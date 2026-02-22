@@ -12,7 +12,7 @@ dependencies: []
 
 ## Problem Statement
 
-TUI Commander has more spacious layout compared to a compact and clean design. The visual density, typography hierarchy, and use of icons/badges can be improved to match a professional appearance while maintaining usability.
+TUICommander has more spacious layout compared to a compact and clean design. The visual density, typography hierarchy, and use of icons/badges can be improved to match a professional appearance while maintaining usability.
 
 ## Acceptance Criteria
 
