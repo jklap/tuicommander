@@ -55,7 +55,6 @@ Claude Code, Codex CLI, Aider, Gemini CLI, Amp, Jules, Cursor Agent, OpenCode, W
 ### What "monitoring" actually means
 
 - **Rate limit detection** — Provider-specific patterns (Claude "overloaded", Gemini "429", OpenAI "too many requests"). Status bar shows countdown timers per session.
-- **Fallback chains** — Configure primary + fallback agents. When Claude hits a rate limit, auto-switch to Gemini. Auto-recovery checks every 5 minutes.
 - **Question detection** — Recognizes Y/N prompts, numbered options, inquirer-style menus. Tab shows `?` icon, notification sound fires, overlay appears with keyboard navigation (`↑/↓`, `Enter`, `1-9`).
 - **Usage tracking** — Claude Code weekly/session limit percentage: blue < 70%, yellow 70–89%, red pulsing >= 90%.
 - **Activity dashboard** (`Cmd+Shift+A`) — Real-time view of all sessions: agent type, status (working / waiting / rate-limited / idle), last activity timestamp.
@@ -206,7 +205,7 @@ Rust + [Tauri v2](https://tauri.app) backend, [SolidJS](https://solidjs.com) UI,
 |---|---|
 | [Getting Started](docs/user-guide/getting-started.md) | First-run guide |
 | [Features](docs/FEATURES.md) | Complete feature reference with all keyboard shortcuts |
-| [AI Agents](docs/user-guide/ai-agents.md) | Agent detection, fallback chains, rate limits |
+| [AI Agents](docs/user-guide/ai-agents.md) | Agent detection, rate limits, question detection |
 | [Plugin API](docs/plugins.md) | Build plugins for TUICommander |
 | [HTTP API](docs/api/http-api.md) | REST/WebSocket/SSE endpoints |
 | [Architecture](docs/ARCHITECTURE.md) | System design and component overview |
