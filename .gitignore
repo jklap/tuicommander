@@ -36,3 +36,6 @@ CLAUDE.md
 .mdkb
 .fastembed_cache
 scripts
+
+# Sidecar binaries (built during cargo tauri build)
+src-tauri/binaries/tuic-mcp-bridge-*
