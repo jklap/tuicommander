@@ -39,4 +39,4 @@ scripts
 issues-to-monitor.md
 
 # Sidecar binaries (built during cargo tauri build)
-src-tauri/binaries/tuic-mcp-bridge-*
+src-tauri/binaries/tuic-bridge-*
