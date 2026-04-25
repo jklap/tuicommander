@@ -105,6 +105,7 @@ import { useSmartPrompts } from "./hooks/useSmartPrompts";
 import { registerAiChatContextActions } from "./components/AIChatPanel/contextMenuActions";
 import { AIChatPanel } from "./components/AIChatPanel/AIChatPanel";
 import { aiChatStore } from "./stores/aiChatStore";
+import { renderPanelMode, registerPanel } from "./panelRouter";
 import { aiAgentStore } from "./stores/aiAgentStore";
 import { applyAppTheme, applyFontFamily } from "./themes";
 import { createLongPressHandlerFromHotkey } from "./hooks/useLongPressHotkey";
@@ -125,16 +126,16 @@ const getMaxTabNameLength = () => settingsStore.state.maxTabNameLength;
 /** Detect secondary window mode via URL query param */
 const isSecondaryWindow = () => new URLSearchParams(window.location.search).get("mode") === "secondary";
 
-/** Detect detached panel mode via URL query param */
-function getPanelParams(): { isPanelMode: boolean; panelId: string | null; chatId: string | null } {
-  const params = new URLSearchParams(window.location.search);
-  const mode = params.get("mode");
-  return {
-    isPanelMode: mode === "panel",
-    panelId: params.get("panel"),
-    chatId: params.get("chatId"),
-  };
-}
+registerPanel({
+  id: "ai-chat",
+  title: "AI Chat",
+  defaultSize: { width: 500, height: 700 },
+  Component: (props: { params: URLSearchParams }) => {
+    const chatId = props.params.get("chatId");
+    if (chatId) aiChatStore.setChatId(chatId);
+    return <AIChatPanel visible={true} onClose={() => window.close()} />;
+  },
+});
 
 const App: Component = () => {
   const [statusInfo, _setStatusInfoRaw] = createSignal("Ready");
@@ -1714,17 +1715,8 @@ const App: Component = () => {
 
 
   // Detached panel mode: full-viewport single panel
-  const panelParams = getPanelParams();
-  if (panelParams.isPanelMode && panelParams.panelId === "ai-chat") {
-    if (panelParams.chatId) {
-      aiChatStore.setChatId(panelParams.chatId);
-    }
-    return (
-      <div id="app" class="panel-mode panel-ai-chat">
-        <AIChatPanel visible={true} onClose={() => window.close()} />
-      </div>
-    );
-  }
+  const panelEl = renderPanelMode();
+  if (panelEl) return panelEl;
 
   // Secondary window: minimal pane-only layout
   if (isSecondaryWindow()) {
