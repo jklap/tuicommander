@@ -57,14 +57,14 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
       />
 
       <Show when={settingsStore.isAiChatEnabled()}>
-        <Show when={uiStore.state.aiChatDetached} fallback={
+        <Show when={uiStore.isDetached("ai-chat")} fallback={
           <AIChatPanel
             visible={uiStore.state.aiChatPanelVisible}
             onClose={() => uiStore.toggleAiChatPanel()}
           />
         }>
           <Show when={uiStore.state.aiChatPanelVisible}>
-            <DetachedPlaceholder panel="AI Chat" windowLabel="ai-chat-panel" />
+            <DetachedPlaceholder panel="AI Chat" panelId="ai-chat" />
           </Show>
         </Show>
       </Show>
