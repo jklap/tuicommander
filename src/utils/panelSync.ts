@@ -35,6 +35,12 @@ export function createPanelSyncReceiver<T>(panelId: string) {
     }
   });
 
+  // Notify main window when this panel window is closed (OS close button).
+  // Rust on_window_event may not fire reliably for OS-initiated close on macOS.
+  window.addEventListener("beforeunload", () => {
+    emitTo("main", "panel-window-closed", panelId);
+  });
+
   async function emitAction(action: string, data: unknown) {
     await emitTo("main", "panel-action", { panelId, action, data });
   }

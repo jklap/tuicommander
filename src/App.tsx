@@ -468,7 +468,12 @@ const App: Component = () => {
     listen<PanelAction>("panel-action", (event) => {
       const { panelId, action, data } = event.payload;
       if (panelId === "activity") {
-        activityPanelAdapter.handleAction(action, data);
+        if (action === "reattach") {
+          uiStore.clearDetached("activity");
+          activityDashboardStore.open();
+        } else {
+          activityPanelAdapter.handleAction(action, data);
+        }
       }
     }).then((fn) => { unlisten = fn; });
     onCleanup(() => unlisten?.());

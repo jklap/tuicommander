@@ -143,6 +143,8 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
   const handleReattach = async () => {
     if (!isTauri()) return;
     try {
+      const { emitTo } = await import("@tauri-apps/api/event");
+      await emitTo("main", "panel-action", { panelId: "activity", action: "reattach", data: {} });
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("close_panel_window", { panelId: "activity" });
     } catch (e) {
