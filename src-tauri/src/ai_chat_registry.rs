@@ -281,10 +281,6 @@ impl ChatRegistry {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)] // Was used by open_ai_chat_window, retained for registry API completeness
-pub(crate) fn validate_id_public(id: &str) -> Result<(), String> {
-    validate_id(id)
-}
 
 fn validate_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > 64 {

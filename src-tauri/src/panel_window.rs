@@ -29,7 +29,9 @@ pub async fn open_panel_window(
     }
     let mut query = format!("mode=panel&panel={panel_id}");
     for (k, v) in &params {
-        query.push_str(&format!("&{k}={v}"));
+        let mut enc = url::form_urlencoded::Serializer::new(String::new());
+        enc.append_pair(k, v);
+        query.push_str(&format!("&{}", enc.finish()));
     }
     let url = tauri::WebviewUrl::App(format!("/?{query}").into());
     let window = tauri::WebviewWindowBuilder::new(&app, &label, url)
@@ -42,13 +44,20 @@ pub async fn open_panel_window(
     let app_handle = app.clone();
     let pid = panel_id.clone();
     window.on_window_event(move |event| {
-        match event {
-            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
-                let _ = app_handle.emit("panel-window-closed", &pid);
-            }
-            _ => {}
+        if let tauri::WindowEvent::Destroyed = event {
+            let _ = app_handle.emit("panel-window-closed", &pid);
         }
     });
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn focus_panel_window(app: tauri::AppHandle, panel_id: String) -> Result<(), String> {
+    validate_panel_id(&panel_id)?;
+    let label = format!("panel-{panel_id}");
+    if let Some(w) = app.get_webview_window(&label) {
+        w.set_focus().map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 

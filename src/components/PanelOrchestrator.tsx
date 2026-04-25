@@ -4,7 +4,6 @@ import { MarkdownPanel } from "./MarkdownPanel";
 import { NotesPanel } from "./NotesPanel";
 import { GitPanel } from "./GitPanel/GitPanel";
 import { AIChatPanel } from "./AIChatPanel";
-import { DetachedPlaceholder } from "./DetachedPlaceholder";
 import { uiStore } from "../stores/ui";
 import { terminalsStore } from "../stores/terminals";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
@@ -56,17 +55,11 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
         requestedTab={uiStore.state.gitPanelRequestedTab}
       />
 
-      <Show when={settingsStore.isAiChatEnabled()}>
-        <Show when={uiStore.isDetached("ai-chat")} fallback={
-          <AIChatPanel
-            visible={uiStore.state.aiChatPanelVisible}
-            onClose={() => uiStore.toggleAiChatPanel()}
-          />
-        }>
-          <Show when={uiStore.state.aiChatPanelVisible}>
-            <DetachedPlaceholder panel="AI Chat" panelId="ai-chat" />
-          </Show>
-        </Show>
+      <Show when={settingsStore.isAiChatEnabled() && !uiStore.isDetached("ai-chat")}>
+        <AIChatPanel
+          visible={uiStore.state.aiChatPanelVisible}
+          onClose={() => uiStore.toggleAiChatPanel()}
+        />
       </Show>
     </>
   );

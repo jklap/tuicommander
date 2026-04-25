@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-const { mockListen, mockEmitTo } = vi.hoisted(() => ({
+const { mockListen, mockEmitTo, mockWindowListen, mockOnCloseRequested } = vi.hoisted(() => ({
   mockListen: vi.fn(),
   mockEmitTo: vi.fn().mockResolvedValue(undefined),
+  mockWindowListen: vi.fn(),
+  mockOnCloseRequested: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
@@ -12,6 +14,13 @@ vi.mock("@tauri-apps/api/event", () => ({
 
 vi.mock("../../invoke", () => ({
   listen: mockListen,
+}));
+
+vi.mock("@tauri-apps/api/webviewWindow", () => ({
+  getCurrentWebviewWindow: () => ({
+    listen: mockWindowListen,
+    onCloseRequested: mockOnCloseRequested,
+  }),
 }));
 
 import {
@@ -25,7 +34,8 @@ describe("panelSync", () => {
     vi.useFakeTimers();
     mockListen.mockReset();
     mockEmitTo.mockReset().mockResolvedValue(undefined);
-    // Default: listen captures the callback for manual invocation
+    mockWindowListen.mockReset().mockImplementation(() => Promise.resolve(() => {}));
+    mockOnCloseRequested.mockReset().mockImplementation(() => Promise.resolve(() => {}));
     mockListen.mockImplementation(() => Promise.resolve(() => {}));
   });
 
@@ -36,7 +46,7 @@ describe("panelSync", () => {
   describe("createPanelSyncReceiver", () => {
     it("applies snapshot on matching panel-sync event", () => {
       let capturedCallback: ((event: { payload: PanelSnapshot }) => void) | null = null;
-      mockListen.mockImplementation((_event: string, cb: (event: { payload: PanelSnapshot }) => void) => {
+      mockWindowListen.mockImplementation((_event: string, cb: (event: { payload: PanelSnapshot }) => void) => {
         capturedCallback = cb;
         return Promise.resolve(() => {});
       });
@@ -45,14 +55,14 @@ describe("panelSync", () => {
       expect(state()).toBeNull();
 
       capturedCallback!({
-        payload: { panelId: "activity", seq: 1, snapshot: { count: 42 } },
+        payload: { panelId: "activity", ts: 1000, snapshot: { count: 42 } },
       });
       expect(state()).toEqual({ count: 42 });
     });
 
     it("ignores events for other panels", () => {
       let capturedCallback: ((event: { payload: PanelSnapshot }) => void) | null = null;
-      mockListen.mockImplementation((_event: string, cb: (event: { payload: PanelSnapshot }) => void) => {
+      mockWindowListen.mockImplementation((_event: string, cb: (event: { payload: PanelSnapshot }) => void) => {
         capturedCallback = cb;
         return Promise.resolve(() => {});
       });
@@ -60,14 +70,14 @@ describe("panelSync", () => {
       const { state } = createPanelSyncReceiver<{ count: number }>("activity");
 
       capturedCallback!({
-        payload: { panelId: "ai-chat", seq: 1, snapshot: { count: 99 } },
+        payload: { panelId: "ai-chat", ts: 1000, snapshot: { count: 99 } },
       });
       expect(state()).toBeNull();
     });
 
-    it("ignores stale seq numbers", () => {
+    it("ignores stale timestamps", () => {
       let capturedCallback: ((event: { payload: PanelSnapshot }) => void) | null = null;
-      mockListen.mockImplementation((_event: string, cb: (event: { payload: PanelSnapshot }) => void) => {
+      mockWindowListen.mockImplementation((_event: string, cb: (event: { payload: PanelSnapshot }) => void) => {
         capturedCallback = cb;
         return Promise.resolve(() => {});
       });
@@ -75,23 +85,23 @@ describe("panelSync", () => {
       const { state } = createPanelSyncReceiver<{ count: number }>("activity");
 
       capturedCallback!({
-        payload: { panelId: "activity", seq: 5, snapshot: { count: 50 } },
+        payload: { panelId: "activity", ts: 5000, snapshot: { count: 50 } },
       });
       expect(state()).toEqual({ count: 50 });
 
       capturedCallback!({
-        payload: { panelId: "activity", seq: 3, snapshot: { count: 30 } },
+        payload: { panelId: "activity", ts: 3000, snapshot: { count: 30 } },
       });
       expect(state()).toEqual({ count: 50 });
 
       capturedCallback!({
-        payload: { panelId: "activity", seq: 5, snapshot: { count: 55 } },
+        payload: { panelId: "activity", ts: 5000, snapshot: { count: 55 } },
       });
       expect(state()).toEqual({ count: 50 });
     });
 
     it("emitAction sends panel-action to main window", async () => {
-      mockListen.mockImplementation(() => Promise.resolve(() => {}));
+      mockWindowListen.mockImplementation(() => Promise.resolve(() => {}));
       const { emitAction } = createPanelSyncReceiver("activity");
 
       await emitAction("navigate", { termId: "t1" });
@@ -101,6 +111,12 @@ describe("panelSync", () => {
         action: "navigate",
         data: { termId: "t1" },
       });
+    });
+
+    it("registers onCloseRequested handler", () => {
+      mockWindowListen.mockImplementation(() => Promise.resolve(() => {}));
+      createPanelSyncReceiver("activity");
+      expect(mockOnCloseRequested).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -117,7 +133,6 @@ describe("panelSync", () => {
         "panel-sync",
         expect.objectContaining({
           panelId: "activity",
-          seq: 1,
           snapshot: { terminals: [] },
         }),
       );
@@ -144,7 +159,7 @@ describe("panelSync", () => {
       expect(mockEmitTo).toHaveBeenCalledTimes(3);
     });
 
-    it("increments seq on each push", () => {
+    it("uses monotonic timestamps that always increase", () => {
       const serialize = vi.fn().mockReturnValue({});
       const provider = createPanelSyncProvider("activity", serialize, 500);
 
@@ -153,9 +168,27 @@ describe("panelSync", () => {
       vi.advanceTimersByTime(500);
 
       const calls = mockEmitTo.mock.calls;
-      expect(calls[0][2].seq).toBe(1);
-      expect(calls[1][2].seq).toBe(2);
-      expect(calls[2][2].seq).toBe(3);
+      const ts0 = calls[0][2].ts as number;
+      const ts1 = calls[1][2].ts as number;
+      const ts2 = calls[2][2].ts as number;
+      expect(ts0).toBeGreaterThan(0);
+      expect(ts1).toBeGreaterThanOrEqual(ts0);
+      expect(ts2).toBeGreaterThanOrEqual(ts1);
+
+      provider.stop();
+    });
+
+    it("does not start twice", () => {
+      const serialize = vi.fn().mockReturnValue({});
+      const provider = createPanelSyncProvider("activity", serialize, 1000);
+
+      provider.start();
+      provider.start();
+
+      expect(mockEmitTo).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(1000);
+      expect(mockEmitTo).toHaveBeenCalledTimes(2);
 
       provider.stop();
     });

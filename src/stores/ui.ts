@@ -125,6 +125,7 @@ function createUIStore() {
         settings_nav_width: state.settingsNavWidth,
         diff_view_mode: state.diffViewMode,
         file_browser_view_mode: state.fileBrowserViewMode,
+        detached_panels: state.detachedPanels,
       },
     }).catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
   }
@@ -187,6 +188,7 @@ function createUIStore() {
           settings_nav_width?: number;
           diff_view_mode?: string;
           file_browser_view_mode?: string;
+          detached_panels?: Record<string, string>;
         }>("load_ui_prefs");
         if (loaded) {
           if (loaded.sidebar_visible !== undefined) {
@@ -231,6 +233,9 @@ function createUIStore() {
           }
           if (loaded.file_browser_view_mode === "flat" || loaded.file_browser_view_mode === "tree") {
             setState("fileBrowserViewMode", loaded.file_browser_view_mode);
+          }
+          if (loaded.detached_panels && typeof loaded.detached_panels === "object") {
+            setState("detachedPanels", loaded.detached_panels);
           }
         }
       } catch (err) {
@@ -321,11 +326,13 @@ function createUIStore() {
 
     setDetached(panelId: string, windowLabel: string): void {
       setState("detachedPanels", panelId, windowLabel);
+      saveUIPrefs();
     },
 
     clearDetached(panelId: string): void {
       const { [panelId]: _, ...rest } = state.detachedPanels;
       setState("detachedPanels", reconcile(rest));
+      saveUIPrefs();
     },
 
     isDetached(panelId: string): boolean {
