@@ -1002,3 +1002,57 @@
   flex: 1;
 }
 
+/* Manual MCP configuration disclosure */
+.mcpDisclosure {
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  font-size: var(--font-sm);
+  padding: 2px 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mcpDisclosureArrow {
+  font-size: var(--font-xs);
+}
+
+.mcpDisclosureBody {
+  margin-top: 6px;
+}
+
+.mcpSnippetWrap {
+  position: relative;
+}
+
+.mcpSnippetPre {
+  background: var(--bg-tertiary);
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  font-size: var(--font-xs);
+  line-height: 1.4;
+  overflow: auto;
+  margin: 0;
+  color: var(--fg-primary);
+}
+
+.mcpSnippetCopy {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: var(--fg-secondary);
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-xs);
+}
+
+.mcpCode {
+  font-size: var(--font-xs);
+  word-break: break-all;
+}
+
