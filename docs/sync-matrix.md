@@ -106,11 +106,14 @@ When modifying AI Chat panel, settings, context menu actions, or streaming backe
 | `src/components/PanelOrchestrator.tsx` | Switches between AIChatPanel and DetachedPlaceholder |
 | `src/components/DetachedPlaceholder.tsx` | Placeholder shown in main window when panel is detached |
 | `src/components/SettingsPanel/tabs/AiChatTab.tsx` | Settings panel section |
-| `src/stores/ui.ts` | `aiChatPanelVisible` + `aiChatPanelWidth` + `aiChatDetached` signals |
-| `src/keybindingDefaults.ts` | `toggle-ai-chat` hotkey |
+| `src/stores/ui.ts` | `aiChatPanelVisible` + `aiChatPanelWidth` + `detachedPanels` map |
+| `src/panelRouter.tsx` | Panel adapter registry + routing for detached panel windows |
+| `src/utils/panelSync.ts` | PanelSyncProvider + PanelSyncReceiver for main↔detached communication |
+| `src/hooks/initPanelWindow.ts` | Bootstrap for detached panel windows (theme, font, settings) |
+| `src/keybindingDefaults.ts` | `toggle-ai-chat` + `detach-activity-dashboard` hotkeys |
 | `docs/FEATURES.md` | AI Chat feature section |
 | `docs/user-guide/ai-chat.md` | User-facing AI Chat guide |
-| `docs/api/tauri-commands.md` | Chat Registry + `open_ai_chat_window` commands |
+| `docs/api/tauri-commands.md` | Chat Registry + `open_panel_window` / `close_panel_window` / `focus_main_window` commands |
 
 ### AI Agent (ReAct loop, knowledge store, MCP terminal tools)
 When modifying the AI agent loop engine, tool dispatch, session knowledge store,

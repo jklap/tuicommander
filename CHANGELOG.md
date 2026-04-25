@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Generic detachable panel system** — Any panel can be detached to a separate window via `open_panel_window` Rust command. Two-tier sync: self-sufficient panels call Rust directly, projection panels receive state snapshots via `emitTo`. Panel adapters define per-panel serialization, actions, and components.
+- **Activity Dashboard detach** — Detach button in Activity Dashboard header and "Open Activity Dashboard in separate window" Command Palette entry. Live state sync at 1 Hz via PanelSyncProvider/Receiver.
+- **AI Chat migrated to generic panel lifecycle** — `open_ai_chat_window` replaced by `open_panel_window("ai-chat", ...)`. Channel-based streaming sync preserved.
+
+### Changed
+- **`uiStore.detachedPanels`** — Replaced `aiChatDetached: boolean` with generic `detachedPanels: Record<string, string>` map. `isDetached(panelId)` / `setDetached()` / `clearDetached()` replace per-panel flags.
+- **Panel routing extracted** — `panelRouter.tsx` provides `registerPanel()`, `renderPanelMode()`, and panel adapter registry, replacing hardcoded panel routing in App.tsx.
+
+### Removed
+- `open_ai_chat_window` Rust command (replaced by generic `open_panel_window`)
+- `aiChatDetached` field in uiStore (replaced by `detachedPanels` map)
+
 ## [1.0.7] - 2026-04-24
 
 ### Added

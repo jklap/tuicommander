@@ -200,7 +200,9 @@ Cross-window state synchronization for the AI Chat panel. The registry is the Ru
 | `chat_set_pinned` | `chat_id, pinned` | `()` | Set the pinned flag on a chat |
 | `chat_attach_terminal` | `chat_id, terminal_id` | `()` | Attach a terminal session to a chat |
 | `chat_detach_terminal` | `chat_id` | `()` | Detach the terminal from a chat |
-| `open_ai_chat_window` | `chat_id` | `()` | Open (or focus) a detached AI Chat panel window. URL: `/?mode=panel&panel=ai-chat&chatId=<id>`. Emits `ai-chat-window-closed` on destroy |
+| `open_panel_window` | `panel_id, title?, params?, width?, height?` | `()` | Open (or focus) a detached panel window. `panel_id` becomes the window label prefix (`panel-{id}`). URL: `/?mode=panel&panel={id}&{params}`. Emits `panel-window-closed { panelId }` on destroy |
+| `close_panel_window` | `panel_id` | `()` | Close a detached panel window by ID |
+| `focus_main_window` | — | `()` | Bring the main window to foreground (used by detached panels after cross-window actions) |
 
 ## AI Agent Loop (`ai_agent/commands.rs`)
 

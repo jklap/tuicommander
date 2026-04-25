@@ -2,6 +2,18 @@
 
 Features to test when TUICommander is more usable.
 
+## Detachable Panels
+- [ ] Activity Dashboard: click detach button in header → opens in separate window
+- [ ] Activity Dashboard detached: rows show live terminal status updates (~1 Hz)
+- [ ] Activity Dashboard detached: click row → navigates to terminal in main window
+- [ ] Activity Dashboard detached: globe button toggles Global Workspace promotion
+- [ ] Activity Dashboard detached: close window → main window clears detached state
+- [ ] AI Chat: detach button → opens in separate window with streaming intact
+- [ ] AI Chat detached: send message, verify streaming response renders
+- [ ] AI Chat detached: close window → main window shows panel again (not placeholder)
+- [ ] Command Palette: "Open Activity Dashboard in separate window" entry works
+- [ ] Both panels: detach while panel is open, verify placeholder shown in main window
+
 ## Experimental Feature Flags
 - [ ] Settings > General: "Experimental Features" section visible at bottom
 - [ ] Master toggle defaults to OFF for fresh config
