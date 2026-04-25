@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { listen } from "../invoke";
 import { emitTo } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 export interface PanelSnapshot<T = unknown> {
   panelId: string;
@@ -18,7 +19,10 @@ export function createPanelSyncReceiver<T>(panelId: string) {
   const [state, setState] = createSignal<T | null>(null);
   let lastSeq = -1;
 
-  listen<PanelSnapshot<T>>("panel-sync", (event) => {
+  // Use window-scoped listen — emitTo targets a specific window,
+  // so the global listen (broadcast only) won't receive these events.
+  const win = getCurrentWebviewWindow();
+  win.listen<PanelSnapshot<T>>("panel-sync", (event) => {
     if (event.payload.panelId !== panelId) return;
     if (event.payload.seq <= lastSeq) return;
     lastSeq = event.payload.seq;

@@ -42,8 +42,11 @@ pub async fn open_panel_window(
     let app_handle = app.clone();
     let pid = panel_id.clone();
     window.on_window_event(move |event| {
-        if let tauri::WindowEvent::Destroyed = event {
-            let _ = app_handle.emit("panel-window-closed", &pid);
+        match event {
+            tauri::WindowEvent::CloseRequested { .. } | tauri::WindowEvent::Destroyed => {
+                let _ = app_handle.emit("panel-window-closed", &pid);
+            }
+            _ => {}
         }
     });
     Ok(())
