@@ -3,6 +3,9 @@ import { activityDashboardStore } from "../../stores/activityDashboard";
 import { terminalsStore } from "../../stores/terminals";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { rateLimitStore } from "../../stores/ratelimit";
+import { uiStore } from "../../stores/ui";
+import { appLogger } from "../../stores/appLogger";
+import { isTauri } from "../../transport";
 import { formatRelativeTime } from "../../utils/time";
 import { GlobeIcon } from "../GlobeIcon";
 import s from "./ActivityDashboard.module.css";
@@ -99,6 +102,24 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
     onCleanup(() => document.removeEventListener("keydown", handleKeydown, true));
   });
 
+  const handleDetach = async () => {
+    if (!isTauri()) return;
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_panel_window", {
+        panelId: "activity",
+        title: "Activity Dashboard",
+        params: {},
+        width: 550,
+        height: 650,
+      });
+      uiStore.setDetached("activity", "panel-activity");
+      activityDashboardStore.close();
+    } catch (e) {
+      appLogger.error("app", "Failed to detach Activity Dashboard", { error: String(e) });
+    }
+  };
+
   const handleRowClick = (termId: string) => {
     if (props.onSelect) {
       props.onSelect(termId);
@@ -185,9 +206,18 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
         <div class={s.dashboard} onClick={(e) => e.stopPropagation()}>
           <div class={s.header}>
             <h3>Activity Dashboard</h3>
-            <button class={s.close} onClick={() => activityDashboardStore.close()}>
-              &times;
-            </button>
+            <div class={s.headerActions}>
+              <Show when={isTauri()}>
+                <button class={s.detach} onClick={handleDetach} title="Open in separate window">
+                  <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3">
+                    <path d="M8 2h4v4M8 6l4-4M6 3H3a1 1 0 00-1 1v7a1 1 0 001 1h7a1 1 0 001-1V8" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </button>
+              </Show>
+              <button class={s.close} onClick={() => activityDashboardStore.close()}>
+                &times;
+              </button>
+            </div>
           </div>
 
           <div class={s.list}>

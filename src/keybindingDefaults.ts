@@ -63,6 +63,7 @@ export const ACTION_NAMES = [
   "open-secondary-window",
   "command-overview",
   "toggle-compose-panel",
+  "detach-activity-dashboard",
   // Numbered tabs and branches
   ...Array.from({ length: 9 }, (_, i) => `switch-tab-${i + 1}`),
   ...Array.from({ length: 9 }, (_, i) => `switch-branch-${i + 1}`),

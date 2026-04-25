@@ -36,6 +36,28 @@
   font-weight: 600;
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.detach {
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+}
+
+.detach:hover {
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
+}
+
 .close {
   background: none;
   border: none;

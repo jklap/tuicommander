@@ -1375,6 +1375,24 @@ const App: Component = () => {
       const active = terminalsStore.getActive();
       active?.ref?.toggleCompose();
     },
+    detachActivityDashboard: () => {
+      if (!isTauri()) return;
+      (async () => {
+        try {
+          await invoke("open_panel_window", {
+            panelId: "activity",
+            title: "Activity Dashboard",
+            params: {},
+            width: 550,
+            height: 650,
+          });
+          uiStore.setDetached("activity", "panel-activity");
+          activityDashboardStore.close();
+        } catch (e) {
+          appLogger.error("app", "Failed to detach Activity Dashboard", { error: String(e) });
+        }
+      })();
+    },
     newFile: () => {
       const defaultPath = gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath || undefined;
       (async () => {
