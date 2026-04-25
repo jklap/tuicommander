@@ -16,6 +16,7 @@ import { cx } from "../../utils";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { initMouseDrag } from "../../hooks/useMouseDrag";
 import { findPaneGroupAtPoint } from "../../stores/dragDrop";
+import { openPathsAsTabs } from "../../hooks/useFileDrop";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
@@ -548,7 +549,22 @@ export const TabBar: Component<TabBarProps> = (props) => {
   const chevronRight = <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path fill-rule="evenodd" d="M4.646 1.646a.5.5 0 01.708 0l6 6a.5.5 0 010 .708l-6 6a.5.5 0 01-.708-.708L10.293 8 4.646 2.354a.5.5 0 010-.708z"/></svg>;
 
   return (
-    <div class={s.tabBarWrapper}>
+    <div
+      class={s.tabBarWrapper}
+      data-drop-target="tab-bar"
+      onDragOver={(e) => {
+        if (e.dataTransfer?.types?.includes("application/x-tuic-path")) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDrop={(e) => {
+        const path = e.dataTransfer?.getData("application/x-tuic-path");
+        if (!path) return;
+        e.preventDefault();
+        openPathsAsTabs([path]);
+      }}
+    >
       <div class={s.scrollRegion}>
       {/* Left scroll arrow */}
       <button

@@ -29,12 +29,12 @@ const DROP_HOVER_CLASS = "drop-target-hover";
 function updateDropHover(physicalX: number, physicalY: number): void {
   const dpr = window.devicePixelRatio || 1;
   const el = document.elementFromPoint(physicalX / dpr, physicalY / dpr);
-  // Walk up to find a data-drop-target="folder"
+  // Walk up to find a data-drop-target="folder" or "tab-bar"
   let cur: Element | null = el;
   let target: HTMLElement | null = null;
   while (cur) {
     const t = (cur as HTMLElement).dataset?.dropTarget;
-    if (t === "folder") { target = cur as HTMLElement; break; }
+    if (t === "folder" || t === "tab-bar") { target = cur as HTMLElement; break; }
     cur = cur.parentElement;
   }
   if (target === highlightedEl) return;

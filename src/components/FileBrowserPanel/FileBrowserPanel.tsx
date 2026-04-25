@@ -18,6 +18,7 @@ import { t } from "../../i18n";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
 import { cx } from "../../utils";
+import { markInternalDragStart, markInternalDragEnd } from "../../stores/dragDrop";
 import type { DirEntry, ContentMatch } from "../../types/fs";
 import type { ContentSearchOptions } from "../../hooks/useFileBrowser";
 import p from "../shared/panel.module.css";
@@ -1059,6 +1060,15 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
                       )}
                       data-drop-target={entry.is_dir ? "folder" : undefined}
                       data-abs-path={entry.is_dir ? absPath() : undefined}
+                      draggable={true}
+                      onDragStart={(e) => {
+                        const p = absPath();
+                        e.dataTransfer!.setData("application/x-tuic-path", p);
+                        e.dataTransfer!.setData("text/plain", p);
+                        e.dataTransfer!.effectAllowed = "copy";
+                        markInternalDragStart();
+                      }}
+                      onDragEnd={() => markInternalDragEnd()}
                       onClick={() => {
                         setSelectedIndex(index());
                         handleEntryClick(entry);

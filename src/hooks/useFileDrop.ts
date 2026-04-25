@@ -61,7 +61,7 @@ function writePathsToTerminal(paths: string[]): boolean {
 }
 
 /** Open absolute paths as editor / markdown tabs. */
-function openPathsAsTabs(paths: string[]): void {
+export function openPathsAsTabs(paths: string[]): void {
   for (const filePath of paths) {
     const [repoPath, relPath] = resolveRepoPaths(filePath);
     const target = classifyFile(filePath);
@@ -91,8 +91,8 @@ function elementAtDropPoint(physicalX: number, physicalY: number): Element | nul
  * Returns the element and its associated data (absolute path for folder drops).
  */
 interface DropTargetInfo {
-  kind: "folder";
-  absPath: string;
+  kind: "folder" | "tab-bar";
+  absPath?: string;
 }
 function findDropTarget(el: Element | null): DropTargetInfo | null {
   let cur: Element | null = el;
@@ -102,6 +102,7 @@ function findDropTarget(el: Element | null): DropTargetInfo | null {
       const absPath = (cur as HTMLElement).dataset.absPath;
       if (absPath) return { kind: "folder", absPath };
     }
+    if (target === "tab-bar") return { kind: "tab-bar" };
     cur = cur.parentElement;
   }
   return null;
@@ -183,7 +184,7 @@ async function dispatchTauriDrop(paths: string[], x: number, y: number): Promise
   if (target?.kind === "folder") {
     const mode: "move" | "copy" = dragDropStore.copyModifierHeld() ? "copy" : "move";
     await executeFolderDrop(
-      { destDir: target.absPath, paths, mode },
+      { destDir: target.absPath!, paths, mode },
       {
         allowRecursive: false,
         onNeedsConfirm: (req) => {
@@ -192,6 +193,11 @@ async function dispatchTauriDrop(paths: string[], x: number, y: number): Promise
         },
       },
     );
+    return;
+  }
+
+  if (target?.kind === "tab-bar") {
+    openPathsAsTabs(paths);
     return;
   }
 

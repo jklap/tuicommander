@@ -3,6 +3,7 @@ import { useFileBrowser } from "../../hooks/useFileBrowser";
 import { appLogger } from "../../stores/appLogger";
 import { cx } from "../../utils";
 import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
+import { markInternalDragStart, markInternalDragEnd } from "../../stores/dragDrop";
 import type { DirEntry } from "../../types/fs";
 import { getStatusClass, formatSize } from "./fileUtils";
 import { FileIcon } from "./FileIcon";
@@ -60,6 +61,15 @@ export const TreeNode: Component<TreeNodeProps> = (props) => {
         style={{ "padding-left": `${8 + props.depth * 16}px` }}
         onClick={handleClick}
         onContextMenu={(e) => props.onContextMenu(e, props.entry)}
+        draggable={true}
+        onDragStart={(e) => {
+          const p = absPath();
+          e.dataTransfer!.setData("application/x-tuic-path", p);
+          e.dataTransfer!.setData("text/plain", p);
+          e.dataTransfer!.effectAllowed = "copy";
+          markInternalDragStart();
+        }}
+        onDragEnd={() => markInternalDragEnd()}
         data-drop-target={props.entry.is_dir ? "folder" : undefined}
         data-abs-path={props.entry.is_dir ? absPath() : undefined}
       >
