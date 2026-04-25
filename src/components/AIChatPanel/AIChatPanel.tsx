@@ -339,8 +339,14 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
     if (!isTauri()) return;
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("open_ai_chat_window", { chatId: aiChatStore.chatId() });
-      uiStore.setAiChatDetached(true);
+      await invoke("open_panel_window", {
+        panelId: "ai-chat",
+        title: "AI Chat",
+        params: { chatId: aiChatStore.chatId() },
+        width: 500,
+        height: 700,
+      });
+      uiStore.setDetached("ai-chat", "panel-ai-chat");
     } catch (e) {
       appLogger.error("ai-chat", "Failed to detach panel", { error: String(e) });
     }

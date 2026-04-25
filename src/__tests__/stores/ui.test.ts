@@ -511,32 +511,6 @@ describe("uiStore", () => {
       });
     });
 
-    it("backward compat: setAiChatDetached(true) delegates to setDetached", () => {
-      testInScope(() => {
-        store.setAiChatDetached(true);
-        expect(store.isDetached("ai-chat")).toBe(true);
-        expect(store.state.detachedPanels["ai-chat"]).toBe("panel-ai-chat");
-      });
-    });
-
-    it("backward compat: setAiChatDetached(false) delegates to clearDetached", () => {
-      testInScope(() => {
-        store.setAiChatDetached(true);
-        store.setAiChatDetached(false);
-        expect(store.isDetached("ai-chat")).toBe(false);
-      });
-    });
-
-    it("backward compat: aiChatDetached getter reflects detachedPanels", () => {
-      testInScope(() => {
-        expect(store.state.aiChatDetached).toBe(false);
-        store.setDetached("ai-chat", "panel-ai-chat");
-        expect(store.state.aiChatDetached).toBe(true);
-        store.clearDetached("ai-chat");
-        expect(store.state.aiChatDetached).toBe(false);
-      });
-    });
-
     it("is ephemeral — does not persist via save_ui_prefs", () => {
       testInScope(() => {
         mockInvoke.mockClear();
