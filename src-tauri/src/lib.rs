@@ -29,6 +29,7 @@ pub(crate) mod mcp_upstream_config;
 pub(crate) mod mcp_upstream_credentials;
 mod menu;
 pub(crate) mod notification_sound;
+mod panel_window;
 mod output_parser;
 pub(crate) mod plugin_credentials;
 pub(crate) mod plugin_exec;
@@ -1127,6 +1128,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_secondary_window,
             open_ai_chat_window,
+            panel_window::open_panel_window,
+            panel_window::close_panel_window,
+            panel_window::focus_main_window,
             pty::create_pty,
             pty::create_pty_with_worktree,
             pty::list_worktrees,
