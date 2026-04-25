@@ -413,7 +413,7 @@ export const ServicesTab: Component = () => {
               </div>
             </div>
 
-            <Show when={status()?.running && status()?.remote_port}>
+            <Show when={raEnabled()}>
               <div class={s.group}>
                 <label>{t("services.label.networkInterface", "Network Interface")}</label>
                 <Show when={(localIps()?.length ?? 0) > 1} fallback={
@@ -481,7 +481,7 @@ export const ServicesTab: Component = () => {
             </div>
           </div>
 
-          <Show when={status()?.running && connectUrl()}>
+          <Show when={connectUrl()}>
             <div class={s.qr}>
               <Show when={qrDataUrl()}>
                 {(url) => <img src={url()} width={120} height={120} alt={t("services.alt.qrCode", "QR code")} title={t("services.title.qrCode", "Scan to connect")} />}
