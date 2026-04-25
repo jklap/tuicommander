@@ -198,6 +198,9 @@ pub struct OutputParser {
     /// stale suggest. A short TTL bounds the window of ambiguity without
     /// requiring cross-thread reset plumbing from the PTY input handler.
     pending_suggest_at: Option<std::time::Instant>,
+    /// Dedup: true after first session conflict detected — suppresses re-emission
+    /// when the same error text remains visible in the VT log buffer.
+    session_conflict_fired: bool,
 }
 
 struct RateLimitPattern {
@@ -237,6 +240,7 @@ impl OutputParser {
             last_api_error_match: None,
             pending_suggest_line: None,
             pending_suggest_at: None,
+            session_conflict_fired: false,
         }
     }
 
@@ -320,9 +324,11 @@ impl OutputParser {
             events.push(evt);
         }
 
-        // Agent startup session-id conflict (Claude Code)
-        if let Some(evt) = parse_agent_session_conflict(&clean) {
-            events.push(evt);
+        if !self.session_conflict_fired {
+            if let Some(evt) = parse_agent_session_conflict(&clean) {
+                self.session_conflict_fired = true;
+                events.push(evt);
+            }
         }
 
         events
@@ -443,10 +449,11 @@ impl OutputParser {
             }
         }
 
-        // Agent startup session-id conflict (Claude Code):
-        // "Session ID ... is already in use" / "No conversation found with session ID: ..."
-        if let Some(evt) = parse_agent_session_conflict(&joined) {
-            events.push(evt);
+        if !self.session_conflict_fired {
+            if let Some(evt) = parse_agent_session_conflict(&joined) {
+                self.session_conflict_fired = true;
+                events.push(evt);
+            }
         }
 
         // Reset dedup state on user-input (new agent cycle may produce new errors/suggestions).
@@ -457,6 +464,7 @@ impl OutputParser {
             self.last_api_error_match = None;
             self.pending_suggest_line = None;
             self.pending_suggest_at = None;
+            self.session_conflict_fired = false;
         }
 
         events

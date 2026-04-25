@@ -1687,14 +1687,6 @@ impl ChunkProcessor {
                 continue;
             }
 
-            // Mark session for no-inject on Claude-Code session-id conflict.
-            // The shell wrapper checks for a flag file before injecting
-            // `--session-id $TUIC_SESSION`; creating the flag stops the
-            // broken injection without risky PTY writes.
-            //
-            // Gate on Shell mode: the conflict is a startup-only error, so
-            // if we're inside a fullscreen TUI (an agent already running) the
-            // match is a false positive (e.g. the agent quoting a log line).
             if let ParsedEvent::AgentSessionConflict { kind, .. } = event
                 && matches!(
                     self.terminal_mode,
@@ -1702,6 +1694,7 @@ impl ChunkProcessor {
                 )
             {
                 self.mark_session_no_inject(kind);
+                continue;
             }
 
             // Suggest: park in SilenceState and defer emission until silence
@@ -2671,12 +2664,6 @@ pub(crate) async fn create_pty(
     let (pair, child) = pair_and_child.ok_or(last_err)?;
 
     let tuic_session = config.tuic_session.clone();
-
-    // Clean up stale no-session-inject flag from a previous conflict
-    if let Some(ref ts) = tuic_session {
-        let flag = crate::config::config_dir().join(format!("no-session-inject.{ts}"));
-        let _ = std::fs::remove_file(&flag);
-    }
 
     let writer = pair
         .master

@@ -17,7 +17,6 @@ import { paneLayoutStore } from "../../stores/paneLayout";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { appLogger } from "../../stores/appLogger";
 import { notificationsStore } from "../../stores/notifications";
-import { toastsStore } from "../../stores/toasts";
 import { invoke } from "../../invoke";
 import { isMacOS, isWindows } from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
@@ -562,12 +561,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
           terminalsStore.setAwaitingInput(props.id, "error");
           break;
         case "agent-session-conflict": {
-          const title = parsed.kind === "not-found"
-            ? "Session not found — reset applied"
-            : "Session ID conflict — reset applied";
-          const msg = "TUIC_SESSION regenerated. The next `claude` invocation in this tab will use a fresh id.";
-          appLogger.warn("terminal", `[AgentSessionConflict] ${props.id} kind=${parsed.kind} matched="${parsed.matched_text}"`);
-          toastsStore.add(title, msg, "warn", true);
+          const oldUuid = terminalsStore.get(props.id)?.tuicSession;
+          const newUuid = crypto.randomUUID();
+          terminalsStore.update(props.id, { tuicSession: newUuid });
+          appLogger.warn("terminal", `[AgentSessionConflict] ${props.id} kind=${parsed.kind} — tuicSession regenerated ${oldUuid} → ${newUuid}`);
           break;
         }
         case "intent":
@@ -1794,8 +1791,30 @@ export const Terminal: Component<TerminalProps> = (props) => {
     terminal?.focus();
   };
 
+  const handleFileDragOver = (e: DragEvent) => {
+    if (e.dataTransfer?.types?.includes("application/x-tuic-path")) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    }
+  };
+
+  const handleFileDrop = (e: DragEvent) => {
+    const path = e.dataTransfer?.getData("application/x-tuic-path");
+    if (!path || !sessionId) return;
+    e.preventDefault();
+    const quoted = `'${path.replace(/'/g, "'\\''")}' `;
+    pty.write(sessionId, quoted);
+    terminal?.focus();
+  };
+
   return (
-    <div class={s.wrapper} data-terminal-id={props.id} data-focus-target="terminal">
+    <div
+      class={s.wrapper}
+      data-terminal-id={props.id}
+      data-focus-target="terminal"
+      onDragOver={handleFileDragOver}
+      onDrop={handleFileDrop}
+    >
       <TerminalSearch
         visible={searchVisible()}
         searchAddon={searchAddon()}
