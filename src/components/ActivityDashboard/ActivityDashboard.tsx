@@ -3,34 +3,18 @@ import { activityDashboardStore } from "../../stores/activityDashboard";
 import { terminalsStore } from "../../stores/terminals";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { rateLimitStore } from "../../stores/ratelimit";
+import { PanelWindowControls } from "../ui/PanelWindowControls";
 import { formatRelativeTime } from "../../utils/time";
+import { projectName, terminalStatusLabel } from "../../utils/activitySnapshot";
 import { GlobeIcon } from "../GlobeIcon";
 import s from "./ActivityDashboard.module.css";
 
-/** Derive status label and CSS class from terminal state */
-function getTerminalStatus(
-  shellState: string | null,
-  awaitingInput: string | null,
-  sessionId: string | null,
-): { label: string; className: string } {
-  if (sessionId && rateLimitStore.isRateLimited(sessionId)) {
-    return { label: "Rate limited", className: s.statusRateLimited };
-  } else if (awaitingInput) {
-    return { label: "Waiting for input", className: s.statusWaiting };
-  } else if (shellState === "busy") {
-    return { label: "Working", className: s.statusWorking };
-  } else if (shellState === "idle") {
-    return { label: "Idle", className: s.statusIdle };
-  }
-  return { label: "\u2014", className: s.statusIdle };
-}
-
-/** Extract project name (last path segment) from cwd */
-function projectName(cwd: string | null): string | null {
-  if (!cwd) return null;
-  const segments = cwd.replace(/\/+$/, "").split("/");
-  return segments[segments.length - 1] || null;
-}
+export const statusClasses = {
+  rateLimited: s.statusRateLimited,
+  waiting: s.statusWaiting,
+  working: s.statusWorking,
+  idle: s.statusIdle,
+};
 
 /** Truncate a string to a single line for display */
 function truncate(text: string, maxLen = 80): string {
@@ -68,8 +52,28 @@ const SubTaskIcon: Component = () => (
   </svg>
 );
 
+export type TerminalRow = {
+  id: string;
+  name: string;
+  project: string | null;
+  agent: string;
+  status: { label: string; className: string };
+  lastDataAt: number | null;
+  lastPrompt: string | null;
+  agentIntent: string | null;
+  currentTask: string | null;
+  activeSubTasks: number;
+  isActive: boolean;
+  isPromoted: boolean;
+};
+
 interface ActivityDashboardProps {
   onSelect?: (id: string) => void;
+  onPromote?: (id: string) => void;
+  /** When true, renders without overlay — used in detached panel windows. */
+  embedded?: boolean;
+  /** External data source. When provided, bypasses store reads. */
+  terminals?: () => TerminalRow[];
 }
 
 export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
@@ -106,21 +110,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
       terminalsStore.setActive(termId);
       requestAnimationFrame(() => terminalsStore.get(termId)?.ref?.focus());
     }
-    activityDashboardStore.close();
-  };
-
-  type TerminalRow = {
-    id: string;
-    name: string;
-    project: string | null;
-    agent: string;
-    status: { label: string; className: string };
-    lastDataAt: number | null;
-    lastPrompt: string | null;
-    agentIntent: string | null;
-    currentTask: string | null;
-    activeSubTasks: number;
-    isActive: boolean;
+    if (!props.embedded) activityDashboardStore.close();
   };
 
   /** Build a fresh row from the live store. Called at render time so every
@@ -129,7 +119,8 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
   const buildRow = (id: string): TerminalRow | null => {
     const term = terminalsStore.get(id);
     if (!term) return null;
-    const status = getTerminalStatus(term.shellState, term.awaitingInput, term.sessionId);
+    const isRL = !!(term.sessionId && rateLimitStore.isRateLimited(term.sessionId));
+    const status = terminalStatusLabel(term.shellState, term.awaitingInput, isRL, statusClasses);
     return {
       id,
       name: term.name,
@@ -143,6 +134,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
       currentTask: term.agentType === "claude" ? null : term.currentTask,
       activeSubTasks: term.activeSubTasks,
       isActive: terminalsStore.state.activeId === id,
+      isPromoted: globalWorkspaceStore.isPromoted(id),
     };
   };
 
@@ -175,99 +167,116 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
     return orderSnapshot();
   });
 
-  const terminals = createMemo(() =>
+  const storeTerminals = createMemo(() =>
     orderedIds().map(buildRow).filter(Boolean) as TerminalRow[],
   );
+
+  const terminals = () => props.terminals ? props.terminals() : storeTerminals();
+
+  const dashboardContent = () => (
+    <>
+      <div class={s.header}>
+        <h3>Activity Dashboard</h3>
+        <div class={s.headerActions}>
+          <PanelWindowControls
+            panelId="activity"
+            mode={props.embedded ? "detached" : "inline"}
+            onInlineClose={() => activityDashboardStore.close()}
+          />
+        </div>
+      </div>
+
+      <div class={s.list}>
+        <Show when={terminals().length === 0}>
+          <div class={s.empty}>No active terminals</div>
+        </Show>
+
+        <For each={terminals()}>
+          {(term) => (
+            <div
+              class={`${s.row} ${term.isActive ? s.activeRow : ""}`}
+              onClick={() => handleRowClick(term.id)}
+            >
+              <div class={s.rowMain}>
+                <div class={s.nameCell}>
+                  <span class={s.termName}>{term.name}</span>
+                  <Show when={term.project}>
+                    <span class={s.project}>{term.project}</span>
+                  </Show>
+                </div>
+                <span class={s.agent}>{term.agent}</span>
+                <span class={`${s.status} ${term.status.className}`}>{term.status.label}</span>
+                <span class={s.lastActivity}>{formatRelativeTime(term.lastDataAt)}</span>
+                <button
+                  class={`${s.promoteBtn} ${term.isPromoted ? s.promoted : ""}`}
+                  title={term.isPromoted ? "Remove from Global Workspace" : "Promote to Global Workspace"}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (props.onPromote) {
+                      props.onPromote(term.id);
+                    } else {
+                      globalWorkspaceStore.togglePromote(term.id);
+                    }
+                  }}
+                >
+                  <GlobeIcon />
+                </button>
+              </div>
+              <Show when={term.currentTask}>
+                {(task) => (
+                  <div class={s.subRow} title={task()}>
+                    <TaskIcon />
+                    <span class={s.subText}>{truncate(task())}</span>
+                  </div>
+                )}
+              </Show>
+              <Show when={term.activeSubTasks > 0}>
+                <div class={s.subRow} title={`${term.activeSubTasks} sub-tasks running`}>
+                  <SubTaskIcon />
+                  <span class={s.subText}>{term.activeSubTasks} sub-tasks running</span>
+                </div>
+              </Show>
+              <Show when={term.agentIntent} keyed>
+                {(intent) => (
+                  <div class={s.subRow} title={intent}>
+                    <IntentIcon />
+                    <span class={s.subText}>{truncate(intent)}</span>
+                  </div>
+                )}
+              </Show>
+              {(() => {
+                const prompt = term.lastPrompt;
+                if (!prompt || term.agentIntent) return null;
+                return (
+                  <div class={s.subRow} title={prompt}>
+                    <PromptIcon />
+                    <span class={s.subText}>{truncate(prompt)}</span>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+        </For>
+      </div>
+
+      <div class={s.footer}>
+        <span>{terminals().length} terminal(s)</span>
+        <Show when={!props.embedded}>
+          <span style={{ "margin-left": "auto" }}>Click to switch • Esc to close</span>
+        </Show>
+      </div>
+    </>
+  );
+
+  if (props.embedded) {
+    return <div class={s.dashboard} style={{ "max-height": "100vh", height: "100vh" }}>{dashboardContent()}</div>;
+  }
 
   return (
     <Show when={isOpen()}>
       <div class={s.overlay} onClick={() => activityDashboardStore.close()}>
         <div class={s.dashboard} onClick={(e) => e.stopPropagation()}>
-          <div class={s.header}>
-            <h3>Activity Dashboard</h3>
-            <button class={s.close} onClick={() => activityDashboardStore.close()}>
-              &times;
-            </button>
-          </div>
-
-          <div class={s.list}>
-            <Show when={terminals().length === 0}>
-              <div class={s.empty}>No active terminals</div>
-            </Show>
-
-            <For each={terminals()}>
-              {(term) => (
-                <div
-                  class={`${s.row} ${term.isActive ? s.activeRow : ""}`}
-                  onClick={() => handleRowClick(term.id)}
-                >
-                  <div class={s.rowMain}>
-                    <div class={s.nameCell}>
-                      <span class={s.termName}>{term.name}</span>
-                      <Show when={term.project}>
-                        <span class={s.project}>{term.project}</span>
-                      </Show>
-                    </div>
-                    <span class={s.agent}>{term.agent}</span>
-                    <span class={`${s.status} ${term.status.className}`}>{term.status.label}</span>
-                    <span class={s.lastActivity}>{formatRelativeTime(term.lastDataAt)}</span>
-                    {(() => {
-                      const isGlobal = globalWorkspaceStore.isPromoted(term.id);
-                      return (
-                    <button
-                      class={`${s.promoteBtn} ${isGlobal ? s.promoted : ""}`}
-                      title={isGlobal ? "Remove from Global Workspace" : "Promote to Global Workspace"}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        globalWorkspaceStore.togglePromote(term.id);
-                      }}
-                    >
-                      <GlobeIcon />
-                    </button>
-                      );
-                    })()}
-                  </div>
-                  <Show when={term.currentTask}>
-                    {(task) => (
-                      <div class={s.subRow} title={task()}>
-                        <TaskIcon />
-                        <span class={s.subText}>{truncate(task())}</span>
-                      </div>
-                    )}
-                  </Show>
-                  <Show when={term.activeSubTasks > 0}>
-                    <div class={s.subRow} title={`${term.activeSubTasks} sub-tasks running`}>
-                      <SubTaskIcon />
-                      <span class={s.subText}>{term.activeSubTasks} sub-tasks running</span>
-                    </div>
-                  </Show>
-                  <Show when={term.agentIntent} keyed>
-                    {(intent) => (
-                      <div class={s.subRow} title={intent}>
-                        <IntentIcon />
-                        <span class={s.subText}>{truncate(intent)}</span>
-                      </div>
-                    )}
-                  </Show>
-                  {(() => {
-                    const prompt = term.lastPrompt;
-                    if (!prompt || term.agentIntent) return null;
-                    return (
-                      <div class={s.subRow} title={prompt}>
-                        <PromptIcon />
-                        <span class={s.subText}>{truncate(prompt)}</span>
-                      </div>
-                    );
-                  })()}
-                </div>
-              )}
-            </For>
-          </div>
-
-          <div class={s.footer}>
-            <span>{terminals().length} terminal(s)</span>
-            <span style={{ "margin-left": "auto" }}>Click to switch • Esc to close</span>
-          </div>
+          {dashboardContent()}
         </div>
       </div>
     </Show>

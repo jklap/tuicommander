@@ -83,6 +83,7 @@ const ACTION_META: Partial<Record<ActionName, ActionMeta>> = {
   "open-path": { label: "Open path…", category: "File" },
   "open-secondary-window": { label: "Open secondary window", category: "Navigation" },
   "command-overview": { label: "Command overview", category: "Panels" },
+  "detach-activity-dashboard": { label: "Open Activity Dashboard in separate window", category: "Navigation" },
 };
 
 /**
@@ -147,6 +148,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
     "open-folder": handlers.openFolder,
     "open-path": handlers.openPath,
     "command-overview": handlers.toggleCommandOverview,
+    "detach-activity-dashboard": handlers.detachActivityDashboard,
   };
 
   // Defensive dedup-by-id — today ACTION_META is a Record so ids are unique by

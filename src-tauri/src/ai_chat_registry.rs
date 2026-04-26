@@ -281,9 +281,6 @@ impl ChatRegistry {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-pub(crate) fn validate_id_public(id: &str) -> Result<(), String> {
-    validate_id(id)
-}
 
 fn validate_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > 64 {

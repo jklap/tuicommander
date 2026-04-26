@@ -621,6 +621,8 @@ pub(crate) struct UIPrefsConfig {
     /// Diff viewer mode: "split" (side-by-side) or "unified" (inline).
     #[serde(default = "default_diff_view_mode")]
     pub(crate) diff_view_mode: String,
+    #[serde(default)]
+    pub(crate) detached_panels: std::collections::HashMap<String, String>,
 }
 
 fn default_diff_view_mode() -> String {
@@ -645,6 +647,7 @@ impl Default for UIPrefsConfig {
             git_panel_width: default_git_panel_width(),
             settings_nav_width: default_settings_nav_width(),
             diff_view_mode: default_diff_view_mode(),
+            detached_panels: std::collections::HashMap::new(),
         }
     }
 }
@@ -1368,12 +1371,16 @@ mod tests {
             git_panel_width: 380,
             settings_nav_width: 200,
             diff_view_mode: "split".to_string(),
+            detached_panels: std::collections::HashMap::from([
+                ("activity".to_string(), "panel-activity".to_string()),
+            ]),
         };
         let loaded: UIPrefsConfig = round_trip_in_dir(dir.path(), "ui-prefs.json", &cfg);
         assert!(!loaded.sidebar_visible);
         assert_eq!(loaded.sidebar_width, 300);
         assert_eq!(loaded.diff_panel_width, 500);
         assert_eq!(loaded.markdown_panel_width, 450);
+        assert_eq!(loaded.detached_panels.get("activity").map(|s| s.as_str()), Some("panel-activity"));
         assert_eq!(loaded.notes_panel_width, 320);
         assert_eq!(loaded.settings_nav_width, 200);
         assert_eq!(loaded.diff_view_mode, "split");

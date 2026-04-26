@@ -466,6 +466,77 @@ describe("uiStore", () => {
     });
   });
 
+  describe("detachedPanels", () => {
+    it("setDetached adds entry to map", () => {
+      testInScope(() => {
+        store.setDetached("activity", "panel-activity");
+        expect(store.state.detachedPanels).toEqual({ activity: "panel-activity" });
+      });
+    });
+
+    it("setDetached supports multiple panels", () => {
+      testInScope(() => {
+        store.setDetached("activity", "panel-activity");
+        store.setDetached("ai-chat", "panel-ai-chat");
+        expect(store.state.detachedPanels).toEqual({
+          activity: "panel-activity",
+          "ai-chat": "panel-ai-chat",
+        });
+      });
+    });
+
+    it("clearDetached removes the entry", () => {
+      testInScope(() => {
+        store.setDetached("activity", "panel-activity");
+        store.setDetached("ai-chat", "panel-ai-chat");
+        store.clearDetached("activity");
+        expect(store.state.detachedPanels).toEqual({ "ai-chat": "panel-ai-chat" });
+      });
+    });
+
+    it("clearDetached is no-op for non-existent panel", () => {
+      testInScope(() => {
+        store.clearDetached("nonexistent");
+        expect(store.state.detachedPanels).toEqual({});
+      });
+    });
+
+    it("isDetached returns correct boolean", () => {
+      testInScope(() => {
+        expect(store.isDetached("activity")).toBe(false);
+        store.setDetached("activity", "panel-activity");
+        expect(store.isDetached("activity")).toBe(true);
+        store.clearDetached("activity");
+        expect(store.isDetached("activity")).toBe(false);
+      });
+    });
+
+    it("persists via save_ui_prefs on setDetached", () => {
+      testInScope(() => {
+        mockInvoke.mockClear();
+        store.setDetached("activity", "panel-activity");
+        const persistCalls = mockInvoke.mock.calls.filter(
+          (c) => c[0] === "save_ui_prefs",
+        );
+        expect(persistCalls).toHaveLength(1);
+        expect(persistCalls[0][1].config.detached_panels).toEqual({ activity: "panel-activity" });
+      });
+    });
+
+    it("persists via save_ui_prefs on clearDetached", () => {
+      testInScope(() => {
+        store.setDetached("activity", "panel-activity");
+        mockInvoke.mockClear();
+        store.clearDetached("activity");
+        const persistCalls = mockInvoke.mock.calls.filter(
+          (c) => c[0] === "save_ui_prefs",
+        );
+        expect(persistCalls).toHaveLength(1);
+        expect(persistCalls[0][1].config.detached_panels).toEqual({});
+      });
+    });
+  });
+
   describe("loading state", () => {
     it("setLoading sets loading and message", () => {
       testInScope(() => {

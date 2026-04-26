@@ -1,26 +1,23 @@
 import { Component } from "solid-js";
+import { invoke } from "../invoke";
 import { isTauri } from "../transport";
 import { uiStore } from "../stores/ui";
 import { appLogger } from "../stores/appLogger";
 
 export interface DetachedPlaceholderProps {
   panel: string;
-  windowLabel: string;
+  panelId: string;
 }
 
 export const DetachedPlaceholder: Component<DetachedPlaceholderProps> = (props) => {
   const handleBringBack = async () => {
     if (!isTauri()) return;
     try {
-      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
-      const detached = await WebviewWindow.getByLabel(props.windowLabel);
-      if (detached) {
-        await detached.destroy();
-      }
+      await invoke("close_panel_window", { panelId: props.panelId });
     } catch (e) {
-      appLogger.warn("ai-chat", "Failed to close detached window", { error: String(e) });
+      appLogger.warn("app", "Failed to close detached window", { error: String(e) });
     }
-    uiStore.setAiChatDetached(false);
+    uiStore.clearDetached(props.panelId);
   };
 
   return (

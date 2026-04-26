@@ -1,5 +1,5 @@
 import { batch } from "solid-js";
-import { createStore } from "solid-js/store";
+import { createStore, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { appLogger } from "./appLogger";
 
@@ -42,7 +42,7 @@ interface UIStoreState {
   gitPanelVisible: boolean;
 
   aiChatPanelVisible: boolean;
-  aiChatDetached: boolean;
+  detachedPanels: Record<string, string>;
 
   // Knowledge history overlay — ephemeral, not persisted. Full-screen modal
   // opened from SessionKnowledgeBar's "History" button.
@@ -91,7 +91,7 @@ function createUIStore() {
     fileBrowserPanelVisible: false,
     gitPanelVisible: false,
     aiChatPanelVisible: false,
-    aiChatDetached: false,
+    detachedPanels: {} as Record<string, string>,
     knowledgeHistoryOverlayVisible: false,
     gitPanelRequestedTab: null,
     markdownPanelWidth: MARKDOWN_PANEL_DEFAULT_WIDTH,
@@ -125,6 +125,7 @@ function createUIStore() {
         settings_nav_width: state.settingsNavWidth,
         diff_view_mode: state.diffViewMode,
         file_browser_view_mode: state.fileBrowserViewMode,
+        detached_panels: state.detachedPanels,
       },
     }).catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
   }
@@ -187,6 +188,7 @@ function createUIStore() {
           settings_nav_width?: number;
           diff_view_mode?: string;
           file_browser_view_mode?: string;
+          detached_panels?: Record<string, string>;
         }>("load_ui_prefs");
         if (loaded) {
           if (loaded.sidebar_visible !== undefined) {
@@ -231,6 +233,9 @@ function createUIStore() {
           }
           if (loaded.file_browser_view_mode === "flat" || loaded.file_browser_view_mode === "tree") {
             setState("fileBrowserViewMode", loaded.file_browser_view_mode);
+          }
+          if (loaded.detached_panels && typeof loaded.detached_panels === "object") {
+            setState("detachedPanels", loaded.detached_panels);
           }
         }
       } catch (err) {
@@ -319,8 +324,19 @@ function createUIStore() {
       saveUIPrefs();
     },
 
-    setAiChatDetached(detached: boolean): void {
-      setState("aiChatDetached", detached);
+    setDetached(panelId: string, windowLabel: string): void {
+      setState("detachedPanels", panelId, windowLabel);
+      saveUIPrefs();
+    },
+
+    clearDetached(panelId: string): void {
+      const { [panelId]: _, ...rest } = state.detachedPanels;
+      setState("detachedPanels", reconcile(rest));
+      saveUIPrefs();
+    },
+
+    isDetached(panelId: string): boolean {
+      return panelId in state.detachedPanels;
     },
 
     setKnowledgeHistoryOverlayVisible(visible: boolean): void {

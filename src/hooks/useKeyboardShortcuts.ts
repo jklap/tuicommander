@@ -82,6 +82,7 @@ export interface ShortcutHandlers {
   openSecondaryWindow: () => void;
   toggleCommandOverview: () => void;
   toggleComposePanel: () => void;
+  detachActivityDashboard: () => void;
 }
 
 /** Keys that are modifiers only — not real shortcut targets */
@@ -211,6 +212,7 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
     case "open-secondary-window": handlers.openSecondaryWindow(); return true;
     case "command-overview": handlers.toggleCommandOverview(); return true;
     case "toggle-compose-panel": handlers.toggleComposePanel(); return true;
+    case "detach-activity-dashboard": handlers.detachActivityDashboard(); return true;
 
     // Tab navigation
     case "prev-tab": handlers.navigateTab("prev"); return true;
