@@ -145,6 +145,13 @@ registerPanel({
 registerPanel(activityPanelAdapter);
 
 const App: Component = () => {
+  // Detached panel mode: full-viewport single panel.
+  // Must be checked FIRST — before any createEffect/onMount registrations —
+  // otherwise panel windows run initApp() (re-adopts PTY sessions → "Terminal 1"
+  // flashing), sync providers, keybindings, and every other main-window effect.
+  const panelEl = renderPanelMode();
+  if (panelEl) return panelEl;
+
   const [statusInfo, _setStatusInfoRaw] = createSignal("Ready");
   let statusInfoTimer: ReturnType<typeof setTimeout> | null = null;
   const setStatusInfo = (text: string) => {
@@ -1819,10 +1826,6 @@ const App: Component = () => {
     });
   });
 
-
-  // Detached panel mode: full-viewport single panel
-  const panelEl = renderPanelMode();
-  if (panelEl) return panelEl;
 
   // Secondary window: minimal pane-only layout
   if (isSecondaryWindow()) {

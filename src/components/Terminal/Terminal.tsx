@@ -1619,6 +1619,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
   // Handle font size changes (per-terminal zoom OR global default).
   // Recalculates atlas cleanup thresholds so zoomed terminals get more
   // aggressive rebuild triggers (large glyphs fill atlas pages faster).
+  // fontSize change invalidates every glyph in the atlas (different metrics) —
+  // skipping the rebuild leaves a mix of old- and new-size glyphs visible.
+  let prevFontSize = settingsStore.state.defaultFontSize;
   createEffect(() => {
     const perTerminalSize = terminalsStore.state.terminals[props.id]?.fontSize;
     const defaultSize = settingsStore.state.defaultFontSize;
@@ -1628,6 +1631,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
     terminal.options.lineHeight = snapLineHeight(size);
     webglLife.updateThresholds(size);
     doFit();
+    if (size !== prevFontSize) {
+      prevFontSize = size;
+      rebuildAtlas();
+    }
   });
 
   // When a foreground TUI agent exits (agentType Some → null), some agents
@@ -1660,6 +1667,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
   // Handle font family + theme changes (global settings)
   // Preload via CSS Font Loading API before applying — canvas/WebGL renderers
   // cannot trigger @font-face loading on their own.
+  // fontFamily change rasterizes glyphs from a different font → cached atlas
+  // glyphs become wrong; rebuild after the family swap.
+  let prevFontFamily = settingsStore.state.font;
   createEffect(() => {
     const font = settingsStore.state.font;
     const weight = settingsStore.state.fontWeight;
@@ -1667,10 +1677,33 @@ export const Terminal: Component<TerminalProps> = (props) => {
     if (!terminal) return;
     terminal.options.theme = currentTheme();
     terminal.options.fontWeight = String(weight) as any;
+    const familyChanged = font !== prevFontFamily;
+    prevFontFamily = font;
     preloadFont(font).then(() => {
       terminal!.options.fontFamily = getFontFamily();
       doFit();
+      if (familyChanged) rebuildAtlas();
     });
+  });
+
+  // Watch for devicePixelRatio changes (browser zoom, OS scale switch, monitor
+  // change). DPR changes the pixel size of rasterized glyphs — without a full
+  // atlas rebuild the renderer mixes glyphs at different DPR scales, producing
+  // misaligned blocks. This is what the user fixes manually with Ctrl+= → Ctrl+0.
+  // matchMedia queries are bound to a single value, so the listener must be
+  // re-attached at the new DPR every time it fires.
+  let dprMql: MediaQueryList | undefined;
+  const handleDPRChange = () => {
+    dprMql?.removeEventListener("change", handleDPRChange);
+    dprMql = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    dprMql.addEventListener("change", handleDPRChange);
+    if (!terminal) return;
+    rebuildAtlas();
+    doFit();
+  };
+  onMount(() => {
+    dprMql = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    dprMql.addEventListener("change", handleDPRChange);
   });
 
   // Cleanup on unmount - detach UI but keep PTY session alive
@@ -1679,6 +1712,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     clearTimeout(resizeObserverTimer);
     clearTimeout(retryTimer);
     clearTimeout(agentDetectTimer);
+    dprMql?.removeEventListener("change", handleDPRChange);
     resizeObserver?.disconnect();
     unsubscribePty?.();
     unsubscribePty = undefined;

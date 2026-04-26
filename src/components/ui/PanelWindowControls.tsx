@@ -1,6 +1,7 @@
 import { Component, Show } from "solid-js";
 import { isTauri } from "../../transport";
 import { detachPanel, reattachPanel, closePanel } from "../../panelRouter";
+import s from "./PanelWindowControls.module.css";
 
 export const IconDetach = () => (
   <svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3">
@@ -22,23 +23,24 @@ interface PanelWindowControlsProps {
 
 export const PanelWindowControls: Component<PanelWindowControlsProps> = (props) => {
   return (
-    <>
+    <div class={s.controls}>
       <Show when={props.mode === "inline" && isTauri()}>
-        <button onClick={() => detachPanel(props.panelId)} title="Open in separate window">
+        <button class={s.btn} onClick={() => detachPanel(props.panelId)} title="Open in separate window">
           <IconDetach />
         </button>
       </Show>
       <Show when={props.mode === "detached"}>
-        <button onClick={() => reattachPanel(props.panelId)} title="Bring back to main window">
+        <button class={s.btn} onClick={() => reattachPanel(props.panelId)} title="Bring back to main window">
           <IconReattach />
         </button>
       </Show>
       <button
+        class={`${s.btn} ${s.close}`}
         onClick={() => props.mode === "detached" ? closePanel(props.panelId) : props.onInlineClose?.()}
         title="Close"
       >
         &times;
       </button>
-    </>
+    </div>
   );
 };
