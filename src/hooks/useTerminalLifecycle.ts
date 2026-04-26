@@ -171,6 +171,16 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
       }
     }
 
+    if (terminalsStore.isDetached(id)) {
+      const windowLabel = terminalsStore.state.detachedWindows[id];
+      terminalsStore.reattach(id);
+      if (windowLabel) {
+        import("@tauri-apps/api/webviewWindow").then(({ WebviewWindow }) =>
+          WebviewWindow.getByLabel(windowLabel).then((w) => w?.close()),
+        ).catch((err) => appLogger.warn("terminal", `Failed to close floating window ${windowLabel} on tab close`, err));
+      }
+    }
+
     setClosedTabs((prev) => [...prev.slice(-9), { name: terminal.name, fontSize: terminal.fontSize, cwd: terminal.cwd }]);
 
     if (terminal.sessionId) {
@@ -188,10 +198,11 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
     const termTab = activeGroup?.tabs.find(t => t.type === "terminal");
     if (termTab) survivorId = termTab.id;
 
-    const activeRepo = repositoriesStore.getActive();
-    if (activeRepo && activeRepo.activeBranch) {
-      repositoriesStore.removeTerminalFromBranch(activeRepo.path, activeRepo.activeBranch, id);
+    const owner = repositoriesStore.findOwnerForTerminal(id);
+    if (owner) {
+      repositoriesStore.removeTerminalFromBranch(owner.repoPath, owner.branchName, id);
     }
+    const activeRepo = repositoriesStore.getActive();
 
     const wasActive = terminalsStore.state.activeId === id;
     terminalsStore.remove(id);

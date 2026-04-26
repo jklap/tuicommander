@@ -83,6 +83,8 @@ export interface TabBarProps {
   onSplitHorizontal?: () => void;
   onReorder?: (fromIndex: number, toIndex: number) => void;
   onDetachTab?: (id: string) => void;
+  onReattachTab?: (id: string) => void;
+  onFocusDetachedTab?: (id: string) => void;
   onMoveToWorktree?: (terminalId: string, worktreePath: string) => void;
   getWorktreeTargets?: (terminalId: string) => Array<{ branchName: string; path: string }>;
 }
@@ -199,6 +201,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
     const ids = activeTerminals();
     const idx = ids.indexOf(id);
     const hasSession = !!terminalsStore.get(id)?.sessionId;
+    const detached = terminalsStore.isDetached(id);
     const worktreeTargets = props.getWorktreeTargets?.(id) ?? [];
     const items: ContextMenuItem[] = [
       { label: t("tabBar.closeTab", "Close Tab"), shortcut: `${getModifierSymbol()}W`, action: () => props.onTabClose(id) },
@@ -206,7 +209,9 @@ export const TabBar: Component<TabBarProps> = (props) => {
       { label: t("tabBar.closeRight", "Close Tabs to the Right"), action: () => props.onCloseToRight(id), disabled: idx >= ids.length - 1 },
       { label: "", separator: true, action: () => {} },
       { label: t("tabBar.renameTab", "Rename Tab"), action: () => setEditingId(id) },
-      { label: t("tabBar.detachToWindow", "Detach to Window"), action: () => props.onDetachTab?.(id), disabled: !hasSession },
+      detached
+        ? { label: t("tabBar.reattachTab", "Reattach to Main Window"), action: () => props.onReattachTab?.(id) }
+        : { label: t("tabBar.detachToWindow", "Detach to Window"), action: () => props.onDetachTab?.(id), disabled: !hasSession },
     ];
     if (worktreeTargets.length > 0) {
       items.push(
@@ -583,6 +588,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
         {(id, index) => {
           const terminal = () => terminalsStore.get(id);
           const isActive = () => terminalsStore.state.activeId === id;
+          const isDetached = () => terminalsStore.isDetached(id);
           const isBusy = () => terminalsStore.isBusy(id);
           const isIdle = () => !isBusy() && terminal()?.shellState === "idle";
           const isExited = () => terminal()?.shellState === "exited";
@@ -598,6 +604,14 @@ export const TabBar: Component<TabBarProps> = (props) => {
           const [hovered, setHovered] = createSignal(false);
           const repoName = () => repositoriesStore.getRepoForTerminal(id);
 
+          const handleTabClick = () => {
+            if (isDetached()) {
+              props.onFocusDetachedTab?.(id);
+            } else {
+              props.onTabSelect(id);
+            }
+          };
+
           const handleCloseTab = (e: Event) => {
             e.preventDefault();
             e.stopPropagation();
@@ -609,11 +623,10 @@ export const TabBar: Component<TabBarProps> = (props) => {
               <div
                 class={cx(
                   s.tab,
-                  isActive() && s.active,
+                  isActive() && !isDetached() && s.active,
+                  isDetached() && s.detached,
                   awaitingInput() && s.awaitingInput,
                   awaitingInput() && AWAITING_CLASSES[awaitingInput()!],
-                  // Suppress busy/idle indicators when awaiting input —
-                  // the awaiting state (orange/red) takes visual priority.
                   !awaitingInput() && isBusy() && s.shellBusy,
                   !awaitingInput() && !isBusy() && isUnseen() && s.shellUnseen,
                   !awaitingInput() && isIdle() && !isUnseen() && s.shellIdle,
@@ -624,7 +637,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
                   isDragOver() && dragOverSide() === "right" && s.dragOverRight,
                 )}
                 data-tab-id={id}
-                onClick={() => props.onTabSelect(id)}
+                onClick={handleTabClick}
                 onAuxClick={(e) => {
                   if (e.button === 1) handleCloseTab(e);
                 }}
@@ -645,6 +658,11 @@ export const TabBar: Component<TabBarProps> = (props) => {
                     {progress() !== null && progress() !== undefined && (
                       <span class={s.progressLabel}>{progress()}%</span>
                     )}
+                    <Show when={isDetached()}>
+                      <svg class={s.detachedIcon} viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5">
+                        <path d="M7 1h4v4M11 1L6 6M5 2H2v8h8V7" />
+                      </svg>
+                    </Show>
                   </span>
                 }>
                   <input

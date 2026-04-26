@@ -586,6 +586,19 @@ function createRepositoriesStore() {
       return terminalToRepo.get(termId) ?? null;
     },
 
+    /** Reverse-lookup: find repo path + branch name owning a terminal.
+     *  Uses O(1) repo lookup via inverse index, then scans branches (typically 1-5). */
+    findOwnerForTerminal(termId: string): { repoPath: string; branchName: string } | null {
+      const repoPath = terminalToRepo.get(termId);
+      if (!repoPath) return null;
+      const repo = state.repositories[repoPath];
+      if (!repo) return null;
+      for (const [name, branch] of Object.entries(repo.branches)) {
+        if (branch.terminals.includes(termId)) return { repoPath, branchName: name };
+      }
+      return null;
+    },
+
     /** Reverse-lookup: returns repo displayName for a terminal (for overlay labels). */
     getRepoForTerminal(termId: string): string | null {
       const path = terminalToRepo.get(termId);

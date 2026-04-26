@@ -247,6 +247,10 @@ const PaneGroupView: Component<{
     }
   };
 
+  const handleGroupWheel = () => {
+    if (isActive()) return;
+    paneLayoutStore.setActiveGroup(props.groupId);
+  };
 
   return (
     <div
@@ -256,6 +260,7 @@ const PaneGroupView: Component<{
       data-group-id={props.groupId}
       onClick={handleGroupClick}
       onContextMenu={handleGroupClick}
+      onWheel={handleGroupWheel}
     >
       {/* Mini tab bar — auto-show when 2+ tabs, always accept drops */}
       <Show when={showTabBar()}>

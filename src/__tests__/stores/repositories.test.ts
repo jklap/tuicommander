@@ -1056,4 +1056,65 @@ describe("repositoriesStore", () => {
       });
     });
   });
+
+  describe("findOwnerForTerminal()", () => {
+    it("returns repo and branch for a registered terminal", () => {
+      testInScope(() => {
+        store.add({ path: "/repo", displayName: "Repo" });
+        store.setBranch("/repo", "main", { worktreePath: "/repo" });
+        store.addTerminalToBranch("/repo", "main", "term-1");
+
+        const owner = store.findOwnerForTerminal("term-1");
+        expect(owner).toEqual({ repoPath: "/repo", branchName: "main" });
+      });
+    });
+
+    it("returns null for an unknown terminal", () => {
+      testInScope(() => {
+        store.add({ path: "/repo", displayName: "Repo" });
+        store.setBranch("/repo", "main", { worktreePath: "/repo" });
+
+        expect(store.findOwnerForTerminal("unknown")).toBeNull();
+      });
+    });
+
+    it("finds the correct branch when multiple branches exist", () => {
+      testInScope(() => {
+        store.add({ path: "/repo", displayName: "Repo" });
+        store.setBranch("/repo", "main", { worktreePath: "/repo" });
+        store.setBranch("/repo", "feature", { worktreePath: "/repo-feat" });
+        store.addTerminalToBranch("/repo", "main", "term-main");
+        store.addTerminalToBranch("/repo", "feature", "term-feat");
+
+        expect(store.findOwnerForTerminal("term-main")).toEqual({ repoPath: "/repo", branchName: "main" });
+        expect(store.findOwnerForTerminal("term-feat")).toEqual({ repoPath: "/repo", branchName: "feature" });
+      });
+    });
+
+    it("returns null when terminal was removed from branch", () => {
+      testInScope(() => {
+        store.add({ path: "/repo", displayName: "Repo" });
+        store.setBranch("/repo", "main", { worktreePath: "/repo" });
+        store.addTerminalToBranch("/repo", "main", "term-1");
+        store.removeTerminalFromBranch("/repo", "main", "term-1");
+
+        expect(store.findOwnerForTerminal("term-1")).toBeNull();
+      });
+    });
+
+    it("works across multiple repos", () => {
+      testInScope(() => {
+        store.add({ path: "/repo-a", displayName: "A" });
+        store.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+        store.addTerminalToBranch("/repo-a", "main", "term-a");
+
+        store.add({ path: "/repo-b", displayName: "B" });
+        store.setBranch("/repo-b", "dev", { worktreePath: "/repo-b" });
+        store.addTerminalToBranch("/repo-b", "dev", "term-b");
+
+        expect(store.findOwnerForTerminal("term-a")).toEqual({ repoPath: "/repo-a", branchName: "main" });
+        expect(store.findOwnerForTerminal("term-b")).toEqual({ repoPath: "/repo-b", branchName: "dev" });
+      });
+    });
+  });
 });

@@ -524,7 +524,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
           terminalsStore.clearAwaitingInput(props.id);
           invoke<string | null>("get_last_prompt", { sessionId: targetSessionId }).then((prompt) => {
             if (prompt !== null) terminalsStore.setLastPrompt(props.id, prompt);
-          }).catch(() => {});
+          }).catch((err) => {
+            appLogger.debug("terminal", "get_last_prompt failed", { sessionId: targetSessionId, error: String(err) });
+          });
           break;
         case "api-error": {
           const agent = terminalsStore.get(props.id)?.agentType;
@@ -533,25 +535,29 @@ export const Terminal: Component<TerminalProps> = (props) => {
           const label = agent ?? "Agent";
           const kindLabel = kind === "server" ? "server error" : kind === "auth" ? "auth failure" : "API error";
           appLogger.error("terminal", `${label}: ${kindLabel} (${patternName})`);
-          terminalsStore.setAwaitingInput(props.id, "error");
 
-          if (kind === "server" && agent && agentConfigsStore.isAutoRetryEnabled(agent) && !retryTimer) {
-            if (retryCount < RETRY_DELAYS.length) {
-              const delay = RETRY_DELAYS[retryCount];
-              const attempt = retryCount + 1;
-              appLogger.info("terminal", `[AutoRetry] ${label}: attempt ${attempt}/${RETRY_DELAYS.length} in ${delay / 1000}s`);
-              retryTimer = setTimeout(() => {
-                retryTimer = undefined;
-                const current = terminalsStore.get(props.id);
-                if (sessionId && current?.awaitingInput === "error") {
-                  appLogger.info("terminal", `[AutoRetry] ${label}: injecting "continue" (attempt ${attempt})`);
-                  pty.write(sessionId, "continue\r").catch((err) =>
-                    appLogger.error("terminal", "[AutoRetry] Failed to write", { error: String(err) }),
-                  );
-                }
-              }, delay);
-              retryCount++;
-            } else {
+          const willAutoRetry = kind === "server" && agent
+            && agentConfigsStore.isAutoRetryEnabled(agent) && !retryTimer
+            && retryCount < RETRY_DELAYS.length;
+
+          if (willAutoRetry) {
+            const delay = RETRY_DELAYS[retryCount];
+            const attempt = retryCount + 1;
+            appLogger.info("terminal", `[AutoRetry] ${label}: attempt ${attempt}/${RETRY_DELAYS.length} in ${delay / 1000}s`);
+            retryTimer = setTimeout(() => {
+              retryTimer = undefined;
+              const current = terminalsStore.get(props.id);
+              if (sessionId && current?.shellState !== "busy") {
+                appLogger.info("terminal", `[AutoRetry] ${label}: injecting "continue" (attempt ${attempt})`);
+                pty.write(sessionId, "continue\r").catch((err) =>
+                  appLogger.error("terminal", "[AutoRetry] Failed to write", { error: String(err) }),
+                );
+              }
+            }, delay);
+            retryCount++;
+          } else {
+            terminalsStore.setAwaitingInput(props.id, "error");
+            if (kind === "server" && agent && agentConfigsStore.isAutoRetryEnabled(agent) && retryCount >= RETRY_DELAYS.length) {
               appLogger.warn("terminal", `[AutoRetry] ${label}: exhausted ${RETRY_DELAYS.length} retries, manual intervention needed`);
             }
           }
@@ -1466,7 +1472,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
   };
   const isVisible = () =>
     props.alwaysVisible ||
-    terminalsStore.state.activeId === props.id ||
+    (terminalsStore.state.activeId === props.id && !terminalsStore.isDetached(props.id)) ||
     isActiveInPaneGroup();
 
   // Track hidden→visible transitions to rebuild the WebGL glyph atlas only once

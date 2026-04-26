@@ -39,7 +39,9 @@ export type AppLogSource =
   | "files"
   | "ViewportLock"
   | "ai-chat"
-  | "ai-agent";
+  | "ai-agent"
+  | "panel"
+  | "panel-sync";
 
 export interface AppLogEntry {
   id: number;

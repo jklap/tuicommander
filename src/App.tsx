@@ -1215,6 +1215,46 @@ const App: Component = () => {
     }
   };
 
+  const reattachFallback = (tabId: string) => {
+    terminalsStore.reattach(tabId);
+    terminalLifecycle.handleTerminalSelect(tabId);
+  };
+
+  /** Focus a detached terminal's floating window */
+  const handleFocusDetachedTab = async (tabId: string) => {
+    if (!isTauri()) return;
+    const windowLabel = terminalsStore.state.detachedWindows[tabId];
+    if (!windowLabel) return;
+    try {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const win = await WebviewWindow.getByLabel(windowLabel);
+      if (win) {
+        await win.unminimize();
+        await win.setFocus();
+      } else {
+        reattachFallback(tabId);
+      }
+    } catch (err) {
+      appLogger.warn("terminal", `Floating window ${windowLabel} not found, reattaching`, err);
+      reattachFallback(tabId);
+    }
+  };
+
+  /** Reattach a detached terminal by closing its floating window */
+  const handleReattachTab = async (tabId: string) => {
+    if (!isTauri()) return;
+    const windowLabel = terminalsStore.state.detachedWindows[tabId];
+    if (!windowLabel) return;
+    try {
+      const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+      const win = await WebviewWindow.getByLabel(windowLabel);
+      await win?.close();
+    } catch (err) {
+      appLogger.warn("terminal", `Failed to close floating window ${windowLabel}`, err);
+    }
+    reattachFallback(tabId);
+  };
+
   // Listen for reattach events from floating windows
   createEffect(() => {
     if (!isTauri()) return;
@@ -1222,8 +1262,7 @@ const App: Component = () => {
 
     listen<{ tabId: string; sessionId: string }>("reattach-terminal", (event) => {
       const { tabId } = event.payload;
-      terminalsStore.reattach(tabId);
-      terminalLifecycle.handleTerminalSelect(tabId);
+      reattachFallback(tabId);
       setStatusInfo("Tab reattached");
       // Force fit after the pane becomes visible again — the xterm canvas
       // may have lost its WebGL context while hidden with display:none.
@@ -1896,6 +1935,8 @@ const App: Component = () => {
               }
             }}
             onDetachTab={handleDetachTab}
+            onReattachTab={handleReattachTab}
+            onFocusDetachedTab={handleFocusDetachedTab}
             getWorktreeTargets={gitOps.getWorktreeTargets}
             onMoveToWorktree={gitOps.moveTerminalToWorktree}
           />

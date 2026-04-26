@@ -437,6 +437,27 @@
   opacity: 0.8;
 }
 
+/* Detached to floating window */
+.tab.detached {
+  opacity: 0.5;
+  border-bottom: 2px dashed var(--text-secondary, #848d97);
+}
+
+.tab.detached:hover {
+  opacity: 0.75;
+}
+
+.tab.detached .tabIcon {
+  opacity: 0.4;
+}
+
+.detachedIcon {
+  margin-left: 4px;
+  opacity: 0.6;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
 /* Drag & drop */
 .tab.dragging {
   opacity: 0.4;
