@@ -157,11 +157,12 @@ describe("SettingsPanel", () => {
 
     // Default is General (Git Integration moved to GitHub tab)
     const headings = container.querySelectorAll(".section h3");
-    expect(headings.length).toBeGreaterThanOrEqual(4);
+    expect(headings.length).toBeGreaterThanOrEqual(5);
     expect(headings[0]!.textContent).toBe("General");
     expect(headings[1]!.textContent).toBe("Confirmations");
-    expect(headings[2]!.textContent).toBe("Power Management");
-    expect(headings[3]!.textContent).toBe("Updates");
+    expect(headings[2]!.textContent).toBe("Terminal");
+    expect(headings[3]!.textContent).toBe("Power Management");
+    expect(headings[4]!.textContent).toBe("Updates");
 
     // Click Notifications nav item
     const navItems = container.querySelectorAll(".navItem");
