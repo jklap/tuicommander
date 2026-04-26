@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import "../mocks/tauri";
 import { terminalsStore } from "../../stores/terminals";
+import { dictationStore } from "../../stores/dictation";
 import { useDictation } from "../../hooks/useDictation";
 
 function resetStores() {
@@ -45,6 +46,8 @@ describe("useDictation", () => {
   beforeEach(() => {
     resetStores();
     vi.clearAllMocks();
+
+    dictationStore.setAutoSend(false);
 
     // Reset mock state
     mockDictationStore.state = {
@@ -284,6 +287,72 @@ describe("useDictation", () => {
         expect(mockPty.write).not.toHaveBeenCalled();
       } finally {
         document.body.removeChild(textarea);
+      }
+    });
+  });
+
+  describe("autoSend", () => {
+    it("sends command to terminal when autoSend is enabled", async () => {
+      dictationStore.setAutoSend(true);
+      const id = terminalsStore.add({
+        sessionId: "sess-1",
+        fontSize: 14,
+        name: "Test",
+        cwd: null,
+        awaitingInput: null,
+      });
+      terminalsStore.setActive(id);
+
+      await dictation.handleDictationStart();
+      await dictation.handleDictationStop();
+
+      // sendCommand writes text + Enter sequence to PTY
+      expect(mockPty.write).toHaveBeenCalled();
+      const calls = mockPty.write.mock.calls.map((c: unknown[]) => c[1]).join("");
+      expect(calls).toContain("hello world");
+    });
+
+    it("does NOT auto-submit when focused on a textarea", async () => {
+      dictationStore.setAutoSend(true);
+      const textarea = document.createElement("textarea");
+      textarea.value = "";
+      document.body.appendChild(textarea);
+      textarea.focus();
+      const enterSpy = vi.fn();
+      textarea.addEventListener("keydown", enterSpy);
+
+      try {
+        await dictation.handleDictationStart();
+        await dictation.handleDictationStop();
+
+        expect(textarea.value).toBe("hello world");
+        expect(enterSpy).not.toHaveBeenCalled();
+        expect(mockPty.write).not.toHaveBeenCalled();
+      } finally {
+        textarea.removeEventListener("keydown", enterSpy);
+        document.body.removeChild(textarea);
+      }
+    });
+
+    it("does NOT auto-submit when focused on an input", async () => {
+      dictationStore.setAutoSend(true);
+      const input = document.createElement("input");
+      input.type = "text";
+      document.body.appendChild(input);
+      input.focus();
+      const enterSpy = vi.fn();
+      input.addEventListener("keydown", enterSpy);
+
+      try {
+        await dictation.handleDictationStart();
+        await dictation.handleDictationStop();
+
+        expect(input.value).toBe("hello world");
+        expect(enterSpy).not.toHaveBeenCalled();
+        expect(mockPty.write).not.toHaveBeenCalled();
+      } finally {
+        input.removeEventListener("keydown", enterSpy);
+        document.body.removeChild(input);
       }
     });
   });

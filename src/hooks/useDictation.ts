@@ -134,27 +134,22 @@ export function useDictation(deps: DictationDeps) {
       el.value = before + text + after;
       el.selectionStart = el.selectionEnd = start + text.length;
       el.dispatchEvent(new Event("input", { bubbles: true }));
-      if (autoSend) {
-        el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
-      }
       deps.setStatusInfo("Ready");
       return;
     }
     if (el && el.getAttribute("contenteditable") === "true") {
       document.execCommand("insertText", false, text);
-      if (autoSend) {
-        el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true }));
-      }
       deps.setStatusInfo("Ready");
       return;
     }
 
     const active = terminalsStore.getActive();
-    if (active?.sessionId) {
+    const targetSessionId = active?.sessionId;
+    if (active && targetSessionId) {
       try {
-        const writeFn = (data: string) => deps.pty.write(active.sessionId!, data);
+        const writeFn = (data: string) => deps.pty.write(targetSessionId, data);
         if (autoSend) {
-          const shellFamily = await getShellFamily(active.sessionId!);
+          const shellFamily = await getShellFamily(targetSessionId);
           await sendCommand(writeFn, text, active.agentType, shellFamily);
         } else {
           await writeFn(text);
