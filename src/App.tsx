@@ -92,6 +92,7 @@ import { useSplitPanes } from "./hooks/useSplitPanes";
 import { useAgentPolling } from "./hooks/useAgentPolling";
 import { useAgentDetection } from "./hooks/useAgentDetection";
 import { agentConfigsStore, llmApiStore } from "./stores/agentConfigs";
+import { providerRegistryStore } from "./stores/providerRegistry";
 import { AGENTS, type AgentType } from "./agents";
 import { buildAgentLaunchCommand } from "./utils/agentSession";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
@@ -534,6 +535,7 @@ const App: Component = () => {
             keybindingsStore.hydrate(),
             agentConfigsStore.hydrate(),
             llmApiStore.hydrate(),
+            providerRegistryStore.hydrate(),
             agentDetection.detectAll(),
           ]);
           const failures = results.filter((r) => r.status === "rejected");
