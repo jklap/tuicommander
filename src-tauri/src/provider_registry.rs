@@ -150,7 +150,133 @@ impl Default for ProviderRegistry {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn load_registry() -> ProviderRegistry {
-    load_json_config(CONFIG_FILE)
+    let path = crate::config::config_dir().join(CONFIG_FILE);
+    if path.exists() {
+        return load_json_config(CONFIG_FILE);
+    }
+    migrate_from_legacy()
+}
+
+fn infer_provider_type(provider_str: &str) -> ProviderType {
+    match provider_str {
+        "anthropic" => ProviderType::Anthropic,
+        "openai" => ProviderType::OpenAi,
+        "gemini" => ProviderType::Gemini,
+        "ollama" => ProviderType::Ollama,
+        "openrouter" => ProviderType::OpenRouter,
+        "deepseek" => ProviderType::DeepSeek,
+        "mistral" => ProviderType::Mistral,
+        _ => ProviderType::Custom,
+    }
+}
+
+fn migrate_from_legacy() -> ProviderRegistry {
+    use crate::ai_agent::engine::ToolPhase;
+
+    let mut reg = ProviderRegistry::default();
+    let chat_cfg: crate::ai_chat::AiChatConfig = load_json_config(crate::ai_chat::CONFIG_FILE);
+    let llm_cfg: crate::llm_api::LlmApiConfig = load_json_config("llm-api.json");
+
+    if chat_cfg.is_configured() {
+        let ptype = infer_provider_type(&chat_cfg.provider);
+        let provider_id = format!("{}-chat", chat_cfg.provider);
+
+        reg.providers.push(ProviderEntry {
+            id: provider_id.clone(),
+            provider_type: ptype,
+            label: format!("{} (migrated)", chat_cfg.provider),
+            base_url: chat_cfg.base_url.clone(),
+        });
+
+        let model_id = format!("chat-{}", chat_cfg.model.replace(['/', '.'], "-"));
+        reg.models.push(ModelEntry {
+            id: model_id.clone(),
+            provider_id: provider_id.clone(),
+            model_name: chat_cfg.model.clone(),
+            tier: ModelTier::Standard,
+        });
+
+        reg.slots.insert(SlotName::Chat, model_id.clone());
+        reg.slots.insert(SlotName::AgentDefault, model_id.clone());
+        reg.slots.insert(SlotName::Enrichment, model_id.clone());
+
+        if let Ok(Some(key)) = crate::credentials::get(crate::credentials::Credential::AiChatApiKey) {
+            let _ = crate::credentials::set(crate::credentials::Credential::Provider(&provider_id), &key);
+        }
+
+        if let Some(overrides) = &chat_cfg.agent_model_overrides {
+            for (phase, override_model) in overrides {
+                let override_id = format!("agent-{}", override_model.replace(['/', '.'], "-"));
+                if !reg.models.iter().any(|m| m.model_name == *override_model) {
+                    reg.models.push(ModelEntry {
+                        id: override_id.clone(),
+                        provider_id: provider_id.clone(),
+                        model_name: override_model.clone(),
+                        tier: ModelTier::Standard,
+                    });
+                }
+                let mid = reg.models.iter().find(|m| m.model_name == *override_model)
+                    .map(|m| m.id.clone()).unwrap_or(override_id);
+                match phase {
+                    ToolPhase::Search => { reg.slots.insert(SlotName::AgentSearch, mid); }
+                    ToolPhase::Read => { reg.slots.insert(SlotName::AgentRead, mid); }
+                    ToolPhase::Write => { reg.slots.insert(SlotName::AgentWrite, mid); }
+                    ToolPhase::Plan => {} // plan uses agent_default
+                }
+            }
+        }
+
+        reg.features.enrichment_enabled = chat_cfg.experimental_ai_block_enrichment;
+    }
+
+    if llm_cfg.is_configured() {
+        let same_provider = chat_cfg.is_configured()
+            && chat_cfg.provider == llm_cfg.provider
+            && chat_cfg.effective_base_url() == llm_cfg.base_url;
+
+        if same_provider {
+            let existing_provider_id = format!("{}-chat", chat_cfg.provider);
+            let headless_model_id = format!("headless-{}", llm_cfg.model.replace(['/', '.'], "-"));
+            if !reg.models.iter().any(|m| m.model_name == llm_cfg.model) {
+                reg.models.push(ModelEntry {
+                    id: headless_model_id.clone(),
+                    provider_id: existing_provider_id,
+                    model_name: llm_cfg.model.clone(),
+                    tier: ModelTier::Standard,
+                });
+            }
+            let mid = reg.models.iter().find(|m| m.model_name == llm_cfg.model)
+                .map(|m| m.id.clone()).unwrap_or(headless_model_id);
+            reg.slots.insert(SlotName::Headless, mid);
+        } else {
+            let ptype = infer_provider_type(&llm_cfg.provider);
+            let provider_id = format!("{}-headless", llm_cfg.provider);
+
+            reg.providers.push(ProviderEntry {
+                id: provider_id.clone(),
+                provider_type: ptype,
+                label: format!("{} (headless, migrated)", llm_cfg.provider),
+                base_url: llm_cfg.base_url.clone(),
+            });
+
+            let model_id = format!("headless-{}", llm_cfg.model.replace(['/', '.'], "-"));
+            reg.models.push(ModelEntry {
+                id: model_id.clone(),
+                provider_id: provider_id.clone(),
+                model_name: llm_cfg.model.clone(),
+                tier: ModelTier::Standard,
+            });
+
+            reg.slots.insert(SlotName::Headless, model_id);
+
+            if let Ok(Some(key)) = crate::credentials::get(crate::credentials::Credential::LlmApiKey) {
+                let _ = crate::credentials::set(crate::credentials::Credential::Provider(&provider_id), &key);
+            }
+        }
+    }
+
+    let _ = save_registry(&reg);
+    reg
 }
 
 pub(crate) fn save_registry(registry: &ProviderRegistry) -> Result<(), String> {
@@ -719,5 +845,191 @@ mod tests {
 
         let resolved = resolve_slot(&reg, SlotName::Chat).unwrap();
         assert_eq!(resolved.config.base_url.as_deref(), Some("http://my-llm:8080/v1/"));
+    }
+
+    // -- migration tests --
+
+    fn write_json(dir: &std::path::Path, filename: &str, value: &impl serde::Serialize) {
+        let json = serde_json::to_string_pretty(value).unwrap();
+        std::fs::write(dir.join(filename), json).unwrap();
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn migrate_empty_configs_produces_empty_registry() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let reg = load_registry();
+        assert_eq!(reg.schema_version, 1);
+        assert!(reg.providers.is_empty());
+        assert!(reg.models.is_empty());
+        assert!(reg.slots.is_empty());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn migrate_ai_chat_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let chat = crate::ai_chat::AiChatConfig {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-5-20241022".to_string(),
+            base_url: None,
+            experimental_ai_block_enrichment: true,
+            ..crate::ai_chat::AiChatConfig::default()
+        };
+        write_json(dir.path(), "ai-chat.json", &chat);
+
+        crate::credentials::set(crate::credentials::Credential::AiChatApiKey, "sk-ant-old").unwrap();
+
+        let reg = load_registry();
+        assert_eq!(reg.providers.len(), 1);
+        assert_eq!(reg.providers[0].provider_type, ProviderType::Anthropic);
+        assert_eq!(reg.providers[0].id, "anthropic-chat");
+        assert_eq!(reg.models.len(), 1);
+        assert_eq!(reg.models[0].model_name, "claude-sonnet-4-5-20241022");
+        assert!(reg.slots.contains_key(&SlotName::Chat));
+        assert!(reg.slots.contains_key(&SlotName::AgentDefault));
+        assert!(reg.slots.contains_key(&SlotName::Enrichment));
+        assert!(reg.features.enrichment_enabled);
+
+        let migrated_key = crate::credentials::get(
+            crate::credentials::Credential::Provider("anthropic-chat")
+        ).unwrap();
+        assert_eq!(migrated_key, Some("sk-ant-old".to_string()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn migrate_llm_api_only() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let llm = crate::llm_api::LlmApiConfig {
+            provider: "openai".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            base_url: None,
+        };
+        write_json(dir.path(), "llm-api.json", &llm);
+
+        crate::credentials::set(crate::credentials::Credential::LlmApiKey, "sk-oai-old").unwrap();
+
+        let reg = load_registry();
+        assert_eq!(reg.providers.len(), 1);
+        assert_eq!(reg.providers[0].provider_type, ProviderType::OpenAi);
+        assert_eq!(reg.providers[0].id, "openai-headless");
+        assert_eq!(reg.models.len(), 1);
+        assert!(reg.slots.contains_key(&SlotName::Headless));
+        assert!(!reg.slots.contains_key(&SlotName::Chat));
+
+        let migrated_key = crate::credentials::get(
+            crate::credentials::Credential::Provider("openai-headless")
+        ).unwrap();
+        assert_eq!(migrated_key, Some("sk-oai-old".to_string()));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn migrate_both_same_provider_deduplicates() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let chat = crate::ai_chat::AiChatConfig {
+            provider: "openai".to_string(),
+            model: "gpt-4o".to_string(),
+            base_url: None,
+            ..crate::ai_chat::AiChatConfig::default()
+        };
+        let llm = crate::llm_api::LlmApiConfig {
+            provider: "openai".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            base_url: None,
+        };
+        write_json(dir.path(), "ai-chat.json", &chat);
+        write_json(dir.path(), "llm-api.json", &llm);
+
+        let reg = load_registry();
+        // Same provider, different models — one provider, two models
+        assert_eq!(reg.providers.len(), 1);
+        assert_eq!(reg.models.len(), 2);
+        assert!(reg.slots.contains_key(&SlotName::Chat));
+        assert!(reg.slots.contains_key(&SlotName::Headless));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn migrate_both_different_providers() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let chat = crate::ai_chat::AiChatConfig {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-5-20241022".to_string(),
+            base_url: None,
+            ..crate::ai_chat::AiChatConfig::default()
+        };
+        let llm = crate::llm_api::LlmApiConfig {
+            provider: "openai".to_string(),
+            model: "gpt-4o-mini".to_string(),
+            base_url: None,
+        };
+        write_json(dir.path(), "ai-chat.json", &chat);
+        write_json(dir.path(), "llm-api.json", &llm);
+
+        let reg = load_registry();
+        assert_eq!(reg.providers.len(), 2);
+        assert_eq!(reg.models.len(), 2);
+        assert!(reg.slots.contains_key(&SlotName::Chat));
+        assert!(reg.slots.contains_key(&SlotName::Headless));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn migrate_with_agent_model_overrides() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let mut overrides = std::collections::HashMap::new();
+        overrides.insert(crate::ai_agent::engine::ToolPhase::Search, "claude-haiku-4-5-20241022".to_string());
+        overrides.insert(crate::ai_agent::engine::ToolPhase::Write, "claude-sonnet-4-5-20241022".to_string());
+
+        let chat = crate::ai_chat::AiChatConfig {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-5-20241022".to_string(),
+            base_url: None,
+            agent_model_overrides: Some(overrides),
+            ..crate::ai_chat::AiChatConfig::default()
+        };
+        write_json(dir.path(), "ai-chat.json", &chat);
+
+        let reg = load_registry();
+        assert!(reg.slots.contains_key(&SlotName::AgentSearch));
+        // Write override uses the same model as default — model exists, slot set
+        assert!(reg.slots.contains_key(&SlotName::AgentWrite));
+        // Haiku model should be added
+        assert!(reg.models.iter().any(|m| m.model_name == "claude-haiku-4-5-20241022"));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn migrate_persists_providers_json() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let chat = crate::ai_chat::AiChatConfig {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-5-20241022".to_string(),
+            ..crate::ai_chat::AiChatConfig::default()
+        };
+        write_json(dir.path(), "ai-chat.json", &chat);
+
+        let _ = load_registry();
+        // providers.json should now exist
+        assert!(dir.path().join("providers.json").exists());
+        // Second load should read from file, not migrate again
+        let reg2 = load_registry();
+        assert_eq!(reg2.providers.len(), 1);
     }
 }

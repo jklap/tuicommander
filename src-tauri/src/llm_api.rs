@@ -30,7 +30,7 @@ pub(crate) struct LlmApiConfig {
 }
 
 impl LlmApiConfig {
-    fn is_configured(&self) -> bool {
+    pub(crate) fn is_configured(&self) -> bool {
         !self.provider.is_empty() && !self.model.is_empty()
     }
 }
