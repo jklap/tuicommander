@@ -1,16 +1,10 @@
 //! LLM API integration for Smart Prompts "api" execution mode.
 //!
 //! Uses the `genai` crate for multi-provider chat completions.
-//! API keys are stored in the unified credential vault (`credentials.rs`).
-//! Config (provider/model/base_url) stored in `llm-api.json`.
+//! Provider config and API keys are stored in the unified provider registry.
 
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
-
-use crate::config::{load_json_config, save_json_config};
-
-const CONFIG_FILE: &str = "llm-api.json";
-use crate::credentials::Credential;
 
 // ---------------------------------------------------------------------------
 // Config
@@ -33,22 +27,6 @@ impl LlmApiConfig {
     pub(crate) fn is_configured(&self) -> bool {
         !self.provider.is_empty() && !self.model.is_empty()
     }
-}
-
-// ---------------------------------------------------------------------------
-// Keyring helpers
-// ---------------------------------------------------------------------------
-
-fn read_api_key() -> Result<Option<String>, String> {
-    crate::credentials::get(Credential::LlmApiKey)
-}
-
-fn save_api_key(key: &str) -> Result<(), String> {
-    crate::credentials::set(Credential::LlmApiKey, key)
-}
-
-fn delete_api_key() -> Result<(), String> {
-    crate::credentials::delete(Credential::LlmApiKey)
 }
 
 // ---------------------------------------------------------------------------
@@ -108,34 +86,6 @@ pub(crate) fn build_client(config: &LlmApiConfig, api_key: &str) -> genai::Clien
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-#[tauri::command]
-pub(crate) fn load_llm_api_config() -> LlmApiConfig {
-    load_json_config(CONFIG_FILE)
-}
-
-#[tauri::command]
-pub(crate) fn save_llm_api_config(config: LlmApiConfig) -> Result<(), String> {
-    save_json_config(CONFIG_FILE, &config)
-}
-
-#[tauri::command]
-pub(crate) fn has_llm_api_key() -> Result<bool, String> {
-    read_api_key().map(|k| k.is_some())
-}
-
-#[tauri::command]
-pub(crate) fn save_llm_api_key(key: String) -> Result<(), String> {
-    if key.is_empty() {
-        return Err("API key must not be empty".to_string());
-    }
-    save_api_key(&key)
-}
-
-#[tauri::command]
-pub(crate) fn delete_llm_api_key() -> Result<(), String> {
-    delete_api_key()
-}
-
 /// Execute a Smart Prompt via direct LLM API call.
 /// Returns the model's response text.
 #[tauri::command]
@@ -177,18 +127,6 @@ pub(crate) async fn execute_api_prompt(
         .first_text()
         .map(|s| s.trim().to_string())
         .ok_or_else(|| "Model returned an empty response".to_string())
-}
-
-/// Test the LLM API connection with a minimal completion.
-#[tauri::command]
-pub(crate) async fn test_llm_api() -> Result<String, String> {
-    execute_api_prompt(
-        Some("Reply with exactly: OK".to_string()),
-        "Test connection".to_string(),
-        15_000,
-    )
-    .await
-    .map(|response| format!("Connection successful — model replied: {response}"))
 }
 
 // ---------------------------------------------------------------------------

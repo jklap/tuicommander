@@ -58,7 +58,7 @@ const DEDUP_COMMANDS = new Set([
   "get_last_prompt",
   "load_config",
   "load_agents_config",
-  "load_llm_api_config",
+  "load_provider_registry",
   "load_keybindings",
   "load_notification_config",
   "load_notes",

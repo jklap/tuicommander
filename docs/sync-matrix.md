@@ -93,6 +93,18 @@ When changing the tool list, tool handlers, `disabled_native_tools`, upstream al
 #### Agent tool actions added (swarm inbox)
 - `agent action=inbox` response now includes `missed_count` — number of messages evicted from the FIFO inbox since last read. Non-zero means the orchestrator missed messages and should increase polling frequency.
 
+### Provider Registry
+When modifying provider types, slot names, credential storage, or the ProvidersTab UI:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/provider_registry.rs` | `ProviderType`, `SlotName`, `ProviderRegistry` structs + Tauri commands |
+| `src-tauri/src/credentials.rs` | `Credential::Provider` variant for per-provider key storage |
+| `src/stores/providerRegistry.ts` | Frontend store: hydrate, save, slot resolution, CRUD |
+| `src/components/SettingsPanel/tabs/ProvidersTab.tsx` | Settings UI: provider cards, model CRUD, slot assignments |
+| `src/hooks/useSmartPrompts.ts` | `resolveSlot("headless")` check for headless execution |
+| `docs/backend/config.md` | `providers.json` schema documentation |
+
 ### AI Chat
 When modifying AI Chat panel, settings, context menu actions, or streaming backend:
 

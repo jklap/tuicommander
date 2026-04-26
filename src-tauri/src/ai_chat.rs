@@ -15,7 +15,6 @@ use crate::llm_api;
 use crate::state::AppState;
 
 pub(crate) const CONFIG_FILE: &str = "ai-chat.json";
-use crate::credentials::Credential;
 
 // ---------------------------------------------------------------------------
 // Config
@@ -99,22 +98,6 @@ impl AiChatConfig {
 }
 
 // ---------------------------------------------------------------------------
-// Keyring helpers
-// ---------------------------------------------------------------------------
-
-pub(crate) fn read_api_key() -> Result<Option<String>, String> {
-    crate::credentials::get(Credential::AiChatApiKey)
-}
-
-fn store_api_key(key: &str) -> Result<(), String> {
-    crate::credentials::set(Credential::AiChatApiKey, key)
-}
-
-fn remove_api_key() -> Result<(), String> {
-    crate::credentials::delete(Credential::AiChatApiKey)
-}
-
-// ---------------------------------------------------------------------------
 // Ollama detection
 // ---------------------------------------------------------------------------
 
@@ -193,34 +176,6 @@ pub(crate) fn load_ai_chat_config() -> AiChatConfig {
 #[tauri::command]
 pub(crate) fn save_ai_chat_config(config: AiChatConfig) -> Result<(), String> {
     save_json_config(CONFIG_FILE, &config)
-}
-
-#[tauri::command]
-pub(crate) fn has_ai_chat_api_key() -> Result<bool, String> {
-    read_api_key().map(|k| k.is_some())
-}
-
-#[tauri::command]
-pub(crate) fn save_ai_chat_api_key(key: String) -> Result<(), String> {
-    if key.is_empty() {
-        return Err("API key must not be empty".to_string());
-    }
-    store_api_key(&key)
-}
-
-#[tauri::command]
-pub(crate) fn delete_ai_chat_api_key() -> Result<(), String> {
-    remove_api_key()
-}
-
-/// Check whether Ollama is running and list available models.
-#[tauri::command]
-pub(crate) async fn check_ollama_status() -> OllamaStatus {
-    let config: AiChatConfig = load_json_config(CONFIG_FILE);
-    let base = config
-        .effective_base_url()
-        .unwrap_or_else(|| "http://localhost:11434/v1/".to_string());
-    detect_ollama(&base).await
 }
 
 /// Quick connection test: first validate the API key, then send a minimal completion.
