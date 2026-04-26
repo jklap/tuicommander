@@ -91,7 +91,7 @@ import { useQuickSwitcher } from "./hooks/useQuickSwitcher";
 import { useSplitPanes } from "./hooks/useSplitPanes";
 import { useAgentPolling } from "./hooks/useAgentPolling";
 import { useAgentDetection } from "./hooks/useAgentDetection";
-import { agentConfigsStore, llmApiStore } from "./stores/agentConfigs";
+import { agentConfigsStore } from "./stores/agentConfigs";
 import { providerRegistryStore } from "./stores/providerRegistry";
 import { AGENTS, type AgentType } from "./agents";
 import { buildAgentLaunchCommand } from "./utils/agentSession";
@@ -534,7 +534,6 @@ const App: Component = () => {
             activityStore.hydrate(),
             keybindingsStore.hydrate(),
             agentConfigsStore.hydrate(),
-            llmApiStore.hydrate(),
             providerRegistryStore.hydrate(),
             agentDetection.detectAll(),
           ]);

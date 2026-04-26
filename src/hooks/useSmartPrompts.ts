@@ -2,7 +2,8 @@ import { promptLibraryStore, type SavedPrompt } from "../stores/promptLibrary";
 import { terminalsStore } from "../stores/terminals";
 import { githubStore } from "../stores/github";
 import { repositoriesStore } from "../stores/repositories";
-import { agentConfigsStore, llmApiStore } from "../stores/agentConfigs";
+import { agentConfigsStore } from "../stores/agentConfigs";
+import { providerRegistryStore } from "../stores/providerRegistry";
 import { usePty } from "./usePty";
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
@@ -74,7 +75,7 @@ export function useSmartPrompts() {
     }
 
     if (prompt.executionMode === "api") {
-      if (!llmApiStore.isConfigured()) return { ok: false, reason: "LLM API not configured — set provider, model, and API key in Settings → Agents" };
+      if (!providerRegistryStore.resolveSlot("headless")) return { ok: false, reason: "Headless provider not configured — add a provider and assign the Headless slot in Settings → Providers" };
       return { ok: true };
     }
 
@@ -83,7 +84,7 @@ export function useSmartPrompts() {
       if (!agentType) return { ok: false, reason: "No headless agent configured — set one in Settings → Agents" };
       // When headless agent is "api", validate API config instead of CLI template
       if (agentType === "api") {
-        if (!llmApiStore.isConfigured()) return { ok: false, reason: "LLM API not configured — set provider, model, and API key in Settings → Agents" };
+        if (!providerRegistryStore.resolveSlot("headless")) return { ok: false, reason: "Headless provider not configured — add a provider and assign the Headless slot in Settings → Providers" };
         return { ok: true };
       }
       const template = agentConfigsStore.getHeadlessTemplate(agentType);
