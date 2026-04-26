@@ -131,29 +131,11 @@ fn apply_intent(state: &AppState, session_id: &str, outcome_id: u64, intent: Str
 }
 
 async fn run_enrichment(req: &EnrichmentRequest) -> Result<String, String> {
-    let config = crate::ai_chat::load_ai_chat_config();
-    if !config.is_configured() {
-        return Err("provider not configured".into());
-    }
+    let registry = crate::provider_registry::load_registry();
+    let resolved = crate::provider_registry::resolve_slot(&registry, crate::provider_registry::SlotName::Enrichment)
+        .map_err(|_| "provider not configured".to_string())?;
 
-    let api_key = if config.provider == "ollama" {
-        crate::ai_chat::read_api_key()
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| "ollama".to_string())
-    } else {
-        match crate::ai_chat::read_api_key() {
-            Ok(Some(k)) => k,
-            _ => return Err("no api key".into()),
-        }
-    };
-
-    let llm_config = crate::llm_api::LlmApiConfig {
-        provider: config.provider.clone(),
-        model: config.model.clone(),
-        base_url: config.effective_base_url(),
-    };
-    let client = crate::llm_api::build_client(&llm_config, &api_key);
+    let client = crate::llm_api::build_client(&resolved.config, &resolved.api_key);
 
     let prompt = build_prompt(req);
 
@@ -163,7 +145,7 @@ async fn run_enrichment(req: &EnrichmentRequest) -> Result<String, String> {
         .append_message(ChatMessage::user(prompt));
 
     let resp =
-        tokio::time::timeout(REQUEST_TIMEOUT, client.exec_chat(&config.model, chat_req, None))
+        tokio::time::timeout(REQUEST_TIMEOUT, client.exec_chat(&resolved.config.model, chat_req, None))
             .await
             .map_err(|_| "timeout".to_string())?
             .map_err(|e| format!("llm error: {e}"))?;

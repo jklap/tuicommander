@@ -16,21 +16,30 @@ pub(crate) fn build_llm_runtime_for_scheduler() -> Result<LlmRuntime, String> {
 }
 
 fn build_llm_runtime() -> Result<LlmRuntime, String> {
-    let chat_config: crate::ai_chat::AiChatConfig =
-        crate::config::load_json_config(crate::ai_chat::CONFIG_FILE);
-    let api_key = if chat_config.provider == "ollama" {
-        crate::ai_chat::read_api_key()?.unwrap_or_else(|| "ollama".to_string())
-    } else {
-        crate::ai_chat::read_api_key()?
-            .ok_or_else(|| "No API key stored — add one in Settings > AI Chat".to_string())?
-    };
-    let config = crate::llm_api::LlmApiConfig {
-        provider: chat_config.provider.clone(),
-        model: chat_config.model.clone(),
-        base_url: chat_config.effective_base_url(),
-    };
-    let model_overrides = chat_config.agent_model_overrides.clone().unwrap_or_default();
-    Ok(LlmRuntime { config, api_key, model_overrides })
+    use crate::provider_registry::{SlotName, load_registry, resolve_slot};
+    use super::engine::ToolPhase;
+
+    let registry = load_registry();
+    let resolved = resolve_slot(&registry, SlotName::AgentDefault)?;
+
+    let mut model_overrides = std::collections::HashMap::new();
+    for (slot, phase) in [
+        (SlotName::AgentSearch, ToolPhase::Search),
+        (SlotName::AgentRead, ToolPhase::Read),
+        (SlotName::AgentWrite, ToolPhase::Write),
+    ] {
+        if let Ok(r) = resolve_slot(&registry, slot) {
+            if r.config.model != resolved.config.model {
+                model_overrides.insert(phase, r.config.model);
+            }
+        }
+    }
+
+    Ok(LlmRuntime {
+        config: resolved.config,
+        api_key: resolved.api_key,
+        model_overrides,
+    })
 }
 
 /// Start an agent loop on a terminal session.

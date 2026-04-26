@@ -150,14 +150,12 @@ pub(crate) async fn execute_api_prompt(
         return Err("Prompt content must not be empty".to_string());
     }
 
-    let config: LlmApiConfig = load_json_config(CONFIG_FILE);
-    if !config.is_configured() {
-        return Err("LLM API not configured — set provider and model in Settings > Agents".to_string());
-    }
+    let registry = crate::provider_registry::load_registry();
+    let resolved = crate::provider_registry::resolve_slot(&registry, crate::provider_registry::SlotName::Headless)
+        .map_err(|_| "LLM API not configured — set provider and model in Settings > Agents".to_string())?;
 
-    let api_key = read_api_key()?
-        .ok_or_else(|| "No API key stored — add one in Settings > Agents".to_string())?;
-
+    let config = resolved.config;
+    let api_key = resolved.api_key;
     let client = build_client(&config, &api_key);
 
     let mut chat_req = ChatRequest::default();

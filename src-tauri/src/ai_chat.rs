@@ -226,21 +226,12 @@ pub(crate) async fn check_ollama_status() -> OllamaStatus {
 /// Quick connection test: first validate the API key, then send a minimal completion.
 #[tauri::command]
 pub(crate) async fn test_ai_chat_connection() -> Result<String, String> {
-    let config: AiChatConfig = load_json_config(CONFIG_FILE);
-    if !config.is_configured() {
-        return Err(
-            "AI Chat not configured — set provider and model in Settings > AI Chat".to_string(),
-        );
-    }
+    let registry = crate::provider_registry::load_registry();
+    let resolved = crate::provider_registry::resolve_slot(&registry, crate::provider_registry::SlotName::Chat)
+        .map_err(|_| "AI Chat not configured — set provider and model in Settings > AI Chat".to_string())?;
 
-    // Ollama doesn't need an API key; others do
-    let api_key = if config.provider == "ollama" {
-        read_api_key()?.unwrap_or_else(|| "ollama".to_string())
-    } else {
-        read_api_key()?.ok_or_else(|| {
-            "No API key stored — add one in Settings > AI Chat".to_string()
-        })?
-    };
+    let llm_config = &resolved.config;
+    let api_key = &resolved.api_key;
 
     // Step 1: lightweight key validation via provider-specific endpoint
     let http = reqwest::Client::builder()
@@ -248,22 +239,22 @@ pub(crate) async fn test_ai_chat_connection() -> Result<String, String> {
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
-    let base = config.effective_base_url().unwrap_or_default();
-    let key_check = match config.provider.as_str() {
+    let base = llm_config.base_url.clone().unwrap_or_default();
+    let key_check = match llm_config.provider.as_str() {
         "openrouter" => {
             let url = format!("{}auth/key", if base.is_empty() { "https://openrouter.ai/api/v1/" } else { &base });
-            Some(http.get(&url).bearer_auth(&api_key).send().await)
+            Some(http.get(&url).bearer_auth(api_key).send().await)
         }
         "anthropic" => {
             let url = "https://api.anthropic.com/v1/models";
             Some(http.get(url)
-                .header("x-api-key", &api_key)
+                .header("x-api-key", api_key)
                 .header("anthropic-version", "2023-06-01")
                 .send().await)
         }
         "openai" => {
             let url = format!("{}models", if base.is_empty() { "https://api.openai.com/v1/" } else { &base });
-            Some(http.get(&url).bearer_auth(&api_key).send().await)
+            Some(http.get(&url).bearer_auth(api_key).send().await)
         }
         "ollama" => {
             let url = format!("{}models", if base.is_empty() { "http://localhost:11434/v1/" } else { &base });
@@ -292,19 +283,13 @@ pub(crate) async fn test_ai_chat_connection() -> Result<String, String> {
                 }
             }
             Err(e) => {
-                return Err(format!("Cannot reach {} API: {e}", config.provider));
+                return Err(format!("Cannot reach {} API: {e}", llm_config.provider));
             }
         }
     }
 
     // Step 2: actual completion test to verify model works
-    let llm_config = llm_api::LlmApiConfig {
-        provider: config.provider.clone(),
-        model: config.model.clone(),
-        base_url: config.effective_base_url(),
-    };
-
-    let client = llm_api::build_client(&llm_config, &api_key);
+    let client = llm_api::build_client(llm_config, api_key);
 
     use genai::chat::{ChatMessage, ChatRequest};
     let chat_req =
@@ -313,7 +298,7 @@ pub(crate) async fn test_ai_chat_connection() -> Result<String, String> {
             .append_message(ChatMessage::user("Test connection"));
 
     let result =
-        tokio::time::timeout(Duration::from_secs(15), client.exec_chat(&config.model, chat_req, None))
+        tokio::time::timeout(Duration::from_secs(15), client.exec_chat(&llm_config.model, chat_req, None))
             .await
             .map_err(|_| "Connection timed out after 15s".to_string())?
             .map_err(|e| format!("Connection failed: {e}"))?;
@@ -772,44 +757,31 @@ pub(crate) async fn stream_ai_chat(
     chat_id: String,
     on_event: tauri::ipc::Channel<ChatStreamEvent>,
 ) -> Result<(), String> {
-    let config: AiChatConfig = load_json_config(CONFIG_FILE);
-    if !config.is_configured() {
-        let err_msg = "AI Chat not configured — set provider and model in Settings > AI Chat".to_string();
-        let _ = on_event.send(ChatStreamEvent::Error { message: err_msg.clone() });
-        registry.update_and_notify(&chat_id, |s| { s.set_error(Some(err_msg)); }).await;
-        return Ok(());
-    }
-
-    // Resolve API key
-    let api_key = if config.provider == "ollama" {
-        read_api_key()?.unwrap_or_else(|| "ollama".to_string())
-    } else {
-        match read_api_key()? {
-            Some(k) => k,
-            None => {
-                let err_msg = "No API key stored — add one in Settings > AI Chat".to_string();
-                let _ = on_event.send(ChatStreamEvent::Error { message: err_msg.clone() });
-                registry.update_and_notify(&chat_id, |s| { s.set_error(Some(err_msg)); }).await;
-                return Ok(());
-            }
+    let resolved = match crate::provider_registry::resolve_slot(
+        &crate::provider_registry::load_registry(),
+        crate::provider_registry::SlotName::Chat,
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            let err_msg = format!("AI Chat not configured — {e}");
+            let _ = on_event.send(ChatStreamEvent::Error { message: err_msg.clone() });
+            registry.update_and_notify(&chat_id, |s| { s.set_error(Some(err_msg)); }).await;
+            return Ok(());
         }
     };
 
-    // Assemble terminal context
-    let ctx = assemble_terminal_context(&state, &session_id, config.context_lines);
+    // Assemble terminal context (context_lines still comes from ai-chat.json)
+    let chat_config: AiChatConfig = load_json_config(CONFIG_FILE);
+    let ctx = assemble_terminal_context(&state, &session_id, chat_config.context_lines);
     let mut system_prompt = build_system_prompt(&ctx);
     if let Some(section) = crate::ai_agent::context::build_knowledge_section(&state, &session_id) {
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&section);
     }
 
-    // Build genai request with cache control
-    let llm_config = llm_api::LlmApiConfig {
-        provider: config.provider.clone(),
-        model: config.model.clone(),
-        base_url: config.effective_base_url(),
-    };
-    let client = llm_api::build_client(&llm_config, &api_key);
+    let llm_config = &resolved.config;
+    let api_key = &resolved.api_key;
+    let client = llm_api::build_client(llm_config, api_key);
 
     use genai::chat::{CacheControl, ChatMessage as GenaiMessage, ChatOptions, ChatRequest, MessageOptions};
 
@@ -842,7 +814,7 @@ pub(crate) async fn stream_ai_chat(
 
     let chat_options = ChatOptions::default()
         .with_capture_usage(true)
-        .with_temperature(config.temperature.into());
+        .with_temperature(chat_config.temperature.into());
 
     // Set up cancellation
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -861,7 +833,7 @@ pub(crate) async fn stream_ai_chat(
     // Stream
     let result = stream_with_batching(
         client,
-        &config.model,
+        &llm_config.model,
         chat_req,
         chat_options,
         &on_event,

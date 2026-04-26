@@ -33,7 +33,6 @@ pub(crate) enum ProviderType {
     Custom,
 }
 
-#[allow(dead_code)] // Wired in story 1480 (consumers call resolve_slot)
 impl ProviderType {
     pub(crate) fn default_base_url(&self) -> Option<&'static str> {
         match self {
@@ -57,6 +56,7 @@ impl ProviderType {
         !matches!(self, Self::Ollama | Self::LmStudio | Self::LiteLlm)
     }
 
+    #[allow(dead_code)] // Wired in story 1481 (Ollama detection + Tauri commands)
     pub(crate) fn uses_custom_url_routing(&self) -> bool {
         self.default_base_url().is_some() || matches!(self, Self::Custom)
     }
@@ -288,14 +288,13 @@ pub(crate) fn save_registry(registry: &ProviderRegistry) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
-#[allow(dead_code)] // Wired in story 1480 (consumers call resolve_slot)
 pub(crate) struct ResolvedSlot {
     pub config: crate::llm_api::LlmApiConfig,
     pub api_key: String,
+    #[allow(dead_code)] // Wired in story 1481 (Tauri commands expose provider_type to UI)
     pub provider_type: ProviderType,
 }
 
-#[allow(dead_code)] // Wired in story 1480
 pub(crate) fn resolve_slot(
     registry: &ProviderRegistry,
     slot: SlotName,
