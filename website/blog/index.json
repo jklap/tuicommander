@@ -1,6 +1,15 @@
 {
   "posts": [
     {
+      "slug": "producthunt-launch",
+      "title": "Launched on Product Hunt — and what real users say",
+      "date": "2026-04-26",
+      "status": "published",
+      "feature": "Product Hunt launch",
+      "summary": "TUICommander is live on Product Hunt this week. Early reviews from daily users name the same patterns: multi-agent terminal sprawl, worktree isolation, blocking Y/n prompts, and couch-mode supervision from mobile. If you use TUIC, your review moves the needle.",
+      "screenshots": []
+    },
+    {
       "slug": "one-month-retrospective",
       "title": "What one person can ship in a month",
       "date": "2026-04-15",
