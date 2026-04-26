@@ -169,6 +169,27 @@ describe("useAgentPolling", () => {
       });
     });
 
+    it("skips discovery when tuicSession is set (shell integration handles session binding)", async () => {
+      mockInvoke.mockResolvedValue("claude");
+
+      await testInScopeAsync(async () => {
+        const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+        store.update(id, { tuicSession: "tuic-uuid-123" });
+
+        const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+        useAgentPolling();
+
+        await tick(30_000);
+        expect(store.get(id)?.agentType).toBe("claude");
+
+        const discoveryCalls = mockInvoke.mock.calls.filter(
+          ([cmd]) => cmd === "discover_agent_session",
+        );
+        expect(discoveryCalls).toHaveLength(0);
+
+      });
+    });
+
     it("skips discovery for agents without sessionDiscovery config (e.g. aider)", async () => {
       mockInvoke.mockResolvedValue("aider");
 

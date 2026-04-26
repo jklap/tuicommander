@@ -117,8 +117,11 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
     }
   }
 
-  // null→agent: attempt session discovery if supported and not yet tried
-  if (agentType !== null && current.agentSessionId === null && !discoveryAttempted.has(termId)) {
+  // null→agent: attempt session discovery if supported and not yet tried.
+  // Skip discovery when tuicSession is set — it IS the session ID
+  // (shell integration injects --session-id $TUIC_SESSION into claude calls).
+  // Discovery is only needed for terminals without tuicSession (legacy, manual launches).
+  if (agentType !== null && current.agentSessionId === null && !discoveryAttempted.has(termId) && !current.tuicSession) {
     const disc = AGENTS[agentType].sessionDiscovery;
     if (disc) {
       discoveryAttempted.add(termId);

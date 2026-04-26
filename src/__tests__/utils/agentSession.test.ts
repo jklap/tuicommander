@@ -140,16 +140,16 @@ describe("verifyAndBuildResumeCommand", () => {
     expect(result).toBe("claude --resume tuic-uuid-1");
   });
 
-  it("falls back to agentSessionId when tuicSession not verified", async () => {
+  it("returns null when tuicSession not verified (session gone, no stale fallback)", async () => {
     mockRpc.mockResolvedValueOnce(false);
     const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", "old-session-id");
-    expect(result).toBe("claude --resume old-session-id");
+    expect(result).toBeNull();
   });
 
-  it("falls back to static resume when neither session exists", async () => {
+  it("returns null when tuicSession set but file missing (no stale fallback)", async () => {
     mockRpc.mockResolvedValueOnce(false);
     const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", null);
-    expect(result).toBe("claude --continue");
+    expect(result).toBeNull();
   });
 
   it("falls back gracefully when rpc throws (browser mode)", async () => {

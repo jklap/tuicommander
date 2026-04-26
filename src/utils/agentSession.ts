@@ -76,6 +76,10 @@ export function buildResumeCommand(agentType: AgentType, agentSessionId?: string
  *
  * Priority: tuicSession (verified on disk) > agentSessionId > static resumeCommand.
  * Falls back gracefully when verify_agent_session is unavailable (browser mode).
+ *
+ * When tuicSession is set and verification runs but fails, the session is gone —
+ * we return null instead of falling back to agentSessionId, which may point to
+ * an older, unrelated session discovered at agent-detection time.
  */
 export async function verifyAndBuildResumeCommand(
   agentType: AgentType,
@@ -95,11 +99,14 @@ export async function verifyAndBuildResumeCommand(
         const cmd = AGENTS[agentType].sessionDiscovery!.resumeWithId(tuicSession);
         return applyDefaultRunConfig(agentType, cmd);
       }
+      // Verification ran but session file not found — session is gone.
+      // Don't fall back to agentSessionId which may be stale.
+      return null;
     } catch {
       // verify_agent_session unavailable (browser mode) — fall through
     }
   }
 
-  // Fall back to discovered agentSessionId or static resumeCommand
+  // No tuicSession or browser mode — fall back to agentSessionId or static resumeCommand
   return buildResumeCommand(agentType, agentSessionId);
 }
