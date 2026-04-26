@@ -1,7 +1,8 @@
 import { Component, createEffect, createMemo, createSignal, For, Show, onCleanup } from "solid-js";
 import { invoke } from "../../invoke";
 import { repositoriesStore } from "../../stores/repositories";
-import { diffTabsStore, isDiffStatus } from "../../stores/diffTabs";
+import { isDiffStatus } from "../../stores/diffTabs";
+import type { OpenDiffFn } from "./GitPanel";
 import { promptLibraryStore } from "../../stores/promptLibrary";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
 import { appLogger } from "../../stores/appLogger";
@@ -27,6 +28,7 @@ export interface ChangesTabProps {
   /** Repo key for store operations (getRevision). Falls back to repoPath. */
   storeRepoPath?: string | null;
   onFileSelect?: (path: string) => void;
+  onOpenDiff: OpenDiffFn;
 }
 
 // SVG icons as inline components (monochrome, fill="currentColor")
@@ -265,7 +267,7 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
 
   function openDiff(file: FileEntry, section: "staged" | "unstaged") {
     if (!props.repoPath || !isDiffStatus(file.status)) return;
-    diffTabsStore.add(
+    props.onOpenDiff(
       props.repoPath,
       file.path,
       file.status,

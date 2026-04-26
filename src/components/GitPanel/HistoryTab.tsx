@@ -1,7 +1,7 @@
 import { Component, createEffect, createSignal, For, Show, on, onCleanup } from "solid-js";
 import { invoke } from "../../invoke";
 import { repositoriesStore } from "../../stores/repositories";
-import { diffTabsStore } from "../../stores/diffTabs";
+import type { OpenDiffFn } from "./GitPanel";
 import { relativeTime } from "../../utils/time";
 import type { CommitLogEntry } from "./types";
 import { appLogger } from "../../stores/appLogger";
@@ -12,6 +12,7 @@ const PAGE_SIZE = 50;
 export interface HistoryTabProps {
   repoPath: string | null;
   filePath: string | null;
+  onOpenDiff: OpenDiffFn;
 }
 
 export const HistoryTab: Component<HistoryTabProps> = (props) => {
@@ -82,7 +83,7 @@ export const HistoryTab: Component<HistoryTabProps> = (props) => {
     const repoPath = props.repoPath;
     const filePath = props.filePath;
     if (!repoPath || !filePath) return;
-    diffTabsStore.add(repoPath, filePath, "M", hash);
+    props.onOpenDiff(repoPath, filePath, "M", hash);
   }
 
   // Re-fetch when repo, file, or revision changes

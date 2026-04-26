@@ -23,6 +23,12 @@
   opacity: 0;
 }
 
+.detached {
+  width: 100%;
+  max-width: 100%;
+  border-left: none;
+}
+
 .tabs {
   display: flex;
   gap: 0;

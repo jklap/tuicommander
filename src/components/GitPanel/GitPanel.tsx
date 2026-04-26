@@ -1,5 +1,7 @@
 import { Component, createEffect, createSignal, Match, Show, Switch } from "solid-js";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
+import { PanelWindowControls } from "../ui/PanelWindowControls";
+import { diffTabsStore, type DiffStatus } from "../../stores/diffTabs";
 import { cx } from "../../utils";
 import { ChangesTab } from "./ChangesTab";
 import { LogTab } from "./LogTab";
@@ -9,6 +11,8 @@ import { HistoryTab } from "./HistoryTab";
 import { BlameTab } from "./BlameTab";
 import p from "../shared/panel.module.css";
 import s from "./GitPanel.module.css";
+
+export type OpenDiffFn = (repoPath: string, filePath: string, status: DiffStatus, scope?: string, untracked?: boolean) => void;
 
 type GitTab = "changes" | "log" | "stashes" | "branches";
 
@@ -27,6 +31,10 @@ export interface GitPanelProps {
   onClose: () => void;
   /** When set, switches to the given tab (used by external shortcuts like toggle-branches-tab) */
   requestedTab?: GitTab | null;
+  /** "inline" (default) = embedded in main window; "detached" = separate panel window */
+  mode?: "inline" | "detached";
+  /** Override for diff-tab opening. When omitted, calls diffTabsStore.add() directly. */
+  onOpenDiff?: OpenDiffFn;
 }
 
 export const GitPanel: Component<GitPanelProps> = (props) => {
@@ -35,6 +43,8 @@ export const GitPanel: Component<GitPanelProps> = (props) => {
   const [historyExpanded, setHistoryExpanded] = createSignal(false);
   const [blameExpanded, setBlameExpanded] = createSignal(false);
   const gitPath = () => (props.fsRoot || props.repoPath) as string | null;
+  const mode = () => props.mode ?? "inline";
+  const openDiff: OpenDiffFn = (...args) => (props.onOpenDiff ?? diffTabsStore.add.bind(diffTabsStore))(...args);
 
   // Switch to the requested tab when an external action (e.g. keyboard shortcut) specifies one
   createEffect(() => {
@@ -69,11 +79,13 @@ export const GitPanel: Component<GitPanelProps> = (props) => {
   return (
     <div
       id="git-panel"
-      class={cx(s.panel, !props.visible && s.hidden)}
+      class={cx(s.panel, mode() === "detached" && s.detached, !props.visible && s.hidden)}
       tabIndex={0}
       onKeyDown={handlePanelKeyDown}
     >
-      <PanelResizeHandle panelId="git-panel" />
+      <Show when={mode() === "inline"}>
+        <PanelResizeHandle panelId="git-panel" />
+      </Show>
       <div class={p.header}>
         <div class={s.tabs}>
           {TABS.map((tab) => (
@@ -85,9 +97,7 @@ export const GitPanel: Component<GitPanelProps> = (props) => {
             </button>
           ))}
         </div>
-        <button class={p.close} onClick={props.onClose} title="Close">
-          &times;
-        </button>
+        <PanelWindowControls panelId="git" mode={mode()} onInlineClose={props.onClose} />
       </div>
       {/* Main tab content — <Switch>/<Match> unmounts inactive tabs, preventing hidden
          tabs from reacting to revision bumps. Additionally, repoPath is null when the
@@ -99,10 +109,11 @@ export const GitPanel: Component<GitPanelProps> = (props) => {
               repoPath={props.visible ? gitPath() : null}
               storeRepoPath={props.visible ? props.repoPath : null}
               onFileSelect={setSelectedFile}
+              onOpenDiff={openDiff}
             />
           </Match>
           <Match when={activeTab() === "log"}>
-            <LogTab repoPath={props.visible ? gitPath() : null} />
+            <LogTab repoPath={props.visible ? gitPath() : null} onOpenDiff={openDiff} />
           </Match>
           <Match when={activeTab() === "stashes"}>
             <StashesTab repoPath={props.visible ? gitPath() : null} />
@@ -130,6 +141,7 @@ export const GitPanel: Component<GitPanelProps> = (props) => {
             <HistoryTab
               repoPath={props.visible ? gitPath() : null}
               filePath={selectedFile()}
+              onOpenDiff={openDiff}
             />
           </div>
         </Show>

@@ -4,7 +4,8 @@ import { invoke } from "../../invoke";
 import { repositoriesStore } from "../../stores/repositories";
 import { cx } from "../../utils";
 import { appLogger } from "../../stores/appLogger";
-import { diffTabsStore, isDiffStatus } from "../../stores/diffTabs";
+import { isDiffStatus } from "../../stores/diffTabs";
+import type { OpenDiffFn } from "./GitPanel";
 import { CommitGraph, graphWidth } from "./CommitGraph";
 import type { GraphNode } from "./CommitGraph";
 import type { CommitLogEntry, ChangedFile } from "./types";
@@ -20,6 +21,7 @@ const EXPANDED_OVERHEAD = 12;
 
 export interface LogTabProps {
   repoPath: string | null;
+  onOpenDiff: OpenDiffFn;
 }
 
 /** Classify a ref string into branch, tag, or HEAD. */
@@ -336,7 +338,7 @@ export const LogTab: Component<LogTabProps> = (props) => {
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   if (props.repoPath && isDiffStatus(file.status)) {
-                                    diffTabsStore.add(props.repoPath, file.path, file.status, commit()!.hash);
+                                    props.onOpenDiff(props.repoPath, file.path, file.status, commit()!.hash);
                                   }
                                 }}
                               >

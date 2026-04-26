@@ -109,6 +109,7 @@ import { aiChatStore } from "./stores/aiChatStore";
 import { renderPanelMode, registerPanel, panelRegistry, togglePanel, detachPanel } from "./panelRouter";
 import { createPanelSyncProvider, type PanelAction } from "./utils/panelSync";
 import { activityPanelAdapter } from "./panelAdapters/activity";
+import { gitPanelAdapter } from "./panelAdapters/git";
 import { aiAgentStore } from "./stores/aiAgentStore";
 import { applyAppTheme, applyFontFamily } from "./themes";
 import { createLongPressHandlerFromHotkey } from "./hooks/useLongPressHotkey";
@@ -143,6 +144,7 @@ registerPanel({
 });
 
 registerPanel(activityPanelAdapter);
+registerPanel(gitPanelAdapter);
 
 const App: Component = () => {
   // Detached panel mode: full-viewport single panel.
@@ -1356,7 +1358,7 @@ const App: Component = () => {
     togglePromptLibrary: promptLibraryStore.toggleDrawer,
     toggleSettings: () => setSettingsPanelVisible((v) => !v),
     toggleTaskQueue: () => setTaskQueueVisible((v) => !v),
-    toggleGitOpsPanel: uiStore.toggleGitPanel,
+    toggleGitOpsPanel: () => togglePanel("git"),
     toggleHelpPanel: () => setHelpPanelVisible((v) => !v),
     toggleNotesPanel: uiStore.toggleNotesPanel,
     toggleFileBrowserPanel: uiStore.toggleFileBrowserPanel,
@@ -1382,7 +1384,7 @@ const App: Component = () => {
     toggleWorktreeManager: () => worktreeManagerStore.toggle(),
     toggleBranchSwitcher: () => branchSwitcherStore.toggle(),
     toggleErrorLog: () => errorLogStore.toggle(),
-    toggleBranchesTab: () => uiStore.toggleGitPanelOnTab("branches"),
+    toggleBranchesTab: () => uiStore.isDetached("git") ? togglePanel("git") : uiStore.toggleGitPanelOnTab("branches"),
     toggleAiChatPanel: () => togglePanel("ai-chat"),
     toggleMcpPopup: () => mcpPopupStore.toggle(),
     toggleGlobalWorkspace: () => {
@@ -1702,7 +1704,7 @@ const App: Component = () => {
         case "zoom-in-all": terminalLifecycle.zoomInAll(); break;
         case "zoom-out-all": terminalLifecycle.zoomOutAll(); break;
         case "zoom-reset-all": terminalLifecycle.zoomResetAll(); break;
-        case "diff-panel": uiStore.toggleGitPanel(); break;
+        case "diff-panel": togglePanel("git"); break;
         case "markdown-panel": uiStore.toggleMarkdownPanel(); break;
         case "notes-panel": uiStore.toggleNotesPanel(); break;
         case "file-browser": uiStore.toggleFileBrowserPanel(); break;
@@ -1715,7 +1717,7 @@ const App: Component = () => {
         case "prompt-library": promptLibraryStore.toggleDrawer(); break;
         case "run-command": gitOps.handleRunCommand(false, () => setRunCommandDialogVisible(true)); break;
         case "edit-run-command": gitOps.handleRunCommand(true, () => setRunCommandDialogVisible(true)); break;
-        case "git-operations": uiStore.toggleGitPanel(); break;
+        case "git-operations": togglePanel("git"); break;
         case "diff-scroll": {
           const repoPath = repositoriesStore.state.activeRepoPath;
           if (repoPath) {
@@ -1724,7 +1726,7 @@ const App: Component = () => {
           }
           break;
         }
-        case "branches": uiStore.toggleGitPanelOnTab("branches"); break;
+        case "branches": uiStore.isDetached("git") ? togglePanel("git") : uiStore.toggleGitPanelOnTab("branches"); break;
         case "worktree-manager": shortcutHandlers.toggleWorktreeManager(); break;
         case "quick-branch-switch": shortcutHandlers.toggleBranchSwitcher(); break;
         case "task-queue": setTaskQueueVisible((v) => !v); break;
@@ -1981,7 +1983,7 @@ const App: Component = () => {
           fontSize={terminalLifecycle.activeFontSize()}
           defaultFontSize={getDefaultFontSize()}
           statusInfo={statusInfo()}
-          onToggleDiff={() => uiStore.toggleGitPanel()}
+          onToggleDiff={() => togglePanel("git")}
           onToggleMarkdown={() => uiStore.toggleMarkdownPanel()}
           onToggleNotes={() => uiStore.toggleNotesPanel()}
           onToggleFileBrowser={() => uiStore.toggleFileBrowserPanel()}

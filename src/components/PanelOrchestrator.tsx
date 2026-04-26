@@ -4,6 +4,8 @@ import { MarkdownPanel } from "./MarkdownPanel";
 import { NotesPanel } from "./NotesPanel";
 import { GitPanel } from "./GitPanel/GitPanel";
 import { AIChatPanel } from "./AIChatPanel";
+import { DetachedPlaceholder } from "./DetachedPlaceholder";
+import { diffTabsStore } from "../stores/diffTabs";
 import { uiStore } from "../stores/ui";
 import { terminalsStore } from "../stores/terminals";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
@@ -47,13 +49,19 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
         }}
       />
 
-      <GitPanel
-        visible={uiStore.state.gitPanelVisible && !globalWorkspaceStore.isActive()}
-        repoPath={props.repoPath}
-        fsRoot={props.fsRoot}
-        onClose={() => uiStore.toggleGitPanel()}
-        requestedTab={uiStore.state.gitPanelRequestedTab}
-      />
+      <Show
+        when={!uiStore.isDetached("git")}
+        fallback={<DetachedPlaceholder panel="Git" panelId="git" />}
+      >
+        <GitPanel
+          visible={uiStore.state.gitPanelVisible && !globalWorkspaceStore.isActive()}
+          repoPath={props.repoPath}
+          fsRoot={props.fsRoot}
+          onClose={() => uiStore.toggleGitPanel()}
+          requestedTab={uiStore.state.gitPanelRequestedTab}
+          onOpenDiff={diffTabsStore.add.bind(diffTabsStore)}
+        />
+      </Show>
 
       <Show when={settingsStore.isAiChatEnabled() && !uiStore.isDetached("ai-chat")}>
         <AIChatPanel
