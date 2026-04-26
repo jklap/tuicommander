@@ -248,12 +248,17 @@ impl tracing::field::Visit for LogVisitor {
     }
 }
 
+/// Max age for rotated log files before cleanup.
+const LOG_RETENTION_DAYS: u64 = 5;
+
 /// Initialise the global `tracing` subscriber.
 ///
-/// Sets up two layers:
+/// Sets up three layers:
 /// 1. **fmt** — writes structured logs to stderr (visible in `tauri dev`).
 /// 2. **RingBufferLayer** — forwards events into the shared [`LogRingBuffer`]
 ///    so they appear in the ErrorLogPanel and the `/logs` HTTP endpoint.
+/// 3. **file** — daily-rotated log files in the config dir's `logs/` folder,
+///    surviving WebView crashes. Old files (> 5 days) are cleaned up at init.
 ///
 /// The default level is `info`; override with `RUST_LOG=debug` etc.
 /// Must be called exactly once, early in `run()`.
@@ -268,10 +273,22 @@ pub(crate) fn init_tracing(buffer: Arc<Mutex<LogRingBuffer>>) {
 
     let ring_layer = RingBufferLayer { buffer };
 
+    let log_dir = crate::config::config_dir().join("logs");
+    let _ = std::fs::create_dir_all(&log_dir);
+    cleanup_old_logs(&log_dir);
+
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "tuic.log");
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_ansi(false)
+        .with_writer(file_appender);
+
     let registry = tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt_layer)
-        .with(ring_layer);
+        .with(ring_layer)
+        .with(file_layer);
 
     #[cfg(feature = "tokio-console")]
     {
@@ -281,6 +298,24 @@ pub(crate) fn init_tracing(buffer: Arc<Mutex<LogRingBuffer>>) {
     #[cfg(not(feature = "tokio-console"))]
     {
         registry.init();
+    }
+}
+
+/// Remove log files older than [`LOG_RETENTION_DAYS`].
+fn cleanup_old_logs(log_dir: &std::path::Path) {
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(LOG_RETENTION_DAYS * 24 * 3600);
+    let Ok(entries) = std::fs::read_dir(log_dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("log") {
+            continue;
+        }
+        let Ok(meta) = path.metadata() else { continue };
+        let Ok(modified) = meta.modified() else { continue };
+        if modified < cutoff {
+            let _ = std::fs::remove_file(&path);
+        }
     }
 }
 
