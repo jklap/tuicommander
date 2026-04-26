@@ -26,6 +26,7 @@ function createEditorTabsStore() {
     getActive: base.getActive,
     getCount: base.getCount,
     setPinned: base.setPinned,
+    reorderByIds: base.reorderByIds,
 
     /** Add a new editor tab (or activate existing if same file already open) */
     add(repoPath: string, filePath: string, initialLine?: number, opts?: { externalEditable?: boolean }): string {

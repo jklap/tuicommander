@@ -39,6 +39,7 @@ function createDiffTabsStore() {
     getActive: base.getActive,
     getCount: base.getCount,
     setPinned: base.setPinned,
+    reorderByIds: base.reorderByIds,
 
     /** Add a new diff tab (or return existing if same file+scope already open).
      *  Deactivates terminal/md/editor tabs so the diff pane becomes visible. */

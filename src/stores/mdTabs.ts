@@ -215,8 +215,6 @@ function createMdTabsStore() {
         // re-open) replace stale content instead of silently keeping
         // the previous render.
         base._setState("tabs", existing.id, "html" as keyof MdTabData, html as MdTabData[keyof MdTabData]);
-        base.setActive(existing.id);
-
         return existing.id;
       }
 

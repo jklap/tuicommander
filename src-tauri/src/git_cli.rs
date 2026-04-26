@@ -146,8 +146,24 @@ impl GitCmd {
 // Entry point
 // ---------------------------------------------------------------------------
 
+/// Remove stale `.git/index.lock` left behind by crashed external processes
+/// (e.g. Claude Code killed mid-`git status`). A lock is stale when the file
+/// is empty — real in-progress locks contain the serialised index.
+fn remove_stale_index_lock(cwd: &Path) {
+    let lock = cwd.join(".git/index.lock");
+    match std::fs::metadata(&lock) {
+        Ok(meta) if meta.len() == 0 => {
+            if std::fs::remove_file(&lock).is_ok() {
+                tracing::info!(source = "git_cli", "Removed stale 0-byte index.lock in {}", cwd.display());
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Create a git command builder rooted at the given directory.
 pub(crate) fn git_cmd(cwd: &Path) -> GitCmd {
+    remove_stale_index_lock(cwd);
     let mut cmd = Command::new(resolve_cli("git"));
     cmd.current_dir(cwd);
     cmd.env("GIT_TERMINAL_PROMPT", "0");

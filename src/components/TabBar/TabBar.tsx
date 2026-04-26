@@ -399,6 +399,12 @@ export const TabBar: Component<TabBarProps> = (props) => {
           } else if (visibleMdIds().includes(sourceId) && visibleMdIds().includes(overId)) {
             const side = overSide === "left" ? "before" : "after";
             mdTabsStore.reorderByIds(sourceId, overId, side);
+          } else if (visibleDiffIds().includes(sourceId) && visibleDiffIds().includes(overId)) {
+            const side = overSide === "left" ? "before" : "after";
+            diffTabsStore.reorderByIds(sourceId, overId, side);
+          } else if (visibleEditIds().includes(sourceId) && visibleEditIds().includes(overId)) {
+            const side = overSide === "left" ? "before" : "after";
+            editorTabsStore.reorderByIds(sourceId, overId, side);
           }
           resetDragState();
           return;
