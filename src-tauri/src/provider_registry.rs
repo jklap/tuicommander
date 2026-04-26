@@ -367,6 +367,66 @@ pub(crate) fn save_provider_registry(registry: ProviderRegistry) -> Result<(), S
     save_registry(&registry)
 }
 
+#[tauri::command]
+pub(crate) fn get_provider_api_key_exists(provider_id: String) -> Result<bool, String> {
+    crate::credentials::get(crate::credentials::Credential::Provider(&provider_id))
+        .map(|v| v.is_some())
+}
+
+#[tauri::command]
+pub(crate) fn save_provider_api_key(provider_id: String, key: String) -> Result<(), String> {
+    if key.is_empty() {
+        return Err("API key must not be empty".to_string());
+    }
+    crate::credentials::set(crate::credentials::Credential::Provider(&provider_id), &key)
+}
+
+#[tauri::command]
+pub(crate) fn delete_provider_api_key(provider_id: String) -> Result<(), String> {
+    crate::credentials::delete(crate::credentials::Credential::Provider(&provider_id))
+}
+
+#[tauri::command]
+pub(crate) async fn test_slot_connection(slot: SlotName) -> Result<String, String> {
+    use genai::chat::{ChatMessage, ChatRequest};
+
+    let registry = load_registry();
+    let resolved = resolve_slot(&registry, slot)?;
+    let client = crate::llm_api::build_client(&resolved.config, &resolved.api_key);
+
+    let chat_req = ChatRequest::default()
+        .with_system("Reply with exactly: OK")
+        .append_message(ChatMessage::user("Test connection"));
+
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(15),
+        client.exec_chat(&resolved.config.model, chat_req, None),
+    )
+    .await
+    .map_err(|_| "Connection timed out after 15s".to_string())?
+    .map_err(|e| format!("Connection failed: {e}"))?;
+
+    let text = result
+        .first_text()
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+
+    Ok(format!("Connection successful — model replied: {text}"))
+}
+
+#[tauri::command]
+pub(crate) async fn check_ollama_models(provider_id: String) -> crate::ai_chat::OllamaStatus {
+    let registry = load_registry();
+    let base = registry
+        .providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .and_then(|p| p.base_url.as_deref().map(String::from))
+        .or_else(|| ProviderType::Ollama.default_base_url().map(String::from))
+        .unwrap_or_else(|| "http://localhost:11434/v1/".to_string());
+    crate::ai_chat::detect_ollama(&base).await
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

@@ -145,7 +145,7 @@ struct OllamaTagEntry {
     size: u64,
 }
 
-async fn detect_ollama(base: &str) -> OllamaStatus {
+pub(crate) async fn detect_ollama(base: &str) -> OllamaStatus {
     let url = base.trim_end_matches('/').trim_end_matches("/v1");
     let tags_url = format!("{url}/api/tags");
 
