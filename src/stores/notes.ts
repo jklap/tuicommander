@@ -148,6 +148,25 @@ function createNotesStore() {
       return state.notes.filter((n) => n.repoPath === null || n.repoPath === activeRepo).length;
     },
 
+    /** Count of pending (not yet used) notes for the given repo filter */
+    pendingCount(activeRepo: string | null): number {
+      return state.notes.filter((n) =>
+        !n.usedAt && (!activeRepo || n.repoPath === null || n.repoPath === activeRepo),
+      ).length;
+    },
+
+    /** Remove all notes that have been used (usedAt !== null) */
+    clearCompleted(): void {
+      const completed = state.notes.filter((n) => n.usedAt !== null);
+      if (completed.length === 0) return;
+      const completedIds = completed.map((n) => n.id);
+      setState("notes", (notes) => notes.filter((n) => !completedIds.includes(n.id)));
+      saveNotes(state.notes);
+      invoke("delete_note_assets_batch", { noteIds: completedIds }).catch((err) =>
+        appLogger.debug("store", "Failed to delete note assets", err),
+      );
+    },
+
     /** Get total note count */
     count(): number {
       return state.notes.length;

@@ -430,6 +430,127 @@ describe("notesStore", () => {
     });
   });
 
+  describe("pendingCount()", () => {
+    it("returns total count when all notes are pending (no repo filter)", () => {
+      testInScope(() => {
+        store.addNote("a");
+        store.addNote("b");
+        expect(store.pendingCount(null)).toBe(2);
+      });
+    });
+
+    it("excludes used notes", () => {
+      testInScope(() => {
+        store.addNote("pending");
+        store.addNote("used");
+        store.markUsed(store.state.notes[0].id);
+        expect(store.pendingCount(null)).toBe(1);
+      });
+    });
+
+    it("returns 0 when all notes are used", () => {
+      testInScope(() => {
+        store.addNote("a");
+        store.addNote("b");
+        store.markUsed(store.state.notes[0].id);
+        store.markUsed(store.state.notes[1].id);
+        expect(store.pendingCount(null)).toBe(0);
+      });
+    });
+
+    it("filters by repo when activeRepo is set", () => {
+      testInScope(() => {
+        store.addNote("global pending");
+        store.addNote("repo-a pending", "/repo/a", "a");
+        store.addNote("repo-b pending", "/repo/b", "b");
+        // global + repo-a match, repo-b excluded
+        expect(store.pendingCount("/repo/a")).toBe(2);
+      });
+    });
+
+    it("excludes used notes from repo filter", () => {
+      testInScope(() => {
+        store.addNote("global pending");
+        store.addNote("repo-a used", "/repo/a", "a");
+        store.markUsed(store.state.notes[0].id); // most recent = repo-a used
+        expect(store.pendingCount("/repo/a")).toBe(1);
+      });
+    });
+  });
+
+  describe("clearCompleted()", () => {
+    it("removes all used notes", () => {
+      testInScope(() => {
+        store.addNote("pending");
+        store.addNote("used");
+        store.markUsed(store.state.notes[0].id); // most recent = "used"
+        mockInvoke.mockClear();
+
+        store.clearCompleted();
+
+        expect(store.state.notes).toHaveLength(1);
+        expect(store.state.notes[0].text).toBe("pending");
+      });
+    });
+
+    it("does nothing when no notes are used", () => {
+      testInScope(() => {
+        store.addNote("a");
+        store.addNote("b");
+        mockInvoke.mockClear();
+
+        store.clearCompleted();
+
+        expect(store.state.notes).toHaveLength(2);
+        expect(mockInvoke).not.toHaveBeenCalled();
+      });
+    });
+
+    it("persists via save_notes after clearing", () => {
+      testInScope(() => {
+        store.addNote("used");
+        store.markUsed(store.state.notes[0].id);
+        mockInvoke.mockClear();
+
+        store.clearCompleted();
+
+        expect(mockInvoke).toHaveBeenCalledWith("save_notes", { config: { notes: [] } });
+      });
+    });
+
+    it("calls delete_note_assets_batch for all cleared notes", () => {
+      testInScope(() => {
+        store.addNote("used-1");
+        store.addNote("used-2");
+        const id1 = store.state.notes[0].id;
+        const id2 = store.state.notes[1].id;
+        store.markUsed(id1);
+        store.markUsed(id2);
+        mockInvoke.mockClear();
+
+        store.clearCompleted();
+
+        expect(mockInvoke).toHaveBeenCalledWith("delete_note_assets_batch", {
+          noteIds: expect.arrayContaining([id1, id2]),
+        });
+      });
+    });
+
+    it("clears all used notes while preserving pending ones", () => {
+      testInScope(() => {
+        store.addNote("keep-1");
+        store.addNote("remove");
+        store.addNote("keep-2");
+        store.markUsed(store.state.notes[1].id); // "remove" is at index 1
+
+        store.clearCompleted();
+
+        expect(store.state.notes).toHaveLength(2);
+        expect(store.state.notes.map((n) => n.text).sort()).toEqual(["keep-1", "keep-2"]);
+      });
+    });
+  });
+
   describe("markUsed()", () => {
     it("sets usedAt timestamp on the note", () => {
       testInScope(() => {

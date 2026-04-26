@@ -144,7 +144,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
   const getRepoPath = () => props.currentRepoPath;
   const github = useGitHub(getRepoPath);
 
-  const notesBadgeCount = () => notesStore.filteredCount(props.currentRepoPath ?? null);
+  const notesBadgeCount = () => notesStore.pendingCount(props.currentRepoPath ?? null);
 
   const [changesCount, setChangesCount] = createSignal(0);
   createEffect(() => {

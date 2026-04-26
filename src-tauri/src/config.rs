@@ -1182,6 +1182,21 @@ pub(crate) fn delete_note_assets(note_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Delete image assets for multiple notes in a single IPC round-trip.
+#[tauri::command]
+pub(crate) fn delete_note_assets_batch(note_ids: Vec<String>) -> Result<(), String> {
+    let base = config_dir().join(NOTE_IMAGES_DIR);
+    for note_id in &note_ids {
+        validate_note_id(note_id)?;
+        let dir = base.join(note_id);
+        if dir.exists() {
+            std::fs::remove_dir_all(&dir)
+                .map_err(|e| format!("Failed to delete note assets for {note_id}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
 /// Return the absolute path of the note-images root directory.
 /// The frontend needs this as `baseDir` for `convertFileSrc()`.
 #[tauri::command]

@@ -15,6 +15,28 @@
   gap: 8px;
 }
 
+.headerRight {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.headerBtn {
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+}
+
+.headerBtn:hover {
+  background: var(--bg-highlight);
+  color: var(--fg-primary);
+}
+
 .title {
   color: var(--fg-secondary);
   font-weight: 500;

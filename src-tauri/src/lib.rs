@@ -1331,6 +1331,7 @@ pub fn run() {
             config::save_notes,
             config::save_note_image,
             config::delete_note_assets,
+            config::delete_note_assets_batch,
             config::get_note_images_dir,
             config::load_activity,
             config::save_activity,

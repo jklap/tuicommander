@@ -66,7 +66,8 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
   let textareaRef: HTMLTextAreaElement | undefined;
 
   const filteredNotes = () => notesStore.getFilteredNotes(props.repoPath);
-  const badgeCount = () => notesStore.filteredCount(props.repoPath);
+  const badgeCount = () => notesStore.pendingCount(props.repoPath);
+  const hasCompleted = () => notesStore.getFilteredNotes(props.repoPath).some((n) => n.usedAt !== null);
 
   const repoOptions = () => {
     const repos = repositoriesStore.state.repositories;
@@ -192,9 +193,16 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
             <span class={p.fileCountBadge}>{badgeCount()}</span>
           </Show>
         </div>
-        <button class={p.close} onClick={props.onClose} title={`${t("notesPanel.close", "Close")} (${getModifierSymbol()}N)`}>
-          &times;
-        </button>
+        <div class={p.headerRight}>
+          <Show when={hasCompleted()}>
+            <button class={p.headerBtn} onClick={() => notesStore.clearCompleted()} title={t("notesPanel.clearCompleted", "Clear completed ideas")}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5zM11 2.5V1.5A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1H11zm1.958 1l-.846 10.58a1 1 0 0 1-.997.92h-6.23a1 1 0 0 1-.997-.92L3.042 3.5h9.916z"/></svg>
+            </button>
+          </Show>
+          <button class={p.close} onClick={props.onClose} title={`${t("notesPanel.close", "Close")} (${getModifierSymbol()}N)`}>
+            &times;
+          </button>
+        </div>
       </div>
 
       <div class={cx(p.content, s.list)}>
