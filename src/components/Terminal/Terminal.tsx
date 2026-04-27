@@ -1989,32 +1989,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
           }}
           searchVisible={overlaySearchVisible()}
           onSearchClose={() => setOverlaySearchVisible(false)}
-          terminalBg={currentTheme().background ?? "#1e1e1e"}
-          fontFamily={terminal?.options.fontFamily ?? getFontFamily()}
-          fontSize={terminal?.options.fontSize ?? settingsStore.state.defaultFontSize}
-          fontWeight={String(terminal?.options.fontWeight ?? settingsStore.state.fontWeight)}
-          cellHeight={(() => {
-            if (!terminal) return Math.ceil(settingsStore.state.defaultFontSize * TARGET_LINE_HEIGHT);
-            try {
-              const dims = (terminal as any)._core?._renderService?.dimensions;
-              if (dims?.css?.cell?.height) return dims.css.cell.height;
-            } catch { /* fallback */ }
-            const screen = terminal.element?.querySelector(".xterm-screen") as HTMLElement | null;
-            if (screen && terminal.rows > 0) return screen.clientHeight / terminal.rows;
-            return Math.ceil(
-              (terminal.options.fontSize ?? settingsStore.state.defaultFontSize) *
-              (terminal.options.lineHeight ?? TARGET_LINE_HEIGHT),
-            );
-          })()}
-          cellWidth={(() => {
-            if (!terminal) return settingsStore.state.defaultFontSize * 0.6;
-            try {
-              const dims = (terminal as any)._core?._renderService?.dimensions;
-              if (dims?.css?.cell?.width) return dims.css.cell.width;
-            } catch { /* fallback */ }
-            return settingsStore.state.defaultFontSize * 0.6;
-          })()}
-          cols={terminal?.cols ?? 80}
+          terminalOptions={{
+            fontSize: terminal?.options.fontSize ?? settingsStore.state.defaultFontSize,
+            fontFamily: terminal?.options.fontFamily ?? getFontFamily(),
+            fontWeight: (terminal?.options.fontWeight ?? String(settingsStore.state.fontWeight)) as any,
+            fontWeightBold: "bold",
+            lineHeight: terminal?.options.lineHeight ?? snapLineHeight(settingsStore.state.defaultFontSize),
+            theme: currentTheme(),
+          }}
         />
       </Show>
     </div>

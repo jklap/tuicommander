@@ -1,35 +1,17 @@
-import { Component, For, Index, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { type LogLine, spanStyle, lineText } from "../../mobile/utils/logLine";
+import { Component, onCleanup, onMount } from "solid-js";
+import { Terminal as XTerm, type ITerminalOptions } from "@xterm/xterm";
+import { FitAddon } from "@xterm/addon-fit";
+import { SearchAddon } from "@xterm/addon-search";
+import { Unicode11Addon } from "@xterm/addon-unicode11";
+import { WebglAddon } from "@xterm/addon-webgl";
+import { WebglLifecycle } from "./webglLifecycle";
+import { logLinesToAnsi } from "./logLineToAnsi";
+import type { LogLine } from "../../mobile/utils/logLine";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
-import { settingsStore } from "../../stores/settings";
-import { trimSelection } from "./Terminal";
-import { SearchBar } from "../shared/SearchBar";
-import type { SearchOptions } from "../shared/DomSearchEngine";
-import { searchLogLines, highlightSpans, type SearchMatch } from "./scrollbackSearch";
 import s from "./AltScreenHistory.module.css";
 
 const POLL_INTERVAL = 500;
-
-function deduplicatedScreen(log: LogLine[], screen: LogLine[]): LogLine[] {
-  if (screen.length === 0 || log.length === 0) return screen;
-  const lastLogTexts = log.slice(-screen.length).map(lineText);
-  let overlap = 0;
-  for (let start = 0; start <= lastLogTexts.length - screen.length; start++) {
-    let match = true;
-    for (let j = 0; j < screen.length && start + j < lastLogTexts.length; j++) {
-      if (lastLogTexts[start + j] !== lineText(screen[j])) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      overlap = Math.min(screen.length, lastLogTexts.length - start);
-      break;
-    }
-  }
-  return overlap > 0 ? screen.slice(overlap) : screen;
-}
 
 interface VtLogChunk {
   lines: LogLine[];
@@ -41,24 +23,19 @@ interface VtLogChunk {
 interface Props {
   sessionId: string;
   onClose: () => void;
-  terminalBg: string;
-  fontFamily: string;
-  fontSize: number;
-  fontWeight: string;
-  cellHeight: number;
-  cellWidth: number;
-  cols: number;
+  terminalOptions: ITerminalOptions;
   searchVisible: boolean;
   onSearchClose: () => void;
 }
 
 export const AltScreenHistory: Component<Props> = (props) => {
   let containerEl: HTMLDivElement | undefined;
-  let ignoreScrollUntil = 0;
-
-  const [logLines, setLogLines] = createSignal<LogLine[]>([]);
-  const [screenRows, setScreenRows] = createSignal<LogLine[]>([]);
+  let terminal: XTerm | undefined;
+  let fitAddon: FitAddon | undefined;
+  let searchAddon: SearchAddon | undefined;
+  const webglLife = new WebglLifecycle(() => new WebglAddon());
   let newestTotal = 0;
+  let ignoreScrollUntil = 0;
 
   async function fetchAll() {
     try {
@@ -67,11 +44,18 @@ export const AltScreenHistory: Component<Props> = (props) => {
         offset: 0,
         limit: 100000,
       });
-      setLogLines(chunk.lines);
-      setScreenRows(chunk.screen);
+      const allLines = [...chunk.lines, ...chunk.screen];
       newestTotal = chunk.total_lines;
+      const ansi = logLinesToAnsi(allLines);
+      terminal?.write("\x1b[?25l"); // hide cursor
+      if (ansi) terminal?.write(ansi);
+      // Scroll to bottom after write
+      requestAnimationFrame(() => {
+        ignoreScrollUntil = performance.now() + 150;
+        terminal?.scrollToBottom();
+      });
     } catch (err) {
-      appLogger.error("terminal", "read_vt_log failed", { error: String(err) });
+      appLogger.error("terminal", "read_vt_log failed in overlay", { error: String(err) });
     }
   }
 
@@ -83,176 +67,78 @@ export const AltScreenHistory: Component<Props> = (props) => {
         limit: 500,
       });
       if (chunk.lines.length > 0) {
-        setLogLines((prev) => [...prev, ...chunk.lines]);
+        newestTotal = chunk.total_lines;
+        const ansi = logLinesToAnsi(chunk.lines);
+        if (ansi) terminal?.write("\r\n" + ansi);
       }
-      setScreenRows(chunk.screen);
-      newestTotal = chunk.total_lines;
     } catch (err) {
-      appLogger.debug("terminal", "read_vt_log poll failed", { sessionId: props.sessionId, error: String(err) });
+      appLogger.debug("terminal", "read_vt_log poll failed in overlay", { sessionId: props.sessionId, error: String(err) });
     }
   }
 
   onMount(() => {
-    fetchAll().then(() => {
-      requestAnimationFrame(() => {
-        if (containerEl) {
-          ignoreScrollUntil = performance.now() + 150;
-          containerEl.scrollTop = containerEl.scrollHeight;
-        }
-      });
+    if (!containerEl) return;
+
+    terminal = new XTerm({
+      ...props.terminalOptions,
+      disableStdin: true,
+      cursorBlink: false,
+      scrollback: 100000,
+      allowProposedApi: true,
     });
+
+    fitAddon = new FitAddon();
+    terminal.loadAddon(fitAddon);
+
+    searchAddon = new SearchAddon();
+    terminal.loadAddon(searchAddon);
+
+    terminal.open(containerEl);
+    fitAddon.fit();
+
+    const unicode11 = new Unicode11Addon();
+    terminal.loadAddon(unicode11);
+    terminal.unicode.activeVersion = "11";
+
+    webglLife.attach(terminal);
+
+    fetchAll();
 
     const pollId = setInterval(fetchNewer, POLL_INTERVAL);
     onCleanup(() => clearInterval(pollId));
+
+    const handleResize = () => fitAddon?.fit();
+    window.addEventListener("resize", handleResize);
+    onCleanup(() => window.removeEventListener("resize", handleResize));
+  });
+
+  onCleanup(() => {
+    webglLife.dispose();
+    searchAddon?.dispose();
+    fitAddon?.dispose();
+    terminal?.dispose();
   });
 
   const handleScroll = () => {
-    if (!containerEl || performance.now() < ignoreScrollUntil) return;
-    const canScroll = containerEl.scrollHeight > containerEl.clientHeight + 16;
-    if (!canScroll) return;
-    const atBottom =
-      containerEl.scrollTop + containerEl.clientHeight >= containerEl.scrollHeight - 8;
+    if (!terminal || performance.now() < ignoreScrollUntil) return;
+    const buf = terminal.buffer.active;
+    const atBottom = buf.viewportY >= buf.baseY;
     if (atBottom) props.onClose();
   };
 
-  const handleMouseUp = () => {
-    if (!settingsStore.state.copyOnSelect) return;
-    const sel = window.getSelection()?.toString();
-    if (!sel || sel.length < 2) return;
-    const trimmed = trimSelection(sel);
-    if (!trimmed) return;
-    const setStatus = (window as unknown as Record<string, unknown>).__tuic_setStatusInfo as ((msg: string) => void) | undefined;
-    navigator.clipboard.writeText(trimmed).then(() => {
-      setStatus?.("Copied to clipboard");
-    }).catch((err) => {
-      appLogger.warn("terminal", "Scroll history copy-on-select failed", err);
-    });
-  };
-
-  const dedupScreen = createMemo(() => deduplicatedScreen(logLines(), screenRows()));
-  const allLines = createMemo(() => [...logLines(), ...dedupScreen()]);
-
-  const [matches, setMatches] = createSignal<SearchMatch[]>([]);
-  const [activeIdx, setActiveIdx] = createSignal(-1);
-  let searchToken = 0;
-
-  const handleSearch = (term: string, opts: SearchOptions) => {
-    const token = ++searchToken;
-    const found = searchLogLines(allLines(), term, opts);
-    if (token !== searchToken) return;
-    setMatches(found);
-    setActiveIdx(found.length > 0 ? 0 : -1);
-    if (found.length > 0) scrollToMatch(0);
-  };
-
-  const handleNext = () => {
-    const m = matches();
-    if (m.length === 0) return;
-    const next = (activeIdx() + 1) % m.length;
-    setActiveIdx(next);
-    scrollToMatch(next);
-  };
-
-  const handlePrev = () => {
-    const m = matches();
-    if (m.length === 0) return;
-    const prev = (activeIdx() - 1 + m.length) % m.length;
-    setActiveIdx(prev);
-    scrollToMatch(prev);
-  };
-
-  function scrollToMatch(idx: number) {
-    const m = matches()[idx];
-    if (!m || !containerEl) return;
-    const rows = containerEl.querySelectorAll(`.${s.row}`);
-    const row = rows[m.lineIndex];
-    if (row) {
-      ignoreScrollUntil = performance.now() + 150;
-      row.scrollIntoView({ block: "center", behavior: "smooth" });
-    }
-  }
-
-  const matchesByLine = createMemo(() => {
-    const m = matches();
-    const map = new Map<number, { matches: SearchMatch[]; globalOffset: number }>();
-    for (let i = 0; i < m.length; ) {
-      const lineIdx = m[i].lineIndex;
-      const start = i;
-      while (i < m.length && m[i].lineIndex === lineIdx) i++;
-      map.set(lineIdx, { matches: m.slice(start, i), globalOffset: start });
-    }
-    return map;
-  });
-
-  const renderLine = (line: LogLine, lineIndex: number) => {
-    const info = matchesByLine().get(lineIndex);
-    if (!info) {
-      return (
-        <div class={s.row}>
-          <Index each={line.spans}>
-            {(span) => {
-              const st = spanStyle(span());
-              return st
-                ? <span style={st}>{span().text}</span>
-                : <>{span().text}</>;
-            }}
-          </Index>
-        </div>
-      );
-    }
-    const segs = highlightSpans(line, info.matches, activeIdx(), info.globalOffset);
-    return (
-      <div class={s.row}>
-        <For each={segs}>{(seg) => {
-          const st = spanStyle(seg.span);
-          const cls = seg.highlight
-            ? seg.active ? s.matchActive : s.matchHighlight
-            : undefined;
-          return st || cls
-            ? <span style={st || {}} class={cls}>{seg.text}</span>
-            : <>{seg.text}</>;
-        }}</For>
-      </div>
-    );
-  };
-
   return (
-    <div
-      ref={containerEl}
-      class={s.overlay}
-      style={{ background: props.terminalBg }}
-      onScroll={handleScroll}
-      onMouseUp={handleMouseUp}
-    >
-      <SearchBar
-        visible={props.searchVisible}
-        onSearch={handleSearch}
-        onNext={handleNext}
-        onPrev={handlePrev}
-        onClose={props.onSearchClose}
-        matchIndex={activeIdx()}
-        matchCount={matches().length}
-        matchLabel={matches().length >= 1000 ? "1000+" : undefined}
-      />
-      <div class={s.header} style={{ background: props.terminalBg }}>
-        <span class={s.label}>Scroll history — {logLines().length} lines</span>
+    <div class={s.overlay}>
+      <div class={s.header} style={{ background: props.terminalOptions.theme?.background ?? "#1e1e1e" }}>
+        <span class={s.label}>Scroll history</span>
         <button class={s.closeBtn} onClick={props.onClose}>
           Return to live ↓
         </button>
       </div>
       <div
-        class={s.content}
-        style={{
-          "--cell-height": `${props.cellHeight}px`,
-          "--content-width": `${props.cols * props.cellWidth}px`,
-          "font-family": props.fontFamily,
-          "font-size": `${props.fontSize}px`,
-          "font-weight": props.fontWeight,
-          "letter-spacing": `calc(${props.cellWidth}px - 1ch)`,
-        }}
-      >
-        <For each={allLines()}>{(line, i) => renderLine(line, i())}</For>
-      </div>
+        ref={containerEl}
+        class={s.xtermContainer}
+        onScroll={handleScroll}
+      />
     </div>
   );
 };
