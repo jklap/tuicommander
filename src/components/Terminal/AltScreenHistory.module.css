@@ -67,32 +67,4 @@
   color: var(--fg-primary, #fff);
 }
 
-.content {
-  flex: 1;
-  padding: 8px;
-  line-height: var(--cell-height);
-}
-
-.content ::selection {
-  background: rgba(255, 255, 0, 0.25);
-  color: inherit;
-}
-
-.row {
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  max-width: var(--content-width);
-  min-height: var(--cell-height);
-  line-height: inherit;
-}
-
-.matchHighlight {
-  background: rgba(255, 255, 0, 0.25);
-  border-radius: 1px;
-}
-
-.matchActive {
-  background: rgba(255, 140, 0, 0.7);
-  border-radius: 1px;
-}
 
