@@ -188,6 +188,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
   const [searchVisible, setSearchVisible] = createSignal(false);
   // Scrollback history overlay
   const [showAltHistory, setShowAltHistory] = createSignal(false);
+  const [overlaySearchVisible, setOverlaySearchVisible] = createSignal(false);
   // Compose panel state
   const [composeOpen, setComposeOpen] = createSignal(false);
   const [pendingComposeText, setPendingComposeText] = createSignal("");
@@ -927,9 +928,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // keypress from reaching xterm (which would eat the next typed character).
     let blockEscForResumeDismiss = false;
     terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-      // ESC while alt-screen history overlay is open: the overlay's document listener
-      // already closes it, but we also suppress the \x1b from reaching the PTY.
+      // ESC while alt-screen history overlay is open:
+      // Priority: overlay search → overlay close. Suppress \x1b from reaching PTY.
       if (showAltHistory() && event.type === "keydown" && event.key === "Escape") {
+        if (overlaySearchVisible()) {
+          setOverlaySearchVisible(false);
+        } else {
+          setShowAltHistory(false);
+          setOverlaySearchVisible(false);
+          terminal?.focus();
+        }
         return false;
       }
 
@@ -999,10 +1007,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
         }
       }
 
-      // Intercept Cmd+F (macOS) / Ctrl+F (Win/Linux) to open xterm search.
+      // Intercept Cmd+F (macOS) / Ctrl+F (Win/Linux) to open search.
       if (event.type === "keydown" && (event.metaKey || event.ctrlKey) && event.key === "f" && !event.altKey && !event.shiftKey) {
         event.preventDefault();
-        setSearchVisible(true);
+        if (showAltHistory()) {
+          setOverlaySearchVisible(true);
+        } else {
+          setSearchVisible(true);
+        }
         return false;
       }
 
@@ -1972,8 +1984,11 @@ export const Terminal: Component<TerminalProps> = (props) => {
           sessionId={sessionId!}
           onClose={() => {
             setShowAltHistory(false);
+            setOverlaySearchVisible(false);
             terminal?.focus();
           }}
+          searchVisible={overlaySearchVisible()}
+          onSearchClose={() => setOverlaySearchVisible(false)}
           terminalBg={currentTheme().background ?? "#1e1e1e"}
           fontFamily={terminal?.options.fontFamily ?? getFontFamily()}
           fontSize={terminal?.options.fontSize ?? settingsStore.state.defaultFontSize}

@@ -4,6 +4,9 @@ import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
 import { trimSelection } from "./Terminal";
+import { SearchBar } from "../shared/SearchBar";
+import type { SearchOptions } from "../shared/DomSearchEngine";
+import { searchLogLines, highlightSpans, type SearchMatch } from "./scrollbackSearch";
 import s from "./AltScreenHistory.module.css";
 
 const POLL_INTERVAL = 500;
@@ -43,6 +46,8 @@ interface Props {
   fontSize: number;
   fontWeight: string;
   cellHeight: number;
+  searchVisible: boolean;
+  onSearchClose: () => void;
 }
 
 export const AltScreenHistory: Component<Props> = (props) => {
@@ -96,19 +101,7 @@ export const AltScreenHistory: Component<Props> = (props) => {
     });
 
     const pollId = setInterval(fetchNewer, POLL_INTERVAL);
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        e.stopPropagation();
-        props.onClose();
-      }
-    };
-    document.addEventListener("keydown", onKey, { capture: true });
-    onCleanup(() => {
-      document.removeEventListener("keydown", onKey, { capture: true });
-      clearInterval(pollId);
-    });
+    onCleanup(() => clearInterval(pollId));
   });
 
   const handleScroll = () => {
@@ -135,19 +128,91 @@ export const AltScreenHistory: Component<Props> = (props) => {
   };
 
   const dedupScreen = createMemo(() => deduplicatedScreen(logLines(), screenRows()));
+  const allLines = createMemo(() => [...logLines(), ...dedupScreen()]);
 
-  const renderLine = (line: LogLine) => (
-    <div class={s.row}>
-      <Index each={line.spans}>
-        {(span) => {
-          const st = spanStyle(span());
-          return st
-            ? <span style={st}>{span().text}</span>
-            : <>{span().text}</>;
-        }}
-      </Index>
-    </div>
-  );
+  const [matches, setMatches] = createSignal<SearchMatch[]>([]);
+  const [activeIdx, setActiveIdx] = createSignal(-1);
+  let searchToken = 0;
+
+  const handleSearch = (term: string, opts: SearchOptions) => {
+    const token = ++searchToken;
+    const found = searchLogLines(allLines(), term, opts);
+    if (token !== searchToken) return;
+    setMatches(found);
+    setActiveIdx(found.length > 0 ? 0 : -1);
+    if (found.length > 0) scrollToMatch(0);
+  };
+
+  const handleNext = () => {
+    const m = matches();
+    if (m.length === 0) return;
+    const next = (activeIdx() + 1) % m.length;
+    setActiveIdx(next);
+    scrollToMatch(next);
+  };
+
+  const handlePrev = () => {
+    const m = matches();
+    if (m.length === 0) return;
+    const prev = (activeIdx() - 1 + m.length) % m.length;
+    setActiveIdx(prev);
+    scrollToMatch(prev);
+  };
+
+  function scrollToMatch(idx: number) {
+    const m = matches()[idx];
+    if (!m || !containerEl) return;
+    const rows = containerEl.querySelectorAll(`.${s.row}`);
+    const row = rows[m.lineIndex];
+    if (row) {
+      ignoreScrollUntil = performance.now() + 150;
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }
+
+  const matchesByLine = createMemo(() => {
+    const m = matches();
+    const map = new Map<number, { matches: SearchMatch[]; globalOffset: number }>();
+    for (let i = 0; i < m.length; ) {
+      const lineIdx = m[i].lineIndex;
+      const start = i;
+      while (i < m.length && m[i].lineIndex === lineIdx) i++;
+      map.set(lineIdx, { matches: m.slice(start, i), globalOffset: start });
+    }
+    return map;
+  });
+
+  const renderLine = (line: LogLine, lineIndex: number) => {
+    const info = matchesByLine().get(lineIndex);
+    if (!info) {
+      return (
+        <div class={s.row}>
+          <Index each={line.spans}>
+            {(span) => {
+              const st = spanStyle(span());
+              return st
+                ? <span style={st}>{span().text}</span>
+                : <>{span().text}</>;
+            }}
+          </Index>
+        </div>
+      );
+    }
+    const segs = highlightSpans(line, info.matches, activeIdx(), info.globalOffset);
+    return (
+      <div class={s.row}>
+        <For each={segs}>{(seg) => {
+          const st = spanStyle(seg.span);
+          const cls = seg.highlight
+            ? seg.active ? s.matchActive : s.matchHighlight
+            : undefined;
+          return st || cls
+            ? <span style={st || {}} class={cls}>{seg.text}</span>
+            : <>{seg.text}</>;
+        }}</For>
+      </div>
+    );
+  };
 
   return (
     <div
@@ -157,6 +222,16 @@ export const AltScreenHistory: Component<Props> = (props) => {
       onScroll={handleScroll}
       onMouseUp={handleMouseUp}
     >
+      <SearchBar
+        visible={props.searchVisible}
+        onSearch={handleSearch}
+        onNext={handleNext}
+        onPrev={handlePrev}
+        onClose={props.onSearchClose}
+        matchIndex={activeIdx()}
+        matchCount={matches().length}
+        matchLabel={matches().length >= 1000 ? "1000+" : undefined}
+      />
       <div class={s.header} style={{ background: props.terminalBg }}>
         <span class={s.label}>Scroll history — {logLines().length} lines</span>
         <button class={s.closeBtn} onClick={props.onClose}>
@@ -172,8 +247,7 @@ export const AltScreenHistory: Component<Props> = (props) => {
           "font-weight": props.fontWeight,
         }}
       >
-        <For each={logLines()}>{renderLine}</For>
-        <For each={dedupScreen()}>{renderLine}</For>
+        <For each={allLines()}>{(line, i) => renderLine(line, i())}</For>
       </div>
     </div>
   );
