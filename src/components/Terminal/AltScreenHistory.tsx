@@ -46,6 +46,8 @@ interface Props {
   fontSize: number;
   fontWeight: string;
   cellHeight: number;
+  cellWidth: number;
+  cols: number;
   searchVisible: boolean;
   onSearchClose: () => void;
 }
@@ -242,9 +244,11 @@ export const AltScreenHistory: Component<Props> = (props) => {
         class={s.content}
         style={{
           "--cell-height": `${props.cellHeight}px`,
+          "--content-width": `${props.cols * props.cellWidth}px`,
           "font-family": props.fontFamily,
           "font-size": `${props.fontSize}px`,
           "font-weight": props.fontWeight,
+          "letter-spacing": `calc(${props.cellWidth}px - 1ch)`,
         }}
       >
         <For each={allLines()}>{(line, i) => renderLine(line, i())}</For>

@@ -2006,6 +2006,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
               (terminal.options.lineHeight ?? TARGET_LINE_HEIGHT),
             );
           })()}
+          cellWidth={(() => {
+            if (!terminal) return settingsStore.state.defaultFontSize * 0.6;
+            try {
+              const dims = (terminal as any)._core?._renderService?.dimensions;
+              if (dims?.css?.cell?.width) return dims.css.cell.width;
+            } catch { /* fallback */ }
+            return settingsStore.state.defaultFontSize * 0.6;
+          })()}
+          cols={terminal?.cols ?? 80}
         />
       </Show>
     </div>
