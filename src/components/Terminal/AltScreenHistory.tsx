@@ -2,6 +2,8 @@ import { Component, For, Index, createMemo, createSignal, onCleanup, onMount } f
 import { type LogLine, spanStyle, lineText } from "../../mobile/utils/logLine";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { settingsStore } from "../../stores/settings";
+import { trimSelection } from "./Terminal";
 import s from "./AltScreenHistory.module.css";
 
 const POLL_INTERVAL = 500;
@@ -118,6 +120,20 @@ export const AltScreenHistory: Component<Props> = (props) => {
     if (atBottom) props.onClose();
   };
 
+  const handleMouseUp = () => {
+    if (!settingsStore.state.copyOnSelect) return;
+    const sel = window.getSelection()?.toString();
+    if (!sel || sel.length < 2) return;
+    const trimmed = trimSelection(sel);
+    if (!trimmed) return;
+    const setStatus = (window as unknown as Record<string, unknown>).__tuic_setStatusInfo as ((msg: string) => void) | undefined;
+    navigator.clipboard.writeText(trimmed).then(() => {
+      setStatus?.("Copied to clipboard");
+    }).catch((err) => {
+      appLogger.warn("terminal", "Scroll history copy-on-select failed", err);
+    });
+  };
+
   const dedupScreen = createMemo(() => deduplicatedScreen(logLines(), screenRows()));
 
   const renderLine = (line: LogLine) => (
@@ -139,6 +155,7 @@ export const AltScreenHistory: Component<Props> = (props) => {
       class={s.overlay}
       style={{ background: props.terminalBg }}
       onScroll={handleScroll}
+      onMouseUp={handleMouseUp}
     >
       <div class={s.header} style={{ background: props.terminalBg }}>
         <span class={s.label}>Scroll history — {logLines().length} lines</span>

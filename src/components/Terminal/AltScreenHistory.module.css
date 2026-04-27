@@ -69,6 +69,11 @@
   line-height: var(--cell-height);
 }
 
+.content ::selection {
+  background: rgba(255, 255, 0, 0.25);
+  color: inherit;
+}
+
 .row {
   white-space: pre-wrap;
   overflow-wrap: break-word;
