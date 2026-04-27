@@ -408,6 +408,9 @@ pub(crate) struct AppConfig {
     /// Sub-flag: AI Chat panel, shortcuts, and palette entry
     #[serde(default)]
     pub(crate) ai_chat_enabled: bool,
+    /// Sub-flag: scrollback history overlay on scroll-up in agent mode
+    #[serde(default)]
+    pub(crate) scroll_history_enabled: bool,
     /// Expose `ai_terminal_*` tools to external MCP. Default off: they need a
     /// per-session filesystem sandbox only the internal agent loop creates.
     ///
@@ -514,6 +517,7 @@ impl Default for AppConfig {
             issue_filter: default_issue_filter(),
             experimental_features_enabled: false,
             ai_chat_enabled: false,
+            scroll_history_enabled: false,
             ai_terminal_mcp_enabled: false,
         }
     }
@@ -1283,6 +1287,7 @@ mod tests {
             issue_filter: "assigned".to_string(),
             experimental_features_enabled: false,
             ai_chat_enabled: false,
+            scroll_history_enabled: false,
             ai_terminal_mcp_enabled: false,
         };
         let loaded: AppConfig = round_trip_in_dir(dir.path(), "config.json", &cfg);

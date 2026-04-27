@@ -1230,7 +1230,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // Scroll-up → show scrollback history overlay.
     // xterm.js scrollback gets corrupted by resize with Ink/agent panels, so we
     // show an overlay that reads clean scrollback lines from the Rust VtLogBuffer.
-    if (settingsStore.state.experimentalFeaturesEnabled) {
+    if (settingsStore.isScrollHistoryEnabled()) {
       const handleAltWheelUp = (e: WheelEvent) => {
         const bufType = terminal?.buffer.active.type ?? "none";
         const agentType = terminalsStore.get(props.id)?.agentType ?? null;
@@ -1967,7 +1967,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
           }
         }}
       />
-      <Show when={settingsStore.state.experimentalFeaturesEnabled && showAltHistory() && sessionId}>
+      <Show when={settingsStore.isScrollHistoryEnabled() && showAltHistory() && sessionId}>
         <AltScreenHistory
           sessionId={sessionId!}
           onClose={() => {
