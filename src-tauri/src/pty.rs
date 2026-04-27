@@ -3810,15 +3810,20 @@ pub(crate) fn read_vt_log(
     let Some(vt_log) = state.vt_log_buffers.get(&session_id) else {
         return VtLogChunk { lines: vec![], screen: vec![], total_lines: 0, oldest: 0 };
     };
-    let buf = vt_log.lock();
-    let offset = offset.unwrap_or_else(|| buf.total_lines().saturating_sub(limit));
-    let (lines, _) = buf.lines_since_owned(offset, limit);
-    let raw_rows = buf.screen_rows();
+    let (lines, raw_rows, screen_log, total_lines, oldest) = {
+        let buf = vt_log.lock();
+        let off = offset.unwrap_or_else(|| buf.total_lines().saturating_sub(limit));
+        let (lines, _) = buf.lines_since_owned(off, limit);
+        let raw_rows = buf.screen_rows();
+        let screen_log = buf.screen_log_lines();
+        let total_lines = buf.total_lines();
+        let oldest = buf.oldest_offset();
+        (lines, raw_rows, screen_log, total_lines, oldest)
+    };
+    // Chrome cutoff runs outside the lock — no contention with PTY reader.
     let refs: Vec<&str> = raw_rows.iter().map(|s| s.as_str()).collect();
     let cutoff = crate::chrome::find_chrome_cutoff(&refs).unwrap_or(raw_rows.len());
-    let screen: Vec<crate::state::LogLine> = buf.screen_log_lines().into_iter().take(cutoff).collect();
-    let total_lines = buf.total_lines();
-    let oldest = buf.oldest_offset();
+    let screen: Vec<crate::state::LogLine> = screen_log.into_iter().take(cutoff).collect();
 
     VtLogChunk { lines, screen, total_lines, oldest }
 }

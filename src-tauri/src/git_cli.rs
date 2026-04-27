@@ -148,13 +148,28 @@ impl GitCmd {
 
 /// Remove stale `.git/index.lock` left behind by crashed external processes
 /// (e.g. Claude Code killed mid-`git status`). A lock is stale when the file
-/// is empty — real in-progress locks contain the serialised index.
+/// is empty AND older than 5 seconds — real in-progress locks contain the
+/// serialised index, and the age guard avoids racing with a live git process
+/// that just created the file.
 fn remove_stale_index_lock(cwd: &Path) {
     let lock = cwd.join(".git/index.lock");
     match std::fs::metadata(&lock) {
         Ok(meta) if meta.len() == 0 => {
-            if std::fs::remove_file(&lock).is_ok() {
-                tracing::info!(source = "git_cli", "Removed stale 0-byte index.lock in {}", cwd.display());
+            let is_old = meta.modified()
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .map(|d| d.as_secs() >= 5)
+                .unwrap_or(false);
+            if !is_old {
+                return;
+            }
+            match std::fs::remove_file(&lock) {
+                Ok(()) => {
+                    tracing::info!(source = "git_cli", "Removed stale 0-byte index.lock in {}", cwd.display());
+                }
+                Err(e) => {
+                    tracing::warn!(source = "git_cli", "Failed to remove stale index.lock in {}: {e}", cwd.display());
+                }
             }
         }
         _ => {}

@@ -1852,9 +1852,9 @@ impl VtLogBuffer {
         }
         // Suppress scrollback capture when cols drops by >50% (side panel).
         // Ignore the very first resize (total_pushed==0, xterm fit addon).
-        if cols < prev / 2 && self.total_pushed > 0 {
+        if cols.saturating_mul(2) < prev && self.total_pushed > 0 {
             self.suppress_capture = true;
-        } else if cols >= prev {
+        } else if cols.saturating_mul(2) >= self.max_cols {
             self.suppress_capture = false;
         }
         let effective_cols = cols.max(self.max_cols);
