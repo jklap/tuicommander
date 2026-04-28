@@ -765,41 +765,45 @@ fn parse_issue_node(v: &serde_json::Value) -> Option<GitHubIssue> {
     })
 }
 
-/// Build a batched GraphQL query for issues across multiple repos.
-/// `viewer` is the GitHub username for filtering (assignee/creator/mentioned).
-/// `filter_mode`: "assigned", "created", "mentioned", or "all".
-fn build_multi_repo_issues_query(
-    repos: &[(String, String, String)],
-    viewer: &str,
-    filter_mode: &str,
-) -> (String, Vec<(String, String)>) {
-    // Build search qualifier based on filter mode
-    let qualifier = match filter_mode {
-        "assigned" => format!("assignee:{viewer}"),
-        "created" => format!("author:{viewer}"),
-        "mentioned" => format!("mentions:{viewer}"),
+/// Build `filterBy` clause for `repository().issues()` based on filter mode.
+fn issues_filter_clause(filter_mode: &str, viewer: &str) -> String {
+    match filter_mode {
+        "assigned" => format!(", filterBy: {{ assignee: \"{viewer}\" }}"),
+        "created" => format!(", filterBy: {{ createdBy: \"{viewer}\" }}"),
+        "mentioned" => format!(", filterBy: {{ mentioned: \"{viewer}\" }}"),
         _ => String::new(), // "all" — no user filter
-    };
+    }
+}
 
+/// The issues sub-selection for embedding inside a repository alias.
+fn issues_repo_section(filter_mode: &str, viewer: &str) -> String {
+    let filter = issues_filter_clause(filter_mode, viewer);
     let node_fields = r#"number title state url createdAt updatedAt
         author { login }
         labels(first: 10) { nodes { name color } }
         assignees(first: 5) { nodes { login } }
         milestone { title }
         comments { totalCount }"#;
+    format!(
+        "    issues(first: 30, states: [OPEN]{filter}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {node_fields} }}\n    }}"
+    )
+}
 
+/// Build a batched GraphQL query for issues only (on-demand Tauri command path).
+/// Uses `repository().issues()` — cheaper than `search()` in GraphQL points.
+fn build_multi_repo_issues_query(
+    repos: &[(String, String, String)],
+    viewer: &str,
+    filter_mode: &str,
+) -> (String, Vec<(String, String)>) {
     let mut aliases: Vec<(String, String)> = Vec::new();
     let mut parts = vec!["query BatchRepoIssues {".to_string()];
 
     for (i, (path, owner, name)) in repos.iter().enumerate() {
         let alias = format!("r{i}");
-        let search_q = if qualifier.is_empty() {
-            format!("repo:{owner}/{name} is:issue is:open")
-        } else {
-            format!("repo:{owner}/{name} is:issue is:open {qualifier}")
-        };
         parts.push(format!(
-            "  {alias}: search(query: \"{search_q}\", type: ISSUE, first: 30) {{\n    nodes {{\n      ... on Issue {{ {node_fields} }}\n    }}\n  }}"
+            "  {alias}: repository(owner: \"{owner}\", name: \"{name}\") {{\n{}\n  }}",
+            issues_repo_section(filter_mode, viewer),
         ));
         aliases.push((alias, path.clone()));
     }
@@ -840,15 +844,19 @@ pub(crate) async fn get_all_issues_impl(
         return Ok(std::collections::HashMap::new());
     }
 
-    // Resolve viewer login for filtering
-    let viewer = get_viewer_login(state).await.unwrap_or_default();
+    let viewer = if !matches!(filter_mode, "all") {
+        get_viewer_login(state).await.unwrap_or_default()
+    } else {
+        String::new()
+    };
     let (query, aliases) = build_multi_repo_issues_query(&repos, &viewer, filter_mode);
 
     let response = graphql_with_retry(state, &query, serde_json::Value::Null).await?;
 
     let mut results = std::collections::HashMap::new();
     for (alias, path) in &aliases {
-        let nodes = match response["data"][alias]["nodes"].as_array() {
+        // Response is now repository.issues.nodes, not search.nodes
+        let nodes = match response["data"][alias]["issues"]["nodes"].as_array() {
             Some(arr) => arr,
             None => continue,
         };
@@ -856,6 +864,175 @@ pub(crate) async fn get_all_issues_impl(
         results.insert(path.clone(), issues);
     }
     Ok(results)
+}
+
+// ── Unified batch query (PRs + Issues in one HTTP call) ──────────────────────
+
+/// Build a batched GraphQL query fetching PRs and (optionally) Issues for all
+/// repos in a single HTTP request.  When `filter_mode` is "disabled" the issues
+/// section is omitted entirely, saving GraphQL points.
+fn build_unified_batch_query(
+    repos: &[(String, String, String)],
+    include_merged: bool,
+    filter_mode: &str,
+    viewer: &str,
+) -> (String, Vec<(String, String)>) {
+    let states = if include_merged { "[OPEN, MERGED]" } else { "[OPEN]" };
+    let pr_node_fields = r#"number title state url headRefName headRefOid baseRefName isDraft
+        additions deletions mergeable mergeStateStatus reviewDecision
+        createdAt updatedAt
+        author { login }
+        labels(first: 10) { nodes { name color } }
+        commits(last: 1) {
+          totalCount
+          nodes {
+            commit {
+              statusCheckRollup {
+                contexts {
+                  checkRunCountsByState { state count }
+                  statusContextCountsByState { state count }
+                }
+              }
+            }
+          }
+        }"#;
+
+    let include_issues = !matches!(filter_mode, "" | "disabled");
+
+    let mut aliases: Vec<(String, String)> = Vec::new();
+    let mut parts = vec!["query BatchPoll {".to_string()];
+
+    for (i, (path, owner, name)) in repos.iter().enumerate() {
+        let alias = format!("r{i}");
+        let issues_section = if include_issues {
+            format!("\n{}", issues_repo_section(filter_mode, viewer))
+        } else {
+            String::new()
+        };
+        parts.push(format!(
+            "  {alias}: repository(owner: \"{owner}\", name: \"{name}\") {{\n    mergeCommitAllowed\n    squashMergeAllowed\n    rebaseMergeAllowed\n    pullRequests(first: 20, states: {states}, orderBy: {{field: UPDATED_AT, direction: DESC}}) {{\n      nodes {{ {pr_node_fields} }}\n    }}{issues_section}\n  }}"
+        ));
+        aliases.push((alias, path.clone()));
+    }
+    parts.push("  rateLimit { cost remaining resetAt }".to_string());
+    parts.push("}".to_string());
+
+    (parts.join("\n"), aliases)
+}
+
+/// Result of a unified batch poll.
+pub(crate) struct BatchPollResult {
+    pub(crate) prs: std::collections::HashMap<String, Vec<BranchPrStatus>>,
+    /// Non-empty only when filter_mode != "disabled".
+    pub(crate) issues: std::collections::HashMap<String, Vec<GitHubIssue>>,
+}
+
+/// Fetch PRs + Issues for all repos in a single batched GraphQL call.
+/// Writes the remaining rate-limit budget to `state` for proactive throttling.
+pub(crate) async fn get_all_batch_impl(
+    paths: &[String],
+    include_merged: bool,
+    filter_mode: &str,
+    state: &AppState,
+) -> Result<BatchPollResult, String> {
+    if state.github_token.read().is_none() {
+        return Ok(BatchPollResult { prs: Default::default(), issues: Default::default() });
+    }
+
+    let now = Instant::now();
+    state.git_cache.github_repo_cooldown.retain(|_key, expiry| *expiry > now);
+
+    let repos: Vec<(String, String, String)> = paths
+        .iter()
+        .filter_map(|path| {
+            let repo_path = PathBuf::from(path);
+            let url = get_github_remote_url(&repo_path)?;
+            let (owner, name) = parse_remote_url(&url)?;
+            let cooldown_key = format!("{owner}/{name}");
+            if state.git_cache.github_repo_cooldown.contains_key(&cooldown_key) {
+                return None;
+            }
+            Some((path.clone(), owner, name))
+        })
+        .collect();
+
+    if repos.is_empty() {
+        return Ok(BatchPollResult { prs: Default::default(), issues: Default::default() });
+    }
+
+    let include_issues = !matches!(filter_mode, "" | "disabled");
+    let viewer = if include_issues && !matches!(filter_mode, "all") {
+        get_viewer_login(state).await.unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let (query, aliases) = build_unified_batch_query(&repos, include_merged, filter_mode, &viewer);
+    let response = graphql_with_retry(state, &query, serde_json::Value::Null).await?;
+
+    // Store rate-limit budget for proactive throttling in the poller
+    if let Some(remaining) = response["data"]["rateLimit"]["remaining"].as_u64() {
+        state.github_rate_limit_remaining.store(
+            remaining as u32,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+
+    let alias_repo_names: std::collections::HashMap<&str, (&str, &str)> = repos
+        .iter()
+        .enumerate()
+        .map(|(i, (_path, owner, name))| (aliases[i].0.as_str(), (owner.as_str(), name.as_str())))
+        .collect();
+
+    let mut pr_results: std::collections::HashMap<String, Vec<BranchPrStatus>> = Default::default();
+    let mut issue_results: std::collections::HashMap<String, Vec<GitHubIssue>> = Default::default();
+
+    for (alias, path) in &aliases {
+        let repo_json = &response["data"][alias];
+
+        if repo_json.is_null() {
+            if let Some((owner, name)) = alias_repo_names.get(alias.as_str()) {
+                let cooldown_key = format!("{owner}/{name}");
+                let was_known = state.git_cache.github_repo_cooldown.contains_key(&cooldown_key);
+                let expiry = Instant::now() + std::time::Duration::from_secs(24 * 3600);
+                state.git_cache.github_repo_cooldown.insert(cooldown_key, expiry);
+                if !was_known {
+                    let msg = format!("Repository {owner}/{name} not found on GitHub — cooldown 24h");
+                    let mut buf = state.log_buffer.lock();
+                    buf.push("warn".into(), "github".into(), msg, None);
+                }
+            }
+            continue;
+        }
+
+        if let Some(nodes) = repo_json["pullRequests"]["nodes"].as_array() {
+            let mut statuses: Vec<BranchPrStatus> = nodes.iter().filter_map(parse_pr_node).collect();
+            stamp_merge_policy(&mut statuses, repo_json);
+
+            if include_merged && statuses.iter().any(|s| s.state == "MERGED") {
+                let branch_tips = local_branch_tips(Path::new(path));
+                statuses.retain(|s| {
+                    if s.state != "MERGED" || s.head_ref_oid.is_empty() { return true; }
+                    match branch_tips.get(&s.branch) {
+                        Some(tip) => tip == &s.head_ref_oid,
+                        None => true,
+                    }
+                });
+            }
+
+            AppState::set_cached(&state.git_cache.github_status, path.clone(), statuses.clone());
+            pr_results.insert(path.clone(), statuses);
+        }
+
+        if include_issues
+            && let Some(nodes) = repo_json["issues"]["nodes"].as_array()
+        {
+            let issues: Vec<GitHubIssue> = nodes.iter().filter_map(parse_issue_node).collect();
+            issue_results.insert(path.clone(), issues);
+        }
+    }
+
+    Ok(BatchPollResult { prs: pr_results, issues: issue_results })
 }
 
 /// Fetch issues for a single repo (Tauri command).
@@ -1177,107 +1354,14 @@ fn build_multi_repo_pr_query(
 }
 
 /// Fetch PR statuses for all repos in a single batched GraphQL call.
-/// On failure (network, auth, complexity), returns Err so the caller can fall back to per-repo calls.
+/// Delegates to `get_all_batch_impl` with issues disabled (PR-only path for Tauri command).
 pub(crate) async fn get_all_pr_statuses_impl(
     paths: &[String],
     include_merged: bool,
     state: &AppState,
 ) -> Result<std::collections::HashMap<String, Vec<BranchPrStatus>>, String> {
-    if state.github_token.read().is_none() {
-        return Ok(std::collections::HashMap::new());
-    }
-
-    // Evict expired cooldowns before filtering
-    let now = Instant::now();
-    state.git_cache.github_repo_cooldown.retain(|_key, expiry| *expiry > now);
-
-    // Resolve (path, owner, repo) for each path that has a GitHub remote
-    let repos: Vec<(String, String, String)> = paths
-        .iter()
-        .filter_map(|path| {
-            let repo_path = PathBuf::from(path);
-            let url = get_github_remote_url(&repo_path)?;
-            let (owner, name) = parse_remote_url(&url)?;
-            // Skip repos in cooldown (not found on GitHub)
-            let cooldown_key = format!("{owner}/{name}");
-            if state.git_cache.github_repo_cooldown.contains_key(&cooldown_key) {
-                return None;
-            }
-            Some((path.clone(), owner, name))
-        })
-        .collect();
-
-    if repos.is_empty() {
-        return Ok(std::collections::HashMap::new());
-    }
-
-    let (query, aliases) = build_multi_repo_pr_query(&repos, include_merged);
-
-    let response = graphql_with_retry(state, &query, serde_json::Value::Null).await?;
-
-    // Build alias→(owner, name) lookup for logging null repos
-    let alias_repo_names: std::collections::HashMap<&str, (&str, &str)> = repos
-        .iter()
-        .enumerate()
-        .map(|(i, (_path, owner, name))| {
-            // aliases are "r0", "r1", … matching the enumerate index
-            let alias_key: &str = aliases[i].0.as_str();
-            (alias_key, (owner.as_str(), name.as_str()))
-        })
-        .collect();
-
-    let mut results = std::collections::HashMap::new();
-    for (alias, path) in &aliases {
-        let repo_json = &response["data"][alias];
-        let nodes = match repo_json["pullRequests"]["nodes"].as_array() {
-            Some(arr) => arr,
-            None => {
-                // Null repo — likely doesn't exist on GitHub.
-                // Add to 1-hour cooldown so future batch polls skip it.
-                if repo_json.is_null()
-                    && let Some((owner, name)) = alias_repo_names.get(alias.as_str())
-                {
-                    let cooldown_key = format!("{owner}/{name}");
-                    let was_known = state.git_cache.github_repo_cooldown.contains_key(&cooldown_key);
-                    // 404 is effectively permanent (repo renamed/deleted/private/never existed).
-                    // Use a long cooldown — cleared only on app restart — to avoid re-warning
-                    // every hour indefinitely. The cooldown is in-memory so a restart is the
-                    // natural recovery point when the user fixes the remote URL.
-                    let expiry = Instant::now() + std::time::Duration::from_secs(24 * 3600);
-                    state.git_cache.github_repo_cooldown.insert(cooldown_key, expiry);
-                    if !was_known {
-                        let msg = format!("Repository {owner}/{name} not found on GitHub — cooldown 24h");
-                        let mut buf = state.log_buffer.lock();
-                        buf.push("warn".into(), "github".into(), msg, None);
-                    }
-                }
-                continue;
-            }
-        };
-        let mut statuses: Vec<BranchPrStatus> = nodes.iter().filter_map(parse_pr_node).collect();
-        stamp_merge_policy(&mut statuses, repo_json);
-
-        // Filter stale merged PRs: if a branch was recreated (e.g. new worktree from
-        // scratch), its local tip won't match the PR's headRefOid.  Without this filter
-        // the UI shows a "merged" badge on a freshly created worktree.
-        if include_merged && statuses.iter().any(|s| s.state == "MERGED") {
-            let branch_tips = local_branch_tips(Path::new(path));
-            statuses.retain(|s| {
-                if s.state != "MERGED" || s.head_ref_oid.is_empty() {
-                    return true; // keep non-merged and PRs missing the OID
-                }
-                match branch_tips.get(&s.branch) {
-                    Some(tip) => tip == &s.head_ref_oid,
-                    None => true, // branch deleted locally — keep PR visible
-                }
-            });
-        }
-
-        // Update the per-repo cache so get_repo_pr_statuses hits cache on next individual call
-        AppState::set_cached(&state.git_cache.github_status, path.clone(), statuses.clone());
-        results.insert(path.clone(), statuses);
-    }
-    Ok(results)
+    let result = get_all_batch_impl(paths, include_merged, "disabled", state).await?;
+    Ok(result.prs)
 }
 
 /// Fetch PR statuses for all repos in a single batched GraphQL call.
@@ -3012,9 +3096,10 @@ mod tests {
             ("path1".to_string(), "owner".to_string(), "repo".to_string()),
         ];
         let (query, aliases) = build_multi_repo_issues_query(&repos, "octocat", "assigned");
-        assert!(query.contains("assignee:octocat"));
-        assert!(query.contains("is:issue"));
-        assert!(query.contains("is:open"));
+        // New format uses repository().issues(filterBy:) instead of search()
+        assert!(query.contains("filterBy: { assignee: \"octocat\" }"));
+        assert!(query.contains("issues("));
+        assert!(query.contains("states: [OPEN]"));
         assert_eq!(aliases.len(), 1);
         assert_eq!(aliases[0].0, "r0");
     }
@@ -3025,9 +3110,8 @@ mod tests {
             ("p".to_string(), "o".to_string(), "r".to_string()),
         ];
         let (query, _) = build_multi_repo_issues_query(&repos, "viewer", "all");
-        // "all" mode should NOT include user qualifiers
-        assert!(!query.contains("assignee:"));
-        assert!(!query.contains("author:"));
-        assert!(!query.contains("mentions:"));
+        // "all" mode should NOT include filterBy qualifier
+        assert!(!query.contains("filterBy"));
+        assert!(query.contains("issues("));
     }
 }

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -92,8 +92,12 @@ pub(crate) fn detect_transitions(
 const BASE_INTERVAL: Duration = Duration::from_secs(30);
 const HIDDEN_INTERVAL: Duration = Duration::from_secs(120);
 const MAX_INTERVAL: Duration = Duration::from_secs(300);
-const ISSUES_INTERVAL: Duration = Duration::from_secs(120);
+/// Debounce window for coalescing event-driven poll requests into the periodic batch.
 const DEBOUNCE_WINDOW: Duration = Duration::from_secs(2);
+/// Proactive throttle: slow down when fewer than this many GraphQL points remain.
+const RATE_BUDGET_LOW: u32 = 500;
+/// Proactive throttle: pause at MAX_INTERVAL when critically low on budget.
+const RATE_BUDGET_CRITICAL: u32 = 100;
 
 pub(crate) enum PollerCmd {
     SetVisibility(bool),
@@ -129,28 +133,38 @@ async fn poll_loop(
     let mut prev: PrevState = HashMap::new();
     let mut fail_count: u32 = 0;
     let mut startup = true;
-    let mut debounce_timers: HashMap<String, Instant> = HashMap::new();
-    let mut last_issues_poll = Instant::now() - ISSUES_INTERVAL;
+    // Pending on-demand poll: set by PollRepo/SetIssueFilter to fire the batch
+    // early rather than spawning a separate single-repo API call.
+    let mut pending_poll_at: Option<tokio::time::Instant> = None;
 
-    let mut interval = tokio::time::interval(current_interval(visible, fail_count));
+    let mut interval = tokio::time::interval(current_interval(visible, fail_count, u32::MAX));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        tokio::select! {
-            _ = interval.tick() => {
-                poll_all_pr(
-                    &state, &handle, &paths, startup,
-                    &mut prev, &mut fail_count,
-                ).await;
-                startup = false;
-                interval = tokio::time::interval(current_interval(visible, fail_count));
-                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Resolves immediately when pending_poll_at has elapsed; stays pending otherwise.
+        let pending_sleep = async {
+            match pending_poll_at {
+                Some(at) => tokio::time::sleep_until(at).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
 
-                // Issues polling piggybacks on the PR interval tick
-                if last_issues_poll.elapsed() >= ISSUES_INTERVAL {
-                    poll_issues(&state, &handle, &paths, &issue_filter).await;
-                    last_issues_poll = Instant::now();
-                }
+        tokio::select! {
+            _ = pending_sleep => {
+                pending_poll_at = None;
+                let rate_budget = state.github_rate_limit_remaining.load(std::sync::atomic::Ordering::Relaxed);
+                poll_batch(&state, &handle, &paths, false, &issue_filter, &mut prev, &mut fail_count).await;
+                // Reset the periodic interval so the next scheduled tick is a full interval away.
+                interval = tokio::time::interval(current_interval(visible, fail_count, rate_budget));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            }
+            _ = interval.tick() => {
+                let rate_budget = state.github_rate_limit_remaining.load(std::sync::atomic::Ordering::Relaxed);
+                poll_batch(&state, &handle, &paths, startup, &issue_filter, &mut prev, &mut fail_count).await;
+                startup = false;
+                pending_poll_at = None; // Periodic tick covers any pending request too
+                interval = tokio::time::interval(current_interval(visible, fail_count, rate_budget));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             }
             cmd = rx.recv() => {
                 match cmd {
@@ -158,30 +172,27 @@ async fn poll_loop(
                         let was_hidden = !visible;
                         visible = v;
                         if was_hidden && visible {
-                            // Became visible: poll immediately + reset interval
-                            poll_all_pr(
-                                &state, &handle, &paths, false,
-                                &mut prev, &mut fail_count,
-                            ).await;
-                            interval = tokio::time::interval(current_interval(visible, fail_count));
-                            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                            // Became visible: fire immediately via pending_poll_at
+                            pending_poll_at = Some(tokio::time::Instant::now());
                         }
                     }
-                    Some(PollerCmd::PollRepo(path)) => {
-                        let now = Instant::now();
-                        if debounce_timers.get(&path).is_some_and(|last| now.duration_since(*last) < DEBOUNCE_WINDOW) {
-                            continue;
+                    Some(PollerCmd::PollRepo(_path)) => {
+                        // Coalesce into the next batch rather than firing a separate
+                        // single-repo API call. Advance the timer by DEBOUNCE_WINDOW
+                        // so rapid UI actions (merge, approve) still get a quick refresh.
+                        let at = tokio::time::Instant::now() + DEBOUNCE_WINDOW;
+                        if pending_poll_at.is_none_or(|existing| at < existing) {
+                            pending_poll_at = Some(at);
                         }
-                        debounce_timers.insert(path.clone(), now);
-                        poll_single_repo(&state, &handle, &path, &mut prev).await;
                     }
                     Some(PollerCmd::UpdatePaths(new_paths)) => {
                         paths = new_paths;
                     }
                     Some(PollerCmd::SetIssueFilter(filter)) => {
                         issue_filter = filter;
-                        poll_issues(&state, &handle, &paths, &issue_filter).await;
-                        last_issues_poll = Instant::now();
+                        // Fire immediately so the new filter takes effect without waiting
+                        // for the next scheduled tick.
+                        pending_poll_at = Some(tokio::time::Instant::now());
                     }
                     Some(PollerCmd::Stop) | None => break,
                 }
@@ -190,82 +201,71 @@ async fn poll_loop(
     }
 }
 
-fn current_interval(visible: bool, fail_count: u32) -> Duration {
+/// Compute the next poll interval based on visibility, failure count, and rate-limit budget.
+fn current_interval(visible: bool, fail_count: u32, rate_budget: u32) -> Duration {
     if !visible {
         return HIDDEN_INTERVAL;
     }
-    if fail_count == 0 {
-        return BASE_INTERVAL;
+    if rate_budget < RATE_BUDGET_CRITICAL {
+        return MAX_INTERVAL;
     }
-    let backoff = BASE_INTERVAL.as_millis() as f64 * 2_f64.powi(fail_count as i32 - 1);
+    let base = if rate_budget < RATE_BUDGET_LOW {
+        // Low budget — double the base interval to conserve points
+        BASE_INTERVAL * 2
+    } else {
+        BASE_INTERVAL
+    };
+    if fail_count == 0 {
+        return base;
+    }
+    let backoff = base.as_millis() as f64 * 2_f64.powi(fail_count as i32 - 1);
     Duration::from_millis(backoff.min(MAX_INTERVAL.as_millis() as f64) as u64)
 }
 
-async fn poll_all_pr(
+/// Execute a unified batch poll (PRs + Issues) and emit Tauri events for both.
+async fn poll_batch(
     state: &AppState,
     handle: &AppHandle,
     paths: &[String],
     include_merged: bool,
+    issue_filter: &str,
     prev: &mut PrevState,
     fail_count: &mut u32,
 ) {
     if paths.is_empty() { return; }
-
-    // Check circuit breaker
     if state.github_circuit_breaker.check().is_err() { return; }
 
-    let path_strs: Vec<String> = paths.to_vec();
-    match crate::github::get_all_pr_statuses_impl(&path_strs, include_merged, state).await {
-        Ok(results) => {
+    match crate::github::get_all_batch_impl(paths, include_merged, issue_filter, state).await {
+        Ok(result) => {
             *fail_count = 0;
-            for (repo_path, statuses) in &results {
+
+            // Emit PR updates + detect transitions
+            for (repo_path, statuses) in &result.prs {
                 process_repo_update(state, handle, repo_path, statuses, prev);
             }
-            for (repo_path, statuses) in results {
+            for (repo_path, statuses) in result.prs {
                 let _ = handle.emit("github-pr-update", PrUpdatePayload {
                     repo_path: repo_path.clone(),
                     statuses: statuses.clone(),
                 });
-                let _ = state.event_bus.send(AppEvent::GitHubPrUpdate {
-                    repo_path,
-                    statuses,
+                let _ = state.event_bus.send(AppEvent::GitHubPrUpdate { repo_path, statuses });
+            }
+
+            // Emit issue updates
+            for (repo_path, issues) in result.issues {
+                let _ = handle.emit("github-issues-update", IssuesUpdatePayload {
+                    repo_path: repo_path.clone(),
+                    issues: issues.clone(),
                 });
+                let _ = state.event_bus.send(AppEvent::GitHubIssuesUpdate { repo_path, issues });
             }
         }
         Err(e) => {
             let msg = e.to_string();
-            if msg.starts_with("rate-limit:") {
-                // Don't increment fail_count for rate limits
-            } else {
+            if !msg.starts_with("rate-limit:") {
                 *fail_count = fail_count.saturating_add(1);
             }
             tracing::warn!(source = "github_poller", "poll_all failed: {msg}");
-        }
-    }
-}
-
-async fn poll_single_repo(
-    state: &AppState,
-    handle: &AppHandle,
-    path: &str,
-    prev: &mut PrevState,
-) {
-    if state.github_circuit_breaker.check().is_err() { return; }
-
-    match crate::github::get_repo_pr_statuses_impl(path, false, state).await {
-        Ok(statuses) => {
-            process_repo_update(state, handle, path, &statuses, prev);
-            let _ = handle.emit("github-pr-update", PrUpdatePayload {
-                repo_path: path.to_string(),
-                statuses: statuses.clone(),
-            });
-            let _ = state.event_bus.send(AppEvent::GitHubPrUpdate {
-                repo_path: path.to_string(),
-                statuses,
-            });
-        }
-        Err(e) => {
-            tracing::warn!(source = "github_poller", path, "poll_repo failed: {}", e);
         }
     }
 }
@@ -283,40 +283,10 @@ fn process_repo_update(
             let transitions = detect_transitions(repo_path, old_pr, new_pr);
             for t in transitions {
                 let _ = handle.emit("github-transition", &t);
-                let _ = state.event_bus.send(AppEvent::GitHubTransition {
-                    transition: t,
-                });
+                let _ = state.event_bus.send(AppEvent::GitHubTransition { transition: t });
             }
         }
         old_map.insert(new_pr.branch.clone(), new_pr.clone());
-    }
-}
-
-async fn poll_issues(
-    state: &AppState,
-    handle: &AppHandle,
-    paths: &[String],
-    filter: &str,
-) {
-    if filter.is_empty() || filter == "disabled" || paths.is_empty() { return; }
-    if state.github_circuit_breaker.check().is_err() { return; }
-
-    match crate::github::get_all_issues_impl(paths, filter, state).await {
-        Ok(results) => {
-            for (repo_path, issues) in results {
-                let _ = handle.emit("github-issues-update", IssuesUpdatePayload {
-                    repo_path: repo_path.clone(),
-                    issues: issues.clone(),
-                });
-                let _ = state.event_bus.send(AppEvent::GitHubIssuesUpdate {
-                    repo_path,
-                    issues,
-                });
-            }
-        }
-        Err(e) => {
-            tracing::warn!(source = "github_poller", "poll_issues failed: {}", e);
-        }
     }
 }
 

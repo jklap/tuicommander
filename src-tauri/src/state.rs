@@ -860,6 +860,9 @@ pub struct AppState {
     pub(crate) github_poller: parking_lot::Mutex<Option<crate::github_poller::GitHubPoller>>,
     /// Cached GitHub viewer login (authenticated user) for issue filtering.
     pub(crate) github_viewer_login: parking_lot::RwLock<Option<String>>,
+    /// Remaining GraphQL points from last poll — used for proactive throttling.
+    /// Initialized to u32::MAX (no constraint). Written by each successful batch poll.
+    pub(crate) github_rate_limit_remaining: std::sync::atomic::AtomicU32,
     /// Shutdown sender for the HTTP server — send () to gracefully stop it.
     /// Only the TCP listener + TLS renewal task listen to this signal now;
     /// IPC listeners (Unix socket / named pipe) and the session reaper live
@@ -2101,6 +2104,7 @@ pub(crate) mod tests_support {
             github_circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
             github_poller: parking_lot::Mutex::new(None),
             github_viewer_login: parking_lot::RwLock::new(None),
+            github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(String::from("test-token")),
@@ -2554,6 +2558,7 @@ mod tests {
             github_circuit_breaker: crate::github::GitHubCircuitBreaker::new(),
             github_poller: parking_lot::Mutex::new(None),
             github_viewer_login: parking_lot::RwLock::new(None),
+            github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(String::from("test-token")),

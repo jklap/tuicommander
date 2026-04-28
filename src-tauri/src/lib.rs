@@ -882,6 +882,7 @@ pub fn run() {
         push_store: push::PushStore::load(&config::config_dir()),
         desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
         server_start_time: std::time::Instant::now(),
+        github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
     });
 
     // Wire the event bus into the upstream registry so status changes emit SSE events.
@@ -1201,6 +1202,7 @@ pub fn run() {
             agent::spawn_agent,
             agent_session::discover_agent_session,
             agent_session::verify_agent_session,
+            agent_session::preflight_session_inject,
             agent_session::claude_project_dir,
             worktree::remove_worktree,
             worktree::check_worktree_dirty,
