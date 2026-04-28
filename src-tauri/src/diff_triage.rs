@@ -580,6 +580,298 @@ fn build_chat_request(session: &TriageSession, new_user_msg: &str) -> genai::cha
     req.append_message(final_user)
 }
 
+// ---------------------------------------------------------------------------
+// Tool definitions and dispatch for multi-turn triage
+// ---------------------------------------------------------------------------
+
+const MAX_READ_LINES: usize = 1000;
+
+/// JSON schemas for tools the LLM can call during multi-turn triage.
+pub fn triage_tool_definitions() -> serde_json::Value {
+    serde_json::json!([
+        {
+            "name": "read_file",
+            "description": "Read the full content of a file in the repo. Use when a diff is truncated or you need more context to classify a file.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Repo-relative file path"
+                    }
+                },
+                "required": ["path"]
+            }
+        },
+        {
+            "name": "read_file_range",
+            "description": "Read a specific line range from a file in the repo.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Repo-relative file path"
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "1-based start line (inclusive)"
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "1-based end line (inclusive)"
+                    }
+                },
+                "required": ["path", "start_line", "end_line"]
+            }
+        }
+    ])
+}
+
+/// Dispatch a tool call synchronously. Safe to call from a blocking context.
+/// Returns the tool result as a string (content or error message).
+pub fn dispatch_tool(tool_name: &str, args: &serde_json::Value, repo_path: &str) -> String {
+    match tool_name {
+        "read_file" => {
+            let Some(path) = args["path"].as_str() else {
+                return "error: missing path argument".to_string();
+            };
+            read_file_impl(repo_path, path, None, None)
+        }
+        "read_file_range" => {
+            let Some(path) = args["path"].as_str() else {
+                return "error: missing path argument".to_string();
+            };
+            let start = args["start_line"].as_u64().map(|n| n as usize);
+            let end = args["end_line"].as_u64().map(|n| n as usize);
+            read_file_impl(repo_path, path, start, end)
+        }
+        _ => format!("error: unknown tool '{tool_name}'"),
+    }
+}
+
+fn read_file_impl(
+    repo_path: &str,
+    path: &str,
+    start_line: Option<usize>,
+    end_line: Option<usize>,
+) -> String {
+    let repo_canonical = match std::fs::canonicalize(repo_path) {
+        Ok(p) => p,
+        Err(e) => return format!("error: cannot resolve repo path: {e}"),
+    };
+    let file_path = std::path::Path::new(repo_path).join(path);
+    let file_canonical = match std::fs::canonicalize(&file_path) {
+        Ok(p) => p,
+        Err(e) => return format!("error: {e}"),
+    };
+    if !file_canonical.starts_with(&repo_canonical) {
+        return "error: path outside repository".to_string();
+    }
+
+    let bytes = match std::fs::read(&file_canonical) {
+        Ok(b) => b,
+        Err(e) => return format!("error: {e}"),
+    };
+
+    if bytes.contains(&0u8) {
+        return "error: binary file".to_string();
+    }
+
+    let text = match String::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return "error: binary file".to_string(),
+    };
+
+    let lines: Vec<&str> = text.lines().collect();
+    let total = lines.len();
+
+    let (start, end) = match (start_line, end_line) {
+        (Some(s), Some(e)) => {
+            let s = s.saturating_sub(1).min(total);
+            let e = e.min(total);
+            (s, e)
+        }
+        _ => (0, total),
+    };
+
+    let selected = &lines[start..end];
+    let truncate_at = selected.len().min(MAX_READ_LINES);
+    let mut result = selected[..truncate_at].join("\n");
+    if selected.len() > MAX_READ_LINES {
+        result.push_str(&format!("\n[truncated at {MAX_READ_LINES} lines]"));
+    }
+    result
+}
+
+// ---------------------------------------------------------------------------
+// Multi-turn classification engine
+// ---------------------------------------------------------------------------
+
+const MAX_TOOL_CALLS_PER_TURN: usize = 3;
+
+fn build_genai_tools() -> Vec<genai::chat::Tool> {
+    let defs = triage_tool_definitions();
+    defs.as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|t| {
+            let name = t["name"].as_str()?;
+            let mut tool = genai::chat::Tool::new(name);
+            if let Some(desc) = t["description"].as_str() {
+                tool = tool.with_description(desc);
+            }
+            if let Some(schema) = t.get("inputSchema") {
+                tool = tool.with_schema(schema.clone());
+            }
+            Some(tool)
+        })
+        .collect()
+}
+
+/// Execute a single LLM turn: send user message, handle up to MAX_TOOL_CALLS_PER_TURN
+/// tool call round-trips, return the final text response. Updates session.messages.
+async fn do_turn(
+    client: &genai::Client,
+    model: &str,
+    session: &mut TriageSession,
+    user_msg: String,
+    repo_path: &str,
+    tools: &[genai::chat::Tool],
+) -> Option<String> {
+    use genai::chat::{ChatOptions, ToolResponse};
+
+    let chat_options = ChatOptions::default().with_capture_tool_calls(true);
+    let mut req = build_chat_request(session, &user_msg).with_tools(tools.to_vec());
+
+    for _ in 0..=MAX_TOOL_CALLS_PER_TURN {
+        let response = match tokio::time::timeout(
+            LLM_TIMEOUT,
+            client.exec_chat(model, req.clone(), Some(&chat_options)),
+        )
+        .await
+        {
+            Ok(Ok(resp)) => resp,
+            _ => return None,
+        };
+
+        let text = response.first_text().map(|s| s.to_string());
+        let tool_calls = response.into_tool_calls();
+
+        if tool_calls.is_empty() {
+            session
+                .messages
+                .push(SessionMsg { role: MsgRole::User, content: user_msg });
+            if let Some(ref t) = text {
+                session
+                    .messages
+                    .push(SessionMsg { role: MsgRole::Assistant, content: t.clone() });
+            }
+            return text;
+        }
+
+        req = req.append_message(tool_calls.clone());
+        for tc in &tool_calls {
+            let output = dispatch_tool(&tc.fn_name, &tc.fn_arguments, repo_path);
+            req = req.append_message(ToolResponse::new(&tc.call_id, output));
+        }
+    }
+
+    session
+        .messages
+        .push(SessionMsg { role: MsgRole::User, content: user_msg });
+    None
+}
+
+/// Multi-turn LLM classification: overview turn + per-file turns with tool use.
+/// Skips unchanged files (hash match). Updates session in place.
+async fn classify_multi_turn(
+    client: &genai::Client,
+    model: &str,
+    session: &mut TriageSession,
+    files: &[(String, String, u32, u32)],
+    heuristic_names: &[(&str, &str)],
+    app: &tauri::AppHandle,
+    repo_path: &str,
+    stats: &HashMap<&str, (u32, u32)>,
+) -> LlmParsed {
+    let tools = build_genai_tools();
+    let file_paths: Vec<&str> = files.iter().map(|(p, _, _, _)| p.as_str()).collect();
+
+    if session.summary.is_none() {
+        let overview_msg = build_overview(&file_paths, heuristic_names);
+        if let Some(text) =
+            do_turn(client, model, session, overview_msg, repo_path, &tools).await
+        {
+            if let JsonlParsed::Summary(s) = parse_jsonl_line(&text) {
+                session.summary = Some(s.clone());
+                emit_progress(
+                    app, repo_path, Some(&s), &[], "llm-overview", false, true, Some(model),
+                );
+            }
+        }
+    }
+
+    let mut classified = Vec::new();
+
+    for (path, diff, additions, deletions) in files {
+        let h = hash_diff(diff);
+
+        if session.file_hashes.get(path.as_str()).copied() == Some(h) {
+            if let Some(cached) = session.classifications.get(path.as_str()) {
+                let mut fc = cached.clone();
+                fc.additions = *additions;
+                fc.deletions = *deletions;
+                emit_progress(
+                    app, repo_path, session.summary.as_deref(), &[fc.clone()], "cached",
+                    false, true, Some(model),
+                );
+                classified.push(fc);
+                continue;
+            }
+        }
+
+        let file_msg = build_file_msg(path, diff, *additions, *deletions);
+        let mut fc =
+            match do_turn(client, model, session, file_msg, repo_path, &tools).await {
+                Some(text) => match parse_jsonl_line(&text) {
+                    JsonlParsed::File(mut fc) => {
+                        fc.additions = *additions;
+                        fc.deletions = *deletions;
+                        fc
+                    }
+                    _ => {
+                        let mut fb = fallback_classification(path);
+                        fb.additions = *additions;
+                        fb.deletions = *deletions;
+                        fb
+                    }
+                },
+                None => {
+                    let mut fb = fallback_classification(path);
+                    fb.additions = *additions;
+                    fb.deletions = *deletions;
+                    fb
+                }
+            };
+
+        if let Some(&(a, d)) = stats.get(fc.path.as_str()) {
+            fc.additions = a;
+            fc.deletions = d;
+        }
+
+        session.file_hashes.insert(path.clone(), h);
+        session.classifications.insert(path.clone(), fc.clone());
+        emit_progress(
+            app, repo_path, session.summary.as_deref(), &[fc.clone()], "llm-file", false,
+            true, Some(model),
+        );
+        classified.push(fc);
+    }
+
+    LlmParsed { summary: session.summary.clone(), files: classified }
+}
+
 /// Streaming LLM classification — emits each file as soon as it's classified.
 async fn classify_streaming(
     client: &genai::Client,
@@ -1325,5 +1617,217 @@ mod tests {
         let json = serde_json::to_string(&c).unwrap();
         assert!(json.contains("\"risk\":\"behavioral-change\""));
         assert!(json.contains("\"category\":\"schema\""));
+    }
+
+    // -- dispatch_tool tests --------------------------------------------------
+
+    fn make_repo() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("hello.rs"), "fn main() {}\n").unwrap();
+        let sub = dir.path().join("src");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("lib.rs"), "pub fn greet() {}\n").unwrap();
+        dir
+    }
+
+    #[test]
+    fn dispatch_tool_read_file_valid() {
+        let repo = make_repo();
+        let args = serde_json::json!({"path": "hello.rs"});
+        let result = dispatch_tool("read_file", &args, repo.path().to_str().unwrap());
+        assert_eq!(result, "fn main() {}");
+    }
+
+    #[test]
+    fn dispatch_tool_read_file_nested() {
+        let repo = make_repo();
+        let args = serde_json::json!({"path": "src/lib.rs"});
+        let result = dispatch_tool("read_file", &args, repo.path().to_str().unwrap());
+        assert_eq!(result, "pub fn greet() {}");
+    }
+
+    #[test]
+    fn dispatch_tool_read_file_missing_path_arg() {
+        let repo = make_repo();
+        let args = serde_json::json!({});
+        let result = dispatch_tool("read_file", &args, repo.path().to_str().unwrap());
+        assert!(result.starts_with("error:"), "expected error, got: {result}");
+    }
+
+    #[test]
+    fn dispatch_tool_read_file_nonexistent() {
+        let repo = make_repo();
+        let args = serde_json::json!({"path": "nope.rs"});
+        let result = dispatch_tool("read_file", &args, repo.path().to_str().unwrap());
+        assert!(result.starts_with("error:"), "expected error, got: {result}");
+    }
+
+    #[test]
+    fn dispatch_tool_path_outside_repo_rejected() {
+        let repo = make_repo();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+        let outside_name = outside.path().file_name().unwrap().to_str().unwrap();
+        let relative = format!("../{outside_name}/secret.txt");
+        let args = serde_json::json!({"path": relative});
+        let result = dispatch_tool("read_file", &args, repo.path().to_str().unwrap());
+        assert_eq!(result, "error: path outside repository");
+    }
+
+    #[test]
+    fn dispatch_tool_binary_file_rejected() {
+        let repo = make_repo();
+        std::fs::write(repo.path().join("image.bin"), b"\x89PNG\r\n\x1a\n\x00\x00").unwrap();
+        let args = serde_json::json!({"path": "image.bin"});
+        let result = dispatch_tool("read_file", &args, repo.path().to_str().unwrap());
+        assert_eq!(result, "error: binary file");
+    }
+
+    #[test]
+    fn dispatch_tool_truncates_at_1000_lines() {
+        let repo = make_repo();
+        let content: String = (0..1500)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(repo.path().join("big.txt"), &content).unwrap();
+        let args = serde_json::json!({"path": "big.txt"});
+        let result = dispatch_tool("read_file", &args, repo.path().to_str().unwrap());
+        assert!(result.ends_with(&format!("[truncated at {MAX_READ_LINES} lines]")));
+        let line_count = result.lines().count();
+        assert_eq!(line_count, MAX_READ_LINES + 1); // 1000 content + 1 truncation notice
+    }
+
+    #[test]
+    fn dispatch_tool_no_truncation_under_limit() {
+        let repo = make_repo();
+        let content: String = (0..50)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(repo.path().join("small.txt"), &content).unwrap();
+        let args = serde_json::json!({"path": "small.txt"});
+        let result = dispatch_tool("read_file", &args, repo.path().to_str().unwrap());
+        assert!(!result.contains("truncated"));
+        assert_eq!(result.lines().count(), 50);
+    }
+
+    #[test]
+    fn dispatch_tool_read_file_range() {
+        let repo = make_repo();
+        let content: String = (1..=20)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(repo.path().join("range.txt"), &content).unwrap();
+        let args = serde_json::json!({"path": "range.txt", "start_line": 5, "end_line": 10});
+        let result = dispatch_tool("read_file_range", &args, repo.path().to_str().unwrap());
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines.len(), 6); // lines 5..=10
+        assert_eq!(lines[0], "line 5");
+        assert_eq!(lines[5], "line 10");
+    }
+
+    #[test]
+    fn dispatch_tool_read_file_range_clamps() {
+        let repo = make_repo();
+        let content = "one\ntwo\nthree\n";
+        std::fs::write(repo.path().join("short.txt"), content).unwrap();
+        let args = serde_json::json!({"path": "short.txt", "start_line": 2, "end_line": 999});
+        let result = dispatch_tool("read_file_range", &args, repo.path().to_str().unwrap());
+        let lines: Vec<&str> = result.lines().collect();
+        assert_eq!(lines.len(), 2); // lines 2..=3 (clamped)
+        assert_eq!(lines[0], "two");
+        assert_eq!(lines[1], "three");
+    }
+
+    #[test]
+    fn dispatch_tool_unknown_tool() {
+        let repo = make_repo();
+        let args = serde_json::json!({"path": "hello.rs"});
+        let result = dispatch_tool("delete_file", &args, repo.path().to_str().unwrap());
+        assert!(result.contains("unknown tool"), "got: {result}");
+    }
+
+    #[test]
+    fn triage_tool_definitions_schema_valid() {
+        let defs = triage_tool_definitions();
+        let arr = defs.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["name"], "read_file");
+        assert_eq!(arr[1]["name"], "read_file_range");
+        assert!(arr[0]["inputSchema"]["properties"]["path"].is_object());
+        assert!(arr[1]["inputSchema"]["properties"]["start_line"].is_object());
+        assert!(arr[1]["inputSchema"]["properties"]["end_line"].is_object());
+    }
+
+    /// Simulates the tool call round-trip: LLM emits a ToolCall → dispatch → ToolResponse.
+    /// Verifies that dispatch_tool output can be wrapped in ToolResponse and the content is correct.
+    #[test]
+    fn tool_call_round_trip_read_file() {
+        use genai::chat::{ToolCall, ToolResponse};
+
+        let repo = make_repo();
+        let tc = ToolCall {
+            call_id: "call_001".to_string(),
+            fn_name: "read_file".to_string(),
+            fn_arguments: serde_json::json!({"path": "hello.rs"}),
+            thought_signatures: None,
+        };
+
+        let output = dispatch_tool(&tc.fn_name, &tc.fn_arguments, repo.path().to_str().unwrap());
+        assert_eq!(output, "fn main() {}", "dispatch_tool returned unexpected content");
+
+        // Verify ToolResponse can be constructed (round-trip complete)
+        let response = ToolResponse::new(&tc.call_id, output.clone());
+        assert_eq!(response.call_id, "call_001");
+        assert_eq!(response.content, output);
+    }
+
+    #[test]
+    fn tool_call_round_trip_read_file_range() {
+        use genai::chat::{ToolCall, ToolResponse};
+
+        let repo = make_repo();
+        let content: String = (1..=10).map(|i| format!("line {i}")).collect::<Vec<_>>().join("\n");
+        std::fs::write(repo.path().join("numbered.txt"), &content).unwrap();
+
+        let tc = ToolCall {
+            call_id: "call_002".to_string(),
+            fn_name: "read_file_range".to_string(),
+            fn_arguments: serde_json::json!({"path": "numbered.txt", "start_line": 3, "end_line": 5}),
+            thought_signatures: None,
+        };
+
+        let output = dispatch_tool(&tc.fn_name, &tc.fn_arguments, repo.path().to_str().unwrap());
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines, vec!["line 3", "line 4", "line 5"]);
+
+        let response = ToolResponse::new(&tc.call_id, output);
+        assert_eq!(response.call_id, "call_002");
+    }
+
+    #[test]
+    fn tool_call_round_trip_path_traversal_rejected() {
+        use genai::chat::{ToolCall, ToolResponse};
+
+        let repo = make_repo();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), "top secret").unwrap();
+        let outside_name = outside.path().file_name().unwrap().to_str().unwrap();
+
+        let tc = ToolCall {
+            call_id: "call_003".to_string(),
+            fn_name: "read_file".to_string(),
+            fn_arguments: serde_json::json!({"path": format!("../{outside_name}/secret.txt")}),
+            thought_signatures: None,
+        };
+
+        let output = dispatch_tool(&tc.fn_name, &tc.fn_arguments, repo.path().to_str().unwrap());
+        assert_eq!(output, "error: path outside repository");
+
+        // Even on error, ToolResponse wraps the error message back to the LLM
+        let response = ToolResponse::new(&tc.call_id, output.clone());
+        assert_eq!(response.content, output);
     }
 }
