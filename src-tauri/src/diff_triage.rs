@@ -7,19 +7,68 @@ use std::time::Duration;
 use tauri::Emitter;
 
 // ---------------------------------------------------------------------------
-// Per-repo LLM classification cache — avoids re-sending unchanged diffs
+// Per-repo LLM triage session — persistent conversation + diff hash cache
 // ---------------------------------------------------------------------------
 
-struct CachedEntry {
-    diff_hash: u64,
-    classification: FileClassification,
+const MAX_SESSION_MESSAGES: usize = 100;
+const SESSION_TTL: Duration = Duration::from_secs(300);
+
+#[derive(Clone, Copy, Debug)]
+enum MsgRole {
+    User,
+    Assistant,
 }
 
-type RepoCache = HashMap<String, CachedEntry>;
+#[derive(Clone, Debug)]
+struct SessionMsg {
+    role: MsgRole,
+    content: String,
+}
 
-fn triage_cache() -> &'static Mutex<HashMap<String, RepoCache>> {
-    static CACHE: OnceLock<Mutex<HashMap<String, RepoCache>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+struct TriageSession {
+    messages: Vec<SessionMsg>,
+    file_hashes: HashMap<String, u64>,
+    classifications: HashMap<String, FileClassification>,
+    summary: Option<String>,
+    model: String,
+    file_set_key: u64,
+    created_at: std::time::Instant,
+}
+
+impl TriageSession {
+    fn new(model: String, file_set_key: u64) -> Self {
+        Self {
+            messages: Vec::new(),
+            file_hashes: HashMap::new(),
+            classifications: HashMap::new(),
+            summary: None,
+            model,
+            file_set_key,
+            created_at: std::time::Instant::now(),
+        }
+    }
+
+    fn is_valid(&self, model: &str, file_set_key: u64) -> bool {
+        self.model == model
+            && self.file_set_key == file_set_key
+            && self.messages.len() < MAX_SESSION_MESSAGES
+            && self.created_at.elapsed() < SESSION_TTL
+    }
+}
+
+fn triage_sessions() -> &'static Mutex<HashMap<String, TriageSession>> {
+    static SESSIONS: OnceLock<Mutex<HashMap<String, TriageSession>>> = OnceLock::new();
+    SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn file_set_key(paths: &[&str]) -> u64 {
+    let mut sorted: Vec<&str> = paths.to_vec();
+    sorted.sort_unstable();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for p in sorted {
+        p.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn hash_diff(diff: &str) -> u64 {
@@ -352,18 +401,20 @@ const TRIAGE_SYSTEM_PROMPT: &str = "\
 You are a senior code reviewer triaging a changeset for a developer. \
 Analyze ALL files together as a coherent changeset — understand how they relate. \
 \n\n\
-Return JSON with exactly this shape:\n\
-{\"summary\": \"2-3 sentence overview of what this changeset does and why it matters\", \
-\"files\": [{\"path\": \"...\", \"relevance\": \"high|medium|low\", \
+Output format: one JSON object per line (JSONL). \
+First line MUST be the changeset summary:\n\
+{\"summary\": \"2-3 sentence overview of what this changeset does and why it matters\"}\n\n\
+Then one line per file, in review-priority order (most important first):\n\
+{\"path\": \"...\", \"relevance\": \"high|medium|low\", \
 \"category\": \"business-logic|api-surface|schema|config|test|boilerplate|style\", \
 \"risk\": \"breaking-change|behavioral-change|cosmetic\", \
-\"summary\": \"one sentence explaining THIS file's role in the changeset\"}]}\n\n\
+\"summary\": \"one sentence explaining THIS file's role in the changeset\"}\n\n\
 Rules:\n\
-- \"summary\" is the changeset overview — what a reviewer needs to know before diving in\n\
 - Relevance is about review priority: high=must review carefully, medium=worth a look, low=can skip\n\
 - A test file that covers the main change is medium, not low — context matters\n\
-- Omit truly trivial files (lock files, formatting-only) from the files array entirely\n\
-- Summaries must relate files to each other: \"Adds the handler that X calls\" not just \"Adds handler\"";
+- Omit truly trivial files (lock files, formatting-only) entirely\n\
+- Summaries must relate files to each other: \"Adds the handler that X calls\" not just \"Adds handler\"\n\
+- EACH LINE must be valid JSON. No wrapping array or object. No trailing commas.";
 
 pub(crate) fn build_prompt(files: &[(String, String, u32, u32)]) -> String {
     let mut prompt = String::from("Triage this changeset:\n\n");
@@ -371,13 +422,10 @@ pub(crate) fn build_prompt(files: &[(String, String, u32, u32)]) -> String {
         prompt.push_str(&format!(
             "<file path=\"{path}\" +{additions} -{deletions}>\n"
         ));
-        let truncated: String = diff_text
-            .lines()
-            .take(MAX_LINES_PER_FILE)
-            .collect::<Vec<_>>()
-            .join("\n");
+        let lines: Vec<&str> = diff_text.lines().collect();
+        let truncated = lines[..lines.len().min(MAX_LINES_PER_FILE)].join("\n");
         prompt.push_str(&truncated);
-        if diff_text.lines().count() > MAX_LINES_PER_FILE {
+        if lines.len() > MAX_LINES_PER_FILE {
             prompt.push_str("\n[... truncated]");
         }
         prompt.push_str("\n</file>\n\n");
@@ -386,13 +434,13 @@ pub(crate) fn build_prompt(files: &[(String, String, u32, u32)]) -> String {
 }
 
 #[derive(Deserialize)]
-struct LlmTriageResponse {
-    summary: Option<String>,
-    files: Vec<LlmFileResult>,
+#[serde(deny_unknown_fields)]
+struct SummaryLine {
+    summary: String,
 }
 
 #[derive(Deserialize)]
-struct LlmFileResult {
+struct FileLine {
     path: String,
     relevance: Relevance,
     category: Category,
@@ -405,25 +453,35 @@ struct LlmParsed {
     files: Vec<FileClassification>,
 }
 
-fn parse_llm_response(text: &str) -> Option<LlmParsed> {
-    let parsed: LlmTriageResponse = serde_json::from_str(text).ok()?;
-    Some(LlmParsed {
-        summary: parsed.summary,
-        files: parsed
-            .files
-            .into_iter()
-            .map(|f| FileClassification {
-                path: f.path,
-                relevance: f.relevance,
-                category: f.category,
-                risk: f.risk,
-                summary: f.summary,
-                source: ClassificationSource::Llm,
-                additions: 0,
-                deletions: 0,
-            })
-            .collect(),
-    })
+fn parse_jsonl_line(line: &str) -> JsonlParsed {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return JsonlParsed::Skip;
+    }
+    if let Ok(s) = serde_json::from_str::<SummaryLine>(trimmed) {
+        if !s.summary.is_empty() {
+            return JsonlParsed::Summary(s.summary);
+        }
+    }
+    if let Ok(f) = serde_json::from_str::<FileLine>(trimmed) {
+        return JsonlParsed::File(FileClassification {
+            path: f.path,
+            relevance: f.relevance,
+            category: f.category,
+            risk: f.risk,
+            summary: f.summary,
+            source: ClassificationSource::Llm,
+            additions: 0,
+            deletions: 0,
+        });
+    }
+    JsonlParsed::Skip
+}
+
+enum JsonlParsed {
+    Summary(String),
+    File(FileClassification),
+    Skip,
 }
 
 fn fallback_classification(path: &str) -> FileClassification {
@@ -439,45 +497,107 @@ fn fallback_classification(path: &str) -> FileClassification {
     }
 }
 
-async fn classify_holistic(
+/// Streaming LLM classification — emits each file as soon as it's classified.
+async fn classify_streaming(
     client: &genai::Client,
     model: &str,
     files: &[(String, String, u32, u32)],
+    app: &tauri::AppHandle,
+    repo_path: &str,
+    diff_hashes: &HashMap<String, u64>,
+    stats: &HashMap<&str, (u32, u32)>,
 ) -> LlmParsed {
-    use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatResponseFormat};
+    use futures_util::StreamExt;
+    use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatStreamEvent as GenaiStreamEvent};
 
     let prompt = build_prompt(files);
     let chat_req = ChatRequest::default()
         .with_system(TRIAGE_SYSTEM_PROMPT)
         .append_message(ChatMessage::user(prompt));
-    let opts = ChatOptions::default()
-        .with_response_format(ChatResponseFormat::JsonMode);
+    let opts = ChatOptions::default();
 
-    let result = tokio::time::timeout(
+    let stream_result = tokio::time::timeout(
         LLM_TIMEOUT,
-        client.exec_chat(model, chat_req, Some(&opts)),
+        client.exec_chat_stream(model, chat_req, Some(&opts)),
     )
     .await;
 
-    match result {
-        Ok(Ok(resp)) => {
-            let text = resp.first_text().unwrap_or_default();
-            parse_llm_response(text.trim()).unwrap_or_else(|| LlmParsed {
+    let stream_resp = match stream_result {
+        Ok(Ok(resp)) => resp,
+        _ => {
+            return LlmParsed {
                 summary: None,
                 files: files
                     .iter()
                     .map(|(path, _, _, _)| fallback_classification(path))
                     .collect(),
-            })
+            };
         }
-        _ => LlmParsed {
-            summary: None,
-            files: files
-                .iter()
-                .map(|(path, _, _, _)| fallback_classification(path))
-                .collect(),
-        },
+    };
+
+    let mut stream = stream_resp.stream;
+    let mut buf = String::new();
+    let mut summary: Option<String> = None;
+    let mut classified: Vec<FileClassification> = Vec::new();
+
+    loop {
+        let event = tokio::time::timeout(LLM_TIMEOUT, stream.next()).await;
+        match event {
+            Ok(Some(Ok(GenaiStreamEvent::Chunk(chunk)))) => {
+                buf.push_str(&chunk.content);
+                while let Some(nl) = buf.find('\n') {
+                    let line: String = buf.drain(..=nl).collect();
+                    match parse_jsonl_line(&line) {
+                        JsonlParsed::Summary(s) => {
+                            summary = Some(s.clone());
+                            emit_progress(
+                                app, repo_path, Some(&s), &[],
+                                "llm-streaming", false, true, Some(model),
+                            );
+                        }
+                        JsonlParsed::File(mut fc) => {
+                            if let Some(&(a, d)) = stats.get(fc.path.as_str()) {
+                                fc.additions = a;
+                                fc.deletions = d;
+                            }
+                            emit_progress(
+                                app, repo_path, summary.as_deref(), &[fc.clone()],
+                                "llm-streaming", false, true, Some(model),
+                            );
+                            classified.push(fc);
+                        }
+                        JsonlParsed::Skip => {}
+                    }
+                }
+            }
+            Ok(Some(Ok(GenaiStreamEvent::End(_)))) => break,
+            Ok(Some(Ok(_))) => {} // Start, ReasoningChunk, etc. — ignore
+            Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
+        }
     }
+
+    // Process any remaining partial line in buffer
+    if !buf.trim().is_empty() {
+        if let JsonlParsed::File(mut fc) = parse_jsonl_line(&buf) {
+            if let Some(&(a, d)) = stats.get(fc.path.as_str()) {
+                fc.additions = a;
+                fc.deletions = d;
+            }
+            classified.push(fc);
+        }
+    }
+
+    // Fallback for files the LLM didn't mention
+    let classified_paths: std::collections::HashSet<String> =
+        classified.iter().map(|f| f.path.clone()).collect();
+    let missing: Vec<_> = files
+        .iter()
+        .filter(|(path, _, _, _)| !classified_paths.contains(path.as_str()))
+        .map(|(path, _, _, _)| fallback_classification(path))
+        .collect();
+    classified.extend(missing);
+
+    LlmParsed { summary, files: classified }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -522,8 +642,8 @@ pub(crate) async fn run_diff_triage(
 ) -> Result<TriageResult, String> {
     let changed_files = crate::git::get_changed_files(repo_path.clone(), None).await?;
     if changed_files.is_empty() {
-        if let Ok(mut cache) = triage_cache().lock() {
-            cache.remove(&repo_path);
+        if let Ok(mut sessions) = triage_sessions().lock() {
+            sessions.remove(&repo_path);
         }
         emit_progress(&app, &repo_path, None, &[], "done", true, false, None);
         return Ok(TriageResult {
@@ -576,36 +696,57 @@ pub(crate) async fn run_diff_triage(
         });
     }
 
-    // Fetch all diffs, check cache for individual files
+    // Fetch all diffs in a single git call (1 subprocess, not N)
     let llm_candidates: Vec<_> = needs_llm.iter().take(MAX_FILES_TO_LLM).collect();
-    let mut cache_hits: Vec<FileClassification> = Vec::new();
-    let mut uncached: Vec<(String, String, u32, u32)> = Vec::new();
-
-    for (path, additions, deletions, is_untracked) in &llm_candidates {
-        let diff_text = crate::git::get_file_diff(
-            repo_path.clone(),
-            path.clone(),
-            None,
-            Some(*is_untracked),
-        )
+    let bulk_files: Vec<(String, bool)> = llm_candidates
+        .iter()
+        .map(|(path, _, _, is_untracked)| (path.clone(), *is_untracked))
+        .collect();
+    let all_diffs = crate::git::get_bulk_diffs(repo_path.clone(), bulk_files)
         .await
         .unwrap_or_default();
 
+    // Resolve model before session lookup (need model name for is_valid check)
+    let registry = crate::provider_registry::load_registry();
+    let resolved_slot = crate::provider_registry::resolve_slot(
+        &registry,
+        crate::provider_registry::SlotName::Enrichment,
+    );
+    let model_name_for_session = resolved_slot.as_ref().map(|r| r.config.model.clone()).unwrap_or_default();
+
+    let fsk = file_set_key(
+        &llm_candidates.iter().map(|(p, _, _, _)| p.as_str()).collect::<Vec<_>>(),
+    );
+
+    // Take existing session (if valid) or create fresh
+    let mut session = {
+        let mut sessions = triage_sessions().lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(s) = sessions.get(&repo_path) {
+            if s.is_valid(&model_name_for_session, fsk) {
+                sessions.remove(&repo_path).unwrap()
+            } else {
+                TriageSession::new(model_name_for_session.clone(), fsk)
+            }
+        } else {
+            TriageSession::new(model_name_for_session.clone(), fsk)
+        }
+    };
+
+    let mut cache_hits: Vec<FileClassification> = Vec::new();
+    let mut uncached: Vec<(String, String, u32, u32)> = Vec::new();
+
+    for (path, additions, deletions, _is_untracked) in &llm_candidates {
+        let diff_text = all_diffs.get(path).cloned().unwrap_or_default();
         let h = hash_diff(&diff_text);
-        let hit = triage_cache()
-            .lock()
-            .ok()
-            .and_then(|cache| {
-                cache
-                    .get(&repo_path)
-                    .and_then(|rc| rc.get(path))
-                    .filter(|e| e.diff_hash == h)
-                    .map(|e| {
-                        let mut c = e.classification.clone();
-                        c.additions = *additions;
-                        c.deletions = *deletions;
-                        c
-                    })
+
+        let hit = session.file_hashes.get(path.as_str())
+            .filter(|&&cached_h| cached_h == h)
+            .and_then(|_| session.classifications.get(path.as_str()))
+            .map(|c| {
+                let mut c = c.clone();
+                c.additions = *additions;
+                c.deletions = *deletions;
+                c
             });
 
         if let Some(cached) = hit {
@@ -617,7 +758,7 @@ pub(crate) async fn run_diff_triage(
 
     if !cache_hits.is_empty() {
         emit_progress(
-            &app, &repo_path, None, &cache_hits,
+            &app, &repo_path, session.summary.as_deref(), &cache_hits,
             if uncached.is_empty() { "done" } else { "cached" },
             uncached.is_empty(), true, None,
         );
@@ -632,11 +773,7 @@ pub(crate) async fn run_diff_triage(
     let mut changeset_summary: Option<String> = None;
 
     if !uncached.is_empty() {
-        let registry = crate::provider_registry::load_registry();
-        match crate::provider_registry::resolve_slot(
-            &registry,
-            crate::provider_registry::SlotName::Enrichment,
-        ) {
+        match resolved_slot {
             Ok(resolved) => {
                 let client =
                     crate::llm_api::build_client(&resolved.config, &resolved.api_key);
@@ -647,29 +784,27 @@ pub(crate) async fn run_diff_triage(
                     .map(|(p, d, _, _)| (p.clone(), hash_diff(d)))
                     .collect();
 
-                // Single holistic LLM call — all files together for context
-                let parsed = classify_holistic(&client, &model_name, &uncached).await;
-                changeset_summary = parsed.summary;
+                // Streaming LLM call — emits each file as it's classified
+                let parsed = classify_streaming(
+                    &client, &model_name, &uncached,
+                    &app, &repo_path, &diff_hashes, &stats,
+                ).await;
+                changeset_summary = parsed.summary.clone();
 
-                // Store results in cache
-                if let Ok(mut cache) = triage_cache().lock() {
-                    let rc = cache.entry(repo_path.clone()).or_default();
-                    for r in &parsed.files {
-                        if let Some(&h) = diff_hashes.get(&r.path) {
-                            rc.insert(
-                                r.path.clone(),
-                                CachedEntry {
-                                    diff_hash: h,
-                                    classification: r.clone(),
-                                },
-                            );
-                        }
+                // Update session with new classifications and hashes
+                if let Some(ref s) = parsed.summary {
+                    session.summary = Some(s.clone());
+                }
+                for fc in &parsed.files {
+                    if let Some(&h) = diff_hashes.get(&fc.path) {
+                        session.file_hashes.insert(fc.path.clone(), h);
+                        session.classifications.insert(fc.path.clone(), fc.clone());
                     }
                 }
 
                 emit_progress(
                     &app, &repo_path, changeset_summary.as_deref(),
-                    &parsed.files, "done", true, true, Some(&model_name),
+                    &[], "done", true, true, Some(&model_name),
                 );
                 all_classified.extend(parsed.files);
 
@@ -690,6 +825,17 @@ pub(crate) async fn run_diff_triage(
         }
     }
 
+    // Prune session entries for files no longer in the changeset
+    let current_paths: std::collections::HashSet<&str> =
+        changed_files.iter().map(|f| f.path.as_str()).collect();
+    session.file_hashes.retain(|k, _| current_paths.contains(k.as_str()));
+    session.classifications.retain(|k, _| current_paths.contains(k.as_str()));
+
+    // Store session back
+    if let Ok(mut sessions) = triage_sessions().lock() {
+        sessions.insert(repo_path.clone(), session);
+    }
+
     for (path, _, _, _) in needs_llm.iter().skip(MAX_FILES_TO_LLM) {
         all_classified.push(fallback_classification(path));
     }
@@ -698,14 +844,6 @@ pub(crate) async fn run_diff_triage(
         if let Some(&(a, d)) = stats.get(c.path.as_str()) {
             c.additions = a;
             c.deletions = d;
-        }
-    }
-
-    if let Ok(mut cache) = triage_cache().lock() {
-        if let Some(rc) = cache.get_mut(&repo_path) {
-            let current: std::collections::HashSet<&str> =
-                changed_files.iter().map(|f| f.path.as_str()).collect();
-            rc.retain(|k, _| current.contains(k.as_str()));
         }
     }
 
@@ -926,36 +1064,92 @@ mod tests {
     }
 
     #[test]
-    fn parse_llm_response_valid() {
-        let json = r#"{"summary": "Refactored config API", "files": [
-            {"path": "src/config.rs", "relevance": "high", "category": "api-surface",
-             "risk": "breaking-change", "summary": "Changed public API"}
-        ]}"#;
-        let parsed = parse_llm_response(json).unwrap();
-        assert_eq!(parsed.summary.as_deref(), Some("Refactored config API"));
-        assert_eq!(parsed.files.len(), 1);
-        assert_eq!(parsed.files[0].path, "src/config.rs");
-        assert_eq!(parsed.files[0].relevance, Relevance::High);
-        assert_eq!(parsed.files[0].category, Category::ApiSurface);
-        assert_eq!(parsed.files[0].risk, Risk::BreakingChange);
-        assert_eq!(parsed.files[0].source, ClassificationSource::Llm);
+    fn parse_jsonl_summary_line() {
+        match parse_jsonl_line(r#"{"summary": "Refactored config API"}"#) {
+            JsonlParsed::Summary(s) => assert_eq!(s, "Refactored config API"),
+            _ => panic!("expected Summary"),
+        }
     }
 
     #[test]
-    fn parse_llm_response_without_summary() {
-        let json = r#"{"files": [
-            {"path": "a.rs", "relevance": "low", "category": "style",
-             "risk": "cosmetic", "summary": "Formatting"}
-        ]}"#;
-        let parsed = parse_llm_response(json).unwrap();
-        assert!(parsed.summary.is_none());
-        assert_eq!(parsed.files.len(), 1);
+    fn parse_jsonl_file_line() {
+        let line = r#"{"path": "src/config.rs", "relevance": "high", "category": "api-surface", "risk": "breaking-change", "summary": "Changed public API"}"#;
+        match parse_jsonl_line(line) {
+            JsonlParsed::File(fc) => {
+                assert_eq!(fc.path, "src/config.rs");
+                assert_eq!(fc.relevance, Relevance::High);
+                assert_eq!(fc.category, Category::ApiSurface);
+                assert_eq!(fc.risk, Risk::BreakingChange);
+                assert_eq!(fc.source, ClassificationSource::Llm);
+            }
+            _ => panic!("expected File"),
+        }
     }
 
     #[test]
-    fn parse_llm_response_malformed_returns_none() {
-        assert!(parse_llm_response("not json").is_none());
-        assert!(parse_llm_response("{\"files\": \"bad\"}").is_none());
+    fn parse_jsonl_empty_and_malformed() {
+        assert!(matches!(parse_jsonl_line(""), JsonlParsed::Skip));
+        assert!(matches!(parse_jsonl_line("  \n"), JsonlParsed::Skip));
+        assert!(matches!(parse_jsonl_line("not json"), JsonlParsed::Skip));
+        assert!(matches!(parse_jsonl_line("{\"bad\": true}"), JsonlParsed::Skip));
+    }
+
+    #[test]
+    fn session_is_valid_checks_model_and_fsk() {
+        let s = TriageSession::new("haiku".to_string(), 42);
+        assert!(s.is_valid("haiku", 42));
+        assert!(!s.is_valid("sonnet", 42));
+        assert!(!s.is_valid("haiku", 99));
+    }
+
+    #[test]
+    fn session_is_valid_message_cap() {
+        let mut s = TriageSession::new("haiku".to_string(), 1);
+        for i in 0..MAX_SESSION_MESSAGES {
+            s.messages.push(SessionMsg {
+                role: MsgRole::User,
+                content: format!("msg {i}"),
+            });
+        }
+        assert!(!s.is_valid("haiku", 1));
+    }
+
+    #[test]
+    fn file_set_key_is_order_independent() {
+        let k1 = file_set_key(&["a.rs", "b.rs", "c.rs"]);
+        let k2 = file_set_key(&["c.rs", "a.rs", "b.rs"]);
+        assert_eq!(k1, k2);
+    }
+
+    #[test]
+    fn file_set_key_differs_for_different_sets() {
+        let k1 = file_set_key(&["a.rs", "b.rs"]);
+        let k2 = file_set_key(&["a.rs", "c.rs"]);
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn session_hash_based_file_skip() {
+        let mut s = TriageSession::new("haiku".to_string(), 1);
+        let h = hash_diff("some diff content");
+        let fc = FileClassification {
+            path: "src/foo.rs".to_string(),
+            relevance: Relevance::High,
+            category: Category::BusinessLogic,
+            risk: Risk::BehavioralChange,
+            summary: "does stuff".to_string(),
+            source: ClassificationSource::Llm,
+            additions: 10,
+            deletions: 2,
+        };
+        s.file_hashes.insert("src/foo.rs".to_string(), h);
+        s.classifications.insert("src/foo.rs".to_string(), fc);
+
+        // Same hash → cache hit
+        assert!(s.file_hashes.get("src/foo.rs").filter(|&&ch| ch == h).is_some());
+        // Different hash → miss
+        let other = hash_diff("different diff");
+        assert!(s.file_hashes.get("src/foo.rs").filter(|&&ch| ch == other).is_none());
     }
 
     #[test]
