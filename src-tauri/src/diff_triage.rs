@@ -497,6 +497,89 @@ fn fallback_classification(path: &str) -> FileClassification {
     }
 }
 
+// Multi-turn system prompt — used by classify_multi_turn (Step 4).
+// classify_streaming still uses TRIAGE_SYSTEM_PROMPT for the single-shot path.
+const MULTI_TURN_SYSTEM_PROMPT: &str = "\
+You are a senior code reviewer triaging a changeset. \
+I'll show the file list first, then each file's diff one at a time. \
+Keep context across turns — relate files to each other.\n\n\
+RESPONSES — always a single JSON line, nothing else:\n\n\
+When I show the file list:\n\
+{\"summary\": \"2-3 sentence changeset overview\"}\n\n\
+When I show a file diff:\n\
+{\"path\": \"...\", \"relevance\": \"high|medium|low\", \
+\"category\": \"business-logic|api-surface|schema|config|test|boilerplate|style\", \
+\"risk\": \"breaking-change|behavioral-change|cosmetic\", \
+\"summary\": \"one sentence\"}\n\n\
+Rules: high=must review, medium=worth a look, low=skip. \
+Tests covering the main change are medium. \
+Relate files to each other. ONLY output the JSON line.";
+
+/// Builds the overview user message for the first turn of a multi-turn session.
+/// Includes file list + any heuristic-classified file names for context.
+fn build_overview(
+    llm_files: &[&str],
+    heuristic_names: &[(&str, &str)],
+) -> String {
+    let mut msg = String::from("Changeset overview — files to review:\n");
+    for path in llm_files {
+        msg.push_str(&format!("  {path}\n"));
+    }
+    if !heuristic_names.is_empty() {
+        msg.push_str("\nPre-classified by heuristic (no diff needed):\n");
+        for (path, category) in heuristic_names {
+            msg.push_str(&format!("  {path}  [{category}]\n"));
+        }
+    }
+    msg.push_str("\nRespond with the changeset summary JSON.");
+    msg
+}
+
+/// Builds the user message for a single file turn.
+fn build_file_msg(path: &str, diff: &str, additions: u32, deletions: u32) -> String {
+    let lines: Vec<&str> = diff.lines().collect();
+    let truncated = lines[..lines.len().min(MAX_LINES_PER_FILE)].join("\n");
+    let truncation_note = if lines.len() > MAX_LINES_PER_FILE {
+        format!("\n[... truncated at {} lines]", MAX_LINES_PER_FILE)
+    } else {
+        String::new()
+    };
+    format!(
+        "<file path=\"{path}\" +{additions} -{deletions}>\n{truncated}{truncation_note}\n</file>\n\nClassify this file."
+    )
+}
+
+/// Builds a ChatRequest from session history + a new user message, placing
+/// CacheControl::Ephemeral on the system prompt, an optional midpoint message
+/// (when history > 40 messages), and the final user message.
+fn build_chat_request(session: &TriageSession, new_user_msg: &str) -> genai::chat::ChatRequest {
+    use genai::chat::{CacheControl, ChatMessage, ChatRequest, MessageOptions};
+
+    // System message with cache hint — stable across turns
+    let system_msg = ChatMessage::system(MULTI_TURN_SYSTEM_PROMPT)
+        .with_options(MessageOptions::from(CacheControl::Ephemeral));
+    let mut req = ChatRequest::default().append_message(system_msg);
+
+    let midpoint = session.messages.len() / 2;
+    for (i, msg) in session.messages.iter().enumerate() {
+        let cm = match msg.role {
+            MsgRole::User => ChatMessage::user(&msg.content),
+            MsgRole::Assistant => ChatMessage::assistant(&msg.content),
+        };
+        // Add midpoint cache breakpoint for long sessions (> 40 messages)
+        let cm = if session.messages.len() > 40 && i == midpoint {
+            cm.with_options(MessageOptions::from(CacheControl::Ephemeral))
+        } else {
+            cm
+        };
+        req = req.append_message(cm);
+    }
+
+    let final_user = ChatMessage::user(new_user_msg)
+        .with_options(MessageOptions::from(CacheControl::Ephemeral));
+    req.append_message(final_user)
+}
+
 /// Streaming LLM classification — emits each file as soon as it's classified.
 async fn classify_streaming(
     client: &genai::Client,
@@ -1092,6 +1175,75 @@ mod tests {
         assert!(matches!(parse_jsonl_line("  \n"), JsonlParsed::Skip));
         assert!(matches!(parse_jsonl_line("not json"), JsonlParsed::Skip));
         assert!(matches!(parse_jsonl_line("{\"bad\": true}"), JsonlParsed::Skip));
+    }
+
+    #[test]
+    fn build_overview_includes_llm_files() {
+        let msg = build_overview(&["src/main.rs", "src/lib.rs"], &[]);
+        assert!(msg.contains("src/main.rs"));
+        assert!(msg.contains("src/lib.rs"));
+        assert!(msg.contains("changeset summary JSON"));
+        assert!(!msg.contains("Pre-classified"));
+    }
+
+    #[test]
+    fn build_overview_includes_heuristic_context() {
+        let msg = build_overview(
+            &["src/app.rs"],
+            &[("Cargo.lock", "boilerplate"), (".github/workflows/ci.yml", "config")],
+        );
+        assert!(msg.contains("Pre-classified by heuristic"));
+        assert!(msg.contains("Cargo.lock"));
+        assert!(msg.contains("boilerplate"));
+        assert!(msg.contains(".github/workflows/ci.yml"));
+    }
+
+    #[test]
+    fn build_file_msg_truncates_long_diffs() {
+        let long_diff = (0..500).map(|i| format!("+line {i}")).collect::<Vec<_>>().join("\n");
+        let msg = build_file_msg("big.rs", &long_diff, 500, 0);
+        assert!(msg.contains("[... truncated at"));
+        let line_count = msg.lines().filter(|l| l.starts_with("+line")).count();
+        assert_eq!(line_count, MAX_LINES_PER_FILE);
+    }
+
+    #[test]
+    fn build_file_msg_short_diff_no_truncation() {
+        let msg = build_file_msg("small.rs", "+fn foo() {}", 1, 0);
+        assert!(!msg.contains("truncated"));
+        assert!(msg.contains("+fn foo()"));
+        assert!(msg.contains(r#"path="small.rs""#));
+    }
+
+    #[test]
+    fn build_chat_request_cache_control_on_system_and_last() {
+        let session = TriageSession::new("haiku".to_string(), 1);
+        let req = build_chat_request(&session, "classify this file");
+        // system_msg + final_user = 2 messages (no session history)
+        assert_eq!(req.messages.len(), 2);
+        // Both system and final user have cache options
+        assert!(req.messages[0].options.is_some(), "system msg must have CacheControl");
+        assert!(req.messages[1].options.is_some(), "final user msg must have CacheControl");
+    }
+
+    #[test]
+    fn build_chat_request_midpoint_cache_for_long_sessions() {
+        let mut session = TriageSession::new("haiku".to_string(), 1);
+        // Add 42 messages to trigger midpoint caching (> 40)
+        for i in 0..42 {
+            session.messages.push(SessionMsg {
+                role: if i % 2 == 0 { MsgRole::User } else { MsgRole::Assistant },
+                content: format!("msg {i}"),
+            });
+        }
+        let req = build_chat_request(&session, "new msg");
+        // system (idx 0) + 42 session msgs + final user = 44 total
+        assert_eq!(req.messages.len(), 44);
+        let cached_count = req.messages.iter().filter(|m| m.options.is_some()).count();
+        // system + midpoint session msg + final user = 3 with cache options
+        assert_eq!(cached_count, 3, "expected system + midpoint + final to have cache options; got {cached_count}");
+        // midpoint of 42 session msgs = index 21 in session → index 22 in req.messages
+        assert!(req.messages[22].options.is_some(), "midpoint session msg must have cache options");
     }
 
     #[test]
