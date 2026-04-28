@@ -67,6 +67,7 @@ function createMockHandlers(): ShortcutHandlers {
     openPath: vi.fn(),
     openSecondaryWindow: vi.fn(),
     toggleCommandOverview: vi.fn(),
+    openAiTriage: vi.fn(),
     toggleComposePanel: vi.fn(),
     detachActivityDashboard: vi.fn(),
     refreshTerminal: vi.fn(),

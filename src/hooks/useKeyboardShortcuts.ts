@@ -81,6 +81,7 @@ export interface ShortcutHandlers {
   openPath: () => void;
   openSecondaryWindow: () => void;
   toggleCommandOverview: () => void;
+  openAiTriage: () => void;
   toggleComposePanel: () => void;
   detachActivityDashboard: () => void;
 }
@@ -211,6 +212,7 @@ function dispatchAction(action: ActionName, handlers: ShortcutHandlers): boolean
     case "open-path": handlers.openPath(); return true;
     case "open-secondary-window": handlers.openSecondaryWindow(); return true;
     case "command-overview": handlers.toggleCommandOverview(); return true;
+    case "ai-triage": handlers.openAiTriage(); return true;
     case "toggle-compose-panel": handlers.toggleComposePanel(); return true;
     case "detach-activity-dashboard": handlers.detachActivityDashboard(); return true;
 

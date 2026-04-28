@@ -8,6 +8,7 @@ pub(crate) mod claude_usage;
 pub(crate) mod cli;
 pub(crate) mod config;
 mod dictation;
+pub(crate) mod diff_triage;
 pub(crate) mod error_classification;
 pub(crate) mod fs;
 mod input_line_buffer;
@@ -1176,6 +1177,7 @@ pub fn run() {
             git::get_diff_stats,
             git::get_changed_files,
             git::get_file_diff,
+            diff_triage::run_diff_triage,
             git::get_recent_commits,
             list_markdown_files,
             read_file,

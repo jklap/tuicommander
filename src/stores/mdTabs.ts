@@ -304,6 +304,7 @@ function createMdTabsStore() {
       return base._addTab({ type: "command-overview", id, title: "Commands", pinned: true } as CommandOverviewTab);
     },
 
+    /** Add the AI Triage panel tab (singleton per repo — reuses existing if open) */
     /** Add a PR diff tab (or reuse existing for same repo+prNumber, updating diff content) */
     addPrDiff(repoPath: string, prNumber: number, prTitle: string, diff: string): string {
       const existing = Object.values(base.state.tabs).find(

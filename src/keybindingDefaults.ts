@@ -62,6 +62,7 @@ export const ACTION_NAMES = [
   "open-path",
   "open-secondary-window",
   "command-overview",
+  "ai-triage",
   "toggle-compose-panel",
   "detach-activity-dashboard",
   // Numbered tabs and branches
@@ -138,6 +139,7 @@ export const DEFAULT_BINDINGS: Record<ActionName, string> = {
   "open-path": "Cmd+Alt+O",
   "open-secondary-window": "",
   "command-overview": "",
+  "ai-triage": "",
   "toggle-compose-panel": "Cmd+I",
   "detach-activity-dashboard": "",
   // Numbered tabs

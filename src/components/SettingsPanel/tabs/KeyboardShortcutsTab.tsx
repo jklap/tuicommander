@@ -132,6 +132,7 @@ function getShortcutSections(): ShortcutSection[] {
       { action: "toggle-global-workspace", keys: keyFor("toggle-global-workspace"), description: "Toggle global workspace" },
       { action: "toggle-focus-mode", keys: keyFor("toggle-focus-mode"), description: "Focus mode (hide sidebar & panels)" },
       { action: "command-overview", keys: keyFor("command-overview"), description: "Command overview" },
+      { action: "ai-triage", keys: keyFor("ai-triage"), description: "AI Triage" },
       { action: "open-secondary-window", keys: keyFor("open-secondary-window"), description: "Open secondary window" },
     ],
   },

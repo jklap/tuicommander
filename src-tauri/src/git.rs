@@ -104,10 +104,10 @@ pub(crate) struct DiffStats {
 /// Changed file information (for diff browser)
 #[derive(Clone, Serialize)]
 pub(crate) struct ChangedFile {
-    path: String,
-    status: String,
-    additions: u32,
-    deletions: u32,
+    pub(crate) path: String,
+    pub(crate) status: String,
+    pub(crate) additions: u32,
+    pub(crate) deletions: u32,
 }
 
 /// Core logic for fetching git repository info (no caching).

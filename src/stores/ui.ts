@@ -42,6 +42,7 @@ interface UIStoreState {
   gitPanelVisible: boolean;
 
   aiChatPanelVisible: boolean;
+  aiTriagePanelVisible: boolean;
   detachedPanels: Record<string, string>;
 
   // Knowledge history overlay — ephemeral, not persisted. Full-screen modal
@@ -91,6 +92,7 @@ function createUIStore() {
     fileBrowserPanelVisible: false,
     gitPanelVisible: false,
     aiChatPanelVisible: false,
+    aiTriagePanelVisible: false,
     detachedPanels: {} as Record<string, string>,
     knowledgeHistoryOverlayVisible: false,
     gitPanelRequestedTab: null,
@@ -131,12 +133,13 @@ function createUIStore() {
   }
 
   /** Keys of the mutually exclusive right-side panels */
-  type ExclusivePanel = "markdownPanelVisible" | "fileBrowserPanelVisible" | "gitPanelVisible" | "aiChatPanelVisible";
+  type ExclusivePanel = "markdownPanelVisible" | "fileBrowserPanelVisible" | "gitPanelVisible" | "aiChatPanelVisible" | "aiTriagePanelVisible";
   const exclusivePanels: ExclusivePanel[] = [
     "markdownPanelVisible",
     "fileBrowserPanelVisible",
     "gitPanelVisible",
     "aiChatPanelVisible",
+    "aiTriagePanelVisible",
   ];
 
   /** Open one exclusive panel and close the others, or close all if `key` is already open (toggle). */
@@ -322,6 +325,14 @@ function createUIStore() {
     setAiChatPanelWidth(width: number): void {
       setState("aiChatPanelWidth", width);
       saveUIPrefs();
+    },
+
+    toggleAiTriagePanel(): void {
+      setExclusivePanel("aiTriagePanelVisible", !state.aiTriagePanelVisible);
+    },
+
+    setAiTriagePanelVisible(visible: boolean): void {
+      setExclusivePanel("aiTriagePanelVisible", visible);
     },
 
     setDetached(panelId: string, windowLabel: string): void {

@@ -77,6 +77,7 @@ import { tasksStore } from "./stores/tasks";
 import { userActivityStore } from "./stores/userActivity";
 import { contextMenuActionsStore } from "./stores/contextMenuActionsStore";
 import { globalWorkspaceStore } from "./stores/globalWorkspace";
+import { aiTriageStore } from "./stores/aiTriageStore";
 import { paneLayoutKey } from "./stores/savedPaneLayouts";
 import { initPlugins } from "./plugins";
 import { pluginRegistry } from "./plugins/pluginRegistry";
@@ -762,6 +763,19 @@ const App: Component = () => {
     for (const timer of deferredCompletionTimers.values()) clearTimeout(timer);
     deferredCompletionTimers.clear();
   });
+
+  // Auto-trigger AI diff triage when an agent terminal goes idle after meaningful work.
+  const TRIAGE_BUSY_THRESHOLD_MS = 5000;
+  const unsubTriageOnIdle = terminalsStore.onBusyToIdle((id, durationMs) => {
+    if (durationMs < TRIAGE_BUSY_THRESHOLD_MS) return;
+    const t = terminalsStore.get(id);
+    if (!t?.agentType) return;
+    const repoPath = repositoriesStore.getRepoPathForTerminal(id);
+    if (!repoPath) return;
+    appLogger.debug("ai-agent", `Auto-triage for ${id} (agent=${t.agentType}, busy ${Math.round(durationMs / 1000)}s)`);
+    aiTriageStore.runTriage(repoPath);
+  });
+  onCleanup(unsubTriageOnIdle);
 
   // Initialize plugin system
   onMount(() => {
@@ -1452,6 +1466,9 @@ const App: Component = () => {
     },
     toggleCommandOverview: () => {
       mdTabsStore.addCommandOverview();
+    },
+    openAiTriage: () => {
+      uiStore.toggleAiTriagePanel();
     },
     toggleComposePanel: () => {
       const active = terminalsStore.getActive();

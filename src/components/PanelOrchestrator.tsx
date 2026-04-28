@@ -4,6 +4,7 @@ import { MarkdownPanel } from "./MarkdownPanel";
 import { NotesPanel } from "./NotesPanel";
 import { GitPanel } from "./GitPanel/GitPanel";
 import { AIChatPanel } from "./AIChatPanel";
+import { AiTriagePanel } from "./AiTriagePanel";
 import { DetachedPlaceholder } from "./DetachedPlaceholder";
 import { diffTabsStore } from "../stores/diffTabs";
 import { uiStore } from "../stores/ui";
@@ -69,6 +70,12 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
           onClose={() => uiStore.toggleAiChatPanel()}
         />
       </Show>
+
+      <AiTriagePanel
+        visible={uiStore.state.aiTriagePanelVisible}
+        repoPath={props.repoPath}
+        onClose={() => uiStore.toggleAiTriagePanel()}
+      />
     </>
   );
 };
