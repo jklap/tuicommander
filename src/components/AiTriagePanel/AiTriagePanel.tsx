@@ -1,7 +1,7 @@
 import { Component, For, Show, createEffect, createMemo, createSignal } from "solid-js";
-import { invoke } from "@tauri-apps/api/core";
 import { repositoriesStore } from "../../stores/repositories";
 import { editorTabsStore } from "../../stores/editorTabs";
+import { diffTabsStore } from "../../stores/diffTabs";
 import { aiTriageStore, type FileClassification, type Relevance } from "../../stores/aiTriageStore";
 import { cx } from "../../utils";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
@@ -24,6 +24,12 @@ function formatCategory(cat: string): string {
   return cat.replace(/-/g, " ");
 }
 
+function shortPath(path: string): string {
+  const parts = path.split("/");
+  if (parts.length <= 2) return path;
+  return parts.slice(-2).join("/");
+}
+
 export interface AiTriagePanelProps {
   visible: boolean;
   repoPath: string | null;
@@ -35,107 +41,74 @@ export const AiTriagePanel: Component<AiTriagePanelProps> = (props) => {
     if (!props.visible || !props.repoPath) return;
     const rev = repositoriesStore.getRevision(props.repoPath);
     void rev;
-    void aiTriageStore.runTriage(props.repoPath);
+    aiTriageStore.runTriage(props.repoPath);
   });
 
-  const state = () => props.repoPath ? aiTriageStore.getState(props.repoPath) : { files: [], loading: false, llmUsed: false, llmModel: null, error: null };
+  const state = () => props.repoPath ? aiTriageStore.getState(props.repoPath) : { summary: null, files: [], loading: false, llmUsed: false, llmModel: null, error: null };
 
   const highFiles = createMemo(() => state().files.filter((f) => f.relevance === "high"));
   const mediumFiles = createMemo(() => state().files.filter((f) => f.relevance === "medium"));
   const lowFiles = createMemo(() => state().files.filter((f) => f.relevance === "low"));
 
-  const [expanded, setExpanded] = createSignal<Record<string, boolean>>({});
-  const [diffs, setDiffs] = createSignal<Record<string, string>>({});
   const [lowGroupOpen, setLowGroupOpen] = createSignal(false);
-
-  function isExpanded(path: string, relevance: Relevance): boolean {
-    const e = expanded();
-    if (path in e) return e[path];
-    return relevance === "high";
-  }
-
-  async function toggleFile(file: FileClassification) {
-    const wasOpen = isExpanded(file.path, file.relevance);
-    setExpanded((prev) => ({ ...prev, [file.path]: !wasOpen }));
-
-    if (!wasOpen && !diffs()[file.path] && props.repoPath) {
-      try {
-        const diff = await invoke<string>("get_file_diff", {
-          path: props.repoPath,
-          file: file.path,
-        });
-        setDiffs((prev) => ({ ...prev, [file.path]: diff }));
-      } catch {
-        setDiffs((prev) => ({ ...prev, [file.path]: "Failed to load diff" }));
-      }
-    }
-  }
 
   function handleEdit(path: string) {
     if (props.repoPath) editorTabsStore.add(props.repoPath, path);
+  }
+
+  function handleDiff(path: string) {
+    if (props.repoPath) diffTabsStore.add(props.repoPath, path, "M");
   }
 
   function handleRefresh() {
     if (props.repoPath) aiTriageStore.refreshTriage(props.repoPath);
   }
 
-  function parseDiffLines(diff: string): Array<{ text: string; type: "add" | "del" | "hunk" | "context" }> {
-    return diff.split("\n").map((line) => {
-      if (line.startsWith("@@")) return { text: line, type: "hunk" as const };
-      if (line.startsWith("+")) return { text: line, type: "add" as const };
-      if (line.startsWith("-")) return { text: line, type: "del" as const };
-      return { text: line, type: "context" as const };
-    });
-  }
-
-  const diffLineClass = (type: string): string => {
-    if (type === "add") return `${s.diffLine} ${s.diffAdd}`;
-    if (type === "del") return `${s.diffLine} ${s.diffDel}`;
-    if (type === "hunk") return `${s.diffLine} ${s.diffHunk}`;
-    return `${s.diffLine} ${s.diffContext}`;
-  };
-
   const FileRow: Component<{ file: FileClassification }> = (rowProps) => {
     const file = rowProps.file;
-    const open = () => isExpanded(file.path, file.relevance);
+    const hasSummary = () => file.summary && file.summary.length > 0;
 
     return (
       <div class={s.fileRow}>
-        <div class={s.fileHeader} onClick={() => toggleFile(file)}>
-          <span class={cx(s.chevron, open() && s.chevronOpen)}>&#9656;</span>
-          <span class={cx(s.relevanceBadge, relevanceClass(file.relevance))}>
-            {file.relevance}
-          </span>
-          <span class={s.categoryPill}>{formatCategory(file.category)}</span>
-          <span class={s.filePath}>{file.path}</span>
-          <span class={s.fileStats}>
-            <Show when={file.additions > 0}>
-              <span class={s.statsAdd}>+{file.additions}</span>
+        <div class={s.fileHeader}>
+          <div class={s.fileHeaderTop}>
+            <span class={cx(s.relevanceBadge, relevanceClass(file.relevance))}>
+              {file.relevance}
+            </span>
+            <Show when={hasSummary()} fallback={<span class={s.fileSummary}>{shortPath(file.path)}</span>}>
+              <span class={s.fileSummary}>{file.summary}</span>
             </Show>
-            <Show when={file.additions > 0 && file.deletions > 0}>{" "}</Show>
-            <Show when={file.deletions > 0}>
-              <span class={s.statsDel}>-{file.deletions}</span>
-            </Show>
-          </span>
-          <div class={s.fileActions}>
-            <button
-              class={s.actionBtn}
-              onClick={(e) => { e.stopPropagation(); handleEdit(file.path); }}
-            >
-              Edit
-            </button>
+            <div class={s.fileActions}>
+              <button
+                class={s.actionBtn}
+                onClick={() => handleDiff(file.path)}
+                title="View diff"
+              >
+                Diff
+              </button>
+              <button
+                class={s.actionBtn}
+                onClick={() => handleEdit(file.path)}
+                title="Open in editor"
+              >
+                Edit
+              </button>
+            </div>
+          </div>
+          <div class={s.fileHeaderBottom}>
+            <span class={s.filePath}>{file.path}</span>
+            <span class={s.categoryPill}>{formatCategory(file.category)}</span>
+            <span class={s.fileStats}>
+              <Show when={file.additions > 0}>
+                <span class={s.statsAdd}>+{file.additions}</span>
+              </Show>
+              <Show when={file.additions > 0 && file.deletions > 0}>{" "}</Show>
+              <Show when={file.deletions > 0}>
+                <span class={s.statsDel}>-{file.deletions}</span>
+              </Show>
+            </span>
           </div>
         </div>
-        <Show when={file.summary}>
-          <div class={s.fileSummary}>{file.summary}</div>
-        </Show>
-        <Show when={open() && diffs()[file.path]}>
-          <div class={s.diffContainer}>
-            <For each={parseDiffLines(diffs()[file.path])}>
-              {(line) => <div class={diffLineClass(line.type)}>{line.text}</div>}
-            </For>
-          </div>
-        </Show>
       </div>
     );
   };
@@ -155,6 +128,9 @@ export const AiTriagePanel: Component<AiTriagePanelProps> = (props) => {
           <Show when={lowFiles().length > 0}>
             <span class={cx(s.statBadge, statClass("low"))}>{lowFiles().length} low</span>
           </Show>
+          <Show when={state().loading}>
+            <span class={s.spinner} />
+          </Show>
         </div>
         <div class={p.headerRight}>
           <button class={s.refreshBtn} onClick={handleRefresh}>Refresh</button>
@@ -167,11 +143,8 @@ export const AiTriagePanel: Component<AiTriagePanelProps> = (props) => {
           <div class={s.error}>{state().error}</div>
         </Show>
 
-        <Show when={state().loading}>
-          <div class={s.loading}>
-            <span class={s.spinner} />
-            Classifying...
-          </div>
+        <Show when={state().summary}>
+          <div class={s.summaryBox}>{state().summary}</div>
         </Show>
 
         <Show when={!state().loading && state().files.length === 0 && !state().error}>
@@ -202,7 +175,7 @@ export const AiTriagePanel: Component<AiTriagePanelProps> = (props) => {
           </div>
         </Show>
 
-        <Show when={!state().llmUsed && state().files.length > 0}>
+        <Show when={!state().llmUsed && !state().loading && state().files.length > 0}>
           <div class={s.banner}>
             Configure an AI provider in Settings to enable intelligent classification
           </div>

@@ -107,7 +107,18 @@
   to { transform: rotate(360deg); }
 }
 
-/* File row */
+/* Changeset summary */
+.summaryBox {
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-primary));
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
+  font-size: var(--font-sm);
+  color: var(--fg-primary);
+  line-height: 1.5;
+}
+
+/* File row — two-line: summary on top, path + metadata below */
 .fileRow {
   border-radius: var(--radius-sm);
   background: var(--bg-primary);
@@ -122,24 +133,22 @@
 
 .fileHeader {
   display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+}
+
+.fileHeaderTop {
+  display: flex;
   align-items: center;
   gap: 6px;
-  padding: 5px 8px;
-  cursor: pointer;
-  user-select: none;
-  min-height: 28px;
 }
 
-.chevron {
-  width: 12px;
-  color: var(--fg-muted);
-  font-size: 10px;
-  flex-shrink: 0;
-  transition: transform 0.15s;
-}
-
-.chevronOpen {
-  transform: rotate(90deg);
+.fileHeaderBottom {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-left: 0;
 }
 
 .relevanceBadge {
@@ -167,20 +176,30 @@
   color: var(--fg-muted);
 }
 
-.categoryPill {
-  font-size: var(--font-xs);
-  color: var(--fg-muted);
-  flex-shrink: 0;
-}
-
-.filePath {
-  font-family: var(--font-mono);
+.fileSummary {
   font-size: var(--font-sm);
   color: var(--fg-primary);
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.filePath {
+  font-family: var(--font-mono);
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.categoryPill {
+  font-size: 10px;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+  opacity: 0.7;
 }
 
 .fileStats {
@@ -197,12 +216,6 @@
 
 .statsDel {
   color: var(--error);
-}
-
-.fileSummary {
-  font-size: var(--font-xs);
-  color: var(--fg-secondary);
-  padding: 0 8px 4px 26px;
 }
 
 .fileActions {
@@ -227,40 +240,16 @@
   color: var(--accent);
 }
 
-/* Diff view */
-.diffContainer {
-  border-top: 1px solid var(--border);
-  max-height: 300px;
-  overflow-y: auto;
-  font-family: var(--font-mono);
-  font-size: var(--font-xs);
-  line-height: 1.5;
-  padding: 4px 0;
-}
-
-.diffLine {
-  padding: 0 8px;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.diffAdd {
-  background: color-mix(in srgb, var(--success) 12%, transparent);
-  color: var(--success);
-}
-
-.diffDel {
-  background: color-mix(in srgb, var(--error) 12%, transparent);
-  color: var(--error);
-}
-
-.diffHunk {
-  color: var(--accent);
-  opacity: 0.7;
-}
-
-.diffContext {
+.chevron {
+  width: 12px;
   color: var(--fg-muted);
+  font-size: 10px;
+  flex-shrink: 0;
+  transition: transform 0.15s;
+}
+
+.chevronOpen {
+  transform: rotate(90deg);
 }
 
 /* Low-relevance group */
