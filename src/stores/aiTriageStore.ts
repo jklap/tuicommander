@@ -107,7 +107,7 @@ function createAiTriageStore() {
     }, DEBOUNCE_MS));
   }
 
-  async function executeTriage(repoPath: string): Promise<void> {
+  async function executeTriage(repoPath: string, refresh?: boolean): Promise<void> {
     if (inflight.has(repoPath)) return;
     inflight.add(repoPath);
     const prev = getState(repoPath);
@@ -117,7 +117,10 @@ function createAiTriageStore() {
       error: null,
     });
     try {
-      const result = await invoke<TriageResult>("run_diff_triage", { repoPath });
+      const result = await invoke<TriageResult>("run_diff_triage", {
+        repoPath,
+        refresh: refresh || undefined,
+      });
       // Final result — authoritative, replaces progressive state
       result.files.sort((a, b) => relevanceOrder(a.relevance) - relevanceOrder(b.relevance));
       setState("repos", repoPath, {
@@ -154,7 +157,7 @@ function createAiTriageStore() {
     }
     // Clear existing results for a fresh holistic analysis
     setState("repos", repoPath, { ...DEFAULT_STATE, loading: true });
-    void executeTriage(repoPath);
+    void executeTriage(repoPath, true);
   }
 
   return { state, getState, runTriage, refreshTriage, clear };
