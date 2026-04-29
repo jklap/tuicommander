@@ -307,7 +307,7 @@ fn is_ci_file(path: &str) -> bool {
     CI_PATTERNS.iter().any(|p| path.contains(p))
 }
 
-fn is_doc_file(path: &str, filename: &str, ext: &str) -> bool {
+fn is_doc_file(_path: &str, filename: &str, ext: &str) -> bool {
     DOC_FILES.iter().any(|&f| filename == f)
         || DOC_EXTENSIONS.contains(&ext)
 }
@@ -397,41 +397,6 @@ const MAX_LINES_PER_FILE: usize = 300;
 const MAX_FILES_TO_LLM: usize = 30;
 const LLM_TIMEOUT: Duration = Duration::from_secs(60);
 
-const TRIAGE_SYSTEM_PROMPT: &str = "\
-You are a senior code reviewer triaging a changeset for a developer. \
-Analyze ALL files together as a coherent changeset — understand how they relate. \
-\n\n\
-Output format: one JSON object per line (JSONL). \
-First line MUST be the changeset summary:\n\
-{\"summary\": \"2-3 sentence overview of what this changeset does and why it matters\"}\n\n\
-Then one line per file, in review-priority order (most important first):\n\
-{\"path\": \"...\", \"relevance\": \"high|medium|low\", \
-\"category\": \"business-logic|api-surface|schema|config|test|boilerplate|style\", \
-\"risk\": \"breaking-change|behavioral-change|cosmetic\", \
-\"summary\": \"one sentence explaining THIS file's role in the changeset\"}\n\n\
-Rules:\n\
-- Relevance is about review priority: high=must review carefully, medium=worth a look, low=can skip\n\
-- A test file that covers the main change is medium, not low — context matters\n\
-- Omit truly trivial files (lock files, formatting-only) entirely\n\
-- Summaries must relate files to each other: \"Adds the handler that X calls\" not just \"Adds handler\"\n\
-- EACH LINE must be valid JSON. No wrapping array or object. No trailing commas.";
-
-pub(crate) fn build_prompt(files: &[(String, String, u32, u32)]) -> String {
-    let mut prompt = String::from("Triage this changeset:\n\n");
-    for (path, diff_text, additions, deletions) in files {
-        prompt.push_str(&format!(
-            "<file path=\"{path}\" +{additions} -{deletions}>\n"
-        ));
-        let lines: Vec<&str> = diff_text.lines().collect();
-        let truncated = lines[..lines.len().min(MAX_LINES_PER_FILE)].join("\n");
-        prompt.push_str(&truncated);
-        if lines.len() > MAX_LINES_PER_FILE {
-            prompt.push_str("\n[... truncated]");
-        }
-        prompt.push_str("\n</file>\n\n");
-    }
-    prompt
-}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -497,8 +462,6 @@ fn fallback_classification(path: &str) -> FileClassification {
     }
 }
 
-// Multi-turn system prompt — used by classify_multi_turn (Step 4).
-// classify_streaming still uses TRIAGE_SYSTEM_PROMPT for the single-shot path.
 const MULTI_TURN_SYSTEM_PROMPT: &str = "\
 You are a senior code reviewer triaging a changeset. \
 I'll show the file list first, then each file's diff one at a time. \
@@ -872,108 +835,6 @@ async fn classify_multi_turn(
     LlmParsed { summary: session.summary.clone(), files: classified }
 }
 
-/// Streaming LLM classification — emits each file as soon as it's classified.
-async fn classify_streaming(
-    client: &genai::Client,
-    model: &str,
-    files: &[(String, String, u32, u32)],
-    app: &tauri::AppHandle,
-    repo_path: &str,
-    diff_hashes: &HashMap<String, u64>,
-    stats: &HashMap<&str, (u32, u32)>,
-) -> LlmParsed {
-    use futures_util::StreamExt;
-    use genai::chat::{ChatMessage, ChatOptions, ChatRequest, ChatStreamEvent as GenaiStreamEvent};
-
-    let prompt = build_prompt(files);
-    let chat_req = ChatRequest::default()
-        .with_system(TRIAGE_SYSTEM_PROMPT)
-        .append_message(ChatMessage::user(prompt));
-    let opts = ChatOptions::default();
-
-    let stream_result = tokio::time::timeout(
-        LLM_TIMEOUT,
-        client.exec_chat_stream(model, chat_req, Some(&opts)),
-    )
-    .await;
-
-    let stream_resp = match stream_result {
-        Ok(Ok(resp)) => resp,
-        _ => {
-            return LlmParsed {
-                summary: None,
-                files: files
-                    .iter()
-                    .map(|(path, _, _, _)| fallback_classification(path))
-                    .collect(),
-            };
-        }
-    };
-
-    let mut stream = stream_resp.stream;
-    let mut buf = String::new();
-    let mut summary: Option<String> = None;
-    let mut classified: Vec<FileClassification> = Vec::new();
-
-    loop {
-        let event = tokio::time::timeout(LLM_TIMEOUT, stream.next()).await;
-        match event {
-            Ok(Some(Ok(GenaiStreamEvent::Chunk(chunk)))) => {
-                buf.push_str(&chunk.content);
-                while let Some(nl) = buf.find('\n') {
-                    let line: String = buf.drain(..=nl).collect();
-                    match parse_jsonl_line(&line) {
-                        JsonlParsed::Summary(s) => {
-                            summary = Some(s.clone());
-                            emit_progress(
-                                app, repo_path, Some(&s), &[],
-                                "llm-streaming", false, true, Some(model),
-                            );
-                        }
-                        JsonlParsed::File(mut fc) => {
-                            if let Some(&(a, d)) = stats.get(fc.path.as_str()) {
-                                fc.additions = a;
-                                fc.deletions = d;
-                            }
-                            emit_progress(
-                                app, repo_path, summary.as_deref(), &[fc.clone()],
-                                "llm-streaming", false, true, Some(model),
-                            );
-                            classified.push(fc);
-                        }
-                        JsonlParsed::Skip => {}
-                    }
-                }
-            }
-            Ok(Some(Ok(GenaiStreamEvent::End(_)))) => break,
-            Ok(Some(Ok(_))) => {} // Start, ReasoningChunk, etc. — ignore
-            Ok(Some(Err(_))) | Ok(None) | Err(_) => break,
-        }
-    }
-
-    // Process any remaining partial line in buffer
-    if !buf.trim().is_empty() {
-        if let JsonlParsed::File(mut fc) = parse_jsonl_line(&buf) {
-            if let Some(&(a, d)) = stats.get(fc.path.as_str()) {
-                fc.additions = a;
-                fc.deletions = d;
-            }
-            classified.push(fc);
-        }
-    }
-
-    // Fallback for files the LLM didn't mention
-    let classified_paths: std::collections::HashSet<String> =
-        classified.iter().map(|f| f.path.clone()).collect();
-    let missing: Vec<_> = files
-        .iter()
-        .filter(|(path, _, _, _)| !classified_paths.contains(path.as_str()))
-        .map(|(path, _, _, _)| fallback_classification(path))
-        .collect();
-    classified.extend(missing);
-
-    LlmParsed { summary, files: classified }
-}
 
 #[derive(Debug, Clone, Serialize)]
 struct TriageProgress {
@@ -1014,6 +875,7 @@ fn emit_progress(
 pub(crate) async fn run_diff_triage(
     app: tauri::AppHandle,
     repo_path: String,
+    refresh: Option<bool>,
 ) -> Result<TriageResult, String> {
     let changed_files = crate::git::get_changed_files(repo_path.clone(), None).await?;
     if changed_files.is_empty() {
@@ -1087,15 +949,21 @@ pub(crate) async fn run_diff_triage(
         &registry,
         crate::provider_registry::SlotName::Enrichment,
     );
-    let model_name_for_session = resolved_slot.as_ref().map(|r| r.config.model.clone()).unwrap_or_default();
+    let model_name_for_session = resolved_slot
+        .as_ref()
+        .map(|r| r.config.model.clone())
+        .unwrap_or_default();
 
     let fsk = file_set_key(
         &llm_candidates.iter().map(|(p, _, _, _)| p.as_str()).collect::<Vec<_>>(),
     );
 
-    // Take existing session (if valid) or create fresh
+    // Take existing session (invalidate first if refresh=true), or create fresh
     let mut session = {
         let mut sessions = triage_sessions().lock().unwrap_or_else(|e| e.into_inner());
+        if refresh.unwrap_or(false) {
+            sessions.remove(&repo_path);
+        }
         if let Some(s) = sessions.get(&repo_path) {
             if s.is_valid(&model_name_for_session, fsk) {
                 sessions.remove(&repo_path).unwrap()
@@ -1107,96 +975,78 @@ pub(crate) async fn run_diff_triage(
         }
     };
 
-    let mut cache_hits: Vec<FileClassification> = Vec::new();
-    let mut uncached: Vec<(String, String, u32, u32)> = Vec::new();
+    // Build (path, diff, additions, deletions) for all LLM candidates
+    let files_with_diffs: Vec<(String, String, u32, u32)> = llm_candidates
+        .iter()
+        .map(|(path, additions, deletions, _)| {
+            let diff = all_diffs.get(path).cloned().unwrap_or_default();
+            (path.to_string(), diff, *additions, *deletions)
+        })
+        .collect();
 
-    for (path, additions, deletions, _is_untracked) in &llm_candidates {
-        let diff_text = all_diffs.get(path).cloned().unwrap_or_default();
-        let h = hash_diff(&diff_text);
+    // Heuristic context for the overview turn: (path, category label)
+    let heuristic_labels: Vec<(String, String)> = heuristic
+        .iter()
+        .map(|c| {
+            let label = serde_json::to_value(c.category)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default();
+            (c.path.clone(), label)
+        })
+        .collect();
+    let heuristic_names: Vec<(&str, &str)> =
+        heuristic_labels.iter().map(|(p, l)| (p.as_str(), l.as_str())).collect();
 
-        let hit = session.file_hashes.get(path.as_str())
-            .filter(|&&cached_h| cached_h == h)
-            .and_then(|_| session.classifications.get(path.as_str()))
-            .map(|c| {
-                let mut c = c.clone();
-                c.additions = *additions;
-                c.deletions = *deletions;
-                c
-            });
-
-        if let Some(cached) = hit {
-            cache_hits.push(cached);
-        } else {
-            uncached.push((path.clone(), diff_text, *additions, *deletions));
-        }
-    }
-
-    if !cache_hits.is_empty() {
-        emit_progress(
-            &app, &repo_path, session.summary.as_deref(), &cache_hits,
-            if uncached.is_empty() { "done" } else { "cached" },
-            uncached.is_empty(), true, None,
-        );
-    }
-
-    let had_cache_hits = !cache_hits.is_empty();
     let mut all_classified = heuristic;
-    all_classified.extend(cache_hits);
-
     let mut llm_used = false;
     let mut llm_model: Option<String> = None;
     let mut changeset_summary: Option<String> = None;
 
-    if !uncached.is_empty() {
-        match resolved_slot {
-            Ok(resolved) => {
-                let client =
-                    crate::llm_api::build_client(&resolved.config, &resolved.api_key);
-                let model_name = resolved.config.model.clone();
+    match resolved_slot {
+        Ok(resolved) => {
+            let client = crate::llm_api::build_client(&resolved.config, &resolved.api_key);
+            let model_name = resolved.config.model.clone();
 
-                let diff_hashes: HashMap<String, u64> = uncached
-                    .iter()
-                    .map(|(p, d, _, _)| (p.clone(), hash_diff(d)))
-                    .collect();
+            let parsed = classify_multi_turn(
+                &client,
+                &model_name,
+                &mut session,
+                &files_with_diffs,
+                &heuristic_names,
+                &app,
+                &repo_path,
+                &stats,
+            )
+            .await;
 
-                // Streaming LLM call — emits each file as it's classified
-                let parsed = classify_streaming(
-                    &client, &model_name, &uncached,
-                    &app, &repo_path, &diff_hashes, &stats,
-                ).await;
-                changeset_summary = parsed.summary.clone();
-
-                // Update session with new classifications and hashes
-                if let Some(ref s) = parsed.summary {
-                    session.summary = Some(s.clone());
-                }
-                for fc in &parsed.files {
-                    if let Some(&h) = diff_hashes.get(&fc.path) {
-                        session.file_hashes.insert(fc.path.clone(), h);
-                        session.classifications.insert(fc.path.clone(), fc.clone());
-                    }
-                }
-
-                emit_progress(
-                    &app, &repo_path, changeset_summary.as_deref(),
-                    &[], "done", true, true, Some(&model_name),
-                );
-                all_classified.extend(parsed.files);
-
-                llm_used = true;
-                llm_model = Some(model_name);
-            }
-            Err(_) => {
-                let mut fallbacks = Vec::new();
-                for (path, _, additions, deletions) in &uncached {
+            changeset_summary = parsed.summary.clone();
+            emit_progress(
+                &app,
+                &repo_path,
+                changeset_summary.as_deref(),
+                &[],
+                "done",
+                true,
+                true,
+                Some(&model_name),
+            );
+            all_classified.extend(parsed.files);
+            llm_used = true;
+            llm_model = Some(model_name);
+        }
+        Err(_) => {
+            let fallbacks: Vec<FileClassification> = files_with_diffs
+                .iter()
+                .map(|(path, _, additions, deletions)| {
                     let mut fc = fallback_classification(path);
                     fc.additions = *additions;
                     fc.deletions = *deletions;
-                    fallbacks.push(fc);
-                }
-                emit_progress(&app, &repo_path, None, &fallbacks, "done", true, false, None);
-                all_classified.extend(fallbacks);
-            }
+                    fc
+                })
+                .collect();
+            emit_progress(&app, &repo_path, None, &fallbacks, "done", true, false, None);
+            all_classified.extend(fallbacks);
         }
     }
 
@@ -1226,7 +1076,7 @@ pub(crate) async fn run_diff_triage(
     Ok(TriageResult {
         summary: changeset_summary,
         files: all_classified,
-        llm_used: llm_used || had_cache_hits,
+        llm_used,
         llm_model,
     })
 }
@@ -1412,30 +1262,6 @@ mod tests {
     fn path_is_preserved_in_classification() {
         let c = classify("deep/nested/path/Cargo.lock").unwrap();
         assert_eq!(c.path, "deep/nested/path/Cargo.lock");
-    }
-
-    #[test]
-    fn build_prompt_xml_format() {
-        let files = vec![(
-            "src/main.rs".to_string(),
-            "+fn hello() {}\n-fn old() {}".to_string(),
-            1u32,
-            1u32,
-        )];
-        let prompt = build_prompt(&files);
-        assert!(prompt.contains("<file path=\"src/main.rs\" +1 -1>"));
-        assert!(prompt.contains("</file>"));
-        assert!(prompt.contains("+fn hello()"));
-    }
-
-    #[test]
-    fn build_prompt_truncates_long_diffs() {
-        let long_diff = (0..500).map(|i| format!("+line {i}")).collect::<Vec<_>>().join("\n");
-        let files = vec![("big.rs".to_string(), long_diff, 500, 0)];
-        let prompt = build_prompt(&files);
-        assert!(prompt.contains("[... truncated]"));
-        let line_count = prompt.lines().filter(|l| l.starts_with("+line")).count();
-        assert_eq!(line_count, MAX_LINES_PER_FILE);
     }
 
     #[test]
