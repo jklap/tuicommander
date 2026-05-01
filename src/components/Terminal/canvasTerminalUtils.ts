@@ -103,6 +103,34 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
   return { cursorRow, cursorCol, cursorVisible, rows };
 }
 
+export type CursorShape = "block" | "beam" | "underline";
+
+export interface CursorRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Compute the pixel rectangle for a cursor at the given grid position. */
+export function computeCursorRect(
+  shape: CursorShape,
+  row: number,
+  col: number,
+  m: CellMetrics,
+): CursorRect {
+  const x = col * m.cellWidth;
+  const y = row * m.cellHeight;
+  switch (shape) {
+    case "block":
+      return { x, y, w: m.cellWidth, h: m.cellHeight };
+    case "beam":
+      return { x, y, w: 2, h: m.cellHeight };
+    case "underline":
+      return { x, y: y + m.cellHeight - 2, w: m.cellWidth, h: 2 };
+  }
+}
+
 /**
  * Measure a monospace font and return cell metrics for grid layout.
  * Uses 'M' as the reference glyph (widest ASCII char in most monospace fonts).

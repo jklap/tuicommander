@@ -3,12 +3,14 @@ import { settingsStore } from "../../stores/settings";
 import {
   decodeBinaryFrame,
   measureFont,
+  computeCursorRect,
   type CellMetrics,
+  type CursorShape,
   type DecodedFrame,
   type DecodedCell,
 } from "./canvasTerminalUtils";
 // Re-export for external consumers
-export type { CellMetrics, DecodedFrame, DecodedCell };
+export type { CellMetrics, CursorShape, DecodedFrame, DecodedCell };
 
 export interface CanvasTerminalProps {
   sessionId: string;
@@ -25,7 +27,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   const glyphCache = new Map<string, ImageBitmap>();
 
   const [metrics, setMetrics] = createSignal<CellMetrics | null>(null);
+  const [focused, setFocused] = createSignal(false);
   let currentFrame: DecodedFrame | null = null;
+  let cursorShape: CursorShape = "block";
+  let cursorBlinkOn = true;
+  let blinkInterval: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
 
@@ -100,6 +106,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         }
       }
     }
+    paintCursor(frame, m);
   }
 
   function resolveFg(cell: DecodedCell, defaultColor: string): string {
@@ -123,6 +130,105 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     return `${style}${fontSize}px ${fontFamily}`;
   }
 
+  function paintCursor(frame: DecodedFrame, m: CellMetrics) {
+    if (!frame.cursorVisible) return;
+    if (!cursorBlinkOn && focused()) return;
+
+    const fgDefault = getComputedStyle(canvasRef).getPropertyValue("--text-primary").trim() || "#d4d4d4";
+    const rect = computeCursorRect(cursorShape, frame.cursorRow, frame.cursorCol, m);
+
+    if (!focused()) {
+      ctx.strokeStyle = fgDefault;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1);
+      return;
+    }
+
+    ctx.fillStyle = fgDefault;
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+
+    // For block cursor, draw the character in inverse
+    if (cursorShape === "block") {
+      const row = frame.rows.find((r) => r.index === frame.cursorRow);
+      const cell = row?.cells[frame.cursorCol];
+      if (cell && cell.char && cell.char !== " ") {
+        const bgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
+        const fontFamily = settingsStore.getFontFamily();
+        ctx.font = buildFontStyle(cell, m.fontSize, fontFamily);
+        ctx.fillStyle = bgDefault;
+        ctx.fillText(cell.char, rect.x, frame.cursorRow * m.cellHeight + m.baseline);
+      }
+    }
+  }
+
+  function startBlink() {
+    stopBlink();
+    cursorBlinkOn = true;
+    blinkInterval = setInterval(() => {
+      cursorBlinkOn = !cursorBlinkOn;
+      const m = metrics();
+      if (currentFrame && m) {
+        repaintCursorRow(currentFrame, m);
+      }
+    }, 530);
+  }
+
+  function stopBlink() {
+    if (blinkInterval != null) {
+      clearInterval(blinkInterval);
+      blinkInterval = undefined;
+    }
+  }
+
+  function resetBlink() {
+    cursorBlinkOn = true;
+    startBlink();
+  }
+
+  function repaintCursorRow(frame: DecodedFrame, m: CellMetrics) {
+    const y = frame.cursorRow * m.cellHeight;
+    ctx.clearRect(0, y, canvasRef.width / m.dpr, m.cellHeight);
+
+    const row = frame.rows.find((r) => r.index === frame.cursorRow);
+    if (row) {
+      const fontFamily = settingsStore.getFontFamily();
+      const bgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
+      const fgDefault = getComputedStyle(canvasRef).getPropertyValue("--text-primary").trim() || "#d4d4d4";
+      for (let c = 0; c < row.cells.length; c++) {
+        const cell = row.cells[c];
+        if (cell.char === "") continue;
+        const x = c * m.cellWidth;
+        const fg = resolveFg(cell, fgDefault);
+        const bg = resolveBg(cell, bgDefault);
+        if (!cell.defaultBg || cell.inverse) {
+          ctx.fillStyle = bg;
+          ctx.fillRect(x, y, m.cellWidth, m.cellHeight);
+        }
+        if (cell.char !== " ") {
+          ctx.font = buildFontStyle(cell, m.fontSize, fontFamily);
+          ctx.fillStyle = fg;
+          if (cell.dim) ctx.globalAlpha = 0.5;
+          ctx.fillText(cell.char, x, y + m.baseline);
+          if (cell.dim) ctx.globalAlpha = 1.0;
+        }
+        if (cell.underline) {
+          ctx.fillStyle = fg;
+          ctx.fillRect(x, y + m.cellHeight - 1, m.cellWidth, 1);
+        }
+        if (cell.strikeout) {
+          ctx.fillStyle = fg;
+          ctx.fillRect(x, y + Math.floor(m.cellHeight / 2), m.cellWidth, 1);
+        }
+      }
+    }
+    paintCursor(frame, m);
+  }
+
+  function repaintCursorIfNeeded() {
+    const m = metrics();
+    if (currentFrame && m) repaintCursorRow(currentFrame, m);
+  }
+
   function onFrame(data: ArrayBuffer | number[]) {
     const buffer = data instanceof ArrayBuffer ? data : new Uint8Array(data).buffer;
     const frame = decodeBinaryFrame(buffer);
@@ -141,6 +247,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
     resizeObserver = new ResizeObserver(() => remeasure());
     resizeObserver.observe(canvasRef.parentElement ?? canvasRef);
+
+    canvasRef.addEventListener("focus", () => { setFocused(true); startBlink(); });
+    canvasRef.addEventListener("blur", () => { setFocused(false); stopBlink(); repaintCursorIfNeeded(); });
+    canvasRef.addEventListener("keydown", () => resetBlink());
 
     // Subscribe to grid channel
     try {
@@ -162,6 +272,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   });
 
   onCleanup(() => {
+    stopBlink();
     resizeObserver?.disconnect();
     unsubscribe?.();
     glyphCache.clear();
