@@ -3,7 +3,7 @@ import { settingsStore, FONT_FAMILIES } from "../../../stores/settings";
 import { uiStore } from "../../../stores/ui";
 import { repositoriesStore } from "../../../stores/repositories";
 import type { RepoGroup } from "../../../stores/repositories";
-import type { FontType } from "../../../stores/settings";
+import type { FontType, TerminalRenderer } from "../../../stores/settings";
 import { THEME_NAMES } from "../../../themes";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { UiLegend } from "../../HelpPanel/UiLegend";
@@ -165,6 +165,19 @@ export const AppearanceTab: Component = () => {
           <span>{settingsStore.state.fontWeight}</span>
         </div>
         <p class={s.hint}>{t("appearance.hint.fontWeight", "Terminal font weight (200 = ExtraLight, 400 = Regular, 700 = Bold)")}</p>
+      </div>
+
+      <div class={s.group}>
+        <label>{t("appearance.label.terminalRenderer", "Terminal Renderer")}</label>
+        <select
+          value={settingsStore.state.terminalRenderer}
+          onChange={(e) => settingsStore.setTerminalRenderer(e.currentTarget.value as TerminalRenderer)}
+        >
+          <option value="webgl">{t("appearance.terminalRenderer.webgl", "WebGL (GPU-accelerated)")}</option>
+          <option value="canvas">{t("appearance.terminalRenderer.canvas", "Canvas 2D (stable)")}</option>
+          <option value="native">{t("appearance.terminalRenderer.native", "Native (experimental)")}</option>
+        </select>
+        <p class={s.hint}>{t("appearance.hint.terminalRenderer", "Rendering backend for terminal output. Native uses Rust-side terminal emulation (experimental). Canvas is more stable; WebGL is faster but may cause rendering artifacts. Applies to new terminals.")}</p>
       </div>
 
       <h3>{t("appearance.heading.tabs", "Tabs")}</h3>

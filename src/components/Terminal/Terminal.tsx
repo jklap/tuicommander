@@ -23,6 +23,7 @@ import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { agentConfigsStore } from "../../stores/agentConfigs";
 import { parseOsc7Url } from "../../utils/osc7";
 import { kittySequenceForKey } from "./kittyKeyboard";
+import CanvasTerminal from "./CanvasTerminal";
 import { getAwaitingInputSound } from "./awaitingInputSound";
 import { searchTerminalBuffer } from "../../utils/terminalSearch";
 import { ScrollTracker, ViewportLock } from "./scrollTracker";
@@ -33,7 +34,6 @@ import { FlowController } from "./flowControl";
 import { installLinkProvider } from "./linkProvider";
 import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { ComposePanel } from "../ComposePanel";
-import { AltScreenHistory } from "./AltScreenHistory";
 import s from "./Terminal.module.css";
 
 
@@ -184,11 +184,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
   // Keep in sync at every `sessionId = X` assignment below.
   const [_currentSessionId, setCurrentSessionId] = createSignal<string | null>(null);
 
+  const useNativeRenderer = () =>
+    isTauri() && settingsStore.state.terminalRenderer === "native";
+
   // Search overlay state
   const [searchVisible, setSearchVisible] = createSignal(false);
   // Scrollback history overlay
-  const [showAltHistory, setShowAltHistory] = createSignal(false);
-  const [overlaySearchVisible, setOverlaySearchVisible] = createSignal(false);
   // Compose panel state
   const [composeOpen, setComposeOpen] = createSignal(false);
   const [pendingComposeText, setPendingComposeText] = createSignal("");
@@ -216,7 +217,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
   // scrollback overflows, even without prior user interaction. Disposed on cleanup.
   let scrollbarFixCleanup: (() => void) | null = null;
   // Alt-screen wheel handler — removed on cleanup
-  let altWheelCleanup: (() => void) | null = null;
 
   // Buffer for PTY output arriving before terminal.open()
   let outputBuffer: string[] = [];
@@ -928,19 +928,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
     // keypress from reaching xterm (which would eat the next typed character).
     let blockEscForResumeDismiss = false;
     terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-      // ESC while alt-screen history overlay is open:
-      // Priority: overlay search → overlay close. Suppress \x1b from reaching PTY.
-      if (showAltHistory() && event.type === "keydown" && event.key === "Escape") {
-        if (overlaySearchVisible()) {
-          setOverlaySearchVisible(false);
-        } else {
-          setShowAltHistory(false);
-          setOverlaySearchVisible(false);
-          terminal?.focus();
-        }
-        return false;
-      }
-
       // Arrow Down with no modifiers: snap to bottom when viewport is scrolled up
       if (event.type === "keydown" && event.key === "ArrowDown" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !scrollTracker.isAtBottom) {
         terminal!.scrollToBottom();
@@ -1010,11 +997,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       // Intercept Cmd+F (macOS) / Ctrl+F (Win/Linux) to open search.
       if (event.type === "keydown" && (event.metaKey || event.ctrlKey) && event.key === "f" && !event.altKey && !event.shiftKey) {
         event.preventDefault();
-        if (showAltHistory()) {
-          setOverlaySearchVisible(true);
-        } else {
-          setSearchVisible(true);
-        }
+        setSearchVisible(true);
         return false;
       }
 
@@ -1238,29 +1221,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
     viewportLock.setLogger((event, details) => {
       appLogger.debug("ViewportLock", `${event} ${JSON.stringify(details)}`);
     });
-
-    // Scroll-up → show scrollback history overlay.
-    // xterm.js scrollback gets corrupted by resize with Ink/agent panels, so we
-    // show an overlay that reads clean scrollback lines from the Rust VtLogBuffer.
-    if (settingsStore.isScrollHistoryEnabled()) {
-      const handleAltWheelUp = (e: WheelEvent) => {
-        const bufType = terminal?.buffer.active.type ?? "none";
-        const agentType = terminalsStore.get(props.id)?.agentType ?? null;
-        if (showAltHistory()) return;
-        if (!terminal) return;
-        const isAgentOrAltScreen = bufType === "alternate" || agentType !== null;
-        if (!isAgentOrAltScreen) return;
-        if (e.deltaY >= 0) return;
-        if (!sessionId || !isTauri()) return;
-        e.preventDefault();
-        e.stopPropagation();
-        setShowAltHistory(true);
-      };
-      // capture:true — fires before xterm's own wheel listener (which may stopPropagation
-      // during the bubble phase on some xterm versions, preventing our handler from running).
-      containerRef.addEventListener("wheel", handleAltWheelUp, { capture: true, passive: false });
-      altWheelCleanup = () => containerRef?.removeEventListener("wheel", handleAltWheelUp, { capture: true });
-    }
 
     // Preload the configured font so the canvas/WebGL renderer can measure
     // and render it correctly from the start (see preloadFont comment above).
@@ -1708,22 +1668,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
     if (lastAgentType !== null && curr === null && terminal) {
       terminal.write("\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m");
       appLogger.debug("terminal", `[Recovery] ${props.id} wrote alt-screen exit after agent "${lastAgentType}" → null`);
-      // Close the history overlay: the terminal is back on the normal screen.
-      setShowAltHistory(false);
     }
     lastAgentType = curr;
-  });
-
-  createEffect(() => {
-    const vp = terminal?.element?.querySelector(".xterm-viewport") as HTMLElement | null;
-    if (!vp) return;
-    if (showAltHistory()) {
-      vp.style.overflow = "hidden";
-      vp.style.pointerEvents = "none";
-    } else {
-      vp.style.overflow = "";
-      vp.style.pointerEvents = "";
-    }
   });
 
   // Handle font family + theme changes (global settings)
@@ -1800,7 +1746,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
     if (containerRef && handleImagePasteRef) containerRef.removeEventListener("paste", handleImagePasteRef, true);
     renderObserverCleanup?.();
     scrollbarFixCleanup?.();
-    altWheelCleanup?.();
     viewportLock.dispose();
     terminal?.dispose();
   });
@@ -1939,11 +1884,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
           <button class={s.resumeDismiss} onClick={handleDismissResume} title="Dismiss">&times;</button>
         </div>
       </Show>
-      <div
-        ref={containerRef}
-        class={s.content}
-        style={{ width: "100%", height: "100%", opacity: fitted() ? 1 : 0 }}
-      />
+      <Show when={useNativeRenderer() && sessionId} fallback={
+        <div
+          ref={containerRef}
+          class={s.content}
+          style={{ width: "100%", height: "100%", opacity: fitted() ? 1 : 0 }}
+        />
+      }>
+        <CanvasTerminal sessionId={sessionId!} />
+      </Show>
       <Show when={!composeOpen()}>
         <div
           class={s.composeHint}
@@ -1979,26 +1928,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
           }
         }}
       />
-      <Show when={settingsStore.isScrollHistoryEnabled() && showAltHistory() && sessionId}>
-        <AltScreenHistory
-          sessionId={sessionId!}
-          onClose={() => {
-            setShowAltHistory(false);
-            setOverlaySearchVisible(false);
-            terminal?.focus();
-          }}
-          searchVisible={overlaySearchVisible()}
-          onSearchClose={() => setOverlaySearchVisible(false)}
-          terminalOptions={{
-            fontSize: terminal?.options.fontSize ?? settingsStore.state.defaultFontSize,
-            fontFamily: terminal?.options.fontFamily ?? getFontFamily(),
-            fontWeight: (terminal?.options.fontWeight ?? String(settingsStore.state.fontWeight)) as any,
-            fontWeightBold: "bold",
-            lineHeight: terminal?.options.lineHeight ?? snapLineHeight(settingsStore.state.defaultFontSize),
-            theme: currentTheme(),
-          }}
-        />
-      </Show>
     </div>
   );
 };

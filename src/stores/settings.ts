@@ -39,7 +39,7 @@ interface RustAppConfig {
   issue_filter?: string;
   experimental_features_enabled?: boolean;
   ai_chat_enabled?: boolean;
-  scroll_history_enabled?: boolean;
+  terminal_renderer?: string;
 }
 
 // Default values
@@ -220,9 +220,19 @@ function validateIssueFilter(value: string | null): IssueFilterMode {
   return value && (VALID_ISSUE_FILTERS as readonly string[]).includes(value) ? (value as IssueFilterMode) : "assigned";
 }
 
+/** Valid terminal renderer values */
+const VALID_RENDERERS: readonly TerminalRenderer[] = ["webgl", "canvas", "native"];
+
+function validateTerminalRenderer(value: string | null): TerminalRenderer {
+  return value && (VALID_RENDERERS as readonly string[]).includes(value) ? (value as TerminalRenderer) : "webgl";
+}
+
 
 /** Split tab mode */
 export type SplitTabMode = "separate" | "unified";
+
+/** Terminal renderer backend */
+export type TerminalRenderer = "webgl" | "canvas" | "native";
 
 /** Update channel */
 export type UpdateChannel = "stable" | "nightly";
@@ -253,7 +263,7 @@ interface SettingsStoreState {
   issueFilter: IssueFilterMode;
   experimentalFeaturesEnabled: boolean;
   aiChatEnabled: boolean;
-  scrollHistoryEnabled: boolean;
+  terminalRenderer: TerminalRenderer;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -285,7 +295,7 @@ function createSettingsStore() {
     issueFilter: "assigned",
     experimentalFeaturesEnabled: false,
     aiChatEnabled: false,
-    scrollHistoryEnabled: false,
+    terminalRenderer: "webgl",
   });
 
   // Shadow copy of the last loaded config — preserves fields not tracked in SolidJS store
@@ -322,7 +332,7 @@ function createSettingsStore() {
       issue_filter: state.issueFilter,
       experimental_features_enabled: state.experimentalFeaturesEnabled,
       ai_chat_enabled: state.aiChatEnabled,
-      scroll_history_enabled: state.scrollHistoryEnabled,
+      terminal_renderer: state.terminalRenderer,
       session_token_duration_secs: baseConfig?.session_token_duration_secs ?? 86400,
       mcp_server_enabled: baseConfig?.mcp_server_enabled ?? true,
     };
@@ -384,7 +394,7 @@ function createSettingsStore() {
         setState("issueFilter", validateIssueFilter(config.issue_filter || null));
         setState("experimentalFeaturesEnabled", config.experimental_features_enabled ?? false);
         setState("aiChatEnabled", config.ai_chat_enabled ?? false);
-        setState("scrollHistoryEnabled", config.scroll_history_enabled ?? false);
+        setState("terminalRenderer", validateTerminalRenderer(config.terminal_renderer || null));
       } catch (err) {
         appLogger.error("config", "Failed to hydrate settings", err);
       }
@@ -535,8 +545,8 @@ function createSettingsStore() {
       save();
     },
 
-    setScrollHistoryEnabled(enabled: boolean): void {
-      setState("scrollHistoryEnabled", enabled);
+    setTerminalRenderer(renderer: TerminalRenderer): void {
+      setState("terminalRenderer", renderer);
       save();
     },
 
@@ -574,9 +584,6 @@ function createSettingsStore() {
       return state.experimentalFeaturesEnabled && state.aiChatEnabled;
     },
 
-    isScrollHistoryEnabled(): boolean {
-      return state.experimentalFeaturesEnabled && state.scrollHistoryEnabled;
-    },
   };
 
   return { state, ...actions };
@@ -605,5 +612,6 @@ registerDebugSnapshot("settings", () => {
     autoUpdateEnabled: s.autoUpdateEnabled,
     preventSleepWhenBusy: s.preventSleepWhenBusy,
     issueFilter: s.issueFilter,
+    terminalRenderer: s.terminalRenderer,
   };
 });
