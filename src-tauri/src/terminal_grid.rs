@@ -6,7 +6,7 @@ use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi;
 
-use crate::state::ChangedRow;
+use crate::state::{ChangedRow, LogColor, LogLine, LogSpan};
 
 /// Wraps `alacritty_terminal::Term` with a TUICommander-specific API.
 ///
@@ -106,6 +106,11 @@ impl TerminalGrid {
         lines
     }
 
+    /// Clear the cached prev_rows to force full diff on next process().
+    pub fn clear_prev_rows(&mut self) {
+        self.prev_rows.clear();
+    }
+
     /// Resize the terminal grid.
     pub fn resize(&mut self, rows: u16, cols: u16) {
         let size = TermSize::new(cols as usize, rows as usize);
@@ -137,6 +142,216 @@ impl TerminalGrid {
     pub fn cursor_point(&self) -> (usize, usize) {
         let point = self.term.grid().cursor.point;
         (point.line.0 as usize, point.column.0)
+    }
+
+    /// Extract a styled `LogLine` from a grid row by iterating cells.
+    ///
+    /// Consecutive cells with the same (fg, bg, bold, italic, underline) attributes
+    /// are grouped into a single `LogSpan`. Trailing whitespace-only spans with
+    /// default attributes are trimmed.
+    pub fn extract_log_line(&self, line: Line) -> LogLine {
+        let grid = self.term.grid();
+        let num_cols = grid.columns();
+        let mut spans: Vec<LogSpan> = Vec::new();
+
+        let mut cur_fg: Option<LogColor> = None;
+        let mut cur_bg: Option<LogColor> = None;
+        let mut cur_bold = false;
+        let mut cur_italic = false;
+        let mut cur_underline = false;
+        let mut cur_text = String::new();
+
+        for col in 0..num_cols {
+            let cell = &grid[line][Column(col)];
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue;
+            }
+
+            let fg = LogColor::from_ansi_color(cell.fg);
+            let bg = LogColor::from_ansi_color(cell.bg);
+            let bold = cell.flags.contains(Flags::BOLD);
+            let italic = cell.flags.contains(Flags::ITALIC);
+            let underline = cell.flags.intersects(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE | Flags::UNDERCURL);
+
+            if !cur_text.is_empty()
+                && (fg != cur_fg || bg != cur_bg || bold != cur_bold
+                    || italic != cur_italic || underline != cur_underline)
+            {
+                spans.push(LogSpan {
+                    text: std::mem::take(&mut cur_text),
+                    fg: cur_fg,
+                    bg: cur_bg,
+                    bold: cur_bold,
+                    italic: cur_italic,
+                    underline: cur_underline,
+                });
+            }
+
+            cur_fg = fg;
+            cur_bg = bg;
+            cur_bold = bold;
+            cur_italic = italic;
+            cur_underline = underline;
+
+            if cell.c == ' ' || cell.c == '\0' {
+                cur_text.push(' ');
+            } else {
+                cur_text.push(cell.c);
+            }
+        }
+
+        if !cur_text.is_empty() {
+            spans.push(LogSpan {
+                text: cur_text,
+                fg: cur_fg,
+                bg: cur_bg,
+                bold: cur_bold,
+                italic: cur_italic,
+                underline: cur_underline,
+            });
+        }
+
+        // Trim trailing whitespace-only spans with default attrs
+        while let Some(last) = spans.last() {
+            if last.fg.is_none() && last.bg.is_none() && !last.bold && !last.italic && !last.underline
+                && last.text.trim_end().is_empty()
+            {
+                spans.pop();
+            } else {
+                break;
+            }
+        }
+        if let Some(last) = spans.last_mut() {
+            let trimmed = last.text.trim_end().to_string();
+            if trimmed.is_empty() && last.fg.is_none() && last.bg.is_none() && !last.bold && !last.italic && !last.underline {
+                spans.pop();
+            } else {
+                last.text = trimmed;
+            }
+        }
+
+        LogLine { spans, cols: num_cols as u16 }
+    }
+
+    /// Current visible screen rows as styled LogLines.
+    pub fn screen_log_lines(&self) -> Vec<LogLine> {
+        let num_lines = self.term.grid().screen_lines();
+        let mut lines = Vec::with_capacity(num_lines);
+        for i in 0..num_lines {
+            lines.push(self.extract_log_line(Line(i as i32)));
+        }
+        lines
+    }
+
+    /// Read `count` most-recent scrollback lines as styled `LogLine`s.
+    /// Soft-wrapped rows (WRAPLINE) are merged into their parent line.
+    pub fn read_scrollback_log_lines(&self, count: usize) -> Vec<LogLine> {
+        let grid = self.term.grid();
+        let history = grid.history_size();
+        if history == 0 || count == 0 {
+            return Vec::new();
+        }
+        let actual_count = count.min(history);
+        let mut result: Vec<LogLine> = Vec::with_capacity(actual_count);
+
+        // Read from oldest to newest within the requested range
+        for i in 0..actual_count {
+            let scrollback_idx = actual_count - i - 1;
+            let line_idx = Line(-(scrollback_idx as i32) - 1);
+            let log_line = self.extract_log_line(line_idx);
+
+            // Check if the previous row (older, one further into history) had WRAPLINE
+            let prev_scrollback_idx = scrollback_idx + 1;
+            let is_continuation = if prev_scrollback_idx < history {
+                let prev_line = Line(-(prev_scrollback_idx as i32) - 1);
+                let last_col = grid.columns().saturating_sub(1);
+                grid[prev_line][Column(last_col)].flags.contains(Flags::WRAPLINE)
+            } else {
+                false
+            };
+
+            if is_continuation {
+                if let Some(prev) = result.last_mut() {
+                    prev.spans.extend(log_line.spans);
+                } else {
+                    result.push(log_line);
+                }
+            } else {
+                result.push(log_line);
+            }
+        }
+        result
+    }
+
+    /// Whether a screen row's last cell has WRAPLINE set (it continues on the next row).
+    pub fn row_wrapped(&self, line: Line) -> bool {
+        let grid = self.term.grid();
+        let last_col = grid.columns().saturating_sub(1);
+        grid[line][Column(last_col)].flags.contains(Flags::WRAPLINE)
+    }
+
+    /// Extract the user-typed text from the prompt line, excluding ghost/suggestion text.
+    pub fn prompt_input_text(&self) -> Option<String> {
+        let grid = self.term.grid();
+        let rows = grid.screen_lines();
+        let cols = grid.columns();
+        let cursor = grid.cursor.point;
+        let cursor_row = cursor.line.0 as usize;
+        let cursor_col = cursor.column.0;
+
+        for row in (0..rows).rev() {
+            let line = Line(row as i32);
+            let mut row_text = String::with_capacity(cols);
+            for col in 0..cols {
+                let cell = &grid[line][Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                if cell.c == '\0' {
+                    row_text.push(' ');
+                } else {
+                    row_text.push(cell.c);
+                }
+            }
+            let trimmed = row_text.trim_start();
+            if !(trimmed.starts_with('❯') || trimmed == ">" || trimmed.starts_with("> ")) {
+                continue;
+            }
+
+            let col_limit = if row == cursor_row { cursor_col } else { cols };
+            let mut result_text = String::new();
+            let mut past_prompt = false;
+            for col in 0..col_limit {
+                let cell = &grid[line][Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                let ch = cell.c;
+                if !past_prompt {
+                    if ch == '❯' || ch == '›' || ch == '>' {
+                        past_prompt = true;
+                        continue;
+                    }
+                    if ch == ' ' || ch == '\t' {
+                        continue;
+                    }
+                    past_prompt = true;
+                }
+                if past_prompt && (ch == ' ' || ch == '\t') && result_text.is_empty() {
+                    continue;
+                }
+                if cell.flags.contains(Flags::DIM) {
+                    break;
+                }
+                if ch == '\0' {
+                    result_text.push(' ');
+                } else {
+                    result_text.push(ch);
+                }
+            }
+            return Some(result_text.trim_end().to_string());
+        }
+        None
     }
 
     fn read_screen_text(&self) -> Vec<String> {

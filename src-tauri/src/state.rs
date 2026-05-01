@@ -1518,11 +1518,25 @@ pub enum LogColor {
 }
 
 impl LogColor {
-    fn from_vt100(c: vt100::Color) -> Option<Self> {
+    pub(crate) fn from_ansi_color(c: alacritty_terminal::vte::ansi::Color) -> Option<Self> {
+        use alacritty_terminal::vte::ansi::{Color, NamedColor};
         match c {
-            vt100::Color::Default => None,
-            vt100::Color::Idx(i) => Some(LogColor::Idx(i)),
-            vt100::Color::Rgb(r, g, b) => Some(LogColor::Rgb(r, g, b)),
+            Color::Named(n) => match n {
+                NamedColor::Foreground | NamedColor::Background | NamedColor::Cursor
+                | NamedColor::BrightForeground | NamedColor::DimForeground => None,
+                NamedColor::DimBlack => Some(LogColor::Idx(0)),
+                NamedColor::DimRed => Some(LogColor::Idx(1)),
+                NamedColor::DimGreen => Some(LogColor::Idx(2)),
+                NamedColor::DimYellow => Some(LogColor::Idx(3)),
+                NamedColor::DimBlue => Some(LogColor::Idx(4)),
+                NamedColor::DimMagenta => Some(LogColor::Idx(5)),
+                NamedColor::DimCyan => Some(LogColor::Idx(6)),
+                NamedColor::DimWhite => Some(LogColor::Idx(7)),
+                // Black=0..BrightWhite=15 — safe to cast
+                _ => Some(LogColor::Idx(n as u8)),
+            },
+            Color::Indexed(i) => Some(LogColor::Idx(i)),
+            Color::Spec(rgb) => Some(LogColor::Rgb(rgb.r, rgb.g, rgb.b)),
         }
     }
 }
@@ -1587,101 +1601,6 @@ impl LogLine {
     }
 }
 
-/// Extract a styled `LogLine` from a vt100 screen row by iterating cells.
-///
-/// Consecutive cells with the same (fg, bg, bold, italic, underline) attributes
-/// are grouped into a single `LogSpan`.  Trailing whitespace-only spans with
-/// default attributes are trimmed.
-fn extract_log_line(screen: &vt100::Screen, row: u16) -> LogLine {
-    let cols = screen.size().1;
-    let mut spans: Vec<LogSpan> = Vec::new();
-
-    // Current span accumulator state
-    let mut cur_fg: Option<LogColor> = None;
-    let mut cur_bg: Option<LogColor> = None;
-    let mut cur_bold = false;
-    let mut cur_italic = false;
-    let mut cur_underline = false;
-    let mut cur_text = String::new();
-
-    for col in 0..cols {
-        let cell = match screen.cell(row, col) {
-            Some(c) => c,
-            None => break,
-        };
-        // Skip wide-char continuation cells
-        if cell.is_wide_continuation() {
-            continue;
-        }
-
-        let fg = LogColor::from_vt100(cell.fgcolor());
-        let bg = LogColor::from_vt100(cell.bgcolor());
-        let bold = cell.bold();
-        let italic = cell.italic();
-        let underline = cell.underline();
-
-        // If attributes changed, flush current span and start new one
-        if !cur_text.is_empty()
-            && (fg != cur_fg || bg != cur_bg || bold != cur_bold
-                || italic != cur_italic || underline != cur_underline)
-        {
-            spans.push(LogSpan {
-                text: std::mem::take(&mut cur_text),
-                fg: cur_fg,
-                bg: cur_bg,
-                bold: cur_bold,
-                italic: cur_italic,
-                underline: cur_underline,
-            });
-        }
-
-        cur_fg = fg;
-        cur_bg = bg;
-        cur_bold = bold;
-        cur_italic = italic;
-        cur_underline = underline;
-
-        let contents = cell.contents();
-        if contents.is_empty() {
-            cur_text.push(' ');
-        } else {
-            cur_text.push_str(contents);
-        }
-    }
-
-    // Flush last span
-    if !cur_text.is_empty() {
-        spans.push(LogSpan {
-            text: cur_text,
-            fg: cur_fg,
-            bg: cur_bg,
-            bold: cur_bold,
-            italic: cur_italic,
-            underline: cur_underline,
-        });
-    }
-
-    // Trim trailing whitespace-only spans with default attrs, then trim the last span's trailing whitespace
-    while let Some(last) = spans.last() {
-        if last.fg.is_none() && last.bg.is_none() && !last.bold && !last.italic && !last.underline
-            && last.text.trim_end().is_empty()
-        {
-            spans.pop();
-        } else {
-            break;
-        }
-    }
-    if let Some(last) = spans.last_mut() {
-        let trimmed = last.text.trim_end().to_string();
-        if trimmed.is_empty() && last.fg.is_none() && last.bg.is_none() && !last.bold && !last.italic && !last.underline {
-            spans.pop();
-        } else {
-            last.text = trimmed;
-        }
-    }
-
-    LogLine { spans, cols }
-}
 
 /// A screen row that changed after a `VtLogBuffer::process()` call.
 ///
@@ -1696,38 +1615,33 @@ pub struct ChangedRow {
     pub text: String,
 }
 
-/// Per-session VT100-aware log buffer.
+/// Per-session VT-aware log buffer.
 ///
-/// Wraps a `vt100::Parser` with native scrollback enabled. Lines that scroll
-/// off the top of the screen are captured by the vt100 parser itself (via its
-/// internal `VecDeque<Row>`). This struct reads new scrollback lines after each
-/// `process()` call and stores them in a bounded `VecDeque<LogLine>` for REST
-/// and WebSocket consumers.
+/// Wraps a `TerminalGrid` (backed by `alacritty_terminal`) with scrollback
+/// capture. Lines that scroll off the top of the screen are captured from the
+/// grid's history and stored in a bounded `VecDeque<LogLine>` for REST and
+/// WebSocket consumers.
 ///
 /// **Thread safety:** Not `Sync` — lives behind `Mutex<VtLogBuffer>` in `AppState`.
-/// The `vt100::Parser` is `Send` but not `Sync`, so this struct shares that bound.
 pub struct VtLogBuffer {
-    parser: vt100::Parser,
-    /// Plain text snapshot of visible rows from the previous `process()` call.
-    /// Used for changed-row detection (output parser) and screen_rows() cache.
-    prev_rows: Vec<String>,
+    grid: crate::terminal_grid::TerminalGrid,
     /// Finalized log lines (oldest first).
     log: VecDeque<LogLine>,
     /// Maximum number of log lines retained in our own buffer.
     capacity: usize,
     /// Whether the previous `process()` call saw the alternate screen active.
     was_alternate: bool,
-    /// Number of scrollback lines already read from the vt100 parser.
+    /// Number of scrollback lines already read from the grid.
     /// Used to detect new scrollback lines after each `process()`.
     scrollback_read: usize,
     /// Monotonically increasing count of all log lines ever pushed (not bounded
     /// by capacity). Used as stable cursor for paginated reads.
     total_pushed: usize,
-    /// Widest cols seen so far. The parser never shrinks below this —
+    /// Widest cols seen so far. The grid never shrinks below this —
     /// prevents Ink re-renders from fragmenting scrollback mid-word.
     max_cols: u16,
     /// Actual PTY cols (what the child process / Ink sees). May be smaller
-    /// than parser cols when a side panel narrows the terminal. Stamped
+    /// than grid cols when a side panel narrows the terminal. Stamped
     /// onto LogLine.cols so the frontend can detect narrow-captured lines.
     pty_cols: u16,
     /// When true, scrollback capture is paused — a side panel just
@@ -1736,17 +1650,16 @@ pub struct VtLogBuffer {
     suppress_capture: bool,
 }
 
-/// Internal scrollback capacity for the vt100 parser. Must be large enough
+/// Internal scrollback capacity for the terminal grid. Must be large enough
 /// that it never fills up between consecutive `process()` calls — in practice
 /// even a `cat huge_file` sends data in ~4KB PTY read chunks.
-const VT100_SCROLLBACK: usize = 10_000;
+const GRID_SCROLLBACK: usize = 10_000;
 
 impl VtLogBuffer {
     pub fn new(rows: u16, cols: u16, capacity: usize) -> Self {
-        let parser = vt100::Parser::new(rows, cols, VT100_SCROLLBACK);
+        let grid = crate::terminal_grid::TerminalGrid::new(rows, cols, GRID_SCROLLBACK);
         Self {
-            parser,
-            prev_rows: Vec::new(),
+            grid,
             log: VecDeque::new(),
             capacity,
             was_alternate: false,
@@ -1758,71 +1671,42 @@ impl VtLogBuffer {
         }
     }
 
-    /// Feed raw PTY bytes into the VT100 parser.
+    /// Feed raw PTY bytes into the terminal grid.
     ///
     /// Returns the screen rows that changed since the previous call.  Changed
     /// rows are detected for **both** normal and alternate screen so that
     /// output parsers can match status lines and intent tokens emitted by
     /// agents that use the alternate screen (e.g. Claude Code / Ink).
     ///
-    /// Log extraction reads new scrollback lines from the vt100 parser's
-    /// native scrollback buffer (normal-screen-only — alternate screen does
-    /// not produce scrollback).
+    /// Log extraction reads new scrollback lines from the grid's history
+    /// (normal-screen-only — alternate screen does not produce scrollback).
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
-        self.parser.process(data);
+        let is_alternate = self.grid.is_alternate_screen();
 
-        // --- Changed-row detection (for output parser) ---
-        let (is_alternate, curr_rows, changed) = {
-            let screen = self.parser.screen();
-            let is_alternate = screen.alternate_screen();
-            let cols = screen.size().1;
-
-            let curr_rows: Vec<String> = screen
-                .rows(0, cols)
-                .map(|r| r.trim_end().to_string())
-                .collect();
-
-            // On screen switch we need fresh prev_rows for changed-row detection.
-            let prev_rows_ref = if is_alternate != self.was_alternate {
-                &[][..]
-            } else {
-                &self.prev_rows[..]
-            };
-
-            let changed: Vec<ChangedRow> = curr_rows
-                .iter()
-                .enumerate()
-                .filter_map(|(i, curr)| {
-                    let prev = prev_rows_ref.get(i).map(String::as_str).unwrap_or("");
-                    if curr != prev {
-                        Some(ChangedRow { row_index: i, text: curr.clone() })
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            (is_alternate, curr_rows, changed)
-        }; // screen borrow ends here
-
+        // TerminalGrid::process handles changed-row detection internally,
+        // but we need to detect screen switches for prev_rows reset.
         if is_alternate != self.was_alternate {
-            self.prev_rows.clear();
+            // Force full diff by clearing TerminalGrid's prev_rows
+            self.grid.clear_prev_rows();
         }
 
-        // --- Log extraction: read new scrollback lines from vt100 ---
-        // The vt100 parser accumulates scrollback automatically when lines
-        // scroll off the top of the normal screen. We just read the delta.
+        let changed = self.grid.process(data);
+
+        let is_alternate = self.grid.is_alternate_screen();
+
+        // --- Log extraction: read new scrollback lines from grid ---
+        // The grid accumulates scrollback automatically when lines scroll
+        // off the top of the normal screen. We just read the delta.
         //
         // When suppress_capture is set (side panel halved the terminal
         // width), Ink re-renders push fragmented junk into scrollback.
         // Skip capture but keep scrollback_read in sync.
         if !is_alternate {
-            let total_sb = self.scrollback_count();
+            let total_sb = self.grid.scrollback_count();
             let delta = total_sb.saturating_sub(self.scrollback_read);
             if delta > 0 {
                 if !self.suppress_capture {
-                    let screen_height = self.parser.screen().size().0 as usize;
-                    let new_lines = self.read_scrollback_lines(delta, screen_height);
+                    let new_lines = self.grid.read_scrollback_log_lines(delta);
                     let trimmed = trim_agent_chrome(new_lines);
                     let pty_cols = self.pty_cols;
                     for mut ll in trimmed {
@@ -1834,19 +1718,18 @@ impl VtLogBuffer {
             }
         }
 
-        self.prev_rows = curr_rows;
         self.was_alternate = is_alternate;
         changed
     }
 
-    /// Update parser dimensions on terminal resize.
+    /// Update grid dimensions on terminal resize.
     ///
     /// Rows are always resized (row count affects scrollback extraction).
     /// Cols are only resized upward: when a side panel shrinks the terminal,
     /// Ink re-renders at narrow width and pushes reformatted fragments into
-    /// scrollback. By keeping the parser at max-cols, the narrow Ink output
+    /// scrollback. By keeping the grid at max-cols, the narrow Ink output
     /// arrives as short lines (not wrapped fragments) and CUU cursor
-    /// addressing still works because the lines are shorter than parser cols.
+    /// addressing still works because the lines are shorter than grid cols.
     pub fn resize(&mut self, rows: u16, cols: u16) {
         let prev = self.pty_cols;
         self.pty_cols = cols;
@@ -1861,56 +1744,9 @@ impl VtLogBuffer {
             self.suppress_capture = false;
         }
         let effective_cols = cols.max(self.max_cols);
-        self.parser.screen_mut().set_size(rows, effective_cols);
-        self.prev_rows.clear();
-        // Re-sync scrollback count after resize (vt100 may adjust scrollback).
-        self.scrollback_read = self.scrollback_count();
-    }
-
-    /// Returns the number of scrollback lines currently stored in the vt100
-    /// parser. Uses set_scrollback(MAX) → scrollback() → set_scrollback(0)
-    /// to query without side effects.
-    fn scrollback_count(&mut self) -> usize {
-        self.parser.screen_mut().set_scrollback(usize::MAX);
-        let count = self.parser.screen().scrollback();
-        self.parser.screen_mut().set_scrollback(0);
-        count
-    }
-
-    /// Reads the `count` most recent scrollback lines as styled `LogLine`s.
-    /// Pages through the vt100 scrollback if `count` exceeds screen height.
-    /// Soft-wrapped rows (continuations from terminal resize) are merged into
-    /// their parent line so the log doesn't contain narrow-wrapped fragments.
-    fn read_scrollback_lines(&mut self, count: usize, screen_height: usize) -> Vec<LogLine> {
-        let mut result: Vec<LogLine> = Vec::with_capacity(count);
-        let total_sb = self.scrollback_count();
-        let mut remaining = count;
-        let mut read_start = total_sb.saturating_sub(count);
-
-        while remaining > 0 {
-            let page = remaining.min(screen_height);
-            let offset = total_sb - read_start;
-            self.parser.screen_mut().set_scrollback(offset);
-            {
-                let screen = self.parser.screen();
-                for row_idx in 0..page {
-                    let line = extract_log_line(screen, row_idx as u16);
-                    if screen.row_wrapped(row_idx as u16) {
-                        if let Some(prev) = result.last_mut() {
-                            prev.spans.extend(line.spans);
-                        } else {
-                            result.push(line);
-                        }
-                    } else {
-                        result.push(line);
-                    }
-                }
-            }
-            read_start += page;
-            remaining -= page;
-        }
-        self.parser.screen_mut().set_scrollback(0);
-        result
+        self.grid.resize(rows, effective_cols);
+        // Re-sync scrollback count after resize (grid may adjust scrollback).
+        self.scrollback_read = self.grid.scrollback_count();
     }
 
     /// All finalized log lines (oldest first).
@@ -1941,31 +1777,18 @@ impl VtLogBuffer {
 
     /// Current visible screen rows.
     ///
-    /// Returns the cached `prev_rows` snapshot (from the last `process()` call)
-    /// when available — no re-parsing needed.  Falls back to reading from the
-    /// parser when `prev_rows` is empty (before any `process()` or after `resize()`).
+    /// Returns the cached snapshot from the grid (from the last `process()` call)
+    /// when available — no re-parsing needed.
     pub fn screen_rows(&self) -> Vec<String> {
-        if !self.prev_rows.is_empty() {
-            return self.prev_rows.clone();
-        }
-        let screen = self.parser.screen();
-        let cols = screen.size().1;
-        screen
-            .rows(0, cols)
-            .map(|r| r.trim_end().to_string())
-            .collect()
+        self.grid.screen_text_rows()
     }
 
     /// Current visible screen rows as styled LogLines (with ANSI color attributes).
     /// Used by mobile/REST to render screen content with colors.
     pub fn screen_log_lines(&self) -> Vec<LogLine> {
-        let screen = self.parser.screen();
-        let rows = screen.size().0;
-        let mut lines = Vec::with_capacity(rows as usize);
-        for row in 0..rows {
-            let mut line = extract_log_line(screen, row);
+        let mut lines = self.grid.screen_log_lines();
+        for line in &mut lines {
             line.strip_structural_tokens();
-            lines.push(line);
         }
         // Trim trailing empty lines
         while let Some(last) = lines.last() {
@@ -1982,50 +1805,7 @@ impl VtLogBuffer {
     /// Uses the cursor position as the boundary — everything after the cursor is suggestion.
     /// Falls back to dim-detection when the cursor is not on a prompt row.
     pub fn prompt_input_text(&self) -> Option<String> {
-        let screen = self.parser.screen();
-        let (rows, cols) = screen.size();
-        let (cursor_row, cursor_col) = screen.cursor_position();
-        // Scan from bottom to find prompt row
-        for row in (0..rows).rev() {
-            let row_text: String = (0..cols)
-                .filter_map(|c| screen.cell(row, c).map(|cell| cell.contents()))
-                .collect::<Vec<_>>()
-                .join("");
-            let trimmed = row_text.trim_start();
-            if !(trimmed.starts_with('❯') || trimmed == ">" || trimmed.starts_with("> ")) {
-                continue;
-            }
-            // Found prompt row — collect text after prompt char up to cursor or dim boundary
-            let col_limit = if row == cursor_row { cursor_col } else { cols };
-            let mut result = String::new();
-            let mut past_prompt = false;
-            for col in 0..col_limit {
-                let Some(cell) = screen.cell(row, col) else { break };
-                if cell.is_wide_continuation() {
-                    continue;
-                }
-                let ch = cell.contents();
-                if !past_prompt {
-                    if ch == "❯" || ch == "›" || ch == ">" {
-                        past_prompt = true;
-                        continue;
-                    }
-                    if ch.trim().is_empty() {
-                        continue;
-                    }
-                    past_prompt = true;
-                }
-                if past_prompt && ch.trim().is_empty() && result.is_empty() {
-                    continue;
-                }
-                if cell.dim() {
-                    break;
-                }
-                result.push_str(ch);
-            }
-            return Some(result.trim_end().to_string());
-        }
-        None
+        self.grid.prompt_input_text()
     }
 
     /// Total log lines ever pushed (monotonically increasing).
@@ -3898,16 +3678,18 @@ mod tests {
 
     // --- LogLine / extract_log_line tests ---
 
+    /// Helper: create a TerminalGrid, feed data, and extract LogLine for row 0.
+    fn extract_line_from(data: &[u8]) -> LogLine {
+        use alacritty_terminal::index::Line;
+        let mut grid = crate::terminal_grid::TerminalGrid::new(4, 80, 0);
+        grid.process(data);
+        grid.extract_log_line(Line(0))
+    }
+
     /// Plain text produces a single span with no color attributes.
     #[test]
     fn test_extract_log_line_plain_text_single_span() {
-        let parser = vt100::Parser::new(4, 80, 0);
-        // Feed plain text to row 0 (no escape sequences)
-        // Actually we need to use a mutable parser, but extract_log_line takes a Screen ref.
-        // Use a local parser.
-        let mut p = vt100::Parser::new(4, 80, 0);
-        p.process(b"Hello world");
-        let line = extract_log_line(p.screen(), 0);
+        let line = extract_line_from(b"Hello world");
         assert_eq!(line.spans.len(), 1, "plain text = single span");
         assert_eq!(line.spans[0].text, "Hello world");
         assert_eq!(line.spans[0].fg, None);
@@ -3915,16 +3697,13 @@ mod tests {
         assert!(!line.spans[0].bold);
         assert!(!line.spans[0].italic);
         assert!(!line.spans[0].underline);
-        drop(parser); // suppress unused warning
     }
 
     /// Colored text (ANSI escape for red) produces a span with fg color.
     #[test]
     fn test_extract_log_line_colored_text() {
-        let mut p = vt100::Parser::new(4, 80, 0);
         // ESC[31m = red foreground, ESC[0m = reset
-        p.process(b"\x1b[31mERROR\x1b[0m ok");
-        let line = extract_log_line(p.screen(), 0);
+        let line = extract_line_from(b"\x1b[31mERROR\x1b[0m ok");
         assert!(line.spans.len() >= 2, "should have at least 2 spans: {:?}", line.spans);
         // First span: "ERROR" with red fg
         assert_eq!(line.spans[0].text, "ERROR");
@@ -3937,10 +3716,8 @@ mod tests {
     /// Multi-span line with bold + color changes.
     #[test]
     fn test_extract_log_line_multi_span_bold_color() {
-        let mut p = vt100::Parser::new(4, 80, 0);
         // Bold green then normal
-        p.process(b"\x1b[1;32m+added\x1b[0m context");
-        let line = extract_log_line(p.screen(), 0);
+        let line = extract_line_from(b"\x1b[1;32m+added\x1b[0m context");
         assert!(line.spans.len() >= 2, "multi-span: {:?}", line.spans);
         assert_eq!(line.spans[0].text, "+added");
         assert!(line.spans[0].bold);
@@ -3955,9 +3732,7 @@ mod tests {
     /// Trailing whitespace spans are trimmed.
     #[test]
     fn test_extract_log_line_trims_trailing_whitespace() {
-        let mut p = vt100::Parser::new(4, 80, 0);
-        p.process(b"text");
-        let line = extract_log_line(p.screen(), 0);
+        let line = extract_line_from(b"text");
         // Should not have trailing spaces filling to column 80
         let total_len: usize = line.spans.iter().map(|s| s.text.len()).sum();
         assert_eq!(total_len, 4, "no trailing whitespace: {:?}", line.spans);
@@ -3966,8 +3741,7 @@ mod tests {
     /// Empty row produces an empty spans vec.
     #[test]
     fn test_extract_log_line_empty_row() {
-        let p = vt100::Parser::new(4, 80, 0);
-        let line = extract_log_line(p.screen(), 0);
+        let line = extract_line_from(b"");
         assert!(line.spans.is_empty(), "empty row = empty spans: {:?}", line.spans);
     }
 
