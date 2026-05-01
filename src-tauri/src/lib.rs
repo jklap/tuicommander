@@ -53,6 +53,7 @@ mod shell_integration;
 pub(crate) mod sleep_prevention;
 pub(crate) mod push;
 pub(crate) mod state;
+pub(crate) mod terminal_grid;
 pub(crate) mod tailscale;
 pub(crate) mod tool_search;
 pub(crate) mod text_rank;
@@ -809,9 +810,9 @@ pub fn run() {
         tracing::error!(source = "app", "Failed to persist config: {e}");
     }
 
-    let (github_token, github_token_source) = crate::github_auth::resolve_token_with_source();
+    let (github_token, github_token_source) = crate::github_auth::resolve_token_without_keychain();
     if github_token.is_none() {
-        tracing::warn!(source = "github", "No GitHub token found (checked GH_TOKEN, GITHUB_TOKEN, OAuth keyring, gh CLI config)");
+        tracing::info!(source = "github", "No GitHub token from env/CLI — keychain deferred until first use");
     }
 
     let mcp_upstream_registry_arc = Arc::new(mcp_proxy::registry::UpstreamRegistry::new());
