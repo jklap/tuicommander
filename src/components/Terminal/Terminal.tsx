@@ -1891,7 +1891,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
           style={{ width: "100%", height: "100%", opacity: fitted() ? 1 : 0 }}
         />
       }>
-        <CanvasTerminal sessionId={sessionId!} />
+        <CanvasTerminal sessionId={sessionId!} onOpenFilePath={props.onOpenFilePath} />
       </Show>
       <Show when={!composeOpen()}>
         <div

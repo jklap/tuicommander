@@ -147,7 +147,7 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
         out.push_str("- `intent: <desc> (<title>)` on work-phase change. `<title>` ≤3 words, spaces not hyphens.\n");
     }
     if show_suggest {
-        out.push_str("- `suggest:` — after task done: `suggest: 1) … | 2) … | 3) …`\n");
+        out.push_str("- `suggest:` — after task done: `suggest: A | B | C` — EXACTLY 3 items separated by `|`, each item ≤40 chars, entire line must fit one terminal row. Never emit 4+ items or multi-line suggestions.\n");
     }
     out.push('\n');
 
@@ -2813,6 +2813,7 @@ mod tests {
             app_handle: parking_lot::RwLock::new(None),
             plugin_watchers: dashmap::DashMap::new(),
             vt_log_buffers: dashmap::DashMap::new(),
+            grid_channels: dashmap::DashMap::new(),
             kitty_states: dashmap::DashMap::new(),
             input_buffers: dashmap::DashMap::new(),
             last_prompts: dashmap::DashMap::new(),

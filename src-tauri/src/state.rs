@@ -1830,6 +1830,54 @@ impl VtLogBuffer {
         self.grid.serialize_dirty_rows()
     }
 
+    // --- Selection delegates ---
+
+    pub(crate) fn grid_selection_start(&mut self, col: usize, row: usize, ty: alacritty_terminal::selection::SelectionType) {
+        self.grid.selection_start(col, row, ty);
+    }
+
+    pub(crate) fn grid_selection_update(&mut self, col: usize, row: usize) {
+        self.grid.selection_update(col, row);
+    }
+
+    pub(crate) fn grid_selection_text(&self) -> Option<String> {
+        self.grid.selection_text()
+    }
+
+    pub(crate) fn grid_selection_clear(&mut self) {
+        self.grid.selection_clear();
+    }
+
+    pub(crate) fn grid_has_selection(&self) -> bool {
+        self.grid.has_selection()
+    }
+
+    // --- Scroll delegates ---
+
+    pub(crate) fn grid_scroll(&mut self, delta: i32) {
+        self.grid.scroll(delta);
+    }
+
+    pub(crate) fn grid_display_offset(&self) -> usize {
+        self.grid.display_offset()
+    }
+
+    pub(crate) fn grid_total_lines(&self) -> usize {
+        self.grid.total_lines()
+    }
+
+    // --- Search delegate ---
+
+    pub(crate) fn grid_search(&self, query: &str) -> Vec<crate::terminal_grid::SearchMatch> {
+        self.grid.search(query)
+    }
+
+    // --- Row text delegate ---
+
+    pub(crate) fn grid_get_row_text(&self, row: usize) -> String {
+        self.grid.get_row_text(row)
+    }
+
     // --- private helpers ---
 
     fn push_log_line(&mut self, line: LogLine) {

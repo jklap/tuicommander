@@ -1,7 +1,7 @@
 // --- Binary frame decoding and font measurement for CanvasTerminal ---
 
 // Wire format constants (must match terminal_grid.rs)
-const HEADER_SIZE = 7;
+const HEADER_SIZE = 16;
 const CELL_SIZE = 11; // 4 (char u32) + 3 (fg) + 3 (bg) + 1 (attrs)
 const ATTR_BOLD = 0x01;
 const ATTR_ITALIC = 0x02;
@@ -39,6 +39,9 @@ export interface DecodedFrame {
   cursorRow: number;
   cursorCol: number;
   cursorVisible: boolean;
+  displayOffset: number;
+  historySize: number;
+  hasSelection: boolean;
   rows: DecodedRow[];
 }
 
@@ -63,6 +66,9 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
   const cursorRow = view.getUint16(offset, true); offset += 2;
   const cursorCol = view.getUint16(offset, true); offset += 2;
   const cursorVisible = view.getUint8(offset) !== 0; offset += 1;
+  const displayOffset = view.getUint32(offset, true); offset += 4;
+  const historySize = view.getUint32(offset, true); offset += 4;
+  const hasSelection = view.getUint8(offset) !== 0; offset += 1;
 
   const rows: DecodedRow[] = [];
   for (let r = 0; r < numRows; r++) {
@@ -100,7 +106,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
     rows.push({ index: rowIndex, cells });
   }
 
-  return { cursorRow, cursorCol, cursorVisible, rows };
+  return { cursorRow, cursorCol, cursorVisible, displayOffset, historySize, hasSelection, rows };
 }
 
 export type CursorShape = "block" | "beam" | "underline";

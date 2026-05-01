@@ -1,12 +1,22 @@
 use alacritty_terminal::event::VoidListener;
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::test::TermSize;
+use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{self, Color, NamedColor, Rgb};
 
 use crate::state::{ChangedRow, LogColor, LogLine, LogSpan};
+
+/// A search match in the terminal grid.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SearchMatch {
+    pub row: usize,
+    pub col_start: usize,
+    pub col_end: usize,
+}
 
 // Attrs byte bit positions for binary cell encoding.
 const ATTR_BOLD: u8       = 0b0000_0001;
@@ -423,12 +433,123 @@ impl TerminalGrid {
         None
     }
 
+    // --- Selection API (delegates to alacritty's native Selection) ---
+
+    /// Start a new selection at the given screen coordinate.
+    pub fn selection_start(&mut self, col: usize, row: usize, ty: SelectionType) {
+        let point = Point::new(Line(row as i32), Column(col));
+        let selection = Selection::new(ty, point, Side::Left);
+        self.term.selection = Some(selection);
+    }
+
+    /// Update the active selection endpoint.
+    pub fn selection_update(&mut self, col: usize, row: usize) {
+        if let Some(ref mut sel) = self.term.selection {
+            let point = Point::new(Line(row as i32), Column(col));
+            sel.update(point, Side::Right);
+        }
+    }
+
+    /// Extract selected text, if any.
+    pub fn selection_text(&self) -> Option<String> {
+        self.term.selection_to_string()
+    }
+
+    /// Clear the current selection.
+    pub fn selection_clear(&mut self) {
+        self.term.selection = None;
+    }
+
+    /// Whether a selection is active.
+    pub fn has_selection(&self) -> bool {
+        self.term.selection.is_some()
+    }
+
+    // --- Scroll API ---
+
+    /// Scroll the viewport by `delta` lines (positive = up / into history).
+    pub fn scroll(&mut self, delta: i32) {
+        self.term.scroll_display(Scroll::Delta(delta));
+    }
+
+    /// Current display offset (0 = at bottom, >0 = scrolled up).
+    pub fn display_offset(&self) -> usize {
+        self.term.grid().display_offset()
+    }
+
+    /// Total number of lines (screen + scrollback history).
+    pub fn total_lines(&self) -> usize {
+        self.term.grid().history_size() + self.term.grid().screen_lines()
+    }
+
+    // --- Search API ---
+
+    /// Simple substring search across visible grid + scrollback.
+    /// Returns matches as (row, col_start, col_end) in absolute coordinates.
+    pub fn search(&self, query: &str) -> Vec<SearchMatch> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let query_lower = query.to_lowercase();
+        let mut matches = Vec::new();
+        let grid = self.term.grid();
+        let history = grid.history_size();
+        let screen = grid.screen_lines();
+        let cols = grid.columns();
+
+        // Search scrollback (oldest first) then screen
+        let total = history + screen;
+        for abs_row in 0..total {
+            let line = if abs_row < history {
+                Line(-((history - abs_row) as i32))
+            } else {
+                Line((abs_row - history) as i32)
+            };
+
+            let mut row_text = String::with_capacity(cols);
+            for col in 0..cols {
+                let cell = &grid[line][Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                if cell.c == '\0' {
+                    row_text.push(' ');
+                } else {
+                    row_text.push(cell.c);
+                }
+            }
+
+            let row_lower = row_text.to_lowercase();
+            let mut start = 0;
+            while let Some(pos) = row_lower[start..].find(&query_lower) {
+                let col_start = start + pos;
+                let col_end = col_start + query.len();
+                matches.push(SearchMatch {
+                    row: abs_row,
+                    col_start,
+                    col_end,
+                });
+                start = col_start + 1;
+            }
+        }
+        matches
+    }
+
+    /// Get text of a single screen row (0-based, relative to viewport).
+    pub fn get_row_text(&self, row: usize) -> String {
+        let display_offset = self.term.grid().display_offset();
+        let line = Line(row as i32) - display_offset;
+        self.row_to_text(line, self.term.grid().screen_lines())
+            .unwrap_or_default()
+    }
+
     /// Serialize dirty rows as a compact binary frame.
     ///
     /// Uses alacritty's built-in damage tracking to identify changed rows.
     /// Wire format:
     /// ```text
     /// Header: [num_rows: u16] [cursor_row: u16] [cursor_col: u16] [cursor_visible: u8]
+    ///         [display_offset: u32] [history_size: u32] [has_selection: u8]
     /// Per row: [row_index: u16] [col_count: u16] [cells...]
     /// Per cell: [char: u32 LE] [fg_r, fg_g, fg_b] [bg_r, bg_g, bg_b] [attrs: u8]
     /// ```
@@ -439,6 +560,9 @@ impl TerminalGrid {
         let num_lines = self.term.grid().screen_lines();
         let cursor = self.term.grid().cursor.point;
         let cursor_visible = self.term.mode().contains(TermMode::SHOW_CURSOR);
+        let display_offset = self.term.grid().display_offset();
+        let history_size = self.term.grid().history_size();
+        let has_selection = self.term.selection.is_some();
 
         let damage = self.term.damage();
         let dirty_lines: Vec<usize> = match damage {
@@ -451,15 +575,18 @@ impl TerminalGrid {
             return Vec::new();
         }
 
-        // Header: 7 bytes
+        // Header: 16 bytes
         let row_count = dirty_lines.len();
-        let estimated = 7 + row_count * (4 + num_cols * 11);
+        let estimated = 16 + row_count * (4 + num_cols * 11);
         let mut buf = Vec::with_capacity(estimated);
 
         buf.extend_from_slice(&(row_count as u16).to_le_bytes());
         buf.extend_from_slice(&(cursor.line.0 as u16).to_le_bytes());
         buf.extend_from_slice(&(cursor.column.0 as u16).to_le_bytes());
         buf.push(cursor_visible as u8);
+        buf.extend_from_slice(&(display_offset as u32).to_le_bytes());
+        buf.extend_from_slice(&(history_size as u32).to_le_bytes());
+        buf.push(has_selection as u8);
 
         let grid = self.term.grid();
         for &row_idx in &dirty_lines {
@@ -685,6 +812,8 @@ mod tests {
 
     // --- Binary serialization tests ---
 
+    const TEST_HEADER_SIZE: usize = 16;
+
     /// Helper: decode the header from a serialized frame.
     fn decode_header(buf: &[u8]) -> (u16, u16, u16, bool) {
         let num_rows = u16::from_le_bytes([buf[0], buf[1]]);
@@ -716,20 +845,22 @@ mod tests {
         assert_eq!(cursor_col, 2);
         assert!(cursor_visible);
 
-        // First dirty row header starts at offset 7
-        let row_idx = u16::from_le_bytes([buf[7], buf[8]]);
-        let col_count = u16::from_le_bytes([buf[9], buf[10]]);
+        // First dirty row header starts after header
+        let h = TEST_HEADER_SIZE;
+        let row_idx = u16::from_le_bytes([buf[h], buf[h+1]]);
+        let col_count = u16::from_le_bytes([buf[h+2], buf[h+3]]);
         assert_eq!(row_idx, 0);
         assert_eq!(col_count, 10);
 
         // First cell = 'H'
-        let (ch, _, _, _, _, _, _, attrs) = decode_cell(&buf, 11);
+        let cell0 = h + 4;
+        let (ch, _, _, _, _, _, _, attrs) = decode_cell(&buf, cell0);
         assert_eq!(ch, 'H');
         assert_ne!(attrs & super::ATTR_DEFAULT_FG, 0, "default fg flag set");
         assert_ne!(attrs & super::ATTR_DEFAULT_BG, 0, "default bg flag set");
 
         // Second cell = 'i'
-        let (ch, _, _, _, _, _, _, _) = decode_cell(&buf, 11 + 11);
+        let (ch, _, _, _, _, _, _, _) = decode_cell(&buf, cell0 + 11);
         assert_eq!(ch, 'i');
     }
 
@@ -741,7 +872,8 @@ mod tests {
         let buf = grid.serialize_dirty_rows();
 
         // Find row 0, cell 0 — should have red fg
-        let (ch, fg_r, fg_g, fg_b, _, _, _, attrs) = decode_cell(&buf, 11);
+        let cell0 = TEST_HEADER_SIZE + 4;
+        let (ch, fg_r, fg_g, fg_b, _, _, _, attrs) = decode_cell(&buf, cell0);
         assert_eq!(ch, 'X');
         assert_eq!(fg_r, 205); // xterm red
         assert_eq!(fg_g, 0);
@@ -757,7 +889,8 @@ mod tests {
         grid.process(b"\x1b[1;3mB\x1b[0m");
         let buf = grid.serialize_dirty_rows();
 
-        let (ch, _, _, _, _, _, _, attrs) = decode_cell(&buf, 11);
+        let cell0 = TEST_HEADER_SIZE + 4;
+        let (ch, _, _, _, _, _, _, attrs) = decode_cell(&buf, cell0);
         assert_eq!(ch, 'B');
         assert_ne!(attrs & super::ATTR_BOLD, 0, "bold flag");
         assert_ne!(attrs & super::ATTR_ITALIC, 0, "italic flag");
@@ -791,10 +924,12 @@ mod tests {
         let buf = grid.serialize_dirty_rows();
 
         // Cell 0 = '日'
-        let (ch0, _, _, _, _, _, _, _) = decode_cell(&buf, 11);
+        let cell0 = TEST_HEADER_SIZE + 4;
+        let (ch0, _, _, _, _, _, _, _) = decode_cell(&buf, cell0);
         assert_eq!(ch0, '日');
         // Cell 1 = wide char spacer → encoded as 0
-        let ch1_raw = u32::from_le_bytes([buf[22], buf[23], buf[24], buf[25]]);
+        let cell1 = cell0 + 11;
+        let ch1_raw = u32::from_le_bytes([buf[cell1], buf[cell1+1], buf[cell1+2], buf[cell1+3]]);
         assert_eq!(ch1_raw, 0, "wide char spacer encoded as 0");
     }
 
@@ -812,8 +947,8 @@ mod tests {
             "frame must be under 256KB, got {} bytes",
             buf.len()
         );
-        // Expected: 7 header + 50 rows × (4 row header + 220 cells × 11 bytes)
-        // = 7 + 50 × (4 + 2420) = 7 + 121_200 = 121_207 bytes
+        // Expected: 16 header + 50 rows × (4 row header + 220 cells × 11 bytes)
+        // = 16 + 50 × (4 + 2420) = 16 + 121_200 = 121_216 bytes
     }
 
     #[test]
@@ -834,11 +969,87 @@ mod tests {
         grid.process(b"\x1b[38;2;100;150;200mR\x1b[0m");
         let buf = grid.serialize_dirty_rows();
 
-        let (ch, fg_r, fg_g, fg_b, _, _, _, attrs) = decode_cell(&buf, 11);
+        let cell0 = TEST_HEADER_SIZE + 4;
+        let (ch, fg_r, fg_g, fg_b, _, _, _, attrs) = decode_cell(&buf, cell0);
         assert_eq!(ch, 'R');
         assert_eq!(fg_r, 100);
         assert_eq!(fg_g, 150);
         assert_eq!(fg_b, 200);
         assert_eq!(attrs & super::ATTR_DEFAULT_FG, 0, "fg is NOT default");
+    }
+
+    // --- Selection tests ---
+
+    #[test]
+    fn selection_start_and_text() {
+        let mut grid = TerminalGrid::new(5, 20, 0);
+        grid.process(b"hello world");
+        grid.selection_start(0, 0, SelectionType::Simple);
+        grid.selection_update(4, 0);
+        let text = grid.selection_text();
+        assert!(text.is_some());
+        assert_eq!(text.unwrap().trim(), "hello");
+    }
+
+    #[test]
+    fn selection_clear() {
+        let mut grid = TerminalGrid::new(5, 20, 0);
+        grid.process(b"hello");
+        grid.selection_start(0, 0, SelectionType::Simple);
+        grid.selection_update(4, 0);
+        assert!(grid.has_selection());
+        grid.selection_clear();
+        assert!(!grid.has_selection());
+        assert!(grid.selection_text().is_none());
+    }
+
+    // --- Search tests ---
+
+    #[test]
+    fn search_finds_matches() {
+        let mut grid = TerminalGrid::new(5, 40, 0);
+        grid.process(b"hello world\r\nfoo hello bar");
+        let matches = grid.search("hello");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].col_start, 0);
+        assert_eq!(matches[1].col_start, 4);
+    }
+
+    #[test]
+    fn search_case_insensitive() {
+        let mut grid = TerminalGrid::new(5, 40, 0);
+        grid.process(b"Hello HELLO hElLo");
+        let matches = grid.search("hello");
+        assert_eq!(matches.len(), 3);
+    }
+
+    #[test]
+    fn search_empty_query() {
+        let grid = TerminalGrid::new(5, 40, 0);
+        let matches = grid.search("");
+        assert!(matches.is_empty());
+    }
+
+    // --- Scroll tests ---
+
+    #[test]
+    fn scroll_and_display_offset() {
+        let mut grid = TerminalGrid::new(3, 20, 100);
+        grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        assert_eq!(grid.display_offset(), 0);
+        grid.scroll(2);
+        assert_eq!(grid.display_offset(), 2);
+    }
+
+    // --- Row text tests ---
+
+    #[test]
+    fn get_row_text_returns_visible() {
+        let mut grid = TerminalGrid::new(5, 20, 0);
+        grid.process(b"first\r\nsecond");
+        let text = grid.get_row_text(0);
+        assert_eq!(text, "first");
+        let text = grid.get_row_text(1);
+        assert_eq!(text, "second");
     }
 }

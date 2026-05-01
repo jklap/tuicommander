@@ -3907,6 +3907,109 @@ pub(crate) fn unsubscribe_terminal_grid(
     state.grid_channels.remove(&session_id);
 }
 
+// --- Selection commands ---
+
+#[tauri::command]
+pub(crate) fn terminal_select_start(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    col: usize,
+    row: usize,
+    word: Option<bool>,
+) {
+    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+        let ty = if word.unwrap_or(false) {
+            alacritty_terminal::selection::SelectionType::Semantic
+        } else {
+            alacritty_terminal::selection::SelectionType::Simple
+        };
+        vt.lock().grid_selection_start(col, row, ty);
+    }
+}
+
+#[tauri::command]
+pub(crate) fn terminal_select_update(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    col: usize,
+    row: usize,
+) {
+    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+        vt.lock().grid_selection_update(col, row);
+    }
+}
+
+#[tauri::command]
+pub(crate) fn terminal_select_text(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Option<String> {
+    state.vt_log_buffers.get(&session_id)
+        .and_then(|vt| vt.lock().grid_selection_text())
+}
+
+#[tauri::command]
+pub(crate) fn terminal_select_clear(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) {
+    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+        vt.lock().grid_selection_clear();
+    }
+}
+
+// --- Scroll commands ---
+
+#[tauri::command]
+pub(crate) fn terminal_scroll(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    delta: i32,
+) {
+    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+        vt.lock().grid_scroll(delta);
+    }
+}
+
+#[tauri::command]
+pub(crate) fn terminal_scroll_info(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> (usize, usize) {
+    state.vt_log_buffers.get(&session_id)
+        .map(|vt| {
+            let vt = vt.lock();
+            (vt.grid_display_offset(), vt.grid_total_lines())
+        })
+        .unwrap_or((0, 0))
+}
+
+// --- Search command ---
+
+#[tauri::command]
+pub(crate) fn terminal_search(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    query: String,
+) -> Vec<crate::terminal_grid::SearchMatch> {
+    state.vt_log_buffers.get(&session_id)
+        .map(|vt| vt.lock().grid_search(&query))
+        .unwrap_or_default()
+}
+
+// --- Row text command ---
+
+#[tauri::command]
+pub(crate) fn terminal_get_row_text(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    row: usize,
+) -> String {
+    state.vt_log_buffers.get(&session_id)
+        .map(|vt| vt.lock().grid_get_row_text(row))
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
