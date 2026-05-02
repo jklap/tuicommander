@@ -15,8 +15,9 @@ export const CODING_EXT = "rs|ts|tsx|js|jsx|mjs|cjs|py|go|java|kt|kts|swift|c|h|
 export function filePathRegex(): RegExp {
   return new RegExp(
     `(?:^|[\\s"'\`(\\[{])` +
-    `((?:~/|/|\\.\\.?/|[\\w@.-]+/)` +
+    `((?:(?:~/|/|\\.\\.?/|[\\w@.-]+/)` +
     `[\\w./@-]*` +
+    `|[\\w@.-]+)` +
     `\\.(?:${CODING_EXT})` +
     `(?::\\d+(?::\\d+)?)?)` +
     `(?=[\\s"'\`),;.!?:\\]}>]|$)`,

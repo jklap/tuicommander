@@ -78,6 +78,36 @@ describe("keyToSequence", () => {
     expect(keyToSequence(evt("z", { ctrlKey: true }))).toBe("\x1a");
   });
 
+  // --- Ctrl+punctuation ---
+  it("maps Ctrl+[ to ESC (0x1b)", () => {
+    expect(keyToSequence(evt("[", { ctrlKey: true }))).toBe("\x1b");
+  });
+
+  it("maps Ctrl+\\ to FS (0x1c)", () => {
+    expect(keyToSequence(evt("\\", { ctrlKey: true }))).toBe("\x1c");
+  });
+
+  it("maps Ctrl+] to GS (0x1d)", () => {
+    expect(keyToSequence(evt("]", { ctrlKey: true }))).toBe("\x1d");
+  });
+
+  it("maps Ctrl+^ to RS (0x1e)", () => {
+    expect(keyToSequence(evt("^", { ctrlKey: true }))).toBe("\x1e");
+  });
+
+  it("maps Ctrl+_ to US (0x1f)", () => {
+    expect(keyToSequence(evt("_", { ctrlKey: true }))).toBe("\x1f");
+  });
+
+  it("maps Ctrl+@ to NUL (0x00)", () => {
+    expect(keyToSequence(evt("@", { ctrlKey: true }))).toBe("\x00");
+  });
+
+  // --- Shift+Tab ---
+  it("maps Shift+Tab to reverse tab (CSI Z)", () => {
+    expect(keyToSequence(evt("Tab", { shiftKey: true }))).toBe("\x1b[Z");
+  });
+
   // --- Alt+letter ---
   it("maps Alt+letter to ESC + char", () => {
     expect(keyToSequence(evt("d", { altKey: true }))).toBe("\x1bd");

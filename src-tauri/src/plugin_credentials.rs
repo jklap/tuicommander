@@ -4,10 +4,26 @@
 //! from the system credential store. On macOS this reads from Keychain;
 //! on Linux/Windows it reads from a JSON file in the user's home directory.
 //!
+//! Results are cached in-memory per service name (5 min TTL) to avoid
+//! repeated OS keychain prompts within the same process.
+//!
 //! Returns the raw credential JSON string, or null if not found.
 
 #[cfg(not(target_os = "macos"))]
 use std::path::PathBuf;
+
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
+const CACHE_TTL: Duration = Duration::from_secs(300);
+
+struct CachedEntry {
+    value: Option<String>,
+    fetched_at: Instant,
+}
+
+static CACHE: Mutex<Option<HashMap<String, CachedEntry>>> = Mutex::new(None);
 
 /// Validate service name format: alphanumeric, dots, hyphens, underscores, spaces.
 /// Prevents shell injection when service_name is passed to macOS `security` CLI.
@@ -36,12 +52,36 @@ fn plugin_read_credential_inner(service_name: &str) -> Result<Option<String>, St
     if service_name.is_empty() {
         return Err("Service name is empty".into());
     }
-    // Validate format to prevent shell injection via macOS `security` CLI
-    // and credential enumeration. Allow alphanumeric, dots, hyphens, underscores, spaces.
     if !is_valid_service_name(service_name) {
         return Err("Service name contains invalid characters (allow: a-z A-Z 0-9 . - _ space)".into());
     }
 
+    cached_read(service_name)
+}
+
+pub(crate) fn cached_read(service_name: &str) -> Result<Option<String>, String> {
+    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+
+    if let Some(entry) = map.get(service_name)
+        && entry.fetched_at.elapsed() < CACHE_TTL
+    {
+        return Ok(entry.value.clone());
+    }
+    drop(guard);
+
+    let value = read_credential_uncached(service_name)?;
+
+    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    let map = guard.get_or_insert_with(HashMap::new);
+    map.insert(
+        service_name.to_string(),
+        CachedEntry { value: value.clone(), fetched_at: Instant::now() },
+    );
+    Ok(value)
+}
+
+fn read_credential_uncached(service_name: &str) -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
         read_from_keychain(service_name)
@@ -80,14 +120,16 @@ pub(crate) fn read_from_keychain(service_name: &str) -> Result<Option<String>, S
 
 /// Linux/Windows: read from `~/.claude/.credentials.json`.
 #[cfg(not(target_os = "macos"))]
-pub(crate) fn read_from_json_file(_service_name: &str) -> Result<Option<String>, String> {
+pub(crate) fn read_from_json_file(service_name: &str) -> Result<Option<String>, String> {
     let path = credentials_json_path()?;
     match std::fs::read_to_string(&path) {
         Ok(content) => {
-            // Validate the JSON is parseable before returning
-            let _parsed: serde_json::Value = serde_json::from_str(&content)
+            let parsed: serde_json::Value = serde_json::from_str(&content)
                 .map_err(|e| format!("Failed to parse credentials file: {e}"))?;
-            Ok(Some(content))
+            match parsed.get(service_name) {
+                Some(val) => Ok(Some(val.to_string())),
+                None => Ok(None),
+            }
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(format!("Failed to read credentials file: {e}")),

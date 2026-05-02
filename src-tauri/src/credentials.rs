@@ -101,6 +101,9 @@ fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
         return Ok(());
     }
 
+    #[cfg(all(debug_assertions, not(test)))]
+    dev_store::init();
+
     #[cfg(test)]
     ensure_mock_keyring();
 
@@ -185,6 +188,116 @@ pub(crate) fn delete(cred: Credential<'_>) -> Result<(), String> {
     let vault = guard.as_mut().unwrap();
     vault.remove(&key);
     persist(vault)
+}
+
+// ---------------------------------------------------------------------------
+// Debug file-backed keyring (avoids OS keychain prompts during development)
+// ---------------------------------------------------------------------------
+
+#[cfg(all(debug_assertions, not(test)))]
+mod dev_store {
+    use keyring::{
+        credential::{CredentialApi, CredentialBuilder, CredentialBuilderApi, CredentialPersistence},
+        Error,
+    };
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, Once, OnceLock};
+
+    type Store = Mutex<HashMap<String, String>>;
+
+    fn file_path() -> PathBuf {
+        let home = dirs::home_dir().expect("Cannot determine home directory");
+        let dir = home.join(".tuicommander-dev");
+        std::fs::create_dir_all(&dir).ok();
+        dir.join("credentials.json")
+    }
+
+    fn store() -> &'static Store {
+        static STORE: OnceLock<Store> = OnceLock::new();
+        STORE.get_or_init(|| {
+            let map = std::fs::read_to_string(file_path())
+                .ok()
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
+            Mutex::new(map)
+        })
+    }
+
+    fn sync(guard: &HashMap<String, String>) {
+        if let Ok(json) = serde_json::to_string_pretty(guard) {
+            std::fs::write(file_path(), json).ok();
+        }
+    }
+
+    #[derive(Debug)]
+    struct FileCredential {
+        key: String,
+    }
+
+    impl CredentialApi for FileCredential {
+        fn set_password(&self, password: &str) -> keyring::Result<()> {
+            let mut guard = store().lock().unwrap();
+            guard.insert(self.key.clone(), password.to_string());
+            sync(&guard);
+            Ok(())
+        }
+        fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
+            let s = std::str::from_utf8(secret)
+                .map_err(|e| Error::BadEncoding(e.to_string().into_bytes()))?;
+            self.set_password(s)
+        }
+        fn get_password(&self) -> keyring::Result<String> {
+            store().lock().unwrap().get(&self.key).cloned().ok_or(Error::NoEntry)
+        }
+        fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+            self.get_password().map(|s| s.into_bytes())
+        }
+        fn delete_credential(&self) -> keyring::Result<()> {
+            let mut guard = store().lock().unwrap();
+            guard.remove(&self.key).ok_or(Error::NoEntry)?;
+            sync(&guard);
+            Ok(())
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Debug)]
+    struct FileBuilder;
+
+    impl CredentialBuilderApi for FileBuilder {
+        fn build(
+            &self,
+            _target: Option<&str>,
+            service: &str,
+            user: &str,
+        ) -> keyring::Result<Box<keyring::credential::Credential>> {
+            Ok(Box::new(FileCredential {
+                key: format!("{service}/{user}"),
+            }))
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn persistence(&self) -> CredentialPersistence {
+            CredentialPersistence::UntilDelete
+        }
+    }
+
+    pub(super) fn init() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            tracing::info!(
+                source = "credentials",
+                path = %file_path().display(),
+                "Debug build: using file-backed credential store"
+            );
+            let builder: Box<CredentialBuilder> = Box::new(FileBuilder);
+            keyring::set_default_credential_builder(builder);
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -284,7 +397,16 @@ fn ensure_mock_keyring() {
 mod tests {
     use super::*;
 
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
     fn reset_vault() {
+        *lock() = None;
+        if let Ok(entry) = keyring::Entry::new(KEYRING_SERVICE, KEYRING_USER) {
+            let _ = entry.delete_credential();
+        }
+    }
+
+    fn simulate_restart() {
         *lock() = None;
     }
 
@@ -307,6 +429,7 @@ mod tests {
 
     #[test]
     fn provider_credential_crud() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_vault();
         set(Credential::Provider("anthropic-main"), "sk-ant-123").unwrap();
         assert_eq!(
@@ -319,6 +442,7 @@ mod tests {
 
     #[test]
     fn get_returns_none_when_empty() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_vault();
         let result = get(Credential::AiChatApiKey).unwrap();
         assert_eq!(result, None);
@@ -326,6 +450,7 @@ mod tests {
 
     #[test]
     fn set_then_get_roundtrips() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_vault();
         set(Credential::AiChatApiKey, "sk-test-123").unwrap();
         let result = get(Credential::AiChatApiKey).unwrap();
@@ -334,6 +459,7 @@ mod tests {
 
     #[test]
     fn delete_removes_credential() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_vault();
         set(Credential::LlmApiKey, "key").unwrap();
         delete(Credential::LlmApiKey).unwrap();
@@ -343,6 +469,7 @@ mod tests {
 
     #[test]
     fn set_trims_whitespace() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_vault();
         set(Credential::GithubOauthToken, "  spaced  ").unwrap();
         let result = get(Credential::GithubOauthToken).unwrap();
@@ -351,6 +478,7 @@ mod tests {
 
     #[test]
     fn mcp_upstream_crud() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_vault();
         set(Credential::McpUpstream("slack"), "xoxb-tok").unwrap();
         assert_eq!(
@@ -363,6 +491,7 @@ mod tests {
 
     #[test]
     fn legacy_straggler_migrated_when_vault_exists() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_vault();
         // Simulate: vault already exists with one key…
         set(Credential::LlmApiKey, "llm-key").unwrap();
@@ -370,8 +499,8 @@ mod tests {
         let legacy = keyring::Entry::new("tuicommander-ai-chat", "api-key").unwrap();
         legacy.set_password("legacy-chat-key").unwrap();
 
-        // Force re-load so the sweep runs
-        reset_vault();
+        // Simulate app restart (keep keyring state, clear in-memory cache)
+        simulate_restart();
         let result = get(Credential::AiChatApiKey).unwrap();
         assert_eq!(result, Some("legacy-chat-key".to_string()));
 
@@ -381,13 +510,14 @@ mod tests {
 
     #[test]
     fn legacy_sweep_does_not_overwrite_vault_value() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_vault();
         set(Credential::AiChatApiKey, "vault-key").unwrap();
         // Plant a stale legacy entry
         let legacy = keyring::Entry::new("tuicommander-ai-chat", "api-key").unwrap();
         legacy.set_password("stale-legacy").unwrap();
 
-        reset_vault();
+        simulate_restart();
         let result = get(Credential::AiChatApiKey).unwrap();
         // Vault value wins (or_insert, not insert)
         assert_eq!(result, Some("vault-key".to_string()));
@@ -397,6 +527,7 @@ mod tests {
 
     #[test]
     fn multiple_credentials_coexist() {
+        let _guard = TEST_LOCK.lock().unwrap();
         reset_vault();
         set(Credential::AiChatApiKey, "chat-key").unwrap();
         set(Credential::LlmApiKey, "llm-key").unwrap();

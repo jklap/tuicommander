@@ -30,14 +30,14 @@ all: build sign
 # Pre-builds frontend so the PWA (served from dist/) is up to date.
 dev:
 	@npx vite build
-	RUST_LOG=tuicommander_lib=debug,info npm run tauri dev
+	TAURI_CLI_WATCHER_IGNORE_FILENAME=.taurignore RUST_LOG=tuicommander_lib=debug,info npm run tauri dev
 
 # Build frontend + launch Tauri dev (for quick manual testing)
 test:
 	@echo "Building Vite frontend..."
 	@npx vite build
 	@echo "Starting Tauri dev..."
-	npm run tauri dev
+	TAURI_CLI_WATCHER_IGNORE_FILENAME=.taurignore npm run tauri dev
 
 # Build .app only (default, fast — skips DMG)
 build:

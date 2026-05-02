@@ -5,9 +5,13 @@ import {
   createMemo,
   createResource,
   createSignal,
+  onMount,
 } from "solid-js";
 import { invoke } from "../../../invoke";
 import { providerRegistryStore, type ProviderEntry, type ProviderType, type ModelEntry, type SlotName } from "../../../stores/providerRegistry";
+import { agentConfigsStore } from "../../../stores/agentConfigs";
+import { AGENTS, AGENT_TYPES, type AgentType } from "../../../agents";
+import { useAgentDetection } from "../../../hooks/useAgentDetection";
 import { appLogger } from "../../../stores/appLogger";
 import s from "../Settings.module.css";
 
@@ -45,9 +49,17 @@ const SLOT_LABELS: Record<SlotName, string> = {
   enrichment: "Enrichment",
 };
 
+const SLOT_DESCRIPTIONS: Record<SlotName, string> = {
+  chat:       "Used by the AI Chat panel for interactive conversations about your code.",
+  agent_mid:  "Default model for AI agent sessions. Also used as fallback when Agent (low) or Agent (high) are unset.",
+  agent_low:  "Used during agent search and read phases — pick a cheaper/faster model to save costs.",
+  agent_high: "Used during agent write phases — pick a higher-quality model for code generation.",
+  headless:   "Used by Smart Prompts in API mode for one-shot LLM calls (e.g. commit messages, code review).",
+  enrichment: "Used for AI block enrichment (command intent labels) and diff triage annotations.",
+};
+
 const SLOT_NAMES: SlotName[] = [
   "chat", "agent_mid", "agent_low", "agent_high",
-  "headless", "enrichment",
 ];
 
 const AGENT_FALLBACK_SLOTS: SlotName[] = ["agent_low", "agent_high"];
@@ -395,8 +407,38 @@ const ProviderCard: Component<{ provider: ProviderEntry }> = (props) => {
 // Slot Assignments
 // ---------------------------------------------------------------------------
 
-const SlotAssignments: Component = () => {
+interface AiChatConfig {
+  temperature: number;
+  context_lines: number;
+  experimental_ai_block_enrichment: boolean;
+}
+
+const SlotAssignments: Component<{ detection: ReturnType<typeof useAgentDetection> }> = (props) => {
   const allModels = () => providerRegistryStore.state.registry.models;
+  const isExternalApi = () => agentConfigsStore.getHeadlessAgent() === "api";
+  const [enrichmentEnabled, setEnrichmentEnabled] = createSignal(false);
+  let cachedConfig: AiChatConfig | null = null;
+
+  onMount(async () => {
+    try {
+      cachedConfig = await invoke<AiChatConfig>("load_ai_chat_config");
+      setEnrichmentEnabled(cachedConfig.experimental_ai_block_enrichment ?? false);
+    } catch {
+      // leave default false
+    }
+  });
+
+  async function toggleEnrichment(enabled: boolean) {
+    setEnrichmentEnabled(enabled);
+    try {
+      if (!cachedConfig) cachedConfig = await invoke<AiChatConfig>("load_ai_chat_config");
+      cachedConfig = { ...cachedConfig, experimental_ai_block_enrichment: enabled };
+      await invoke("save_ai_chat_config", { config: cachedConfig });
+    } catch (e) {
+      appLogger.error("config", "Failed to save enrichment toggle", e);
+      setEnrichmentEnabled(!enabled);
+    }
+  }
 
   function modelLabel(modelId: string): string {
     const model = allModels().find((m) => m.id === modelId);
@@ -419,59 +461,184 @@ const SlotAssignments: Component = () => {
     }
   }
 
+  /** Render a single slot row (reused for both the loop and the headless slot) */
+  function SlotRow(slotProps: { slot: SlotName }) {
+    const currentModelId = () => providerRegistryStore.state.registry.slots[slotProps.slot];
+    const isAgentTier = AGENT_FALLBACK_SLOTS.includes(slotProps.slot);
+    const fallbackHint = () => isAgentTier && !currentModelId();
+
+    return (
+      <div class={s.group} data-testid={`slot-row-${slotProps.slot}`}>
+        <label>
+          {SLOT_LABELS[slotProps.slot]}
+          {" "}
+          <span class={s.infoBadge}>
+            ?
+            <span class={s.infoBadgeTip}>{SLOT_DESCRIPTIONS[slotProps.slot]}</span>
+          </span>
+          <Show when={fallbackHint()}>
+            {" "}
+            <span class={s.hintInline}>(falls back to agent mid)</span>
+          </Show>
+        </label>
+        <div class={s.passwordRow}>
+          <select
+            data-testid={`slot-select-${slotProps.slot}`}
+            value={currentModelId() ?? ""}
+            onChange={(e) => {
+              const v = e.currentTarget.value;
+              if (v) providerRegistryStore.setSlot(slotProps.slot, v);
+              else providerRegistryStore.clearSlot(slotProps.slot);
+            }}
+          >
+            <option value="">— unset —</option>
+            <For each={allModels()}>
+              {(model) => (
+                <option value={model.id}>{modelLabel(model.id)}</option>
+              )}
+            </For>
+          </select>
+          <Show when={currentModelId()}>
+            <button
+              class={s.testBtn}
+              data-testid={`test-slot-${slotProps.slot}`}
+              onClick={() => testSlot(slotProps.slot)}
+              title="Test connection"
+            >
+              Test
+            </button>
+          </Show>
+        </div>
+        <Show when={testResults()[slotProps.slot]}>
+          <div class={s.hint}>{testResults()[slotProps.slot]}</div>
+        </Show>
+      </div>
+    );
+  }
+
   return (
     <div class={s.section} data-testid="slot-assignments">
       <h3>Slot Assignments</h3>
       <For each={SLOT_NAMES}>
-        {(slot) => {
-          const currentModelId = () => providerRegistryStore.state.registry.slots[slot];
-          const isAgentTier = AGENT_FALLBACK_SLOTS.includes(slot);
-          const fallbackHint = () => isAgentTier && !currentModelId();
+        {(slot) => <SlotRow slot={slot} />}
+      </For>
 
-          return (
-            <div class={s.group} data-testid={`slot-row-${slot}`}>
-              <label>
-                {SLOT_LABELS[slot]}
-                <Show when={fallbackHint()}>
-                  {" "}
-                  <span class={s.hintInline}>(falls back to agent mid)</span>
-                </Show>
-              </label>
-              <div class={s.passwordRow}>
+      {/* Headless / Smart Prompts — unified: agent selector + model slot */}
+      <div class={s.group} data-testid="slot-row-headless">
+        <label>
+          {SLOT_LABELS.headless}
+          {" "}
+          <span class={s.infoBadge}>
+            ?
+            <span class={s.infoBadgeTip}>{SLOT_DESCRIPTIONS.headless}</span>
+          </span>
+        </label>
+        <select
+          value={agentConfigsStore.getHeadlessAgent() ?? ""}
+          onChange={(e) => {
+            const val = e.currentTarget.value;
+            agentConfigsStore.setHeadlessAgent(val ? val as AgentType : null);
+          }}
+        >
+          <option value="">— Not configured —</option>
+          <For each={ALL_AGENT_TYPES.filter((t) => props.detection.isAvailable(t) && AGENTS[t]?.defaultHeadlessTemplate)}>
+            {(type) => {
+              const configs = () => agentConfigsStore.getRunConfigs(type);
+              return (
+                <>
+                  <Show
+                    when={configs().length > 0}
+                    fallback={<option value={type}>{AGENTS[type]?.name ?? type}</option>}
+                  >
+                    <optgroup label={AGENTS[type]?.name ?? type}>
+                      <option value={type}>{AGENTS[type]?.name ?? type} (default)</option>
+                      <For each={configs()}>
+                        {(cfg) => (
+                          <option value={`${type}:${cfg.name}`}>
+                            {cfg.name}
+                            {cfg.is_default ? " (default)" : ""}
+                          </option>
+                        )}
+                      </For>
+                    </optgroup>
+                  </Show>
+                </>
+              );
+            }}
+          </For>
+          <option value="api">External API</option>
+        </select>
+        <Show when={isExternalApi()}>
+          {(() => {
+            const headlessModelId = () => providerRegistryStore.state.registry.slots["headless"];
+            return (
+              <div class={s.passwordRow} style={{ "margin-top": "8px" }}>
                 <select
-                  data-testid={`slot-select-${slot}`}
-                  value={currentModelId() ?? ""}
+                  data-testid="slot-select-headless"
+                  value={headlessModelId() ?? ""}
                   onChange={(e) => {
                     const v = e.currentTarget.value;
-                    if (v) providerRegistryStore.setSlot(slot, v);
-                    else providerRegistryStore.clearSlot(slot);
+                    if (v) providerRegistryStore.setSlot("headless", v);
+                    else providerRegistryStore.clearSlot("headless");
                   }}
                 >
-                  <option value="">— unset —</option>
+                  <option value="">— select model —</option>
                   <For each={allModels()}>
                     {(model) => (
                       <option value={model.id}>{modelLabel(model.id)}</option>
                     )}
                   </For>
                 </select>
-                <Show when={currentModelId()}>
+                <Show when={headlessModelId()}>
                   <button
                     class={s.testBtn}
-                    data-testid={`test-slot-${slot}`}
-                    onClick={() => testSlot(slot)}
+                    data-testid="test-slot-headless"
+                    onClick={() => testSlot("headless")}
                     title="Test connection"
                   >
                     Test
                   </button>
                 </Show>
               </div>
-              <Show when={testResults()[slot]}>
-                <div class={s.hint}>{testResults()[slot]}</div>
-              </Show>
-            </div>
-          );
-        }}
-      </For>
+            );
+          })()}
+          <Show when={testResults()["headless"]}>
+            <div class={s.hint}>{testResults()["headless"]}</div>
+          </Show>
+        </Show>
+        <p class={s.hint}>
+          {isExternalApi()
+            ? "Direct LLM calls via the model selected above"
+            : "Agent CLI for one-shot Smart Prompts, or select External API for direct LLM calls"}
+          {props.detection.loading() ? " — detecting..." : ""}
+        </p>
+      </div>
+
+      {/* Enrichment — slot + enable toggle */}
+      <div class={s.group} data-testid="slot-row-enrichment">
+        <label>
+          {SLOT_LABELS.enrichment}
+          {" "}
+          <span class={s.infoBadge}>
+            ?
+            <span class={s.infoBadgeTip}>{SLOT_DESCRIPTIONS.enrichment}</span>
+          </span>
+        </label>
+        <div class={s.toggle}>
+          <input
+            type="checkbox"
+            checked={enrichmentEnabled()}
+            onChange={(e) => toggleEnrichment(e.currentTarget.checked)}
+          />
+          <span>Enrich command blocks with AI metadata</span>
+        </div>
+        <Show when={enrichmentEnabled()}>
+          <SlotRow slot="enrichment" />
+        </Show>
+        <p class={s.hint}>
+          Rate-limited to ~10/min. Sends command output to the provider.
+        </p>
+      </div>
     </div>
   );
 };
@@ -480,8 +647,15 @@ const SlotAssignments: Component = () => {
 // ProvidersTab
 // ---------------------------------------------------------------------------
 
+const ALL_AGENT_TYPES = AGENT_TYPES.filter((t): t is AgentType => t !== "git" && t !== "api");
+
 export const ProvidersTab: Component = () => {
   const [showAddForm, setShowAddForm] = createSignal(false);
+  const detection = useAgentDetection();
+
+  onMount(() => {
+    detection.detectAll();
+  });
 
   const providers = () => providerRegistryStore.state.registry.providers;
 
@@ -526,7 +700,7 @@ export const ProvidersTab: Component = () => {
         </Show>
       </div>
 
-      <SlotAssignments />
+      <SlotAssignments detection={detection} />
     </div>
   );
 };

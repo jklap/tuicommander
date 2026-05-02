@@ -2,7 +2,7 @@ import { Component, For, Show, createEffect, createMemo, createSignal } from "so
 import { repositoriesStore } from "../../stores/repositories";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { diffTabsStore } from "../../stores/diffTabs";
-import { aiTriageStore, type FileClassification, type Relevance } from "../../stores/aiTriageStore";
+import { aiTriageStore, type FileClassification, type Relevance, type TriageStats } from "../../stores/aiTriageStore";
 import { cx } from "../../utils";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import p from "../shared/panel.module.css";
@@ -44,7 +44,21 @@ export const AiTriagePanel: Component<AiTriagePanelProps> = (props) => {
     aiTriageStore.runTriage(props.repoPath);
   });
 
-  const state = () => props.repoPath ? aiTriageStore.getState(props.repoPath) : { summary: null, files: [], loading: false, llmUsed: false, llmModel: null, error: null };
+  const state = () => props.repoPath ? aiTriageStore.getState(props.repoPath) : { summary: null, files: [], loading: false, llmUsed: false, llmModel: null, error: null, stats: { llmClassified: 0, cached: 0, heuristic: 0, fallback: 0 } as TriageStats };
+
+  const statsLine = () => {
+    const st = state().stats;
+    const total = state().files.length;
+    if (total === 0) return null;
+    const parts: string[] = [];
+    if (st.llmClassified > 0) parts.push(`${st.llmClassified} AI`);
+    if (st.cached > 0) parts.push(`${st.cached} cached`);
+    if (st.heuristic > 0) parts.push(`${st.heuristic} auto`);
+    if (st.fallback > 0) parts.push(`${st.fallback} fallback`);
+    const model = state().llmModel;
+    const detail = parts.length > 0 ? parts.join(", ") : "";
+    return `${total} files` + (detail ? ` (${detail})` : "") + (model ? ` · ${model}` : "");
+  };
 
   const highFiles = createMemo(() => state().files.filter((f) => f.relevance === "high"));
   const mediumFiles = createMemo(() => state().files.filter((f) => f.relevance === "medium"));
@@ -143,8 +157,8 @@ export const AiTriagePanel: Component<AiTriagePanelProps> = (props) => {
           <div class={s.error}>{state().error}</div>
         </Show>
 
-        <Show when={state().summary}>
-          <div class={s.summaryBox}>{state().summary}</div>
+        <Show when={statsLine()}>
+          <div class={s.statsLine}>{statsLine()}</div>
         </Show>
 
         <Show when={!state().loading && state().files.length === 0 && !state().error}>
@@ -175,11 +189,6 @@ export const AiTriagePanel: Component<AiTriagePanelProps> = (props) => {
           </div>
         </Show>
 
-        <Show when={!state().llmUsed && !state().loading && state().files.length > 0}>
-          <div class={s.banner}>
-            Configure an AI provider in Settings to enable intelligent classification
-          </div>
-        </Show>
       </div>
     </div>
   );

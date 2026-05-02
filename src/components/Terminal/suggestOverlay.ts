@@ -61,13 +61,13 @@ export function continuationRowsAfterSuggest(
     // Strong terminators that appear right after the wrap chain.
     if (TERMINATOR_RE.test(row.text)) break;
     if (row.text.includes("|")) {
-      // Pipe rows are valid continuations only as the FIRST tail row
-      // (post-wrap pipe-flushed continuation). After the tail walk has
-      // started, another pipe row is unrelated content (Makefile, etc.)
-      // and must terminate (story 1276-a3c2).
+      // Pipe rows are valid continuations when they're adjacent to the
+      // anchor or to previously hidden rows. A pipeless gap between pipe
+      // rows signals unrelated content (Makefile/table — story 1276-a3c2).
       if (pipeTailStarted) break;
       hidden.push(i);
       pipeTailStarted = true;
+      pipeCount += (row.text.match(/\|/g) || []).length;
       continue;
     }
     // Pipeless tail rows: hide them when the suggest is clearly complete

@@ -43,8 +43,21 @@ describe("linkProvider regexes", () => {
       expect(matchAll("/a/b.rs and ./c/d.py")).toEqual(["/a/b.rs", "./c/d.py"]);
     });
 
-    it("does not match bare filenames without path separator", () => {
-      expect(matchAll("main.rs")).toEqual([]);
+    it("matches bare filenames with known extensions", () => {
+      expect(matchAll("main.rs")).toEqual(["main.rs"]);
+      expect(matchAll("README.md")).toEqual(["README.md"]);
+      expect(matchAll("package.json")).toEqual(["package.json"]);
+    });
+
+    it("matches bare filenames inside parens (Claude Code output)", () => {
+      expect(matchAll("Write(README.md)")).toEqual(["README.md"]);
+      expect(matchAll("Edit(src/lib.rs)")).toEqual(["src/lib.rs"]);
+      expect(matchAll("Read(docs/architecture.md)")).toEqual(["docs/architecture.md"]);
+    });
+
+    it("does not match bare words without known extensions", () => {
+      expect(matchAll("hello world")).toEqual([]);
+      expect(matchAll("version 2")).toEqual([]);
     });
 
     it("matches paths with @ in segments", () => {

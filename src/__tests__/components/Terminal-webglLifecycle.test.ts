@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { WebglLifecycle, ATLAS_BASE_FONT, ATLAS_BASE_MIN_PAGES, ATLAS_BASE_MIN_INTERVAL_MS } from "../../components/Terminal/webglLifecycle";
+import { WebglLifecycle, ATLAS_BASE_FONT, ATLAS_BASE_MIN_PAGES, ATLAS_BASE_MIN_INTERVAL_MS, ATLAS_MERGE_THRESHOLD } from "../../components/Terminal/webglLifecycle";
 
 /** Minimal mock matching the subset of Terminal used by WebglLifecycle */
 function mockTerminal() {
@@ -31,23 +31,32 @@ describe("WebglLifecycle", () => {
 
     it("scales down thresholds for larger fonts", () => {
       const wl = new WebglLifecycle(() => mockWebglAddon() as any);
-      // At 28px (2× base), ratio=2 → pages=round(3/2)=2, interval=round(30000/2)=15000
+      // At 28px (2× base), ratio=2 → pages=round(3/2)=2, interval=round(10000/2)=5000
       wl.updateThresholds(28);
       expect(wl.minPages).toBe(2);
-      expect(wl.minIntervalMs).toBe(15_000);
+      expect(wl.minIntervalMs).toBe(5_000);
     });
 
-    it("clamps minimum pages to 1 and interval to 5000ms", () => {
+    it("clamps minimum pages to 1 and interval to 3000ms", () => {
       const wl = new WebglLifecycle(() => mockWebglAddon() as any);
-      // At 56px (4× base), ratio=4 → pages=round(3/4)=1, interval=round(30000/4)=7500
+      // At 56px (4× base), ratio=4 → pages=round(3/4)=1, interval=round(10000/4)=2500→3000
       wl.updateThresholds(56);
       expect(wl.minPages).toBe(1);
-      expect(wl.minIntervalMs).toBe(7_500);
+      expect(wl.minIntervalMs).toBe(3_000);
 
-      // At very large font, interval clamps to 5000
+      // At very large font, interval still clamps to 3000
       wl.updateThresholds(100);
       expect(wl.minPages).toBe(1);
-      expect(wl.minIntervalMs).toBe(5_000);
+      expect(wl.minIntervalMs).toBe(3_000);
+    });
+
+    it("always stays below xterm merge threshold to prevent corruption", () => {
+      const wl = new WebglLifecycle(() => mockWebglAddon() as any);
+      expect(ATLAS_BASE_MIN_PAGES).toBeLessThan(ATLAS_MERGE_THRESHOLD);
+      for (const size of [10, 14, 20, 28, 42, 56, 100]) {
+        wl.updateThresholds(size);
+        expect(wl.minPages).toBeLessThan(ATLAS_MERGE_THRESHOLD);
+      }
     });
 
     it("ignores font sizes smaller than base (ratio clamped to 1)", () => {

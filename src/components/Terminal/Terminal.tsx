@@ -1884,14 +1884,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
           <button class={s.resumeDismiss} onClick={handleDismissResume} title="Dismiss">&times;</button>
         </div>
       </Show>
-      <Show when={useNativeRenderer() && sessionId} fallback={
+      <Show when={useNativeRenderer() && _currentSessionId()} fallback={
         <div
           ref={containerRef}
           class={s.content}
           style={{ width: "100%", height: "100%", opacity: fitted() ? 1 : 0 }}
         />
       }>
-        <CanvasTerminal sessionId={sessionId!} onOpenFilePath={props.onOpenFilePath} />
+        {(sid) => <CanvasTerminal sessionId={sid()} onOpenFilePath={props.onOpenFilePath} />}
       </Show>
       <Show when={!composeOpen()}>
         <div

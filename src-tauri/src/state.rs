@@ -1527,6 +1527,22 @@ impl LogColor {
             Color::Named(n) => match n {
                 NamedColor::Foreground | NamedColor::Background | NamedColor::Cursor
                 | NamedColor::BrightForeground | NamedColor::DimForeground => None,
+                NamedColor::Black => Some(LogColor::Idx(0)),
+                NamedColor::Red => Some(LogColor::Idx(1)),
+                NamedColor::Green => Some(LogColor::Idx(2)),
+                NamedColor::Yellow => Some(LogColor::Idx(3)),
+                NamedColor::Blue => Some(LogColor::Idx(4)),
+                NamedColor::Magenta => Some(LogColor::Idx(5)),
+                NamedColor::Cyan => Some(LogColor::Idx(6)),
+                NamedColor::White => Some(LogColor::Idx(7)),
+                NamedColor::BrightBlack => Some(LogColor::Idx(8)),
+                NamedColor::BrightRed => Some(LogColor::Idx(9)),
+                NamedColor::BrightGreen => Some(LogColor::Idx(10)),
+                NamedColor::BrightYellow => Some(LogColor::Idx(11)),
+                NamedColor::BrightBlue => Some(LogColor::Idx(12)),
+                NamedColor::BrightMagenta => Some(LogColor::Idx(13)),
+                NamedColor::BrightCyan => Some(LogColor::Idx(14)),
+                NamedColor::BrightWhite => Some(LogColor::Idx(15)),
                 NamedColor::DimBlack => Some(LogColor::Idx(0)),
                 NamedColor::DimRed => Some(LogColor::Idx(1)),
                 NamedColor::DimGreen => Some(LogColor::Idx(2)),
@@ -1535,8 +1551,6 @@ impl LogColor {
                 NamedColor::DimMagenta => Some(LogColor::Idx(5)),
                 NamedColor::DimCyan => Some(LogColor::Idx(6)),
                 NamedColor::DimWhite => Some(LogColor::Idx(7)),
-                // Black=0..BrightWhite=15 — safe to cast
-                _ => Some(LogColor::Idx(n as u8)),
             },
             Color::Indexed(i) => Some(LogColor::Idx(i)),
             Color::Spec(rgb) => Some(LogColor::Rgb(rgb.r, rgb.g, rgb.b)),
@@ -1850,6 +1864,10 @@ impl VtLogBuffer {
 
     pub(crate) fn grid_has_selection(&self) -> bool {
         self.grid.has_selection()
+    }
+
+    pub(crate) fn grid_force_full_damage(&mut self) {
+        self.grid.force_full_damage();
     }
 
     // --- Scroll delegates ---

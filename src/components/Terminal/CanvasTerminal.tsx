@@ -77,9 +77,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const rect = canvasRef.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
+    const maxCol = Math.max(0, Math.floor(rect.width / m.cellWidth) - 1);
+    const maxRow = Math.max(0, Math.floor(rect.height / m.cellHeight) - 1);
     return {
-      col: Math.max(0, Math.floor(x / m.cellWidth)),
-      row: Math.max(0, Math.floor(y / m.cellHeight)),
+      col: Math.max(0, Math.min(Math.floor(x / m.cellWidth), maxCol)),
+      row: Math.max(0, Math.min(Math.floor(y / m.cellHeight), maxRow)),
     };
   }
 
@@ -365,15 +367,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   }
 
   function repaintCursorRow(frame: DecodedFrame, m: CellMetrics) {
-    const y = frame.cursorRow * m.cellHeight;
-    ctx.clearRect(0, y, canvasRef.width / m.dpr, m.cellHeight);
-
-    const row = rowMap.get(frame.cursorRow);
-    if (row) {
-      paintRow(row, y, m);
-    }
-    paintSelection(frame, m);
-    paintCursor(frame, m);
+    paintFrame(frame, m);
   }
 
   function repaintCursorIfNeeded() {
@@ -550,6 +544,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     let lastClickTime = 0;
 
     canvasRef.addEventListener("mousedown", (e: MouseEvent) => {
+      canvasRef.focus();
       if (e.button !== 0) return;
       const pos = canvasToGrid(e);
       const now = Date.now();
@@ -622,8 +617,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     // --- Scroll ---
     canvasRef.addEventListener("wheel", (e: WheelEvent) => {
       e.preventDefault();
-      const delta = Math.sign(e.deltaY) * -3;
-      invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta }).catch(() => {});
+      e.stopPropagation();
+      const m = metrics();
+      const lines = m ? Math.round(e.deltaY / m.cellHeight) : Math.sign(e.deltaY);
+      const delta = -(lines || Math.sign(e.deltaY));
+      if (delta !== 0) {
+        invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta }).catch(() => {});
+      }
     }, { passive: false });
 
     // Subscribe to grid channel
@@ -636,6 +636,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         sessionId: props.sessionId,
         channel,
       });
+      invoke("terminal_request_frame", { sessionId: props.sessionId }).catch(() => {});
       unsubscribe = () => {
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
@@ -654,6 +655,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   createEffect(() => {
     settingsStore.state.defaultFontSize;
     settingsStore.state.font;
+    settingsStore.state.fontWeight;
+    settingsStore.state.theme;
     remeasure();
   });
 
@@ -693,11 +696,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       <canvas
         ref={canvasRef!}
         style={{
-          width: "100%",
-          height: "100%",
           display: "block",
+          outline: "none",
         }}
-        tabIndex={-1}
+        tabIndex={0}
       />
       {/* Suggest/intent overlay */}
       <div

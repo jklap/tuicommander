@@ -24,11 +24,16 @@
 
 .content {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 8px 12px;
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+.content > * {
+  flex-shrink: 0;
 }
 
 .statBadge {
@@ -107,15 +112,11 @@
   to { transform: rotate(360deg); }
 }
 
-/* Changeset summary */
-.summaryBox {
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--accent) 8%, var(--bg-primary));
-  border: 1px solid color-mix(in srgb, var(--accent) 25%, var(--border));
-  font-size: var(--font-sm);
-  color: var(--fg-primary);
-  line-height: 1.5;
+/* Stats context line */
+.statsLine {
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  padding: 4px 0;
 }
 
 /* File row — two-line: summary on top, path + metadata below */
@@ -140,7 +141,7 @@
 
 .fileHeaderTop {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
 }
 
@@ -180,9 +181,7 @@
   font-size: var(--font-sm);
   color: var(--fg-primary);
   flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.4;
 }
 
 .filePath {
@@ -288,12 +287,3 @@
   border-bottom: none;
 }
 
-/* No-LLM banner */
-.banner {
-  padding: 8px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--bg-primary);
-  border: 1px solid var(--border);
-  font-size: var(--font-xs);
-  color: var(--fg-muted);
-}

@@ -109,6 +109,31 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
   return { cursorRow, cursorCol, cursorVisible, displayOffset, historySize, hasSelection, rows };
 }
 
+/** Measure natural character height via DOM span — matches xterm.js CharSizeService. */
+export function measureCharHeightDOM(fontSize: number, fontFamily: string, fontWeight: number = 400): number {
+  const span = document.createElement("span");
+  span.style.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
+  span.style.lineHeight = "normal";
+  span.style.position = "absolute";
+  span.style.visibility = "hidden";
+  span.textContent = "W";
+  document.body.appendChild(span);
+  const h = span.getBoundingClientRect().height;
+  document.body.removeChild(span);
+  return h;
+}
+
+/** Snap lineHeight to integer device pixels to prevent sub-pixel seams between rows. */
+export function snapLineHeight(fontSize: number, target: number = 1.2): number {
+  const dpr = window.devicePixelRatio || 1;
+  const rawDevicePx = fontSize * target * dpr;
+  const lo = Math.floor(rawDevicePx);
+  const hi = Math.ceil(rawDevicePx);
+  const best = (Math.abs(rawDevicePx - lo) <= Math.abs(rawDevicePx - hi)) ? lo : hi;
+  const snapped = best / (fontSize * dpr);
+  return Math.max(1.0, Math.min(snapped, 1.5));
+}
+
 export type CursorShape = "block" | "beam" | "underline";
 
 export interface CursorRect {
@@ -139,9 +164,10 @@ export function computeCursorRect(
 
 /**
  * Measure a monospace font and return cell metrics for grid layout.
- * Uses 'M' as the reference glyph (widest ASCII char in most monospace fonts).
- * Cell height matches xterm.js: Math.ceil(fontSize * lineHeight).
- * Font bounding box metrics are used only for accurate baseline positioning.
+ * Matches xterm.js WebGL renderer dimension calculation exactly:
+ *   device.char.height = ceil(charHeight * dpr)
+ *   device.cell.height = floor(device.char.height * lineHeight)
+ *   charTop = round((cellHeight_device - charHeight_device) / 2)
  */
 export function measureFont(
   ctx: CanvasRenderingContext2D,
@@ -150,21 +176,23 @@ export function measureFont(
   dpr: number = 1,
   lineHeight: number = 1.2,
   fontWeight: number = 400,
+  charHeightOverride?: number,
 ): CellMetrics {
   ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
-  const m = ctx.measureText("M");
+  const m = ctx.measureText("W");
   const cellWidth = Math.ceil(m.width);
-  // Cell height: match xterm.js formula exactly (Math.ceil(fontSize * lineHeight)).
-  // Font bounding box is larger than fontSize for many fonts, which would add
-  // extra line spacing not present in xterm.js. Using fontSize * lineHeight
-  // produces the same grid layout as xterm.js for pixel-perfect parity.
-  const cellHeight = Math.ceil(fontSize * lineHeight);
-  // Baseline from font bounding box ascent — accurate vertical text placement.
-  const ascent = Math.ceil(m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent);
-  const descent = Math.ceil(m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent);
-  const fontHeight = ascent + descent;
-  // Center text vertically within the cell using actual font metrics.
-  const baseline = ascent + Math.floor((cellHeight - fontHeight) / 2);
+
+  const ascent = m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent;
+  const descent = m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent;
+  const charHeightCSS = charHeightOverride ?? (ascent + descent);
+
+  // xterm.js WebGL formula: compute in device pixels, then convert back
+  const charHeightDevice = Math.ceil(charHeightCSS * dpr);
+  const cellHeightDevice = Math.floor(charHeightDevice * lineHeight);
+  const charTopDevice = lineHeight === 1 ? 0 : Math.round((cellHeightDevice - charHeightDevice) / 2);
+
+  const cellHeight = cellHeightDevice / dpr;
+  const baseline = Math.ceil(ascent) + charTopDevice / dpr;
 
   return {
     cellWidth,
@@ -173,6 +201,6 @@ export function measureFont(
     fontSize,
     dpr,
     scaledCellWidth: cellWidth * dpr,
-    scaledCellHeight: cellHeight * dpr,
+    scaledCellHeight: cellHeightDevice,
   };
 }

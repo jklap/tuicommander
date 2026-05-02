@@ -1477,16 +1477,20 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
                 agent_type: agent_type_str,
             });
 
+            let print_mode = args["print_mode"].as_bool().unwrap_or(false);
             let app_handle = state.app_handle.read().clone();
-            if let Some(ref app) = app_handle {
-                // Notify Tauri frontend so it creates a tab
-                let agent_type_val = args["agent_type"].as_str();
-                let _ = app.emit("session-created", serde_json::json!({
-                    "session_id": session_id,
-                    "cwd": cwd_str,
-                    "agent_type": agent_type_val,
-                }));
-                spawn_reader_thread(reader, paused, session_id.clone(), app.clone(), state.clone(), None);
+            if !print_mode {
+                if let Some(ref app) = app_handle {
+                    let agent_type_val = args["agent_type"].as_str();
+                    let _ = app.emit("session-created", serde_json::json!({
+                        "session_id": session_id,
+                        "cwd": cwd_str,
+                        "agent_type": agent_type_val,
+                    }));
+                    spawn_reader_thread(reader, paused, session_id.clone(), app.clone(), state.clone(), None);
+                } else {
+                    spawn_headless_reader_thread(reader, paused, session_id.clone(), state.clone());
+                }
             } else {
                 spawn_headless_reader_thread(reader, paused, session_id.clone(), state.clone());
             }

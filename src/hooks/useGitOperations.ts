@@ -679,6 +679,11 @@ export function useGitOperations(deps: GitOperationsDeps) {
           );
           if (resumeCmd) {
             terminalsStore.update(id, { pendingResumeCommand: resumeCmd, agentSessionId: terminal.agentSessionId ?? null });
+          } else if (terminal.tuicSession && terminal.cwd) {
+            invoke("preflight_session_inject", {
+              tuicSession: terminal.tuicSession,
+              cwd: terminal.cwd,
+            }).catch(() => {});
           }
         })).catch((e) => appLogger.warn("terminal", "Resume command verification failed", { error: String(e) }));
       } else {

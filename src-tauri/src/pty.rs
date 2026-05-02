@@ -2476,13 +2476,16 @@ pub(crate) fn spawn_reader_thread(
                                 data: clamped_data,
                             },
                         );
+                    }
 
-                        if let Some(ch) = state.grid_channels.get(&session_id) {
-                            if let Some(vt) = state.vt_log_buffers.get(&session_id) {
-                                let frame = vt.lock().serialize_dirty_rows();
-                                if !frame.is_empty() {
-                                    let _ = ch.send(frame);
-                                }
+                    // Send grid frame unconditionally: the alacritty grid
+                    // receives data inside process_chunk even when xterm
+                    // output is suppressed (silence, transform_xterm=None).
+                    if let Some(ch) = state.grid_channels.get(&session_id) {
+                        if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+                            let frame = vt.lock().serialize_dirty_rows();
+                            if !frame.is_empty() {
+                                let _ = ch.send(frame);
                             }
                         }
                     }
@@ -3898,6 +3901,26 @@ pub(crate) fn subscribe_terminal_grid(
     state.grid_channels.insert(session_id, channel);
 }
 
+/// Request a full frame for a session (used after subscribe to get initial state).
+#[tauri::command]
+pub(crate) fn terminal_request_frame(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) {
+    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+        let frame = {
+            let mut vt = vt.lock();
+            vt.grid_force_full_damage();
+            vt.serialize_dirty_rows()
+        };
+        if !frame.is_empty() {
+            if let Some(ch) = state.grid_channels.get(&session_id) {
+                let _ = ch.send(frame);
+            }
+        }
+    }
+}
+
 /// Unregister the grid channel for a session (called by the frontend on unmount).
 #[tauri::command]
 pub(crate) fn unsubscribe_terminal_grid(
@@ -3923,7 +3946,16 @@ pub(crate) fn terminal_select_start(
         } else {
             alacritty_terminal::selection::SelectionType::Simple
         };
-        vt.lock().grid_selection_start(col, row, ty);
+        let frame = {
+            let mut vt = vt.lock();
+            vt.grid_selection_start(col, row, ty);
+            vt.serialize_dirty_rows()
+        };
+        if !frame.is_empty() {
+            if let Some(ch) = state.grid_channels.get(&session_id) {
+                let _ = ch.send(frame);
+            }
+        }
     }
 }
 
@@ -3935,7 +3967,16 @@ pub(crate) fn terminal_select_update(
     row: usize,
 ) {
     if let Some(vt) = state.vt_log_buffers.get(&session_id) {
-        vt.lock().grid_selection_update(col, row);
+        let frame = {
+            let mut vt = vt.lock();
+            vt.grid_selection_update(col, row);
+            vt.serialize_dirty_rows()
+        };
+        if !frame.is_empty() {
+            if let Some(ch) = state.grid_channels.get(&session_id) {
+                let _ = ch.send(frame);
+            }
+        }
     }
 }
 
@@ -3954,7 +3995,16 @@ pub(crate) fn terminal_select_clear(
     session_id: String,
 ) {
     if let Some(vt) = state.vt_log_buffers.get(&session_id) {
-        vt.lock().grid_selection_clear();
+        let frame = {
+            let mut vt = vt.lock();
+            vt.grid_selection_clear();
+            vt.serialize_dirty_rows()
+        };
+        if !frame.is_empty() {
+            if let Some(ch) = state.grid_channels.get(&session_id) {
+                let _ = ch.send(frame);
+            }
+        }
     }
 }
 
@@ -3967,7 +4017,16 @@ pub(crate) fn terminal_scroll(
     delta: i32,
 ) {
     if let Some(vt) = state.vt_log_buffers.get(&session_id) {
-        vt.lock().grid_scroll(delta);
+        let frame = {
+            let mut vt = vt.lock();
+            vt.grid_scroll(delta);
+            vt.serialize_dirty_rows()
+        };
+        if !frame.is_empty() {
+            if let Some(ch) = state.grid_channels.get(&session_id) {
+                let _ = ch.send(frame);
+            }
+        }
     }
 }
 

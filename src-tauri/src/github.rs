@@ -338,7 +338,18 @@ pub(crate) async fn graphql_with_retry(
     // Check circuit breaker first
     state.github_circuit_breaker.check()?;
 
-    let current_token = state.github_token.read().clone();
+    let mut current_token = state.github_token.read().clone();
+    // Lazy resolution: boot skips keychain, resolve on first use.
+    if current_token.is_none() {
+        let (t, s) = tokio::task::spawn_blocking(crate::github_auth::resolve_token_with_source)
+            .await
+            .map_err(|e| format!("token resolve task panicked: {e}"))?;
+        if t.is_some() {
+            *state.github_token.write() = t.clone();
+            *state.github_token_source.write() = s;
+        }
+        current_token = t;
+    }
     let token = match current_token.as_deref() {
         Some(t) => t.to_string(),
         None => return Err("No GitHub token available".to_string()),

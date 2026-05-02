@@ -194,19 +194,6 @@ export const GeneralTab: Component = () => {
             {t("general.hint.aiChat", "Enable the AI Chat panel, keyboard shortcut, and command palette entry.")}
           </p>
         </div>
-        <div class={s.group}>
-          <div class={s.toggle}>
-            <input
-              type="checkbox"
-              checked={settingsStore.state.scrollHistoryEnabled}
-              onChange={(e) => settingsStore.setScrollHistoryEnabled(e.currentTarget.checked)}
-            />
-            <span>{t("general.toggle.scrollHistory", "Scroll History")}</span>
-          </div>
-          <p class={s.hint}>
-            {t("general.hint.scrollHistory", "Browse full terminal scrollback via an overlay when scrolling up in agent mode.")}
-          </p>
-        </div>
       </Show>
 
     </div>

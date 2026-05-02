@@ -67,17 +67,23 @@ export function keyToSequence(e: KeyboardEvent): string | null {
   // Simple named keys
   switch (e.key) {
     case "Enter": return "\r";
-    case "Tab": return "\t";
+    case "Tab": return e.shiftKey ? "\x1b[Z" : "\t";
     case "Backspace": return "\x7f";
     case "Escape": return "\x1b";
   }
 
-  // Ctrl+letter → control character (0x01-0x1a)
+  // Ctrl+key → control characters
   if (e.ctrlKey && !e.altKey && e.key.length === 1) {
     const lower = e.key.toLowerCase();
     const code = lower.charCodeAt(0);
     if (code >= 0x61 && code <= 0x7a) {
       return String.fromCharCode(code - 0x60);
+    }
+    const ctrlPunct: Record<string, number> = {
+      "@": 0x00, "[": 0x1b, "\\": 0x1c, "]": 0x1d, "^": 0x1e, "_": 0x1f,
+    };
+    if (e.key in ctrlPunct) {
+      return String.fromCharCode(ctrlPunct[e.key]);
     }
   }
 

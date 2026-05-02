@@ -1,5 +1,5 @@
 import { Component, For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { AGENTS, AGENT_DISPLAY, MCP_SUPPORT, type AgentType, type AgentRunConfig } from "../../../agents";
+import { AGENTS, AGENT_DISPLAY, AGENT_TYPES, MCP_SUPPORT, type AgentType, type AgentRunConfig } from "../../../agents";
 import { appLogger } from "../../../stores/appLogger";
 import { agentConfigsStore } from "../../../stores/agentConfigs";
 import { useAgentDetection, type AgentAvailability } from "../../../hooks/useAgentDetection";
@@ -16,8 +16,7 @@ import { findDuplicateEnvKeys, buildEnvFromEntries } from "../../../utils/envVar
 import s from "../Settings.module.css";
 import a from "./AgentsTab.module.css";
 
-// All agent types — sorted dynamically by availability then name
-const ALL_AGENT_TYPES: AgentType[] = ["claude", "cursor", "gemini", "amp", "codex", "aider", "opencode", "goose", "warp", "droid"];
+const ALL_AGENT_TYPES = AGENT_TYPES.filter((t): t is AgentType => t !== "git" && t !== "api");
 
 /**
  * Build the set of lowercased run-config names across all agent groups,
@@ -833,49 +832,6 @@ export const AgentsTab: Component = () => {
           <span>Show suggested follow-up actions</span>
         </div>
         <p class={s.hint}>Display actionable suggestions from agents after completing a task</p>
-      </div>
-
-      <div class={s.group}>
-        <label>Headless Agent</label>
-        <select
-          value={agentConfigsStore.getHeadlessAgent() ?? ""}
-          onChange={(e) => {
-            const val = e.currentTarget.value;
-            agentConfigsStore.setHeadlessAgent(val ? val as AgentType : null);
-          }}
-        >
-          <option value="">— Not configured —</option>
-          <For each={ALL_AGENT_TYPES.filter((t) => t !== "api" && detection.isAvailable(t) && AGENTS[t]?.defaultHeadlessTemplate)}>
-            {(type) => {
-              const configs = () => agentConfigsStore.getRunConfigs(type);
-              return (
-                <>
-                  <Show
-                    when={configs().length > 0}
-                    fallback={<option value={type}>{AGENTS[type]?.name ?? type}</option>}
-                  >
-                    <optgroup label={AGENTS[type]?.name ?? type}>
-                      <option value={type}>{AGENTS[type]?.name ?? type} (default)</option>
-                      <For each={configs()}>
-                        {(cfg) => (
-                          <option value={`${type}:${cfg.name}`}>
-                            {cfg.name}
-                            {cfg.is_default ? " (default)" : ""}
-                          </option>
-                        )}
-                      </For>
-                    </optgroup>
-                  </Show>
-                </>
-              );
-            }}
-          </For>
-          <option value="api">External API</option>
-        </select>
-        <p class={s.hint}>
-          Agent CLI for headless prompts, or External API for direct LLM calls
-          {detection.loading() ? " — detecting..." : ""}
-        </p>
       </div>
 
       <div class={a.agentList}>

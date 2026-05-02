@@ -1193,6 +1193,7 @@ pub fn run() {
             pty::read_vt_log,
             pty::subscribe_terminal_grid,
             pty::unsubscribe_terminal_grid,
+            pty::terminal_request_frame,
             pty::terminal_select_start,
             pty::terminal_select_update,
             pty::terminal_select_text,

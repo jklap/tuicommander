@@ -10,7 +10,6 @@ import s from "../Settings.module.css";
 interface AiChatConfig {
   temperature: number;
   context_lines: number;
-  experimental_ai_block_enrichment: boolean;
   // Legacy fields — kept in JSON for backward compat, not shown in UI
   provider?: string;
   model?: string;
@@ -38,7 +37,6 @@ interface SchedulerConfig {
 export const AiChatTab: Component = () => {
   const [temperature, setTemperature] = createSignal(0.7);
   const [contextLines, setContextLines] = createSignal(150);
-  const [blockEnrichment, setBlockEnrichment] = createSignal(false);
 
   // Scheduler state
   const [schedulerJobs, setSchedulerJobs] = createSignal<ScheduledJob[]>([]);
@@ -59,7 +57,6 @@ export const AiChatTab: Component = () => {
           config: {
             temperature: temperature(),
             context_lines: contextLines(),
-            experimental_ai_block_enrichment: blockEnrichment(),
           },
         });
       } catch (e) {
@@ -73,7 +70,6 @@ export const AiChatTab: Component = () => {
       const config = await invoke<AiChatConfig>("load_ai_chat_config");
       setTemperature(config.temperature ?? 0.7);
       setContextLines(config.context_lines ?? 150);
-      setBlockEnrichment(config.experimental_ai_block_enrichment ?? false);
     } catch (e) {
       appLogger.warn("config", "Failed to load AI Chat config", e);
     }
@@ -248,25 +244,10 @@ export const AiChatTab: Component = () => {
       {/* ── Experimental ── */}
       <h3>Experimental</h3>
 
-      <div class={s.group}>
-        <label>
-          <input
-            type="checkbox"
-            checked={blockEnrichment()}
-            onChange={(e) => {
-              setBlockEnrichment(e.currentTarget.checked);
-              saveConfig();
-            }}
-          />
-          {" "}Enrich command blocks with AI metadata
-        </label>
-        <p class={s.hint}>
-          After each shell command completes, send its command line and a short
-          output tail to the configured provider to derive a one-line intent.
-          Rate-limited to ~10/min. Disabled by default — leaks command output
-          to the provider and consumes tokens.
-        </p>
-      </div>
+      <p class={s.hint}>
+        Block enrichment is now configured in the{" "}
+        <strong>Providers</strong> tab (Enrichment slot).
+      </p>
 
       <p class={s.hint} style={{ "margin-top": "16px", color: "var(--fg-muted)" }}>
         Settings are saved automatically when changed

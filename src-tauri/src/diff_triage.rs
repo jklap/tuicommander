@@ -30,27 +30,26 @@ struct TriageSession {
     file_hashes: HashMap<String, u64>,
     classifications: HashMap<String, FileClassification>,
     summary: Option<String>,
+    file_set_hash: u64,
     model: String,
-    file_set_key: u64,
     created_at: std::time::Instant,
 }
 
 impl TriageSession {
-    fn new(model: String, file_set_key: u64) -> Self {
+    fn new(model: String) -> Self {
         Self {
             messages: Vec::new(),
             file_hashes: HashMap::new(),
             classifications: HashMap::new(),
             summary: None,
+            file_set_hash: 0,
             model,
-            file_set_key,
             created_at: std::time::Instant::now(),
         }
     }
 
-    fn is_valid(&self, model: &str, file_set_key: u64) -> bool {
+    fn is_valid(&self, model: &str) -> bool {
         self.model == model
-            && self.file_set_key == file_set_key
             && self.messages.len() < MAX_SESSION_MESSAGES
             && self.created_at.elapsed() < SESSION_TTL
     }
@@ -59,16 +58,6 @@ impl TriageSession {
 fn triage_sessions() -> &'static Mutex<HashMap<String, TriageSession>> {
     static SESSIONS: OnceLock<Mutex<HashMap<String, TriageSession>>> = OnceLock::new();
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn file_set_key(paths: &[&str]) -> u64 {
-    let mut sorted: Vec<&str> = paths.to_vec();
-    sorted.sort_unstable();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    for p in sorted {
-        p.hash(&mut hasher);
-    }
-    hasher.finish()
 }
 
 fn hash_diff(diff: &str) -> u64 {
@@ -308,7 +297,7 @@ fn is_ci_file(path: &str) -> bool {
 }
 
 fn is_doc_file(_path: &str, filename: &str, ext: &str) -> bool {
-    DOC_FILES.iter().any(|&f| filename == f)
+    DOC_FILES.contains(&filename)
         || DOC_EXTENSIONS.contains(&ext)
 }
 
@@ -338,7 +327,7 @@ pub fn heuristic_classify(
     let ext = ext.as_str();
 
     // 1. Lock files — always low, never interesting
-    if LOCK_FILES.iter().any(|&lf| filename == lf) {
+    if LOCK_FILES.contains(&filename) {
         return Some(make(path, Relevance::Low, Category::Boilerplate, Risk::Cosmetic,
             "Lock file updated"));
     }
@@ -374,13 +363,13 @@ pub fn heuristic_classify(
     }
 
     // 7. Config files with minor edits (≤5 lines)
-    if CONFIG_FILES.iter().any(|&cf| filename == cf) && additions + deletions <= 5 {
+    if CONFIG_FILES.contains(&filename) && additions + deletions <= 5 {
         return Some(make(path, Relevance::Low, Category::Config, Risk::Cosmetic,
             "Minor config change"));
     }
 
     // 8. Formatting/linting config files
-    if FORMAT_CONFIG_FILES.iter().any(|&f| filename == f) {
+    if FORMAT_CONFIG_FILES.contains(&filename) {
         return Some(make(path, Relevance::Low, Category::Style, Risk::Cosmetic,
             "Formatting config updated"));
     }
@@ -418,17 +407,36 @@ struct LlmParsed {
     files: Vec<FileClassification>,
 }
 
-fn parse_jsonl_line(line: &str) -> JsonlParsed {
-    let trimmed = line.trim();
-    if trimmed.is_empty() {
-        return JsonlParsed::Skip;
+fn extract_json(text: &str) -> &str {
+    let trimmed = text.trim();
+    // Strip markdown code fences: ```json\n{...}\n``` or ```\n{...}\n```
+    if let Some(rest) = trimmed.strip_prefix("```") {
+        let inner = rest.strip_prefix("json").unwrap_or(rest);
+        let inner = inner.strip_suffix("```").unwrap_or(inner);
+        return inner.trim();
     }
-    if let Ok(s) = serde_json::from_str::<SummaryLine>(trimmed) {
-        if !s.summary.is_empty() {
-            return JsonlParsed::Summary(s.summary);
+    // Find first '{' ... last '}' if the LLM added preamble/postamble text
+    if let Some(start) = trimmed.find('{') {
+        if let Some(end) = trimmed.rfind('}') {
+            if end > start {
+                return &trimmed[start..=end];
+            }
         }
     }
-    if let Ok(f) = serde_json::from_str::<FileLine>(trimmed) {
+    trimmed
+}
+
+fn parse_jsonl_line(line: &str) -> JsonlParsed {
+    let json = extract_json(line);
+    if json.is_empty() {
+        return JsonlParsed::Skip;
+    }
+    if let Ok(s) = serde_json::from_str::<SummaryLine>(json)
+        && !s.summary.is_empty()
+    {
+        return JsonlParsed::Summary(s.summary);
+    }
+    if let Ok(f) = serde_json::from_str::<FileLine>(json) {
         return JsonlParsed::File(FileClassification {
             path: f.path,
             relevance: f.relevance,
@@ -450,16 +458,54 @@ enum JsonlParsed {
 }
 
 fn fallback_classification(path: &str) -> FileClassification {
+    let filename = Path::new(path)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("");
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let ext = ext.as_str();
+
+    let (category, risk) = if is_test_file(path, filename) {
+        (Category::Test, Risk::BehavioralChange)
+    } else if is_style_file(ext) {
+        (Category::Style, Risk::Cosmetic)
+    } else if is_ignore_file(filename) || CONFIG_FILES.contains(&filename) {
+        (Category::Config, Risk::Cosmetic)
+    } else {
+        (Category::BusinessLogic, Risk::BehavioralChange)
+    };
+
     FileClassification {
         path: path.to_string(),
         relevance: Relevance::Medium,
-        category: Category::BusinessLogic,
-        risk: Risk::BehavioralChange,
+        category,
+        risk,
         summary: String::new(),
         source: ClassificationSource::Heuristic,
         additions: 0,
         deletions: 0,
     }
+}
+
+fn is_test_file(path: &str, filename: &str) -> bool {
+    path.contains("__tests__/")
+        || path.contains("/__test__/")
+        || filename.contains(".test.")
+        || filename.contains(".spec.")
+        || filename.ends_with("_test.go")
+        || filename.ends_with("_test.rs")
+}
+
+fn is_style_file(ext: &str) -> bool {
+    matches!(ext, "css" | "scss" | "sass" | "less" | "styl")
+}
+
+fn is_ignore_file(filename: &str) -> bool {
+    filename.starts_with('.') && filename.ends_with("ignore")
 }
 
 const MULTI_TURN_SYSTEM_PROMPT: &str = "\
@@ -748,6 +794,7 @@ async fn do_turn(
 
 /// Multi-turn LLM classification: overview turn + per-file turns with tool use.
 /// Skips unchanged files (hash match). Updates session in place.
+#[allow(clippy::too_many_arguments)]
 async fn classify_multi_turn(
     client: &genai::Client,
     model: &str,
@@ -761,17 +808,25 @@ async fn classify_multi_turn(
     let tools = build_genai_tools();
     let file_paths: Vec<&str> = files.iter().map(|(p, _, _, _)| p.as_str()).collect();
 
+    // Detect file-set change and reset summary so LLM gets a fresh overview
+    let mut fsh = std::collections::hash_map::DefaultHasher::new();
+    for p in &file_paths { p.hash(&mut fsh); }
+    let current_fsh = fsh.finish();
+    if current_fsh != session.file_set_hash {
+        session.summary = None;
+        session.file_set_hash = current_fsh;
+    }
+
     if session.summary.is_none() {
         let overview_msg = build_overview(&file_paths, heuristic_names);
         if let Some(text) =
             do_turn(client, model, session, overview_msg, repo_path, &tools).await
+            && let JsonlParsed::Summary(s) = parse_jsonl_line(&text)
         {
-            if let JsonlParsed::Summary(s) = parse_jsonl_line(&text) {
-                session.summary = Some(s.clone());
-                emit_progress(
-                    app, repo_path, Some(&s), &[], "llm-overview", false, true, Some(model),
-                );
-            }
+            session.summary = Some(s.clone());
+            emit_progress(
+                app, repo_path, Some(&s), &[], "llm-overview", false, true, Some(model),
+            );
         }
     }
 
@@ -780,18 +835,18 @@ async fn classify_multi_turn(
     for (path, diff, additions, deletions) in files {
         let h = hash_diff(diff);
 
-        if session.file_hashes.get(path.as_str()).copied() == Some(h) {
-            if let Some(cached) = session.classifications.get(path.as_str()) {
-                let mut fc = cached.clone();
-                fc.additions = *additions;
-                fc.deletions = *deletions;
-                emit_progress(
-                    app, repo_path, session.summary.as_deref(), &[fc.clone()], "cached",
-                    false, true, Some(model),
-                );
-                classified.push(fc);
-                continue;
-            }
+        if session.file_hashes.get(path.as_str()).copied() == Some(h)
+            && let Some(cached) = session.classifications.get(path.as_str())
+        {
+            let mut fc = cached.clone();
+            fc.additions = *additions;
+            fc.deletions = *deletions;
+            emit_progress(
+                app, repo_path, session.summary.as_deref(), &[fc.clone()], "cached",
+                false, true, Some(model),
+            );
+            classified.push(fc);
+            continue;
         }
 
         let file_msg = build_file_msg(path, diff, *additions, *deletions);
@@ -799,11 +854,13 @@ async fn classify_multi_turn(
             match do_turn(client, model, session, file_msg, repo_path, &tools).await {
                 Some(text) => match parse_jsonl_line(&text) {
                     JsonlParsed::File(mut fc) => {
+                        fc.path = path.clone();
                         fc.additions = *additions;
                         fc.deletions = *deletions;
                         fc
                     }
                     _ => {
+                        tracing::warn!("triage: LLM response for {path} did not parse as file classification: {text:?}");
                         let mut fb = fallback_classification(path);
                         fb.additions = *additions;
                         fb.deletions = *deletions;
@@ -811,6 +868,7 @@ async fn classify_multi_turn(
                     }
                 },
                 None => {
+                    tracing::warn!("triage: LLM returned no response for {path} (timeout or error)");
                     let mut fb = fallback_classification(path);
                     fb.additions = *additions;
                     fb.deletions = *deletions;
@@ -823,10 +881,15 @@ async fn classify_multi_turn(
             fc.deletions = d;
         }
 
-        session.file_hashes.insert(path.clone(), h);
-        session.classifications.insert(path.clone(), fc.clone());
+        let phase = if fc.source == ClassificationSource::Llm {
+            session.file_hashes.insert(path.clone(), h);
+            session.classifications.insert(path.clone(), fc.clone());
+            "llm-file"
+        } else {
+            "fallback"
+        };
         emit_progress(
-            app, repo_path, session.summary.as_deref(), &[fc.clone()], "llm-file", false,
+            app, repo_path, session.summary.as_deref(), &[fc.clone()], phase, false,
             true, Some(model),
         );
         classified.push(fc);
@@ -847,6 +910,7 @@ struct TriageProgress {
     llm_model: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_progress(
     app: &tauri::AppHandle,
     repo_path: &str,
@@ -924,7 +988,7 @@ pub(crate) async fn run_diff_triage(
     }
 
     if needs_llm.is_empty() {
-        heuristic.sort_by(|a, b| a.relevance.cmp(&b.relevance));
+        heuristic.sort_by_key(|a| a.relevance);
         return Ok(TriageResult {
             summary: None,
             files: heuristic,
@@ -932,6 +996,17 @@ pub(crate) async fn run_diff_triage(
             llm_model: None,
         });
     }
+
+    // Resolve LLM provider early — if not configured, abort instead of faking results
+    let registry = crate::provider_registry::load_registry();
+    let resolved_slot = crate::provider_registry::resolve_slot(
+        &registry,
+        crate::provider_registry::SlotName::Enrichment,
+    );
+    let resolved = resolved_slot.map_err(|e| {
+        format!("No AI provider configured for triage. Set the Enrichment slot in Settings → Providers. ({e})")
+    })?;
+    let model_name_for_session = resolved.config.model.clone();
 
     // Fetch all diffs in a single git call (1 subprocess, not N)
     let llm_candidates: Vec<_> = needs_llm.iter().take(MAX_FILES_TO_LLM).collect();
@@ -943,21 +1018,6 @@ pub(crate) async fn run_diff_triage(
         .await
         .unwrap_or_default();
 
-    // Resolve model before session lookup (need model name for is_valid check)
-    let registry = crate::provider_registry::load_registry();
-    let resolved_slot = crate::provider_registry::resolve_slot(
-        &registry,
-        crate::provider_registry::SlotName::Enrichment,
-    );
-    let model_name_for_session = resolved_slot
-        .as_ref()
-        .map(|r| r.config.model.clone())
-        .unwrap_or_default();
-
-    let fsk = file_set_key(
-        &llm_candidates.iter().map(|(p, _, _, _)| p.as_str()).collect::<Vec<_>>(),
-    );
-
     // Take existing session (invalidate first if refresh=true), or create fresh
     let mut session = {
         let mut sessions = triage_sessions().lock().unwrap_or_else(|e| e.into_inner());
@@ -965,13 +1025,13 @@ pub(crate) async fn run_diff_triage(
             sessions.remove(&repo_path);
         }
         if let Some(s) = sessions.get(&repo_path) {
-            if s.is_valid(&model_name_for_session, fsk) {
+            if s.is_valid(&model_name_for_session) {
                 sessions.remove(&repo_path).unwrap()
             } else {
-                TriageSession::new(model_name_for_session.clone(), fsk)
+                TriageSession::new(model_name_for_session.clone())
             }
         } else {
-            TriageSession::new(model_name_for_session.clone(), fsk)
+            TriageSession::new(model_name_for_session.clone())
         }
     };
 
@@ -999,56 +1059,34 @@ pub(crate) async fn run_diff_triage(
         heuristic_labels.iter().map(|(p, l)| (p.as_str(), l.as_str())).collect();
 
     let mut all_classified = heuristic;
-    let mut llm_used = false;
-    let mut llm_model: Option<String> = None;
-    let mut changeset_summary: Option<String> = None;
 
-    match resolved_slot {
-        Ok(resolved) => {
-            let client = crate::llm_api::build_client(&resolved.config, &resolved.api_key);
-            let model_name = resolved.config.model.clone();
+    let client = crate::llm_api::build_client(&resolved.config, &resolved.api_key);
+    let model_name = resolved.config.model.clone();
 
-            let parsed = classify_multi_turn(
-                &client,
-                &model_name,
-                &mut session,
-                &files_with_diffs,
-                &heuristic_names,
-                &app,
-                &repo_path,
-                &stats,
-            )
-            .await;
+    let parsed = classify_multi_turn(
+        &client,
+        &model_name,
+        &mut session,
+        &files_with_diffs,
+        &heuristic_names,
+        &app,
+        &repo_path,
+        &stats,
+    )
+    .await;
 
-            changeset_summary = parsed.summary.clone();
-            emit_progress(
-                &app,
-                &repo_path,
-                changeset_summary.as_deref(),
-                &[],
-                "done",
-                true,
-                true,
-                Some(&model_name),
-            );
-            all_classified.extend(parsed.files);
-            llm_used = true;
-            llm_model = Some(model_name);
-        }
-        Err(_) => {
-            let fallbacks: Vec<FileClassification> = files_with_diffs
-                .iter()
-                .map(|(path, _, additions, deletions)| {
-                    let mut fc = fallback_classification(path);
-                    fc.additions = *additions;
-                    fc.deletions = *deletions;
-                    fc
-                })
-                .collect();
-            emit_progress(&app, &repo_path, None, &fallbacks, "done", true, false, None);
-            all_classified.extend(fallbacks);
-        }
-    }
+    let changeset_summary = parsed.summary.clone();
+    emit_progress(
+        &app,
+        &repo_path,
+        changeset_summary.as_deref(),
+        &[],
+        "done",
+        true,
+        true,
+        Some(&model_name),
+    );
+    all_classified.extend(parsed.files);
 
     // Prune session entries for files no longer in the changeset
     let current_paths: std::collections::HashSet<&str> =
@@ -1072,12 +1110,12 @@ pub(crate) async fn run_diff_triage(
         }
     }
 
-    all_classified.sort_by(|a, b| a.relevance.cmp(&b.relevance));
+    all_classified.sort_by_key(|a| a.relevance);
     Ok(TriageResult {
         summary: changeset_summary,
         files: all_classified,
-        llm_used,
-        llm_model,
+        llm_used: true,
+        llm_model: Some(model_name),
     })
 }
 
@@ -1291,8 +1329,59 @@ mod tests {
     fn parse_jsonl_empty_and_malformed() {
         assert!(matches!(parse_jsonl_line(""), JsonlParsed::Skip));
         assert!(matches!(parse_jsonl_line("  \n"), JsonlParsed::Skip));
-        assert!(matches!(parse_jsonl_line("not json"), JsonlParsed::Skip));
+        assert!(matches!(parse_jsonl_line("not json at all"), JsonlParsed::Skip));
         assert!(matches!(parse_jsonl_line("{\"bad\": true}"), JsonlParsed::Skip));
+    }
+
+    #[test]
+    fn parse_jsonl_markdown_code_fence() {
+        let fenced = "```json\n{\"path\": \"src/foo.rs\", \"relevance\": \"medium\", \"category\": \"business-logic\", \"risk\": \"cosmetic\", \"summary\": \"Stuff\"}\n```";
+        match parse_jsonl_line(fenced) {
+            JsonlParsed::File(fc) => assert_eq!(fc.path, "src/foo.rs"),
+            _ => panic!("expected File from fenced JSON"),
+        }
+    }
+
+    #[test]
+    fn parse_jsonl_preamble_text() {
+        let with_preamble = "Here is my analysis:\n{\"path\": \"src/bar.rs\", \"relevance\": \"high\", \"category\": \"api-surface\", \"risk\": \"breaking-change\", \"summary\": \"API change\"}";
+        match parse_jsonl_line(with_preamble) {
+            JsonlParsed::File(fc) => {
+                assert_eq!(fc.path, "src/bar.rs");
+                assert_eq!(fc.category, Category::ApiSurface);
+            }
+            _ => panic!("expected File from text with preamble"),
+        }
+    }
+
+    #[test]
+    fn parse_jsonl_summary_in_code_fence() {
+        let fenced = "```\n{\"summary\": \"Big refactor of config\"}\n```";
+        match parse_jsonl_line(fenced) {
+            JsonlParsed::Summary(s) => assert_eq!(s, "Big refactor of config"),
+            _ => panic!("expected Summary from fenced JSON"),
+        }
+    }
+
+    #[test]
+    fn extract_json_plain() {
+        assert_eq!(extract_json(r#"{"a": 1}"#), r#"{"a": 1}"#);
+    }
+
+    #[test]
+    fn extract_json_fenced() {
+        assert_eq!(
+            extract_json("```json\n{\"a\": 1}\n```"),
+            "{\"a\": 1}",
+        );
+    }
+
+    #[test]
+    fn extract_json_with_preamble() {
+        assert_eq!(
+            extract_json("Here: {\"a\": 1} done"),
+            "{\"a\": 1}",
+        );
     }
 
     #[test]
@@ -1335,7 +1424,7 @@ mod tests {
 
     #[test]
     fn build_chat_request_cache_control_on_system_and_last() {
-        let session = TriageSession::new("haiku".to_string(), 1);
+        let session = TriageSession::new("haiku".to_string());
         let req = build_chat_request(&session, "classify this file");
         // system_msg + final_user = 2 messages (no session history)
         assert_eq!(req.messages.len(), 2);
@@ -1346,7 +1435,7 @@ mod tests {
 
     #[test]
     fn build_chat_request_midpoint_cache_for_long_sessions() {
-        let mut session = TriageSession::new("haiku".to_string(), 1);
+        let mut session = TriageSession::new("haiku".to_string());
         // Add 42 messages to trigger midpoint caching (> 40)
         for i in 0..42 {
             session.messages.push(SessionMsg {
@@ -1365,42 +1454,27 @@ mod tests {
     }
 
     #[test]
-    fn session_is_valid_checks_model_and_fsk() {
-        let s = TriageSession::new("haiku".to_string(), 42);
-        assert!(s.is_valid("haiku", 42));
-        assert!(!s.is_valid("sonnet", 42));
-        assert!(!s.is_valid("haiku", 99));
+    fn session_is_valid_checks_model() {
+        let s = TriageSession::new("haiku".to_string());
+        assert!(s.is_valid("haiku"));
+        assert!(!s.is_valid("sonnet"));
     }
 
     #[test]
     fn session_is_valid_message_cap() {
-        let mut s = TriageSession::new("haiku".to_string(), 1);
+        let mut s = TriageSession::new("haiku".to_string());
         for i in 0..MAX_SESSION_MESSAGES {
             s.messages.push(SessionMsg {
                 role: MsgRole::User,
                 content: format!("msg {i}"),
             });
         }
-        assert!(!s.is_valid("haiku", 1));
-    }
-
-    #[test]
-    fn file_set_key_is_order_independent() {
-        let k1 = file_set_key(&["a.rs", "b.rs", "c.rs"]);
-        let k2 = file_set_key(&["c.rs", "a.rs", "b.rs"]);
-        assert_eq!(k1, k2);
-    }
-
-    #[test]
-    fn file_set_key_differs_for_different_sets() {
-        let k1 = file_set_key(&["a.rs", "b.rs"]);
-        let k2 = file_set_key(&["a.rs", "c.rs"]);
-        assert_ne!(k1, k2);
+        assert!(!s.is_valid("haiku"));
     }
 
     #[test]
     fn session_hash_based_file_skip() {
-        let mut s = TriageSession::new("haiku".to_string(), 1);
+        let mut s = TriageSession::new("haiku".to_string());
         let h = hash_diff("some diff content");
         let fc = FileClassification {
             path: "src/foo.rs".to_string(),
@@ -1423,11 +1497,52 @@ mod tests {
     }
 
     #[test]
-    fn fallback_classification_is_medium() {
-        let c = fallback_classification("unknown.rs");
+    fn fallback_source_files_are_business_logic() {
+        let c = fallback_classification("src/main.rs");
         assert_eq!(c.relevance, Relevance::Medium);
         assert_eq!(c.category, Category::BusinessLogic);
         assert!(c.summary.is_empty());
+    }
+
+    #[test]
+    fn fallback_test_files_are_test() {
+        for path in &[
+            "src/__tests__/foo.test.ts",
+            "src/components/Terminal.test.tsx",
+            "tests/integration_test.rs",
+            "spec/models/user.spec.js",
+            "pkg/handler_test.go",
+        ] {
+            let c = fallback_classification(path);
+            assert_eq!(c.category, Category::Test, "{path}");
+            assert_eq!(c.risk, Risk::BehavioralChange, "{path}");
+        }
+    }
+
+    #[test]
+    fn fallback_css_files_are_style() {
+        for path in &[
+            "src/components/Panel.module.css",
+            "styles/global.scss",
+            "src/theme.less",
+        ] {
+            let c = fallback_classification(path);
+            assert_eq!(c.category, Category::Style, "{path}");
+            assert_eq!(c.risk, Risk::Cosmetic, "{path}");
+        }
+    }
+
+    #[test]
+    fn fallback_ignore_files_are_config() {
+        for path in &[
+            "src-tauri/.taurignore",
+            ".dockerignore",
+            ".gitignore",
+        ] {
+            let c = fallback_classification(path);
+            assert_eq!(c.category, Category::Config, "{path}");
+            assert_eq!(c.risk, Risk::Cosmetic, "{path}");
+        }
     }
 
     #[test]

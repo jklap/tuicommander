@@ -408,9 +408,9 @@ pub(crate) struct AppConfig {
     /// Sub-flag: AI Chat panel, shortcuts, and palette entry
     #[serde(default)]
     pub(crate) ai_chat_enabled: bool,
-    /// Sub-flag: scrollback history overlay on scroll-up in agent mode
-    #[serde(default)]
-    pub(crate) scroll_history_enabled: bool,
+    /// Terminal renderer: "webgl" (default, GPU-accelerated) or "canvas" (CPU, no atlas bugs)
+    #[serde(default = "default_terminal_renderer")]
+    pub(crate) terminal_renderer: String,
     /// Expose `ai_terminal_*` tools to external MCP. Default off: they need a
     /// per-session filesystem sandbox only the internal agent loop creates.
     ///
@@ -444,6 +444,10 @@ fn default_bell_style() -> String {
 
 fn default_issue_filter() -> String {
     "assigned".to_string()
+}
+
+fn default_terminal_renderer() -> String {
+    "webgl".to_string()
 }
 
 fn default_mcp_port() -> u16 {
@@ -517,7 +521,7 @@ impl Default for AppConfig {
             issue_filter: default_issue_filter(),
             experimental_features_enabled: false,
             ai_chat_enabled: false,
-            scroll_history_enabled: false,
+            terminal_renderer: default_terminal_renderer(),
             ai_terminal_mcp_enabled: false,
         }
     }
@@ -1287,8 +1291,8 @@ mod tests {
             issue_filter: "assigned".to_string(),
             experimental_features_enabled: false,
             ai_chat_enabled: false,
-            scroll_history_enabled: false,
             ai_terminal_mcp_enabled: false,
+            terminal_renderer: "webgl".to_string(),
         };
         let loaded: AppConfig = round_trip_in_dir(dir.path(), "config.json", &cfg);
         assert_eq!(loaded.shell.as_deref(), Some("/bin/zsh"));

@@ -239,6 +239,39 @@ pub(crate) fn verify_agent_session(
     }
 }
 
+/// Pre-create the `no-session-inject` flag when a restored tab's Claude session
+/// file no longer exists on disk. Prevents the shell wrapper from injecting
+/// `--session-id <stale-uuid>` on the first manual `claude` invocation, which
+/// would cause Claude to exit immediately and leak VT probe responses (DA1,
+/// DECRPM) as visible garbage in the shell.
+#[tauri::command]
+pub(crate) fn preflight_session_inject(tuic_session: String, cwd: String) {
+    if !tuic_session.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+        || tuic_session.len() != 36
+    {
+        return;
+    }
+    if verify_claude_session(&tuic_session, &cwd) {
+        return;
+    }
+    let flag = crate::config::config_dir()
+        .join(format!("no-session-inject.{tuic_session}"));
+    if !flag.exists() {
+        if let Err(e) = std::fs::write(&flag, b"") {
+            tracing::warn!(
+                tuic_session = %tuic_session,
+                error = %e,
+                "Failed to pre-create no-session-inject flag"
+            );
+        } else {
+            tracing::info!(
+                tuic_session = %tuic_session,
+                "Pre-created no-session-inject flag (session file gone)"
+            );
+        }
+    }
+}
+
 /// Check if `~/.claude/projects/<slug>/<uuid>.jsonl` exists.
 fn verify_claude_session(session_id: &str, cwd: &str) -> bool {
     if !is_uuid(session_id) {

@@ -152,9 +152,12 @@ describe("ProvidersTab", () => {
     expect(getByTestId("slot-assignments")).toBeTruthy();
   });
 
-  it("renders all 6 slot dropdowns", () => {
+  it("renders all 6 slot rows", () => {
     const { getByTestId } = render(() => <ProvidersTab />);
     for (const slot of ["chat", "agent_mid", "agent_low", "agent_high", "headless", "enrichment"]) {
+      expect(getByTestId(`slot-row-${slot}`)).toBeTruthy();
+    }
+    for (const slot of ["chat", "agent_mid", "agent_low", "agent_high"]) {
       expect(getByTestId(`slot-select-${slot}`)).toBeTruthy();
     }
   });

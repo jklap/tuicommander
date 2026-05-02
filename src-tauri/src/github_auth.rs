@@ -327,8 +327,21 @@ pub(crate) async fn github_diagnostics(
 pub(crate) async fn github_auth_status(
     state: State<'_, Arc<AppState>>,
 ) -> Result<AuthStatus, String> {
-    let token = state.github_token.read().clone();
-    let source = *state.github_token_source.read();
+    let mut token = state.github_token.read().clone();
+    let mut source = *state.github_token_source.read();
+
+    // Lazy resolution: if boot skipped the keychain, try full resolution now.
+    if token.is_none() {
+        let (t, s) = tokio::task::spawn_blocking(resolve_token_with_source)
+            .await
+            .map_err(|e| format!("token resolve task panicked: {e}"))?;
+        if t.is_some() {
+            *state.github_token.write() = t.clone();
+            *state.github_token_source.write() = s;
+        }
+        token = t;
+        source = s;
+    }
 
     let Some(token) = token else {
         return Ok(AuthStatus {
@@ -461,6 +474,10 @@ pub(crate) fn token_from_gh_cli() -> Option<String> {
 /// Single source of truth for token priority — used at startup, fallback, and logout.
 /// Priority: GH_TOKEN env → GITHUB_TOKEN env → keyring OAuth → gh_token crate → gh CLI.
 pub(crate) fn resolve_all_candidates() -> Vec<(String, TokenSource)> {
+    resolve_all_candidates_inner(true)
+}
+
+fn resolve_all_candidates_inner(include_keychain: bool) -> Vec<(String, TokenSource)> {
     let mut candidates = Vec::new();
     if let Ok(token) = std::env::var("GH_TOKEN")
         && !token.is_empty()
@@ -473,7 +490,8 @@ pub(crate) fn resolve_all_candidates() -> Vec<(String, TokenSource)> {
     {
         candidates.push((token, TokenSource::Env));
     }
-    if let Ok(Some(token)) = read_github_oauth_token()
+    if include_keychain
+        && let Ok(Some(token)) = read_github_oauth_token()
         && !candidates.iter().any(|(t, _)| t == &token)
     {
         candidates.push((token, TokenSource::OAuth));
@@ -496,6 +514,16 @@ pub(crate) fn resolve_all_candidates() -> Vec<(String, TokenSource)> {
 /// Thin wrapper over `resolve_all_candidates()`.
 pub(crate) fn resolve_token_with_source() -> (Option<String>, TokenSource) {
     resolve_all_candidates()
+        .into_iter()
+        .next()
+        .map(|(t, s)| (Some(t), s))
+        .unwrap_or((None, TokenSource::None))
+}
+
+/// Like `resolve_token_with_source` but skips keychain access.
+/// Used at boot to avoid prompting the user before they need it.
+pub(crate) fn resolve_token_without_keychain() -> (Option<String>, TokenSource) {
+    resolve_all_candidates_inner(false)
         .into_iter()
         .next()
         .map(|(t, s)| (Some(t), s))

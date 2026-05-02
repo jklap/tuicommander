@@ -577,7 +577,7 @@ fn read_claude_credentials() -> Result<(Option<String>, Option<PlanInfo>), Strin
         #[cfg(target_os = "macos")]
         {
             let keychain_result =
-                crate::plugin_credentials::read_from_keychain("Claude Code-credentials");
+                crate::plugin_credentials::cached_read("Claude Code-credentials");
             match keychain_result {
                 Ok(Some(json)) => Some(json),
                 _ => {

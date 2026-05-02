@@ -43,6 +43,15 @@ interface TriageProgress {
 // Per-repo triage state
 // ---------------------------------------------------------------------------
 
+export interface TriageStats {
+  llmClassified: number;
+  cached: number;
+  heuristic: number;
+  fallback: number;
+}
+
+const DEFAULT_STATS: TriageStats = { llmClassified: 0, cached: 0, heuristic: 0, fallback: 0 };
+
 interface TriageState {
   summary: string | null;
   files: FileClassification[];
@@ -50,10 +59,11 @@ interface TriageState {
   llmUsed: boolean;
   llmModel: string | null;
   error: string | null;
+  stats: TriageStats;
 }
 
 const DEFAULT_STATE: TriageState = {
-  summary: null, files: [], loading: false, llmUsed: false, llmModel: null, error: null,
+  summary: null, files: [], loading: false, llmUsed: false, llmModel: null, error: null, stats: DEFAULT_STATS,
 };
 
 interface AiTriageStoreState {
@@ -79,6 +89,13 @@ function createAiTriageStore() {
     const merged = [...existingByPath.values()];
     merged.sort((a, b) => relevanceOrder(a.relevance) - relevanceOrder(b.relevance));
 
+    const count = p.files.length;
+    const stats = { ...prev.stats };
+    if (p.phase === "llm-file") stats.llmClassified += count;
+    else if (p.phase === "cached") stats.cached += count;
+    else if (p.phase === "heuristic") stats.heuristic += count;
+    else if (p.phase === "fallback") stats.fallback += count;
+
     setState("repos", repo, {
       summary: p.summary ?? prev.summary,
       files: merged,
@@ -86,6 +103,7 @@ function createAiTriageStore() {
       llmUsed: p.llm_used || prev.llmUsed,
       llmModel: p.llm_model ?? prev.llmModel,
       error: null,
+      stats,
     });
   });
 
@@ -121,7 +139,7 @@ function createAiTriageStore() {
         repoPath,
         refresh: refresh || undefined,
       });
-      // Final result — authoritative, replaces progressive state
+      // Final result — authoritative, replaces progressive state (keep accumulated stats)
       result.files.sort((a, b) => relevanceOrder(a.relevance) - relevanceOrder(b.relevance));
       setState("repos", repoPath, {
         summary: result.summary,
@@ -130,6 +148,7 @@ function createAiTriageStore() {
         llmUsed: result.llm_used,
         llmModel: result.llm_model,
         error: null,
+        stats: getState(repoPath).stats,
       });
     } catch (err) {
       setState("repos", repoPath, {
@@ -155,8 +174,7 @@ function createAiTriageStore() {
       clearTimeout(pending.get(repoPath));
       pending.delete(repoPath);
     }
-    // Clear existing results for a fresh holistic analysis
-    setState("repos", repoPath, { ...DEFAULT_STATE, loading: true });
+    setState("repos", repoPath, { ...DEFAULT_STATE, stats: { ...DEFAULT_STATS }, loading: true });
     void executeTriage(repoPath, true);
   }
 

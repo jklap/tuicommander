@@ -3,10 +3,22 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{self, Color, NamedColor, Rgb};
+
+/// Local grid size type implementing `Dimensions` to avoid depending on
+/// `alacritty_terminal::term::test::TermSize` (test-only, no stability guarantee).
+struct GridSize {
+    cols: usize,
+    lines: usize,
+}
+
+impl Dimensions for GridSize {
+    fn columns(&self) -> usize { self.cols }
+    fn screen_lines(&self) -> usize { self.lines }
+    fn total_lines(&self) -> usize { self.lines }
+}
 
 use crate::state::{ChangedRow, LogColor, LogLine, LogSpan};
 
@@ -31,23 +43,23 @@ const ATTR_DEFAULT_BG: u8 = 0b1000_0000;
 /// Standard xterm 256-color palette (16 ANSI + 216 color cube + 24 grayscale).
 fn xterm_color_rgb(index: u8) -> Rgb {
     match index {
-        // 16 standard ANSI colors
-        0  => Rgb { r: 0,   g: 0,   b: 0   },
-        1  => Rgb { r: 205, g: 0,   b: 0   },
-        2  => Rgb { r: 0,   g: 205, b: 0   },
-        3  => Rgb { r: 205, g: 205, b: 0   },
-        4  => Rgb { r: 0,   g: 0,   b: 238 },
-        5  => Rgb { r: 205, g: 0,   b: 205 },
-        6  => Rgb { r: 0,   g: 205, b: 205 },
-        7  => Rgb { r: 229, g: 229, b: 229 },
-        8  => Rgb { r: 127, g: 127, b: 127 },
-        9  => Rgb { r: 255, g: 0,   b: 0   },
-        10 => Rgb { r: 0,   g: 255, b: 0   },
-        11 => Rgb { r: 255, g: 255, b: 0   },
-        12 => Rgb { r: 92,  g: 92,  b: 255 },
-        13 => Rgb { r: 255, g: 0,   b: 255 },
-        14 => Rgb { r: 0,   g: 255, b: 255 },
-        15 => Rgb { r: 255, g: 255, b: 255 },
+        // 16 standard ANSI colors — match "commander" xterm.js theme
+        0  => Rgb { r: 0x1e, g: 0x1e, b: 0x1e },
+        1  => Rgb { r: 0xf1, g: 0x4c, b: 0x4c },
+        2  => Rgb { r: 0x23, g: 0xd1, b: 0x8b },
+        3  => Rgb { r: 0xe5, g: 0xe5, b: 0x10 },
+        4  => Rgb { r: 0x3b, g: 0x8e, b: 0xea },
+        5  => Rgb { r: 0xd6, g: 0x70, b: 0xd6 },
+        6  => Rgb { r: 0x29, g: 0xb8, b: 0xdb },
+        7  => Rgb { r: 0xd4, g: 0xd4, b: 0xd4 },
+        8  => Rgb { r: 0x66, g: 0x66, b: 0x66 },
+        9  => Rgb { r: 0xf1, g: 0x4c, b: 0x4c },
+        10 => Rgb { r: 0x23, g: 0xd1, b: 0x8b },
+        11 => Rgb { r: 0xf5, g: 0xf5, b: 0x43 },
+        12 => Rgb { r: 0x3b, g: 0x8e, b: 0xea },
+        13 => Rgb { r: 0xd6, g: 0x70, b: 0xd6 },
+        14 => Rgb { r: 0x29, g: 0xb8, b: 0xdb },
+        15 => Rgb { r: 0xff, g: 0xff, b: 0xff },
         // 216-color cube (indices 16-231)
         16..=231 => {
             let n = index - 16;
@@ -73,16 +85,30 @@ fn resolve_color(c: Color) -> Option<Rgb> {
         Color::Named(n) => match n {
             NamedColor::Foreground | NamedColor::Background | NamedColor::Cursor
             | NamedColor::BrightForeground | NamedColor::DimForeground => None,
-            NamedColor::DimBlack   => Some(xterm_color_rgb(0)),
-            NamedColor::DimRed     => Some(xterm_color_rgb(1)),
-            NamedColor::DimGreen   => Some(xterm_color_rgb(2)),
-            NamedColor::DimYellow  => Some(xterm_color_rgb(3)),
-            NamedColor::DimBlue    => Some(xterm_color_rgb(4)),
-            NamedColor::DimMagenta => Some(xterm_color_rgb(5)),
-            NamedColor::DimCyan    => Some(xterm_color_rgb(6)),
-            NamedColor::DimWhite   => Some(xterm_color_rgb(7)),
-            // Black=0..BrightWhite=15
-            _ => Some(xterm_color_rgb(n as u8)),
+            NamedColor::Black        => Some(xterm_color_rgb(0)),
+            NamedColor::Red          => Some(xterm_color_rgb(1)),
+            NamedColor::Green        => Some(xterm_color_rgb(2)),
+            NamedColor::Yellow       => Some(xterm_color_rgb(3)),
+            NamedColor::Blue         => Some(xterm_color_rgb(4)),
+            NamedColor::Magenta      => Some(xterm_color_rgb(5)),
+            NamedColor::Cyan         => Some(xterm_color_rgb(6)),
+            NamedColor::White        => Some(xterm_color_rgb(7)),
+            NamedColor::BrightBlack  => Some(xterm_color_rgb(8)),
+            NamedColor::BrightRed    => Some(xterm_color_rgb(9)),
+            NamedColor::BrightGreen  => Some(xterm_color_rgb(10)),
+            NamedColor::BrightYellow => Some(xterm_color_rgb(11)),
+            NamedColor::BrightBlue   => Some(xterm_color_rgb(12)),
+            NamedColor::BrightMagenta => Some(xterm_color_rgb(13)),
+            NamedColor::BrightCyan   => Some(xterm_color_rgb(14)),
+            NamedColor::BrightWhite  => Some(xterm_color_rgb(15)),
+            NamedColor::DimBlack     => Some(xterm_color_rgb(0)),
+            NamedColor::DimRed       => Some(xterm_color_rgb(1)),
+            NamedColor::DimGreen     => Some(xterm_color_rgb(2)),
+            NamedColor::DimYellow    => Some(xterm_color_rgb(3)),
+            NamedColor::DimBlue      => Some(xterm_color_rgb(4)),
+            NamedColor::DimMagenta   => Some(xterm_color_rgb(5)),
+            NamedColor::DimCyan      => Some(xterm_color_rgb(6)),
+            NamedColor::DimWhite     => Some(xterm_color_rgb(7)),
         },
     }
 }
@@ -104,7 +130,7 @@ impl TerminalGrid {
             scrolling_history: scrollback,
             ..Config::default()
         };
-        let size = TermSize::new(cols as usize, rows as usize);
+        let size = GridSize { cols: cols as usize, lines: rows as usize };
         let term = Term::new(config, &size, VoidListener);
         Self {
             term,
@@ -173,12 +199,11 @@ impl TerminalGrid {
 
         let count = limit.min(history - offset);
         let mut lines = Vec::with_capacity(count);
-        let screen_lines = grid.screen_lines();
 
         for i in 0..count {
             let scrollback_idx = history - offset - i - 1;
             let line_idx = Line(-(scrollback_idx as i32) - 1);
-            if let Some(text) = self.row_to_text(line_idx, screen_lines) {
+            if let Some(text) = self.row_to_text(line_idx) {
                 lines.push(text);
             }
         }
@@ -192,7 +217,7 @@ impl TerminalGrid {
 
     /// Resize the terminal grid.
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        let size = TermSize::new(cols as usize, rows as usize);
+        let size = GridSize { cols: cols as usize, lines: rows as usize };
         self.term.resize(size);
         self.prev_rows.clear();
     }
@@ -220,7 +245,7 @@ impl TerminalGrid {
     /// Read the cursor position (line, column) in screen coordinates.
     pub fn cursor_point(&self) -> (usize, usize) {
         let point = self.term.grid().cursor.point;
-        (point.line.0 as usize, point.column.0)
+        (point.line.0.max(0) as usize, point.column.0)
     }
 
     /// Extract a styled `LogLine` from a grid row by iterating cells.
@@ -465,6 +490,16 @@ impl TerminalGrid {
         self.term.selection.is_some()
     }
 
+    /// Mark all rows as dirty so the next serialize_dirty_rows returns a full frame.
+    /// Uses a resize-to-same-size trick since alacritty's mark_fully_damaged is private.
+    pub fn force_full_damage(&mut self) {
+        let size = GridSize {
+            cols: self.term.grid().columns(),
+            lines: self.term.grid().screen_lines(),
+        };
+        self.term.resize(size);
+    }
+
     // --- Scroll API ---
 
     /// Scroll the viewport by `delta` lines (positive = up / into history).
@@ -520,16 +555,18 @@ impl TerminalGrid {
             }
 
             let row_lower = row_text.to_lowercase();
-            let mut start = 0;
-            while let Some(pos) = row_lower[start..].find(&query_lower) {
-                let col_start = start + pos;
-                let col_end = col_start + query.len();
+            let query_char_len = query_lower.chars().count();
+            let mut byte_start = 0;
+            while let Some(byte_pos) = row_lower[byte_start..].find(&query_lower) {
+                let match_byte = byte_start + byte_pos;
+                let col_start = row_lower[..match_byte].chars().count();
+                let col_end = col_start + query_char_len;
                 matches.push(SearchMatch {
                     row: abs_row,
                     col_start,
                     col_end,
                 });
-                start = col_start + 1;
+                byte_start = match_byte + row_lower[match_byte..].chars().next().map_or(1, |c| c.len_utf8());
             }
         }
         matches
@@ -539,8 +576,7 @@ impl TerminalGrid {
     pub fn get_row_text(&self, row: usize) -> String {
         let display_offset = self.term.grid().display_offset();
         let line = Line(row as i32) - display_offset;
-        self.row_to_text(line, self.term.grid().screen_lines())
-            .unwrap_or_default()
+        self.row_to_text(line).unwrap_or_default()
     }
 
     /// Serialize dirty rows as a compact binary frame.
@@ -581,8 +617,8 @@ impl TerminalGrid {
         let mut buf = Vec::with_capacity(estimated);
 
         buf.extend_from_slice(&(row_count as u16).to_le_bytes());
-        buf.extend_from_slice(&(cursor.line.0 as u16).to_le_bytes());
-        buf.extend_from_slice(&(cursor.column.0 as u16).to_le_bytes());
+        buf.extend_from_slice(&(cursor.line.0.max(0) as u16).to_le_bytes());
+        buf.extend_from_slice(&(cursor.column.0.max(0) as u16).to_le_bytes());
         buf.push(cursor_visible as u8);
         buf.extend_from_slice(&(display_offset as u32).to_le_bytes());
         buf.extend_from_slice(&(history_size as u32).to_le_bytes());
@@ -659,8 +695,11 @@ impl TerminalGrid {
         rows
     }
 
-    fn row_to_text(&self, line: Line, _screen_lines: usize) -> Option<String> {
+    fn row_to_text(&self, line: Line) -> Option<String> {
         let grid = self.term.grid();
+        if line.0 < -(grid.history_size() as i32) || line.0 >= grid.screen_lines() as i32 {
+            return None;
+        }
         let num_cols = grid.columns();
         let mut text = String::with_capacity(num_cols);
         for col in 0..num_cols {
@@ -875,9 +914,9 @@ mod tests {
         let cell0 = TEST_HEADER_SIZE + 4;
         let (ch, fg_r, fg_g, fg_b, _, _, _, attrs) = decode_cell(&buf, cell0);
         assert_eq!(ch, 'X');
-        assert_eq!(fg_r, 205); // xterm red
-        assert_eq!(fg_g, 0);
-        assert_eq!(fg_b, 0);
+        assert_eq!(fg_r, 0xf1); // commander theme red
+        assert_eq!(fg_g, 0x4c);
+        assert_eq!(fg_b, 0x4c);
         assert_eq!(attrs & super::ATTR_DEFAULT_FG, 0, "fg is NOT default");
         assert_ne!(attrs & super::ATTR_DEFAULT_BG, 0, "bg IS default");
     }
@@ -1051,5 +1090,53 @@ mod tests {
         assert_eq!(text, "first");
         let text = grid.get_row_text(1);
         assert_eq!(text, "second");
+    }
+
+    // --- Scrollback reading tests ---
+
+    #[test]
+    fn read_scrollback_after_overflow() {
+        let mut grid = TerminalGrid::new(3, 20, 100);
+        grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        let count = grid.scrollback_count();
+        assert!(count >= 2, "expected scrollback >= 2, got {count}");
+        let lines = grid.read_scrollback_lines(0, 10);
+        assert!(!lines.is_empty(), "scrollback should have content");
+        assert!(lines[0].contains("line"), "first scrollback line should contain text");
+    }
+
+    #[test]
+    fn read_scrollback_with_offset() {
+        let mut grid = TerminalGrid::new(3, 20, 100);
+        grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5\r\nline6\r\nline7");
+        let count = grid.scrollback_count();
+        let all = grid.read_scrollback_lines(0, count);
+        if count > 1 {
+            let partial = grid.read_scrollback_lines(1, count - 1);
+            assert_eq!(partial.len(), all.len() - 1);
+        }
+    }
+
+    #[test]
+    fn read_scrollback_offset_past_history_returns_empty() {
+        let mut grid = TerminalGrid::new(3, 20, 100);
+        grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        let count = grid.scrollback_count();
+        let lines = grid.read_scrollback_lines(count + 100, 10);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn read_scrollback_no_history_returns_empty() {
+        let grid = TerminalGrid::new(24, 80, 100);
+        let lines = grid.read_scrollback_lines(0, 10);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn get_row_text_out_of_bounds_returns_empty() {
+        let grid = TerminalGrid::new(5, 20, 0);
+        let text = grid.get_row_text(999);
+        assert_eq!(text, "");
     }
 }

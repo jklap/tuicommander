@@ -89,7 +89,7 @@
 }
 
 .termName {
-  font-size: var(--font-lg);
+  font-size: var(--font-md);
   color: var(--fg-primary);
   font-weight: 500;
   white-space: nowrap;
