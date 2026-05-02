@@ -150,6 +150,7 @@ export const TerminalArea: Component<TerminalAreaProps> = (props) => {
                         detached: isDetached(),
                       }}
                       style={isDetached() ? { display: "none" } : undefined}
+                      data-drop-target="pane"
                     >
                       <Terminal
                         id={id}

@@ -60,6 +60,7 @@ function writePathsToTerminal(paths: string[]): boolean {
   return true;
 }
 
+
 /** Open absolute paths as editor / markdown tabs. */
 export function openPathsAsTabs(paths: string[]): void {
   for (const filePath of paths) {

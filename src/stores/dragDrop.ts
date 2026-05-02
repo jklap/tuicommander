@@ -21,6 +21,8 @@ const [dropPayload, setDropPayload] = createSignal<TauriDropPayload | null>(null
 const [isOverWindow, setIsOverWindow] = createSignal(false);
 /** True while ⌥/Option (macOS) or Ctrl (Linux/Windows) is held — copy instead of move. */
 const [copyModifierHeld, setCopyModifierHeld] = createSignal(false);
+/** True while Shift is held — forces path-write mode on AI agent terminals. */
+const [shiftHeld, setShiftHeld] = createSignal(false);
 
 /** Element currently highlighted as a folder drop target (null when none). */
 let highlightedEl: HTMLElement | null = null;
@@ -57,6 +59,8 @@ export const dragDropStore = {
   isOverWindow,
   /** Whether the user is holding the copy modifier while dragging. */
   copyModifierHeld,
+  /** Whether the user is holding Shift while dragging. */
+  shiftHeld,
 };
 
 function isMac(): boolean {
@@ -67,6 +71,7 @@ function isMac(): boolean {
 /** Update modifier state from a keyboard event. */
 function updateModifierFromEvent(e: KeyboardEvent) {
   setCopyModifierHeld(isMac() ? e.altKey : e.ctrlKey);
+  setShiftHeld(e.shiftKey);
 }
 
 /**
@@ -85,7 +90,7 @@ export async function initDragDrop(): Promise<void> {
   document.addEventListener("keydown", updateModifierFromEvent);
   document.addEventListener("keyup", updateModifierFromEvent);
   // Clear on blur so the flag doesn't get stuck if the user releases outside.
-  window.addEventListener("blur", () => setCopyModifierHeld(false));
+  window.addEventListener("blur", () => { setCopyModifierHeld(false); setShiftHeld(false); });
 
   if (!isTauri()) return;
 
