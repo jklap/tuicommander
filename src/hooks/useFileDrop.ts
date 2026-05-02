@@ -91,7 +91,7 @@ function elementAtDropPoint(physicalX: number, physicalY: number): Element | nul
  * Returns the element and its associated data (absolute path for folder drops).
  */
 interface DropTargetInfo {
-  kind: "folder" | "tab-bar";
+  kind: "folder" | "tab-bar" | "pane";
   absPath?: string;
 }
 function findDropTarget(el: Element | null): DropTargetInfo | null {
@@ -103,6 +103,7 @@ function findDropTarget(el: Element | null): DropTargetInfo | null {
       if (absPath) return { kind: "folder", absPath };
     }
     if (target === "tab-bar") return { kind: "tab-bar" };
+    if (target === "pane") return { kind: "pane" };
     cur = cur.parentElement;
   }
   return null;
@@ -201,8 +202,12 @@ async function dispatchTauriDrop(paths: string[], x: number, y: number): Promise
     return;
   }
 
-  // Fallback: if a terminal exists, paste absolute paths into it; else open as tabs.
-  if (writePathsToTerminal(paths)) return;
+  if (target?.kind === "pane") {
+    writePathsToTerminal(paths);
+    return;
+  }
+
+  // Drop outside terminal/folder/tab-bar: open files in viewer tabs.
   openPathsAsTabs(paths);
 }
 
