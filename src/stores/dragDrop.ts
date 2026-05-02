@@ -28,9 +28,21 @@ const [shiftHeld, setShiftHeld] = createSignal(false);
 let highlightedEl: HTMLElement | null = null;
 const DROP_HOVER_CLASS = "drop-target-hover";
 
-function updateDropHover(physicalX: number, physicalY: number): void {
+/**
+ * Convert Tauri physical-pixel coordinates to CSS pixels for elementFromPoint.
+ * On macOS with titleBarStyle="Overlay", Tauri reports coordinates relative to
+ * the window frame which includes the native titlebar inset. We measure the
+ * actual offset by comparing window.outerHeight with window.innerHeight.
+ */
+export function tauriPhysicalToCss(physicalX: number, physicalY: number): { x: number; y: number } {
   const dpr = window.devicePixelRatio || 1;
-  const el = document.elementFromPoint(physicalX / dpr, physicalY / dpr);
+  const chromeHeight = (window.outerHeight - window.innerHeight) * dpr;
+  return { x: physicalX / dpr, y: (physicalY - chromeHeight) / dpr };
+}
+
+function updateDropHover(physicalX: number, physicalY: number): void {
+  const { x, y } = tauriPhysicalToCss(physicalX, physicalY);
+  const el = document.elementFromPoint(x, y);
   // Walk up to find a data-drop-target="folder" or "tab-bar"
   let cur: Element | null = el;
   let target: HTMLElement | null = null;
@@ -104,12 +116,10 @@ export async function initDragDrop(): Promise<void> {
       // don't treat as file drop. The actual move happens via dragend fallback.
       if (isInternalDrag()) {
         if ((payload.type === "enter" || payload.type === "over") && payload.position) {
-          const dpr = window.devicePixelRatio || 1;
-          _lastDragCssPosition = { x: payload.position.x / dpr, y: payload.position.y / dpr };
+          _lastDragCssPosition = tauriPhysicalToCss(payload.position.x, payload.position.y);
           if (_pendingInternalDrag) updatePaneDropHover(payload.position.x, payload.position.y);
         } else if (payload.type === "drop" && payload.position) {
-          const dpr = window.devicePixelRatio || 1;
-          _lastDragCssPosition = { x: payload.position.x / dpr, y: payload.position.y / dpr };
+          _lastDragCssPosition = tauriPhysicalToCss(payload.position.x, payload.position.y);
           if (_pendingInternalDrag) clearPaneDropHover();
         } else if (payload.type === "leave") {
           if (_pendingInternalDrag) clearPaneDropHover();
@@ -207,8 +217,8 @@ let highlightedPaneEl: HTMLElement | null = null;
 const PANE_DROP_HOVER_CLASS = "pane-drop-hover";
 
 export function updatePaneDropHover(physicalX: number, physicalY: number): void {
-  const dpr = window.devicePixelRatio || 1;
-  const el = document.elementFromPoint(physicalX / dpr, physicalY / dpr);
+  const { x, y } = tauriPhysicalToCss(physicalX, physicalY);
+  const el = document.elementFromPoint(x, y);
   let cur: Element | null = el;
   let target: HTMLElement | null = null;
   while (cur) {

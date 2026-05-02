@@ -11,6 +11,7 @@ import {
   markInternalDragStart,
   markInternalDragEnd,
   isInternalDrag,
+  tauriPhysicalToCss,
 } from "../stores/dragDrop";
 import { rpc, isTauri } from "../transport";
 import { invoke } from "../invoke";
@@ -91,11 +92,11 @@ export function openPathsAsTabs(paths: string[]): void {
 /**
  * Hit-test the element under a physical-pixel coordinate from a Tauri drop event.
  * Tauri's `position` is in *physical* pixels; `elementFromPoint` needs CSS pixels.
- * The ratio is `window.devicePixelRatio`.
+ * Uses `tauriPhysicalToCss` from dragDrop store for coordinate conversion.
  */
 function elementAtDropPoint(physicalX: number, physicalY: number): Element | null {
-  const dpr = window.devicePixelRatio || 1;
-  return document.elementFromPoint(physicalX / dpr, physicalY / dpr);
+  const { x, y } = tauriPhysicalToCss(physicalX, physicalY);
+  return document.elementFromPoint(x, y);
 }
 
 /**
