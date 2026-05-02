@@ -11,6 +11,13 @@
   min-width: 0;
 }
 
+/* File drag-over highlight (applied by dragDrop.ts via global class) */
+.tabBarWrapper:global(.drop-target-hover) {
+  background: rgba(var(--accent-rgb, 99, 102, 241), 0.08);
+  outline: 1px dashed var(--accent);
+  outline-offset: -1px;
+}
+
 /* Scroll region — contains arrows, fades, and the scrollable tab list */
 .scrollRegion {
   display: flex;

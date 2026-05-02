@@ -200,18 +200,20 @@ export const TabBar: Component<TabBarProps> = (props) => {
     // Terminal tab
     const ids = activeTerminals();
     const idx = ids.indexOf(id);
-    const hasSession = !!terminalsStore.get(id)?.sessionId;
+    const term = terminalsStore.get(id);
+    const hasSession = !!term?.sessionId;
+    const exited = term?.shellState === "exited";
     const detached = terminalsStore.isDetached(id);
     const worktreeTargets = props.getWorktreeTargets?.(id) ?? [];
     const items: ContextMenuItem[] = [
-      { label: t("tabBar.closeTab", "Close Tab"), shortcut: `${getModifierSymbol()}W`, action: () => props.onTabClose(id) },
+      { label: exited ? t("tabBar.removeTab", "Remove Tab") : t("tabBar.closeTab", "Close Tab"), shortcut: `${getModifierSymbol()}W`, action: () => props.onTabClose(id) },
       { label: t("tabBar.closeOthers", "Close Other Tabs"), action: () => props.onCloseOthers(id), disabled: ids.length <= 1 },
       { label: t("tabBar.closeRight", "Close Tabs to the Right"), action: () => props.onCloseToRight(id), disabled: idx >= ids.length - 1 },
       { label: "", separator: true, action: () => {} },
       { label: t("tabBar.renameTab", "Rename Tab"), action: () => setEditingId(id) },
       detached
         ? { label: t("tabBar.reattachTab", "Reattach to Main Window"), action: () => props.onReattachTab?.(id) }
-        : { label: t("tabBar.detachToWindow", "Detach to Window"), action: () => props.onDetachTab?.(id), disabled: !hasSession },
+        : { label: t("tabBar.detachToWindow", "Detach to Window"), action: () => props.onDetachTab?.(id), disabled: !hasSession || exited },
     ];
     if (worktreeTargets.length > 0) {
       items.push(
