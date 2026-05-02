@@ -2038,6 +2038,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     state.output_buffers.remove(session_id);
     state.vt_log_buffers.remove(session_id);
     state.grid_channels.remove(session_id);
+    state.grid_frame_in_flight.remove(session_id);
     state.ws_clients.remove(session_id);
     state.kitty_states.remove(session_id);
     state.input_buffers.remove(session_id);
@@ -2064,6 +2065,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
         .store(now_ms, Ordering::Relaxed);
     state.ws_clients.remove(session_id);
     state.grid_channels.remove(session_id);
+    state.grid_frame_in_flight.remove(session_id);
     state.kitty_states.remove(session_id);
     state.input_buffers.remove(session_id);
     state.silence_states.remove(session_id);
@@ -2525,16 +2527,17 @@ pub(crate) fn spawn_reader_thread(
                         );
                     }
 
-                    // Send grid frame unconditionally: the alacritty grid
-                    // receives data inside process_chunk even when xterm
-                    // output is suppressed (silence, transform_xterm=None).
-                    if let Some(ch) = state.grid_channels.get(&session_id)
+                    // Send grid frame if the frontend has acked the previous one.
+                    // When in-flight, damage accumulates in alacritty's grid and
+                    // the next frame will carry all pending changes (natural coalescing).
+                    let in_flight = state.grid_frame_in_flight.get(&session_id)
+                        .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+                        .unwrap_or(false);
+                    if !in_flight
                         && let Some(vt) = state.vt_log_buffers.get(&session_id)
                     {
                         let frame = vt.lock().serialize_dirty_rows();
-                        if !frame.is_empty() {
-                            let _ = ch.send(frame);
-                        }
+                        send_grid_frame(&state, &session_id, frame);
                     }
                 }
                 Err(e) => {
@@ -3196,6 +3199,53 @@ pub(crate) async fn write_pty(
     } else {
         Err("Session not found".to_string())
     }
+    })
+    .await
+    .map_err(|e| format!("Task join error: {e}"))?
+}
+
+/// Write an image file to a PTY session using the iTerm2 Inline Images Protocol (OSC 1337).
+/// Format: ESC ] 1337 ; File=name=<b64name>;size=<bytes>;inline=1 : <b64data> BEL
+#[tauri::command]
+pub(crate) async fn write_image_to_pty(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    file_path: String,
+) -> Result<(), String> {
+    use base64::Engine;
+
+    let file_data = tokio::fs::read(&file_path)
+        .await
+        .map_err(|e| format!("Failed to read image file: {e}"))?;
+    let file_size = file_data.len();
+
+    let file_name = std::path::Path::new(&file_path)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
+    let b64_name = base64::engine::general_purpose::STANDARD.encode(file_name.as_bytes());
+    let b64_data = base64::engine::general_purpose::STANDARD.encode(&file_data);
+
+    let osc = format!(
+        "\x1b]1337;File=name={b64_name};size={file_size};inline=1:{b64_data}\x07"
+    );
+
+    let state = Arc::clone(&state);
+    tokio::task::spawn_blocking(move || {
+        if let Some(entry) = state.sessions.get(&session_id) {
+            let mut session = entry.lock();
+            session
+                .writer
+                .write_all(osc.as_bytes())
+                .map_err(|e| format!("Failed to write OSC 1337 to PTY: {e}"))?;
+            session
+                .writer
+                .flush()
+                .map_err(|e| format!("Failed to flush PTY: {e}"))?;
+            Ok(())
+        } else {
+            Err("Session not found".to_string())
+        }
     })
     .await
     .map_err(|e| format!("Task join error: {e}"))?
@@ -3936,6 +3986,19 @@ pub(crate) fn read_vt_log(
     VtLogChunk { lines, screen, total_lines, oldest }
 }
 
+/// Send a grid frame via the session's channel and mark it in-flight.
+fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>) {
+    if frame.is_empty() {
+        return;
+    }
+    if let Some(ch) = state.grid_channels.get(session_id) {
+        if let Some(flag) = state.grid_frame_in_flight.get(session_id) {
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let _ = ch.send(frame);
+    }
+}
+
 /// Register a Tauri Channel for binary grid frame streaming on a session.
 /// The frontend calls this once per terminal; subsequent PTY output triggers
 /// `serialize_dirty_rows()` on the session's TerminalGrid and sends the result
@@ -3946,7 +4009,20 @@ pub(crate) fn subscribe_terminal_grid(
     session_id: String,
     channel: tauri::ipc::Channel<Vec<u8>>,
 ) {
+    state.grid_frame_in_flight.insert(session_id.clone(), Arc::new(AtomicBool::new(false)));
     state.grid_channels.insert(session_id, channel);
+}
+
+/// Acknowledge that the frontend has painted the last grid frame.
+/// Clears the in-flight flag so the PTY reader can send the next frame.
+#[tauri::command]
+pub(crate) fn ack_terminal_frame(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) {
+    if let Some(flag) = state.grid_frame_in_flight.get(&session_id) {
+        flag.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Request a full frame for a session (used after subscribe to get initial state).
@@ -3961,11 +4037,7 @@ pub(crate) fn terminal_request_frame(
             vt.grid_force_full_damage();
             vt.serialize_dirty_rows()
         };
-        if !frame.is_empty()
-            && let Some(ch) = state.grid_channels.get(&session_id)
-        {
-            let _ = ch.send(frame);
-        }
+        send_grid_frame(&state, &session_id, frame);
     }
 }
 
@@ -3976,6 +4048,7 @@ pub(crate) fn unsubscribe_terminal_grid(
     session_id: String,
 ) {
     state.grid_channels.remove(&session_id);
+    state.grid_frame_in_flight.remove(&session_id);
 }
 
 // --- Selection commands ---
@@ -3999,11 +4072,7 @@ pub(crate) fn terminal_select_start(
             vt.grid_selection_start(col, row, ty);
             vt.serialize_dirty_rows()
         };
-        if !frame.is_empty()
-            && let Some(ch) = state.grid_channels.get(&session_id)
-        {
-            let _ = ch.send(frame);
-        }
+        send_grid_frame(&state, &session_id, frame);
     }
 }
 
@@ -4020,11 +4089,7 @@ pub(crate) fn terminal_select_update(
             vt.grid_selection_update(col, row);
             vt.serialize_dirty_rows()
         };
-        if !frame.is_empty()
-            && let Some(ch) = state.grid_channels.get(&session_id)
-        {
-            let _ = ch.send(frame);
-        }
+        send_grid_frame(&state, &session_id, frame);
     }
 }
 
@@ -4048,11 +4113,7 @@ pub(crate) fn terminal_select_clear(
             vt.grid_selection_clear();
             vt.serialize_dirty_rows()
         };
-        if !frame.is_empty()
-            && let Some(ch) = state.grid_channels.get(&session_id)
-        {
-            let _ = ch.send(frame);
-        }
+        send_grid_frame(&state, &session_id, frame);
     }
 }
 
@@ -4070,11 +4131,7 @@ pub(crate) fn terminal_scroll(
             vt.grid_scroll(delta);
             vt.serialize_dirty_rows()
         };
-        if !frame.is_empty()
-            && let Some(ch) = state.grid_channels.get(&session_id)
-        {
-            let _ = ch.send(frame);
-        }
+        send_grid_frame(&state, &session_id, frame);
     }
 }
 

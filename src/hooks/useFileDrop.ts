@@ -14,7 +14,7 @@ import {
 } from "../stores/dragDrop";
 import { rpc, isTauri } from "../transport";
 import { invoke } from "../invoke";
-import { classifyFile } from "../utils/filePreview";
+import { classifyFile, isImageFile } from "../utils/filePreview";
 import { pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 
 // Re-export for existing callsites that import from useFileDrop
@@ -47,6 +47,17 @@ function resolveRepoPaths(absolutePath: string): [repoPath: string, filePath: st
  */
 function shellQuote(path: string): string {
   return path.replace(/([^A-Za-z0-9_\-.~/])/g, "\\$1");
+}
+
+/** Write image files to the active terminal via OSC 1337 inline image protocol. */
+function writeImagesToTerminal(paths: string[]): void {
+  const active = terminalsStore.getActive();
+  if (!active?.sessionId) return;
+  for (const path of paths) {
+    rpc("write_image_to_pty", { sessionId: active.sessionId, filePath: path }).catch((err) => {
+      appLogger.error("terminal", "Failed to write image via OSC 1337", err);
+    });
+  }
 }
 
 /** Write absolute paths to the active terminal as space-separated shell-quoted tokens. */
@@ -203,7 +214,14 @@ async function dispatchTauriDrop(paths: string[], x: number, y: number): Promise
   }
 
   if (target?.kind === "pane") {
-    writePathsToTerminal(paths);
+    const images = paths.filter(isImageFile);
+    const nonImages = paths.filter((p) => !isImageFile(p));
+    if (images.length > 0) {
+      writeImagesToTerminal(images);
+    }
+    if (nonImages.length > 0) {
+      writePathsToTerminal(nonImages);
+    }
     return;
   }
 
