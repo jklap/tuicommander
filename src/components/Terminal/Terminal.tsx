@@ -198,6 +198,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
   // WebSocket reconnect state (browser/PWA mode only)
   const [reconnecting, setReconnecting] = createSignal<{ attempt: number; max: number } | null>(null);
   let sessionInitialized = false;
+  let disposed = false;
   let unsubscribePty: Unsubscribe | undefined;
   let unlistenParsed: (() => void) | undefined;
   let unlistenKitty: (() => void) | undefined;
@@ -721,11 +722,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
       unlistenParsed = await listen<ParsedEvent>(`pty-parsed-${targetSessionId}`, (event) => {
         handleParsedEvent(event.payload);
       });
+      if (disposed) { unlistenParsed(); unlistenParsed = undefined; return; }
 
       // Listen for kitty keyboard protocol flag changes from Rust
       unlistenKitty = await listen<number>(`kitty-keyboard-${targetSessionId}`, (event) => {
         kittyFlags = event.payload;
       });
+      if (disposed) { unlistenKitty(); unlistenKitty = undefined; return; }
 
       // Listen for OSC 133 shell integration markers from Rust (native renderer)
       unlistenOsc133 = await listen<{ marker: string; line: number; exit_code: number | null }>(
@@ -734,6 +737,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
           terminalsStore.handleOsc133(props.id, marker, line, exit_code ?? undefined);
         },
       );
+      if (disposed) { unlistenOsc133(); unlistenOsc133 = undefined; return; }
 
       // Listen for OSC 0/2 title changes from Rust (native renderer)
       unlistenTitle = await listen<string>(
@@ -761,6 +765,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
           navigator.clipboard.writeText(event.payload).catch(() => {});
         },
       );
+      if (disposed) { unlistenClipboardStore(); unlistenClipboardStore = undefined; return; }
 
       // Sync initial kitty flags — the push event may have fired before listener attached.
       // Only apply if the listener hasn't already updated kittyFlags (race guard).
@@ -1751,6 +1756,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
   // Cleanup on unmount - detach UI but keep PTY session alive
   onCleanup(() => {
+    disposed = true;
     clearTimeout(resizeTimer);
     clearTimeout(resizeObserverTimer);
     clearTimeout(retryTimer);
