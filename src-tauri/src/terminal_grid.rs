@@ -5,7 +5,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
-use alacritty_terminal::vte::ansi::{self, Color, NamedColor, Rgb};
+use alacritty_terminal::vte::ansi::{self, Color, CursorShape, NamedColor, Rgb};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -527,6 +527,7 @@ impl TerminalGrid {
     /// Scroll the viewport by `delta` lines (positive = up / into history).
     pub fn scroll(&mut self, delta: i32) {
         self.term.scroll_display(Scroll::Delta(delta));
+        self.force_full_next = true;
     }
 
     /// Current display offset (0 = at bottom, >0 = scrolled up).
@@ -655,8 +656,17 @@ impl TerminalGrid {
         let mut buf = Vec::with_capacity(estimated);
 
         let bell = self.drain_bell();
+        let cursor_shape = self.term.cursor_style().shape;
         let mut frame_flags: u8 = 0;
         if bell { frame_flags |= 0x01; }
+        // bits 1-2: cursor shape (0=block, 1=underline, 2=beam)
+        let shape_bits: u8 = match cursor_shape {
+            CursorShape::Block => 0,
+            CursorShape::Underline => 1,
+            CursorShape::Beam => 2,
+            _ => 0,
+        };
+        frame_flags |= shape_bits << 1;
 
         buf.extend_from_slice(&(row_count as u16).to_le_bytes());
         buf.extend_from_slice(&(cursor.line.0.max(0) as u16).to_le_bytes());

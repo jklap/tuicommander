@@ -59,7 +59,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   // Accumulated screen buffer: survives partial damage frames so resize can repaint everything
   let screenRows = new Map<number, DecodedFrame["rows"][0]>();
   let lastDisplayOffset = -1;
-  let cursorShape: CursorShape = "block";
   let cursorBlinkOn = true;
   let blinkInterval: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -209,7 +208,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     if (!frame.cursorVisible) return;
     if (!cursorBlinkOn && focused()) return;
 
-    const rect = computeCursorRect(cursorShape, frame.cursorRow, frame.cursorCol, m);
+    const rect = computeCursorRect(frame.cursorShape, frame.cursorRow, frame.cursorCol, m);
 
     if (!focused()) {
       ctx.strokeStyle = cachedFgDefault;
@@ -221,7 +220,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     ctx.fillStyle = cachedFgDefault;
     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
-    if (cursorShape === "block") {
+    if (frame.cursorShape === "block") {
       const row = rowMap.get(frame.cursorRow);
       const cell = row?.cells[frame.cursorCol];
       if (cell && cell.char && cell.char !== " ") {
@@ -305,7 +304,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (currentFrame && m) {
         repaintCursorRow(currentFrame, m);
       }
-    }, 530);
+    }, 700);
   }
 
   function stopBlink() {

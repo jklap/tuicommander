@@ -39,6 +39,7 @@ export interface DecodedFrame {
   cursorRow: number;
   cursorCol: number;
   cursorVisible: boolean;
+  cursorShape: "block" | "underline" | "beam";
   displayOffset: number;
   historySize: number;
   hasSelection: boolean;
@@ -74,6 +75,8 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
   const keyboardFlags = view.getUint8(offset); offset += 1;
   const frameFlags = view.getUint8(offset); offset += 1;
   const bell = (frameFlags & 0x01) !== 0;
+  const cursorShapeRaw = (frameFlags >> 1) & 0x03;
+  const cursorShape: "block" | "underline" | "beam" = cursorShapeRaw === 2 ? "beam" : cursorShapeRaw === 1 ? "underline" : "block";
 
   const rows: DecodedRow[] = [];
   for (let r = 0; r < numRows; r++) {
@@ -111,7 +114,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
     rows.push({ index: rowIndex, cells });
   }
 
-  return { cursorRow, cursorCol, cursorVisible, displayOffset, historySize, hasSelection, keyboardFlags, bell, rows };
+  return { cursorRow, cursorCol, cursorVisible, cursorShape, displayOffset, historySize, hasSelection, keyboardFlags, bell, rows };
 }
 
 /** Measure natural character height via DOM span — matches xterm.js CharSizeService. */
