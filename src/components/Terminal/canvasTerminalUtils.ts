@@ -140,8 +140,8 @@ export function computeCursorRect(
 /**
  * Measure a monospace font and return cell metrics for grid layout.
  * Uses 'M' as the reference glyph (widest ASCII char in most monospace fonts).
- * Cell height is derived from actual font metrics (ascent + descent), not fontSize,
- * matching how real terminals (xterm.js, Alacritty) compute cell dimensions.
+ * Cell height matches xterm.js: Math.ceil(fontSize * lineHeight).
+ * Font bounding box metrics are used only for accurate baseline positioning.
  */
 export function measureFont(
   ctx: CanvasRenderingContext2D,
@@ -154,16 +154,16 @@ export function measureFont(
   ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
   const m = ctx.measureText("M");
   const cellWidth = Math.ceil(m.width);
-  // Cell height from actual font metrics (ascent + descent), scaled by lineHeight.
-  // This matches standard terminal behaviour — fontSize * lineHeight produces cells
-  // that are too small because fontSize < actual font height for most fonts.
+  // Cell height: match xterm.js formula exactly (Math.ceil(fontSize * lineHeight)).
+  // Font bounding box is larger than fontSize for many fonts, which would add
+  // extra line spacing not present in xterm.js. Using fontSize * lineHeight
+  // produces the same grid layout as xterm.js for pixel-perfect parity.
+  const cellHeight = Math.ceil(fontSize * lineHeight);
+  // Baseline from font bounding box ascent — accurate vertical text placement.
   const ascent = Math.ceil(m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent);
   const descent = Math.ceil(m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent);
   const fontHeight = ascent + descent;
-  // Snap to device pixels for crisp rendering on Retina displays
-  const rawDevicePx = fontHeight * lineHeight * dpr;
-  const cellHeight = Math.round(rawDevicePx / dpr);
-  // Baseline: ascent + half the extra space (lineHeight padding) centers text vertically
+  // Center text vertically within the cell using actual font metrics.
   const baseline = ascent + Math.floor((cellHeight - fontHeight) / 2);
 
   return {
