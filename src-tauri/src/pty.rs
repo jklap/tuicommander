@@ -1560,11 +1560,12 @@ impl ChunkProcessor {
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
         // Also capture the post-process `total_lines` and `oldest_offset` so
         // we can emit a throttled growth/rotation event for the scrollback overlay.
-        let (changed_rows, osc133_events, vt_log_total, vt_log_oldest) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
+        let (changed_rows, osc133_events, vt_log_total, vt_log_oldest, term_events) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
             let (changed, osc133) = vt.process(data.as_bytes());
             let total = vt.total_lines();
             let oldest = vt.oldest_offset();
+            let tevts = vt.grid_drain_events();
 
             // Filter out changed rows below the input area border (horizontal rule).
             // Claude Code (and similar agents) render a quota/budget status bar below
@@ -1582,9 +1583,9 @@ impl ChunkProcessor {
                 changed
             };
 
-            (changed, osc133, Some(total), Some(oldest))
+            (changed, osc133, Some(total), Some(oldest), tevts)
         } else {
-            (Vec::new(), Vec::new(), None, None)
+            (Vec::new(), Vec::new(), None, None, Vec::new())
         };
 
         // Emit scrollback-overlay growth/rotation event (throttled to 100ms).
@@ -1623,6 +1624,39 @@ impl ChunkProcessor {
                         &format!("pty-osc133-{session_id}"),
                         evt,
                     );
+                }
+            }
+        }
+
+        // Handle terminal events from alacritty (title, clipboard, PTY writes)
+        if !term_events.is_empty() {
+            use crate::terminal_grid::TermEvent;
+            for evt in term_events {
+                match evt {
+                    TermEvent::PtyWrite(response) => {
+                        if let Some(sess) = state.sessions.get(session_id) {
+                            if let Some(mut s) = sess.try_lock() {
+                                let _ = s.writer.write_all(response.as_bytes());
+                                let _ = s.writer.flush();
+                            }
+                        }
+                    }
+                    TermEvent::Title(title) => {
+                        if let Some(a) = app {
+                            let _ = a.emit(&format!("pty-title-{session_id}"), &title);
+                        }
+                    }
+                    TermEvent::ResetTitle => {
+                        if let Some(a) = app {
+                            let _ = a.emit(&format!("pty-title-{session_id}"), "");
+                        }
+                    }
+                    TermEvent::ClipboardStore(text) => {
+                        if let Some(a) = app {
+                            let _ = a.emit(&format!("pty-clipboard-store-{session_id}"), &text);
+                        }
+                    }
+                    TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {}
                 }
             }
         }

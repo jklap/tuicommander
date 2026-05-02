@@ -202,6 +202,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
   let unlistenParsed: (() => void) | undefined;
   let unlistenKitty: (() => void) | undefined;
   let unlistenOsc133: (() => void) | undefined;
+  let unlistenTitle: (() => void) | undefined;
+  let unlistenClipboardStore: (() => void) | undefined;
 
   // Kitty keyboard protocol: current flags for this session (0 = disabled)
   let kittyFlags = 0;
@@ -733,6 +735,33 @@ export const Terminal: Component<TerminalProps> = (props) => {
         },
       );
 
+      // Listen for OSC 0/2 title changes from Rust (native renderer)
+      unlistenTitle = await listen<string>(
+        `pty-title-${targetSessionId}`, (event) => {
+          const title = event.payload;
+          const term = terminalsStore.get(props.id);
+          if (term?.nameIsCustom || (term?.agentIntent && settingsStore.state.intentTabTitle)) return;
+          if (!title) {
+            if (originalName) terminalsStore.update(props.id, { name: originalName });
+          } else {
+            const cleaned = cleanOscTitle(title);
+            if (cleaned) {
+              if (!originalName) originalName = terminalsStore.get(props.id)?.name || null;
+              terminalsStore.update(props.id, { name: cleaned });
+            } else if (originalName) {
+              terminalsStore.update(props.id, { name: originalName });
+            }
+          }
+        },
+      );
+
+      // Listen for OSC 52 clipboard store from Rust (native renderer)
+      unlistenClipboardStore = await listen<string>(
+        `pty-clipboard-store-${targetSessionId}`, (event) => {
+          navigator.clipboard.writeText(event.payload).catch(() => {});
+        },
+      );
+
       // Sync initial kitty flags — the push event may have fired before listener attached.
       // Only apply if the listener hasn't already updated kittyFlags (race guard).
       const preListenFlags = kittyFlags;
@@ -801,6 +830,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
           unlistenKitty = undefined;
           unlistenOsc133?.();
           unlistenOsc133 = undefined;
+          unlistenTitle?.();
+          unlistenTitle = undefined;
+          unlistenClipboardStore?.();
+          unlistenClipboardStore = undefined;
         }
       }
       if (!reconnected) {
@@ -1730,6 +1763,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
     unlistenParsed = undefined;
     unlistenKitty?.();
     unlistenKitty = undefined;
+    unlistenOsc133?.();
+    unlistenOsc133 = undefined;
+    unlistenTitle?.();
+    unlistenTitle = undefined;
+    unlistenClipboardStore?.();
+    unlistenClipboardStore = undefined;
     kittyFlags = 0;
 
     // Resume reader if paused (don't leave PTY blocked after unmount)

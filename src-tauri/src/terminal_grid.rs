@@ -5,19 +5,41 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
+use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
-#[derive(Clone)]
-pub(crate) struct BellListener {
-    bell: Arc<AtomicBool>,
+/// Terminal event captured from alacritty for forwarding to PTY/frontend.
+#[derive(Debug, Clone)]
+pub enum TermEvent {
+    Title(String),
+    ResetTitle,
+    ClipboardStore(String),
+    PtyWrite(String),
+    MouseCursorDirty,
+    CursorBlinkingChange,
 }
 
-impl EventListener for BellListener {
+#[derive(Clone)]
+pub(crate) struct TermEventCollector {
+    bell: Arc<AtomicBool>,
+    events: Arc<Mutex<Vec<TermEvent>>>,
+}
+
+impl EventListener for TermEventCollector {
     fn send_event(&self, event: Event) {
-        if matches!(event, Event::Bell) {
-            self.bell.store(true, Ordering::Relaxed);
+        match event {
+            Event::Bell => { self.bell.store(true, Ordering::Relaxed); }
+            Event::Title(t) => { self.events.lock().unwrap().push(TermEvent::Title(t)); }
+            Event::ResetTitle => { self.events.lock().unwrap().push(TermEvent::ResetTitle); }
+            Event::ClipboardStore(_, text) => { self.events.lock().unwrap().push(TermEvent::ClipboardStore(text)); }
+            Event::PtyWrite(s) => { self.events.lock().unwrap().push(TermEvent::PtyWrite(s)); }
+            Event::MouseCursorDirty => { self.events.lock().unwrap().push(TermEvent::MouseCursorDirty); }
+            Event::CursorBlinkingChange => { self.events.lock().unwrap().push(TermEvent::CursorBlinkingChange); }
+            Event::ClipboardLoad(..) | Event::ColorRequest(..) | Event::TextAreaSizeRequest(..)
+            | Event::Wakeup | Event::Exit | Event::ChildExit(_) => {}
         }
     }
 }
@@ -104,37 +126,45 @@ fn xterm_color_rgb(index: u8) -> Rgb {
 }
 
 /// Resolve a `Color` to RGB, returning `None` for default fg/bg.
-fn resolve_color(c: Color) -> Option<Rgb> {
+/// Checks dynamic color overrides (from OSC 4/10/11/12) before falling back to static palette.
+fn resolve_color(c: Color, colors: &Colors) -> Option<Rgb> {
     match c {
         Color::Spec(rgb) => Some(rgb),
-        Color::Indexed(i) => Some(xterm_color_rgb(i)),
-        Color::Named(n) => match n {
-            NamedColor::Foreground | NamedColor::Background | NamedColor::Cursor
-            | NamedColor::BrightForeground | NamedColor::DimForeground => None,
-            NamedColor::Black        => Some(xterm_color_rgb(0)),
-            NamedColor::Red          => Some(xterm_color_rgb(1)),
-            NamedColor::Green        => Some(xterm_color_rgb(2)),
-            NamedColor::Yellow       => Some(xterm_color_rgb(3)),
-            NamedColor::Blue         => Some(xterm_color_rgb(4)),
-            NamedColor::Magenta      => Some(xterm_color_rgb(5)),
-            NamedColor::Cyan         => Some(xterm_color_rgb(6)),
-            NamedColor::White        => Some(xterm_color_rgb(7)),
-            NamedColor::BrightBlack  => Some(xterm_color_rgb(8)),
-            NamedColor::BrightRed    => Some(xterm_color_rgb(9)),
-            NamedColor::BrightGreen  => Some(xterm_color_rgb(10)),
-            NamedColor::BrightYellow => Some(xterm_color_rgb(11)),
-            NamedColor::BrightBlue   => Some(xterm_color_rgb(12)),
-            NamedColor::BrightMagenta => Some(xterm_color_rgb(13)),
-            NamedColor::BrightCyan   => Some(xterm_color_rgb(14)),
-            NamedColor::BrightWhite  => Some(xterm_color_rgb(15)),
-            NamedColor::DimBlack     => Some(xterm_color_rgb(0)),
-            NamedColor::DimRed       => Some(xterm_color_rgb(1)),
-            NamedColor::DimGreen     => Some(xterm_color_rgb(2)),
-            NamedColor::DimYellow    => Some(xterm_color_rgb(3)),
-            NamedColor::DimBlue      => Some(xterm_color_rgb(4)),
-            NamedColor::DimMagenta   => Some(xterm_color_rgb(5)),
-            NamedColor::DimCyan      => Some(xterm_color_rgb(6)),
-            NamedColor::DimWhite     => Some(xterm_color_rgb(7)),
+        Color::Indexed(i) => {
+            colors[i as usize].or_else(|| Some(xterm_color_rgb(i)))
+        }
+        Color::Named(n) => {
+            if let Some(rgb) = colors[n] {
+                return Some(rgb);
+            }
+            match n {
+                NamedColor::Foreground | NamedColor::Background | NamedColor::Cursor
+                | NamedColor::BrightForeground | NamedColor::DimForeground => None,
+                NamedColor::Black        => Some(xterm_color_rgb(0)),
+                NamedColor::Red          => Some(xterm_color_rgb(1)),
+                NamedColor::Green        => Some(xterm_color_rgb(2)),
+                NamedColor::Yellow       => Some(xterm_color_rgb(3)),
+                NamedColor::Blue         => Some(xterm_color_rgb(4)),
+                NamedColor::Magenta      => Some(xterm_color_rgb(5)),
+                NamedColor::Cyan         => Some(xterm_color_rgb(6)),
+                NamedColor::White        => Some(xterm_color_rgb(7)),
+                NamedColor::BrightBlack  => Some(xterm_color_rgb(8)),
+                NamedColor::BrightRed    => Some(xterm_color_rgb(9)),
+                NamedColor::BrightGreen  => Some(xterm_color_rgb(10)),
+                NamedColor::BrightYellow => Some(xterm_color_rgb(11)),
+                NamedColor::BrightBlue   => Some(xterm_color_rgb(12)),
+                NamedColor::BrightMagenta => Some(xterm_color_rgb(13)),
+                NamedColor::BrightCyan   => Some(xterm_color_rgb(14)),
+                NamedColor::BrightWhite  => Some(xterm_color_rgb(15)),
+                NamedColor::DimBlack     => Some(xterm_color_rgb(0)),
+                NamedColor::DimRed       => Some(xterm_color_rgb(1)),
+                NamedColor::DimGreen     => Some(xterm_color_rgb(2)),
+                NamedColor::DimYellow    => Some(xterm_color_rgb(3)),
+                NamedColor::DimBlue      => Some(xterm_color_rgb(4)),
+                NamedColor::DimMagenta   => Some(xterm_color_rgb(5)),
+                NamedColor::DimCyan      => Some(xterm_color_rgb(6)),
+                NamedColor::DimWhite     => Some(xterm_color_rgb(7)),
+            }
         },
     }
 }
@@ -145,11 +175,12 @@ fn resolve_color(c: Color) -> Option<Rgb> {
 /// interface that `VtLogBuffer` expects, so it can drop in as a replacement
 /// for the current `vt100::Parser`.
 pub struct TerminalGrid {
-    term: Term<BellListener>,
+    term: Term<TermEventCollector>,
     processor: ansi::Processor,
     prev_rows: Vec<String>,
     force_full_next: bool,
     bell_flag: Arc<AtomicBool>,
+    events: Arc<Mutex<Vec<TermEvent>>>,
 }
 
 impl TerminalGrid {
@@ -162,7 +193,8 @@ impl TerminalGrid {
         };
         let size = GridSize { cols: cols as usize, lines: rows as usize };
         let bell_flag = Arc::new(AtomicBool::new(false));
-        let listener = BellListener { bell: bell_flag.clone() };
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let listener = TermEventCollector { bell: bell_flag.clone(), events: events.clone() };
         let term = Term::new(config, &size, listener);
         Self {
             term,
@@ -170,6 +202,7 @@ impl TerminalGrid {
             prev_rows: Vec::new(),
             force_full_next: false,
             bell_flag,
+            events,
         }
     }
 
@@ -275,12 +308,12 @@ impl TerminalGrid {
     }
 
     /// Access the underlying Term (for future rendering/selection needs).
-    pub fn term(&self) -> &Term<BellListener> {
+    pub fn term(&self) -> &Term<TermEventCollector> {
         &self.term
     }
 
     /// Mutable access to the underlying Term.
-    pub fn term_mut(&mut self) -> &mut Term<BellListener> {
+    pub fn term_mut(&mut self) -> &mut Term<TermEventCollector> {
         &mut self.term
     }
 
@@ -537,6 +570,11 @@ impl TerminalGrid {
         self.bell_flag.swap(false, Ordering::Relaxed)
     }
 
+    /// Drain queued terminal events (title changes, clipboard, PTY writes, etc.)
+    pub fn drain_events(&self) -> Vec<TermEvent> {
+        std::mem::take(&mut *self.events.lock().unwrap())
+    }
+
     /// Get the OSC 8 hyperlink URI at a given viewport position, if any.
     pub fn hyperlink_at(&self, row: usize, col: usize) -> Option<String> {
         let display_offset = self.term.grid().display_offset();
@@ -709,6 +747,7 @@ impl TerminalGrid {
         buf.push(frame_flags);
 
         let grid = self.term.grid();
+        let colors = self.term.colors();
         for &row_idx in &dirty_lines {
             let line = Line(row_idx as i32 - display_offset as i32);
             buf.extend_from_slice(&(row_idx as u16).to_le_bytes());
@@ -725,7 +764,7 @@ impl TerminalGrid {
                 };
                 buf.extend_from_slice(&ch.to_le_bytes());
 
-                let (fg_rgb, fg_default) = match resolve_color(cell.fg) {
+                let (fg_rgb, fg_default) = match resolve_color(cell.fg, colors) {
                     Some(rgb) => (rgb, false),
                     None => (Rgb { r: 0, g: 0, b: 0 }, true),
                 };
@@ -733,7 +772,7 @@ impl TerminalGrid {
                 buf.push(fg_rgb.g);
                 buf.push(fg_rgb.b);
 
-                let (bg_rgb, bg_default) = match resolve_color(cell.bg) {
+                let (bg_rgb, bg_default) = match resolve_color(cell.bg, colors) {
                     Some(rgb) => (rgb, false),
                     None => (Rgb { r: 0, g: 0, b: 0 }, true),
                 };

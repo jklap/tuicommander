@@ -1869,6 +1869,10 @@ impl VtLogBuffer {
         self.grid.force_full_damage();
     }
 
+    pub(crate) fn grid_drain_events(&self) -> Vec<crate::terminal_grid::TermEvent> {
+        self.grid.drain_events()
+    }
+
     // --- Scroll delegates ---
 
     pub(crate) fn grid_scroll(&mut self, delta: i32) {
