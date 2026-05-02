@@ -182,6 +182,7 @@ async function dispatchTauriDrop(paths: string[], x: number, y: number): Promise
 
   const el = elementAtDropPoint(x, y);
   const target = findDropTarget(el);
+  appLogger.info("app", `dispatchTauriDrop: ${paths.length} file(s), target=${target?.kind ?? "none"}`, { paths, x, y });
 
   if (target?.kind === "folder") {
     const mode: "move" | "copy" = dragDropStore.copyModifierHeld() ? "copy" : "move";
@@ -204,7 +205,20 @@ async function dispatchTauriDrop(paths: string[], x: number, y: number): Promise
   }
 
   if (target?.kind === "pane") {
-    writePathsToTerminal(paths);
+    const active = terminalsStore.getActive();
+    const agentType = active ? terminalsStore.getAgentTypeForSession(active.sessionId ?? "") : null;
+    const isAgent = agentType && IMAGE_PASTE_AGENTS.has(agentType as AgentType);
+    const images = paths.filter((p) => IMAGE_EXTS.test(p));
+    const nonImages = paths.filter((p) => !IMAGE_EXTS.test(p));
+
+    if (isAgent && images.length > 0 && !dragDropStore.shiftHeld()) {
+      for (const img of images) {
+        void dropImageToAgent(img);
+      }
+      if (nonImages.length > 0) writePathsToTerminal(nonImages);
+    } else {
+      writePathsToTerminal(paths);
+    }
     return;
   }
 
