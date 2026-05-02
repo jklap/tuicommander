@@ -26,6 +26,10 @@ export type { CellMetrics, CursorShape, DecodedFrame, DecodedCell };
 export interface CanvasTerminalRef {
   focus: () => void;
   refresh: () => void;
+  searchFind: (query: string) => Promise<{ index: number; count: number }>;
+  searchNext: () => { index: number; count: number };
+  searchPrev: () => { index: number; count: number };
+  searchClear: () => void;
 }
 
 export interface CanvasTerminalProps {
@@ -59,6 +63,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   // Accumulated screen buffer: survives partial damage frames so resize can repaint everything
   let screenRows = new Map<number, DecodedFrame["rows"][0]>();
   let lastDisplayOffset = -1;
+  let searchMatches: { row: number; col_start: number; col_end: number }[] = [];
+  let activeSearchIndex = -1;
   let cursorBlinkOn = true;
   let blinkInterval: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
@@ -149,9 +155,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     }
 
     paintSelection(frame, m);
+    paintSearchHighlights(m);
     paintCursor(frame, m);
     updateScrollbar(frame);
     updateSuggestOverlay(frame, m);
+  }
+
+  function paintSearchHighlights(m: CellMetrics) {
+    if (searchMatches.length === 0) return;
+    for (let i = 0; i < searchMatches.length; i++) {
+      const match = searchMatches[i];
+      const isActive = i === activeSearchIndex;
+      ctx.fillStyle = isActive ? "rgba(255, 140, 0, 0.7)" : "rgba(255, 255, 0, 0.25)";
+      const x = match.col_start * m.cellWidth;
+      const y = match.row * m.cellHeight;
+      const w = (match.col_end - match.col_start) * m.cellWidth;
+      ctx.fillRect(x, y, w, m.cellHeight);
+    }
   }
 
   function paintSelection(frame: DecodedFrame, m: CellMetrics) {
@@ -437,6 +457,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
   async function checkLinksAtRow(row: number, col: number) {
     if (!invokeRef || !alive) return;
+
+    // OSC 8 hyperlinks take priority — the program explicitly tagged this cell
+    try {
+      const uri = await invokeRef("terminal_hyperlink_at", {
+        sessionId: props.sessionId, row, col,
+      }) as string | null;
+      if (uri) {
+        hoveredLink = { row, colStart: col, colEnd: col + 1, path: uri };
+        canvasRef.style.cursor = "pointer";
+        return;
+      }
+    } catch { /* ignore — command may not exist on older backend */ }
+    if (!alive) return;
+
     const rowText = await invokeRef("terminal_get_row_text", {
       sessionId: props.sessionId,
       row,
@@ -575,9 +609,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         return;
       }
 
-      // DEFERRED (2026-05-02) — Cmd+F opens the shared SearchBar but search uses xterm's
-      // SearchAddon which doesn't work with CanvasTerminal. Needs a CanvasTerminalSearch
-      // component that uses the Rust terminal_search IPC + canvas highlight rendering.
       if ((e.metaKey || e.ctrlKey) && e.key === "f" && !e.altKey && !e.shiftKey) {
         e.preventDefault();
         props.onSearchOpen?.();
@@ -900,6 +931,43 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         lastDisplayOffset = -1;
         remeasure();
         invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(() => {});
+      },
+      searchFind: async (query: string) => {
+        if (!query || !invokeRef) {
+          searchMatches = [];
+          activeSearchIndex = -1;
+          const m = metrics();
+          if (currentFrame && m) paintFrame(currentFrame, m);
+          return { index: -1, count: 0 };
+        }
+        const matches = await invokeRef("terminal_search", {
+          sessionId: props.sessionId, query,
+        }) as { row: number; col_start: number; col_end: number }[];
+        searchMatches = matches;
+        activeSearchIndex = matches.length > 0 ? 0 : -1;
+        const m = metrics();
+        if (currentFrame && m) paintFrame(currentFrame, m);
+        return { index: activeSearchIndex, count: matches.length };
+      },
+      searchNext: () => {
+        if (searchMatches.length === 0) return { index: -1, count: 0 };
+        activeSearchIndex = (activeSearchIndex + 1) % searchMatches.length;
+        const m = metrics();
+        if (currentFrame && m) paintFrame(currentFrame, m);
+        return { index: activeSearchIndex, count: searchMatches.length };
+      },
+      searchPrev: () => {
+        if (searchMatches.length === 0) return { index: -1, count: 0 };
+        activeSearchIndex = (activeSearchIndex - 1 + searchMatches.length) % searchMatches.length;
+        const m = metrics();
+        if (currentFrame && m) paintFrame(currentFrame, m);
+        return { index: activeSearchIndex, count: searchMatches.length };
+      },
+      searchClear: () => {
+        searchMatches = [];
+        activeSearchIndex = -1;
+        const m = metrics();
+        if (currentFrame && m) paintFrame(currentFrame, m);
       },
     });
   });

@@ -1202,6 +1202,7 @@ pub fn run() {
             pty::terminal_scroll_info,
             pty::terminal_search,
             pty::terminal_get_row_text,
+            pty::terminal_hyperlink_at,
             pty::update_session_cwd,
             pty::set_session_name,
             pty::get_session_foreground_process,

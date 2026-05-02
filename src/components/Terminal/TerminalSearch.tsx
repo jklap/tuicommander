@@ -1,6 +1,7 @@
 import { Component, createEffect, createSignal, onCleanup } from "solid-js";
 import type { SearchAddon, ISearchOptions, ISearchResultChangeEvent } from "@xterm/addon-search";
 import type { SearchOptions } from "../shared/DomSearchEngine";
+import type { CanvasTerminalRef } from "./CanvasTerminal";
 import { SearchBar } from "../shared/SearchBar";
 
 /** Decoration colors for search highlights (dark theme) */
@@ -15,7 +16,8 @@ const DECORATIONS = {
 
 export interface TerminalSearchProps {
   visible: boolean;
-  searchAddon: SearchAddon | undefined;
+  searchAddon?: SearchAddon | undefined;
+  canvasRef?: CanvasTerminalRef | undefined;
   onClose: () => void;
 }
 
@@ -47,7 +49,11 @@ export const TerminalSearch: Component<TerminalSearchProps> = (props) => {
   // Clear decorations when closing
   createEffect(() => {
     if (!props.visible) {
-      props.searchAddon?.clearDecorations();
+      if (props.canvasRef) {
+        props.canvasRef.searchClear();
+      } else {
+        props.searchAddon?.clearDecorations();
+      }
       setResultIndex(-1);
       setResultCount(0);
     }
@@ -63,6 +69,19 @@ export const TerminalSearch: Component<TerminalSearchProps> = (props) => {
 
   const handleSearch = (term: string, opts: SearchOptions) => {
     lastTerm = term;
+    if (props.canvasRef) {
+      if (term) {
+        props.canvasRef.searchFind(term).then(({ index, count }) => {
+          setResultIndex(index);
+          setResultCount(count);
+        });
+      } else {
+        props.canvasRef.searchClear();
+        setResultIndex(-1);
+        setResultCount(0);
+      }
+      return;
+    }
     lastOpts = buildXtermOpts(opts);
     if (term && props.searchAddon) {
       props.searchAddon.findNext(term, lastOpts);
@@ -74,13 +93,27 @@ export const TerminalSearch: Component<TerminalSearchProps> = (props) => {
   };
 
   const handleNext = () => {
-    if (lastTerm && props.searchAddon) {
+    if (!lastTerm) return;
+    if (props.canvasRef) {
+      const { index, count } = props.canvasRef.searchNext();
+      setResultIndex(index);
+      setResultCount(count);
+      return;
+    }
+    if (props.searchAddon) {
       props.searchAddon.findNext(lastTerm, lastOpts);
     }
   };
 
   const handlePrev = () => {
-    if (lastTerm && props.searchAddon) {
+    if (!lastTerm) return;
+    if (props.canvasRef) {
+      const { index, count } = props.canvasRef.searchPrev();
+      setResultIndex(index);
+      setResultCount(count);
+      return;
+    }
+    if (props.searchAddon) {
       props.searchAddon.findPrevious(lastTerm, lastOpts);
     }
   };

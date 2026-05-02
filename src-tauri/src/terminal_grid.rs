@@ -518,6 +518,16 @@ impl TerminalGrid {
         self.bell_flag.swap(false, Ordering::Relaxed)
     }
 
+    /// Get the OSC 8 hyperlink URI at a given viewport position, if any.
+    pub fn hyperlink_at(&self, row: usize, col: usize) -> Option<String> {
+        let display_offset = self.term.grid().display_offset();
+        let line = Line(row as i32 - display_offset as i32);
+        let grid = self.term.grid();
+        if col >= grid.columns() { return None; }
+        let cell = &grid[line][Column(col)];
+        cell.hyperlink().map(|h| h.uri().to_owned())
+    }
+
     /// Mark all rows as dirty so the next serialize_dirty_rows returns a full frame.
     pub fn force_full_damage(&mut self) {
         self.force_full_next = true;

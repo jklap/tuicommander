@@ -4069,6 +4069,17 @@ pub(crate) fn terminal_get_row_text(
         .unwrap_or_default()
 }
 
+#[tauri::command]
+pub(crate) fn terminal_hyperlink_at(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    row: usize,
+    col: usize,
+) -> Option<String> {
+    state.vt_log_buffers.get(&session_id)
+        .and_then(|vt| vt.lock().grid_hyperlink_at(row, col))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

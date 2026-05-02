@@ -1931,10 +1931,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
     >
       <TerminalSearch
         visible={searchVisible()}
-        searchAddon={searchAddon()}
+        searchAddon={isNative() ? undefined : searchAddon()}
+        canvasRef={isNative() ? canvasTerminalRef : undefined}
         onClose={() => {
           setSearchVisible(false);
-          terminal?.focus();
+          if (isNative()) canvasTerminalRef?.focus();
+          else terminal?.focus();
         }}
       />
       <Show when={reconnecting()}>

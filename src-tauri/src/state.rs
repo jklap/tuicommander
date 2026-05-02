@@ -1896,6 +1896,10 @@ impl VtLogBuffer {
         self.grid.get_row_text(row)
     }
 
+    pub(crate) fn grid_hyperlink_at(&self, row: usize, col: usize) -> Option<String> {
+        self.grid.hyperlink_at(row, col)
+    }
+
     // --- private helpers ---
 
     fn push_log_line(&mut self, line: LogLine) {
