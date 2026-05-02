@@ -1,9 +1,10 @@
-import { Component, createSignal, onMount, onCleanup } from "solid-js";
+import { Component, createSignal, createEffect, onMount, onCleanup } from "solid-js";
 import { settingsStore } from "../../stores/settings";
 import {
   decodeBinaryFrame,
   measureFont,
   computeCursorRect,
+  snapLineHeight,
   type CellMetrics,
   type CursorShape,
   type DecodedFrame,
@@ -38,12 +39,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   const [metrics, setMetrics] = createSignal<CellMetrics | null>(null);
   const [focused, setFocused] = createSignal(false);
   let currentFrame: DecodedFrame | null = null;
+  // Accumulated screen buffer: survives partial damage frames so resize can repaint everything
+  let screenRows = new Map<number, DecodedFrame["rows"][0]>();
+  let lastDisplayOffset = -1;
   let cursorShape: CursorShape = "block";
   let cursorBlinkOn = true;
   let blinkInterval: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let invokeRef: ((cmd: string, args: Record<string, unknown>) => Promise<unknown>) | undefined;
+  let rafId: number | undefined;
+  let alive = true;
 
   // Selection state
   let selecting = false;
@@ -53,6 +59,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   // Link detection
   const linkCache = new Map<string, { text: string; path: string; line?: number; col?: number; index: number }[] | null>();
   let hoveredLink: { row: number; colStart: number; colEnd: number; path: string; line?: number; col?: number } | null = null;
+
+  // Cached CSS custom properties (re-read on remeasure, not every frame)
+  let cachedBgDefault = "#1e1e1e";
+  let cachedFgDefault = "#d4d4d4";
+
+  // Row index → row data lookup (rebuilt each paintFrame)
+  let rowMap = new Map<number, DecodedFrame["rows"][0]>();
 
   function writePty(data: string) {
     invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch(() => {});
@@ -65,8 +78,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     return {
-      col: Math.floor(x / m.cellWidth),
-      row: Math.floor(y / m.cellHeight),
+      col: Math.max(0, Math.floor(x / m.cellWidth)),
+      row: Math.max(0, Math.floor(y / m.cellHeight)),
     };
   }
 
@@ -75,13 +88,26 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const dpr = window.devicePixelRatio || 1;
     const fontSize = settingsStore.state.defaultFontSize;
     const fontFamily = settingsStore.getFontFamily();
-    const m = measureFont(ctx, fontSize, fontFamily, dpr);
+    const fontWeight = settingsStore.state.fontWeight;
+    const m = measureFont(ctx, fontSize, fontFamily, dpr, snapLineHeight(fontSize), fontWeight);
     setMetrics(m);
 
-    const rect = canvasRef.getBoundingClientRect();
-    canvasRef.width = Math.floor(rect.width * dpr);
-    canvasRef.height = Math.floor(rect.height * dpr);
+    cachedBgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
+    cachedFgDefault = getComputedStyle(canvasRef).getPropertyValue("--text-primary").trim() || "#d4d4d4";
+
+    const rect = containerRef.getBoundingClientRect();
+    const cols = Math.floor(rect.width / m.cellWidth);
+    const rows = Math.floor(rect.height / m.cellHeight);
+    const logicalW = cols * m.cellWidth;
+    const logicalH = rows * m.cellHeight;
+    canvasRef.width = logicalW * dpr;
+    canvasRef.height = logicalH * dpr;
+    canvasRef.style.width = `${logicalW}px`;
+    canvasRef.style.height = `${logicalH}px`;
     ctx.scale(dpr, dpr);
+    if (cols > 0 && rows > 0 && invokeRef) {
+      invokeRef("resize_pty", { sessionId: props.sessionId, rows, cols }).catch(() => {});
+    }
 
     if (currentFrame) {
       paintFrame(currentFrame, m);
@@ -89,49 +115,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   }
 
   function paintFrame(frame: DecodedFrame, m: CellMetrics) {
-    const fontFamily = settingsStore.getFontFamily();
-    const bgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
-    const fgDefault = getComputedStyle(canvasRef).getPropertyValue("--text-primary").trim() || "#d4d4d4";
-
+    rowMap = new Map(frame.rows.map(r => [r.index, r]));
+    // Fill with default background so line-height gaps aren't visible
+    const w = canvasRef.width / m.dpr;
+    const h = canvasRef.height / m.dpr;
+    ctx.fillStyle = cachedBgDefault;
+    ctx.fillRect(0, 0, w, h);
     for (const row of frame.rows) {
       const y = row.index * m.cellHeight;
-      ctx.clearRect(0, y, canvasRef.width / m.dpr, m.cellHeight);
-
-      for (let c = 0; c < row.cells.length; c++) {
-        const cell = row.cells[c];
-        if (cell.char === "") continue;
-
-        const x = c * m.cellWidth;
-        const fg = resolveFg(cell, fgDefault);
-        const bg = resolveBg(cell, bgDefault);
-
-        if (!cell.defaultBg || cell.inverse) {
-          ctx.fillStyle = bg;
-          ctx.fillRect(x, y, m.cellWidth, m.cellHeight);
-        }
-
-        if (cell.char !== " ") {
-          const fontStyle = buildFontStyle(cell, m.fontSize, fontFamily);
-          ctx.font = fontStyle;
-          ctx.fillStyle = fg;
-          if (cell.dim) ctx.globalAlpha = 0.5;
-          ctx.fillText(cell.char, x, y + m.baseline);
-          if (cell.dim) ctx.globalAlpha = 1.0;
-        }
-
-        if (cell.underline) {
-          ctx.fillStyle = fg;
-          ctx.fillRect(x, y + m.cellHeight - 1, m.cellWidth, 1);
-        }
-
-        if (cell.strikeout) {
-          ctx.fillStyle = fg;
-          ctx.fillRect(x, y + Math.floor(m.cellHeight / 2), m.cellWidth, 1);
-        }
-      }
+      paintRow(row, y, m);
     }
 
-    // Selection overlay
     paintSelection(frame, m);
     paintCursor(frame, m);
     updateScrollbar(frame);
@@ -184,35 +178,33 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   function buildFontStyle(cell: DecodedCell, fontSize: number, fontFamily: string): string {
     let style = "";
     if (cell.italic) style += "italic ";
-    if (cell.bold) style += "bold ";
-    return `${style}${fontSize}px ${fontFamily}`;
+    const weight = cell.bold ? "bold" : settingsStore.state.fontWeight;
+    return `${style}${weight} ${fontSize}px ${fontFamily}`;
   }
 
   function paintCursor(frame: DecodedFrame, m: CellMetrics) {
     if (!frame.cursorVisible) return;
     if (!cursorBlinkOn && focused()) return;
 
-    const fgDefault = getComputedStyle(canvasRef).getPropertyValue("--text-primary").trim() || "#d4d4d4";
     const rect = computeCursorRect(cursorShape, frame.cursorRow, frame.cursorCol, m);
 
     if (!focused()) {
-      ctx.strokeStyle = fgDefault;
+      ctx.strokeStyle = cachedFgDefault;
       ctx.lineWidth = 1;
       ctx.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1);
       return;
     }
 
-    ctx.fillStyle = fgDefault;
+    ctx.fillStyle = cachedFgDefault;
     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
     if (cursorShape === "block") {
-      const row = frame.rows.find((r) => r.index === frame.cursorRow);
+      const row = rowMap.get(frame.cursorRow);
       const cell = row?.cells[frame.cursorCol];
       if (cell && cell.char && cell.char !== " ") {
-        const bgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
         const fontFamily = settingsStore.getFontFamily();
         ctx.font = buildFontStyle(cell, m.fontSize, fontFamily);
-        ctx.fillStyle = bgDefault;
+        ctx.fillStyle = cachedBgDefault;
         ctx.fillText(cell.char, rect.x, frame.cursorRow * m.cellHeight + m.baseline);
       }
     }
@@ -244,38 +236,41 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
   // --- Suggest / Intent overlay ---
 
+  function makeOverlayDiv(top: number, height: number, background: string): HTMLDivElement {
+    const div = document.createElement("div");
+    div.style.cssText = `position:absolute;left:0;right:0;top:${top}px;height:${height}px;background:${background}`;
+    return div;
+  }
+
   function updateSuggestOverlay(frame: DecodedFrame, m: CellMetrics) {
     if (!overlayRef) return;
     const bg = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
     const numRows = frame.rows.length > 0 ? Math.max(...frame.rows.map(r => r.index)) + 1 : 0;
 
     const getRowSnapshot = (i: number) => {
-      const row = frame.rows.find(r => r.index === i);
+      const row = rowMap.get(i);
       if (!row) return null;
       const text = row.cells.map(c => c.char || " ").join("");
       return { text, isWrapped: false };
     };
 
-    let html = "";
+    overlayRef.textContent = "";
     for (let row = 0; row < numRows; row++) {
       const snapshot = getRowSnapshot(row);
       if (!snapshot) continue;
       const text = snapshot.text;
 
       if (SUGGEST_ANCHOR_RE.test(text) && isSuggestBlock(row, numRows, getRowSnapshot)) {
-        const top = row * m.cellHeight;
-        html += `<div style="position:absolute;left:0;right:0;top:${top}px;height:${m.cellHeight}px;background:${bg}"></div>`;
+        overlayRef.appendChild(makeOverlayDiv(row * m.cellHeight, m.cellHeight, bg));
         const hiddenRows = continuationRowsAfterSuggest(row, numRows, getRowSnapshot);
         for (const contRow of hiddenRows) {
-          html += `<div style="position:absolute;left:0;right:0;top:${contRow * m.cellHeight}px;height:${m.cellHeight}px;background:${bg}"></div>`;
+          overlayRef.appendChild(makeOverlayDiv(contRow * m.cellHeight, m.cellHeight, bg));
         }
         if (hiddenRows.length > 0) row = hiddenRows[hiddenRows.length - 1];
       } else if (INTENT_RE.test(text)) {
-        const top = row * m.cellHeight;
-        html += `<div style="position:absolute;left:0;right:0;top:${top}px;height:${m.cellHeight}px;background:rgba(181,147,90,0.12)"></div>`;
+        overlayRef.appendChild(makeOverlayDiv(row * m.cellHeight, m.cellHeight, "rgba(181,147,90,0.12)"));
       }
     }
-    overlayRef.innerHTML = html;
   }
 
   function startBlink() {
@@ -302,41 +297,80 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     startBlink();
   }
 
+  function drawBlockChar(cp: number, x: number, y: number, m: CellMetrics): boolean {
+    const w = m.cellWidth;
+    const h = m.cellHeight;
+    const hw = Math.ceil(w / 2);
+    const hh = Math.ceil(h / 2);
+    const hw2 = w - hw;
+    const hh2 = h - hh;
+    switch (cp) {
+      // Half blocks
+      case 0x2580: ctx.fillRect(x, y, w, hh); return true;
+      case 0x2584: ctx.fillRect(x, y + hh, w, hh2); return true;
+      case 0x2588: ctx.fillRect(x, y, w, h); return true;
+      case 0x258C: ctx.fillRect(x, y, hw, h); return true;
+      case 0x2590: ctx.fillRect(x + hw, y, hw2, h); return true;
+      // Shade blocks
+      case 0x2591: { const a = ctx.globalAlpha; ctx.globalAlpha = a * 0.25; ctx.fillRect(x, y, w, h); ctx.globalAlpha = a; return true; }
+      case 0x2592: { const a = ctx.globalAlpha; ctx.globalAlpha = a * 0.5; ctx.fillRect(x, y, w, h); ctx.globalAlpha = a; return true; }
+      case 0x2593: { const a = ctx.globalAlpha; ctx.globalAlpha = a * 0.75; ctx.fillRect(x, y, w, h); ctx.globalAlpha = a; return true; }
+      // Quadrant block elements
+      case 0x2596: ctx.fillRect(x, y + hh, hw, hh2); return true;
+      case 0x2597: ctx.fillRect(x + hw, y + hh, hw2, hh2); return true;
+      case 0x2598: ctx.fillRect(x, y, hw, hh); return true;
+      case 0x2599: ctx.fillRect(x, y, hw, h); ctx.fillRect(x + hw, y + hh, hw2, hh2); return true;
+      case 0x259A: ctx.fillRect(x, y, hw, hh); ctx.fillRect(x + hw, y + hh, hw2, hh2); return true;
+      case 0x259B: ctx.fillRect(x, y, w, hh); ctx.fillRect(x, y + hh, hw, hh2); return true;
+      case 0x259C: ctx.fillRect(x, y, w, hh); ctx.fillRect(x + hw, y + hh, hw2, hh2); return true;
+      case 0x259D: ctx.fillRect(x + hw, y, hw2, hh); return true;
+      case 0x259E: ctx.fillRect(x + hw, y, hw2, hh); ctx.fillRect(x, y + hh, hw, hh2); return true;
+      case 0x259F: ctx.fillRect(x + hw, y, hw2, h); ctx.fillRect(x, y + hh, hw, hh2); return true;
+      default: return false;
+    }
+  }
+
+  function paintRow(row: DecodedFrame["rows"][0], y: number, m: CellMetrics) {
+    const fontFamily = settingsStore.getFontFamily();
+    let lastFont = "";
+    for (let c = 0; c < row.cells.length; c++) {
+      const cell = row.cells[c];
+      const x = c * m.cellWidth;
+      if (!cell.defaultBg || cell.inverse) {
+        ctx.fillStyle = resolveBg(cell, cachedBgDefault);
+        ctx.fillRect(x, y, m.cellWidth, m.cellHeight);
+      }
+      if (cell.char && cell.char !== " ") {
+        ctx.fillStyle = resolveFg(cell, cachedFgDefault);
+        if (cell.dim) ctx.globalAlpha = 0.5;
+        const cp = cell.char.codePointAt(0) ?? 0;
+        if (((cp >= 0x2580 && cp <= 0x2593) || (cp >= 0x2596 && cp <= 0x259F)) && drawBlockChar(cp, x, y, m)) {
+          // Block element drawn as geometry
+        } else {
+          const font = buildFontStyle(cell, m.fontSize, fontFamily);
+          if (font !== lastFont) { ctx.font = font; lastFont = font; }
+          ctx.fillText(cell.char, x, y + m.baseline);
+        }
+        if (cell.dim) ctx.globalAlpha = 1.0;
+      }
+      if (cell.underline) {
+        ctx.fillStyle = resolveFg(cell, cachedFgDefault);
+        ctx.fillRect(x, y + m.cellHeight - 1, m.cellWidth, 1);
+      }
+      if (cell.strikeout) {
+        ctx.fillStyle = resolveFg(cell, cachedFgDefault);
+        ctx.fillRect(x, y + Math.floor(m.cellHeight / 2), m.cellWidth, 1);
+      }
+    }
+  }
+
   function repaintCursorRow(frame: DecodedFrame, m: CellMetrics) {
     const y = frame.cursorRow * m.cellHeight;
     ctx.clearRect(0, y, canvasRef.width / m.dpr, m.cellHeight);
 
-    const row = frame.rows.find((r) => r.index === frame.cursorRow);
+    const row = rowMap.get(frame.cursorRow);
     if (row) {
-      const fontFamily = settingsStore.getFontFamily();
-      const bgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
-      const fgDefault = getComputedStyle(canvasRef).getPropertyValue("--text-primary").trim() || "#d4d4d4";
-      for (let c = 0; c < row.cells.length; c++) {
-        const cell = row.cells[c];
-        if (cell.char === "") continue;
-        const x = c * m.cellWidth;
-        const fg = resolveFg(cell, fgDefault);
-        const bg = resolveBg(cell, bgDefault);
-        if (!cell.defaultBg || cell.inverse) {
-          ctx.fillStyle = bg;
-          ctx.fillRect(x, y, m.cellWidth, m.cellHeight);
-        }
-        if (cell.char !== " ") {
-          ctx.font = buildFontStyle(cell, m.fontSize, fontFamily);
-          ctx.fillStyle = fg;
-          if (cell.dim) ctx.globalAlpha = 0.5;
-          ctx.fillText(cell.char, x, y + m.baseline);
-          if (cell.dim) ctx.globalAlpha = 1.0;
-        }
-        if (cell.underline) {
-          ctx.fillStyle = fg;
-          ctx.fillRect(x, y + m.cellHeight - 1, m.cellWidth, 1);
-        }
-        if (cell.strikeout) {
-          ctx.fillStyle = fg;
-          ctx.fillRect(x, y + Math.floor(m.cellHeight / 2), m.cellWidth, 1);
-        }
-      }
+      paintRow(row, y, m);
     }
     paintSelection(frame, m);
     paintCursor(frame, m);
@@ -352,10 +386,30 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const frame = decodeBinaryFrame(buffer);
     if (!frame) return;
 
-    currentFrame = frame;
-    const m = metrics();
-    if (m) {
-      paintFrame(frame, m);
+    // When scroll position changes, the entire visible content is different
+    if (frame.displayOffset !== lastDisplayOffset) {
+      screenRows.clear();
+      lastDisplayOffset = frame.displayOffset;
+    }
+
+    // Merge incoming damaged rows into the full screen buffer
+    for (const row of frame.rows) {
+      screenRows.set(row.index, row);
+    }
+
+    // Build a full frame from the accumulated buffer
+    currentFrame = {
+      ...frame,
+      rows: Array.from(screenRows.values()),
+    };
+
+    if (rafId === undefined) {
+      rafId = requestAnimationFrame(() => {
+        rafId = undefined;
+        if (!alive) return;
+        const m = metrics();
+        if (currentFrame && m) paintFrame(currentFrame, m);
+      });
     }
   }
 
@@ -364,11 +418,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   let linkThrottle: ReturnType<typeof setTimeout> | undefined;
 
   async function checkLinksAtRow(row: number, col: number) {
-    if (!invokeRef) return;
+    if (!invokeRef || !alive) return;
     const rowText = await invokeRef("terminal_get_row_text", {
       sessionId: props.sessionId,
       row,
     }) as string;
+    if (!alive) return;
 
     const cacheKey = `${row}:${rowText}`;
     let links = linkCache.get(cacheKey);
@@ -434,7 +489,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   }
 
   onMount(async () => {
-    ctx = canvasRef.getContext("2d")!;
+    ctx = canvasRef.getContext("2d", { alpha: false })!;
+    await document.fonts.ready;
     remeasure();
 
     resizeObserver = new ResizeObserver(() => remeasure());
@@ -456,20 +512,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       resetBlink();
 
       // Ctrl+C with selection → copy instead of interrupt
-      if ((e.ctrlKey || e.metaKey) && e.key === "c" && selectionStart && selectionEnd) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && selectionStart && selectionEnd) {
         e.preventDefault();
         e.stopPropagation();
         copySelection();
         return;
       }
 
-      // Any keypress clears selection
+      // Any keypress clears selection — full repaint to remove ghost highlights
       if (selectionStart) {
         selectionStart = null;
         selectionEnd = null;
         invokeRef?.("terminal_select_clear", { sessionId: props.sessionId }).catch(() => {});
         const m = metrics();
-        if (currentFrame && m) paintFrame(currentFrame, m);
+        if (currentFrame && m) {
+          ctx.clearRect(0, 0, canvasRef.width / m.dpr, canvasRef.height / m.dpr);
+          paintFrame(currentFrame, m);
+        }
       }
 
       const seq = keyToSequence(e);
@@ -482,7 +541,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
     canvasRef.addEventListener("paste", (e: ClipboardEvent) => {
       const text = e.clipboardData?.getData("text");
-      if (text) writePty(text);
+      if (text) writePty(`\x1b[200~${text}\x1b[201~`);
       e.preventDefault();
     });
 
@@ -585,8 +644,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         }).catch(() => {});
       };
     } catch {
-      // Not in Tauri context (tests, PWA)
+      unsubscribe = () => {
+        document.removeEventListener("mousemove", onMouseMove);
+        document.removeEventListener("mouseup", onMouseUp);
+      };
     }
+  });
+
+  createEffect(() => {
+    settingsStore.state.defaultFontSize;
+    settingsStore.state.font;
+    remeasure();
   });
 
   async function copySelection() {
@@ -602,11 +670,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   }
 
   onCleanup(() => {
+    alive = false;
     stopBlink();
+    if (rafId !== undefined) { cancelAnimationFrame(rafId); rafId = undefined; }
     resizeObserver?.disconnect();
     unsubscribe?.();
     clearTimeout(linkThrottle);
     linkCache.clear();
+    screenRows.clear();
   });
 
   return (
