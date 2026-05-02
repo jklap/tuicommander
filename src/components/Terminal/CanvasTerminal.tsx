@@ -10,13 +10,15 @@ import {
   type DecodedFrame,
   type DecodedCell,
 } from "./canvasTerminalUtils";
-import { keyToSequence } from "./terminalInput";
+import { keyToSequence, altSequenceFromCode } from "./terminalInput";
+import { kittySequenceForKey } from "./kittyKeyboard";
 import { isSuggestBlock, continuationRowsAfterSuggest } from "./suggestOverlay";
 import {
   filePathRegex,
   fileUrlRegex,
 } from "./linkProvider";
 import { terminalsStore } from "../../stores/terminals";
+import { isMacOS, isWindows } from "../../platform";
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame, DecodedCell };
 
@@ -501,15 +503,26 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (e.data) writePty(e.data);
     });
 
+    let leftOptionHeld = false;
+
     canvasRef.addEventListener("keydown", (e: KeyboardEvent) => {
       if (composing) return;
       resetBlink();
 
-      // Ctrl+C with selection → copy instead of interrupt
+      // Ctrl/Cmd+C with selection → copy instead of interrupt
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "c" && selectionStart && selectionEnd) {
         e.preventDefault();
         e.stopPropagation();
         copySelection();
+        return;
+      }
+
+      // Windows Ctrl+V paste
+      if (isWindows() && e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey && (e.key === "v" || e.key === "V")) {
+        e.preventDefault();
+        navigator.clipboard.readText().then(
+          (text) => { if (text) writePty(`\x1b[200~${text}\x1b[201~`); },
+        ).catch(() => {});
         return;
       }
 
@@ -525,12 +538,73 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         }
       }
 
+      // Shift+Enter → ESC CR (multi-line for Claude Code, Ink, etc.)
+      // Must run BEFORE Kitty block — CC expects \x1b\r, not CSI 13;2 u
+      if (e.key === "Enter" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        writePty("\x1b\r");
+        return;
+      }
+
+      // Shift+Tab: send CSI Z but prevent browser focus navigation
+      if (e.key === "Tab" && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
+        writePty("\x1b[Z");
+        return;
+      }
+
+      // macOS WebKit Emacs keybindings: Ctrl+A/D/E/K etc. intercepted by native
+      // text system before our handler. Use e.code for reliable mapping.
+      if (isMacOS() && e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+        const cm = e.code.match(/^Key([A-Z])$/);
+        if (cm) {
+          const ctrl = String.fromCharCode(cm[1].charCodeAt(0) - 0x40);
+          e.preventDefault();
+          writePty(ctrl);
+          return;
+        }
+      }
+
+      // Kitty keyboard protocol: encode special keys when flag 1 (disambiguate) is active
+      const kbFlags = currentFrame?.keyboardFlags ?? 0;
+      if (kbFlags & 1) {
+        const seq = kittySequenceForKey(e.key, e.shiftKey, e.altKey, e.ctrlKey, e.metaKey);
+        if (seq !== null) {
+          e.preventDefault();
+          writePty(seq);
+          return;
+        }
+      }
+
+      // macOS Alt/Option key handling (left Option only)
+      if (isMacOS() && e.altKey && !e.metaKey && !e.ctrlKey) {
+        if (e.code === "AltLeft") {
+          leftOptionHeld = true;
+          return;
+        }
+        if (leftOptionHeld) {
+          const altSeq = altSequenceFromCode(e);
+          if (altSeq) {
+            e.preventDefault();
+            writePty(altSeq);
+            return;
+          }
+        }
+      }
+      if (!e.altKey) leftOptionHeld = false;
+
+      // Default: legacy VT100 encoding
       const seq = keyToSequence(e);
       if (seq !== null) {
         e.preventDefault();
         e.stopPropagation();
         writePty(seq);
       }
+    });
+
+    // Track Alt key release for macOS left-option state
+    canvasRef.addEventListener("keyup", (e: KeyboardEvent) => {
+      if (e.code === "AltLeft") leftOptionHeld = false;
     });
 
     canvasRef.addEventListener("paste", (e: ClipboardEvent) => {
@@ -615,7 +689,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     });
 
     // --- Scroll ---
-    canvasRef.addEventListener("wheel", (e: WheelEvent) => {
+    function handleWheel(e: WheelEvent) {
       e.preventDefault();
       e.stopPropagation();
       const m = metrics();
@@ -624,7 +698,47 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (delta !== 0) {
         invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta }).catch(() => {});
       }
-    }, { passive: false });
+    }
+    canvasRef.addEventListener("wheel", handleWheel, { passive: false });
+    scrollbarRef.addEventListener("wheel", handleWheel, { passive: false });
+
+    // Scrollbar drag
+    let scrollDragging = false;
+    let scrollDragStartY = 0;
+    let scrollDragStartOffset = 0;
+
+    scrollThumbRef.addEventListener("mousedown", (e: MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      scrollDragging = true;
+      scrollDragStartY = e.clientY;
+      scrollDragStartOffset = currentFrame?.displayOffset ?? 0;
+    });
+
+    const onScrollDragMove = (e: MouseEvent) => {
+      if (!scrollDragging || !currentFrame) return;
+      const historySize = currentFrame.historySize;
+      if (historySize === 0) return;
+      const trackHeight = scrollbarRef.clientHeight;
+      const thumbHeight = parseFloat(scrollThumbRef.style.height) || 20;
+      const scrollRange = trackHeight - thumbHeight;
+      if (scrollRange <= 0) return;
+
+      const dy = e.clientY - scrollDragStartY;
+      const offsetDelta = Math.round((dy / scrollRange) * historySize);
+      const newOffset = Math.max(0, Math.min(historySize, scrollDragStartOffset - offsetDelta));
+      const delta = newOffset - (currentFrame.displayOffset);
+      if (delta !== 0) {
+        invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta }).catch(() => {});
+      }
+    };
+
+    const onScrollDragUp = () => {
+      scrollDragging = false;
+    };
+
+    document.addEventListener("mousemove", onScrollDragMove);
+    document.addEventListener("mouseup", onScrollDragUp);
 
     // Subscribe to grid channel
     try {
@@ -640,6 +754,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       unsubscribe = () => {
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
+        document.removeEventListener("mousemove", onScrollDragMove);
+        document.removeEventListener("mouseup", onScrollDragUp);
         invoke("unsubscribe_terminal_grid", {
           sessionId: props.sessionId,
         }).catch(() => {});
@@ -722,7 +838,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
           position: "absolute",
           top: "0",
           right: "0",
-          width: "8px",
+          width: "14px",
           height: "100%",
           display: "none",
           "z-index": "20",
@@ -731,13 +847,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         <div
           ref={scrollThumbRef!}
           style={{
-            width: "6px",
-            "margin-left": "1px",
-            "border-radius": "3px",
-            background: "rgba(255,255,255,0.25)",
+            width: "10px",
+            "margin-left": "2px",
+            "border-radius": "5px",
+            background: "rgba(255,255,255,0.3)",
             "min-height": "20px",
             position: "absolute",
             top: "0",
+            cursor: "grab",
           }}
         />
       </div>

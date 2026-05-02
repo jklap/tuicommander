@@ -87,14 +87,57 @@ export function keyToSequence(e: KeyboardEvent): string | null {
     }
   }
 
-  // Alt+letter → ESC + char
-  if (e.altKey && !e.ctrlKey && e.key.length === 1) {
-    return `\x1b${e.key}`;
+  // Alt+letter → ESC + char (use e.code to avoid macOS dead-key characters)
+  if (e.altKey && !e.ctrlKey) {
+    const seq = altSequenceFromCode(e);
+    if (seq) return seq;
+    if (e.key.length === 1) return `\x1b${e.key}`;
   }
 
   // Printable single character
   if (e.key.length === 1) {
     return e.key;
+  }
+
+  return null;
+}
+
+/**
+ * macOS Alt/Option key handling via e.code.
+ * On macOS, Alt+letter produces dead-key characters in e.key (e.g. π for Alt+P).
+ * Terminal emulators need ESC + base letter instead.
+ * Also handles Alt+punctuation for shell keybindings (Alt+., Alt+/, etc.).
+ */
+export function altSequenceFromCode(e: KeyboardEvent): string | null {
+  const code = e.code;
+  if (!code) return null;
+
+  if (code.startsWith("Key")) {
+    const ch = code.slice(3).toLowerCase();
+    return "\x1b" + (e.shiftKey ? ch.toUpperCase() : ch);
+  }
+  if (code.startsWith("Digit")) {
+    return "\x1b" + code.slice(5);
+  }
+
+  switch (code) {
+    case "Backspace":    return "\x1b\x7f"; // Alt+Backspace = backward-kill-word
+    case "Space":        return "\x1b ";
+    case "Period":       return "\x1b.";    // Alt+. = insert-last-argument
+    case "Comma":        return "\x1b,";
+    case "Slash":        return "\x1b/";
+    case "Minus":        return "\x1b-";
+    case "Equal":        return "\x1b=";
+    case "Semicolon":    return "\x1b;";
+    case "Quote":        return "\x1b'";
+    case "BracketLeft":  return "\x1b[";
+    case "BracketRight": return "\x1b]";
+    case "Backslash":    return "\x1b\\";
+    case "Backquote":    return "\x1b`";
+    case "ArrowLeft":    return "\x1b[1;3D"; // word backward
+    case "ArrowRight":   return "\x1b[1;3C"; // word forward
+    case "ArrowUp":      return "\x1b[1;3A";
+    case "ArrowDown":    return "\x1b[1;3B";
   }
 
   return null;

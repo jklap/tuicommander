@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { keyToSequence } from "../../components/Terminal/terminalInput";
+import { keyToSequence, altSequenceFromCode } from "../../components/Terminal/terminalInput";
 
 describe("keyToSequence", () => {
   const evt = (key: string, opts: Partial<KeyboardEvent> = {}): KeyboardEvent =>
-    ({ key, ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...opts } as unknown as KeyboardEvent);
+    ({ key, code: "", ctrlKey: false, altKey: false, shiftKey: false, metaKey: false, ...opts } as unknown as KeyboardEvent);
 
   // --- Printable characters ---
   it("passes printable ASCII as-is", () => {
@@ -108,10 +108,18 @@ describe("keyToSequence", () => {
     expect(keyToSequence(evt("Tab", { shiftKey: true }))).toBe("\x1b[Z");
   });
 
-  // --- Alt+letter ---
-  it("maps Alt+letter to ESC + char", () => {
-    expect(keyToSequence(evt("d", { altKey: true }))).toBe("\x1bd");
-    expect(keyToSequence(evt("f", { altKey: true }))).toBe("\x1bf");
+  // --- Alt+letter (with e.code for macOS dead-key handling) ---
+  it("maps Alt+letter via e.code to ESC + base char", () => {
+    expect(keyToSequence(evt("π", { altKey: true, code: "KeyP" } as Partial<KeyboardEvent>))).toBe("\x1bp");
+    expect(keyToSequence(evt("∂", { altKey: true, code: "KeyD" } as Partial<KeyboardEvent>))).toBe("\x1bd");
+  });
+
+  it("maps Alt+Shift+letter via e.code to ESC + uppercase", () => {
+    expect(keyToSequence(evt("∏", { altKey: true, shiftKey: true, code: "KeyP" } as Partial<KeyboardEvent>))).toBe("\x1bP");
+  });
+
+  it("maps Alt+digit via e.code", () => {
+    expect(keyToSequence(evt("¡", { altKey: true, code: "Digit1" } as Partial<KeyboardEvent>))).toBe("\x1b1");
   });
 
   // --- Navigation keys ---
@@ -137,5 +145,34 @@ describe("keyToSequence", () => {
     expect(keyToSequence(evt("Alt"))).toBeNull();
     expect(keyToSequence(evt("Meta"))).toBeNull();
     expect(keyToSequence(evt("CapsLock"))).toBeNull();
+  });
+});
+
+describe("altSequenceFromCode", () => {
+  const evt = (code: string, opts: Partial<KeyboardEvent> = {}): KeyboardEvent =>
+    ({ key: "", code, ctrlKey: false, altKey: true, shiftKey: false, metaKey: false, ...opts } as unknown as KeyboardEvent);
+
+  it("maps Alt+Backspace to backward-kill-word", () => {
+    expect(altSequenceFromCode(evt("Backspace"))).toBe("\x1b\x7f");
+  });
+
+  it("maps Alt+. to insert-last-argument", () => {
+    expect(altSequenceFromCode(evt("Period"))).toBe("\x1b.");
+  });
+
+  it("maps Alt+ArrowLeft to word backward", () => {
+    expect(altSequenceFromCode(evt("ArrowLeft"))).toBe("\x1b[1;3D");
+  });
+
+  it("maps Alt+ArrowRight to word forward", () => {
+    expect(altSequenceFromCode(evt("ArrowRight"))).toBe("\x1b[1;3C");
+  });
+
+  it("maps Alt+/ for history search", () => {
+    expect(altSequenceFromCode(evt("Slash"))).toBe("\x1b/");
+  });
+
+  it("returns null for unknown codes", () => {
+    expect(altSequenceFromCode(evt("IntlBackslash"))).toBeNull();
   });
 });

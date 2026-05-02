@@ -128,6 +128,7 @@ impl TerminalGrid {
     pub fn new(rows: u16, cols: u16, scrollback: usize) -> Self {
         let config = Config {
             scrolling_history: scrollback,
+            kitty_keyboard: true,
             ..Config::default()
         };
         let size = GridSize { cols: cols as usize, lines: rows as usize };
@@ -586,11 +587,15 @@ impl TerminalGrid {
     /// ```text
     /// Header: [num_rows: u16] [cursor_row: u16] [cursor_col: u16] [cursor_visible: u8]
     ///         [display_offset: u32] [history_size: u32] [has_selection: u8]
+    ///         [keyboard_flags: u8]
     /// Per row: [row_index: u16] [col_count: u16] [cells...]
     /// Per cell: [char: u32 LE] [fg_r, fg_g, fg_b] [bg_r, bg_g, bg_b] [attrs: u8]
     /// ```
     /// attrs: bit0=bold, bit1=italic, bit2=underline, bit3=strikeout,
     ///        bit4=dim, bit5=inverse, bit6=default_fg, bit7=default_bg
+    /// keyboard_flags: bit0=disambiguate_esc_codes, bit1=report_event_types,
+    ///                 bit2=report_alternate_keys, bit3=report_all_keys_as_esc,
+    ///                 bit4=report_associated_text
     pub fn serialize_dirty_rows(&mut self) -> Vec<u8> {
         let num_cols = self.term.grid().columns();
         let num_lines = self.term.grid().screen_lines();
@@ -599,6 +604,13 @@ impl TerminalGrid {
         let display_offset = self.term.grid().display_offset();
         let history_size = self.term.grid().history_size();
         let has_selection = self.term.selection.is_some();
+        let mode = self.term.mode();
+        let mut keyboard_flags: u8 = 0;
+        if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) { keyboard_flags |= 0x01; }
+        if mode.contains(TermMode::REPORT_EVENT_TYPES) { keyboard_flags |= 0x02; }
+        if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) { keyboard_flags |= 0x04; }
+        if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) { keyboard_flags |= 0x08; }
+        if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) { keyboard_flags |= 0x10; }
 
         let damage = self.term.damage();
         let dirty_lines: Vec<usize> = match damage {
@@ -611,9 +623,9 @@ impl TerminalGrid {
             return Vec::new();
         }
 
-        // Header: 16 bytes
+        // Header: 17 bytes
         let row_count = dirty_lines.len();
-        let estimated = 16 + row_count * (4 + num_cols * 11);
+        let estimated = 17 + row_count * (4 + num_cols * 11);
         let mut buf = Vec::with_capacity(estimated);
 
         buf.extend_from_slice(&(row_count as u16).to_le_bytes());
@@ -623,6 +635,7 @@ impl TerminalGrid {
         buf.extend_from_slice(&(display_offset as u32).to_le_bytes());
         buf.extend_from_slice(&(history_size as u32).to_le_bytes());
         buf.push(has_selection as u8);
+        buf.push(keyboard_flags);
 
         let grid = self.term.grid();
         for &row_idx in &dirty_lines {
@@ -851,7 +864,7 @@ mod tests {
 
     // --- Binary serialization tests ---
 
-    const TEST_HEADER_SIZE: usize = 16;
+    const TEST_HEADER_SIZE: usize = 17;
 
     /// Helper: decode the header from a serialized frame.
     fn decode_header(buf: &[u8]) -> (u16, u16, u16, bool) {
