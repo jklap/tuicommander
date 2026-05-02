@@ -759,6 +759,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     let scrollDragStartY = 0;
     let scrollDragStartOffset = 0;
 
+    // Scrollbar track click: jump to position
+    scrollbarRef.addEventListener("mousedown", (e: MouseEvent) => {
+      if (e.target === scrollThumbRef) return; // thumb has its own handler
+      if (!currentFrame || currentFrame.historySize === 0) return;
+      e.preventDefault();
+      const rect = scrollbarRef.getBoundingClientRect();
+      const clickRatio = (e.clientY - rect.top) / rect.height;
+      const targetOffset = Math.round((1 - clickRatio) * currentFrame.historySize);
+      const delta = targetOffset - currentFrame.displayOffset;
+      if (delta !== 0) {
+        invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta }).catch(() => {});
+      }
+    });
+
     scrollThumbRef.addEventListener("mousedown", (e: MouseEvent) => {
       e.preventDefault();
       e.stopPropagation();
