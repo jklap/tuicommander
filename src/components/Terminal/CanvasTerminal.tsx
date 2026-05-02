@@ -70,6 +70,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   let blinkInterval: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
+  let lastResizeCols = 0;
+  let lastResizeRows = 0;
   let invokeRef: ((cmd: string, args: Record<string, unknown>) => Promise<unknown>) | undefined;
   let rafId: number | undefined;
   let resizeDebounce: ReturnType<typeof setTimeout> | undefined;
@@ -136,7 +138,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     canvasRef.style.width = `${logicalW}px`;
     canvasRef.style.height = `${logicalH}px`;
     ctx.scale(dpr, dpr);
-    if (cols > 0 && rows > 0 && logicalW > 0 && logicalH > 0 && invokeRef) {
+    if (cols > 0 && rows > 0 && logicalW > 0 && logicalH > 0 && invokeRef
+        && (cols !== lastResizeCols || rows !== lastResizeRows)) {
+      lastResizeCols = cols;
+      lastResizeRows = rows;
       invokeRef("resize_pty", { sessionId: props.sessionId, rows, cols }).catch(() => {});
     }
 
