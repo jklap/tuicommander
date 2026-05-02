@@ -201,6 +201,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
   let unsubscribePty: Unsubscribe | undefined;
   let unlistenParsed: (() => void) | undefined;
   let unlistenKitty: (() => void) | undefined;
+  let unlistenOsc133: (() => void) | undefined;
 
   // Kitty keyboard protocol: current flags for this session (0 = disabled)
   let kittyFlags = 0;
@@ -724,6 +725,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
         kittyFlags = event.payload;
       });
 
+      // Listen for OSC 133 shell integration markers from Rust (native renderer)
+      unlistenOsc133 = await listen<{ marker: string; line: number; exit_code: number | null }>(
+        `pty-osc133-${targetSessionId}`, (event) => {
+          const { marker, line, exit_code } = event.payload;
+          terminalsStore.handleOsc133(props.id, marker, line, exit_code ?? undefined);
+        },
+      );
+
       // Sync initial kitty flags — the push event may have fired before listener attached.
       // Only apply if the listener hasn't already updated kittyFlags (race guard).
       const preListenFlags = kittyFlags;
@@ -790,6 +799,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
           unlistenParsed = undefined;
           unlistenKitty?.();
           unlistenKitty = undefined;
+          unlistenOsc133?.();
+          unlistenOsc133 = undefined;
         }
       }
       if (!reconnected) {

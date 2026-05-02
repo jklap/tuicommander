@@ -37,6 +37,17 @@ impl Dimensions for GridSize {
 
 use crate::state::{ChangedRow, LogColor, LogLine, LogSpan};
 
+/// An OSC 133 shell integration marker detected in the PTY stream.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Osc133Event {
+    /// Marker type: "A" (prompt), "B" (command), "C" (execution), "D" (finished)
+    pub marker: String,
+    /// Cursor line at the time the marker was detected
+    pub line: usize,
+    /// Exit code (only present for "D" markers)
+    pub exit_code: Option<i32>,
+}
+
 /// A search match in the terminal grid.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SearchMatch {
@@ -164,9 +175,9 @@ impl TerminalGrid {
 
     /// Feed raw PTY bytes into the terminal emulator.
     ///
-    /// Returns changed rows since the last call (same contract as
-    /// `VtLogBuffer::process()`).
-    pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
+    /// Returns changed rows and any OSC 133 events found in the data.
+    pub fn process(&mut self, data: &[u8]) -> (Vec<ChangedRow>, Vec<Osc133Event>) {
+        let osc_events = Self::extract_osc133(data);
         self.processor.advance(&mut self.term, data);
 
         let curr_rows = self.read_screen_text();
@@ -188,7 +199,15 @@ impl TerminalGrid {
             .collect();
 
         self.prev_rows = curr_rows;
-        changed
+
+        // Fill in cursor line for OSC 133 events (after processing so cursor is up-to-date)
+        let cursor_line = self.term.grid().cursor.point.line.0.max(0) as usize;
+        let osc_events: Vec<Osc133Event> = osc_events.into_iter().map(|mut e| {
+            e.line = cursor_line;
+            e
+        }).collect();
+
+        (changed, osc_events)
     }
 
     /// Returns plain text snapshot of all visible screen rows (trimmed).
@@ -776,6 +795,42 @@ impl TerminalGrid {
         }
         Some(text.trim_end().to_string())
     }
+
+    /// Scan raw PTY bytes for OSC 133 sequences (shell integration markers).
+    /// Pattern: ESC ] 133 ; <marker> [; params] BEL  or  ESC ] 133 ; <marker> [; params] ESC \
+    fn extract_osc133(data: &[u8]) -> Vec<Osc133Event> {
+        let mut events = Vec::new();
+        let prefix = b"\x1b]133;";
+        let mut i = 0;
+        while i + prefix.len() < data.len() {
+            if data[i..].starts_with(prefix) {
+                let start = i + prefix.len();
+                // Find terminator: BEL (\x07) or ST (\x1b\\)
+                let mut end = start;
+                while end < data.len() {
+                    if data[end] == 0x07 { break; }
+                    if end + 1 < data.len() && data[end] == 0x1b && data[end + 1] == b'\\' { break; }
+                    end += 1;
+                }
+                if end > start {
+                    let payload = &data[start..end];
+                    let marker = (payload[0] as char).to_string();
+                    let exit_code = if marker == "D" && payload.len() > 2 && payload[1] == b';' {
+                        std::str::from_utf8(&payload[2..]).ok().and_then(|s| s.parse::<i32>().ok())
+                    } else {
+                        None
+                    };
+                    if "ABCD".contains(&marker) {
+                        events.push(Osc133Event { marker, line: 0, exit_code });
+                    }
+                }
+                i = end + 1;
+            } else {
+                i += 1;
+            }
+        }
+        events
+    }
 }
 
 #[cfg(test)]
@@ -794,7 +849,7 @@ mod tests {
     #[test]
     fn process_simple_text() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
-        let changed = grid.process(b"hello world");
+        let (changed, _) = grid.process(b"hello world");
         assert!(!changed.is_empty());
         let first = &changed[0];
         assert_eq!(first.row_index, 0);
@@ -804,15 +859,15 @@ mod tests {
     #[test]
     fn process_returns_empty_on_no_change() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
-        grid.process(b"hello");
-        let changed = grid.process(b"");
+        let _ = grid.process(b"hello");
+        let (changed, _) = grid.process(b"");
         assert!(changed.is_empty());
     }
 
     #[test]
     fn screen_text_rows_returns_visible_content() {
         let mut grid = TerminalGrid::new(5, 20, 100);
-        grid.process(b"line1\r\nline2\r\nline3");
+        let _ = grid.process(b"line1\r\nline2\r\nline3");
         let rows = grid.screen_text_rows();
         assert_eq!(rows.len(), 5);
         assert_eq!(rows[0], "line1");
@@ -825,7 +880,7 @@ mod tests {
     #[test]
     fn cursor_position_tracks_output() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
-        grid.process(b"abc");
+        let _ = grid.process(b"abc");
         let (line, col) = grid.cursor_point();
         assert_eq!(line, 0);
         assert_eq!(col, 3);
@@ -834,7 +889,7 @@ mod tests {
     #[test]
     fn cursor_moves_on_newline() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
-        grid.process(b"abc\r\ndef");
+        let _ = grid.process(b"abc\r\ndef");
         let (line, col) = grid.cursor_point();
         assert_eq!(line, 1);
         assert_eq!(col, 3);
@@ -845,10 +900,10 @@ mod tests {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         assert!(!grid.is_alternate_screen());
         // Enter alt screen: CSI ? 1049 h
-        grid.process(b"\x1b[?1049h");
+        let _ = grid.process(b"\x1b[?1049h");
         assert!(grid.is_alternate_screen());
         // Exit alt screen: CSI ? 1049 l
-        grid.process(b"\x1b[?1049l");
+        let _ = grid.process(b"\x1b[?1049l");
         assert!(!grid.is_alternate_screen());
     }
 
@@ -856,7 +911,7 @@ mod tests {
     fn scrollback_generated_by_overflow() {
         let mut grid = TerminalGrid::new(3, 20, 100);
         // Write 5 lines into a 3-row terminal → 2 lines scroll into history
-        grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        let _ = grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
         assert!(grid.scrollback_count() >= 2);
     }
 
@@ -871,9 +926,9 @@ mod tests {
     #[test]
     fn changed_rows_detects_overwrite() {
         let mut grid = TerminalGrid::new(5, 20, 100);
-        grid.process(b"hello");
+        let _ = grid.process(b"hello");
         // Move cursor to beginning of line and overwrite
-        let changed = grid.process(b"\rworld");
+        let (changed, _) = grid.process(b"\rworld");
         assert!(!changed.is_empty());
         assert_eq!(changed[0].text, "world");
     }
@@ -881,7 +936,7 @@ mod tests {
     #[test]
     fn ansi_colors_do_not_leak_into_text() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
-        grid.process(b"\x1b[31mred text\x1b[0m");
+        let _ = grid.process(b"\x1b[31mred text\x1b[0m");
         let rows = grid.screen_text_rows();
         assert_eq!(rows[0], "red text");
     }
@@ -889,7 +944,7 @@ mod tests {
     #[test]
     fn wide_chars_handled() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
-        grid.process("日本語".as_bytes());
+        let _ = grid.process("日本語".as_bytes());
         let rows = grid.screen_text_rows();
         assert!(rows[0].contains("日本語"));
     }
@@ -898,8 +953,8 @@ mod tests {
     fn cursor_movement_escape_sequences() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         // Write text, move cursor up 1 line (CUU), write more
-        grid.process(b"first\r\nsecond");
-        grid.process(b"\x1b[A"); // cursor up
+        let _ = grid.process(b"first\r\nsecond");
+        let _ = grid.process(b"\x1b[A"); // cursor up
         let (line, _col) = grid.cursor_point();
         assert_eq!(line, 0);
     }
@@ -907,9 +962,9 @@ mod tests {
     #[test]
     fn erase_in_line() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
-        grid.process(b"hello world");
+        let _ = grid.process(b"hello world");
         // Move to column 5, erase to end of line
-        grid.process(b"\x1b[6G\x1b[K");
+        let _ = grid.process(b"\x1b[6G\x1b[K");
         let rows = grid.screen_text_rows();
         assert_eq!(rows[0], "hello");
     }
@@ -939,7 +994,7 @@ mod tests {
     #[test]
     fn serialize_plain_text_roundtrip() {
         let mut grid = TerminalGrid::new(5, 10, 0);
-        grid.process(b"Hi");
+        let _ = grid.process(b"Hi");
         let buf = grid.serialize_dirty_rows();
         assert!(!buf.is_empty());
 
@@ -972,7 +1027,7 @@ mod tests {
     fn serialize_colored_text_preserves_rgb() {
         let mut grid = TerminalGrid::new(5, 10, 0);
         // ESC[31m = red foreground (ANSI color 1)
-        grid.process(b"\x1b[31mX\x1b[0m");
+        let _ = grid.process(b"\x1b[31mX\x1b[0m");
         let buf = grid.serialize_dirty_rows();
 
         // Find row 0, cell 0 — should have red fg
@@ -990,7 +1045,7 @@ mod tests {
     fn serialize_bold_italic_attrs() {
         let mut grid = TerminalGrid::new(5, 10, 0);
         // Bold + italic
-        grid.process(b"\x1b[1;3mB\x1b[0m");
+        let _ = grid.process(b"\x1b[1;3mB\x1b[0m");
         let buf = grid.serialize_dirty_rows();
 
         let cell0 = TEST_HEADER_SIZE + 4;
@@ -1004,12 +1059,12 @@ mod tests {
     #[test]
     fn serialize_only_dirty_rows_after_reset() {
         let mut grid = TerminalGrid::new(5, 10, 0);
-        grid.process(b"line1\r\nline2\r\nline3");
+        let _ = grid.process(b"line1\r\nline2\r\nline3");
         // Drain initial damage
         let _ = grid.serialize_dirty_rows();
 
         // Now modify only row 0
-        grid.process(b"\x1b[1;1Hchanged");
+        let _ = grid.process(b"\x1b[1;1Hchanged");
         let buf = grid.serialize_dirty_rows();
 
         if buf.is_empty() {
@@ -1024,7 +1079,7 @@ mod tests {
     #[test]
     fn serialize_wide_char_spacer_is_zero() {
         let mut grid = TerminalGrid::new(5, 10, 0);
-        grid.process("日".as_bytes()); // wide char takes 2 columns
+        let _ = grid.process("日".as_bytes()); // wide char takes 2 columns
         let buf = grid.serialize_dirty_rows();
 
         // Cell 0 = '日'
@@ -1043,7 +1098,7 @@ mod tests {
         let mut grid = TerminalGrid::new(50, 220, 0);
         // Fill every cell to ensure all rows are dirty
         for _ in 0..50 {
-            grid.process(b"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\r\n");
+            let _ = grid.process(b"XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX\r\n");
         }
         let buf = grid.serialize_dirty_rows();
         assert!(
@@ -1059,8 +1114,8 @@ mod tests {
     fn serialize_cursor_hidden() {
         let mut grid = TerminalGrid::new(5, 10, 0);
         // DECTCEM: hide cursor
-        grid.process(b"\x1b[?25l");
-        grid.process(b"text");
+        let _ = grid.process(b"\x1b[?25l");
+        let _ = grid.process(b"text");
         let buf = grid.serialize_dirty_rows();
         let (_, _, _, cursor_visible) = decode_header(&buf);
         assert!(!cursor_visible, "cursor should be hidden");
@@ -1070,7 +1125,7 @@ mod tests {
     fn serialize_rgb_color_passthrough() {
         let mut grid = TerminalGrid::new(5, 10, 0);
         // ESC[38;2;100;150;200m = 24-bit fg color
-        grid.process(b"\x1b[38;2;100;150;200mR\x1b[0m");
+        let _ = grid.process(b"\x1b[38;2;100;150;200mR\x1b[0m");
         let buf = grid.serialize_dirty_rows();
 
         let cell0 = TEST_HEADER_SIZE + 4;
@@ -1087,7 +1142,7 @@ mod tests {
     #[test]
     fn selection_start_and_text() {
         let mut grid = TerminalGrid::new(5, 20, 0);
-        grid.process(b"hello world");
+        let _ = grid.process(b"hello world");
         grid.selection_start(0, 0, SelectionType::Simple);
         grid.selection_update(4, 0);
         let text = grid.selection_text();
@@ -1098,7 +1153,7 @@ mod tests {
     #[test]
     fn selection_clear() {
         let mut grid = TerminalGrid::new(5, 20, 0);
-        grid.process(b"hello");
+        let _ = grid.process(b"hello");
         grid.selection_start(0, 0, SelectionType::Simple);
         grid.selection_update(4, 0);
         assert!(grid.has_selection());
@@ -1112,7 +1167,7 @@ mod tests {
     #[test]
     fn search_finds_matches() {
         let mut grid = TerminalGrid::new(5, 40, 0);
-        grid.process(b"hello world\r\nfoo hello bar");
+        let _ = grid.process(b"hello world\r\nfoo hello bar");
         let matches = grid.search("hello");
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].col_start, 0);
@@ -1122,7 +1177,7 @@ mod tests {
     #[test]
     fn search_case_insensitive() {
         let mut grid = TerminalGrid::new(5, 40, 0);
-        grid.process(b"Hello HELLO hElLo");
+        let _ = grid.process(b"Hello HELLO hElLo");
         let matches = grid.search("hello");
         assert_eq!(matches.len(), 3);
     }
@@ -1139,7 +1194,7 @@ mod tests {
     #[test]
     fn scroll_and_display_offset() {
         let mut grid = TerminalGrid::new(3, 20, 100);
-        grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        let _ = grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
         assert_eq!(grid.display_offset(), 0);
         grid.scroll(2);
         assert_eq!(grid.display_offset(), 2);
@@ -1150,7 +1205,7 @@ mod tests {
     #[test]
     fn get_row_text_returns_visible() {
         let mut grid = TerminalGrid::new(5, 20, 0);
-        grid.process(b"first\r\nsecond");
+        let _ = grid.process(b"first\r\nsecond");
         let text = grid.get_row_text(0);
         assert_eq!(text, "first");
         let text = grid.get_row_text(1);
@@ -1162,7 +1217,7 @@ mod tests {
     #[test]
     fn read_scrollback_after_overflow() {
         let mut grid = TerminalGrid::new(3, 20, 100);
-        grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        let _ = grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
         let count = grid.scrollback_count();
         assert!(count >= 2, "expected scrollback >= 2, got {count}");
         let lines = grid.read_scrollback_lines(0, 10);
@@ -1173,7 +1228,7 @@ mod tests {
     #[test]
     fn read_scrollback_with_offset() {
         let mut grid = TerminalGrid::new(3, 20, 100);
-        grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5\r\nline6\r\nline7");
+        let _ = grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5\r\nline6\r\nline7");
         let count = grid.scrollback_count();
         let all = grid.read_scrollback_lines(0, count);
         if count > 1 {
@@ -1185,7 +1240,7 @@ mod tests {
     #[test]
     fn read_scrollback_offset_past_history_returns_empty() {
         let mut grid = TerminalGrid::new(3, 20, 100);
-        grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        let _ = grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
         let count = grid.scrollback_count();
         let lines = grid.read_scrollback_lines(count + 100, 10);
         assert!(lines.is_empty());

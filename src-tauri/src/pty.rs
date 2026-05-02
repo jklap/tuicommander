@@ -1560,9 +1560,9 @@ impl ChunkProcessor {
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
         // Also capture the post-process `total_lines` and `oldest_offset` so
         // we can emit a throttled growth/rotation event for the scrollback overlay.
-        let (changed_rows, vt_log_total, vt_log_oldest) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
+        let (changed_rows, osc133_events, vt_log_total, vt_log_oldest) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
-            let changed = vt.process(data.as_bytes());
+            let (changed, osc133) = vt.process(data.as_bytes());
             let total = vt.total_lines();
             let oldest = vt.oldest_offset();
 
@@ -1582,9 +1582,9 @@ impl ChunkProcessor {
                 changed
             };
 
-            (changed, Some(total), Some(oldest))
+            (changed, osc133, Some(total), Some(oldest))
         } else {
-            (Vec::new(), None, None)
+            (Vec::new(), Vec::new(), None, None)
         };
 
         // Emit scrollback-overlay growth/rotation event (throttled to 100ms).
@@ -1613,6 +1613,18 @@ impl ChunkProcessor {
         // Update oldest tracking (no event needed — frontend reads it on chunk fetch)
         if let Some(new_oldest) = vt_log_oldest {
             self.last_vt_log_oldest = new_oldest;
+        }
+
+        // Emit OSC 133 shell integration events to frontend
+        if !osc133_events.is_empty() {
+            if let Some(a) = app {
+                for evt in &osc133_events {
+                    let _ = a.emit(
+                        &format!("pty-osc133-{session_id}"),
+                        evt,
+                    );
+                }
+            }
         }
 
         // Write to ring buffer and broadcast to WebSocket clients while
@@ -5468,7 +5480,7 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let mut parser = OutputParser::new();
 
-        let changed = vt_log.process(b"* Reading files...");
+        let (changed, _) = vt_log.process(b"* Reading files...");
         let events = parser.parse_clean_lines(&changed, true);
         assert!(
             events.iter().any(|e| matches!(e, ParsedEvent::StatusLine { .. })),
@@ -5487,8 +5499,8 @@ mod tests {
         let mut parser = OutputParser::new();
 
         // Enter alternate screen (smcup: ESC[?1049h)
-        vt_log.process(b"\x1b[?1049h");
-        let changed = vt_log.process(b"intent: Doing work (Test)");
+        let _ = vt_log.process(b"\x1b[?1049h");
+        let (changed, _) = vt_log.process(b"intent: Doing work (Test)");
         let events = parser.parse_clean_lines(&changed, true);
         assert!(
             events.iter().any(|e| matches!(e, ParsedEvent::Intent { .. })),
@@ -5515,7 +5527,7 @@ mod tests {
         use crate::state::VtLogBuffer;
 
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-        let changed = vt_log.process(b"Would you like to proceed?");
+        let (changed, _) = vt_log.process(b"Would you like to proceed?");
         assert_eq!(extract_question_line(&changed).as_deref(), Some("Would you like to proceed?"));
     }
 
@@ -5527,7 +5539,7 @@ mod tests {
 
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let data = b"Le committo?\r\n\r\n\xe2\x8f\xb5\xe2\x8f\xb5 Reading files";
-        let changed = vt_log.process(data);
+        let (changed, _) = vt_log.process(data);
         assert_eq!(extract_question_line(&changed).as_deref(), Some("Le committo?"),
             "question must be found even when mode line is on a later row; changed_rows: {:?}",
             changed.iter().map(|r| format!("[{}] {:?}", r.row_index, &r.text)).collect::<Vec<_>>()
@@ -5540,9 +5552,9 @@ mod tests {
         use crate::state::VtLogBuffer;
 
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-        vt_log.process(b"\x1b[?1049h");
+        let _ = vt_log.process(b"\x1b[?1049h");
         let data = b"\x1b[5;1HDo you want to proceed?\x1b[23;1H* Thinking...";
-        let changed = vt_log.process(data);
+        let (changed, _) = vt_log.process(data);
         assert_eq!(extract_question_line(&changed).as_deref(), Some("Do you want to proceed?"),
             "question must be found in alternate screen; changed_rows: {:?}",
             changed.iter().map(|r| format!("[{}] {:?}", r.row_index, &r.text)).collect::<Vec<_>>()
@@ -5558,7 +5570,7 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let mut silence = SilenceState::new();
 
-        let changed = vt_log.process(b"Le committo?\r\n\r\n\xe2\x8f\xb5\xe2\x8f\xb5 Reading files");
+        let (changed, _) = vt_log.process(b"Le committo?\r\n\r\n\xe2\x8f\xb5\xe2\x8f\xb5 Reading files");
         silence.on_chunk(false, extract_question_line(&changed), false, false, false);
 
         assert_eq!(silence.pending_question_line.as_deref(), Some("Le committo?"));
@@ -5576,11 +5588,11 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let mut silence = SilenceState::new();
 
-        let changed = vt_log.process(b"Le committo?");
+        let (changed, _) = vt_log.process(b"Le committo?");
         silence.on_chunk(false, extract_question_line(&changed), false, false, false);
 
         // Mode line / prompt decoration arrives in a separate chunk
-        let changed = vt_log.process(b"\r\n\xe2\x8f\xb5\xe2\x8f\xb5 Idle");
+        let (changed, _) = vt_log.process(b"\r\n\xe2\x8f\xb5\xe2\x8f\xb5 Idle");
         silence.on_chunk(false, extract_question_line(&changed), false, false, false);
 
         // 10s silence → fires
@@ -5600,7 +5612,7 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let mut parser = OutputParser::new();
 
-        let changed = vt_log.process(b"intent: Testing headless reader");
+        let (changed, _) = vt_log.process(b"intent: Testing headless reader");
         let events = parser.parse_clean_lines(&changed, true);
 
         assert!(
@@ -5618,8 +5630,8 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let mut parser = OutputParser::new();
 
-        vt_log.process(b"\x1b[?1049h"); // enter alternate screen
-        let changed = vt_log.process(b"* Reading files...");
+        let _ = vt_log.process(b"\x1b[?1049h"); // enter alternate screen
+        let (changed, _) = vt_log.process(b"* Reading files...");
         let events = parser.parse_clean_lines(&changed, true);
 
         assert!(
@@ -5674,10 +5686,10 @@ mod tests {
         let mut parser = OutputParser::new();
 
         // Simulate Ink render: write placeholder, then CPL + overwrite with intent
-        vt_log.process(b"\x1b[?1049h");  // alternate screen
-        vt_log.process(b"placeholder text\r\n");
+        let _ = vt_log.process(b"\x1b[?1049h");  // alternate screen
+        let _ = vt_log.process(b"placeholder text\r\n");
         // Ink update: go up, clear line, write intent
-        let changed = vt_log.process(
+        let (changed, _) = vt_log.process(
             b"\x1b[1F\x1b[2Kintent: Fix all 34 documentation gaps (Fixing gaps)"
         );
         let events = parser.parse_clean_lines(&changed, true);
@@ -5701,13 +5713,13 @@ mod tests {
         use crate::state::VtLogBuffer;
 
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-        vt_log.process(b"\x1b[?1049h");  // alternate screen
-        vt_log.process(b"old line\r\n");
+        let _ = vt_log.process(b"\x1b[?1049h");  // alternate screen
+        let _ = vt_log.process(b"old line\r\n");
 
         // Chunk 1: partial CSI (just the introducer)
-        let changed1 = vt_log.process(b"\x1b[");
+        let (changed1, _) = vt_log.process(b"\x1b[");
         // Chunk 2: parameter + final byte completing CPL, then text
-        let changed2 = vt_log.process(b"1Fintent: Fix all gaps");
+        let (changed2, _) = vt_log.process(b"1Fintent: Fix all gaps");
 
         // Check that no row contains literal "1F" as text
         for row in changed1.iter().chain(changed2.iter()) {
@@ -5756,16 +5768,16 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let mut parser = OutputParser::new();
 
-        vt_log.process(b"\x1b[?1049h");  // alternate screen
+        let _ = vt_log.process(b"\x1b[?1049h");  // alternate screen
 
         // Frame 1: Ink renders initial content with colors
-        vt_log.process(
+        let _ = vt_log.process(
             b"\x1b[1;1H\x1b[38;2;128;128;128m\xe2\x97\x8f\x1b[0m \x1b[1mintent: Reading codebase structure (Reading code)\x1b[0m"
         );
 
         // Frame 2: Ink updates — cursor up, erase line, rewrite
         // This is how Ink typically does incremental updates
-        let changed = vt_log.process(
+        let (changed, _) = vt_log.process(
             b"\x1b[1F\x1b[2K\x1b[38;2;128;128;128m\xe2\x97\x8f\x1b[0m \x1b[1mintent: Fix all 34 documentation gaps (Fixing gaps)\x1b[0m"
         );
 
@@ -5797,7 +5809,7 @@ mod tests {
         use crate::state::VtLogBuffer;
 
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-        vt_log.process(b"\x1b[?1049h");
+        let _ = vt_log.process(b"\x1b[?1049h");
 
         // Simulate fragmented delivery of: \x1b[1F\x1b[2Kintent: Fix all gaps
         let fragments: Vec<&[u8]> = vec![
@@ -5811,7 +5823,7 @@ mod tests {
 
         let mut all_changed = Vec::new();
         for frag in fragments {
-            let changed = vt_log.process(frag);
+            let (changed, _) = vt_log.process(frag);
             all_changed.extend(changed);
         }
 
