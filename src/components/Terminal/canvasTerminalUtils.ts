@@ -1,7 +1,7 @@
 // --- Binary frame decoding and font measurement for CanvasTerminal ---
 
 // Wire format constants (must match terminal_grid.rs)
-const HEADER_SIZE = 17;
+const HEADER_SIZE = 18;
 const CELL_SIZE = 11; // 4 (char u32) + 3 (fg) + 3 (bg) + 1 (attrs)
 const ATTR_BOLD = 0x01;
 const ATTR_ITALIC = 0x02;
@@ -43,6 +43,7 @@ export interface DecodedFrame {
   historySize: number;
   hasSelection: boolean;
   keyboardFlags: number;
+  bell: boolean;
   rows: DecodedRow[];
 }
 
@@ -71,6 +72,8 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
   const historySize = view.getUint32(offset, true); offset += 4;
   const hasSelection = view.getUint8(offset) !== 0; offset += 1;
   const keyboardFlags = view.getUint8(offset); offset += 1;
+  const frameFlags = view.getUint8(offset); offset += 1;
+  const bell = (frameFlags & 0x01) !== 0;
 
   const rows: DecodedRow[] = [];
   for (let r = 0; r < numRows; r++) {
@@ -108,7 +111,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
     rows.push({ index: rowIndex, cells });
   }
 
-  return { cursorRow, cursorCol, cursorVisible, displayOffset, historySize, hasSelection, keyboardFlags, rows };
+  return { cursorRow, cursorCol, cursorVisible, displayOffset, historySize, hasSelection, keyboardFlags, bell, rows };
 }
 
 /** Measure natural character height via DOM span — matches xterm.js CharSizeService. */

@@ -22,8 +22,14 @@ import { isMacOS, isWindows } from "../../platform";
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame, DecodedCell };
 
+export interface CanvasTerminalRef {
+  focus: () => void;
+  refresh: () => void;
+}
+
 export interface CanvasTerminalProps {
   sessionId: string;
+  terminalId: string;
   onOpenFilePath?: (path: string, line?: number, col?: number) => void;
   onSearchOpen?: () => void;
   onSearchClose?: () => void;
@@ -31,6 +37,8 @@ export interface CanvasTerminalProps {
   onResume?: () => void;
   onResumeDismiss?: () => void;
   hasPendingResume?: boolean;
+  onRef?: (ref: CanvasTerminalRef) => void;
+  onBell?: () => void;
 }
 
 const SUGGEST_ANCHOR_RE = /^[\s●⏺]*suggest:\s+\S/;
@@ -57,6 +65,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   let resizeObserver: ResizeObserver | undefined;
   let invokeRef: ((cmd: string, args: Record<string, unknown>) => Promise<unknown>) | undefined;
   let rafId: number | undefined;
+  let resizeDebounce: ReturnType<typeof setTimeout> | undefined;
+  let dprMediaQuery: MediaQueryList | undefined;
+  let dprChangeHandler: (() => void) | undefined;
   let alive = true;
 
   // Selection state
@@ -96,7 +107,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   function remeasure() {
     if (!ctx) return;
     const dpr = window.devicePixelRatio || 1;
-    const fontSize = settingsStore.state.defaultFontSize;
+    const perTerminalSize = terminalsStore.state.terminals[props.terminalId]?.fontSize;
+    const fontSize = perTerminalSize ?? settingsStore.state.defaultFontSize;
     const fontFamily = settingsStore.getFontFamily();
     const fontWeight = settingsStore.state.fontWeight;
     const m = measureFont(ctx, fontSize, fontFamily, dpr, snapLineHeight(fontSize), fontWeight);
@@ -115,7 +127,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     canvasRef.style.width = `${logicalW}px`;
     canvasRef.style.height = `${logicalH}px`;
     ctx.scale(dpr, dpr);
-    if (cols > 0 && rows > 0 && invokeRef) {
+    if (cols > 0 && rows > 0 && logicalW > 0 && logicalH > 0 && invokeRef) {
       invokeRef("resize_pty", { sessionId: props.sessionId, rows, cols }).catch(() => {});
     }
 
@@ -388,6 +400,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const frame = decodeBinaryFrame(buffer);
     if (!frame) return;
 
+    if (frame.bell) props.onBell?.();
+
     // When scroll position changes, the entire visible content is different
     if (frame.displayOffset !== lastDisplayOffset) {
       screenRows.clear();
@@ -487,7 +501,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         }
       }
     }
-    canvasRef.style.cursor = hoveredLink ? "pointer" : "";
+    canvasRef.style.cursor = hoveredLink ? "pointer" : "text";
   }
 
   onMount(async () => {
@@ -495,8 +509,21 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     await document.fonts.ready;
     remeasure();
 
-    resizeObserver = new ResizeObserver(() => remeasure());
+    resizeObserver = new ResizeObserver(() => {
+      clearTimeout(resizeDebounce);
+      resizeDebounce = setTimeout(() => remeasure(), 100);
+    });
     resizeObserver.observe(containerRef);
+
+    // DPR change: browser zoom or external monitor switch
+    dprChangeHandler = () => {
+      dprMediaQuery?.removeEventListener("change", dprChangeHandler!);
+      dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      dprMediaQuery.addEventListener("change", dprChangeHandler!);
+      remeasure();
+    };
+    dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    dprMediaQuery.addEventListener("change", dprChangeHandler);
 
     canvasRef.addEventListener("focus", () => { setFocused(true); startBlink(); });
     canvasRef.addEventListener("blur", () => { setFocused(false); stopBlink(); repaintCursorIfNeeded(); });
@@ -520,6 +547,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         && currentFrame && currentFrame.displayOffset > 0) {
         e.preventDefault();
         invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta: -(currentFrame.displayOffset) }).catch(() => {});
+        return;
+      }
+
+      // Force re-render: clear accumulated buffer and request fresh frame from Rust
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "l" && !e.altKey) {
+        e.preventDefault();
+        screenRows.clear();
+        currentFrame = null;
+        lastDisplayOffset = -1;
+        remeasure();
+        invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(() => {});
         return;
       }
 
@@ -832,9 +870,21 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         document.removeEventListener("mouseup", onMouseUp);
       };
     }
+
+    props.onRef?.({
+      focus: () => canvasRef.focus(),
+      refresh: () => {
+        screenRows.clear();
+        currentFrame = null;
+        lastDisplayOffset = -1;
+        remeasure();
+        invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(() => {});
+      },
+    });
   });
 
   createEffect(() => {
+    terminalsStore.state.terminals[props.terminalId]?.fontSize;
     settingsStore.state.defaultFontSize;
     settingsStore.state.font;
     settingsStore.state.fontWeight;
@@ -858,7 +908,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     alive = false;
     stopBlink();
     if (rafId !== undefined) { cancelAnimationFrame(rafId); rafId = undefined; }
+    clearTimeout(resizeDebounce);
     resizeObserver?.disconnect();
+    if (dprChangeHandler) dprMediaQuery?.removeEventListener("change", dprChangeHandler);
     unsubscribe?.();
     clearTimeout(linkThrottle);
     linkCache.clear();
@@ -880,6 +932,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         style={{
           display: "block",
           outline: "none",
+          cursor: "text",
         }}
         tabIndex={0}
       />

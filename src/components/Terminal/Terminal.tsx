@@ -23,7 +23,7 @@ import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { agentConfigsStore } from "../../stores/agentConfigs";
 import { parseOsc7Url } from "../../utils/osc7";
 import { kittySequenceForKey } from "./kittyKeyboard";
-import CanvasTerminal from "./CanvasTerminal";
+import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { getAwaitingInputSound } from "./awaitingInputSound";
 import { searchTerminalBuffer } from "../../utils/terminalSearch";
 import { ScrollTracker, ViewportLock } from "./scrollTracker";
@@ -186,6 +186,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
   const useNativeRenderer = () =>
     isTauri() && settingsStore.state.terminalRenderer === "native";
+
+  let canvasTerminalRef: CanvasTerminalRef | undefined;
 
   // Search overlay state
   const [searchVisible, setSearchVisible] = createSignal(false);
@@ -1176,19 +1178,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     });
 
     // Bell handler: flash and/or beep on BEL character
-    terminal.onBell(() => {
-      const style = settingsStore.state.bellStyle;
-      if (style === "none") return;
-      if (style === "visual" || style === "both") {
-        containerRef?.classList.add("bell-flash");
-        setTimeout(() => containerRef?.classList.remove("bell-flash"), 150);
-      }
-      if (style === "sound" || style === "both") {
-        notificationsStore.play("info").catch((err) => {
-          appLogger.warn("terminal", "Bell audio playback failed", err);
-        });
-      }
-    });
+    terminal.onBell(handleBell);
 
     const search = new SearchAddon();
     terminal.loadAddon(search);
@@ -1599,7 +1589,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
         // focus it now that the DOM is ready (the synchronous focus() in handleTerminalSelect
         // fires before this rAF, so it fails on a still-hidden element).
         if (terminalsStore.state.activeId === props.id) {
-          terminal?.focus();
+          if (isNative()) canvasTerminalRef?.focus();
+          else terminal?.focus();
         }
 
         // The ResizeObserver (100ms debounce) is the authoritative resize path
@@ -1751,27 +1742,56 @@ export const Terminal: Component<TerminalProps> = (props) => {
   });
 
   // Public methods exposed via ref pattern
+  const isNative = () => useNativeRenderer();
+
   const refMethods = {
-    fit: () => doFit(),
+    fit: () => {
+      if (isNative()) canvasTerminalRef?.refresh();
+      else doFit();
+    },
     write: (data: string) => {
-      // Write to PTY stdin (sends as user input to the shell)
       if (sessionId) {
         pty.write(sessionId, data).catch((err) => {
           appLogger.error("terminal", "Failed to write to PTY", err);
         });
       }
     },
-    writeln: (data: string) => terminal?.writeln(data),
-    input: (data: string) => terminal?.input(data, true),
-    clear: () => terminal?.clear(),
-    refresh: () => {
-      rebuildAtlas();
-      if (terminal) {
-        fitAddon?.fit();
-        terminal.refresh(0, terminal.rows - 1);
+    writeln: (data: string) => {
+      if (isNative()) {
+        if (sessionId) pty.write(sessionId, data + "\n").catch(() => {});
+      } else {
+        terminal?.writeln(data);
       }
     },
-    focus: () => terminal?.focus(),
+    input: (data: string) => {
+      if (isNative()) {
+        if (sessionId) pty.write(sessionId, data).catch(() => {});
+      } else {
+        terminal?.input(data, true);
+      }
+    },
+    clear: () => {
+      if (isNative()) {
+        if (sessionId) pty.write(sessionId, "\x1b[2J\x1b[H\x1b[3J").catch(() => {});
+      } else {
+        terminal?.clear();
+      }
+    },
+    refresh: () => {
+      if (isNative()) {
+        canvasTerminalRef?.refresh();
+      } else {
+        rebuildAtlas();
+        if (terminal) {
+          fitAddon?.fit();
+          terminal.refresh(0, terminal.rows - 1);
+        }
+      }
+    },
+    focus: () => {
+      if (isNative()) canvasTerminalRef?.focus();
+      else terminal?.focus();
+    },
     getSessionId: () => sessionId,
     openSearch: () => setSearchVisible(true),
     closeSearch: () => setSearchVisible(false),
@@ -1799,15 +1819,47 @@ export const Terminal: Component<TerminalProps> = (props) => {
       return searchTerminalBuffer(lines, query, props.id, name);
     },
     scrollToLine: (lineIndex: number) => {
-      if (!terminal) return;
-      const viewportY = terminal.buffer.active.viewportY;
-      const delta = lineIndex - viewportY - Math.floor(terminal.rows / 2);
-      terminal.scrollLines(delta);
+      if (isNative()) {
+        // DEFERRED (2026-05-02) — scrollToLine for native needs terminal_scroll_to IPC
+        // that accepts absolute line index. Current terminal_scroll only does relative delta.
+      } else if (terminal) {
+        const viewportY = terminal.buffer.active.viewportY;
+        const delta = lineIndex - viewportY - Math.floor(terminal.rows / 2);
+        terminal.scrollLines(delta);
+      }
     },
-    scrollToTop: () => terminal?.scrollToTop(),
-    scrollToBottom: () => terminal?.scrollToBottom(),
-    scrollPages: (pages: number) => terminal?.scrollPages(pages),
-    getSelection: () => terminal?.getSelection() ?? "",
+    scrollToTop: () => {
+      if (isNative() && sessionId) {
+        invoke("terminal_scroll_info", { sessionId }).then((info) => {
+          const [, total] = info as [number, number];
+          invoke("terminal_scroll", { sessionId, delta: total }).catch(() => {});
+        }).catch(() => {});
+      } else {
+        terminal?.scrollToTop();
+      }
+    },
+    scrollToBottom: () => {
+      if (isNative() && sessionId) {
+        invoke("terminal_scroll_info", { sessionId }).then((info) => {
+          const [offset] = info as [number, number];
+          if (offset > 0) invoke("terminal_scroll", { sessionId, delta: -offset }).catch(() => {});
+        }).catch(() => {});
+      } else {
+        terminal?.scrollToBottom();
+      }
+    },
+    scrollPages: (pages: number) => {
+      if (isNative() && sessionId) {
+        const lines = pages * 24;
+        invoke("terminal_scroll", { sessionId, delta: -lines }).catch(() => {});
+      } else {
+        terminal?.scrollPages(pages);
+      }
+    },
+    getSelection: () => {
+      if (isNative()) return "";
+      return terminal?.getSelection() ?? "";
+    },
     getBufferLines: (startLine: number, endLine: number) => {
       if (!terminal) return [];
       const buf = terminal.buffer.active;
@@ -1823,6 +1875,20 @@ export const Terminal: Component<TerminalProps> = (props) => {
   onMount(() => {
     terminalsStore.update(props.id, { ref: refMethods });
   });
+
+  const handleBell = () => {
+    const style = settingsStore.state.bellStyle;
+    if (style === "none") return;
+    if (style === "visual" || style === "both") {
+      containerRef?.classList.add("bell-flash");
+      setTimeout(() => containerRef?.classList.remove("bell-flash"), 150);
+    }
+    if (style === "sound" || style === "both") {
+      notificationsStore.play("info").catch((err) => {
+        appLogger.warn("terminal", "Bell audio playback failed", err);
+      });
+    }
+  };
 
   const handleResume = () => {
     const cmd = terminalsStore.get(props.id)?.pendingResumeCommand;
@@ -1893,6 +1959,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       }>
         {(sid) => <CanvasTerminal
           sessionId={sid()}
+          terminalId={props.id}
           onOpenFilePath={props.onOpenFilePath}
           onSearchOpen={() => setSearchVisible(true)}
           onSearchClose={() => setSearchVisible(false)}
@@ -1900,6 +1967,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
           onResume={handleResume}
           onResumeDismiss={() => terminalsStore.update(props.id, { pendingResumeCommand: null })}
           hasPendingResume={!!terminalsStore.get(props.id)?.pendingResumeCommand}
+          onRef={(ref) => { canvasTerminalRef = ref; }}
+          onBell={handleBell}
         />}
       </Show>
       <Show when={!composeOpen()}>

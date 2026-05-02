@@ -1,4 +1,4 @@
-use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
@@ -6,6 +6,21 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{self, Color, NamedColor, Rgb};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+#[derive(Clone)]
+struct BellListener {
+    bell: Arc<AtomicBool>,
+}
+
+impl EventListener for BellListener {
+    fn send_event(&self, event: Event) {
+        if matches!(event, Event::Bell) {
+            self.bell.store(true, Ordering::Relaxed);
+        }
+    }
+}
 
 /// Local grid size type implementing `Dimensions` to avoid depending on
 /// `alacritty_terminal::term::test::TermSize` (test-only, no stability guarantee).
@@ -119,9 +134,11 @@ fn resolve_color(c: Color) -> Option<Rgb> {
 /// interface that `VtLogBuffer` expects, so it can drop in as a replacement
 /// for the current `vt100::Parser`.
 pub struct TerminalGrid {
-    term: Term<VoidListener>,
+    term: Term<BellListener>,
     processor: ansi::Processor,
     prev_rows: Vec<String>,
+    force_full_next: bool,
+    bell_flag: Arc<AtomicBool>,
 }
 
 impl TerminalGrid {
@@ -132,11 +149,15 @@ impl TerminalGrid {
             ..Config::default()
         };
         let size = GridSize { cols: cols as usize, lines: rows as usize };
-        let term = Term::new(config, &size, VoidListener);
+        let bell_flag = Arc::new(AtomicBool::new(false));
+        let listener = BellListener { bell: bell_flag.clone() };
+        let term = Term::new(config, &size, listener);
         Self {
             term,
             processor: ansi::Processor::new(),
             prev_rows: Vec::new(),
+            force_full_next: false,
+            bell_flag,
         }
     }
 
@@ -234,12 +255,12 @@ impl TerminalGrid {
     }
 
     /// Access the underlying Term (for future rendering/selection needs).
-    pub fn term(&self) -> &Term<VoidListener> {
+    pub fn term(&self) -> &Term<BellListener> {
         &self.term
     }
 
     /// Mutable access to the underlying Term.
-    pub fn term_mut(&mut self) -> &mut Term<VoidListener> {
+    pub fn term_mut(&mut self) -> &mut Term<BellListener> {
         &mut self.term
     }
 
@@ -491,14 +512,14 @@ impl TerminalGrid {
         self.term.selection.is_some()
     }
 
+    /// Returns true if a bell was rung since last drain, and resets the flag.
+    pub fn drain_bell(&self) -> bool {
+        self.bell_flag.swap(false, Ordering::Relaxed)
+    }
+
     /// Mark all rows as dirty so the next serialize_dirty_rows returns a full frame.
-    /// Uses a resize-to-same-size trick since alacritty's mark_fully_damaged is private.
     pub fn force_full_damage(&mut self) {
-        let size = GridSize {
-            cols: self.term.grid().columns(),
-            lines: self.term.grid().screen_lines(),
-        };
-        self.term.resize(size);
+        self.force_full_next = true;
     }
 
     // --- Scroll API ---
@@ -612,10 +633,15 @@ impl TerminalGrid {
         if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) { keyboard_flags |= 0x08; }
         if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) { keyboard_flags |= 0x10; }
 
-        let damage = self.term.damage();
-        let dirty_lines: Vec<usize> = match damage {
-            TermDamage::Full => (0..num_lines).collect(),
-            TermDamage::Partial(iter) => iter.map(|b| b.line).collect(),
+        let dirty_lines: Vec<usize> = if self.force_full_next {
+            self.force_full_next = false;
+            (0..num_lines).collect()
+        } else {
+            let damage = self.term.damage();
+            match damage {
+                TermDamage::Full => (0..num_lines).collect(),
+                TermDamage::Partial(iter) => iter.map(|b| b.line).collect(),
+            }
         };
 
         if dirty_lines.is_empty() {
@@ -623,10 +649,14 @@ impl TerminalGrid {
             return Vec::new();
         }
 
-        // Header: 17 bytes
+        // Header: 18 bytes
         let row_count = dirty_lines.len();
-        let estimated = 17 + row_count * (4 + num_cols * 11);
+        let estimated = 18 + row_count * (4 + num_cols * 11);
         let mut buf = Vec::with_capacity(estimated);
+
+        let bell = self.drain_bell();
+        let mut frame_flags: u8 = 0;
+        if bell { frame_flags |= 0x01; }
 
         buf.extend_from_slice(&(row_count as u16).to_le_bytes());
         buf.extend_from_slice(&(cursor.line.0.max(0) as u16).to_le_bytes());
@@ -636,6 +666,7 @@ impl TerminalGrid {
         buf.extend_from_slice(&(history_size as u32).to_le_bytes());
         buf.push(has_selection as u8);
         buf.push(keyboard_flags);
+        buf.push(frame_flags);
 
         let grid = self.term.grid();
         for &row_idx in &dirty_lines {
@@ -864,7 +895,7 @@ mod tests {
 
     // --- Binary serialization tests ---
 
-    const TEST_HEADER_SIZE: usize = 17;
+    const TEST_HEADER_SIZE: usize = 18;
 
     /// Helper: decode the header from a serialized frame.
     fn decode_header(buf: &[u8]) -> (u16, u16, u16, bool) {
