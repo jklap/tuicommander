@@ -28,6 +28,9 @@ export interface CanvasTerminalProps {
   onSearchOpen?: () => void;
   onSearchClose?: () => void;
   searchVisible?: boolean;
+  onResume?: () => void;
+  onResumeDismiss?: () => void;
+  hasPendingResume?: boolean;
 }
 
 const SUGGEST_ANCHOR_RE = /^[\s●⏺]*suggest:\s+\S/;
@@ -512,6 +515,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (composing) return;
       resetBlink();
 
+      // Arrow Down with no modifiers: snap to bottom when scrolled up
+      if (e.key === "ArrowDown" && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
+        && currentFrame && currentFrame.displayOffset > 0) {
+        e.preventDefault();
+        invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta: -(currentFrame.displayOffset) }).catch(() => {});
+        return;
+      }
+
       // DEFERRED (2026-05-02) — Cmd+F opens the shared SearchBar but search uses xterm's
       // SearchAddon which doesn't work with CanvasTerminal. Needs a CanvasTerminalSearch
       // component that uses the Rust terminal_search IPC + canvas highlight rendering.
@@ -525,6 +536,23 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (e.key === "Escape" && props.searchVisible) {
         e.preventDefault();
         props.onSearchClose?.();
+        return;
+      }
+
+      // Resume banner: Space/Enter accept, other keys dismiss
+      if (props.hasPendingResume) {
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          props.onResume?.();
+        } else if (e.key.length === 1) {
+          props.onResumeDismiss?.();
+          // Let the keystroke pass through to PTY
+          const seq = keyToSequence(e);
+          if (seq !== null) writePty(seq);
+        } else if (e.key === "Escape" || e.key === "Backspace" || e.key === "Delete" || e.key === "Tab") {
+          e.preventDefault();
+          props.onResumeDismiss?.();
+        }
         return;
       }
 

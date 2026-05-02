@@ -1897,6 +1897,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
           onSearchOpen={() => setSearchVisible(true)}
           onSearchClose={() => setSearchVisible(false)}
           searchVisible={searchVisible()}
+          onResume={handleResume}
+          onResumeDismiss={() => terminalsStore.update(props.id, { pendingResumeCommand: null })}
+          hasPendingResume={!!terminalsStore.get(props.id)?.pendingResumeCommand}
         />}
       </Show>
       <Show when={!composeOpen()}>
