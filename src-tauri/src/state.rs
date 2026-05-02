@@ -1760,8 +1760,7 @@ impl VtLogBuffer {
         } else if cols.saturating_mul(2) >= self.max_cols {
             self.suppress_capture = false;
         }
-        let effective_cols = cols.max(self.max_cols);
-        self.grid.resize(rows, effective_cols);
+        self.grid.resize(rows, cols);
         // Re-sync scrollback count after resize (grid may adjust scrollback).
         self.scrollback_read = self.grid.scrollback_count();
     }
