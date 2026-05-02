@@ -14,7 +14,7 @@ import {
 } from "../stores/dragDrop";
 import { rpc, isTauri } from "../transport";
 import { invoke } from "../invoke";
-import { classifyFile, isImageFile } from "../utils/filePreview";
+import { classifyFile } from "../utils/filePreview";
 import { pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 
 // Re-export for existing callsites that import from useFileDrop
@@ -49,23 +49,13 @@ function shellQuote(path: string): string {
   return path.replace(/([^A-Za-z0-9_\-.~/])/g, "\\$1");
 }
 
-/** Write image files to the active terminal via OSC 1337 inline image protocol. */
-function writeImagesToTerminal(paths: string[]): void {
-  const active = terminalsStore.getActive();
-  if (!active?.sessionId) return;
-  for (const path of paths) {
-    rpc("write_image_to_pty", { sessionId: active.sessionId, filePath: path }).catch((err) => {
-      appLogger.error("terminal", "Failed to write image via OSC 1337", err);
-    });
-  }
-}
-
-/** Write absolute paths to the active terminal as space-separated shell-quoted tokens. */
+/** Write absolute paths to the active terminal as a bracketed paste (like Cmd+V). */
 function writePathsToTerminal(paths: string[]): boolean {
   const active = terminalsStore.getActive();
   if (!active?.sessionId || !terminalsStore.state.activeId) return false;
   const joined = paths.map(shellQuote).join(" ");
-  rpc("write_pty", { sessionId: active.sessionId, data: joined }).catch((err) => {
+  const bracketed = `\x1b[200~${joined}\x1b[201~`;
+  rpc("write_pty", { sessionId: active.sessionId, data: bracketed }).catch((err) => {
     appLogger.error("terminal", "Failed to write dropped file paths", err);
   });
   return true;
@@ -213,16 +203,7 @@ async function dispatchTauriDrop(paths: string[], x: number, y: number): Promise
   }
 
   if (target?.kind === "pane") {
-    const active = terminalsStore.getActive();
-    const hasAgent = !!active?.agentType;
-    const images = hasAgent ? paths.filter(isImageFile) : [];
-    const nonImages = hasAgent ? paths.filter((p) => !isImageFile(p)) : paths;
-    if (images.length > 0) {
-      writeImagesToTerminal(images);
-    }
-    if (nonImages.length > 0) {
-      writePathsToTerminal(nonImages);
-    }
+    writePathsToTerminal(paths);
     return;
   }
 

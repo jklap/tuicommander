@@ -142,6 +142,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         && (cols !== lastResizeCols || rows !== lastResizeRows)) {
       lastResizeCols = cols;
       lastResizeRows = rows;
+      screenRows.clear();
+      lastDisplayOffset = -1;
       invokeRef("resize_pty", { sessionId: props.sessionId, rows, cols }).catch(() => {});
     }
 

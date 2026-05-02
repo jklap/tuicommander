@@ -3204,53 +3204,6 @@ pub(crate) async fn write_pty(
     .map_err(|e| format!("Task join error: {e}"))?
 }
 
-/// Write an image file to a PTY session using the iTerm2 Inline Images Protocol (OSC 1337).
-/// Format: ESC ] 1337 ; File=name=<b64name>;size=<bytes>;inline=1 : <b64data> BEL
-#[tauri::command]
-pub(crate) async fn write_image_to_pty(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    file_path: String,
-) -> Result<(), String> {
-    use base64::Engine;
-
-    let file_data = tokio::fs::read(&file_path)
-        .await
-        .map_err(|e| format!("Failed to read image file: {e}"))?;
-    let file_size = file_data.len();
-
-    let file_name = std::path::Path::new(&file_path)
-        .file_name()
-        .unwrap_or_default()
-        .to_string_lossy();
-    let b64_name = base64::engine::general_purpose::STANDARD.encode(file_name.as_bytes());
-    let b64_data = base64::engine::general_purpose::STANDARD.encode(&file_data);
-
-    let osc = format!(
-        "\x1b]1337;File=name={b64_name};size={file_size};inline=1:{b64_data}\x07"
-    );
-
-    let state = Arc::clone(&state);
-    tokio::task::spawn_blocking(move || {
-        if let Some(entry) = state.sessions.get(&session_id) {
-            let mut session = entry.lock();
-            session
-                .writer
-                .write_all(osc.as_bytes())
-                .map_err(|e| format!("Failed to write OSC 1337 to PTY: {e}"))?;
-            session
-                .writer
-                .flush()
-                .map_err(|e| format!("Failed to flush PTY: {e}"))?;
-            Ok(())
-        } else {
-            Err("Session not found".to_string())
-        }
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?
-}
-
 /// Return the current content of the input line buffer for a PTY session.
 /// Empty string when the user has not started typing.
 #[tauri::command]

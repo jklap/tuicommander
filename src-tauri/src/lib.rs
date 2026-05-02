@@ -1196,7 +1196,7 @@ pub fn run() {
             pty::unsubscribe_terminal_grid,
             pty::terminal_request_frame,
             pty::ack_terminal_frame,
-            pty::write_image_to_pty,
+
             pty::terminal_select_start,
             pty::terminal_select_update,
             pty::terminal_select_text,
