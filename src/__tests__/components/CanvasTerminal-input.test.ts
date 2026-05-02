@@ -172,6 +172,54 @@ describe("altSequenceFromCode", () => {
     expect(altSequenceFromCode(evt("Slash"))).toBe("\x1b/");
   });
 
+  it("maps Alt+Space", () => {
+    expect(altSequenceFromCode(evt("Space"))).toBe("\x1b ");
+  });
+
+  it("maps Alt+Comma", () => {
+    expect(altSequenceFromCode(evt("Comma"))).toBe("\x1b,");
+  });
+
+  it("maps Alt+Minus", () => {
+    expect(altSequenceFromCode(evt("Minus"))).toBe("\x1b-");
+  });
+
+  it("maps Alt+Equal", () => {
+    expect(altSequenceFromCode(evt("Equal"))).toBe("\x1b=");
+  });
+
+  it("maps Alt+Semicolon", () => {
+    expect(altSequenceFromCode(evt("Semicolon"))).toBe("\x1b;");
+  });
+
+  it("maps Alt+Quote", () => {
+    expect(altSequenceFromCode(evt("Quote"))).toBe("\x1b'");
+  });
+
+  it("maps Alt+BracketLeft", () => {
+    expect(altSequenceFromCode(evt("BracketLeft"))).toBe("\x1b[");
+  });
+
+  it("maps Alt+BracketRight", () => {
+    expect(altSequenceFromCode(evt("BracketRight"))).toBe("\x1b]");
+  });
+
+  it("maps Alt+Backslash", () => {
+    expect(altSequenceFromCode(evt("Backslash"))).toBe("\x1b\\");
+  });
+
+  it("maps Alt+Backquote", () => {
+    expect(altSequenceFromCode(evt("Backquote"))).toBe("\x1b`");
+  });
+
+  it("maps Alt+ArrowUp", () => {
+    expect(altSequenceFromCode(evt("ArrowUp"))).toBe("\x1b[1;3A");
+  });
+
+  it("maps Alt+ArrowDown", () => {
+    expect(altSequenceFromCode(evt("ArrowDown"))).toBe("\x1b[1;3B");
+  });
+
   it("returns null for unknown codes", () => {
     expect(altSequenceFromCode(evt("IntlBackslash"))).toBeNull();
   });

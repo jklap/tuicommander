@@ -297,7 +297,8 @@ impl Utf8ReadBuffer {
 
         // SAFETY: `combined[..valid_up_to]` was verified as valid UTF-8 above via
         // `std::str::from_utf8` / `Utf8Error::valid_up_to`, so `from_utf8_unchecked` is sound.
-        unsafe { String::from_utf8_unchecked(combined[..valid_up_to].to_vec()) }
+        combined.truncate(valid_up_to);
+        unsafe { String::from_utf8_unchecked(combined) }
     }
 
     /// Flush any remaining bytes (at EOF). Incomplete sequences are dropped.

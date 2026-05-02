@@ -2476,6 +2476,7 @@ pub(crate) fn spawn_reader_thread(
 
     std::thread::spawn(move || {
         let sid_for_panic = session_id.clone();
+        let state_for_panic = state.clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let mut buf = [0u8; 65536];
         let mut utf8_buf = Utf8ReadBuffer::new();
@@ -2595,6 +2596,7 @@ pub(crate) fn spawn_reader_thread(
                 "unknown panic payload".to_string()
             };
             tracing::error!(session_id = %sid_for_panic, "READER THREAD PANICKED: {msg}");
+            mark_session_exited(&sid_for_panic, &state_for_panic);
         }
     });
 }

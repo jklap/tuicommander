@@ -1792,7 +1792,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
   });
 
   // Public methods exposed via ref pattern
-  const isNative = () => useNativeRenderer();
+  const isNative = useNativeRenderer;
 
   const refMethods = {
     fit: () => {
@@ -1872,6 +1872,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       if (isNative()) {
         // DEFERRED (2026-05-02) — scrollToLine for native needs terminal_scroll_to IPC
         // that accepts absolute line index. Current terminal_scroll only does relative delta.
+        appLogger.warn("terminal", "scrollToLine: not implemented for native renderer", { lineIndex });
       } else if (terminal) {
         const viewportY = terminal.buffer.active.viewportY;
         const delta = lineIndex - viewportY - Math.floor(terminal.rows / 2);
@@ -1900,8 +1901,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
     },
     scrollPages: (pages: number) => {
       if (isNative() && sessionId) {
-        const lines = pages * 24;
-        invoke("terminal_scroll", { sessionId, delta: -lines }).catch(() => {});
+        // DEFERRED (2026-05-02) — uses fallback 24 rows; native renderer doesn't
+        // expose screen dimensions yet. Should read from terminal_scroll_info.
+        invoke("terminal_scroll", { sessionId, delta: -(pages * 24) }).catch(() => {});
       } else {
         terminal?.scrollPages(pages);
       }

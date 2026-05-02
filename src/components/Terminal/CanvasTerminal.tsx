@@ -20,6 +20,7 @@ import {
 import { handleOpenUrl } from "../../utils/openUrl";
 import { terminalsStore } from "../../stores/terminals";
 import { isMacOS, isWindows } from "../../platform";
+import { appLogger } from "../../stores/appLogger";
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame, DecodedCell };
 
@@ -93,7 +94,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   let rowMap = new Map<number, DecodedFrame["rows"][0]>();
 
   function writePty(data: string) {
-    invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch(() => {});
+    invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch((e) => {
+      appLogger.warn("terminal", "PTY write failed", { sessionId: props.sessionId, error: e });
+    });
   }
 
   function canvasToGrid(e: MouseEvent): { col: number; row: number } {
@@ -149,9 +152,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const h = canvasRef.height / m.dpr;
     ctx.fillStyle = cachedBgDefault;
     ctx.fillRect(0, 0, w, h);
+    const fontFamily = settingsStore.getFontFamily();
     for (const row of frame.rows) {
       const y = row.index * m.cellHeight;
-      paintRow(row, y, m);
+      paintRow(row, y, m, fontFamily);
     }
 
     paintSelection(frame, m);
@@ -258,7 +262,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
   function updateScrollbar(frame: DecodedFrame) {
     if (!scrollbarRef || !scrollThumbRef) return;
-    const total = frame.historySize + (frame.rows.length > 0 ? Math.max(...frame.rows.map(r => r.index)) + 1 : 24);
+    const total = frame.historySize + (frame.rows.length > 0 ? (frame.rows[frame.rows.length - 1]?.index ?? -1) + 1 : 24);
     const visible = canvasRef.getBoundingClientRect().height / (metrics()?.cellHeight ?? 16);
 
     if (frame.historySize === 0) {
@@ -288,8 +292,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
   function updateSuggestOverlay(frame: DecodedFrame, m: CellMetrics) {
     if (!overlayRef) return;
-    const bg = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
-    const numRows = frame.rows.length > 0 ? Math.max(...frame.rows.map(r => r.index)) + 1 : 0;
+    const bg = cachedBgDefault;
+    const numRows = frame.rows.length > 0 ? (frame.rows[frame.rows.length - 1]?.index ?? -1) + 1 : 0;
 
     const getRowSnapshot = (i: number) => {
       const row = rowMap.get(i);
@@ -324,7 +328,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       cursorBlinkOn = !cursorBlinkOn;
       const m = metrics();
       if (currentFrame && m) {
-        repaintCursorRow(currentFrame, m);
+        repaintCursorOnly(currentFrame, m);
       }
     }, 700);
   }
@@ -374,8 +378,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     }
   }
 
-  function paintRow(row: DecodedFrame["rows"][0], y: number, m: CellMetrics) {
-    const fontFamily = settingsStore.getFontFamily();
+  function paintRow(row: DecodedFrame["rows"][0], y: number, m: CellMetrics, fontFamily?: string) {
+    fontFamily ??= settingsStore.getFontFamily();
     let lastFont = "";
     for (let c = 0; c < row.cells.length; c++) {
       const cell = row.cells[c];
@@ -408,13 +412,21 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     }
   }
 
-  function repaintCursorRow(frame: DecodedFrame, m: CellMetrics) {
-    paintFrame(frame, m);
+  function repaintCursorOnly(frame: DecodedFrame, m: CellMetrics) {
+    const prevRow = frame.cursorRow;
+    const row = rowMap.get(prevRow);
+    if (row) {
+      const y = prevRow * m.cellHeight;
+      ctx.fillStyle = cachedBgDefault;
+      ctx.fillRect(0, y, canvasRef.width / m.dpr, m.cellHeight);
+      paintRow(row, y, m);
+    }
+    paintCursor(frame, m);
   }
 
   function repaintCursorIfNeeded() {
     const m = metrics();
-    if (currentFrame && m) repaintCursorRow(currentFrame, m);
+    if (currentFrame && m) repaintCursorOnly(currentFrame, m);
   }
 
   function onFrame(data: ArrayBuffer | number[]) {
@@ -506,11 +518,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
       if (fileMatches.length === 0 && urlMatches.length === 0) {
         linkCache.set(cacheKey, null);
-        if (linkCache.size > 200) linkCache.clear();
+        if (linkCache.size > 200) { const oldest = linkCache.keys().next().value; if (oldest !== undefined) linkCache.delete(oldest); }
         links = null;
       } else {
         // Resolve file paths
-        const termData = terminalsStore.get(props.sessionId);
+        const termId = terminalsStore.getTerminalForSession(props.sessionId);
+        const termData = termId ? terminalsStore.get(termId) : undefined;
         const cwd = termData?.cwd || "";
         const resolvedFiles = await Promise.all(
           fileMatches.map(async (m) => {
@@ -525,7 +538,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
                 if (lc[2]) col = parseInt(lc[2], 10);
               }
               return { text: m.text, path: r.absolute_path, line, col, index: m.index };
-            } catch {
+            } catch (e) {
+              appLogger.debug("terminal", "resolve_terminal_path failed", { candidate: m.candidate, error: e });
               return null;
             }
           }),
@@ -533,7 +547,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         const validFiles = resolvedFiles.filter(Boolean) as { text: string; path: string; line?: number; col?: number; index: number }[];
         const allLinks = [...validFiles, ...urlMatches];
         links = allLinks.length > 0 ? allLinks : null;
-        if (linkCache.size > 200) linkCache.clear();
+        if (linkCache.size > 200) { const oldest = linkCache.keys().next().value; if (oldest !== undefined) linkCache.delete(oldest); }
         linkCache.set(cacheKey, links);
       }
     }
@@ -743,6 +757,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     });
 
     canvasRef.addEventListener("paste", (e: ClipboardEvent) => {
+      if (e.clipboardData) {
+        const items = e.clipboardData.items;
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.startsWith("image/")) {
+            e.preventDefault();
+            writePty("\x16");
+            return;
+          }
+        }
+      }
       const text = e.clipboardData?.getData("text");
       if (text) writePty(`\x1b[200~${text}\x1b[201~`);
       e.preventDefault();
@@ -916,10 +940,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
           sessionId: props.sessionId,
         }).catch(() => {});
       };
-    } catch {
+    } catch (e) {
+      appLogger.error("terminal", "Failed to subscribe to terminal grid channel", {
+        sessionId: props.sessionId, error: e,
+      });
       unsubscribe = () => {
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
+        document.removeEventListener("mousemove", onScrollDragMove);
+        document.removeEventListener("mouseup", onScrollDragUp);
       };
     }
 

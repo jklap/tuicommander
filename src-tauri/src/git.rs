@@ -538,7 +538,8 @@ pub(crate) async fn get_bulk_diffs(
                             .join("\n");
                         result.insert(path.clone(), pseudo);
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        tracing::warn!(path = %path, error = %e, "get_bulk_diffs: failed to read untracked file");
                         result.insert(path.clone(), String::new());
                     }
                 }

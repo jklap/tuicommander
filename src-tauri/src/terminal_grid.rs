@@ -307,16 +307,6 @@ impl TerminalGrid {
         self.term.grid().columns()
     }
 
-    /// Access the underlying Term (for future rendering/selection needs).
-    pub fn term(&self) -> &Term<TermEventCollector> {
-        &self.term
-    }
-
-    /// Mutable access to the underlying Term.
-    pub fn term_mut(&mut self) -> &mut Term<TermEventCollector> {
-        &mut self.term
-    }
-
     /// Read the cursor position (line, column) in screen coordinates.
     pub fn cursor_point(&self) -> (usize, usize) {
         let point = self.term.grid().cursor.point;
@@ -463,6 +453,7 @@ impl TerminalGrid {
     }
 
     /// Whether a screen row's last cell has WRAPLINE set (it continues on the next row).
+    #[allow(dead_code)] // used by scrollback log line extraction
     pub fn row_wrapped(&self, line: Line) -> bool {
         let grid = self.term.grid();
         let last_col = grid.columns().saturating_sub(1);
@@ -572,7 +563,13 @@ impl TerminalGrid {
 
     /// Drain queued terminal events (title changes, clipboard, PTY writes, etc.)
     pub fn drain_events(&self) -> Vec<TermEvent> {
-        std::mem::take(&mut *self.events.lock().unwrap())
+        match self.events.lock() {
+            Ok(mut guard) => std::mem::take(&mut *guard),
+            Err(e) => {
+                tracing::error!("terminal_grid: events mutex poisoned: {e}");
+                Vec::new()
+            }
+        }
     }
 
     /// Get the OSC 8 hyperlink URI at a given viewport position, if any.
@@ -709,7 +706,10 @@ impl TerminalGrid {
             let damage = self.term.damage();
             match damage {
                 TermDamage::Full => (0..num_lines).collect(),
-                TermDamage::Partial(iter) => iter.map(|b| b.line).collect(),
+                TermDamage::Partial(iter) => iter
+                    .map(|b| b.line)
+                    .filter(|&l| l < num_lines)
+                    .collect(),
             }
         };
 
