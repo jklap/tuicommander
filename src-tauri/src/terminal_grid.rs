@@ -5,12 +5,12 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
-use alacritty_terminal::vte::ansi::{self, Color, CursorShape, NamedColor, Rgb};
+use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone)]
-struct BellListener {
+pub(crate) struct BellListener {
     bell: Arc<AtomicBool>,
 }
 
@@ -146,6 +146,7 @@ impl TerminalGrid {
         let config = Config {
             scrolling_history: scrollback,
             kitty_keyboard: true,
+            default_cursor_style: CursorStyle { shape: CursorShape::Beam, blinking: true },
             ..Config::default()
         };
         let size = GridSize { cols: cols as usize, lines: rows as usize };
@@ -680,7 +681,7 @@ impl TerminalGrid {
 
         let grid = self.term.grid();
         for &row_idx in &dirty_lines {
-            let line = Line(row_idx as i32);
+            let line = Line(row_idx as i32 - display_offset as i32);
             buf.extend_from_slice(&(row_idx as u16).to_le_bytes());
             buf.extend_from_slice(&(num_cols as u16).to_le_bytes());
 

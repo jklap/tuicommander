@@ -408,6 +408,9 @@ pub(crate) struct AppConfig {
     /// Sub-flag: AI Chat panel, shortcuts, and palette entry
     #[serde(default)]
     pub(crate) ai_chat_enabled: bool,
+    /// Terminal cursor style: "bar" (default), "block", "underline"
+    #[serde(default = "default_cursor_style")]
+    pub(crate) cursor_style: String,
     /// Terminal renderer: "webgl" (default, GPU-accelerated) or "canvas" (CPU, no atlas bugs)
     #[serde(default = "default_terminal_renderer")]
     pub(crate) terminal_renderer: String,
@@ -444,6 +447,10 @@ fn default_bell_style() -> String {
 
 fn default_issue_filter() -> String {
     "assigned".to_string()
+}
+
+fn default_cursor_style() -> String {
+    "bar".to_string()
 }
 
 fn default_terminal_renderer() -> String {
@@ -521,6 +528,7 @@ impl Default for AppConfig {
             issue_filter: default_issue_filter(),
             experimental_features_enabled: false,
             ai_chat_enabled: false,
+            cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
             ai_terminal_mcp_enabled: false,
         }
@@ -1292,6 +1300,7 @@ mod tests {
             experimental_features_enabled: false,
             ai_chat_enabled: false,
             ai_terminal_mcp_enabled: false,
+            cursor_style: "bar".to_string(),
             terminal_renderer: "webgl".to_string(),
         };
         let loaded: AppConfig = round_trip_in_dir(dir.path(), "config.json", &cfg);

@@ -205,10 +205,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   }
 
   function paintCursor(frame: DecodedFrame, m: CellMetrics) {
-    if (!frame.cursorVisible) return;
     if (!cursorBlinkOn && focused()) return;
 
-    const rect = computeCursorRect(frame.cursorShape, frame.cursorRow, frame.cursorCol, m);
+    const settingShape: CursorShape = settingsStore.state.cursorStyle === "block" ? "block"
+      : settingsStore.state.cursorStyle === "underline" ? "underline" : "beam";
+    const shape: CursorShape = frame.cursorVisible ? frame.cursorShape : settingShape;
+    const rect = computeCursorRect(shape, frame.cursorRow, frame.cursorCol, m);
 
     if (!focused()) {
       ctx.strokeStyle = cachedFgDefault;
@@ -220,7 +222,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     ctx.fillStyle = cachedFgDefault;
     ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
-    if (frame.cursorShape === "block") {
+    if (shape === "block") {
       const row = rowMap.get(frame.cursorRow);
       const cell = row?.cells[frame.cursorCol];
       if (cell && cell.char && cell.char !== " ") {
