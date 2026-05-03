@@ -189,6 +189,105 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
     }),
   },
 
+  // --- Terminal grid commands ---
+  terminal_scroll: {
+    map: (args) => ({
+      method: "POST",
+      path: `/sessions/${args.sessionId}/terminal/scroll`,
+      body: { delta: args.delta },
+    }),
+  },
+  terminal_scroll_to: {
+    map: (args) => ({
+      method: "POST",
+      path: `/sessions/${args.sessionId}/terminal/scroll-to`,
+      body: { line: args.line },
+    }),
+  },
+  terminal_scroll_info: {
+    map: (args) => ({
+      method: "GET",
+      path: `/sessions/${args.sessionId}/terminal/scroll-info`,
+    }),
+  },
+  terminal_select_start: {
+    map: (args) => ({
+      method: "POST",
+      path: `/sessions/${args.sessionId}/terminal/select/start`,
+      body: { col: args.col, row: args.row, word: args.word },
+    }),
+  },
+  terminal_select_update: {
+    map: (args) => ({
+      method: "POST",
+      path: `/sessions/${args.sessionId}/terminal/select/update`,
+      body: { col: args.col, row: args.row },
+    }),
+  },
+  terminal_select_text: {
+    map: (args) => ({
+      method: "GET",
+      path: `/sessions/${args.sessionId}/terminal/select/text`,
+      transform: (data) => (data as { text: string | null }).text,
+    }),
+  },
+  terminal_select_clear: {
+    map: (args) => ({
+      method: "POST",
+      path: `/sessions/${args.sessionId}/terminal/select/clear`,
+    }),
+  },
+  terminal_search: {
+    map: (args) => ({
+      method: "POST",
+      path: `/sessions/${args.sessionId}/terminal/search`,
+      body: { query: args.query },
+      transform: (data) => (data as { matches: unknown[] }).matches,
+    }),
+  },
+  terminal_search_buffer: {
+    map: (args) => ({
+      method: "POST",
+      path: `/sessions/${args.sessionId}/terminal/search-buffer`,
+      body: { query: args.query },
+      transform: (data) => (data as { matches: unknown[] }).matches,
+    }),
+  },
+  terminal_get_row_text: {
+    map: (args) => ({
+      method: "GET",
+      path: `/sessions/${args.sessionId}/terminal/row-text?row=${args.row}`,
+      transform: (data) => (data as { text: string }).text,
+    }),
+  },
+  terminal_get_lines: {
+    map: (args) => ({
+      method: "GET",
+      path: `/sessions/${args.sessionId}/terminal/lines?start=${args.start}&end=${args.end}`,
+      transform: (data) => (data as { lines: string[] }).lines,
+    }),
+  },
+  terminal_get_cursor_line: {
+    map: (args) => ({
+      method: "GET",
+      path: `/sessions/${args.sessionId}/terminal/cursor-line`,
+      transform: (data) => (data as { text: string }).text,
+    }),
+  },
+  terminal_hyperlink_at: {
+    map: (args) => ({
+      method: "GET",
+      path: `/sessions/${args.sessionId}/terminal/hyperlink?row=${args.row}&col=${args.col}`,
+      transform: (data) => (data as { url: string | null }).url,
+    }),
+  },
+  terminal_request_frame: {
+    map: (args) => ({
+      method: "POST",
+      path: `/sessions/${args.sessionId}/terminal/request-frame`,
+    }),
+  },
+
   // --- Orchestrator ---
   get_orchestrator_stats: { map: () => ({ method: "GET", path: "/stats" }) },
   get_session_metrics: { map: () => ({ method: "GET", path: "/metrics" }) },

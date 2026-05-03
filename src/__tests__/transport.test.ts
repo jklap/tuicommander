@@ -216,6 +216,107 @@ describe("transport", () => {
       expect(result.path).toContain("query=hello");
       expect(result.path).toContain("caseSensitive=true");
     });
+
+    // --- Terminal grid commands ---
+
+    it("maps terminal_scroll to POST /sessions/{id}/terminal/scroll", () => {
+      const result = mapCommandToHttp("terminal_scroll", { sessionId: "s1", delta: -5 });
+      expect(result.method).toBe("POST");
+      expect(result.path).toBe("/sessions/s1/terminal/scroll");
+      expect(result.body).toEqual({ delta: -5 });
+    });
+
+    it("maps terminal_scroll_to to POST /sessions/{id}/terminal/scroll-to", () => {
+      const result = mapCommandToHttp("terminal_scroll_to", { sessionId: "s1", line: 42 });
+      expect(result.method).toBe("POST");
+      expect(result.path).toBe("/sessions/s1/terminal/scroll-to");
+      expect(result.body).toEqual({ line: 42 });
+    });
+
+    it("maps terminal_scroll_info to GET /sessions/{id}/terminal/scroll-info", () => {
+      const result = mapCommandToHttp("terminal_scroll_info", { sessionId: "s1" });
+      expect(result.method).toBe("GET");
+      expect(result.path).toBe("/sessions/s1/terminal/scroll-info");
+    });
+
+    it("maps terminal_select_start to POST /sessions/{id}/terminal/select/start", () => {
+      const result = mapCommandToHttp("terminal_select_start", { sessionId: "s1", col: 5, row: 3, word: true });
+      expect(result.method).toBe("POST");
+      expect(result.path).toBe("/sessions/s1/terminal/select/start");
+      expect(result.body).toEqual({ col: 5, row: 3, word: true });
+    });
+
+    it("maps terminal_select_update to POST /sessions/{id}/terminal/select/update", () => {
+      const result = mapCommandToHttp("terminal_select_update", { sessionId: "s1", col: 10, row: 7 });
+      expect(result.method).toBe("POST");
+      expect(result.path).toBe("/sessions/s1/terminal/select/update");
+      expect(result.body).toEqual({ col: 10, row: 7 });
+    });
+
+    it("maps terminal_select_text to GET with transform", () => {
+      const result = mapCommandToHttp("terminal_select_text", { sessionId: "s1" });
+      expect(result.method).toBe("GET");
+      expect(result.path).toBe("/sessions/s1/terminal/select/text");
+      expect(result.transform!({ text: "selected" })).toBe("selected");
+      expect(result.transform!({ text: null })).toBeNull();
+    });
+
+    it("maps terminal_select_clear to POST /sessions/{id}/terminal/select/clear", () => {
+      const result = mapCommandToHttp("terminal_select_clear", { sessionId: "s1" });
+      expect(result.method).toBe("POST");
+      expect(result.path).toBe("/sessions/s1/terminal/select/clear");
+    });
+
+    it("maps terminal_search to POST with transform", () => {
+      const result = mapCommandToHttp("terminal_search", { sessionId: "s1", query: "foo" });
+      expect(result.method).toBe("POST");
+      expect(result.path).toBe("/sessions/s1/terminal/search");
+      expect(result.body).toEqual({ query: "foo" });
+      expect(result.transform!({ matches: [{ row: 0, col: 1 }] })).toEqual([{ row: 0, col: 1 }]);
+    });
+
+    it("maps terminal_search_buffer to POST with transform", () => {
+      const result = mapCommandToHttp("terminal_search_buffer", { sessionId: "s1", query: "bar" });
+      expect(result.method).toBe("POST");
+      expect(result.path).toBe("/sessions/s1/terminal/search-buffer");
+      expect(result.body).toEqual({ query: "bar" });
+      expect(result.transform!({ matches: [] })).toEqual([]);
+    });
+
+    it("maps terminal_get_row_text to GET with transform", () => {
+      const result = mapCommandToHttp("terminal_get_row_text", { sessionId: "s1", row: 5 });
+      expect(result.method).toBe("GET");
+      expect(result.path).toBe("/sessions/s1/terminal/row-text?row=5");
+      expect(result.transform!({ text: "hello" })).toBe("hello");
+    });
+
+    it("maps terminal_get_lines to GET with transform", () => {
+      const result = mapCommandToHttp("terminal_get_lines", { sessionId: "s1", start: 0, end: 3 });
+      expect(result.method).toBe("GET");
+      expect(result.path).toBe("/sessions/s1/terminal/lines?start=0&end=3");
+      expect(result.transform!({ lines: ["a", "b"] })).toEqual(["a", "b"]);
+    });
+
+    it("maps terminal_get_cursor_line to GET with transform", () => {
+      const result = mapCommandToHttp("terminal_get_cursor_line", { sessionId: "s1" });
+      expect(result.method).toBe("GET");
+      expect(result.path).toBe("/sessions/s1/terminal/cursor-line");
+      expect(result.transform!({ text: "$ " })).toBe("$ ");
+    });
+
+    it("maps terminal_hyperlink_at to GET with transform", () => {
+      const result = mapCommandToHttp("terminal_hyperlink_at", { sessionId: "s1", row: 2, col: 10 });
+      expect(result.method).toBe("GET");
+      expect(result.path).toBe("/sessions/s1/terminal/hyperlink?row=2&col=10");
+      expect(result.transform!({ url: "https://example.com" })).toBe("https://example.com");
+      expect(result.transform!({ url: null })).toBeNull();
+    });
+
+    it("maps terminal_request_frame to POST /sessions/{id}/terminal/request-frame", () => {
+      const result = mapCommandToHttp("terminal_request_frame", { sessionId: "s1" });
+      expect(result.method).toBe("POST");
+      expect(result.path).toBe("/sessions/s1/terminal/request-frame");
+    });
   });
 
   describe("rpc()", () => {
