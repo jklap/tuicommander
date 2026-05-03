@@ -33,6 +33,7 @@ export type { CellMetrics, CursorShape, DecodedFrame, DecodedCell };
 export interface CanvasTerminalRef {
   focus: () => void;
   refresh: () => void;
+  getSelectionText: () => string;
   searchFind: (query: string) => Promise<{ index: number; count: number }>;
   searchNext: () => { index: number; count: number };
   searchPrev: () => { index: number; count: number };
@@ -96,6 +97,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   let selecting = false;
   let selectionStart: { col: number; row: number } | null = null;
   let selectionEnd: { col: number; row: number } | null = null;
+  let cachedSelectionText = "";
 
   // Link detection
   const linkCache = new Map<string, { text: string; path: string; line?: number; col?: number; index: number }[] | null>();
@@ -855,6 +857,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (selectionStart && e.key !== "Meta" && e.key !== "Control" && e.key !== "Alt" && e.key !== "Shift") {
         selectionStart = null;
         selectionEnd = null;
+        cachedSelectionText = "";
         invokeRef?.("terminal_select_clear", { sessionId: props.sessionId }).catch(() => {});
         const m = metrics();
         if (currentFrame && m) {
@@ -1012,6 +1015,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const onMouseUp = () => {
       if (selecting && selectionStart && selectionEnd) {
         copySelection();
+        invokeRef?.("terminal_select_text", { sessionId: props.sessionId })
+          .then((t) => { cachedSelectionText = (t as string | null) ?? ""; })
+          .catch(() => {});
       }
       selecting = false;
     };
@@ -1152,6 +1158,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
     props.onRef?.({
       focus: () => canvasRef.focus(),
+      getSelectionText: () => cachedSelectionText,
       refresh: () => {
         screenRows.clear();
         currentFrame = null;

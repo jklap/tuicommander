@@ -1939,7 +1939,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
       }
     },
     getSelection: () => {
-      if (isNative()) return "";
+      if (isNative()) return canvasTerminalRef?.getSelectionText() ?? "";
       return terminal?.getSelection() ?? "";
     },
     getBufferLines: (startLine: number, endLine: number) => {
