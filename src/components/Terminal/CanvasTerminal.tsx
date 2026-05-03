@@ -27,6 +27,7 @@ import { terminalsStore } from "../../stores/terminals";
 import { isMacOS, isWindows } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
+import { createTransport, type TerminalTransport } from "./canvasTerminalTransport";
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame, DecodedCell };
 
@@ -80,13 +81,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   let cursorBlinkOn = true;
   let blinkInterval: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
-  let unlistenCwd: (() => void) | undefined;
-  let unlistenOsc133: (() => void) | undefined;
-  let unlistenPtyOutput: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let visibilityObserver: IntersectionObserver | undefined;
   let lastResizeCols = 0;
   let lastResizeRows = 0;
+  let transport: TerminalTransport | undefined;
   let invokeRef: ((cmd: string, args: Record<string, unknown>) => Promise<unknown>) | undefined;
   let rafId: number | undefined;
   let resizeDebounce: ReturnType<typeof setTimeout> | undefined;
@@ -1199,25 +1198,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     document.addEventListener("mousemove", onScrollDragMove);
     document.addEventListener("mouseup", onScrollDragUp);
 
-    // Subscribe to grid channel
+    // Subscribe to grid channel via transport abstraction
     try {
-      const { invoke, Channel } = await import("@tauri-apps/api/core");
-      invokeRef = invoke;
-      const channel = new Channel<ArrayBuffer | number[]>();
-      channel.onmessage = onFrame;
-      await invoke("subscribe_terminal_grid", {
-        sessionId: props.sessionId,
-        channel,
-      });
-      invoke("terminal_request_frame", { sessionId: props.sessionId }).catch(() => {});
+      transport = createTransport(props.sessionId);
+      invokeRef = (cmd, args) => transport!.invoke(cmd, args);
+      await transport.subscribe((data) => onFrame(data));
       unsubscribe = () => {
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onMouseUp);
         document.removeEventListener("mousemove", onScrollDragMove);
         document.removeEventListener("mouseup", onScrollDragUp);
-        invoke("unsubscribe_terminal_grid", {
-          sessionId: props.sessionId,
-        }).catch(() => {});
+        transport?.unsubscribe();
       };
     } catch (e) {
       appLogger.error("terminal", "Failed to subscribe to terminal grid channel", {
@@ -1231,26 +1222,21 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       };
     }
 
-    // Listen for OSC 7 CWD changes from Rust
-    try {
-      const { listen } = await import("@tauri-apps/api/event");
-      unlistenCwd = await listen<string>(`pty-cwd-${props.sessionId}`, (event) => {
-        terminalsStore.update(props.terminalId, { cwd: event.payload });
-        props.onCwdChange?.(props.terminalId, event.payload);
+    // Listen for session events via transport
+    if (transport) {
+      await transport.onEvent("cwd", (payload) => {
+        const cwd = (payload as { cwd: string }).cwd ?? (payload as string);
+        terminalsStore.update(props.terminalId, { cwd });
+        props.onCwdChange?.(props.terminalId, cwd);
       });
-      unlistenOsc133 = await listen<{ marker: string; line: number; exit_code: number | null }>(
-        `pty-osc133-${props.sessionId}`, (event) => {
-          const { marker, line, exit_code } = event.payload;
-          terminalsStore.handleOsc133(props.terminalId, marker, line, exit_code ?? undefined);
-        },
-      );
-      unlistenPtyOutput = await listen<{ data: string }>(
-        `pty-output-${props.sessionId}`, (event) => {
-          pluginRegistry.processRawOutput(event.payload.data, props.sessionId);
-        },
-      );
-    } catch {
-      // not in Tauri context
+      await transport.onEvent("osc133", (payload) => {
+        const { marker, line, exit_code } = payload as { marker: string; line: number; exit_code: number | null };
+        terminalsStore.handleOsc133(props.terminalId, marker, line, exit_code ?? undefined);
+      });
+      await transport.onEvent("output", (payload) => {
+        const { data } = payload as { data: string };
+        pluginRegistry.processRawOutput(data, props.sessionId);
+      });
     }
 
     props.onRef?.({
@@ -1347,9 +1333,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     visibilityObserver?.disconnect();
     if (dprChangeHandler) dprMediaQuery?.removeEventListener("change", dprChangeHandler);
     unsubscribe?.();
-    unlistenCwd?.();
-    unlistenOsc133?.();
-    unlistenPtyOutput?.();
     clearTimeout(linkThrottle);
     linkCache.clear();
     screenRows.clear();
