@@ -6,7 +6,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::term::search::RegexSearch;
-use alacritty_terminal::term::color::Colors;
+use alacritty_terminal::term::color::{Colors, named_color_to_index};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -143,33 +143,17 @@ fn resolve_color(c: Color, colors: &Colors) -> Option<Rgb> {
             if let Some(rgb) = colors[n] {
                 return Some(rgb);
             }
-            match n {
-                NamedColor::Foreground | NamedColor::Background | NamedColor::Cursor
-                | NamedColor::BrightForeground | NamedColor::DimForeground => None,
-                NamedColor::Black        => Some(xterm_color_rgb(0)),
-                NamedColor::Red          => Some(xterm_color_rgb(1)),
-                NamedColor::Green        => Some(xterm_color_rgb(2)),
-                NamedColor::Yellow       => Some(xterm_color_rgb(3)),
-                NamedColor::Blue         => Some(xterm_color_rgb(4)),
-                NamedColor::Magenta      => Some(xterm_color_rgb(5)),
-                NamedColor::Cyan         => Some(xterm_color_rgb(6)),
-                NamedColor::White        => Some(xterm_color_rgb(7)),
-                NamedColor::BrightBlack  => Some(xterm_color_rgb(8)),
-                NamedColor::BrightRed    => Some(xterm_color_rgb(9)),
-                NamedColor::BrightGreen  => Some(xterm_color_rgb(10)),
-                NamedColor::BrightYellow => Some(xterm_color_rgb(11)),
-                NamedColor::BrightBlue   => Some(xterm_color_rgb(12)),
-                NamedColor::BrightMagenta => Some(xterm_color_rgb(13)),
-                NamedColor::BrightCyan   => Some(xterm_color_rgb(14)),
-                NamedColor::BrightWhite  => Some(xterm_color_rgb(15)),
-                NamedColor::DimBlack     => Some(dim_rgb(xterm_color_rgb(0))),
-                NamedColor::DimRed       => Some(dim_rgb(xterm_color_rgb(1))),
-                NamedColor::DimGreen     => Some(dim_rgb(xterm_color_rgb(2))),
-                NamedColor::DimYellow    => Some(dim_rgb(xterm_color_rgb(3))),
-                NamedColor::DimBlue      => Some(dim_rgb(xterm_color_rgb(4))),
-                NamedColor::DimMagenta   => Some(dim_rgb(xterm_color_rgb(5))),
-                NamedColor::DimCyan      => Some(dim_rgb(xterm_color_rgb(6))),
-                NamedColor::DimWhite     => Some(dim_rgb(xterm_color_rgb(7))),
+            let is_dim = matches!(n,
+                NamedColor::DimBlack | NamedColor::DimRed | NamedColor::DimGreen
+                | NamedColor::DimYellow | NamedColor::DimBlue | NamedColor::DimMagenta
+                | NamedColor::DimCyan | NamedColor::DimWhite
+            );
+            match named_color_to_index(n) {
+                Some(i) => {
+                    let rgb = xterm_color_rgb(i);
+                    Some(if is_dim { dim_rgb(rgb) } else { rgb })
+                }
+                None => None,
             }
         },
     }
