@@ -270,8 +270,26 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     octx.clearRect(0, 0, overlayCanvasRef.width / m.dpr, overlayCanvasRef.height / m.dpr);
     paintSelection(frame, m);
     paintSearchHighlights(m);
+    paintLinkUnderline(frame, m);
     paintGutterMarkers(m);
     paintCursor(frame, m);
+  }
+
+  function paintLinkUnderline(frame: DecodedFrame, m: CellMetrics) {
+    if (!hoveredLink) return;
+    const vpRow = hoveredLink.row - (frame.historySize - frame.displayOffset);
+    if (vpRow < 0 || vpRow >= (frame.screenRows || lastResizeRows)) return;
+    const x = hoveredLink.colStart * m.cellWidth;
+    const w = (hoveredLink.colEnd - hoveredLink.colStart) * m.cellWidth;
+    const y = vpRow * m.cellHeight + m.cellHeight - 1;
+    octx.strokeStyle = cachedFgDefault;
+    octx.lineWidth = 1;
+    octx.setLineDash([3, 2]);
+    octx.beginPath();
+    octx.moveTo(x, y + 0.5);
+    octx.lineTo(x + w, y + 0.5);
+    octx.stroke();
+    octx.setLineDash([]);
   }
 
   function findNearestVisibleMatch(matches: typeof searchMatches): number {
@@ -1018,6 +1036,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (uri) {
         hoveredLink = { row, colStart: col, colEnd: col + 1, path: uri };
         canvasRef.style.cursor = "pointer";
+        if (currentFrame) { const m = metrics(); if (m) repaintOverlay(currentFrame, m); }
         return;
       }
     } catch { /* ignore — command may not exist on older backend */ }
@@ -1104,6 +1123,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       }
     }
     canvasRef.style.cursor = hoveredLink ? "pointer" : "text";
+    if (currentFrame) { const m = metrics(); if (m) repaintOverlay(currentFrame, m); }
   }
 
   onMount(async () => {
@@ -1436,14 +1456,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
 
-    // Link click
-    canvasRef.addEventListener("click", (e: MouseEvent) => {
-      if (hoveredLink && (e.metaKey || e.ctrlKey)) {
-        if (hoveredLink.path.startsWith("http://") || hoveredLink.path.startsWith("https://")) {
-          handleOpenUrl(hoveredLink.path);
-        } else {
-          props.onOpenFilePath?.(hoveredLink.path, hoveredLink.line, hoveredLink.col);
-        }
+    // Link click — plain click opens, skip if user was selecting text
+    canvasRef.addEventListener("click", () => {
+      if (!hoveredLink) return;
+      const dragged = selectionStart && selectionEnd
+        && (selectionStart.row !== selectionEnd.row || selectionStart.col !== selectionEnd.col);
+      if (dragged) return;
+      if (hoveredLink.path.startsWith("http://") || hoveredLink.path.startsWith("https://")) {
+        handleOpenUrl(hoveredLink.path);
+      } else {
+        props.onOpenFilePath?.(hoveredLink.path, hoveredLink.line, hoveredLink.col);
       }
     });
 

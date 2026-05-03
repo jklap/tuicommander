@@ -13,6 +13,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - **`uiStore.detachedPanels`** — Replaced `aiChatDetached: boolean` with generic `detachedPanels: Record<string, string>` map. `isDetached(panelId)` / `setDetached()` / `clearDetached()` replace per-panel flags.
+- **Terminal perf: RAF-coalesced painting** — All paint triggers (frame arrival, keydown, mousedown) now go through a single `scheduleRepaint()` via `requestAnimationFrame`, eliminating synchronous double-paints.
+- **Terminal perf: zero-clone frame dispatch** — `send_grid_frame` skips the ~121KB frame clone when no WebSocket subscribers are connected (common desktop case).
+- **Terminal perf: single screen snapshot per PTY chunk** — Chrome cutoff detection uses a borrowed `&[String]` view; downstream parsers share one owned snapshot instead of re-acquiring the lock.
+- **Terminal perf: in-place string trim** — `read_screen_text()` and `row_to_text()` trim trailing whitespace via `truncate()` instead of allocating a new String per row.
 - **Panel routing extracted** — `panelRouter.tsx` provides `registerPanel()`, `renderPanelMode()`, and panel adapter registry, replacing hardcoded panel routing in App.tsx.
 
 ### Removed

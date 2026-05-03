@@ -38,6 +38,13 @@ Key insight: Terminal.tsx handles parsed events, session lifecycle, banners, and
 
 Each frame: 22-byte header + variable row data. Per cell: 4 bytes codepoint + 3 bytes fg RGB + 3 bytes bg RGB + 1 byte attrs bitmask = 11 bytes. Decoded in `decodeBinaryFrame` using struct-of-arrays (SoA) typed arrays — zero per-cell object allocation.
 
+## Performance Notes
+
+- **RAF coalescing:** All paint triggers (frame arrival, keydown selection clear, mousedown) go through `scheduleRepaint()` which schedules a single `requestAnimationFrame`. No synchronous paint calls — prevents double-paint in a single event loop turn.
+- **`send_grid_frame` clone guard:** Frame is only cloned for the `grid_watch` channel when `receiver_count() > 0` (i.e. WS clients connected). Desktop-only path (Tauri Channel) is zero-copy.
+- **`screen_text_rows_ref()`:** `TerminalGrid` exposes a borrowed `&[String]` view of cached screen rows. Used in `process_chunk` for chrome cutoff detection to avoid cloning 50 Strings per PTY chunk. Downstream parsers (slash-menu, choice-prompt) share a single owned snapshot computed once per chunk.
+- **Trim in-place:** `read_screen_text()` and `row_to_text()` use `String::truncate()` instead of `.trim_end().to_string()`, eliminating one allocation per row.
+
 ## Feature Table
 
 ### Rendering

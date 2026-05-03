@@ -1428,10 +1428,16 @@ pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
         // Each menu row: optional leading whitespace, optional ❯ marker, /command, 2+ spaces, description
         static ref MENU_ROW_RE: regex::Regex =
             regex::Regex::new(r"^\s*(?:❯\s+)?(/\S+)\s{2,}(.+)$").unwrap();
+        // Continuation row: deeply indented text that wraps from a long description.
+        // Requires 8+ leading spaces to distinguish from chrome lines (status bar,
+        // permission toggle) which have only 2-4 spaces of indent.
+        static ref CONTINUATION_RE: regex::Regex =
+            regex::Regex::new(r"^\s{8,}\S").unwrap();
     }
 
     // Scan from the bottom to find the contiguous block of menu rows.
     // Menu items are at the bottom of the screen; stop at the first non-matching row.
+    // Continuation lines (wrapped descriptions) are skipped — they don't start with /.
     let mut items: Vec<SlashMenuItem> = Vec::new();
     for row in screen_rows.iter().rev() {
         let trimmed = row.trim();
@@ -1447,6 +1453,9 @@ pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
             let description = caps[2].trim().to_string();
             let highlighted = row.contains('❯');
             items.push(SlashMenuItem { command, description, highlighted });
+        } else if CONTINUATION_RE.is_match(row) {
+            // Wrapped description line — skip without breaking
+            continue;
         } else {
             break;
         }
@@ -4000,6 +4009,67 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             }
             _ => panic!("Expected SlashMenu event"),
         }
+    }
+
+    #[test]
+    fn test_slash_menu_wrapped_descriptions() {
+        // Real-world scenario: descriptions wrap when terminal is narrower than
+        // the description text. The parser must skip continuation lines.
+        let mut screen: Vec<String> = vec![String::new(); 4];
+        screen.push("──────────────────────────────────────────────────────────────────────────────────────────────────────────────────".into());
+        screen.push("❯\u{a0}/".into());
+        screen.push("──────────────────────────────────────────────────────────────────────────────────────────────────────────────────".into());
+        screen.push("/wiz:stories                  (wiz) Persistent file-based task tracking with merge-safe IDs, dependency".into());
+        screen.push("                              awareness, and unattended auto-continue across sessions. Use when managing stor…".into());
+        screen.push("/handoff                      (wiz) Use at session end to write handoff + capture session memory to mdkb".into());
+        screen.push("/wiz:work                     (wiz) Execute work plans efficiently while maintaining quality with systematic".into());
+        screen.push("                              task tracking".into());
+        for _ in 0..20 {
+            screen.push(String::new());
+        }
+        let evt = parse_slash_menu(&screen).expect("should detect menu with wrapped descriptions");
+        match evt {
+            ParsedEvent::SlashMenu { items } => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0].command, "/wiz:stories");
+                assert_eq!(items[1].command, "/handoff");
+                assert_eq!(items[2].command, "/wiz:work");
+            }
+            _ => panic!("Expected SlashMenu event"),
+        }
+    }
+
+    #[test]
+    fn test_slash_menu_continuation_only_after_item() {
+        // A continuation-like row before any menu item should break the scan
+        let screen = make_screen(&[
+            "                              some random indented text",
+            "/help      Get help",
+            "/clear     Clear history",
+        ], 24);
+        let evt = parse_slash_menu(&screen).expect("should still detect menu items");
+        match evt {
+            ParsedEvent::SlashMenu { items } => {
+                assert_eq!(items.len(), 2);
+            }
+            _ => panic!("Expected SlashMenu event"),
+        }
+    }
+
+    #[test]
+    fn test_slash_menu_chrome_not_skipped_as_continuation() {
+        // Chrome lines (2-space indent) must NOT be treated as continuation.
+        // If they were, the parser would skip past chrome and find stale
+        // menu items from a previous render → false positive.
+        let mut screen: Vec<String> = vec![String::new(); 20];
+        screen.push("/help      Get help".to_string());
+        screen.push("/clear     Clear history".to_string());
+        screen.push("──────────────────────────────────────".to_string());
+        screen.push("❯".to_string());
+        screen.push("──────────────────────────────────────".to_string());
+        screen.push("  [Opus 4.6 | Team] ██████░░░░ 64%".to_string());
+        screen.push("  ⏵⏵ bypass permissions on (shift+tab to cycle)".to_string());
+        assert!(parse_slash_menu(&screen).is_none(), "chrome lines should stop the scan");
     }
 
     // ── ActiveSubtasks tests ──────────────────────────────────────────
