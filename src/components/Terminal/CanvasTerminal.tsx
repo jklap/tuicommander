@@ -1322,7 +1322,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
             "margin-left": "2px",
             "border-radius": "5px",
             background: "var(--text-primary, rgba(255,255,255,0.3))",
-            opacity: "0.3",
+            opacity: "var(--scrollbar-opacity, 0.3)",
             "min-height": "20px",
             position: "absolute",
             top: "0",
