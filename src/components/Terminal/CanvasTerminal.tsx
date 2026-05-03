@@ -79,6 +79,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   let blinkInterval: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
   let unlistenCwd: (() => void) | undefined;
+  let unlistenOsc133: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let lastResizeCols = 0;
   let lastResizeRows = 0;
@@ -177,6 +178,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
     paintSelection(frame, m);
     paintSearchHighlights(m);
+    paintGutterMarkers(m);
     paintCursor(frame, m);
     updateScrollbar(frame);
     updateSuggestOverlay(frame, m);
@@ -236,6 +238,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         ctx.fillStyle = "#e8984c";
         ctx.fillRect(x, y + m.cellHeight - 2, w, 2);
       }
+    }
+  }
+
+  function paintGutterMarkers(m: CellMetrics) {
+    const term = terminalsStore.get(props.terminalId);
+    if (!term) return;
+    const blocks = term.commandBlocks;
+    if (blocks.length === 0) return;
+    for (const block of blocks) {
+      if (block.exitCode === null || block.exitCode === 0) continue;
+      const vpRow = absRowToViewport(block.promptLine);
+      if (vpRow === null) continue;
+      ctx.fillStyle = "#f85149";
+      ctx.fillRect(0, vpRow * m.cellHeight, 3, m.cellHeight);
     }
   }
 
@@ -686,6 +702,35 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         return;
       }
 
+      // Cmd+Up/Down (macOS) or Ctrl+Up/Down (Win/Linux): navigate between command blocks (OSC 133)
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey
+        && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        const term = terminalsStore.get(props.terminalId);
+        if (term) {
+          const blocks = term.commandBlocks;
+          const active = term.activeBlock;
+          const allPromptLines = blocks.map((b) => b.promptLine).concat(active ? [active.promptLine] : []);
+          if (allPromptLines.length > 0 && currentFrame) {
+            const currentViewLine = currentFrame.historySize - currentFrame.displayOffset;
+            let targetLine: number | undefined;
+            if (e.key === "ArrowUp") {
+              for (let i = allPromptLines.length - 1; i >= 0; i--) {
+                if (allPromptLines[i] < currentViewLine) { targetLine = allPromptLines[i]; break; }
+              }
+            } else {
+              for (let i = 0; i < allPromptLines.length; i++) {
+                if (allPromptLines[i] > currentViewLine) { targetLine = allPromptLines[i]; break; }
+              }
+            }
+            if (targetLine !== undefined) {
+              invokeRef?.("terminal_scroll_to", { sessionId: props.sessionId, line: targetLine }).catch(() => {});
+            }
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+
       // Force re-render: clear accumulated buffer and request fresh frame from Rust
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "l" && !e.altKey) {
         e.preventDefault();
@@ -1034,6 +1079,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         terminalsStore.update(props.terminalId, { cwd: event.payload });
         props.onCwdChange?.(props.terminalId, event.payload);
       });
+      unlistenOsc133 = await listen<{ marker: string; line: number; exit_code: number | null }>(
+        `pty-osc133-${props.sessionId}`, (event) => {
+          const { marker, line, exit_code } = event.payload;
+          terminalsStore.handleOsc133(props.terminalId, marker, line, exit_code ?? undefined);
+        },
+      );
     } catch {
       // not in Tauri context
     }
@@ -1126,6 +1177,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     if (dprChangeHandler) dprMediaQuery?.removeEventListener("change", dprChangeHandler);
     unsubscribe?.();
     unlistenCwd?.();
+    unlistenOsc133?.();
     clearTimeout(linkThrottle);
     linkCache.clear();
     screenRows.clear();
