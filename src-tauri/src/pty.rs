@@ -4189,6 +4189,17 @@ pub(crate) fn terminal_search(
         .unwrap_or_default()
 }
 
+#[tauri::command]
+pub(crate) fn terminal_search_buffer(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    query: String,
+) -> Vec<crate::terminal_grid::BufferSearchMatch> {
+    state.vt_log_buffers.get(&session_id)
+        .map(|vt| vt.lock().grid_search_buffer(&query))
+        .unwrap_or_default()
+}
+
 // --- Row text command ---
 
 #[tauri::command]
@@ -4199,6 +4210,18 @@ pub(crate) fn terminal_get_row_text(
 ) -> String {
     state.vt_log_buffers.get(&session_id)
         .map(|vt| vt.lock().grid_get_row_text(row))
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+pub(crate) fn terminal_get_lines(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    start: usize,
+    end: usize,
+) -> Vec<String> {
+    state.vt_log_buffers.get(&session_id)
+        .map(|vt| vt.lock().grid_get_lines(start, end))
         .unwrap_or_default()
 }
 

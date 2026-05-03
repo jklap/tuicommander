@@ -42,23 +42,17 @@ export function truncateText(text: string, maxChars: number): string {
  * Prefers selected text (via window.getSelection). Falls back to the last 50
  * buffer lines from the active terminal ref.
  */
-function getTerminalText(sessionId?: string): string {
-  // 1. Try window selection (xterm selections propagate to window.getSelection)
+async function getTerminalText(sessionId?: string): Promise<string> {
   const sel = window.getSelection()?.toString().trim();
   if (sel) return sel;
 
-  // 2. Fallback: last 50 lines from the terminal buffer
   if (!sessionId) return "";
   const terminals = terminalsStore.state.terminals;
   const entry = Object.values(terminals).find((t) => t.sessionId === sessionId);
   if (!entry?.ref) return "";
 
   try {
-    // getBufferLines(start, end) — read the tail of the buffer.
-    // xterm buffer length isn't directly exposed on TerminalRef, but
-    // we can request a generous range and the impl clamps internally.
-    // Use 0 → very large number to get all lines, then take last 50.
-    const allLines = entry.ref.getBufferLines(0, 999_999);
+    const allLines = await entry.ref.getBufferLines(0, 999_999);
     const tail = allLines.slice(-50);
     return tail.join("\n").trimEnd();
   } catch (e) {
@@ -80,8 +74,8 @@ export function registerAiChatContextActions(): Array<{ dispose(): void }> {
       id: "ai-chat:explain",
       label: "Explain with AI",
       target: "terminal",
-      action: (ctx) => {
-        const raw = getTerminalText(ctx.sessionId);
+      action: async (ctx) => {
+        const raw = await getTerminalText(ctx.sessionId);
         if (!raw) {
           appLogger.info("ai-chat", "Explain: no terminal text available");
           return;
@@ -103,8 +97,8 @@ export function registerAiChatContextActions(): Array<{ dispose(): void }> {
       id: "ai-chat:fix-error",
       label: "Fix this error",
       target: "terminal",
-      action: (ctx) => {
-        const raw = getTerminalText(ctx.sessionId);
+      action: async (ctx) => {
+        const raw = await getTerminalText(ctx.sessionId);
         if (!raw) {
           appLogger.info("ai-chat", "Fix error: no terminal text available");
           return;

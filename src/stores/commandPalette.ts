@@ -143,7 +143,7 @@ function createCommandPaletteStore() {
   }
 
   /** Search across all attached terminal buffers */
-  function triggerTerminalSearch(searchQuery: string): void {
+  async function triggerTerminalSearch(searchQuery: string): Promise<void> {
     // Lazy import to avoid circular dependency
     const { terminalsStore } = require("./terminals");
 
@@ -151,7 +151,7 @@ function createCommandPaletteStore() {
     setState({ terminalResults: [], terminalSearching: true });
 
     const allResults: TerminalMatch[] = [];
-    const terminals = terminalsStore.state.terminals as Record<string, { id: string; ref?: { searchBuffer?: (q: string) => TerminalMatch[] } }>;
+    const terminals = terminalsStore.state.terminals as Record<string, { id: string; ref?: { searchBuffer?: (q: string) => TerminalMatch[] | Promise<TerminalMatch[]> } }>;
     const detached = terminalsStore.state.detachedWindows as Record<string, string>;
 
     for (const id of Object.keys(terminals)) {
@@ -160,7 +160,7 @@ function createCommandPaletteStore() {
       if (detached[id]) continue;
       const ref = terminals[id]?.ref;
       if (!ref?.searchBuffer) continue;
-      const matches = ref.searchBuffer(searchQuery);
+      const matches = await ref.searchBuffer(searchQuery);
       allResults.push(...matches);
       if (allResults.length >= MAX_TERMINAL_RESULTS) break;
     }

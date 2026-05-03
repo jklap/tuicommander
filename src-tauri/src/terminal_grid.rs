@@ -83,6 +83,15 @@ pub struct SearchMatch {
     pub col_end: usize,
 }
 
+/// A search match with the full line text for workspace search.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BufferSearchMatch {
+    pub line_index: usize,
+    pub line_text: String,
+    pub match_start: usize,
+    pub match_end: usize,
+}
+
 // Attrs byte bit positions for binary cell encoding.
 const ATTR_BOLD: u8       = 0b0000_0001;
 const ATTR_ITALIC: u8     = 0b0000_0010;
@@ -649,6 +658,57 @@ impl TerminalGrid {
             });
 
             // Advance past this match
+            if m_end.column < last_col {
+                origin = Point::new(m_end.line, m_end.column + 1);
+            } else if m_end.line < bottommost {
+                origin = Point::new(m_end.line + 1i32, Column(0));
+            } else {
+                break;
+            }
+        }
+        matches
+    }
+
+    pub fn search_buffer(&self, query: &str) -> Vec<BufferSearchMatch> {
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let mut regex = match RegexSearch::new(query) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        let history = self.term.grid().history_size();
+        let topmost = self.term.topmost_line();
+        let bottommost = self.term.bottommost_line();
+        let last_col = self.term.last_column();
+
+        let start = Point::new(topmost, Column(0));
+        let end = Point::new(bottommost, last_col);
+
+        let mut matches = Vec::new();
+        let mut origin = start;
+        let mut last_row_line: Option<(usize, String)> = None;
+
+        while let Some(m) = self.term.regex_search_right(&mut regex, origin, end) {
+            let m_start = *m.start();
+            let m_end = *m.end();
+            let abs_row = (m_start.line.0 + history as i32) as usize;
+
+            let line_text = if last_row_line.as_ref().is_some_and(|(r, _)| *r == abs_row) {
+                last_row_line.as_ref().unwrap().1.clone()
+            } else {
+                let text = self.row_to_text(m_start.line).unwrap_or_default();
+                last_row_line = Some((abs_row, text.clone()));
+                text
+            };
+
+            matches.push(BufferSearchMatch {
+                line_index: abs_row,
+                line_text,
+                match_start: m_start.column.0,
+                match_end: m_end.column.0 + 1,
+            });
+
             if m_end.column < last_col {
                 origin = Point::new(m_end.line, m_end.column + 1);
             } else if m_end.line < bottommost {

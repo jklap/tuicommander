@@ -3,12 +3,12 @@ import { terminalsStore, type CommandBlock } from "../../stores/terminals";
 import s from "./CommandOverview.module.css";
 
 /** Extract command text from a block using the terminal's buffer lines */
-function getCommandText(termId: string, block: CommandBlock): string {
+async function getCommandText(termId: string, block: CommandBlock): Promise<string> {
   if (block.commandLine == null || block.executionLine == null) return "";
   const term = terminalsStore.get(termId);
   const ref = term?.ref;
   if (!ref) return "";
-  const lines = ref.getBufferLines(block.commandLine, block.executionLine);
+  const lines = await ref.getBufferLines(block.commandLine, block.executionLine);
   return lines.join(" ").trim();
 }
 
@@ -78,15 +78,15 @@ export const CommandOverview: Component = () => {
           const active = () => entry.activeBlock;
           const isRunning = () => entry.shellState === "busy" || (active() != null && active()!.endLine == null);
           const exitCode = () => block()?.exitCode ?? null;
-          const commandText = () => {
+          const [commandText, setCommandText] = createSignal("");
+          {
+            const resolve = (b: CommandBlock | null) => {
+              if (!b) { setCommandText(""); return; }
+              getCommandText(entry.termId, b).then(setCommandText);
+            };
             const b = block();
-            if (!b) {
-              const a = active();
-              if (a) return getCommandText(entry.termId, a);
-              return "";
-            }
-            return getCommandText(entry.termId, b);
-          };
+            resolve(b ?? active());
+          }
           const duration = () => {
             const b = block();
             if (!b?.startedAt || !b?.endedAt) return null;

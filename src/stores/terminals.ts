@@ -86,7 +86,7 @@ export interface TerminalRef {
   toggleCompose: () => void;
   openComposeWithText: (text: string) => void;
   /** Search the terminal buffer for a query string (case-insensitive) */
-  searchBuffer: (query: string) => TerminalMatch[];
+  searchBuffer: (query: string) => TerminalMatch[] | Promise<TerminalMatch[]>;
   /** Scroll to an absolute buffer line index (centered in viewport) */
   scrollToLine: (lineIndex: number) => void;
   getSelection: () => string;
@@ -94,7 +94,7 @@ export interface TerminalRef {
   scrollToBottom: () => void;
   scrollPages: (pages: number) => void;
   /** Read buffer lines between two absolute line indices (exclusive end) */
-  getBufferLines: (startLine: number, endLine: number) => string[];
+  getBufferLines: (startLine: number, endLine: number) => string[] | Promise<string[]>;
 }
 
 /** Combined terminal state */

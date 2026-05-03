@@ -1901,10 +1901,20 @@ impl VtLogBuffer {
         self.grid.search(query)
     }
 
+    pub(crate) fn grid_search_buffer(&self, query: &str) -> Vec<crate::terminal_grid::BufferSearchMatch> {
+        self.grid.search_buffer(query)
+    }
+
     // --- Row text delegate ---
 
     pub(crate) fn grid_get_row_text(&self, row: usize) -> String {
         self.grid.get_row_text(row)
+    }
+
+    pub(crate) fn grid_get_lines(&self, start: usize, end: usize) -> Vec<String> {
+        let total = self.grid.total_lines();
+        let clamped_end = end.min(total);
+        (start..clamped_end).map(|i| self.grid.get_row_text(i)).collect()
     }
 
     pub(crate) fn grid_hyperlink_at(&self, row: usize, col: usize) -> Option<String> {

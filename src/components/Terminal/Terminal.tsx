@@ -1865,6 +1865,20 @@ export const Terminal: Component<TerminalProps> = (props) => {
       setComposeOpen(true);
     },
     searchBuffer: (query: string) => {
+      if (isNative() && sessionId) {
+        type RustMatch = { line_index: number; line_text: string; match_start: number; match_end: number };
+        return invoke("terminal_search_buffer", { sessionId, query }).then((raw) => {
+          const name = terminalsStore.get(props.id)?.name ?? props.id;
+          return (raw as RustMatch[]).map((m) => ({
+            terminalId: props.id,
+            terminalName: name,
+            lineIndex: m.line_index,
+            lineText: m.line_text,
+            matchStart: m.match_start,
+            matchEnd: m.match_end,
+          }));
+        });
+      }
       if (!terminal) return [];
       const buf = terminal.buffer.active;
       const lines: string[] = [];
@@ -1919,6 +1933,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
       return terminal?.getSelection() ?? "";
     },
     getBufferLines: (startLine: number, endLine: number) => {
+      if (isNative() && sessionId) {
+        return invoke("terminal_get_lines", { sessionId, start: startLine, end: endLine }) as Promise<string[]>;
+      }
       if (!terminal) return [];
       const buf = terminal.buffer.active;
       const lines: string[] = [];

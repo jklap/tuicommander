@@ -957,18 +957,17 @@ const App: Component = () => {
     { label: "Copy", shortcut: `${getModifierSymbol()}C`, action: terminalLifecycle.copyFromTerminal, separator: agentDetection.getAvailable().length > 0 },
     {
       label: "Copy Block Output",
-      action: () => {
+      action: async () => {
         const activeId = terminalsStore.state.activeId;
         if (!activeId) return;
         const term = terminalsStore.get(activeId);
         if (!term) return;
-        // Find the most recent completed block
         const blocks = term.commandBlocks;
         const lastBlock = blocks[blocks.length - 1];
         if (!lastBlock || lastBlock.executionLine == null || lastBlock.endLine == null) return;
         const ref = term.ref;
         if (!ref) return;
-        const lines = ref.getBufferLines(lastBlock.executionLine + 1, lastBlock.endLine);
+        const lines = await ref.getBufferLines(lastBlock.executionLine + 1, lastBlock.endLine);
         const text = lines.join("\n").trimEnd();
         if (text) navigator.clipboard.writeText(text);
       },
