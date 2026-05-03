@@ -2,7 +2,6 @@ import { Component, createSignal, createEffect, onMount, onCleanup } from "solid
 import { settingsStore } from "../../stores/settings";
 import {
   decodeBinaryFrame,
-  measureFont,
   computeCursorRect,
   snapLineHeight,
   type CellMetrics,
@@ -10,6 +9,13 @@ import {
   type DecodedFrame,
   type DecodedCell,
 } from "./canvasTerminalUtils";
+import {
+  getSharedMetrics,
+  drawCachedGlyph,
+  acquireCache,
+  releaseCache,
+  invalidateGlyphCache,
+} from "./glyphCache";
 import { keyToSequence, altSequenceFromCode } from "./terminalInput";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { isSuggestBlock, continuationRowsAfterSuggest } from "./suggestOverlay";
@@ -124,7 +130,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const fontSize = perTerminalSize ?? settingsStore.state.defaultFontSize;
     const fontFamily = settingsStore.getFontFamily();
     const fontWeight = settingsStore.state.fontWeight;
-    const m = measureFont(ctx, fontSize, fontFamily, dpr, snapLineHeight(fontSize), fontWeight);
+    const m = getSharedMetrics(fontSize, fontFamily, dpr, snapLineHeight(fontSize), fontWeight);
     setMetrics(m);
 
     cachedBgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
@@ -398,15 +404,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         ctx.fillRect(x, y, m.cellWidth, m.cellHeight);
       }
       if (cell.char && cell.char !== " ") {
-        ctx.fillStyle = resolveFg(cell, cachedFgDefault);
+        const fg = resolveFg(cell, cachedFgDefault);
+        ctx.fillStyle = fg;
         if (cell.dim) ctx.globalAlpha = 0.5;
         const cp = cell.char.codePointAt(0) ?? 0;
         if (((cp >= 0x2580 && cp <= 0x2593) || (cp >= 0x2596 && cp <= 0x259F)) && drawBlockChar(cp, x, y, m)) {
           // Block element drawn as geometry
         } else {
           const font = buildFontStyle(cell, m.fontSize, fontFamily);
-          if (font !== lastFont) { ctx.font = font; lastFont = font; }
-          ctx.fillText(cell.char, x, y + m.baseline);
+          if (!cell.dim && drawCachedGlyph(ctx, cell.char, font, fg, x, y, m)) {
+            // Drawn from shared glyph atlas
+          } else {
+            if (font !== lastFont) { ctx.font = font; lastFont = font; }
+            ctx.fillText(cell.char, x, y + m.baseline);
+          }
         }
         if (cell.dim) ctx.globalAlpha = 1.0;
       }
@@ -584,6 +595,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
   onMount(async () => {
     ctx = canvasRef.getContext("2d", { alpha: false })!;
+    acquireCache();
     await document.fonts.ready;
     remeasure();
 
@@ -1024,6 +1036,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     settingsStore.state.font;
     settingsStore.state.fontWeight;
     settingsStore.state.theme;
+    invalidateGlyphCache();
     remeasure();
   });
 
@@ -1051,6 +1064,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     clearTimeout(linkThrottle);
     linkCache.clear();
     screenRows.clear();
+    releaseCache();
   });
 
   return (

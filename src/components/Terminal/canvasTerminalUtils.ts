@@ -182,7 +182,7 @@ export function computeCursorRect(
  *   charTop = round((cellHeight_device - charHeight_device) / 2)
  */
 export function measureFont(
-  ctx: CanvasRenderingContext2D,
+  ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
   fontSize: number,
   fontFamily: string,
   dpr: number = 1,
