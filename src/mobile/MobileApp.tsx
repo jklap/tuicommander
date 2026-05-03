@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, Match, Show, Switch } from "solid-js";
+import { createEffect, createMemo, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { TopBar } from "./components/TopBar";
 import { BottomTabs, type TabId } from "./components/BottomTabs";
 import { SessionsScreen } from "./screens/SessionsScreen";
@@ -29,6 +29,34 @@ function sessionIdFromUrl(): string | null {
 }
 
 export default function MobileApp() {
+  // iOS Safari/PWA keyboard handling.
+  // Track visualViewport height and offsetTop to resize and reposition
+  // the fixed shell. html/body are height:auto so the document has no
+  // scrollable content — iOS can't scroll the page on keyboard open.
+  onMount(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    let raf = 0;
+    const update = () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        document.documentElement.style.setProperty("--app-height", `${vv.height}px`);
+      });
+    };
+    const pinScroll = () => { window.scrollTo(0, 0); };
+
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    window.addEventListener("scroll", pinScroll);
+    onCleanup(() => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+      window.removeEventListener("scroll", pinScroll);
+      cancelAnimationFrame(raf);
+    });
+  });
+
   const [activeTab, setActiveTab] = createSignal<TabId>("sessions");
   const [selectedSessionId, setSelectedSessionId] = createSignal<string | null>(sessionIdFromUrl());
   const { sessions, loading, refreshing, error, refresh, questionCount } = useSessions();

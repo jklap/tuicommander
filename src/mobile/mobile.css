@@ -67,15 +67,13 @@
 }
 
 html, body {
-  height: 100%;
+  height: auto;
   overflow: hidden;
   background: var(--bg-primary);
   color: var(--fg-primary);
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  /* user-select: none applied via * selector — re-enable on content elements as needed */
-  /* Prevent iOS rubber-band on the body */
   overscroll-behavior: none;
 }
 
@@ -84,7 +82,6 @@ input, textarea, select {
   font-size: 16px;
 }
 
-/* Safe area handled by individual components (header, CommandInput, BottomTabs) */
 #mobile-app {
-  height: 100%;
+  height: auto;
 }

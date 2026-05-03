@@ -116,12 +116,13 @@ pub(super) async fn write_to_session(
     } else {
         // Maintain current slash_mode for subsequent chars (delta sync sends
         // one char at a time after the initial "/"), unless dismissed
-        let dismissed = body.data.contains('\x1b') || body.data.contains('\x03');
+        let is_bare_esc = body.data == "\x1b" || (body.data.contains('\x1b') && !body.data.contains("\x1b["));
+        let dismissed = is_bare_esc || body.data.contains('\x03');
         !dismissed
             && state.slash_mode.get(&session_id)
                 .is_some_and(|v| v.load(std::sync::atomic::Ordering::Relaxed))
     };
-    tracing::debug!("write_pty slash_mode: in_slash={in_slash} buf='{}' data='{}'", buf.content(), body.data);
+    tracing::info!("write_pty slash_mode: in_slash={in_slash} buf='{}' data='{}'", buf.content(), body.data);
     state
         .slash_mode
         .entry(session_id.clone())

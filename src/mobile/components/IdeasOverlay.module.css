@@ -16,7 +16,7 @@
   -webkit-backdrop-filter: blur(12px) saturate(1.6);
   border-top: 1px solid var(--border);
   border-radius: 12px 12px 0 0;
-  padding-bottom: max(8px, env(safe-area-inset-bottom));
+  padding-bottom: 8px;
 }
 
 .header {

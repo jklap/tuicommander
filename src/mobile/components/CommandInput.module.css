@@ -6,8 +6,7 @@
   background: var(--bg-secondary);
   border-top: 1px solid var(--border);
   flex-shrink: 0;
-  /* Safe area for home indicator + iPhone display corner radius */
-  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+  padding-bottom: 8px;
 }
 
 .input {

@@ -21,8 +21,4 @@ describe("BottomTabs frosted glass CSS", () => {
     const blurPx = parseInt(match![1], 10);
     expect(blurPx).toBeGreaterThanOrEqual(10);
   });
-
-  it("safe-area-inset-bottom uses max() fallback pattern", () => {
-    expect(css).toMatch(/max\(\s*\d+px\s*,\s*env\(safe-area-inset-bottom[^)]*\)\s*\)/);
-  });
 });

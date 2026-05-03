@@ -200,6 +200,7 @@ export function CommandInput(props: CommandInputProps) {
       <Show when={showDropup() && !showChoicePrompt()}>
         <SlashMenuOverlay
           items={props.slashItems ?? []}
+          sessionId={props.sessionId}
           onSelect={handleSlashSelect}
         />
       </Show>
