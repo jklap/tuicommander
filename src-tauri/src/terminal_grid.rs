@@ -316,6 +316,7 @@ impl TerminalGrid {
         let size = GridSize { cols: cols as usize, lines: rows as usize };
         self.term.resize(size);
         self.prev_rows.clear();
+        self.force_full_next = true;
     }
 
     /// Extract a styled `LogLine` from a grid row by iterating cells.
@@ -724,9 +725,9 @@ impl TerminalGrid {
             return Vec::new();
         }
 
-        // Header: 18 bytes
+        // Header: 22 bytes
         let row_count = dirty_lines.len();
-        let estimated = 18 + row_count * (4 + num_cols * 11);
+        let estimated = 22 + row_count * (4 + num_cols * 11);
         let mut buf = Vec::with_capacity(estimated);
 
         let bell = self.drain_bell();
@@ -751,6 +752,8 @@ impl TerminalGrid {
         buf.push(has_selection as u8);
         buf.push(keyboard_flags);
         buf.push(frame_flags);
+        buf.extend_from_slice(&(num_lines as u16).to_le_bytes());
+        buf.extend_from_slice(&(num_cols as u16).to_le_bytes());
 
         let grid = self.term.grid();
         let colors = self.term.colors();

@@ -1,7 +1,7 @@
 // --- Binary frame decoding and font measurement for CanvasTerminal ---
 
 // Wire format constants (must match terminal_grid.rs)
-const HEADER_SIZE = 18;
+const HEADER_SIZE = 22;
 const CELL_SIZE = 11; // 4 (char u32) + 3 (fg) + 3 (bg) + 1 (attrs)
 const ATTR_BOLD = 0x01;
 const ATTR_ITALIC = 0x02;
@@ -45,6 +45,8 @@ export interface DecodedFrame {
   hasSelection: boolean;
   keyboardFlags: number;
   bell: boolean;
+  screenRows: number;
+  screenCols: number;
   rows: DecodedRow[];
 }
 
@@ -74,6 +76,8 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
   const hasSelection = view.getUint8(offset) !== 0; offset += 1;
   const keyboardFlags = view.getUint8(offset); offset += 1;
   const frameFlags = view.getUint8(offset); offset += 1;
+  const screenRows = view.getUint16(offset, true); offset += 2;
+  const screenCols = view.getUint16(offset, true); offset += 2;
   const bell = (frameFlags & 0x01) !== 0;
   const cursorShapeRaw = (frameFlags >> 1) & 0x03;
   const cursorShape: "block" | "underline" | "beam" = cursorShapeRaw === 2 ? "beam" : cursorShapeRaw === 1 ? "underline" : "block";
@@ -114,7 +118,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
     rows.push({ index: rowIndex, cells });
   }
 
-  return { cursorRow, cursorCol, cursorVisible, cursorShape, displayOffset, historySize, hasSelection, keyboardFlags, bell, rows };
+  return { cursorRow, cursorCol, cursorVisible, cursorShape, displayOffset, historySize, hasSelection, keyboardFlags, bell, screenRows, screenCols, rows };
 }
 
 /** Measure natural character height via DOM span — matches xterm.js CharSizeService. */

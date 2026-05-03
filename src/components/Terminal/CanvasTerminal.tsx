@@ -64,6 +64,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   // Accumulated screen buffer: survives partial damage frames so resize can repaint everything
   let screenRows = new Map<number, DecodedFrame["rows"][0]>();
   let lastDisplayOffset = -1;
+  let lastScreenRows = -1;
+  let lastScreenCols = -1;
   let searchMatches: { row: number; col_start: number; col_end: number }[] = [];
   let activeSearchIndex = -1;
   let cursorBlinkOn = true;
@@ -443,10 +445,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
     if (frame.bell) props.onBell?.();
 
-    // When scroll position changes, the entire visible content is different
-    if (frame.displayOffset !== lastDisplayOffset) {
+    // When scroll position or geometry changes, the entire visible content is different
+    if (frame.displayOffset !== lastDisplayOffset
+        || frame.screenRows !== lastScreenRows
+        || frame.screenCols !== lastScreenCols) {
       screenRows.clear();
       lastDisplayOffset = frame.displayOffset;
+      lastScreenRows = frame.screenRows;
+      lastScreenCols = frame.screenCols;
     }
 
     // Merge incoming damaged rows into the full screen buffer
