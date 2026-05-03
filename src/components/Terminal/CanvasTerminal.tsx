@@ -11,7 +11,6 @@ import {
 } from "./canvasTerminalUtils";
 import {
   getSharedMetrics,
-  drawCachedGlyph,
   acquireCache,
   releaseCache,
   invalidateGlyphCache,
@@ -456,12 +455,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
           // Block element drawn as geometry
         } else {
           const font = buildFontStyle(cell, m.fontSize, fontFamily);
-          if (!cell.dim && drawCachedGlyph(ctx, cell.char, font, fg, x, y, m)) {
-            // Drawn from shared glyph atlas
-          } else {
-            if (font !== lastFont) { ctx.font = font; lastFont = font; }
-            ctx.fillText(cell.char, x, y + m.baseline);
-          }
+          if (font !== lastFont) { ctx.font = font; lastFont = font; }
+          ctx.fillText(cell.char, x, y + m.baseline);
         }
         if (cell.dim) ctx.globalAlpha = 1.0;
       }
