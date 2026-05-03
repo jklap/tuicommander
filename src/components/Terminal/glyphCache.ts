@@ -148,8 +148,8 @@ export function drawCachedGlyph(
 
   ctx.drawImage(
     atlas,
-    entry.x, entry.y, entry.w, entry.h,
-    dx, dy, m.cellWidth, m.cellHeight,
+    entry.x, entry.y, entry.w + GLYPH_PAD, entry.h,
+    dx, dy, m.cellWidth + GLYPH_PAD / m.dpr, m.cellHeight,
   );
   return true;
 }
