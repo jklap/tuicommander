@@ -692,7 +692,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       }
 
       // Any keypress clears selection — full repaint to remove ghost highlights
-      if (selectionStart) {
+      // Skip pure modifier keys so Cmd+C / Ctrl+C can fire as a chord
+      if (selectionStart && e.key !== "Meta" && e.key !== "Control" && e.key !== "Alt" && e.key !== "Shift") {
         selectionStart = null;
         selectionEnd = null;
         invokeRef?.("terminal_select_clear", { sessionId: props.sessionId }).catch(() => {});
