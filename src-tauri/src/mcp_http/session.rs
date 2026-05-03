@@ -1484,4 +1484,39 @@ mod tests {
         let current = rx2.borrow().clone();
         assert_eq!(current, vec![10, 20, 30]);
     }
+
+    /// Verifies that spawn_pty_session registers a grid_watch channel for the session,
+    /// so that handle_ws_grid_session can subscribe to it (regression for BUG-2).
+    #[tokio::test]
+    async fn spawn_pty_session_registers_grid_watch() {
+        let state = super::super::tests::test_state();
+
+        assert!(state.grid_watch.is_empty());
+
+        let result = super::spawn_pty_session(
+            state.clone(),
+            std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into()),
+            None,
+            24,
+            80,
+            None,
+        );
+
+        let session_id = match result {
+            Ok(id) => id,
+            Err(_) => return, // PTY unavailable in CI — skip gracefully
+        };
+
+        assert!(
+            state.grid_watch.contains_key(&session_id),
+            "spawn_pty_session must register a grid_watch channel"
+        );
+
+        // Verify the channel is functional
+        let tx = state.grid_watch.get(&session_id).unwrap();
+        let mut rx = tx.subscribe();
+        tx.send(vec![1, 2, 3]).unwrap();
+        rx.changed().await.unwrap();
+        assert_eq!(*rx.borrow_and_update(), vec![1, 2, 3]);
+    }
 }

@@ -927,7 +927,7 @@ mod tests {
         req
     }
 
-    fn test_state() -> Arc<AppState> {
+    pub(super) fn test_state() -> Arc<AppState> {
         let state = Arc::new(AppState {
             sessions: DashMap::new(),
             worktrees_dir: std::env::temp_dir().join("test-worktrees"),
