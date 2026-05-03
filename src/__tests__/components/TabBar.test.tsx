@@ -217,7 +217,7 @@ describe("TabBar", () => {
     expect(tabs[1].classList.contains("shellIdle")).toBe(false);
   });
 
-  it("tab with progress shows progress label and bar", () => {
+  it("tab with progress shows bar at correct width (no label)", () => {
     const id = addTerminal({ name: "Progress" });
     terminalsStore.update(id, { progress: 50 });
 
@@ -225,15 +225,13 @@ describe("TabBar", () => {
       <TabBar onTabSelect={() => {}} onTabClose={() => {}} onCloseOthers={() => {}} onCloseToRight={() => {}} onNewTab={() => {}} />
     ));
     const tab = container.querySelector(".tab")!;
-    const label = tab.querySelector(".progressLabel");
-    expect(label).not.toBeNull();
-    expect(label!.textContent).toBe("50%");
+    expect(tab.querySelector(".progressLabel")).toBeNull();
     const bar = tab.querySelector(".progress");
     expect(bar).not.toBeNull();
     expect((bar as HTMLElement).style.width).toBe("50%");
   });
 
-  it("tab with progress=0 shows progress label and bar", () => {
+  it("tab with progress=0 shows bar, no label", () => {
     const id = addTerminal({ name: "Zero" });
     terminalsStore.update(id, { progress: 0 });
 
@@ -241,9 +239,10 @@ describe("TabBar", () => {
       <TabBar onTabSelect={() => {}} onTabClose={() => {}} onCloseOthers={() => {}} onCloseToRight={() => {}} onNewTab={() => {}} />
     ));
     const tab = container.querySelector(".tab")!;
-    const label = tab.querySelector(".progressLabel");
-    expect(label).not.toBeNull();
-    expect(label!.textContent).toBe("0%");
+    expect(tab.querySelector(".progressLabel")).toBeNull();
+    const bar = tab.querySelector(".progress");
+    expect(bar).not.toBeNull();
+    expect((bar as HTMLElement).style.width).toBe("0%");
   });
 
   it("tab with progress=null does not show progress elements", () => {

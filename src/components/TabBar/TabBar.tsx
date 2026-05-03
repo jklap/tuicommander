@@ -663,9 +663,6 @@ export const TabBar: Component<TabBarProps> = (props) => {
                 <Show when={isEditing()} fallback={
                   <span class={s.tabName}>
                     {terminal()?.name}
-                    {progress() !== null && progress() !== undefined && (
-                      <span class={s.progressLabel}>{progress()}%</span>
-                    )}
                     <Show when={isDetached()}>
                       <svg class={s.detachedIcon} viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.5">
                         <path d="M7 1h4v4M11 1L6 6M5 2H2v8h8V7" />
