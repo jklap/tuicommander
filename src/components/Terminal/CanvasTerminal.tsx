@@ -180,14 +180,54 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     updateSuggestOverlay(frame, m);
   }
 
+  function findNearestVisibleMatch(matches: typeof searchMatches): number {
+    if (!currentFrame) return 0;
+    const viewportTop = currentFrame.historySize - currentFrame.displayOffset;
+    const screenLines = currentFrame.screenRows || lastResizeRows;
+    const viewportBottom = viewportTop + screenLines;
+    // Prefer the last visible match (closest to cursor / bottom of viewport)
+    let best = 0;
+    for (let i = matches.length - 1; i >= 0; i--) {
+      if (matches[i].row >= viewportTop && matches[i].row < viewportBottom) {
+        best = i;
+        break;
+      }
+    }
+    return best;
+  }
+
+  function scrollToMatch(match: { row: number; col_start: number; col_end: number }) {
+    if (!currentFrame || !invokeRef) return;
+    const viewportTop = currentFrame.historySize - currentFrame.displayOffset;
+    const screenLines = currentFrame.screenRows || lastResizeRows;
+    const viewportBottom = viewportTop + screenLines;
+    if (match.row >= viewportTop && match.row < viewportBottom) return;
+    const targetOffset = currentFrame.historySize - match.row + Math.floor(screenLines / 2);
+    const clamped = Math.max(0, Math.min(targetOffset, currentFrame.historySize));
+    const delta = clamped - currentFrame.displayOffset;
+    if (delta !== 0) {
+      invokeRef("terminal_scroll", { sessionId: props.sessionId, delta }).catch(() => {});
+    }
+  }
+
+  function absRowToViewport(absRow: number): number | null {
+    if (!currentFrame) return null;
+    const viewportTop = currentFrame.historySize - currentFrame.displayOffset;
+    const viewportRow = absRow - viewportTop;
+    if (viewportRow < 0 || viewportRow >= (currentFrame.screenRows || lastResizeRows)) return null;
+    return viewportRow;
+  }
+
   function paintSearchHighlights(m: CellMetrics) {
     if (searchMatches.length === 0) return;
     for (let i = 0; i < searchMatches.length; i++) {
       const match = searchMatches[i];
+      const vpRow = absRowToViewport(match.row);
+      if (vpRow === null) continue;
       const isActive = i === activeSearchIndex;
       ctx.fillStyle = isActive ? "rgba(255, 140, 0, 0.7)" : "rgba(255, 255, 0, 0.25)";
       const x = match.col_start * m.cellWidth;
-      const y = match.row * m.cellHeight;
+      const y = vpRow * m.cellHeight;
       const w = (match.col_end - match.col_start) * m.cellWidth;
       ctx.fillRect(x, y, w, m.cellHeight);
     }
@@ -1002,7 +1042,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
           sessionId: props.sessionId, query,
         }) as { row: number; col_start: number; col_end: number }[];
         searchMatches = matches;
-        activeSearchIndex = matches.length > 0 ? 0 : -1;
+        if (matches.length > 0) {
+          activeSearchIndex = findNearestVisibleMatch(matches);
+          scrollToMatch(matches[activeSearchIndex]);
+        } else {
+          activeSearchIndex = -1;
+        }
         const m = metrics();
         if (currentFrame && m) paintFrame(currentFrame, m);
         return { index: activeSearchIndex, count: matches.length };
@@ -1010,6 +1055,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       searchNext: () => {
         if (searchMatches.length === 0) return { index: -1, count: 0 };
         activeSearchIndex = (activeSearchIndex + 1) % searchMatches.length;
+        scrollToMatch(searchMatches[activeSearchIndex]);
         const m = metrics();
         if (currentFrame && m) paintFrame(currentFrame, m);
         return { index: activeSearchIndex, count: searchMatches.length };
@@ -1017,6 +1063,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       searchPrev: () => {
         if (searchMatches.length === 0) return { index: -1, count: 0 };
         activeSearchIndex = (activeSearchIndex - 1 + searchMatches.length) % searchMatches.length;
+        scrollToMatch(searchMatches[activeSearchIndex]);
         const m = metrics();
         if (currentFrame && m) paintFrame(currentFrame, m);
         return { index: activeSearchIndex, count: searchMatches.length };
