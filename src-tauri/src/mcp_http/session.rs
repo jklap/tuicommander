@@ -555,6 +555,13 @@ pub(super) async fn ws_stream(
         return StatusCode::NOT_FOUND.into_response();
     }
     let format = query.format.as_deref().unwrap_or("raw");
+
+    if format == "grid" {
+        return ws.write_buffer_size(64 * 1024)
+            .max_write_buffer_size(256 * 1024)
+            .on_upgrade(move |socket| handle_ws_grid_session(socket, id, state));
+    }
+
     // format=text and format=log both serve clean VtLogBuffer rows (no strip_ansi).
     let log_mode = format == "log" || format == "text";
     let initial_offset = query.offset;
@@ -934,6 +941,137 @@ async fn handle_ws_log_session(
     send_task.abort();
 }
 
+/// Handle a WebSocket connection in grid mode (`?format=grid`).
+///
+/// Streams binary grid frames (same format as Tauri Channel) using the
+/// `grid_watch` channel. Uses latest-frame-wins semantics: slow clients
+/// automatically skip intermediate frames via `tokio::sync::watch`.
+///
+/// On connect, sends a full frame (all rows marked dirty). Subsequent frames
+/// are delta-based (only changed rows). Client sends text messages for
+/// commands (e.g. `{"type":"ack"}`) and binary messages for PTY input.
+async fn handle_ws_grid_session(
+    socket: WebSocket,
+    session_id: String,
+    state: Arc<AppState>,
+) {
+    let (mut ws_sender, mut ws_receiver) = socket.split();
+
+    // Subscribe to the grid watch channel (latest-frame-wins for slow clients).
+    let mut frame_rx = match state.grid_watch.get(&session_id) {
+        Some(tx) => tx.subscribe(),
+        None => {
+            let _ = futures_util::SinkExt::send(
+                &mut ws_sender,
+                Message::Close(None),
+            ).await;
+            return;
+        }
+    };
+
+    // Send initial full frame so the client can render immediately.
+    // Scope the MutexGuard so it's dropped before the .await.
+    let initial_frame = state.vt_log_buffers.get(&session_id).and_then(|vt| {
+        let mut vt = vt.lock();
+        vt.grid_force_full_damage();
+        let frame = vt.serialize_dirty_rows();
+        if frame.is_empty() { None } else { Some(frame) }
+    });
+    if let Some(frame) = initial_frame {
+        if futures_util::SinkExt::send(
+            &mut ws_sender,
+            Message::Binary(frame.into()),
+        ).await.is_err() {
+            return;
+        }
+    }
+
+    // Subscribe to event bus for parsed events (exit, closed, etc.)
+    let mut event_rx = state.event_bus.subscribe();
+    let sid_for_events = session_id.clone();
+
+    let send_task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                result = frame_rx.changed() => {
+                    if result.is_err() { break; } // sender dropped
+                    let frame = frame_rx.borrow_and_update().clone();
+                    if !frame.is_empty() {
+                        if futures_util::SinkExt::send(
+                            &mut ws_sender,
+                            Message::Binary(frame.into()),
+                        ).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+                result = event_rx.recv() => {
+                    match result {
+                        Ok(event) => {
+                            let matches = match &event {
+                                crate::state::AppEvent::PtyParsed { session_id: sid, .. } => sid == &sid_for_events,
+                                crate::state::AppEvent::PtyExit { session_id: sid } => sid == &sid_for_events,
+                                crate::state::AppEvent::SessionClosed { session_id: sid, .. } => sid == &sid_for_events,
+                                _ => false,
+                            };
+                            if !matches { continue; }
+
+                            let payload = match &event {
+                                crate::state::AppEvent::PtyParsed { parsed, .. } => {
+                                    serde_json::json!({"type": "parsed", "event": parsed})
+                                }
+                                crate::state::AppEvent::PtyExit { session_id: sid } => {
+                                    serde_json::json!({"type": "exit", "session_id": sid})
+                                }
+                                crate::state::AppEvent::SessionClosed { session_id: sid, reason } => {
+                                    serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})
+                                }
+                                _ => continue,
+                            };
+                            if futures_util::SinkExt::send(
+                                &mut ws_sender,
+                                Message::Text(payload.to_string().into()),
+                            ).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(session_id = %sid_for_events, lagged = n, "grid WS broadcast lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+    });
+
+    // Read messages from the client
+    let state_clone = state.clone();
+    let sid = session_id.clone();
+    while let Some(Ok(msg)) = ws_receiver.next().await {
+        match msg {
+            Message::Text(_text) => {
+                // Reserved for client commands (e.g. resize, scroll).
+                // No ACK needed — watch channel handles backpressure naturally.
+            }
+            Message::Binary(data) => {
+                if let Some(session) = state_clone.sessions.get(&sid) {
+                    let mut s = session.lock();
+                    if let Err(e) = s.writer.write_all(&data) {
+                        tracing::error!(session_id = %sid, "PTY write failed: {e}");
+                        break;
+                    }
+                    let _ = s.writer.flush();
+                }
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    send_task.abort();
+}
+
 /// Remove agent TUI chrome from screen rows (status bars, prompt lines,
 /// separators) and trim trailing empty rows.
 ///
@@ -1153,5 +1291,47 @@ mod tests {
         //    bytes the writer had committed at snapshot time.
         assert!(snapshot_total <= CHUNK_COUNT * CHUNK_SIZE as u64);
         assert!(snapshot_total >= snapshot_indices.len() as u64 * CHUNK_SIZE as u64);
+    }
+
+    // --- Grid watch channel (format=grid WS endpoint) ---
+
+    /// Verifies that the grid_watch channel delivers frames with latest-frame-wins
+    /// semantics: a slow receiver that misses intermediate sends still gets the
+    /// most recent frame on its next `changed().await`.
+    #[tokio::test]
+    async fn grid_watch_latest_frame_wins() {
+        let (tx, mut rx) = tokio::sync::watch::channel(Vec::<u8>::new());
+
+        // Send 3 frames without the receiver polling
+        tx.send(vec![1, 2, 3]).unwrap();
+        tx.send(vec![4, 5, 6]).unwrap();
+        tx.send(vec![7, 8, 9]).unwrap();
+
+        // Receiver sees only the latest
+        rx.changed().await.unwrap();
+        let frame = rx.borrow_and_update().clone();
+        assert_eq!(frame, vec![7, 8, 9]);
+
+        // No pending change after consuming latest
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            rx.changed(),
+        ).await;
+        assert!(result.is_err(), "should timeout — no new frame");
+    }
+
+    /// Verifies that a newly subscribed receiver gets the current value
+    /// immediately (supports initial full-frame delivery in handle_ws_grid_session).
+    #[tokio::test]
+    async fn grid_watch_subscriber_gets_current_value() {
+        let (tx, _rx) = tokio::sync::watch::channel(Vec::<u8>::new());
+
+        // Publish a frame
+        tx.send(vec![10, 20, 30]).unwrap();
+
+        // New subscriber sees current value via borrow()
+        let rx2 = tx.subscribe();
+        let current = rx2.borrow().clone();
+        assert_eq!(current, vec![10, 20, 30]);
     }
 }
