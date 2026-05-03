@@ -11,6 +11,7 @@ import {
 } from "./canvasTerminalUtils";
 import {
   getSharedMetrics,
+  drawCachedGlyph,
   acquireCache,
   releaseCache,
   invalidateGlyphCache,
@@ -48,6 +49,7 @@ export interface CanvasTerminalProps {
   onResume?: () => void;
   onResumeDismiss?: () => void;
   hasPendingResume?: boolean;
+  onCwdChange?: (id: string, cwd: string) => void;
   onRef?: (ref: CanvasTerminalRef) => void;
   onBell?: () => void;
 }
@@ -76,6 +78,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   let cursorBlinkOn = true;
   let blinkInterval: ReturnType<typeof setInterval> | undefined;
   let unsubscribe: (() => void) | undefined;
+  let unlistenCwd: (() => void) | undefined;
   let resizeObserver: ResizeObserver | undefined;
   let lastResizeCols = 0;
   let lastResizeRows = 0;
@@ -455,8 +458,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
           // Block element drawn as geometry
         } else {
           const font = buildFontStyle(cell, m.fontSize, fontFamily);
-          if (font !== lastFont) { ctx.font = font; lastFont = font; }
-          ctx.fillText(cell.char, x, y + m.baseline);
+          if (!cell.dim && drawCachedGlyph(ctx, cell.char, font, fg, x, y, m)) {
+            // Drawn from shared DOM canvas atlas
+          } else {
+            if (font !== lastFont) { ctx.font = font; lastFont = font; }
+            ctx.fillText(cell.char, x, y + m.baseline);
+          }
         }
         if (cell.dim) ctx.globalAlpha = 1.0;
       }
@@ -1018,6 +1025,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         document.removeEventListener("mousemove", onScrollDragMove);
         document.removeEventListener("mouseup", onScrollDragUp);
       };
+    }
+
+    // Listen for OSC 7 CWD changes from Rust
+    try {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlistenCwd = await listen<string>(`pty-cwd-${props.sessionId}`, (event) => {
+        terminalsStore.update(props.terminalId, { cwd: event.payload });
+        props.onCwdChange?.(props.terminalId, event.payload);
+      });
+    } catch {
+      // not in Tauri context
     }
 
     props.onRef?.({
