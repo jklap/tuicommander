@@ -191,6 +191,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     isTauri() && settingsStore.state.terminalRenderer === "native";
 
   let canvasTerminalRef: CanvasTerminalRef | undefined;
+  let pendingCanvasFocus = false;
 
   // Search overlay state
   const [searchVisible, setSearchVisible] = createSignal(false);
@@ -1848,8 +1849,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
       }
     },
     focus: () => {
-      if (isNative()) canvasTerminalRef?.focus();
-      else terminal?.focus();
+      if (isNative()) {
+        if (canvasTerminalRef) canvasTerminalRef.focus();
+        else pendingCanvasFocus = true;
+      } else {
+        terminal?.focus();
+      }
     },
     getSessionId: () => sessionId,
     openSearch: () => setSearchVisible(true),
@@ -2056,7 +2061,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
           hasPendingResume={!!terminalsStore.get(props.id)?.pendingResumeCommand}
           onFocus={() => props.onFocus?.(props.id)}
           onCwdChange={props.onCwdChange}
-          onRef={(ref) => { canvasTerminalRef = ref; }}
+          onRef={(ref) => { canvasTerminalRef = ref; if (pendingCanvasFocus) { pendingCanvasFocus = false; ref.focus(); } }}
           onBell={handleBell}
         />}
       </Show>
