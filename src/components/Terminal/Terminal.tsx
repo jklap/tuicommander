@@ -1875,10 +1875,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
       return searchTerminalBuffer(lines, query, props.id, name);
     },
     scrollToLine: (lineIndex: number) => {
-      if (isNative()) {
-        // DEFERRED (2026-05-02) — scrollToLine for native needs terminal_scroll_to IPC
-        // that accepts absolute line index. Current terminal_scroll only does relative delta.
-        appLogger.warn("terminal", "scrollToLine: not implemented for native renderer", { lineIndex });
+      if (isNative() && sessionId) {
+        invoke("terminal_scroll_to", { sessionId, line: lineIndex }).catch(() => {});
       } else if (terminal) {
         const viewportY = terminal.buffer.active.viewportY;
         const delta = lineIndex - viewportY - Math.floor(terminal.rows / 2);
@@ -1888,7 +1886,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     scrollToTop: () => {
       if (isNative() && sessionId) {
         invoke("terminal_scroll_info", { sessionId }).then((info) => {
-          const [, total] = info as [number, number];
+          const [, total] = info as [number, number, number];
           invoke("terminal_scroll", { sessionId, delta: total }).catch(() => {});
         }).catch(() => {});
       } else {
@@ -1898,7 +1896,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     scrollToBottom: () => {
       if (isNative() && sessionId) {
         invoke("terminal_scroll_info", { sessionId }).then((info) => {
-          const [offset] = info as [number, number];
+          const [offset] = info as [number, number, number];
           if (offset > 0) invoke("terminal_scroll", { sessionId, delta: -offset }).catch(() => {});
         }).catch(() => {});
       } else {
@@ -1907,9 +1905,11 @@ export const Terminal: Component<TerminalProps> = (props) => {
     },
     scrollPages: (pages: number) => {
       if (isNative() && sessionId) {
-        // DEFERRED (2026-05-02) — uses fallback 24 rows; native renderer doesn't
-        // expose screen dimensions yet. Should read from terminal_scroll_info.
-        invoke("terminal_scroll", { sessionId, delta: -(pages * 24) }).catch(() => {});
+        invoke("terminal_scroll_info", { sessionId }).then((info) => {
+          const [, , screenLines] = info as [number, number, number];
+          const rows = screenLines || 24;
+          invoke("terminal_scroll", { sessionId, delta: -(pages * rows) }).catch(() => {});
+        }).catch(() => {});
       } else {
         terminal?.scrollPages(pages);
       }

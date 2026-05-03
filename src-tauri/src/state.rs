@@ -1701,7 +1701,7 @@ impl VtLogBuffer {
     ///
     /// Log extraction reads new scrollback lines from the grid's history
     /// (normal-screen-only — alternate screen does not produce scrollback).
-    pub fn process(&mut self, data: &[u8]) -> (Vec<ChangedRow>, Vec<crate::terminal_grid::Osc133Event>) {
+    pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
         let is_alternate = self.grid.is_alternate_screen();
 
         // TerminalGrid::process handles changed-row detection internally,
@@ -1711,7 +1711,7 @@ impl VtLogBuffer {
             self.grid.clear_prev_rows();
         }
 
-        let (changed, osc133_events) = self.grid.process(data);
+        let changed = self.grid.process(data);
 
         let is_alternate = self.grid.is_alternate_screen();
 
@@ -1740,7 +1740,7 @@ impl VtLogBuffer {
         }
 
         self.was_alternate = is_alternate;
-        (changed, osc133_events)
+        changed
     }
 
     /// Update grid dimensions on terminal resize.
@@ -1879,12 +1879,20 @@ impl VtLogBuffer {
         self.grid.scroll(delta);
     }
 
+    pub(crate) fn grid_scroll_to_line(&mut self, line: usize) {
+        self.grid.scroll_to_line(line);
+    }
+
     pub(crate) fn grid_display_offset(&self) -> usize {
         self.grid.display_offset()
     }
 
     pub(crate) fn grid_total_lines(&self) -> usize {
         self.grid.total_lines()
+    }
+
+    pub(crate) fn grid_screen_lines(&self) -> usize {
+        self.grid.screen_lines()
     }
 
     // --- Search delegate ---
@@ -3553,7 +3561,7 @@ mod tests {
         let mut buf = make_vt_log();
         let changed = buf.process(b"hello world");
         assert!(
-            changed.0.iter().any(|r| r.text == "hello world"),
+            changed.iter().any(|r| r.text == "hello world"),
             "expected 'hello world' in changed rows, got: {:?}",
             changed,
         );
@@ -3566,12 +3574,12 @@ mod tests {
         // "aaaa\r" moves cursor to column 0; "bbbb" overwrites — vt100 renders "bbbb"
         let changed = buf.process(b"aaaa\rbbbb");
         assert!(
-            changed.0.iter().any(|r| r.text.contains("bbbb")),
+            changed.iter().any(|r| r.text.contains("bbbb")),
             "expected 'bbbb' after CR overwrite, got: {:?}",
             changed,
         );
         assert!(
-            !changed.0.iter().any(|r| r.text == "aaaa"),
+            !changed.iter().any(|r| r.text == "aaaa"),
             "should not see raw 'aaaa' (overwritten), got: {:?}",
             changed,
         );
@@ -3584,7 +3592,7 @@ mod tests {
         buf.process(b"\x1b[?1049h");
         let changed = buf.process(b"status: running");
         assert!(
-            changed.0.iter().any(|r| r.text.contains("status: running")),
+            changed.iter().any(|r| r.text.contains("status: running")),
             "changed rows must be reported during alternate screen, got: {:?}",
             changed,
         );
@@ -3599,7 +3607,7 @@ mod tests {
         // Move cursor up 1 row (CUU 1) and overwrite line1
         let changed = buf.process(b"\x1b[1Aupdated");
         assert!(
-            changed.0.iter().any(|r| r.text.contains("updated")),
+            changed.iter().any(|r| r.text.contains("updated")),
             "expected 'updated' in changed rows after CUU overwrite, got: {:?}",
             changed,
         );
@@ -3612,7 +3620,7 @@ mod tests {
         buf.process(b"hello");
         let changed = buf.process(b"");
         assert!(
-            changed.0.is_empty(),
+            changed.is_empty(),
             "expected no changed rows when no data written, got: {:?}",
             changed,
         );
@@ -3627,7 +3635,7 @@ mod tests {
         buf.resize(24, 80);
         let changed = buf.process(b"");
         assert!(
-            changed.0.iter().any(|r| r.text.contains("hello")),
+            changed.iter().any(|r| r.text.contains("hello")),
             "expected 'hello' after resize clears prev, got: {:?}",
             changed,
         );
@@ -3644,7 +3652,7 @@ mod tests {
         // Exit alternate — should reset prev for normal screen
         let changed = buf.process(b"\x1b[?1049l");
         assert!(
-            changed.0.iter().any(|r| r.text.contains("normal line")),
+            changed.iter().any(|r| r.text.contains("normal line")),
             "expected 'normal line' after screen switch resets prev, got: {:?}",
             changed,
         );

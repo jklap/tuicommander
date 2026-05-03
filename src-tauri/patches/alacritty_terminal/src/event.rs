@@ -56,6 +56,12 @@ pub enum Event {
 
     /// Child process exited.
     ChildExit(ExitStatus),
+
+    /// OSC 133 shell integration marker.
+    Osc133 { command: char, params: String },
+
+    /// OSC 7 current working directory (file://hostname/path).
+    Osc7(String),
 }
 
 impl Debug for Event {
@@ -74,6 +80,8 @@ impl Debug for Event {
             Event::Bell => write!(f, "Bell"),
             Event::Exit => write!(f, "Exit"),
             Event::ChildExit(status) => write!(f, "ChildExit({status:?})"),
+            Event::Osc133 { command, params } => write!(f, "Osc133({command}, {params:?})"),
+            Event::Osc7(url) => write!(f, "Osc7({url})"),
         }
     }
 }

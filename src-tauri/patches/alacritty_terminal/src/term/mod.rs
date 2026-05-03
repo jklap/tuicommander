@@ -995,6 +995,7 @@ impl<T> Term<T> {
         let fg = self.grid.cursor.template.fg;
         let bg = self.grid.cursor.template.bg;
         let flags = self.grid.cursor.template.flags;
+        let cell_type = self.grid.cursor.template.cell_type;
         let extra = self.grid.cursor.template.extra.clone();
 
         let mut cursor_cell = self.grid.cursor_cell();
@@ -1023,6 +1024,7 @@ impl<T> Term<T> {
         cursor_cell.fg = fg;
         cursor_cell.bg = bg;
         cursor_cell.flags = flags;
+        cursor_cell.cell_type = cell_type;
         cursor_cell.extra = extra;
     }
 
@@ -2277,6 +2279,28 @@ impl<T: EventListener> Handler for Term<T> {
     fn text_area_size_chars(&mut self) {
         let text = format!("\x1b[8;{};{}t", self.screen_lines(), self.columns());
         self.event_proxy.send_event(Event::PtyWrite(text));
+    }
+
+    #[inline]
+    fn osc133(&mut self, command: char, params: &str) {
+        use crate::term::cell::Osc133CellType;
+        let cell_type = match command {
+            'A' => Osc133CellType::Prompt,
+            'B' => Osc133CellType::Input,
+            'C' => Osc133CellType::Output,
+            'D' => Osc133CellType::None,
+            _ => return,
+        };
+        self.grid.cursor.template.cell_type = cell_type;
+        self.event_proxy.send_event(Event::Osc133 {
+            command,
+            params: params.to_owned(),
+        });
+    }
+
+    #[inline]
+    fn osc7(&mut self, url: &str) {
+        self.event_proxy.send_event(Event::Osc7(url.to_owned()));
     }
 }
 

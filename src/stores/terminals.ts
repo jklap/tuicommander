@@ -278,6 +278,7 @@ function createTerminalsStore() {
       setState(
         produce((s) => {
           delete s.terminals[id];
+          delete s.detachedWindows[id];
           if (s.activeId === id) {
             s.activeId = null;
           }

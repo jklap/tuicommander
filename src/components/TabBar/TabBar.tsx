@@ -212,7 +212,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
       { label: "", separator: true, action: () => {} },
       { label: t("tabBar.renameTab", "Rename Tab"), action: () => setEditingId(id) },
       detached
-        ? { label: t("tabBar.reattachTab", "Reattach to Main Window"), action: () => props.onReattachTab?.(id) }
+        ? { label: t("tabBar.reattachTab", "Reattach to Main Window"), action: () => props.onReattachTab?.(id), disabled: exited }
         : { label: t("tabBar.detachToWindow", "Detach to Window"), action: () => props.onDetachTab?.(id), disabled: !hasSession || exited },
     ];
     if (worktreeTargets.length > 0) {

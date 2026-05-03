@@ -1202,6 +1202,7 @@ pub fn run() {
             pty::terminal_select_text,
             pty::terminal_select_clear,
             pty::terminal_scroll,
+            pty::terminal_scroll_to,
             pty::terminal_scroll_info,
             pty::terminal_search,
             pty::terminal_get_row_text,

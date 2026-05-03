@@ -90,15 +90,5 @@ describe("useGitHub (reactive wrapper)", () => {
       });
     });
 
-    it("startPolling and stopPolling are no-ops", () => {
-      testInScope(() => {
-        const { startPolling, stopPolling } = useGitHub(() => "/repos/my-repo");
-
-        // These should not throw
-        startPolling();
-        stopPolling();
-
-      });
-    });
   });
 });

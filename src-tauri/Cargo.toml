@@ -106,6 +106,7 @@ windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp
 
 [patch.crates-io]
 alacritty_terminal = { path = "patches/alacritty_terminal" }
+vte = { path = "patches/vte" }
 
 [dev-dependencies]
 tempfile = "3"

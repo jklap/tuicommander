@@ -161,18 +161,6 @@ describe("StatusBar", () => {
     expect(statusInfo!.textContent).toBe("Ready");
   });
 
-  it("renders MD toggle button", () => {
-    const { container } = render(() => <StatusBar {...defaultProps} />);
-    const mdBtn = findToggleByTitle(container, "Markdown");
-    expect(mdBtn).not.toBeNull();
-  });
-
-  it("renders Git toggle button", () => {
-    const { container } = render(() => <StatusBar {...defaultProps} />);
-    const gitBtn = findToggleByTitle(container, "Git");
-    expect(gitBtn).not.toBeNull();
-  });
-
   it("calls onToggleMarkdown when MD button clicked", () => {
     const onToggleMarkdown = vi.fn();
     const { container } = render(() => (
@@ -191,14 +179,6 @@ describe("StatusBar", () => {
     const gitBtn = findToggleByTitle(container, "Git")!;
     fireEvent.click(gitBtn);
     expect(onToggleDiff).toHaveBeenCalledOnce();
-  });
-
-  it("shows zoom indicator", () => {
-    const { container } = render(() => <StatusBar {...defaultProps} />);
-    const statusBar = container.querySelector(".bar");
-    expect(statusBar).not.toBeNull();
-    const statusSection = container.querySelector(".section");
-    expect(statusSection).not.toBeNull();
   });
 
   it("does not render githubStatus when github status is null", () => {

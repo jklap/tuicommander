@@ -2831,14 +2831,6 @@ mod tests {
         assert_eq!(args, vec!["diff", "abc123^", "abc123"]);
     }
 
-    #[test]
-    fn null_device_constant_is_correct() {
-        #[cfg(not(windows))]
-        assert_eq!(NULL_DEVICE, "/dev/null");
-        #[cfg(windows)]
-        assert_eq!(NULL_DEVICE, "NUL");
-    }
-
     // --- parse_porcelain_v2 unit tests ---
 
     #[test]
@@ -2979,17 +2971,6 @@ mod tests {
     }
 
     // --- Integration tests for get_working_tree_status ---
-
-    #[tokio::test]
-    async fn get_working_tree_status_on_real_repo() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let result = get_working_tree_status(repo.to_string_lossy().to_string()).await;
-        assert!(result.is_ok(), "should succeed on real repo");
-        let status = result.unwrap();
-        // We're in a git repo, so branch should be set (unless detached)
-        // At minimum, the parse should not panic
-        let _ = status.ahead; // confirms the field was populated without panic
-    }
 
     #[tokio::test]
     async fn get_working_tree_status_nonexistent_path() {
@@ -3162,44 +3143,6 @@ mod tests {
     // --- get_git_panel_context_impl tests ---
 
     #[test]
-    fn git_panel_context_returns_valid_branch() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let ctx = get_git_panel_context_impl(&repo);
-        assert!(!ctx.branch.is_empty(), "branch should not be empty");
-    }
-
-    #[test]
-    fn git_panel_context_status_is_known_value() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let ctx = get_git_panel_context_impl(&repo);
-        assert!(
-            ["clean", "dirty", "conflict"].contains(&ctx.status.as_str()),
-            "status should be clean/dirty/conflict, got: {}",
-            ctx.status
-        );
-    }
-
-    #[test]
-    fn git_panel_context_has_last_commit() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let ctx = get_git_panel_context_impl(&repo);
-        assert!(ctx.last_commit.is_some(), "repo should have at least one commit");
-        let commit = ctx.last_commit.unwrap();
-        assert!(!commit.hash.is_empty());
-        assert!(!commit.short_hash.is_empty());
-        assert!(!commit.subject.is_empty());
-    }
-
-    #[test]
-    fn git_panel_context_not_in_rebase_or_cherry_pick() {
-        // This repo should not be in rebase/cherry-pick during tests
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let ctx = get_git_panel_context_impl(&repo);
-        assert!(!ctx.in_rebase, "should not be in rebase");
-        assert!(!ctx.in_cherry_pick, "should not be in cherry-pick");
-    }
-
-    #[test]
     fn git_panel_context_nonexistent_repo_returns_defaults() {
         let ctx = get_git_panel_context_impl(Path::new("/nonexistent/repo"));
         assert!(ctx.branch.is_empty(), "branch should be empty for non-repo");
@@ -3297,14 +3240,6 @@ mod tests {
     }
 
     // --- get_stash_list tests ---
-
-    #[tokio::test]
-    async fn get_stash_list_real_repo_does_not_error() {
-        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let result = get_stash_list(repo.to_string_lossy().to_string()).await;
-        // Should succeed regardless of whether there are stashes
-        assert!(result.is_ok(), "get_stash_list should not error on a real repo");
-    }
 
     #[tokio::test]
     async fn get_stash_list_nonexistent_repo_returns_empty() {

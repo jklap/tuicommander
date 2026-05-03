@@ -870,7 +870,14 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
 
             let (exited, exit_code): (bool, Option<i64>) = if let Some(entry) = &session_entry {
                 match entry.lock()._child.try_wait() {
-                    Ok(Some(status)) => (true, Some(status.exit_code() as i64)),
+                    Ok(Some(status)) => {
+                        let code = if let Some(sig) = status.signal() {
+                            128 + crate::pty::parse_signal_number(&sig) as i64
+                        } else {
+                            status.exit_code() as i64
+                        };
+                        (true, Some(code))
+                    },
                     _ => (false, None),
                 }
             } else if buffers_present {

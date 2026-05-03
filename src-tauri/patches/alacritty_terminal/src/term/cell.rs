@@ -36,6 +36,21 @@ bitflags! {
     }
 }
 
+/// Semantic zone type assigned by OSC 133 shell integration markers.
+///
+/// Fits in the 2-byte alignment padding between `flags` (u16) and `extra`
+/// (pointer-aligned) in `Cell`, so adding this field costs zero extra bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
+#[repr(u8)]
+pub enum Osc133CellType {
+    #[default]
+    None = 0,
+    Prompt = 1,
+    Input = 2,
+    Output = 3,
+}
+
 /// Counter for hyperlinks without explicit ID.
 static HYPERLINK_ID_SUFFIX: AtomicU32 = AtomicU32::new(0);
 
@@ -136,6 +151,7 @@ pub struct Cell {
     pub fg: Color,
     pub bg: Color,
     pub flags: Flags,
+    pub cell_type: Osc133CellType,
     pub extra: Option<Arc<CellExtra>>,
 }
 
@@ -147,6 +163,7 @@ impl Default for Cell {
             bg: Color::Named(NamedColor::Background),
             fg: Color::Named(NamedColor::Foreground),
             flags: Flags::empty(),
+            cell_type: Osc133CellType::None,
             extra: None,
         }
     }
@@ -250,14 +267,14 @@ impl GridCell for Cell {
 
     #[inline]
     fn reset(&mut self, template: &Self) {
-        *self = Cell { bg: template.bg, ..Cell::default() };
+        *self = Cell { bg: template.bg, cell_type: template.cell_type, ..Cell::default() };
     }
 }
 
 impl From<Color> for Cell {
     #[inline]
     fn from(color: Color) -> Self {
-        Self { bg: color, ..Cell::default() }
+        Self { bg: color, cell_type: Osc133CellType::None, ..Cell::default() }
     }
 }
 

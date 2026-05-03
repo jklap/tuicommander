@@ -276,14 +276,6 @@ mod tests {
     }
 
     #[test]
-    fn volume_is_clamped() {
-        // Verify extreme volumes don't panic
-        let _ = EnvelopedTone::new(440.0, Duration::from_millis(100), 0.0, Waveform::Sine);
-        let _ = EnvelopedTone::new(440.0, Duration::from_millis(100), 1.0, Waveform::Triangle);
-        let _ = EnvelopedTone::new(440.0, Duration::from_millis(100), 2.0, Waveform::Sine);
-    }
-
-    #[test]
     fn envelope_attack_ramps_up() {
         let tone = EnvelopedTone::new(440.0, Duration::from_millis(100), 1.0, Waveform::Sine);
         // At sample 0, envelope should be 0

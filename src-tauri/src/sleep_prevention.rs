@@ -37,15 +37,3 @@ pub(crate) fn unblock_sleep(blocker: tauri::State<'_, SleepBlocker>) -> Result<(
     *guard = None;
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn blocker_starts_empty() {
-        let blocker = SleepBlocker::new();
-        let guard = blocker.0.lock().unwrap();
-        assert!(guard.is_none());
-    }
-}

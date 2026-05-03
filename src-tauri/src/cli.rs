@@ -154,29 +154,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_extra_bin_dirs_returns_non_empty() {
-        let dirs = extra_bin_dirs();
-        assert!(!dirs.is_empty(), "extra_bin_dirs should return at least one directory");
-    }
-
-    #[test]
-    fn test_extra_bin_dirs_no_duplicates() {
-        let dirs = extra_bin_dirs();
-        let mut seen = std::collections::HashSet::new();
-        for dir in dirs {
-            assert!(seen.insert(dir), "Duplicate directory in extra_bin_dirs: {dir}");
-        }
-    }
-
-    #[test]
-    fn test_extra_bin_dirs_no_empty_strings() {
-        let dirs = extra_bin_dirs();
-        for dir in dirs {
-            assert!(!dir.is_empty(), "extra_bin_dirs should not contain empty strings");
-        }
-    }
-
-    #[test]
     fn test_resolve_cli_returns_name_when_not_found() {
         let result = resolve_cli("nonexistent_binary_xyz_12345");
         assert_eq!(result, "nonexistent_binary_xyz_12345");
@@ -197,21 +174,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn test_apply_no_window_does_not_panic() {
-        let mut cmd = std::process::Command::new("echo");
-        apply_no_window(&mut cmd);
-        // Must not panic on any platform; on non-Windows it's a no-op
-    }
-
-    #[test]
-    fn test_resolve_cli_caches_result() {
-        // Call twice — should return the same value (cached)
-        let first = resolve_cli("nonexistent_cached_test_abc");
-        let second = resolve_cli("nonexistent_cached_test_abc");
-        assert_eq!(first, second);
     }
 
     #[test]

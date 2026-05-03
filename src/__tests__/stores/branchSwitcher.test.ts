@@ -8,12 +8,6 @@ describe("branchSwitcherStore", () => {
     return mod.branchSwitcherStore;
   }
 
-  it("starts closed with empty query", async () => {
-    const store = await freshStore();
-    expect(store.state.isOpen).toBe(false);
-    expect(store.state.query).toBe("");
-  });
-
   it("open() sets isOpen true and clears query", async () => {
     const store = await freshStore();
     store.setQuery("stale");

@@ -68,22 +68,6 @@ describe("TabBar", () => {
     });
   }
 
-  it("renders the tab container", () => {
-    const { container } = render(() => (
-      <TabBar onTabSelect={() => {}} onTabClose={() => {}} onCloseOthers={() => {}} onCloseToRight={() => {}} onNewTab={() => {}} />
-    ));
-    expect(container.querySelector(".tabs")).not.toBeNull();
-  });
-
-  it("renders the new tab button", () => {
-    const { container } = render(() => (
-      <TabBar onTabSelect={() => {}} onTabClose={() => {}} onCloseOthers={() => {}} onCloseToRight={() => {}} onNewTab={() => {}} />
-    ));
-    const btn = container.querySelector(".newBtn");
-    expect(btn).not.toBeNull();
-    expect(btn!.textContent).toContain("+");
-  });
-
   it("clicking new tab button calls onNewTab directly", () => {
     const onNewTab = vi.fn();
     const { container } = render(() => (

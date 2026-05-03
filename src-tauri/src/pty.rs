@@ -960,6 +960,69 @@ fn emit_active_subtasks(
     }
 }
 
+/// Extract a signal number from portable_pty's signal string.
+/// Format is typically "Killed: 9", "Interrupt: 2", or "Signal 15".
+pub(crate) fn parse_signal_number(sig: &str) -> i32 {
+    sig.rsplit(|c: char| !c.is_ascii_digit())
+        .find(|s| !s.is_empty())
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or(0)
+}
+
+fn parse_osc7_cwd(url: &str) -> Result<String, ()> {
+    let rest = url.strip_prefix("file://").ok_or(())?;
+    let path_start = rest.find('/').ok_or(())?;
+    let raw = &rest[path_start..];
+    if raw.is_empty() {
+        return Err(());
+    }
+    let decoded = percent_decode(raw)?;
+    let path = if decoded.len() > 1 && decoded.ends_with('/') {
+        &decoded[..decoded.len() - 1]
+    } else {
+        &decoded
+    };
+    if !path.starts_with('/') {
+        return Err(());
+    }
+    Ok(path.to_string())
+}
+
+fn percent_decode(s: &str) -> Result<String, ()> {
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = hex_val(bytes[i + 1]).ok_or(())?;
+            let lo = hex_val(bytes[i + 2]).ok_or(())?;
+            out.push(hi << 4 | lo);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).map_err(|_| ())
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn parse_osc133_exit_code(command: char, params: &str) -> Option<i32> {
+    if command == 'D' && !params.is_empty() {
+        params.parse::<i32>().ok()
+    } else {
+        None
+    }
+}
+
 /// Emit an `Inferred` command outcome for shells that don't speak OSC 133.
 /// Called right after a busy→idle transition; no-op once we've ever observed
 /// a marker for this session (shell-integration path is authoritative then).
@@ -1281,101 +1344,84 @@ impl ChunkProcessor {
         }
     }
 
-    /// Drives the OSC 133 state machine. Call once per chunk, before the
-    /// chunk is transformed for display. On `C` captures the command text
-    /// from the input line buffer; on `D(code)` builds a `CommandOutcome`
-    /// and records it into `state.session_knowledge`.
-    fn record_osc133_outcomes(&mut self, data: &str, session_id: &str, state: &AppState) {
+    /// Handle a single OSC 133 event from the VTE handler.
+    /// On 'C' captures the command text; on 'D' builds a `CommandOutcome`.
+    fn handle_osc133_event(&mut self, command: char, params: &str, session_id: &str, state: &AppState) {
         use crate::ai_agent::knowledge::{
-            classify_error, scan_osc133, CommandOutcome, Osc133Marker, OutcomeClass,
-            SessionKnowledge,
+            classify_error, CommandOutcome, OutcomeClass, SessionKnowledge,
         };
 
-        let markers = scan_osc133(data);
-        if markers.is_empty() {
-            return;
-        }
-        state
-            .has_osc133_integration
-            .insert(session_id.to_string(), ());
-
-        for m in markers {
-            match m {
-                Osc133Marker::C => {
-                    let cmd = state
-                        .input_buffers
-                        .get(session_id)
-                        .map(|b| b.lock().content())
-                        .unwrap_or_default();
-                    self.pending_command = Some(cmd);
-                    self.pending_command_started = Some(std::time::Instant::now());
-                }
-                Osc133Marker::D(exit_code) => {
-                    let command = self.pending_command.take().unwrap_or_default();
-                    let duration_ms = self
-                        .pending_command_started
-                        .take()
-                        .map(|t| t.elapsed().as_millis() as u64)
-                        .unwrap_or(0);
-                    // Use cached cwd — avoids sessions.lock() in the reader
-                    // thread (deadlock with write_pty holding that lock during
-                    // blocking kernel write).
-                    let cwd = self.session_cwd.clone().unwrap_or_default();
-                    let output_snippet = state
-                        .vt_log_buffers
-                        .get(session_id)
-                        .map(|b| {
-                            let buf = b.lock();
-                            buf.screen_rows().join("\n")
-                        })
-                        .unwrap_or_default();
-                    let mut tail_start = output_snippet.len().saturating_sub(500);
-                    while tail_start > 0 && !output_snippet.is_char_boundary(tail_start) {
-                        tail_start += 1;
-                    }
-                    let output_snippet = output_snippet[tail_start..].to_string();
-
-                    let classification = if exit_code == 0 {
-                        OutcomeClass::Success
-                    } else if let Some(error_type) = classify_error(&output_snippet) {
-                        OutcomeClass::Error { error_type }
-                    } else {
-                        OutcomeClass::Error {
-                            error_type: "unknown".into(),
-                        }
-                    };
-
-                    let outcome = CommandOutcome {
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0),
-                        command,
-                        cwd,
-                        exit_code: Some(exit_code),
-                        output_snippet,
-                        classification,
-                        duration_ms,
-                        id: 0,
-                        semantic_intent: None,
-                    };
-                    {
-                        let entry = state
-                            .session_knowledge
-                            .entry(session_id.to_string())
-                            .or_insert_with(|| Mutex::new(SessionKnowledge::new()));
-                        entry.lock().terminal_mode = self.terminal_mode.clone();
-                    }
-                    let snapshot = outcome.clone();
-                    let outcome_id = state.record_outcome(session_id, outcome);
-                    // Opt-in AI enrichment: non-blocking enqueue, dropped on
-                    // full queue or disabled setting. Worker assigns
-                    // `semantic_intent` asynchronously.
-                    let mut enriched = snapshot;
-                    enriched.id = outcome_id;
-                    crate::ai_agent::enrichment::try_enqueue_outcome(session_id, &enriched);
-                }
+        match command {
+            'C' => {
+                let cmd = state
+                    .input_buffers
+                    .get(session_id)
+                    .map(|b| b.lock().content())
+                    .unwrap_or_default();
+                self.pending_command = Some(cmd);
+                self.pending_command_started = Some(std::time::Instant::now());
             }
+            'D' => {
+                let exit_code = params.parse::<i32>().unwrap_or(0);
+                let command = self.pending_command.take().unwrap_or_default();
+                let duration_ms = self
+                    .pending_command_started
+                    .take()
+                    .map(|t| t.elapsed().as_millis() as u64)
+                    .unwrap_or(0);
+                let cwd = self.session_cwd.clone().unwrap_or_default();
+                let output_snippet = state
+                    .vt_log_buffers
+                    .get(session_id)
+                    .map(|b| {
+                        let buf = b.lock();
+                        buf.screen_rows().join("\n")
+                    })
+                    .unwrap_or_default();
+                let mut tail_start = output_snippet.len().saturating_sub(500);
+                while tail_start > 0 && !output_snippet.is_char_boundary(tail_start) {
+                    tail_start += 1;
+                }
+                let output_snippet = output_snippet[tail_start..].to_string();
+
+                let classification = if exit_code == 0 {
+                    OutcomeClass::Success
+                } else if let Some(error_type) = classify_error(&output_snippet) {
+                    OutcomeClass::Error { error_type }
+                } else {
+                    OutcomeClass::Error {
+                        error_type: "unknown".into(),
+                    }
+                };
+
+                let outcome = CommandOutcome {
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                    command,
+                    cwd,
+                    exit_code: Some(exit_code),
+                    output_snippet,
+                    classification,
+                    duration_ms,
+                    id: 0,
+                    semantic_intent: None,
+                };
+                {
+                    let entry = state
+                        .session_knowledge
+                        .entry(session_id.to_string())
+                        .or_insert_with(|| Mutex::new(SessionKnowledge::new()));
+                    entry.lock().terminal_mode = self.terminal_mode.clone();
+                }
+                let snapshot = outcome.clone();
+                let outcome_id = state.record_outcome(session_id, outcome);
+                let mut enriched = snapshot;
+                enriched.id = outcome_id;
+                crate::ai_agent::enrichment::try_enqueue_outcome(session_id, &enriched);
+            }
+            _ => {}
         }
     }
 
@@ -1550,19 +1596,15 @@ impl ChunkProcessor {
             return None;
         }
 
-        // Drive OSC 133 shell-integration state machine (command start/end markers).
-        // No-op when the shell has no integration — falls back to busy→idle inferrer.
-        self.record_osc133_outcomes(data, session_id, state);
-
         // Check pending plan files: emit if file appeared, drop if deadline expired.
         self.check_pending_planfiles(session_id, state, app);
 
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
         // Also capture the post-process `total_lines` and `oldest_offset` so
         // we can emit a throttled growth/rotation event for the scrollback overlay.
-        let (changed_rows, osc133_events, vt_log_total, vt_log_oldest, term_events) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
+        let (changed_rows, vt_log_total, vt_log_oldest, term_events) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
-            let (changed, osc133) = vt.process(data.as_bytes());
+            let changed = vt.process(data.as_bytes());
             let total = vt.total_lines();
             let oldest = vt.oldest_offset();
             let tevts = vt.grid_drain_events();
@@ -1583,9 +1625,9 @@ impl ChunkProcessor {
                 changed
             };
 
-            (changed, osc133, Some(total), Some(oldest), tevts)
+            (changed, Some(total), Some(oldest), tevts)
         } else {
-            (Vec::new(), Vec::new(), None, None, Vec::new())
+            (Vec::new(), None, None, Vec::new())
         };
 
         // Emit scrollback-overlay growth/rotation event (throttled to 100ms).
@@ -1616,21 +1658,9 @@ impl ChunkProcessor {
             self.last_vt_log_oldest = new_oldest;
         }
 
-        // Emit OSC 133 shell integration events to frontend
-        if !osc133_events.is_empty()
-            && let Some(a) = app
-        {
-            for evt in &osc133_events {
-                let _ = a.emit(
-                    &format!("pty-osc133-{session_id}"),
-                    evt,
-                );
-            }
-        }
-
-        // Handle terminal events from alacritty (title, clipboard, PTY writes)
+        // Handle terminal events from alacritty (title, clipboard, PTY writes, OSC 133)
         if !term_events.is_empty() {
-            use crate::terminal_grid::TermEvent;
+            use crate::terminal_grid::{TermEvent, Osc133Event};
             for evt in term_events {
                 match evt {
                     TermEvent::PtyWrite(response) => {
@@ -1654,6 +1684,26 @@ impl ChunkProcessor {
                     TermEvent::ClipboardStore(text) => {
                         if let Some(a) = app {
                             let _ = a.emit(&format!("pty-clipboard-store-{session_id}"), &text);
+                        }
+                    }
+                    TermEvent::Osc133 { command, params } => {
+                        state.has_osc133_integration.insert(session_id.to_string(), ());
+                        self.handle_osc133_event(command, &params, session_id, state);
+                        if let Some(a) = app {
+                            let _ = a.emit(
+                                &format!("pty-osc133-{session_id}"),
+                                &Osc133Event { marker: command.to_string(), line: 0, exit_code: parse_osc133_exit_code(command, &params) },
+                            );
+                        }
+                    }
+                    TermEvent::Osc7(url) => {
+                        if let Ok(cwd) = parse_osc7_cwd(&url) {
+                            if let Some(entry) = state.sessions.get(session_id) {
+                                entry.lock().cwd = Some(cwd.clone());
+                            }
+                            if let Some(a) = app {
+                                let _ = a.emit(&format!("pty-cwd-{session_id}"), &cwd);
+                            }
                         }
                     }
                     TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {}
@@ -2117,10 +2167,19 @@ fn push_state_change_to_parent(state: &AppState, session_id: &str, payload: serd
 /// Tombstones are reaped by `spawn_tombstone_sweeper` after `TOMBSTONE_TTL_MS`.
 pub(crate) fn mark_session_exited(session_id: &str, state: &AppState) {
     // Capture exit code before dropping the session entry.
+    // portable_pty::ExitStatus carries both exit_code() and signal().
+    // Signal-killed processes get 128+signum (shell convention) so the
+    // caller can distinguish SIGKILL (137) from normal exit(1).
     if let Some(entry) = state.sessions.get(session_id)
         && let Ok(Some(status)) = entry.value().lock()._child.try_wait()
     {
-        state.exit_codes.insert(session_id.to_string(), status.exit_code() as i32);
+        let code = if let Some(sig) = status.signal() {
+            let signum = parse_signal_number(&sig);
+            128 + signum
+        } else {
+            status.exit_code() as i32
+        };
+        state.exit_codes.insert(session_id.to_string(), code);
     }
     if state.sessions.remove(session_id).is_some() {
         state.metrics.active_sessions.fetch_sub(1, Ordering::Relaxed);
@@ -4089,16 +4148,32 @@ pub(crate) fn terminal_scroll(
 }
 
 #[tauri::command]
+pub(crate) fn terminal_scroll_to(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    line: usize,
+) {
+    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+        let frame = {
+            let mut vt = vt.lock();
+            vt.grid_scroll_to_line(line);
+            vt.serialize_dirty_rows()
+        };
+        send_grid_frame(&state, &session_id, frame);
+    }
+}
+
+#[tauri::command]
 pub(crate) fn terminal_scroll_info(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> (usize, usize) {
+) -> (usize, usize, usize) {
     state.vt_log_buffers.get(&session_id)
         .map(|vt| {
             let vt = vt.lock();
-            (vt.grid_display_offset(), vt.grid_total_lines())
+            (vt.grid_display_offset(), vt.grid_total_lines(), vt.grid_screen_lines())
         })
-        .unwrap_or((0, 0))
+        .unwrap_or((0, 0, 0))
 }
 
 // --- Search command ---
@@ -4141,6 +4216,34 @@ pub(crate) fn terminal_hyperlink_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_parse_signal_number_killed() {
+        assert_eq!(parse_signal_number("Killed: 9"), 9);
+    }
+
+    #[test]
+    fn test_parse_signal_number_interrupt() {
+        assert_eq!(parse_signal_number("Interrupt: 2"), 2);
+    }
+
+    #[test]
+    fn test_parse_signal_number_format_variant() {
+        assert_eq!(parse_signal_number("Signal 15"), 15);
+    }
+
+    #[test]
+    fn test_parse_signal_number_unknown() {
+        assert_eq!(parse_signal_number("unknown signal"), 0);
+    }
+
+    #[test]
+    fn test_parse_osc133_exit_code() {
+        assert_eq!(parse_osc133_exit_code('D', "0"), Some(0));
+        assert_eq!(parse_osc133_exit_code('D', "127"), Some(127));
+        assert_eq!(parse_osc133_exit_code('D', ""), None);
+        assert_eq!(parse_osc133_exit_code('A', "0"), None);
+    }
 
     #[test]
     fn test_classify_agent_claude() {
@@ -5526,7 +5629,7 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let mut parser = OutputParser::new();
 
-        let (changed, _) = vt_log.process(b"* Reading files...");
+        let changed = vt_log.process(b"* Reading files...");
         let events = parser.parse_clean_lines(&changed, true);
         assert!(
             events.iter().any(|e| matches!(e, ParsedEvent::StatusLine { .. })),
@@ -5546,7 +5649,7 @@ mod tests {
 
         // Enter alternate screen (smcup: ESC[?1049h)
         let _ = vt_log.process(b"\x1b[?1049h");
-        let (changed, _) = vt_log.process(b"intent: Doing work (Test)");
+        let changed = vt_log.process(b"intent: Doing work (Test)");
         let events = parser.parse_clean_lines(&changed, true);
         assert!(
             events.iter().any(|e| matches!(e, ParsedEvent::Intent { .. })),
@@ -5573,7 +5676,7 @@ mod tests {
         use crate::state::VtLogBuffer;
 
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
-        let (changed, _) = vt_log.process(b"Would you like to proceed?");
+        let changed = vt_log.process(b"Would you like to proceed?");
         assert_eq!(extract_question_line(&changed).as_deref(), Some("Would you like to proceed?"));
     }
 
@@ -5585,7 +5688,7 @@ mod tests {
 
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let data = b"Le committo?\r\n\r\n\xe2\x8f\xb5\xe2\x8f\xb5 Reading files";
-        let (changed, _) = vt_log.process(data);
+        let changed = vt_log.process(data);
         assert_eq!(extract_question_line(&changed).as_deref(), Some("Le committo?"),
             "question must be found even when mode line is on a later row; changed_rows: {:?}",
             changed.iter().map(|r| format!("[{}] {:?}", r.row_index, &r.text)).collect::<Vec<_>>()
@@ -5600,7 +5703,7 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let _ = vt_log.process(b"\x1b[?1049h");
         let data = b"\x1b[5;1HDo you want to proceed?\x1b[23;1H* Thinking...";
-        let (changed, _) = vt_log.process(data);
+        let changed = vt_log.process(data);
         assert_eq!(extract_question_line(&changed).as_deref(), Some("Do you want to proceed?"),
             "question must be found in alternate screen; changed_rows: {:?}",
             changed.iter().map(|r| format!("[{}] {:?}", r.row_index, &r.text)).collect::<Vec<_>>()
@@ -5616,7 +5719,7 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let mut silence = SilenceState::new();
 
-        let (changed, _) = vt_log.process(b"Le committo?\r\n\r\n\xe2\x8f\xb5\xe2\x8f\xb5 Reading files");
+        let changed = vt_log.process(b"Le committo?\r\n\r\n\xe2\x8f\xb5\xe2\x8f\xb5 Reading files");
         silence.on_chunk(false, extract_question_line(&changed), false, false, false);
 
         assert_eq!(silence.pending_question_line.as_deref(), Some("Le committo?"));
@@ -5634,11 +5737,11 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let mut silence = SilenceState::new();
 
-        let (changed, _) = vt_log.process(b"Le committo?");
+        let changed = vt_log.process(b"Le committo?");
         silence.on_chunk(false, extract_question_line(&changed), false, false, false);
 
         // Mode line / prompt decoration arrives in a separate chunk
-        let (changed, _) = vt_log.process(b"\r\n\xe2\x8f\xb5\xe2\x8f\xb5 Idle");
+        let changed = vt_log.process(b"\r\n\xe2\x8f\xb5\xe2\x8f\xb5 Idle");
         silence.on_chunk(false, extract_question_line(&changed), false, false, false);
 
         // 10s silence → fires
@@ -5658,7 +5761,7 @@ mod tests {
         let mut vt_log = VtLogBuffer::new(24, 80, 1000);
         let mut parser = OutputParser::new();
 
-        let (changed, _) = vt_log.process(b"intent: Testing headless reader");
+        let changed = vt_log.process(b"intent: Testing headless reader");
         let events = parser.parse_clean_lines(&changed, true);
 
         assert!(
@@ -5677,7 +5780,7 @@ mod tests {
         let mut parser = OutputParser::new();
 
         let _ = vt_log.process(b"\x1b[?1049h"); // enter alternate screen
-        let (changed, _) = vt_log.process(b"* Reading files...");
+        let changed = vt_log.process(b"* Reading files...");
         let events = parser.parse_clean_lines(&changed, true);
 
         assert!(
@@ -5735,7 +5838,7 @@ mod tests {
         let _ = vt_log.process(b"\x1b[?1049h");  // alternate screen
         let _ = vt_log.process(b"placeholder text\r\n");
         // Ink update: go up, clear line, write intent
-        let (changed, _) = vt_log.process(
+        let changed = vt_log.process(
             b"\x1b[1F\x1b[2Kintent: Fix all 34 documentation gaps (Fixing gaps)"
         );
         let events = parser.parse_clean_lines(&changed, true);
@@ -5763,9 +5866,9 @@ mod tests {
         let _ = vt_log.process(b"old line\r\n");
 
         // Chunk 1: partial CSI (just the introducer)
-        let (changed1, _) = vt_log.process(b"\x1b[");
+        let changed1 = vt_log.process(b"\x1b[");
         // Chunk 2: parameter + final byte completing CPL, then text
-        let (changed2, _) = vt_log.process(b"1Fintent: Fix all gaps");
+        let changed2 = vt_log.process(b"1Fintent: Fix all gaps");
 
         // Check that no row contains literal "1F" as text
         for row in changed1.iter().chain(changed2.iter()) {
@@ -5823,7 +5926,7 @@ mod tests {
 
         // Frame 2: Ink updates — cursor up, erase line, rewrite
         // This is how Ink typically does incremental updates
-        let (changed, _) = vt_log.process(
+        let changed = vt_log.process(
             b"\x1b[1F\x1b[2K\x1b[38;2;128;128;128m\xe2\x97\x8f\x1b[0m \x1b[1mintent: Fix all 34 documentation gaps (Fixing gaps)\x1b[0m"
         );
 
@@ -5869,7 +5972,7 @@ mod tests {
 
         let mut all_changed = Vec::new();
         for frag in fragments {
-            let (changed, _) = vt_log.process(frag);
+            let changed = vt_log.process(frag);
             all_changed.extend(changed);
         }
 

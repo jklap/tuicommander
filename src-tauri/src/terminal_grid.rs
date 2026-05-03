@@ -21,6 +21,8 @@ pub enum TermEvent {
     PtyWrite(String),
     MouseCursorDirty,
     CursorBlinkingChange,
+    Osc133 { command: char, params: String },
+    Osc7(String),
 }
 
 #[derive(Clone)]
@@ -39,6 +41,8 @@ impl EventListener for TermEventCollector {
             Event::PtyWrite(s) => { self.events.lock().unwrap().push(TermEvent::PtyWrite(s)); }
             Event::MouseCursorDirty => { self.events.lock().unwrap().push(TermEvent::MouseCursorDirty); }
             Event::CursorBlinkingChange => { self.events.lock().unwrap().push(TermEvent::CursorBlinkingChange); }
+            Event::Osc133 { command, params } => { self.events.lock().unwrap().push(TermEvent::Osc133 { command, params }); }
+            Event::Osc7(url) => { self.events.lock().unwrap().push(TermEvent::Osc7(url)); }
             Event::ClipboardLoad(..) | Event::ColorRequest(..) | Event::TextAreaSizeRequest(..)
             | Event::Wakeup | Event::Exit | Event::ChildExit(_) => {}
         }
@@ -196,9 +200,9 @@ impl TerminalGrid {
 
     /// Feed raw PTY bytes into the terminal emulator.
     ///
-    /// Returns changed rows and any OSC 133 events found in the data.
-    pub fn process(&mut self, data: &[u8]) -> (Vec<ChangedRow>, Vec<Osc133Event>) {
-        let osc_events = Self::extract_osc133(data);
+    /// Returns changed rows. OSC 133 events are delivered via `drain_events()`
+    /// as `TermEvent::Osc133` (parsed natively by the patched VTE handler).
+    pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
         self.processor.advance(&mut self.term, data);
 
         let curr_rows = self.read_screen_text();
@@ -221,14 +225,7 @@ impl TerminalGrid {
 
         self.prev_rows = curr_rows;
 
-        // Fill in cursor line for OSC 133 events (after processing so cursor is up-to-date)
-        let cursor_line = self.term.grid().cursor.point.line.0.max(0) as usize;
-        let osc_events: Vec<Osc133Event> = osc_events.into_iter().map(|mut e| {
-            e.line = cursor_line;
-            e
-        }).collect();
-
-        (changed, osc_events)
+        changed
     }
 
     /// Returns plain text snapshot of all visible screen rows (trimmed).
@@ -276,7 +273,6 @@ impl TerminalGrid {
     }
 
     /// Number of visible screen rows.
-    #[cfg(test)]
     pub fn screen_lines(&self) -> usize {
         self.term.grid().screen_lines()
     }
@@ -598,6 +594,19 @@ impl TerminalGrid {
         self.term.grid().display_offset()
     }
 
+    /// Scroll to an absolute line index (0 = top of scrollback history).
+    /// Clamps to valid range.
+    pub fn scroll_to_line(&mut self, line: usize) {
+        let history = self.term.grid().history_size();
+        let target_offset = history.saturating_sub(line);
+        let current = self.term.grid().display_offset();
+        let delta = target_offset as i32 - current as i32;
+        if delta != 0 {
+            self.term.scroll_display(Scroll::Delta(delta));
+            self.term.mark_fully_damaged();
+        }
+    }
+
     /// Total number of lines (screen + scrollback history).
     pub fn total_lines(&self) -> usize {
         self.term.grid().history_size() + self.term.grid().screen_lines()
@@ -826,40 +835,9 @@ impl TerminalGrid {
         Some(text.trim_end().to_string())
     }
 
-    /// Scan raw PTY bytes for OSC 133 sequences (shell integration markers).
-    /// Pattern: ESC ] 133 ; <marker> [; params] BEL  or  ESC ] 133 ; <marker> [; params] ESC \
-    fn extract_osc133(data: &[u8]) -> Vec<Osc133Event> {
-        let mut events = Vec::new();
-        let prefix = b"\x1b]133;";
-        let mut i = 0;
-        while i + prefix.len() < data.len() {
-            if data[i..].starts_with(prefix) {
-                let start = i + prefix.len();
-                // Find terminator: BEL (\x07) or ST (\x1b\\)
-                let mut end = start;
-                while end < data.len() {
-                    if data[end] == 0x07 { break; }
-                    if end + 1 < data.len() && data[end] == 0x1b && data[end + 1] == b'\\' { break; }
-                    end += 1;
-                }
-                if end > start {
-                    let payload = &data[start..end];
-                    let marker = (payload[0] as char).to_string();
-                    let exit_code = if marker == "D" && payload.len() > 2 && payload[1] == b';' {
-                        std::str::from_utf8(&payload[2..]).ok().and_then(|s| s.parse::<i32>().ok())
-                    } else {
-                        None
-                    };
-                    if "ABCD".contains(&marker) {
-                        events.push(Osc133Event { marker, line: 0, exit_code });
-                    }
-                }
-                i = end + 1;
-            } else {
-                i += 1;
-            }
-        }
-        events
+    #[cfg(test)]
+    pub(crate) fn term(&self) -> &Term<TermEventCollector> {
+        &self.term
     }
 }
 
@@ -879,7 +857,7 @@ mod tests {
     #[test]
     fn process_simple_text() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
-        let (changed, _) = grid.process(b"hello world");
+        let changed = grid.process(b"hello world");
         assert!(!changed.is_empty());
         let first = &changed[0];
         assert_eq!(first.row_index, 0);
@@ -890,7 +868,7 @@ mod tests {
     fn process_returns_empty_on_no_change() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         let _ = grid.process(b"hello");
-        let (changed, _) = grid.process(b"");
+        let changed = grid.process(b"");
         assert!(changed.is_empty());
     }
 
@@ -958,7 +936,7 @@ mod tests {
         let mut grid = TerminalGrid::new(5, 20, 100);
         let _ = grid.process(b"hello");
         // Move cursor to beginning of line and overwrite
-        let (changed, _) = grid.process(b"\rworld");
+        let changed = grid.process(b"\rworld");
         assert!(!changed.is_empty());
         assert_eq!(changed[0].text, "world");
     }
@@ -1264,6 +1242,32 @@ mod tests {
         assert_eq!(grid.display_offset(), 2);
     }
 
+    #[test]
+    fn scroll_to_line_absolute() {
+        let mut grid = TerminalGrid::new(3, 20, 100);
+        // 5 lines into a 3-row screen → 2 lines in history
+        let _ = grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        assert_eq!(grid.display_offset(), 0);
+
+        // Scroll to top of history (line 0)
+        grid.scroll_to_line(0);
+        assert_eq!(grid.display_offset(), 2);
+
+        // Scroll to line 1
+        grid.scroll_to_line(1);
+        assert_eq!(grid.display_offset(), 1);
+
+        // Scroll to bottom (line beyond history)
+        grid.scroll_to_line(100);
+        assert_eq!(grid.display_offset(), 0);
+
+        // Scroll to line 0 again, then back to bottom via scroll_to_line(2)
+        grid.scroll_to_line(0);
+        assert_eq!(grid.display_offset(), 2);
+        grid.scroll_to_line(2);
+        assert_eq!(grid.display_offset(), 0);
+    }
+
     // --- Row text tests ---
 
     #[test]
@@ -1322,5 +1326,97 @@ mod tests {
         let grid = TerminalGrid::new(5, 20, 0);
         let text = grid.get_row_text(999);
         assert_eq!(text, "");
+    }
+
+    #[test]
+    fn osc133_a_emits_event_via_drain() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]133;A\x07");
+        let events = grid.drain_events();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            TermEvent::Osc133 { command, .. } => assert_eq!(*command, 'A'),
+            other => panic!("expected Osc133, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn osc133_d_with_exit_code() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]133;D;42\x07");
+        let events = grid.drain_events();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            TermEvent::Osc133 { command, params } => {
+                assert_eq!(*command, 'D');
+                assert_eq!(params, "42");
+            }
+            other => panic!("expected Osc133, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn osc133_multiple_markers_in_one_chunk() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]133;A\x07prompt$ \x1b]133;B\x07ls\x1b]133;C\x07");
+        let events = grid.drain_events();
+        assert_eq!(events.len(), 3);
+        let commands: Vec<char> = events.iter().map(|e| match e {
+            TermEvent::Osc133 { command, .. } => *command,
+            _ => panic!("unexpected event"),
+        }).collect();
+        assert_eq!(commands, vec!['A', 'B', 'C']);
+    }
+
+    #[test]
+    fn osc133_st_terminator() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]133;D;0\x1b\\");
+        let events = grid.drain_events();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            TermEvent::Osc133 { command, params } => {
+                assert_eq!(*command, 'D');
+                assert_eq!(params, "0");
+            }
+            other => panic!("expected Osc133, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn osc133_cell_type_tagging() {
+        use alacritty_terminal::term::cell::Osc133CellType;
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        // Write prompt text after A marker
+        grid.process(b"\x1b]133;A\x07$ ");
+        // Write command text after B marker
+        grid.process(b"\x1b]133;B\x07ls -la");
+        // Write output after C marker
+        grid.process(b"\x1b]133;C\x07file1.txt\r\nfile2.txt");
+
+        // Check cell types via the grid
+        let row0 = grid.get_row_text(0);
+        assert!(row0.contains("$"), "row0 should contain prompt: {row0}");
+
+        // Access the term to verify cell_type on cells
+        let term = grid.term();
+        let grid_ref = term.grid();
+        // Row 0 should start with Prompt cells (from A marker), then Input cells (from B)
+        let cell_0_0 = &grid_ref[alacritty_terminal::index::Line(0)][alacritty_terminal::index::Column(0)];
+        assert_eq!(cell_0_0.cell_type, Osc133CellType::Prompt);
+
+        // After "B" marker, cells should be Input
+        // "$ " is 2 chars (Prompt), then "ls -la" is 6 chars (Input)
+        let cell_0_2 = &grid_ref[alacritty_terminal::index::Line(0)][alacritty_terminal::index::Column(2)];
+        assert_eq!(cell_0_2.cell_type, Osc133CellType::Input);
+    }
+
+    #[test]
+    fn osc133_no_events_for_plain_text() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"hello world");
+        let events = grid.drain_events();
+        let osc_events: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Osc133 { .. })).collect();
+        assert!(osc_events.is_empty());
     }
 }

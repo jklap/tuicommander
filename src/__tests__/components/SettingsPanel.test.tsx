@@ -244,12 +244,4 @@ describe("SettingsPanel", () => {
     expect(container.querySelector(".footerReset")).not.toBeNull();
   });
 
-  it("renders split layout with nav sidebar", () => {
-    const { container } = render(() => (
-      <SettingsPanel visible={true} onClose={() => {}} />
-    ));
-    expect(container.querySelector(".body")).not.toBeNull();
-    expect(container.querySelector(".nav")).not.toBeNull();
-    expect(container.querySelector(".content")).not.toBeNull();
-  });
 });

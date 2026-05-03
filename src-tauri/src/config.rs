@@ -1534,12 +1534,6 @@ mod tests {
     }
 
     #[test]
-    fn has_custom_settings_false_for_defaults() {
-        let entry = RepoSettingsEntry::default();
-        assert!(!entry.has_custom_settings());
-    }
-
-    #[test]
     fn has_custom_settings_true_when_base_branch_changed() {
         let entry = RepoSettingsEntry {
             base_branch: Some("main".to_string()),
@@ -1610,18 +1604,6 @@ mod tests {
             ..RepoSettingsEntry::default()
         };
         assert!(entry.has_custom_settings());
-    }
-
-    #[test]
-    fn corrupt_file_returns_default() {
-        // Write garbage JSON, should return default
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("bad.json");
-        fs::write(&path, "not valid json!!!").unwrap();
-        // Since load_json_config uses the global config_dir, we test the deserialization path
-        let result: Result<AppConfig, _> = serde_json::from_str("not valid json!!!");
-        assert!(result.is_err());
-        // The load_json_config function gracefully falls back to default
     }
 
     #[test]

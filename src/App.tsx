@@ -1256,10 +1256,11 @@ const App: Component = () => {
         await win.unminimize();
         await win.setFocus();
       } else {
+        appLogger.info("terminal", `Floating window ${windowLabel} gone, reattaching ${tabId}`);
         reattachFallback(tabId);
       }
     } catch (err) {
-      appLogger.warn("terminal", `Floating window ${windowLabel} not found, reattaching`, err);
+      appLogger.warn("terminal", `Error focusing floating window ${windowLabel}, reattaching`, err);
       reattachFallback(tabId);
     }
   };
@@ -1288,10 +1289,14 @@ const App: Component = () => {
       const { tabId } = event.payload;
       reattachFallback(tabId);
       setStatusInfo("Tab reattached");
-      // Force fit after the pane becomes visible again — the xterm canvas
-      // may have lost its WebGL context while hidden with display:none.
+      // Force refresh after the pane becomes visible again — the terminal
+      // canvas may have lost its rendering context while hidden with display:none.
       setTimeout(() => {
-        terminalsStore.get(tabId)?.ref?.fit();
+        const ref = terminalsStore.get(tabId)?.ref;
+        if (ref) {
+          ref.refresh();
+          ref.fit();
+        }
       }, 150);
     }).then((fn) => { unlisten = fn; }).catch((err) => appLogger.error("terminal", "Failed to listen for reattach events", err));
 
