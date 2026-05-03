@@ -1,19 +1,5 @@
 // Shared types for TUICommander
 
-import type { Terminal } from "@xterm/xterm";
-import type { FitAddon } from "@xterm/addon-fit";
-
-/** Terminal pane instance */
-export interface TerminalPane {
-  id: string;
-  sessionId: string | null;
-  terminal: Terminal;
-  fitAddon: FitAddon;
-  element: HTMLElement;
-  fontSize: number;
-  name: string;
-}
-
 /** PTY output event from Tauri */
 export interface PtyOutput {
   session_id: string;

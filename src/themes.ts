@@ -1,9 +1,18 @@
-import type { ITheme } from "@xterm/xterm";
 import { FONT_FAMILIES, type FontType } from "./stores/settings";
 import { appLogger } from "./stores/appLogger";
 
+/** Terminal color theme (mirrors xterm.js ITheme keys used by CanvasTerminal) */
+export interface TerminalTheme {
+  background?: string; foreground?: string; cursor?: string; cursorAccent?: string;
+  selectionBackground?: string; selectionForeground?: string; selectionInactiveBackground?: string;
+  black?: string; red?: string; green?: string; yellow?: string;
+  blue?: string; magenta?: string; cyan?: string; white?: string;
+  brightBlack?: string; brightRed?: string; brightGreen?: string; brightYellow?: string;
+  brightBlue?: string; brightMagenta?: string; brightCyan?: string; brightWhite?: string;
+}
+
 /** Available terminal color themes */
-export const TERMINAL_THEMES: Record<string, ITheme> = {
+export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
   "commander": {
     background: "#1e1e1e",
     foreground: "#d4d4d4",
@@ -299,7 +308,7 @@ export const THEME_NAMES: Record<string, string> = {
 };
 
 /** Get a theme by key, falling back to vscode-dark */
-export function getTerminalTheme(key: string): ITheme {
+export function getTerminalTheme(key: string): TerminalTheme {
   return TERMINAL_THEMES[key] ?? TERMINAL_THEMES["vscode-dark"];
 }
 
@@ -596,7 +605,7 @@ export function applyFontFamily(font: FontType): void {
   tag.textContent = `* { --font-mono: ${family} !important; }`;
 }
 
-const ANSI_KEYS: readonly (keyof ITheme)[] = [
+const ANSI_KEYS: readonly (keyof TerminalTheme)[] = [
   "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
   "brightBlack", "brightRed", "brightGreen", "brightYellow",
   "brightBlue", "brightMagenta", "brightCyan", "brightWhite",

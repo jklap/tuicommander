@@ -72,7 +72,7 @@ export const HelpPanel: Component<HelpPanelProps> = (props) => {
                 <div class={s.section}>
                   <h3 class={s.sectionTitle}>{t("helpPanel.aboutApp", "TUICommander")}</h3>
                   <p class={s.desc}>
-                    {t("helpPanel.appDescription", "A modern terminal multiplexer and Git worktree manager built with Tauri, SolidJS, and xterm.js.")}
+                    {t("helpPanel.appDescription", "A modern terminal multiplexer and Git worktree manager built with Tauri, SolidJS, and Alacritty.")}
                   </p>
                 </div>
 
@@ -127,7 +127,7 @@ export const HelpPanel: Component<HelpPanelProps> = (props) => {
                 </div>
 
                 <div class={s.section}>
-                  <p class={s.menuNote}>MIT License &middot; Tauri 2 &middot; SolidJS &middot; xterm.js &middot; Rust</p>
+                  <p class={s.menuNote}>MIT License &middot; Tauri 2 &middot; SolidJS &middot; Alacritty &middot; Rust</p>
                   <p class={s.menuNote}>&copy; 2026 Stefano Straus</p>
                   <p class={s.menuNote}>
                     {t("helpPanel.version", "Version")} {__APP_VERSION__}

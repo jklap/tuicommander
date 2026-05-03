@@ -6,7 +6,6 @@ import { appLogger } from "./stores/appLogger";
 import { initDebugGlobals } from "./debugGlobals";
 import "./global.css";
 import "./styles.css";
-import "@xterm/xterm/css/xterm.css";
 
 // Expose debug globals for MCP eval_js introspection (works in dev and release)
 initDebugGlobals();
