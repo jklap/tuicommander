@@ -5,7 +5,6 @@ import { NotesPanel } from "./NotesPanel";
 import { GitPanel } from "./GitPanel/GitPanel";
 import { AIChatPanel } from "./AIChatPanel";
 import { AiTriagePanel } from "./AiTriagePanel";
-import { DetachedPlaceholder } from "./DetachedPlaceholder";
 import { diffTabsStore } from "../stores/diffTabs";
 import { uiStore } from "../stores/ui";
 import { terminalsStore } from "../stores/terminals";
@@ -22,10 +21,7 @@ export interface PanelOrchestratorProps {
 export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
   return (
     <>
-      <Show
-        when={!uiStore.isDetached("file-browser")}
-        fallback={<DetachedPlaceholder panel="File Browser" panelId="file-browser" />}
-      >
+      <Show when={!uiStore.isDetached("file-browser")}>
         <FileBrowserPanel
           visible={uiStore.state.fileBrowserPanelVisible && !globalWorkspaceStore.isActive()}
           repoPath={props.repoPath}
@@ -35,10 +31,7 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
         />
       </Show>
 
-      <Show
-        when={!uiStore.isDetached("markdown")}
-        fallback={<DetachedPlaceholder panel="Markdown" panelId="markdown" />}
-      >
+      <Show when={!uiStore.isDetached("markdown")}>
         <MarkdownPanel
           visible={uiStore.state.markdownPanelVisible}
           repoPath={props.repoPath}
@@ -47,10 +40,7 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
         />
       </Show>
 
-      <Show
-        when={!uiStore.isDetached("notes")}
-        fallback={<DetachedPlaceholder panel="Notes" panelId="notes" />}
-      >
+      <Show when={!uiStore.isDetached("notes")}>
         <NotesPanel
           visible={uiStore.state.notesPanelVisible}
           repoPath={props.repoPath}
@@ -65,10 +55,7 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
         />
       </Show>
 
-      <Show
-        when={!uiStore.isDetached("git")}
-        fallback={<DetachedPlaceholder panel="Git" panelId="git" />}
-      >
+      <Show when={!uiStore.isDetached("git")}>
         <GitPanel
           visible={uiStore.state.gitPanelVisible && !globalWorkspaceStore.isActive()}
           repoPath={props.repoPath}

@@ -2174,7 +2174,7 @@ pub(crate) fn mark_session_exited(session_id: &str, state: &AppState) {
         && let Ok(Some(status)) = entry.value().lock()._child.try_wait()
     {
         let code = if let Some(sig) = status.signal() {
-            let signum = parse_signal_number(&sig);
+            let signum = parse_signal_number(sig);
             128 + signum
         } else {
             status.exit_code() as i32

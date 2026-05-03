@@ -36,7 +36,7 @@ export const notesPanelAdapter: PanelAdapter = {
   defaultSize: { width: 450, height: 600 },
   toggle: () => uiStore.toggleNotesPanel(),
   onDetach: () => uiStore.setNotesPanelVisible(false),
-  detachParams: () => {
+  detachParams: (): Record<string, string> => {
     const repoPath = repositoriesStore.state.activeRepoPath;
     return repoPath ? { repoPath } : {};
   },

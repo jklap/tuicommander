@@ -5,7 +5,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { appLogger } from "../../stores/appLogger";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { ContextMenu, createContextMenu, type ContextMenuItem } from "../ContextMenu";
-import { getModifierSymbol, shortenHomePath } from "../../platform";
+import { shortenHomePath } from "../../platform";
 import { globToRegex } from "../../utils";
 import { pathBasename, pathDirname } from "../../utils/pathUtils";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";

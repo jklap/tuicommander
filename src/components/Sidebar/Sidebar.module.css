@@ -44,7 +44,9 @@
 }
 
 .footer {
-  padding: 4px 6px;
+  height: var(--status-height);
+  min-height: var(--status-height);
+  padding: 0 6px;
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: row;
@@ -57,7 +59,7 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 7px 8px;
+  padding: 5px 8px;
   background: transparent;
   border: none;
   border-radius: var(--radius-md);
@@ -86,8 +88,8 @@
 }
 
 .footerAction {
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -671,7 +673,9 @@
 
 /* ── Git Quick Actions ── */
 .gitQuickActions {
-  padding: 4px 6px;
+  height: var(--status-height);
+  min-height: var(--status-height);
+  padding: 0 6px;
   border-top: 1px solid var(--border);
   display: flex;
   flex-direction: row;

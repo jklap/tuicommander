@@ -872,7 +872,7 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                 match entry.lock()._child.try_wait() {
                     Ok(Some(status)) => {
                         let code = if let Some(sig) = status.signal() {
-                            128 + crate::pty::parse_signal_number(&sig) as i64
+                            128 + crate::pty::parse_signal_number(sig) as i64
                         } else {
                             status.exit_code() as i64
                         };

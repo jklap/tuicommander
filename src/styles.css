@@ -209,8 +209,9 @@
 .terminal-pane {
   position: absolute;
   inset: 0;
-  padding: 8px;
+  padding: 5px;
   display: none;
+  background: var(--bg-secondary);
 }
 
 .terminal-pane.active {

@@ -3,7 +3,6 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { notesStore, generateId } from "../../stores/notes";
 import { invoke } from "../../invoke";
 import { repositoriesStore } from "../../stores/repositories";
-import { getModifierSymbol } from "../../platform";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import { PanelWindowControls } from "../ui/PanelWindowControls";
 import { t } from "../../i18n";
