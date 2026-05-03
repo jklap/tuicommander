@@ -51,6 +51,7 @@ export interface CanvasTerminalProps {
   onResumeDismiss?: () => void;
   hasPendingResume?: boolean;
   onCwdChange?: (id: string, cwd: string) => void;
+  onFocus?: () => void;
   onRef?: (ref: CanvasTerminalRef) => void;
   onBell?: () => void;
 }
@@ -735,7 +736,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
     dprMediaQuery.addEventListener("change", dprChangeHandler);
 
-    canvasRef.addEventListener("focus", () => { setFocused(true); startBlink(); });
+    canvasRef.addEventListener("focus", () => { setFocused(true); startBlink(); props.onFocus?.(); });
     canvasRef.addEventListener("blur", () => { setFocused(false); stopBlink(); repaintCursorIfNeeded(); });
 
     // --- Keyboard ---
