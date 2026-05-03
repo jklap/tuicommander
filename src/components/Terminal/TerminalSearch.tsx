@@ -1,22 +1,10 @@
-import { Component, createEffect, createSignal, onCleanup } from "solid-js";
-import type { SearchAddon, ISearchOptions, ISearchResultChangeEvent } from "@xterm/addon-search";
+import { Component, createEffect, createSignal } from "solid-js";
 import type { SearchOptions } from "../shared/DomSearchEngine";
 import type { CanvasTerminalRef } from "./CanvasTerminal";
 import { SearchBar } from "../shared/SearchBar";
 
-/** Decoration colors for search highlights (dark theme) */
-const DECORATIONS = {
-  matchBackground: "#ffff0040",
-  matchBorder: "transparent",
-  matchOverviewRuler: "#ffff00",
-  activeMatchBackground: "#ff8c00b0",
-  activeMatchBorder: "#ff8c00",
-  activeMatchColorOverviewRuler: "#ff8c00",
-} as const;
-
 export interface TerminalSearchProps {
   visible: boolean;
-  searchAddon?: SearchAddon | undefined;
   canvasRef?: CanvasTerminalRef | undefined;
   onClose: () => void;
 }
@@ -26,67 +14,25 @@ export const TerminalSearch: Component<TerminalSearchProps> = (props) => {
   const [resultCount, setResultCount] = createSignal(0);
 
   let lastTerm = "";
-  let lastOpts: ISearchOptions = { incremental: true, decorations: DECORATIONS };
-  let resultsListener: { dispose: () => void } | undefined;
-
-  // Subscribe to result count changes when addon is available
-  createEffect(() => {
-    resultsListener?.dispose();
-    const addon = props.searchAddon;
-    if (!addon) return;
-
-    resultsListener = addon.onDidChangeResults((e: ISearchResultChangeEvent) => {
-      setResultIndex(e.resultIndex);
-      setResultCount(e.resultCount);
-    });
-
-    onCleanup(() => {
-      resultsListener?.dispose();
-      resultsListener = undefined;
-    });
-  });
 
   // Clear decorations when closing
   createEffect(() => {
     if (!props.visible) {
-      if (props.canvasRef) {
-        props.canvasRef.searchClear();
-      } else {
-        props.searchAddon?.clearDecorations();
-      }
+      props.canvasRef?.searchClear();
       setResultIndex(-1);
       setResultCount(0);
     }
   });
 
-  const buildXtermOpts = (opts: SearchOptions): ISearchOptions => ({
-    caseSensitive: opts.caseSensitive,
-    regex: opts.regex,
-    wholeWord: opts.wholeWord,
-    incremental: true,
-    decorations: DECORATIONS,
-  });
-
-  const handleSearch = (term: string, opts: SearchOptions) => {
+  const handleSearch = (term: string, _opts: SearchOptions) => {
     lastTerm = term;
-    if (props.canvasRef) {
-      if (term) {
-        props.canvasRef.searchFind(term).then(({ index, count }) => {
-          setResultIndex(index);
-          setResultCount(count);
-        });
-      } else {
-        props.canvasRef.searchClear();
-        setResultIndex(-1);
-        setResultCount(0);
-      }
-      return;
-    }
-    lastOpts = buildXtermOpts(opts);
-    if (term && props.searchAddon) {
-      props.searchAddon.findNext(term, lastOpts);
-    } else if (!term) {
-      props.searchAddon?.clearDecorations();
+    if (term) {
+      props.canvasRef?.searchFind(term).then(({ index, count }) => {
+        setResultIndex(index);
+        setResultCount(count);
+      });
+    } else {
+      props.canvasRef?.searchClear();
       setResultIndex(-1);
       setResultCount(0);
     }
@@ -94,28 +40,16 @@ export const TerminalSearch: Component<TerminalSearchProps> = (props) => {
 
   const handleNext = () => {
     if (!lastTerm) return;
-    if (props.canvasRef) {
-      const { index, count } = props.canvasRef.searchNext();
-      setResultIndex(index);
-      setResultCount(count);
-      return;
-    }
-    if (props.searchAddon) {
-      props.searchAddon.findNext(lastTerm, lastOpts);
-    }
+    const { index, count } = props.canvasRef?.searchNext() ?? { index: -1, count: 0 };
+    setResultIndex(index);
+    setResultCount(count);
   };
 
   const handlePrev = () => {
     if (!lastTerm) return;
-    if (props.canvasRef) {
-      const { index, count } = props.canvasRef.searchPrev();
-      setResultIndex(index);
-      setResultCount(count);
-      return;
-    }
-    if (props.searchAddon) {
-      props.searchAddon.findPrevious(lastTerm, lastOpts);
-    }
+    const { index, count } = props.canvasRef?.searchPrev() ?? { index: -1, count: 0 };
+    setResultIndex(index);
+    setResultCount(count);
   };
 
   return (
