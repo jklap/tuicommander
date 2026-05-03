@@ -102,15 +102,11 @@ function rasterize(
   const x = nextX;
   const y = nextY;
 
-  atlasCtx.save();
-  atlasCtx.beginPath();
-  atlasCtx.rect(x, y, w, h);
-  atlasCtx.clip();
+  atlasCtx.clearRect(x, y, slot, h);
   atlasCtx.font = fontStyle;
   atlasCtx.fillStyle = fgColor;
   atlasCtx.textBaseline = "alphabetic";
   atlasCtx.fillText(char, x, y + m.baseline * m.dpr);
-  atlasCtx.restore();
 
   nextX += slot;
   return { x, y, w, h };
