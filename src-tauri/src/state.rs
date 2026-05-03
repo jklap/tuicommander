@@ -891,6 +891,9 @@ pub struct AppState {
     /// Active Tauri Channel subscriptions for binary grid streaming (session_id → channel).
     /// Frontend calls `subscribe_terminal_grid` to register; channel is dropped on session exit.
     pub(crate) grid_channels: DashMap<String, tauri::ipc::Channel<Vec<u8>>>,
+    /// Watch channel for WebSocket grid streaming (session_id → sender).
+    /// Uses latest-frame-wins semantics: slow WS clients skip intermediate frames.
+    pub(crate) grid_watch: DashMap<String, tokio::sync::watch::Sender<Vec<u8>>>,
     /// Flow control: true while a grid frame is in-flight (awaiting frontend ack).
     /// When set, the PTY reader skips sending frames — damage accumulates in alacritty.
     pub(crate) grid_frame_in_flight: DashMap<String, Arc<AtomicBool>>,
@@ -1996,6 +1999,7 @@ pub(crate) mod tests_support {
             plugin_watchers: dashmap::DashMap::new(),
             vt_log_buffers: dashmap::DashMap::new(),
             grid_channels: dashmap::DashMap::new(),
+            grid_watch: dashmap::DashMap::new(),
             grid_frame_in_flight: dashmap::DashMap::new(),
             kitty_states: dashmap::DashMap::new(),
             input_buffers: dashmap::DashMap::new(),
@@ -2452,6 +2456,7 @@ mod tests {
             plugin_watchers: dashmap::DashMap::new(),
             vt_log_buffers: dashmap::DashMap::new(),
             grid_channels: dashmap::DashMap::new(),
+            grid_watch: dashmap::DashMap::new(),
             grid_frame_in_flight: dashmap::DashMap::new(),
             kitty_states: dashmap::DashMap::new(),
             input_buffers: dashmap::DashMap::new(),

@@ -2088,6 +2088,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     state.output_buffers.remove(session_id);
     state.vt_log_buffers.remove(session_id);
     state.grid_channels.remove(session_id);
+    state.grid_watch.remove(session_id);
     state.grid_frame_in_flight.remove(session_id);
     state.ws_clients.remove(session_id);
     state.kitty_states.remove(session_id);
@@ -2115,6 +2116,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
         .store(now_ms, Ordering::Relaxed);
     state.ws_clients.remove(session_id);
     state.grid_channels.remove(session_id);
+    state.grid_watch.remove(session_id);
     state.grid_frame_in_flight.remove(session_id);
     state.kitty_states.remove(session_id);
     state.input_buffers.remove(session_id);
@@ -2872,6 +2874,8 @@ pub(crate) async fn create_pty(
         session_id.clone(),
         Mutex::new(VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY)),
     );
+    let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+    state.grid_watch.insert(session_id.clone(), grid_watch_tx);
     state.last_output_ms.insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
     state.terminal_rows.insert(session_id.clone(), std::sync::atomic::AtomicU16::new(rows));
     let mut ss = crate::state::SessionState::default();
@@ -2970,6 +2974,8 @@ pub(crate) async fn spawn_session_for_agent(
         session_id.clone(),
         Mutex::new(VtLogBuffer::new(rows, cols, VT_LOG_BUFFER_CAPACITY)),
     );
+    let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+    state.grid_watch.insert(session_id.clone(), grid_watch_tx);
     state.last_output_ms.insert(session_id.clone(), AtomicU64::new(0));
     state.terminal_rows.insert(session_id.clone(), std::sync::atomic::AtomicU16::new(rows));
     state.session_states.insert(session_id.clone(), crate::state::SessionState::default());
@@ -3105,6 +3111,8 @@ pub(crate) async fn create_pty_with_worktree(
         session_id.clone(),
         Mutex::new(VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY)),
     );
+    let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+    state.grid_watch.insert(session_id.clone(), grid_watch_tx);
     state.last_output_ms.insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
     state.terminal_rows.insert(session_id.clone(), std::sync::atomic::AtomicU16::new(pty_rows));
     let mut ss = crate::state::SessionState::default();
@@ -3999,9 +4007,13 @@ pub(crate) fn read_vt_log(
 }
 
 /// Send a grid frame via the session's channel and mark it in-flight.
+/// Also publishes to the watch channel for WebSocket subscribers.
 fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>) {
     if frame.is_empty() {
         return;
+    }
+    if let Some(watch_tx) = state.grid_watch.get(session_id) {
+        let _ = watch_tx.send(frame.clone());
     }
     if let Some(ch) = state.grid_channels.get(session_id) {
         if let Some(flag) = state.grid_frame_in_flight.get(session_id) {
