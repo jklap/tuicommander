@@ -108,9 +108,38 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   let cachedBgDefault = "#1e1e1e";
   let cachedFgDefault = "#d4d4d4";
 
-  // Row index → row data lookup (rebuilt each paintFrame)
+  // Row index → row data lookup (persistent, updated incrementally)
   let rowMap = new Map<number, DecodedFrame["rows"][0]>();
+  // Rows that arrived in the latest onFrame batch (drives incremental repaint)
+  let pendingDirtyRows = new Set<number>();
+  // When true, next paint must redraw everything (scroll, resize, clear)
+  let fullRepaintNeeded = true;
   let hidden = false;
+
+  // Memoized color strings: pack RGB into u32 key → "rgb(r,g,b)" string
+  const colorStringCache = new Map<number, string>();
+  function cachedRgbString(r: number, g: number, b: number): string {
+    const key = (r << 16) | (g << 8) | b;
+    let s = colorStringCache.get(key);
+    if (s === undefined) {
+      s = `rgb(${r},${g},${b})`;
+      colorStringCache.set(key, s);
+    }
+    return s;
+  }
+
+  // Memoized font style strings: pack attrs into a key → font string
+  const fontStyleCache = new Map<string, string>();
+  function cachedFontStyle(italic: boolean, bold: boolean, fontSize: number, fontFamily: string): string {
+    const weight = bold ? "bold" : settingsStore.state.fontWeight;
+    const key = `${italic ? "i" : ""}${weight}${fontSize}${fontFamily}`;
+    let s = fontStyleCache.get(key);
+    if (s === undefined) {
+      s = `${italic ? "italic " : ""}${weight} ${fontSize}px ${fontFamily}`;
+      fontStyleCache.set(key, s);
+    }
+    return s;
+  }
 
   function writePty(data: string) {
     invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch((e) => {
@@ -163,26 +192,41 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       lastResizeCols = cols;
       lastResizeRows = rows;
       screenRows.clear();
+      rowMap.clear();
+      fullRepaintNeeded = true;
       lastDisplayOffset = -1;
       invokeRef("resize_pty", { sessionId: props.sessionId, rows, cols }).catch(() => {});
     }
 
     if (currentFrame) {
+      fullRepaintNeeded = true;
       paintFrame(currentFrame, m);
     }
   }
 
-  function paintFrame(frame: DecodedFrame, m: CellMetrics) {
-    rowMap = new Map(frame.rows.map(r => [r.index, r]));
-    // Fill with default background so line-height gaps aren't visible
+  function paintFrame(frame: DecodedFrame, m: CellMetrics, dirtyIndices?: Set<number>) {
     const w = canvasRef.width / m.dpr;
-    const h = canvasRef.height / m.dpr;
-    ctx.fillStyle = cachedBgDefault;
-    ctx.fillRect(0, 0, w, h);
     const fontFamily = settingsStore.getFontFamily();
-    for (const row of frame.rows) {
-      const y = row.index * m.cellHeight;
-      paintRow(row, y, m, fontFamily);
+
+    if (fullRepaintNeeded || !dirtyIndices) {
+      // Full repaint: clear canvas + paint all rows
+      const h = canvasRef.height / m.dpr;
+      ctx.fillStyle = cachedBgDefault;
+      ctx.fillRect(0, 0, w, h);
+      for (const [, row] of rowMap) {
+        paintRow(row, row.index * m.cellHeight, m, fontFamily);
+      }
+      fullRepaintNeeded = false;
+    } else {
+      // Incremental: only clear and repaint dirty rows
+      ctx.fillStyle = cachedBgDefault;
+      for (const idx of dirtyIndices) {
+        const row = rowMap.get(idx);
+        if (!row) continue;
+        const y = idx * m.cellHeight;
+        ctx.fillRect(0, y, w, m.cellHeight);
+        paintRow(row, y, m, fontFamily);
+      }
     }
 
     paintSelection(frame, m);
@@ -190,7 +234,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     paintGutterMarkers(m);
     paintCursor(frame, m);
     updateScrollbar(frame);
-    updateSuggestOverlay(frame, m);
+    updateSuggestOverlay(frame, m, dirtyIndices);
   }
 
   function findNearestVisibleMatch(matches: typeof searchMatches): number {
@@ -264,26 +308,27 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     }
   }
 
-  function paintSelection(frame: DecodedFrame, m: CellMetrics) {
+  function paintSelection(_frame: DecodedFrame, m: CellMetrics) {
     if (!selectionStart || !selectionEnd) return;
     const startRow = Math.min(selectionStart.row, selectionEnd.row);
     const endRow = Math.max(selectionStart.row, selectionEnd.row);
 
     ctx.fillStyle = "rgba(58, 130, 220, 0.35)";
 
-    for (const row of frame.rows) {
-      if (row.index < startRow || row.index > endRow) continue;
-      const y = row.index * m.cellHeight;
+    for (let ri = startRow; ri <= endRow; ri++) {
+      const row = rowMap.get(ri);
+      if (!row) continue;
+      const y = ri * m.cellHeight;
 
       if (startRow === endRow) {
         const c0 = Math.min(selectionStart.col, selectionEnd.col);
         const c1 = Math.max(selectionStart.col, selectionEnd.col);
         ctx.fillRect(c0 * m.cellWidth, y, (c1 - c0 + 1) * m.cellWidth, m.cellHeight);
-      } else if (row.index === startRow) {
+      } else if (ri === startRow) {
         const isStartFirst = selectionStart.row <= selectionEnd.row;
         const startCol = isStartFirst ? selectionStart.col : selectionEnd.col;
         ctx.fillRect(startCol * m.cellWidth, y, (row.cells.length - startCol) * m.cellWidth, m.cellHeight);
-      } else if (row.index === endRow) {
+      } else if (ri === endRow) {
         const isStartFirst = selectionStart.row <= selectionEnd.row;
         const endCol = isStartFirst ? selectionEnd.col : selectionStart.col;
         ctx.fillRect(0, y, (endCol + 1) * m.cellWidth, m.cellHeight);
@@ -295,23 +340,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
   function resolveFg(cell: DecodedCell, defaultColor: string): string {
     if (cell.inverse) {
-      return cell.defaultBg ? defaultColor : `rgb(${cell.bgR},${cell.bgG},${cell.bgB})`;
+      return cell.defaultBg ? defaultColor : cachedRgbString(cell.bgR, cell.bgG, cell.bgB);
     }
-    return cell.defaultFg ? defaultColor : `rgb(${cell.fgR},${cell.fgG},${cell.fgB})`;
+    return cell.defaultFg ? defaultColor : cachedRgbString(cell.fgR, cell.fgG, cell.fgB);
   }
 
   function resolveBg(cell: DecodedCell, defaultColor: string): string {
     if (cell.inverse) {
-      return cell.defaultFg ? defaultColor : `rgb(${cell.fgR},${cell.fgG},${cell.fgB})`;
+      return cell.defaultFg ? defaultColor : cachedRgbString(cell.fgR, cell.fgG, cell.fgB);
     }
-    return cell.defaultBg ? defaultColor : `rgb(${cell.bgR},${cell.bgG},${cell.bgB})`;
+    return cell.defaultBg ? defaultColor : cachedRgbString(cell.bgR, cell.bgG, cell.bgB);
   }
 
   function buildFontStyle(cell: DecodedCell, fontSize: number, fontFamily: string): string {
-    let style = "";
-    if (cell.italic) style += "italic ";
-    const weight = cell.bold ? "bold" : settingsStore.state.fontWeight;
-    return `${style}${weight} ${fontSize}px ${fontFamily}`;
+    return cachedFontStyle(cell.italic, cell.bold, fontSize, fontFamily);
   }
 
   function paintCursor(frame: DecodedFrame, m: CellMetrics) {
@@ -348,7 +390,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
   function updateScrollbar(frame: DecodedFrame) {
     if (!scrollbarRef || !scrollThumbRef) return;
-    const total = frame.historySize + (frame.rows.length > 0 ? (frame.rows[frame.rows.length - 1]?.index ?? -1) + 1 : 24);
+    const total = frame.historySize + (frame.screenRows || lastResizeRows || 24);
     const visible = canvasRef.getBoundingClientRect().height / (metrics()?.cellHeight ?? 16);
 
     if (frame.historySize === 0) {
@@ -376,10 +418,30 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     return div;
   }
 
-  function updateSuggestOverlay(frame: DecodedFrame, m: CellMetrics) {
+  // Cached suggest/intent overlay state to avoid full DOM rebuild
+  let lastSuggestOverlayKey = "";
+
+  function updateSuggestOverlay(_frame: DecodedFrame, m: CellMetrics, dirtyIndices?: Set<number>) {
     if (!overlayRef) return;
+
+    // Skip full rescan if no dirty rows touch suggest/intent patterns
+    if (dirtyIndices && !fullRepaintNeeded) {
+      let hasSuggestContent = false;
+      for (const idx of dirtyIndices) {
+        const row = rowMap.get(idx);
+        if (!row) continue;
+        const text = row.cells.map(c => c.char || " ").join("");
+        if (SUGGEST_ANCHOR_RE.test(text) || INTENT_RE.test(text)) {
+          hasSuggestContent = true;
+          break;
+        }
+      }
+      if (!hasSuggestContent && lastSuggestOverlayKey !== "") return;
+      if (!hasSuggestContent && lastSuggestOverlayKey === "") return;
+    }
+
     const bg = cachedBgDefault;
-    const numRows = frame.rows.length > 0 ? (frame.rows[frame.rows.length - 1]?.index ?? -1) + 1 : 0;
+    const numRows = lastResizeRows || 24;
 
     const getRowSnapshot = (i: number) => {
       const row = rowMap.get(i);
@@ -388,22 +450,36 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       return { text, isWrapped: false };
     };
 
-    overlayRef.textContent = "";
+    // Build new overlay key to detect changes
+    const parts: string[] = [];
+    const newChildren: HTMLDivElement[] = [];
     for (let row = 0; row < numRows; row++) {
       const snapshot = getRowSnapshot(row);
       if (!snapshot) continue;
       const text = snapshot.text;
 
       if (SUGGEST_ANCHOR_RE.test(text) && isSuggestBlock(row, numRows, getRowSnapshot)) {
-        overlayRef.appendChild(makeOverlayDiv(row * m.cellHeight, m.cellHeight, bg));
+        newChildren.push(makeOverlayDiv(row * m.cellHeight, m.cellHeight, bg));
+        parts.push(`s${row}`);
         const hiddenRows = continuationRowsAfterSuggest(row, numRows, getRowSnapshot);
         for (const contRow of hiddenRows) {
-          overlayRef.appendChild(makeOverlayDiv(contRow * m.cellHeight, m.cellHeight, bg));
+          newChildren.push(makeOverlayDiv(contRow * m.cellHeight, m.cellHeight, bg));
+          parts.push(`c${contRow}`);
         }
         if (hiddenRows.length > 0) row = hiddenRows[hiddenRows.length - 1];
       } else if (INTENT_RE.test(text)) {
-        overlayRef.appendChild(makeOverlayDiv(row * m.cellHeight, m.cellHeight, "rgba(181,147,90,0.12)"));
+        newChildren.push(makeOverlayDiv(row * m.cellHeight, m.cellHeight, "rgba(181,147,90,0.12)"));
+        parts.push(`i${row}`);
       }
+    }
+
+    const newKey = parts.join(",");
+    if (newKey === lastSuggestOverlayKey) return;
+    lastSuggestOverlayKey = newKey;
+
+    overlayRef.textContent = "";
+    for (const child of newChildren) {
+      overlayRef.appendChild(child);
     }
   }
 
@@ -412,9 +488,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     cursorBlinkOn = true;
     blinkInterval = setInterval(() => {
       cursorBlinkOn = !cursorBlinkOn;
-      const m = metrics();
-      if (currentFrame && m) {
-        repaintCursorOnly(currentFrame, m);
+      if (rafId === undefined) {
+        rafId = requestAnimationFrame(() => {
+          rafId = undefined;
+          if (!alive || hidden) return;
+          const m = metrics();
+          if (currentFrame && m) repaintCursorOnly(currentFrame, m);
+        });
       }
     }, 700);
   }
@@ -569,20 +649,24 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         || frame.screenRows !== lastScreenRows
         || frame.screenCols !== lastScreenCols) {
       screenRows.clear();
+      rowMap.clear();
+      fullRepaintNeeded = true;
       lastDisplayOffset = frame.displayOffset;
       lastScreenRows = frame.screenRows;
       lastScreenCols = frame.screenCols;
     }
 
-    // Merge incoming damaged rows into the full screen buffer
+    // Merge incoming damaged rows into persistent stores
     for (const row of frame.rows) {
       screenRows.set(row.index, row);
+      rowMap.set(row.index, row);
+      pendingDirtyRows.add(row.index);
     }
 
-    // Build a full frame from the accumulated buffer
+    // Update frame metadata without rebuilding rows array
     currentFrame = {
       ...frame,
-      rows: Array.from(screenRows.values()),
+      rows: frame.rows,
     };
 
     if (hidden) return;
@@ -592,7 +676,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         if (!alive || hidden) return;
         const m = metrics();
         if (currentFrame && m) {
-          paintFrame(currentFrame, m);
+          const dirty = pendingDirtyRows.size > 0 ? new Set(pendingDirtyRows) : undefined;
+          pendingDirtyRows.clear();
+          paintFrame(currentFrame, m, dirty);
           invokeRef?.("ack_terminal_frame", { sessionId: props.sessionId }).catch(() => {});
         }
       });
@@ -723,6 +809,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (isVisible && hidden) {
         hidden = false;
         screenRows.clear();
+        rowMap.clear();
+        fullRepaintNeeded = true;
         currentFrame = null;
         lastDisplayOffset = -1;
         invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(() => {});
@@ -800,6 +888,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "l" && !e.altKey) {
         e.preventDefault();
         screenRows.clear();
+        rowMap.clear();
+        fullRepaintNeeded = true;
         currentFrame = null;
         lastDisplayOffset = -1;
         remeasure();
@@ -868,7 +958,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         invokeRef?.("terminal_select_clear", { sessionId: props.sessionId }).catch(() => {});
         const m = metrics();
         if (currentFrame && m) {
-          ctx.clearRect(0, 0, canvasRef.width / m.dpr, canvasRef.height / m.dpr);
+          fullRepaintNeeded = true;
           paintFrame(currentFrame, m);
         }
       }
@@ -1168,6 +1258,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       getSelectionText: () => cachedSelectionText,
       refresh: () => {
         screenRows.clear();
+        rowMap.clear();
+        fullRepaintNeeded = true;
         currentFrame = null;
         lastDisplayOffset = -1;
         remeasure();
@@ -1227,6 +1319,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     settingsStore.state.fontWeight;
     settingsStore.state.theme;
     invalidateGlyphCache();
+    fontStyleCache.clear();
+    colorStringCache.clear();
+    fullRepaintNeeded = true;
     remeasure();
   });
 
@@ -1258,6 +1353,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     clearTimeout(linkThrottle);
     linkCache.clear();
     screenRows.clear();
+    rowMap.clear();
+    colorStringCache.clear();
+    fontStyleCache.clear();
     releaseCache();
   });
 

@@ -67,6 +67,8 @@ export class WsTransport implements TerminalTransport {
   private ws: WebSocket | null = null;
   private onFrameHandler: ((data: ArrayBuffer) => void) | null = null;
   private eventHandlers = new Map<string, (payload: unknown) => void>();
+  private closed = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(sessionId: string) {
     this.sessionId = sessionId;
@@ -74,6 +76,11 @@ export class WsTransport implements TerminalTransport {
 
   async subscribe(onFrame: (data: ArrayBuffer) => void): Promise<void> {
     this.onFrameHandler = onFrame;
+    this.closed = false;
+    await this.connect();
+  }
+
+  private async connect(): Promise<void> {
     const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${proto}//${window.location.host}/sessions/${this.sessionId}/stream?format=grid`;
     this.ws = new WebSocket(url);
@@ -83,11 +90,17 @@ export class WsTransport implements TerminalTransport {
         this.onFrameHandler?.(e.data);
       } else {
         try {
-          const event = JSON.parse(e.data as string) as { type: string; payload: unknown };
-          this.eventHandlers.get(event.type)?.(event.payload);
+          const event = JSON.parse(e.data as string) as { type: string; [key: string]: unknown };
+          const { type, ...payload } = event;
+          this.eventHandlers.get(type)?.(payload);
         } catch {
           // ignore non-JSON text messages
         }
+      }
+    };
+    this.ws.onclose = () => {
+      if (!this.closed) {
+        this.reconnectTimer = setTimeout(() => this.connect(), 1000);
       }
     };
     await new Promise<void>((resolve, reject) => {
@@ -97,6 +110,11 @@ export class WsTransport implements TerminalTransport {
   }
 
   unsubscribe(): void {
+    this.closed = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.ws?.close();
     this.ws = null;
     this.eventHandlers.clear();

@@ -97,6 +97,95 @@ describe("canvasTerminalTransport", () => {
   });
 
   describe("WsTransport", () => {
+    let wsInstances: MockWebSocket[];
+
+    class MockWebSocket {
+      static lastUrl = "";
+      binaryType = "";
+      onmessage: ((e: { data: unknown }) => void) | null = null;
+      onclose: (() => void) | null = null;
+      onopen: (() => void) | null = null;
+      onerror: ((e: unknown) => void) | null = null;
+      close = vi.fn();
+      constructor(url: string) {
+        MockWebSocket.lastUrl = url;
+        wsInstances.push(this);
+      }
+    }
+
+    beforeEach(() => {
+      wsInstances = [];
+      (globalThis as Record<string, unknown>).WebSocket = MockWebSocket as unknown as typeof WebSocket;
+    });
+
+    it("connects to /sessions/{id}/stream?format=grid", async () => {
+      const transport = new WsTransport("sess-42");
+      const subscribePromise = transport.subscribe(vi.fn());
+      wsInstances[0].onopen!();
+      await subscribePromise;
+
+      expect(MockWebSocket.lastUrl).toContain("/sessions/sess-42/stream?format=grid");
+      expect(wsInstances[0].binaryType).toBe("arraybuffer");
+    });
+
+    it("dispatches binary frames to onFrame handler", async () => {
+      const transport = new WsTransport("sess-1");
+      const onFrame = vi.fn();
+      const subscribePromise = transport.subscribe(onFrame);
+      wsInstances[0].onopen!();
+      await subscribePromise;
+
+      const buffer = new ArrayBuffer(8);
+      wsInstances[0].onmessage!({ data: buffer });
+      expect(onFrame).toHaveBeenCalledWith(buffer);
+    });
+
+    it("dispatches JSON text messages to event handlers", async () => {
+      const transport = new WsTransport("sess-1");
+      const subscribePromise = transport.subscribe(vi.fn());
+      wsInstances[0].onopen!();
+      await subscribePromise;
+
+      const handler = vi.fn();
+      await transport.onEvent("parsed", handler);
+
+      wsInstances[0].onmessage!({ data: JSON.stringify({ type: "parsed", event: { kind: "cwd" } }) });
+      expect(handler).toHaveBeenCalledWith({ event: { kind: "cwd" } });
+    });
+
+    it("reconnects on unexpected close", async () => {
+      vi.useFakeTimers();
+      const transport = new WsTransport("sess-1");
+      const subscribePromise = transport.subscribe(vi.fn());
+      wsInstances[0].onopen!();
+      await subscribePromise;
+
+      // Simulate unexpected close
+      wsInstances[0].onclose!();
+      expect(wsInstances).toHaveLength(1);
+
+      // After 1s reconnect timer fires
+      vi.advanceTimersByTime(1000);
+      expect(wsInstances).toHaveLength(2);
+
+      vi.useRealTimers();
+    });
+
+    it("does not reconnect after explicit unsubscribe", async () => {
+      vi.useFakeTimers();
+      const transport = new WsTransport("sess-1");
+      const subscribePromise = transport.subscribe(vi.fn());
+      wsInstances[0].onopen!();
+      await subscribePromise;
+
+      transport.unsubscribe();
+      expect(wsInstances[0].close).toHaveBeenCalled();
+
+      vi.advanceTimersByTime(2000);
+      expect(wsInstances).toHaveLength(1); // no new instance
+      vi.useRealTimers();
+    });
+
     it("delegates invoke to rpc()", async () => {
       const { rpc } = await import("../transport");
       (rpc as ReturnType<typeof vi.fn>).mockResolvedValue("ws-result");
