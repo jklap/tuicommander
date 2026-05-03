@@ -77,6 +77,8 @@ export function getSharedMetrics(
   return sharedMetrics;
 }
 
+const GLYPH_PAD = 2;
+
 function rasterize(
   char: string,
   fontStyle: string,
@@ -87,8 +89,9 @@ function rasterize(
 
   const w = m.scaledCellWidth;
   const h = m.scaledCellHeight;
+  const slot = w + GLYPH_PAD;
 
-  if (nextX + w > atlas.width) {
+  if (nextX + slot > atlas.width) {
     nextX = 0;
     nextY += rowHeight;
   }
@@ -100,13 +103,16 @@ function rasterize(
   const y = nextY;
 
   atlasCtx.save();
+  atlasCtx.beginPath();
+  atlasCtx.rect(x, y, w, h);
+  atlasCtx.clip();
   atlasCtx.font = fontStyle;
   atlasCtx.fillStyle = fgColor;
   atlasCtx.textBaseline = "alphabetic";
   atlasCtx.fillText(char, x, y + m.baseline * m.dpr);
   atlasCtx.restore();
 
-  nextX += w;
+  nextX += slot;
   return { x, y, w, h };
 }
 
