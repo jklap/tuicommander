@@ -1095,6 +1095,212 @@ fn trim_screen_chrome(rows: Vec<String>) -> TrimResult {
     TrimResult { cutoff }
 }
 
+// --- Terminal grid HTTP endpoints ---
+// These delegate to the same VtLogBuffer/TerminalGrid logic as the Tauri commands in pty.rs.
+
+pub(super) async fn terminal_scroll(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<super::types::TerminalScrollRequest>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return session_not_found();
+    };
+    let frame = {
+        let mut vt = vt.lock();
+        vt.grid_scroll(body.delta);
+        vt.serialize_dirty_rows()
+    };
+    crate::pty::send_grid_frame(&state, &session_id, frame);
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
+pub(super) async fn terminal_scroll_to(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<super::types::TerminalScrollToRequest>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return session_not_found();
+    };
+    let frame = {
+        let mut vt = vt.lock();
+        vt.grid_scroll_to_line(body.line);
+        vt.serialize_dirty_rows()
+    };
+    crate::pty::send_grid_frame(&state, &session_id, frame);
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
+pub(super) async fn terminal_scroll_info(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
+    };
+    let vt = vt.lock();
+    let info = serde_json::json!({
+        "display_offset": vt.grid_display_offset(),
+        "total_lines": vt.grid_total_lines(),
+        "screen_lines": vt.grid_screen_lines(),
+    });
+    Json(info).into_response()
+}
+
+pub(super) async fn terminal_select_start(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<super::types::TerminalSelectStartRequest>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return session_not_found();
+    };
+    let ty = if body.word.unwrap_or(false) {
+        alacritty_terminal::selection::SelectionType::Semantic
+    } else {
+        alacritty_terminal::selection::SelectionType::Simple
+    };
+    let frame = {
+        let mut vt = vt.lock();
+        vt.grid_selection_start(body.col, body.row, ty);
+        vt.serialize_dirty_rows()
+    };
+    crate::pty::send_grid_frame(&state, &session_id, frame);
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
+pub(super) async fn terminal_select_update(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<super::types::TerminalSelectUpdateRequest>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return session_not_found();
+    };
+    let frame = {
+        let mut vt = vt.lock();
+        vt.grid_selection_update(body.col, body.row);
+        vt.serialize_dirty_rows()
+    };
+    crate::pty::send_grid_frame(&state, &session_id, frame);
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
+pub(super) async fn terminal_select_text(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
+    };
+    let text = vt.lock().grid_selection_text();
+    Json(serde_json::json!({"text": text})).into_response()
+}
+
+pub(super) async fn terminal_select_clear(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return session_not_found();
+    };
+    let frame = {
+        let mut vt = vt.lock();
+        vt.grid_selection_clear();
+        vt.serialize_dirty_rows()
+    };
+    crate::pty::send_grid_frame(&state, &session_id, frame);
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
+pub(super) async fn terminal_search(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<super::types::TerminalSearchRequest>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
+    };
+    let matches = vt.lock().grid_search(&body.query);
+    Json(serde_json::json!({"matches": matches})).into_response()
+}
+
+pub(super) async fn terminal_search_buffer(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<super::types::TerminalSearchRequest>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
+    };
+    let matches = vt.lock().grid_search_buffer(&body.query);
+    Json(serde_json::json!({"matches": matches})).into_response()
+}
+
+pub(super) async fn terminal_get_row_text(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<super::types::TerminalRowQuery>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
+    };
+    let text = vt.lock().grid_get_row_text(query.row);
+    Json(serde_json::json!({"text": text})).into_response()
+}
+
+pub(super) async fn terminal_get_lines(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<super::types::TerminalLinesQuery>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
+    };
+    let lines = vt.lock().grid_get_lines(query.start, query.end);
+    Json(serde_json::json!({"lines": lines})).into_response()
+}
+
+pub(super) async fn terminal_get_cursor_line(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
+    };
+    let text = vt.lock().grid_get_cursor_line();
+    Json(serde_json::json!({"text": text})).into_response()
+}
+
+pub(super) async fn terminal_hyperlink_at(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<super::types::TerminalCellQuery>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "Session not found"}))).into_response();
+    };
+    let url = vt.lock().grid_hyperlink_at(query.row, query.col);
+    Json(serde_json::json!({"url": url})).into_response()
+}
+
+pub(super) async fn terminal_request_frame(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
+        return session_not_found();
+    };
+    let frame = {
+        let mut vt = vt.lock();
+        vt.grid_force_full_damage();
+        vt.serialize_dirty_rows()
+    };
+    crate::pty::send_grid_frame(&state, &session_id, frame);
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

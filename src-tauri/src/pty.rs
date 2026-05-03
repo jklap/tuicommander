@@ -4008,7 +4008,7 @@ pub(crate) fn read_vt_log(
 
 /// Send a grid frame via the session's channel and mark it in-flight.
 /// Also publishes to the watch channel for WebSocket subscribers.
-fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>) {
+pub(crate) fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>) {
     if frame.is_empty() {
         return;
     }

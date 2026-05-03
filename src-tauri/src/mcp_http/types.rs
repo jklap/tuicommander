@@ -427,3 +427,50 @@ pub(super) struct UpdatePathsRequest {
 pub(super) struct SetIssueFilterRequest {
     pub filter: String,
 }
+
+// --- Terminal grid command types ---
+
+#[derive(Deserialize)]
+pub(super) struct TerminalScrollRequest {
+    pub delta: i32,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TerminalScrollToRequest {
+    pub line: usize,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TerminalSelectStartRequest {
+    pub col: usize,
+    pub row: usize,
+    pub word: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TerminalSelectUpdateRequest {
+    pub col: usize,
+    pub row: usize,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TerminalSearchRequest {
+    pub query: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TerminalRowQuery {
+    pub row: usize,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TerminalLinesQuery {
+    pub start: usize,
+    pub end: usize,
+}
+
+#[derive(Deserialize)]
+pub(super) struct TerminalCellQuery {
+    pub row: usize,
+    pub col: usize,
+}
