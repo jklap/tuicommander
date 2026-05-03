@@ -134,6 +134,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
   function remeasure() {
     if (!ctx) return;
+    const rect = containerRef.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return;
+
     const dpr = window.devicePixelRatio || 1;
     const perTerminalSize = terminalsStore.state.terminals[props.terminalId]?.fontSize;
     const fontSize = perTerminalSize ?? settingsStore.state.defaultFontSize;
@@ -145,9 +148,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     cachedBgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
     cachedFgDefault = getComputedStyle(canvasRef).getPropertyValue("--text-primary").trim() || "#d4d4d4";
 
-    const rect = containerRef.getBoundingClientRect();
     const cols = Math.floor(rect.width / m.cellWidth);
     const rows = Math.floor(rect.height / m.cellHeight);
+    if (cols <= 0 || rows <= 0) return;
     const logicalW = cols * m.cellWidth;
     const logicalH = rows * m.cellHeight;
     canvasRef.width = logicalW * dpr;
