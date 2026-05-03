@@ -705,7 +705,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   onMount(async () => {
     ctx = canvasRef.getContext("2d", { alpha: false })!;
     acquireCache();
-    await document.fonts.ready;
+    const fontFamily = settingsStore.getFontFamily();
+    const fontSize = settingsStore.state.defaultFontSize;
+    const fontWeight = settingsStore.state.fontWeight;
+    await document.fonts.load(`${fontWeight} ${fontSize}px ${fontFamily}`, "M").catch(() => document.fonts.ready);
     remeasure();
 
     resizeObserver = new ResizeObserver(() => {
