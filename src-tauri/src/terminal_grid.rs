@@ -5,6 +5,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
+use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
 use std::sync::Arc;
@@ -620,54 +621,47 @@ impl TerminalGrid {
 
     // --- Search API ---
 
-    /// Simple substring search across visible grid + scrollback.
+    /// Regex search across visible grid + scrollback using alacritty's native DFA engine.
     /// Returns matches as (row, col_start, col_end) in absolute coordinates.
+    /// The query is auto-escaped for literal substring search unless it contains
+    /// regex metacharacters; case-insensitive when all lowercase.
     pub fn search(&self, query: &str) -> Vec<SearchMatch> {
         if query.is_empty() {
             return Vec::new();
         }
-        let query_lower = query.to_lowercase();
+        let mut regex = match RegexSearch::new(query) {
+            Ok(r) => r,
+            Err(_) => return Vec::new(),
+        };
+        let history = self.term.grid().history_size();
+        let topmost = self.term.topmost_line();
+        let bottommost = self.term.bottommost_line();
+        let last_col = self.term.last_column();
+
+        let start = Point::new(topmost, Column(0));
+        let end = Point::new(bottommost, last_col);
+
         let mut matches = Vec::new();
-        let grid = self.term.grid();
-        let history = grid.history_size();
-        let screen = grid.screen_lines();
-        let cols = grid.columns();
+        let mut origin = start;
 
-        // Search scrollback (oldest first) then screen
-        let total = history + screen;
-        for abs_row in 0..total {
-            let line = if abs_row < history {
-                Line(-((history - abs_row) as i32))
+        while let Some(m) = self.term.regex_search_right(&mut regex, origin, end) {
+            let m_start = *m.start();
+            let m_end = *m.end();
+
+            let abs_row = (m_start.line.0 + history as i32) as usize;
+            matches.push(SearchMatch {
+                row: abs_row,
+                col_start: m_start.column.0,
+                col_end: m_end.column.0 + 1,
+            });
+
+            // Advance past this match
+            if m_end.column < last_col {
+                origin = Point::new(m_end.line, m_end.column + 1);
+            } else if m_end.line < bottommost {
+                origin = Point::new(m_end.line + 1i32, Column(0));
             } else {
-                Line((abs_row - history) as i32)
-            };
-
-            let mut row_text = String::with_capacity(cols);
-            for col in 0..cols {
-                let cell = &grid[line][Column(col)];
-                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
-                    continue;
-                }
-                if cell.c == '\0' {
-                    row_text.push(' ');
-                } else {
-                    row_text.push(cell.c);
-                }
-            }
-
-            let row_lower = row_text.to_lowercase();
-            let query_char_len = query_lower.chars().count();
-            let mut byte_start = 0;
-            while let Some(byte_pos) = row_lower[byte_start..].find(&query_lower) {
-                let match_byte = byte_start + byte_pos;
-                let col_start = row_lower[..match_byte].chars().count();
-                let col_end = col_start + query_char_len;
-                matches.push(SearchMatch {
-                    row: abs_row,
-                    col_start,
-                    col_end,
-                });
-                byte_start = match_byte + row_lower[match_byte..].chars().next().map_or(1, |c| c.len_utf8());
+                break;
             }
         }
         matches
@@ -1256,6 +1250,22 @@ mod tests {
     fn search_empty_query() {
         let grid = TerminalGrid::new(5, 40, 0);
         let matches = grid.search("");
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn search_regex_pattern() {
+        let mut grid = TerminalGrid::new(5, 40, 0);
+        let _ = grid.process(b"error: file not found\r\nwarning: deprecated");
+        let matches = grid.search("error|warning");
+        assert_eq!(matches.len(), 2);
+    }
+
+    #[test]
+    fn search_invalid_regex_returns_empty() {
+        let mut grid = TerminalGrid::new(5, 40, 0);
+        let _ = grid.process(b"test content");
+        let matches = grid.search("[invalid");
         assert!(matches.is_empty());
     }
 
