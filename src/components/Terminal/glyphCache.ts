@@ -9,23 +9,20 @@ interface CacheConfig {
 }
 
 interface GlyphEntry {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+  cssX: number;
+  cssY: number;
 }
 
 const ATLAS_SIZE = 2048;
-const GLYPH_PAD = 2;
+const GLYPH_PAD = 1;
 
 let config: CacheConfig | null = null;
 let sharedMetrics: CellMetrics | null = null;
 let atlas: HTMLCanvasElement | null = null;
 let atlasCtx: CanvasRenderingContext2D | null = null;
 let glyphs = new Map<string, GlyphEntry>();
-let nextX = 0;
-let nextY = 0;
-let rowHeight = 0;
+let nextCssX = 0;
+let nextCssY = 0;
 let refCount = 0;
 
 function configMatches(a: CacheConfig, b: CacheConfig): boolean {
@@ -36,7 +33,7 @@ function configMatches(a: CacheConfig, b: CacheConfig): boolean {
     && a.lineHeight === b.lineHeight;
 }
 
-function ensureAtlas(): void {
+function ensureAtlas(dpr: number): void {
   if (atlas) return;
   atlas = document.createElement("canvas");
   atlas.width = ATLAS_SIZE;
@@ -44,14 +41,17 @@ function ensureAtlas(): void {
   atlas.style.display = "none";
   document.body.appendChild(atlas);
   atlasCtx = atlas.getContext("2d", { alpha: true })!;
+  atlasCtx.scale(dpr, dpr);
 }
 
 function resetGlyphs(): void {
   glyphs.clear();
-  nextX = 0;
-  nextY = 0;
+  nextCssX = 0;
+  nextCssY = 0;
   if (atlasCtx && atlas) {
+    atlasCtx.setTransform(1, 0, 0, 1, 0, 0);
     atlasCtx.clearRect(0, 0, atlas.width, atlas.height);
+    if (config) atlasCtx.scale(config.dpr, config.dpr);
   }
 }
 
@@ -61,7 +61,9 @@ function destroyAtlas(): void {
   }
   atlas = null;
   atlasCtx = null;
-  resetGlyphs();
+  glyphs.clear();
+  nextCssX = 0;
+  nextCssY = 0;
 }
 
 function invalidate(): void {
@@ -84,43 +86,44 @@ export function getSharedMetrics(
 
   invalidate();
   config = cfg;
-  ensureAtlas();
+  ensureAtlas(dpr);
   sharedMetrics = measureFont(atlasCtx!, fontSize, fontFamily, dpr, lineHeight, fontWeight);
-  rowHeight = sharedMetrics.scaledCellHeight + GLYPH_PAD;
   return sharedMetrics;
 }
 
 function rasterize(
   char: string,
-  scaledFont: string,
+  fontStyle: string,
   fgColor: string,
   m: CellMetrics,
 ): GlyphEntry | null {
   if (!atlasCtx || !atlas) return null;
 
-  const w = m.scaledCellWidth;
-  const h = m.scaledCellHeight;
-  const slot = w + GLYPH_PAD;
+  const cssW = m.cellWidth;
+  const cssH = m.cellHeight;
+  const slot = cssW + GLYPH_PAD;
+  const cssAtlasW = atlas.width / m.dpr;
+  const cssAtlasH = atlas.height / m.dpr;
 
-  if (nextX + slot > atlas.width) {
-    nextX = 0;
-    nextY += rowHeight;
+  if (nextCssX + slot > cssAtlasW) {
+    nextCssX = 0;
+    nextCssY += cssH + GLYPH_PAD;
   }
-  if (nextY + h > atlas.height) {
+  if (nextCssY + cssH > cssAtlasH) {
     resetGlyphs();
   }
 
-  const x = nextX;
-  const y = nextY;
+  const cx = nextCssX;
+  const cy = nextCssY;
 
-  atlasCtx.clearRect(x, y, slot, h);
-  atlasCtx.font = scaledFont;
+  atlasCtx.clearRect(cx, cy, slot, cssH);
+  atlasCtx.font = fontStyle;
   atlasCtx.fillStyle = fgColor;
   atlasCtx.textBaseline = "alphabetic";
-  atlasCtx.fillText(char, x, y + m.baseline * m.dpr);
+  atlasCtx.fillText(char, cx, cy + m.baseline);
 
-  nextX += slot;
-  return { x, y, w, h };
+  nextCssX += slot;
+  return { cssX: cx, cssY: cy };
 }
 
 export function drawCachedGlyph(
@@ -137,19 +140,18 @@ export function drawCachedGlyph(
   const key = `${char}\0${fontStyle}\0${fgColor}`;
   let entry = glyphs.get(key);
   if (!entry) {
-    const scaledFont = fontStyle.replace(
-      `${m.fontSize}px`,
-      `${m.fontSize * m.dpr}px`,
-    );
-    entry = rasterize(char, scaledFont, fgColor, m) ?? undefined;
+    entry = rasterize(char, fontStyle, fgColor, m) ?? undefined;
     if (!entry) return false;
     glyphs.set(key, entry);
   }
 
+  const dpr = m.dpr;
   ctx.drawImage(
     atlas,
-    entry.x, entry.y, entry.w + GLYPH_PAD, entry.h,
-    dx, dy, m.cellWidth + GLYPH_PAD / m.dpr, m.cellHeight,
+    entry.cssX * dpr, entry.cssY * dpr,
+    m.scaledCellWidth, m.scaledCellHeight,
+    dx, dy,
+    m.cellWidth, m.cellHeight,
   );
   return true;
 }
@@ -162,7 +164,8 @@ export function releaseCache(): void {
   refCount = Math.max(0, refCount - 1);
   if (refCount === 0) {
     destroyAtlas();
-    invalidate();
+    config = null;
+    sharedMetrics = null;
   }
 }
 
