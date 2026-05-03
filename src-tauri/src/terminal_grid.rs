@@ -125,6 +125,11 @@ fn xterm_color_rgb(index: u8) -> Rgb {
     }
 }
 
+/// Reduce brightness to 2/3 for dim color variants.
+fn dim_rgb(c: Rgb) -> Rgb {
+    Rgb { r: (c.r as u16 * 2 / 3) as u8, g: (c.g as u16 * 2 / 3) as u8, b: (c.b as u16 * 2 / 3) as u8 }
+}
+
 /// Resolve a `Color` to RGB, returning `None` for default fg/bg.
 /// Checks dynamic color overrides (from OSC 4/10/11/12) before falling back to static palette.
 fn resolve_color(c: Color, colors: &Colors) -> Option<Rgb> {
@@ -156,14 +161,14 @@ fn resolve_color(c: Color, colors: &Colors) -> Option<Rgb> {
                 NamedColor::BrightMagenta => Some(xterm_color_rgb(13)),
                 NamedColor::BrightCyan   => Some(xterm_color_rgb(14)),
                 NamedColor::BrightWhite  => Some(xterm_color_rgb(15)),
-                NamedColor::DimBlack     => Some(xterm_color_rgb(0)),
-                NamedColor::DimRed       => Some(xterm_color_rgb(1)),
-                NamedColor::DimGreen     => Some(xterm_color_rgb(2)),
-                NamedColor::DimYellow    => Some(xterm_color_rgb(3)),
-                NamedColor::DimBlue      => Some(xterm_color_rgb(4)),
-                NamedColor::DimMagenta   => Some(xterm_color_rgb(5)),
-                NamedColor::DimCyan      => Some(xterm_color_rgb(6)),
-                NamedColor::DimWhite     => Some(xterm_color_rgb(7)),
+                NamedColor::DimBlack     => Some(dim_rgb(xterm_color_rgb(0))),
+                NamedColor::DimRed       => Some(dim_rgb(xterm_color_rgb(1))),
+                NamedColor::DimGreen     => Some(dim_rgb(xterm_color_rgb(2))),
+                NamedColor::DimYellow    => Some(dim_rgb(xterm_color_rgb(3))),
+                NamedColor::DimBlue      => Some(dim_rgb(xterm_color_rgb(4))),
+                NamedColor::DimMagenta   => Some(dim_rgb(xterm_color_rgb(5))),
+                NamedColor::DimCyan      => Some(dim_rgb(xterm_color_rgb(6))),
+                NamedColor::DimWhite     => Some(dim_rgb(xterm_color_rgb(7))),
             }
         },
     }
@@ -775,6 +780,7 @@ impl TerminalGrid {
                     Some(rgb) => (rgb, false),
                     None => (Rgb { r: 0, g: 0, b: 0 }, true),
                 };
+                let fg_rgb = if cell.flags.contains(Flags::DIM) { dim_rgb(fg_rgb) } else { fg_rgb };
                 buf.push(fg_rgb.r);
                 buf.push(fg_rgb.g);
                 buf.push(fg_rgb.b);
@@ -1100,6 +1106,24 @@ mod tests {
         assert_ne!(attrs & super::ATTR_BOLD, 0, "bold flag");
         assert_ne!(attrs & super::ATTR_ITALIC, 0, "italic flag");
         assert_eq!(attrs & super::ATTR_UNDERLINE, 0, "no underline");
+    }
+
+    #[test]
+    fn serialize_dim_text_darker_than_normal() {
+        let mut grid = TerminalGrid::new(5, 20, 0);
+        // Normal red then dim red
+        let _ = grid.process(b"\x1b[31mN\x1b[0m\x1b[2;31mD\x1b[0m");
+        let buf = grid.serialize_dirty_rows();
+
+        let cell0 = TEST_HEADER_SIZE + 4;
+        let (ch_n, fg_r_n, fg_g_n, fg_b_n, _, _, _, _) = decode_cell(&buf, cell0);
+        let (ch_d, fg_r_d, fg_g_d, fg_b_d, _, _, _, attrs_d) = decode_cell(&buf, cell0 + 11);
+        assert_eq!(ch_n, 'N');
+        assert_eq!(ch_d, 'D');
+        assert!(fg_r_d < fg_r_n, "dim red R channel ({fg_r_d}) must be darker than normal ({fg_r_n})");
+        assert!(fg_g_d <= fg_g_n, "dim red G channel not brighter");
+        assert!(fg_b_d <= fg_b_n, "dim red B channel not brighter");
+        assert_ne!(attrs_d & super::ATTR_DIM, 0, "dim flag set");
     }
 
     #[test]
