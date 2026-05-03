@@ -1,44 +1,27 @@
 import { Component, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
-import { Terminal as XTerm } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { SearchAddon } from "@xterm/addon-search";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { Unicode11Addon } from "@xterm/addon-unicode11";
 import { TerminalSearch } from "./TerminalSearch";
 import { isTauri, subscribePty, type Unsubscribe } from "../../transport";
-import { handleOpenUrl } from "../../utils/openUrl";
 import { browserCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
 import { settingsStore, FONT_FAMILIES } from "../../stores/settings";
-import { getTerminalTheme } from "../../themes";
 import { terminalsStore, type AwaitingInputType, isShellState } from "../../stores/terminals";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { appLogger } from "../../stores/appLogger";
 import { notificationsStore } from "../../stores/notifications";
 import { invoke } from "../../invoke";
-import { isMacOS, isWindows } from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { agentConfigsStore } from "../../stores/agentConfigs";
-import { parseOsc7Url } from "../../utils/osc7";
-import { kittySequenceForKey } from "./kittyKeyboard";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { getAwaitingInputSound } from "./awaitingInputSound";
-import { searchTerminalBuffer } from "../../utils/terminalSearch";
-import { ScrollTracker, ViewportLock } from "./scrollTracker";
-import { WebglLifecycle } from "./webglLifecycle";
-import { installScrollbarVisibilityFix } from "./scrollbarFix";
-import { installRenderObserver } from "./renderObserver";
-import { FlowController } from "./flowControl";
-import { installLinkProvider } from "./linkProvider";
+import { getSharedMetrics } from "./glyphCache";
+import { snapLineHeight } from "./canvasTerminalUtils";
 import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { ComposePanel } from "../ComposePanel";
 import s from "./Terminal.module.css";
 
 
-/** Trim trailing whitespace from each line of a terminal selection.
- * xterm.js pads lines with spaces to the terminal width. */
+/** Trim trailing whitespace from each line of a terminal selection. */
 export function trimSelection(text: string): string {
   return text.split("\n").map(line => line.trimEnd()).join("\n");
 }
@@ -86,31 +69,11 @@ export interface TerminalProps {
   onCwdChange?: (id: string, cwd: string) => void;
 }
 
-/** Get current theme from settings, with scrollbar defaults */
-function currentTheme() {
-  return {
-    ...getTerminalTheme(settingsStore.state.theme),
-    scrollbarSliderBackground: "rgba(121, 121, 121, 0.4)",
-    scrollbarSliderHoverBackground: "rgba(100, 100, 100, 0.7)",
-    scrollbarSliderActiveBackground: "rgba(191, 191, 191, 0.4)",
-  };
-}
-
 /** Strip common shell prompt patterns from a raw terminal line. */
 function stripPrompt(line: string): string {
   return line.replace(/^.*[$%#❯→>]\s/, "").trimEnd();
 }
 
-/** Extract the user's typed (but not submitted) text from the terminal's current line.
- *  Reads the line at the cursor position and strips common shell prompts. */
-function extractCurrentInput(term: XTerm): string {
-  const buf = term.buffer.active;
-  const absRow = buf.baseY + buf.cursorY;
-  const line = buf.getLine(absRow)?.translateToString(true) ?? "";
-  return stripPrompt(line);
-}
-
-// Font families mapping
 /** Shell control flow pattern — titles containing these are cryptic scripts, not useful names */
 const SHELL_SCRIPT_RE = /;|&&|\|\||\$\(|\bif\b|\bthen\b|\belse\b|\belif\b|\bfi\b|\bfor\b|\bwhile\b|\bdo\b|\bdone\b|\bcase\b|\besac\b/;
 
@@ -148,58 +111,29 @@ export function cleanOscTitle(title: string): string {
 }
 
 
-// Max bytes to buffer before terminal is opened (prevents unbounded growth)
-const OUTPUT_BUFFER_MAX_BYTES = 100 * 1024; // 100KB
-
-
-// Target line height — snapped to integer device pixels at runtime to prevent
-// sub-pixel seams between WebGL cell quads (see snapLineHeight).
-const TARGET_LINE_HEIGHT = 1.2;
-
-/** Snap lineHeight so cellHeight × devicePixelRatio is an integer.
- *  Fractional device-pixel cell heights cause visible 1px seams between rows
- *  in the WebGL renderer because adjacent quads round differently. */
-function snapLineHeight(fontSize: number, target: number = TARGET_LINE_HEIGHT): number {
+/** Get initial terminal dimensions from container size + font metrics. */
+function calcGridSize(container: HTMLElement): { rows: number; cols: number } {
+  const fontSize = settingsStore.state.defaultFontSize;
+  const fontFamily = FONT_FAMILIES[settingsStore.state.font] || FONT_FAMILIES["JetBrains Mono"];
+  const fontWeight = settingsStore.state.fontWeight;
   const dpr = window.devicePixelRatio || 1;
-  const rawDevicePx = fontSize * target * dpr;
-  // Pick the closest integer device-pixel height to the target
-  const lo = Math.floor(rawDevicePx);
-  const hi = Math.ceil(rawDevicePx);
-  const best = (Math.abs(rawDevicePx - lo) <= Math.abs(rawDevicePx - hi)) ? lo : hi;
-  // Avoid degenerate values (too tight or too loose)
-  const snapped = best / (fontSize * dpr);
-  return Math.max(1.0, Math.min(snapped, 1.5));
+  const m = getSharedMetrics(fontSize, fontFamily, dpr, snapLineHeight(fontSize), fontWeight);
+  const cols = Math.max(2, Math.floor(container.clientWidth / m.cellWidth));
+  const rows = Math.max(2, Math.floor(container.clientHeight / m.cellHeight));
+  return { rows, cols };
 }
-
-// Minimum container dimensions before fit() is allowed — prevents WebGL rendering
-// artifacts when xterm gets squeezed into impossibly small panes (e.g. narrow split)
-const MIN_FIT_WIDTH = 80;   // px (~5 columns at 14px)
-const MIN_FIT_HEIGHT = 40;  // px (~2 rows)
 
 export const Terminal: Component<TerminalProps> = (props) => {
   let containerRef: HTMLDivElement | undefined;
-  let terminal: XTerm | undefined;
-  let fitAddon: FitAddon | undefined;
-  const [searchAddon, setSearchAddon] = createSignal<SearchAddon | undefined>();
   let sessionId: string | null = null;
-  // Reactive mirror of the `sessionId` closure var so signal-driven children
-  // can track session changes across resume/reattach.
-  // Keep in sync at every `sessionId = X` assignment below.
   const [_currentSessionId, setCurrentSessionId] = createSignal<string | null>(null);
-
-  const useNativeRenderer = () =>
-    isTauri() && settingsStore.state.terminalRenderer === "native";
 
   let canvasTerminalRef: CanvasTerminalRef | undefined;
   let pendingCanvasFocus = false;
 
-  // Search overlay state
   const [searchVisible, setSearchVisible] = createSignal(false);
-  // Scrollback history overlay
-  // Compose panel state
   const [composeOpen, setComposeOpen] = createSignal(false);
   const [pendingComposeText, setPendingComposeText] = createSignal("");
-  // WebSocket reconnect state (browser/PWA mode only)
   const [reconnecting, setReconnecting] = createSignal<{ attempt: number; max: number } | null>(null);
   let sessionInitialized = false;
   let disposed = false;
@@ -210,80 +144,19 @@ export const Terminal: Component<TerminalProps> = (props) => {
   let unlistenTitle: (() => void) | undefined;
   let unlistenClipboardStore: (() => void) | undefined;
 
-  // Kitty keyboard protocol: current flags for this session (0 = disabled)
   let kittyFlags = 0;
 
-  // WebGL addon lifecycle — atlas stress detection, context loss recovery,
-  // and adaptive threshold scaling. See webglLifecycle.ts for details.
-  const webglLife = new WebglLifecycle(() => new WebglAddon());
-
-  // Clipboard event handlers — hoisted for cleanup
-  let handleCopyRef: ((e: ClipboardEvent) => void) | null = null;
-  let handleImagePasteRef: ((e: ClipboardEvent) => void) | null = null;
-
-  // Render observer for suggest/intent row overlays — disposed on cleanup
-  let renderObserverCleanup: (() => void) | null = null;
-  // Scrollbar visibility fix — forces the vertical scrollbar visible when
-  // scrollback overflows, even without prior user interaction. Disposed on cleanup.
-  let scrollbarFixCleanup: (() => void) | null = null;
-  // Alt-screen wheel handler — removed on cleanup
-
-  // Buffer for PTY output arriving before terminal.open()
-  let outputBuffer: string[] = [];
-  let outputBufferBytes = 0;
-
-  // Flow control — backpressure on PTY reader. See flowControl.ts.
-  const flow = new FlowController();
-
-  // Auto-retry on API server errors — per-agent setting
-  const RETRY_DELAYS = [5_000, 15_000, 30_000]; // exponential backoff
+  const RETRY_DELAYS = [5_000, 15_000, 30_000];
   let retryCount = 0;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let agentDetectTimer: ReturnType<typeof setTimeout> | undefined;
-
-  // Resize debounce (150ms trailing edge)
-  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
-  // ResizeObserver debounce — coalesces rapid layout changes before fitting
-  let resizeObserverTimer: ReturnType<typeof setTimeout> | undefined;
-  // rAF handle for the visibility effect — cancellable on cleanup
   let rafHandle = 0;
 
-  let activityFlagged = false; // Avoids redundant activity store updates per data chunk
-  const mountedAt = performance.now(); // TIMING: track mount-to-PTY latency
-  let lastDataAtTimestamp = 0; // Throttle lastDataAt store updates to 1s
-  let planFileNotified = false; // Play info sound at most once per agent cycle
-  // Hide terminal until first fit to prevent visible resize flicker (80x24 → actual)
-  const [fitted, setFitted] = createSignal(false);
+  let activityFlagged = false;
+  const mountedAt = performance.now();
+  let lastDataAtTimestamp = 0;
+  let planFileNotified = false;
 
-  // Scroll position tracker — handles visibility, alternate buffer, and
-  // re-entrancy without any DOM reads. See scrollTracker.ts for details.
-  const scrollTracker = new ScrollTracker();
-  const viewportLock = new ViewportLock();
-
-  /** Fit terminal to container, preserving scroll position across reflows. */
-  const doFit = () => {
-    if (!containerRef || !fitAddon || !terminal) return;
-    if (containerRef.offsetWidth < MIN_FIT_WIDTH || containerRef.offsetHeight < MIN_FIT_HEIGHT) return;
-
-    // Snapshot BEFORE fit — fitAddon.fit() triggers reflow → onScroll events
-    // that would corrupt the tracker's state before we can read it.
-    const snapshot = scrollTracker.snapshotForFit();
-    fitAddon.fit();
-    const action = scrollTracker.computeFitRestore(terminal.buffer.active.baseY, snapshot);
-
-
-    if (action.type === "scroll-to-bottom") {
-      scrollTracker.suppressNextScroll();
-      terminal.scrollToBottom();
-    } else if (action.type === "scroll-to-line") {
-      scrollTracker.suppressNextScroll();
-      terminal.scrollToLine(action.line!);
-    }
-    viewportLock.update(scrollTracker.isAtBottom);
-    if (!fitted()) setFitted(true);
-  };
-
-  // Reset activity flag when this terminal becomes active (store clears activity)
   createEffect(() => {
     if (terminalsStore.state.activeId === props.id) {
       activityFlagged = false;
@@ -335,107 +208,17 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
   const pty = usePty();
 
-  const getFontFamily = () => {
-    const font = settingsStore.state.font;
-    return FONT_FAMILIES[font] || FONT_FAMILIES["JetBrains Mono"];
-  };
-
-  /** Preload a font via CSS Font Loading API so canvas/WebGL renderers can use it.
-   *  @font-face fonts only load when referenced by DOM text; canvas-based xterm.js
-   *  never triggers that, so we must load explicitly before applying. */
-  const preloadFont = (fontName: string): Promise<FontFace[]> =>
-    document.fonts.load(`16px "${fontName}"`);
-
-
-  /** Process a chunk of PTY output — write to terminal or buffer if not ready/visible */
-  const handlePtyData = (rawData: string) => {
-    // Strip ESC[3J (clear scrollback) only when user is scrolled up, to preserve
-    // their viewport position. When at bottom, let it through to keep scrollback clean.
-    const data = viewportLock.isLocked && rawData.includes("\x1b[3J")
-      ? rawData.replaceAll("\x1b[3J", "")
-      : rawData;
-    if (terminal) {
-      // Dispatch to plugins for all terminals — background tabs may have
-      // plugin-relevant output (e.g. agent detection, error tracking)
-      if (sessionId) {
-        pluginRegistry.processRawOutput(data, sessionId);
-      }
-
-      // Track last PTY output timestamp for activity dashboard (throttled to 1s).
-      // Written to a non-reactive Map (flushed to store every 5s) to avoid
-      // triggering the reactive graph on every PTY output event.
-      const now = Date.now();
-      if (!lastDataAtTimestamp || now - lastDataAtTimestamp > 1000) {
-        lastDataAtTimestamp = now;
-        terminalsStore.touchLastDataAt(props.id, now);
-      }
-      if (terminalsStore.state.activeId !== props.id && !activityFlagged) {
-        activityFlagged = true;
-        terminalsStore.update(props.id, { activity: true });
-      }
-
-      // Hidden terminals: buffer data instead of writing to xterm.
-      // This eliminates ANSI parsing, internal buffer updates, and WebGL
-      // glyph atlas work for invisible terminals — the dominant source of
-      // jank when 3+ agents are streaming simultaneously (~22 MP hidden
-      // canvas work eliminated). Buffer is replayed on hidden→visible.
-      if (!isVisible()) {
-        outputBuffer.push(data);
-        outputBufferBytes += data.length;
-        while (outputBufferBytes > OUTPUT_BUFFER_MAX_BYTES && outputBuffer.length > 1) {
-          const dropped = outputBuffer.shift()!;
-          outputBufferBytes -= dropped.length;
-        }
-        return;
-      }
-
-      const byteLen = data.length;
-      flow.trackWrite(byteLen);
-
-      // Pause reader if we've accumulated too much unprocessed data.
-      if (flow.checkPause() === "pause" && sessionId) {
-        pty.pause(sessionId).catch((err) => appLogger.warn("terminal", "PTY pause failed", { error: String(err) }));
-      }
-
-      viewportLock.writeStart();
-      try {
-        terminal.write(data, () => {
-          viewportLock.writeEnd();
-          flow.trackDrain(byteLen);
-          if (flow.checkResume() === "resume" && sessionId) {
-            pty.resume(sessionId).catch((err) => appLogger.warn("terminal", "PTY resume failed", { error: String(err) }));
-          }
-        });
-      } catch (e) {
-        viewportLock.writeEnd();
-        flow.trackDrain(byteLen);
-        appLogger.warn("terminal", "terminal.write() threw", { error: String(e), sessionId });
-      }
-    } else {
-      // Buffer output until terminal.open() is called
-      outputBuffer.push(data);
-      outputBufferBytes += data.length;
-      // Cap buffer: drop oldest chunks when over limit
-      while (outputBufferBytes > OUTPUT_BUFFER_MAX_BYTES && outputBuffer.length > 1) {
-        const dropped = outputBuffer.shift()!;
-        outputBufferBytes -= dropped.length;
-      }
+  /** Track PTY activity for the activity dashboard. CanvasTerminal handles
+   *  rendering and plugin dispatch; this callback only updates store metadata. */
+  const handlePtyData = (_data: string) => {
+    const now = Date.now();
+    if (!lastDataAtTimestamp || now - lastDataAtTimestamp > 1000) {
+      lastDataAtTimestamp = now;
+      terminalsStore.touchLastDataAt(props.id, now);
     }
-  };
-
-  /** Replay buffered output into the now-open terminal */
-  const replayBuffer = () => {
-    if (terminal && outputBuffer.length > 0) {
-      viewportLock.writeStart();
-      for (const chunk of outputBuffer) {
-        terminal.write(chunk);
-      }
-      outputBuffer = [];
-      outputBufferBytes = 0;
-      // writeEnd before state check so the scroll classification is correct
-      viewportLock.writeEnd();
-      scrollTracker.onScroll(terminal.buffer.active);
-      viewportLock.update(scrollTracker.isAtBottom);
+    if (terminalsStore.state.activeId !== props.id && !activityFlagged) {
+      activityFlagged = true;
+      terminalsStore.update(props.id, { activity: true });
     }
   };
 
@@ -682,9 +465,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
       targetSessionId,
       (data: string) => handlePtyData(data),
       () => {
-        if (terminal) {
-          terminal.writeln("\r\n\x1b[33m[Process exited]\x1b[0m");
-        }
         // Guard: terminal may have been removed from the store already
         // (e.g. pane closed). Updating a removed entry would recreate it as a ghost.
         const stillExists = terminalsStore.get(props.id);
@@ -811,23 +591,22 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
   /** Initialize PTY session and event listeners */
   const initSession = async () => {
-    if (sessionInitialized || !terminal) return;
+    if (sessionInitialized || !containerRef) return;
     sessionInitialized = true;
     const spawnMs = Math.round(performance.now() - mountedAt);
     appLogger.info("terminal", `initSession(${props.id}) — existing sessionId=${sessionId ?? "null"} spawnDelay=${spawnMs}ms`);
 
+    const grid = calcGridSize(containerRef);
+
     try {
       let reconnected = false;
       if (sessionId) {
-        // Already have a session (eagerly attached above) — just resize to current dimensions
         try {
-
-          await pty.resize(sessionId, terminal.rows, terminal.cols);
+          await pty.resize(sessionId, grid.rows, grid.cols);
           reconnected = true;
           appLogger.info("terminal", `initSession(${props.id}) — reconnected to ${sessionId}`);
           detectAgentForTerminal(props.id, "idle").catch(() => {});
         } catch {
-          // Session no longer exists (app restarted) - create fresh
           appLogger.warn("terminal", `initSession(${props.id}) — resize failed for ${sessionId}, creating FRESH session`);
           sessionId = null;
           setCurrentSessionId(null);
@@ -849,8 +628,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
         appLogger.debug("terminal", `initSession(${props.id}) — creating FRESH PTY session (no prior sessionId)`);
         const termData = terminalsStore.get(props.id);
         sessionId = await pty.createSession({
-          rows: terminal.rows,
-          cols: terminal.cols,
+          rows: grid.rows,
+          cols: grid.cols,
           shell: settingsStore.state.shell ?? null,
           cwd: props.cwd || null,
           tuic_session: termData?.tuicSession ?? null,
@@ -859,7 +638,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
         });
         setCurrentSessionId(sessionId);
         if (sessionId) {
-          // Track browser-created sessions so beforeunload only closes our own
           if (!isTauri()) {
             browserCreatedSessions.add(sessionId);
           }
@@ -870,646 +648,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
       if (sessionId) {
         terminalsStore.setSessionId(props.id, sessionId);
         props.onSessionCreated?.(props.id, sessionId);
-
-        // Flush a resize to the PTY with authoritative dimensions. The PTY
-        // may have been created with preliminary rows/cols if the WebView
-        // layout hadn't fully stabilized yet. Re-fit xterm to get the current
-        // container size, then send that to the PTY so the shell (and any
-        // agent launched from it) sees the correct viewport from the start.
-        // Critical for the first terminal after app launch.
-        if (terminal) {
-          doFit();
-          if (terminal.rows > 0 && terminal.cols > 0) {
-            pty.resize(sessionId, terminal.rows, terminal.cols).catch(() => {});
-          }
-        }
       }
     } catch (err) {
-      terminal.writeln(`\x1b[31mFailed to create PTY: ${err}\x1b[0m`);
+      appLogger.error("terminal", `Failed to create PTY: ${err}`);
     }
   };
 
-  /** Fully rebuild the WebGL renderer by disposing the current addon and
-   *  instantiating a new one. Both dispose AND reattach are deferred via
-   *  queueMicrotask so this is safe to call from inside an addon callback
-   *  (e.g. onAddTextureAtlasCanvas fires mid-frame while xterm iterates
-   *  cells — disposing synchronously leaves xterm's render loop touching
-   *  a nulled _glyphRenderer and throws "undefined is not an object
-   *  (evaluating 'this._glyphRenderer.value.updateCell')"). A rebuilding
-   *  flag coalesces re-entrant triggers into a single rebuild. */
-  let rebuildInFlight = false;
-  const rebuildAtlas = () => {
-    // Note: don't gate on webglLife.addon — onContextLoss already cleared it,
-    // and we still need to recreate the addon. dispose() is a no-op when addon
-    // is undefined, so this is safe for both atlas-stress and context-loss paths.
-    // (#1370-563b)
-    if (!terminal || rebuildInFlight) return;
-    rebuildInFlight = true;
-    queueMicrotask(() => {
-      try {
-        if (terminal) {
-          webglLife.dispose();
-          webglLife.attach(terminal);
-        }
-      } finally {
-        rebuildInFlight = false;
-      }
-    });
-  };
-  webglLife.onRebuild = rebuildAtlas;
-
-  let terminalOpened = false;
-  let resizeObserver: ResizeObserver | undefined;
-
-  /** Open xterm in the container and wire up event handlers (deferred until visible) */
-  const openTerminal = () => {
-    if (terminalOpened || !containerRef) return;
-    terminalOpened = true;
-    // DIAG: expose xterm instances for console debugging
-    const w = window as any;
-    if (!w.__terms) w.__terms = {};
-    w.__terms[props.id] = () => terminal;
-
-    // Set initial atlas thresholds based on configured font size
-    webglLife.updateThresholds(settingsStore.state.defaultFontSize);
-
-    terminal = new XTerm({
-      scrollback: 10000,
-      fontSize: settingsStore.state.defaultFontSize,
-      fontFamily: getFontFamily(),
-      fontWeight: String(settingsStore.state.fontWeight) as any,
-      fontWeightBold: "bold",
-      lineHeight: snapLineHeight(settingsStore.state.defaultFontSize),
-      theme: currentTheme(),
-      cursorBlink: true,
-      allowProposedApi: true,
-      rescaleOverlappingGlyphs: true,
-      macOptionIsMeta: false, // Right Option keeps macOS composition (π, ∑, @…)
-      // Override xterm's default OSC 8 link handler — the built-in one calls
-      // window.confirm("WARNING: potentially dangerous") + window.open(), which
-      // shows a scary dialog and then fails in Tauri (window.open is a no-op).
-      linkHandler: {
-        activate: (_event, uri) => {
-          // Route file:// URIs to the file opener (e.g. OSC 8 links from Claude Code)
-          if (uri.startsWith("file://") && props.onOpenFilePath) {
-            try {
-              const parsed = new URL(uri);
-              const filePath = decodeURIComponent(parsed.pathname);
-              if (filePath) {
-                props.onOpenFilePath(filePath);
-                return;
-              }
-            } catch { /* fall through to handleOpenUrl */ }
-          }
-          handleOpenUrl(uri);
-        },
-      },
-    });
-
-    // iTerm2-style Option key split (macOS only):
-    // Left Option → Meta (sends ESC + char for readline/emacs/vi keybindings)
-    // Right Option → macOS composition (π, ∑, @ etc.) — handled by xterm natively
-    //
-    // On Windows/Linux Alt already sends escape sequences natively; no-op there.
-    //
-    // Important: event.location on a regular key (e.g. P) is always 0 (standard),
-    // never 1 (left). We track left-Option state via keydown/keyup on AltLeft itself.
-    //
-    // We intercept both keydown (to inject ESC+char) and keypress (to suppress the
-    // macOS-composed character that xterm's third-level-shift pass-through would send).
-    let leftOptionHeld = false;
-    // Tracks the ESC key cycle (keydown→keypress→keyup) when dismissing the
-    // resume banner so ALL event types are blocked, preventing a stray \x1b
-    // keypress from reaching xterm (which would eat the next typed character).
-    let blockEscForResumeDismiss = false;
-    terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-      // Arrow Down with no modifiers: snap to bottom when viewport is scrolled up
-      if (event.type === "keydown" && event.key === "ArrowDown" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey && !scrollTracker.isAtBottom) {
-        terminal!.scrollToBottom();
-        return false;
-      }
-
-      // Cmd+Up/Down (macOS) or Ctrl+Up/Down (Win/Linux): navigate between command blocks (OSC 133)
-      if (event.type === "keydown" && (event.metaKey || event.ctrlKey) && !event.altKey && !event.shiftKey
-        && (event.key === "ArrowUp" || event.key === "ArrowDown")) {
-        const term = terminalsStore.get(props.id);
-        if (term) {
-          const blocks = term.commandBlocks;
-          const active = term.activeBlock;
-          const allPromptLines = blocks.map((b) => b.promptLine).concat(active ? [active.promptLine] : []);
-          if (allPromptLines.length > 0) {
-            const buf = terminal!.buffer.active;
-            const currentViewLine = buf.viewportY;
-            let targetLine: number | undefined;
-            if (event.key === "ArrowUp") {
-              // Find the nearest block prompt ABOVE the current viewport
-              for (let i = allPromptLines.length - 1; i >= 0; i--) {
-                if (allPromptLines[i] < currentViewLine) { targetLine = allPromptLines[i]; break; }
-              }
-            } else {
-              // Find the nearest block prompt BELOW the current viewport
-              for (let i = 0; i < allPromptLines.length; i++) {
-                if (allPromptLines[i] > currentViewLine) { targetLine = allPromptLines[i]; break; }
-              }
-            }
-            if (targetLine !== undefined) {
-              terminal!.scrollToLine(targetLine);
-              scrollTracker.onScroll(buf);
-              viewportLock.update(scrollTracker.isAtBottom);
-            }
-            event.preventDefault();
-            return false;
-          }
-        }
-      }
-
-      // Windows copy/paste: match Windows Terminal / VS Code convention.
-      // Ctrl+C copies the selection when present, otherwise falls through to SIGINT.
-      // Ctrl+V pastes from the clipboard. Linux keeps Ctrl+Shift+C/V (xterm default).
-      if (isWindows() && event.type === "keydown" && event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey) {
-        if (event.key === "c" || event.key === "C") {
-          const sel = terminal!.getSelection();
-          if (sel) {
-            event.preventDefault();
-            const setStatus = (window as unknown as Record<string, unknown>).__tuic_setStatusInfo as ((msg: string) => void) | undefined;
-            navigator.clipboard.writeText(trimSelection(sel)).then(
-              () => setStatus?.("Copied to clipboard"),
-              (err) => appLogger.warn("terminal", "Ctrl+C copy failed", err),
-            );
-            return false;
-          }
-          // No selection: let xterm send SIGINT (\x03)
-        } else if (event.key === "v" || event.key === "V") {
-          event.preventDefault();
-          navigator.clipboard.readText().then(
-            (text) => { if (text) terminal!.paste(text); },
-            (err) => appLogger.warn("terminal", "Ctrl+V paste failed", err),
-          );
-          return false;
-        }
-      }
-
-      // Intercept Cmd+F (macOS) / Ctrl+F (Win/Linux) to open search.
-      if (event.type === "keydown" && (event.metaKey || event.ctrlKey) && event.key === "f" && !event.altKey && !event.shiftKey) {
-        event.preventDefault();
-        setSearchVisible(true);
-        return false;
-      }
-
-      // Escape closes the search bar.
-      if (event.type === "keydown" && event.key === "Escape" && searchVisible()) {
-        event.preventDefault();
-        setSearchVisible(false);
-        return false;
-      }
-
-      // Resume banner keyboard handling: Space/Enter accept (resume),
-      // Escape or any other key dismisses without resuming.
-      // Block the full key cycle to prevent stray keypresses reaching xterm.
-      if (terminalsStore.get(props.id)?.pendingResumeCommand || blockEscForResumeDismiss) {
-        if (event.type === "keydown" && !blockEscForResumeDismiss) {
-          if (event.key === " " || event.key === "Enter") {
-            // Accept: execute the resume command
-            blockEscForResumeDismiss = true;
-            handleResume();
-          } else if (event.key.length === 1) {
-            // Dismiss on printable key: clear banner and let the keystroke
-            // pass through to xterm so the typed character is not swallowed.
-            terminalsStore.update(props.id, { pendingResumeCommand: null });
-            return true;
-          } else if (event.key === "Escape" || event.key === "Backspace" || event.key === "Delete" || event.key === "Tab") {
-            // Dismiss on editing/control keys: block the full key cycle
-            // to prevent stray sequences (e.g. \x1b from Escape) reaching xterm.
-            blockEscForResumeDismiss = true;
-            terminalsStore.update(props.id, { pendingResumeCommand: null });
-            terminal?.focus();
-          } else {
-            // Modifier-only keys (Shift, Ctrl, Alt, Meta) — ignore, don't dismiss
-            return false;
-          }
-        } else if (event.type === "keyup") {
-          blockEscForResumeDismiss = false;
-        }
-        return false;
-      }
-
-      // Shift+Enter → ESC CR (\x1b\r): standard multi-line newline for CLI apps
-      // (e.g. Claude Code, Ink). Native terminals like ghostty/kitty/WezTerm send
-      // this sequence natively; we replicate the behavior for our embedded terminal.
-      // NOTE: this intentionally runs BEFORE the kitty keyboard block below.
-      // CC expects \x1b\r from the terminal, not kitty CSI u (\x1b[13;2u).
-      // Block ALL event types (keydown + keypress + keyup) — xterm fires keypress
-      // for Enter which would send a bare \r and override our \x1b\r.
-      if (event.key === "Enter" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
-        if (event.type === "keydown") {
-          terminal!.input("\x1b\r", true);
-        }
-        return false;
-      }
-
-      // Shift+Tab: prevent browser focus navigation while letting xterm send CSI Z
-      if (event.key === "Tab" && event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
-        event.preventDefault();
-        return true;
-      }
-
-      // macOS WebKit Emacs keybindings: Ctrl+A/D/E/K etc. are intercepted by the
-      // native text system on the hidden textarea before xterm sees them. We
-      // explicitly send the correct control codes and block WebKit's handling.
-      if (isMacOS() && event.type === "keydown" && event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
-        // event.key is "a"–"z" when Ctrl is held (most browsers), or the
-        // control char itself ("\x01" etc.) in some WebKit builds.  Use
-        // event.code (always "KeyA"–"KeyZ") for reliable mapping.
-        const m = event.code.match(/^Key([A-Z])$/);
-        if (m) {
-          const ctrl = String.fromCharCode(m[1].charCodeAt(0) - 0x40); // A→\x01 … Z→\x1a
-          event.preventDefault();
-          terminal!.input(ctrl, true);
-          return false;
-        }
-      }
-
-      // Kitty keyboard protocol: encode special keys when flag 1 (disambiguate) is active
-      if (event.type === "keydown" && (kittyFlags & 1)) {
-        const seq = kittySequenceForKey(event.key, event.shiftKey, event.altKey, event.ctrlKey, event.metaKey);
-        if (seq !== null) {
-          terminal!.input(seq, true);
-          return false;
-        }
-      }
-
-      // Cmd+modifier+Enter: don't let xterm process (it sends \r to PTY).
-      // Return false so the event reaches the document-level keybinding handler.
-      if (event.metaKey && event.key === "Enter") return false;
-
-      if (!isMacOS()) return true; // Windows/Linux: xterm handles Alt natively
-      if (props.metaHotkeys === false) return true; // disabled for this repo
-      if (event.metaKey || event.ctrlKey) return true; // Cmd+Alt or AltGr: pass through
-      // AltLeft keyup fires with altKey=false — reset state here before early return
-      if (!event.altKey) { leftOptionHeld = false; return true; }
-
-      // Track left vs right Option state via the modifier key itself (location=1 for left)
-      if (event.code === "AltLeft") {
-        if (event.type === "keydown") leftOptionHeld = true;
-        else if (event.type === "keyup") leftOptionHeld = false;
-        return true; // let xterm see the modifier keydown/keyup
-      }
-
-      // Regular key: only intercept when left Option is held
-      if (!leftOptionHeld) return true;
-
-      // Only handle keydown and keypress (both can carry the composed char to xterm)
-      if (event.type !== "keydown" && event.type !== "keypress") return true;
-
-      const code = event.code;
-      let seq: string | null = null;
-
-      if (code.startsWith("Key")) {
-        const ch = code.slice(3).toLowerCase();
-        seq = "\x1b" + (event.shiftKey ? ch.toUpperCase() : ch);
-      } else if (code.startsWith("Digit")) {
-        seq = "\x1b" + code.slice(5);
-      } else {
-        switch (code) {
-          case "Backspace":    seq = "\x1b\x7f"; break; // Alt+Backspace = backward-kill-word
-          case "Space":        seq = "\x1b ";    break;
-          case "Period":       seq = "\x1b.";    break; // Alt+. = insert-last-argument
-          case "Comma":        seq = "\x1b,";    break;
-          case "Slash":        seq = "\x1b/";    break;
-          case "Minus":        seq = "\x1b-";    break;
-          case "Equal":        seq = "\x1b=";    break;
-          case "Semicolon":    seq = "\x1b;";    break;
-          case "Quote":        seq = "\x1b'";    break;
-          case "BracketLeft":  seq = "\x1b[";    break;
-          case "BracketRight": seq = "\x1b]";    break;
-          case "Backslash":    seq = "\x1b\\";   break;
-          case "Backquote":    seq = "\x1b`";    break;
-          case "ArrowLeft":    seq = "\x1b[1;3D"; break; // word backward
-          case "ArrowRight":   seq = "\x1b[1;3C"; break; // word forward
-          case "ArrowUp":      seq = "\x1b[1;3A"; break;
-          case "ArrowDown":    seq = "\x1b[1;3B"; break;
-        }
-      }
-
-      if (seq === null) return true; // unknown key: let xterm handle
-      // On keydown: inject ESC sequence into PTY; on keypress: just suppress
-      if (event.type === "keydown") terminal!.input(seq, true);
-      return false; // suppress xterm's default alt-key processing (both keydown + keypress)
-    });
-
-    fitAddon = new FitAddon();
-    terminal.loadAddon(fitAddon);
-    terminal.loadAddon(new WebLinksAddon((event, uri) => {
-      if (event.button !== 0) return; // only activate on left-click
-      handleOpenUrl(uri);
-    }));
-
-    // Copy on select: auto-copy selection to clipboard when enabled.
-    // Debounced at 200ms to let mouseup clear accidental micro-selections
-    // that happen when clicking to focus. Min 2 chars to ignore stray clicks.
-    // When selection is cleared (click-to-focus, Cmd+C deselect), cancel the
-    // pending timer immediately to avoid overwriting a valid clipboard entry.
-    let copyOnSelectTimer: ReturnType<typeof setTimeout> | undefined;
-    terminal.onSelectionChange(() => {
-      if (!settingsStore.state.copyOnSelect) return;
-      clearTimeout(copyOnSelectTimer);
-      // Check synchronously — if selection is already empty, don't schedule
-      const immediateCheck = terminal?.getSelection();
-      if (!immediateCheck || immediateCheck.length < 2) return;
-      copyOnSelectTimer = setTimeout(() => {
-        const sel = terminal?.getSelection();
-        if (sel && sel.length >= 2) {
-          const setStatus = (window as unknown as Record<string, unknown>).__tuic_setStatusInfo as ((msg: string) => void) | undefined;
-          navigator.clipboard.writeText(trimSelection(sel)).then(() => {
-            setStatus?.("Copied to clipboard");
-          }).catch((err) => {
-            appLogger.warn("terminal", "Copy-on-select clipboard write failed", err);
-            setStatus?.("Copy failed — clipboard unavailable");
-          });
-        }
-      }, 200);
-    });
-
-    // Bell handler: flash and/or beep on BEL character
-    terminal.onBell(handleBell);
-
-    const search = new SearchAddon();
-    terminal.loadAddon(search);
-    setSearchAddon(search);
-
-    // Register link provider for file paths (clickable to open in IDE or MD viewer)
-    if (props.onOpenFilePath) {
-      installLinkProvider(terminal, props.id, props.onOpenFilePath);
-    }
-
-    terminal.open(containerRef);
-    renderObserverCleanup = installRenderObserver(terminal, containerRef);
-    scrollbarFixCleanup = installScrollbarVisibilityFix(terminal, containerRef);
-
-    // Scrollback overlay trigger: use xterm's official wheel handler API to
-    // intercept wheel events before xterm processes them.
-    //
-    // Return false → suppress xterm scroll (overlay handles it or activates).
-    // Return true  → let xterm handle the wheel normally.
-    //
-    viewportLock.attach(
-      containerRef,
-      (line) => terminal!.scrollToLine(line),
-      () => ({
-        viewportY: terminal!.buffer.active.viewportY,
-        baseY: terminal!.buffer.active.baseY,
-        type: terminal!.buffer.active.type,
-      }),
-    );
-    viewportLock.setLogger((event, details) => {
-      appLogger.debug("ViewportLock", `${event} ${JSON.stringify(details)}`);
-    });
-
-    // Preload the configured font so the canvas/WebGL renderer can measure
-    // and render it correctly from the start (see preloadFont comment above).
-    preloadFont(settingsStore.state.font).then(() => doFit());
-
-    // Unicode 11 width tables — fixes width estimation for emoji, box-drawing,
-    // and progress bar characters (█▓▒░) that cause progressive rendering corruption.
-    const unicode11 = new Unicode11Addon();
-    terminal.loadAddon(unicode11);
-    terminal.unicode.activeVersion = "11";
-
-    // Load WebGL renderer for 3-5x rendering performance over canvas.
-    // DOM renderer remains as fallback if WebGL init fails.
-    webglLife.attach(terminal);
-
-    // Update tab title from shell OSC 0/2 escape sequences (e.g. user@host:~/path)
-    // OSC titles take priority over status-line parsing
-    terminal.onTitleChange((title) => {
-      const term = terminalsStore.get(props.id);
-      // Skip OSC title updates when tab name was set by an intent title
-      if (title && !term?.nameIsCustom && !(term?.agentIntent && settingsStore.state.intentTabTitle)) {
-        const cleaned = cleanOscTitle(title);
-        if (cleaned) {
-          if (!originalName) {
-            originalName = terminalsStore.get(props.id)?.name || null;
-          }
-          terminalsStore.update(props.id, { name: cleaned });
-        } else if (originalName) {
-          // Bare user@host means shell prompt returned — restore original tab name
-          terminalsStore.update(props.id, { name: originalName });
-        }
-      }
-    });
-
-    // Track command blocks via OSC 133 shell integration (FinalTerm/iTerm2/VS Code protocol).
-    // A=prompt start, B=command start, C=pre-execution, D;exitcode=command finished.
-    terminal.parser.registerOscHandler(133, (data: string) => {
-      const parts = data.split(";");
-      const type = parts[0]; // "A", "B", "C", or "D"
-      if (!type || !"ABCD".includes(type)) return true;
-      const ec = type === "D" && parts.length > 1 ? parseInt(parts[1], 10) : undefined;
-      const buf = terminal!.buffer.active;
-      const line = buf.baseY + buf.cursorY;
-      terminalsStore.handleOsc133(props.id, type, line, Number.isNaN(ec) ? undefined : ec);
-
-      // Gutter exit code marker on block completion (errors only)
-      if (type === "D" && terminal) {
-        const term = terminalsStore.get(props.id);
-        const blocks = term?.commandBlocks;
-        const lastBlock = blocks?.[blocks.length - 1];
-        if (lastBlock && lastBlock.exitCode !== 0) {
-          const offset = lastBlock.promptLine - buf.baseY - buf.cursorY;
-          const marker = terminal.registerMarker(offset);
-          if (marker) {
-            const deco = terminal.registerDecoration({ marker, anchor: "left", x: 0, width: 1, height: 1 });
-            deco?.onRender((el) => {
-              el.classList.add(s.osc133Gutter, s.osc133GutterErr);
-            });
-          }
-        }
-      }
-      return true;
-    });
-
-    // Track working directory changes via OSC 7 (file://hostname/path).
-    // Updates the terminal's cwd in the store and persists to Rust for restart recovery.
-    terminal.parser.registerOscHandler(7, (data: string) => {
-      const cwd = parseOsc7Url(data);
-      if (!cwd) return true;
-      terminalsStore.update(props.id, { cwd });
-      if (sessionId) {
-        invoke("update_session_cwd", { sessionId, cwd }).catch((err) =>
-          appLogger.debug("terminal", "Failed to persist cwd to Rust session", err),
-        );
-      }
-      props.onCwdChange?.(props.id, cwd);
-      return true;
-    });
-
-    // Replay any PTY output buffered while terminal was not yet open
-    replayBuffer();
-
-    terminal.onScroll(() => {
-      scrollTracker.onScroll(terminal!.buffer.active);
-      viewportLock.update(scrollTracker.isAtBottom);
-    });
-
-    // Clear pendingRender once the renderer has repainted. ViewportLock uses
-    // this flag to classify scroll events as programmatic (write/render-driven)
-    // vs user — fires after terminal.write() parse callback, so scroll events
-    // emitted by the deferred renderer paint are classified correctly.
-    terminal.onRender(() => {
-      viewportLock.renderComplete();
-    });
-
-
-    resizeObserver = new ResizeObserver(() => {
-      // Debounce: panels opening/closing can cause multiple rapid layout changes
-      // (container oscillates between full-width and panel-reduced width).
-      // Wait for layout to settle before fitting + resizing PTY.
-      clearTimeout(resizeObserverTimer);
-      resizeObserverTimer = setTimeout(() => {
-        requestAnimationFrame(() => {
-          if (!containerRef || containerRef.offsetWidth <= 0 || containerRef.offsetHeight <= 0) return;
-          doFit();
-
-          // First ResizeObserver event with valid dimensions: create PTY now
-          // with authoritative rows/cols (layout has settled).
-          if (deferInitToResize) {
-            deferInitToResize = false;
-            pendingOnReady = null; // cancel any safeFit-deferred callback
-            initSession();
-          } else if (pendingOnReady) {
-            // safeFit exhausted retries and deferred to us
-            const cb = pendingOnReady;
-            pendingOnReady = null;
-            cb();
-          }
-
-          // Cancel any pending stale onResize debounce — we're about to send
-          // the authoritative dimensions ourselves.
-          clearTimeout(resizeTimer);
-          if (sessionId && terminal && terminal.rows > 0 && terminal.cols > 0) {
-
-            pty.resize(sessionId, terminal.rows, terminal.cols).catch((err) => {
-              appLogger.error("terminal", "ResizeObserver resize failed", err);
-            });
-          }
-        });
-      }, 100);
-    });
-
-    terminal.onData(async (data) => {
-      if (sessionId) {
-        const isFocusReport = data === "\x1b[I" || data === "\x1b[O";
-        if (!isFocusReport) {
-          if (terminalsStore.get(props.id)?.awaitingInput) {
-            terminalsStore.clearAwaitingInput(props.id);
-          }
-        }
-        const t0 = performance.now();
-        try {
-          await pty.write(sessionId, data);
-          const elapsed = performance.now() - t0;
-          if (elapsed > 500) {
-            appLogger.warn("terminal", `pty.write SLOW: ${Math.round(elapsed)}ms`, { sessionId, dataLen: data.length });
-          }
-        } catch (err) {
-          appLogger.error("terminal", "Failed to write to PTY", err);
-        }
-      } else {
-        appLogger.warn("terminal", `onData fired with null sessionId (${props.id})`);
-      }
-    });
-
-    terminal.onResize(({ rows, cols }) => {
-      if (sessionId && rows > 0 && cols > 0) {
-        // Debounce resize calls to avoid SIGWINCH storms during window drag
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(async () => {
-          if (sessionId) {
-            try {
-              await pty.resize(sessionId, rows, cols);
-            } catch (err) {
-              appLogger.error("terminal", "Failed to resize PTY", err);
-            }
-          }
-        }, 150);
-      }
-    });
-
-    terminal.textarea?.addEventListener("focus", () => {
-      props.onFocus?.(props.id);
-    });
-
-    // Image paste support: intercept paste events in the capture phase (before
-    // xterm's handler) to check for image content.  When the clipboard contains
-    // an image, we send \x16 (Ctrl+V control code) to the PTY so CLI apps like
-    // Claude Code can read the image from the OS clipboard directly.  Without
-    // this, xterm's built-in paste handler calls getData("text/plain") and
-    // silently discards image data.
-    // When no image is present, the event propagates normally and xterm handles
-    // text paste as usual.
-    const handleImagePaste = (e: ClipboardEvent) => {
-      if (!e.clipboardData) return;
-      const items = e.clipboardData.items;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.startsWith("image/")) {
-          e.stopPropagation();
-          e.preventDefault();
-          terminal!.input("\x16", true);
-          return;
-        }
-      }
-      // No image — let xterm handle text paste normally
-    };
-    handleImagePasteRef = handleImagePaste;
-    containerRef.addEventListener("paste", handleImagePaste, true);
-
-    const handleCopy = (e: ClipboardEvent) => {
-      const sel = terminal?.getSelection();
-      if (!sel) return;
-      const trimmed = trimSelection(sel);
-      e.preventDefault();
-      if (e.clipboardData) {
-        e.clipboardData.setData("text/plain", trimmed);
-      } else {
-        navigator.clipboard.writeText(trimmed).catch(() => {});
-      }
-      const setStatus = (window as unknown as Record<string, unknown>).__tuic_setStatusInfo as ((msg: string) => void) | undefined;
-      setStatus?.("Copied to clipboard");
-    };
-    handleCopyRef = handleCopy;
-    containerRef.addEventListener("copy", handleCopy, true);
-  };
-
-  // Deferred onReady callback: when safeFit exhausts retries, the ResizeObserver
-  // picks up the fit + onReady when the container finally gets real dimensions.
-  let pendingOnReady: (() => void) | null = null;
-
-  // Whether initSession should wait for the first ResizeObserver event.
-  // On first mount, safeFit may succeed with preliminary dimensions (container
-  // has *some* size but flex layout hasn't settled). The ResizeObserver debounce
-  // fires ~100ms later with authoritative dimensions. Deferring PTY creation to
-  // that event ensures Ink sees the correct terminal size on its first render.
-  let deferInitToResize = false;
-
-  /** Fit terminal only when container has valid dimensions, retrying if needed.
-   *  If all retries are exhausted, defer to the ResizeObserver rather than
-   *  proceeding with zero dimensions. */
-  const safeFit = (onReady?: () => void, retries = 10) => {
-    const tryFit = (remaining: number) => {
-      requestAnimationFrame(() => {
-        if (containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0) {
-          doFit();
-          onReady?.();
-        } else if (remaining > 0) {
-          tryFit(remaining - 1);
-        } else {
-          appLogger.debug("terminal", "Container has zero dimensions after retries — deferring to ResizeObserver");
-          pendingOnReady = onReady ?? null;
-        }
-      });
-    };
-    tryFit(retries);
-  };
 
   // Check if this terminal is visible. A terminal in a pane-tree group is only
   // visible when it's the active tab of its group — otherwise every tab in the
@@ -1526,247 +670,56 @@ export const Terminal: Component<TerminalProps> = (props) => {
     (terminalsStore.state.activeId === props.id && !terminalsStore.isDetached(props.id)) ||
     isActiveInPaneGroup();
 
-  // Track hidden→visible transitions to rebuild the WebGL glyph atlas only once
-  // after the terminal was actually hidden (branch/tab switch), not on every
-  // isVisible() re-evaluation.
-  let wasHidden = false;
-  let hiddenSince = 0; // timestamp when terminal was last hidden
-
-  // When this terminal becomes visible: open xterm, fit, and init PTY session
+  // When this terminal becomes visible: init PTY session and auto-focus.
+  // CanvasTerminal handles its own rendering lifecycle.
   createEffect(() => {
     if (isVisible()) {
-      // Defer terminal.open() to the next animation frame so the browser has
-      // completed the display:none → block reflow. Without this, xterm and its
-      // WebGL renderer can capture stale container dimensions when a side panel
-      // is already open (flex layout hasn't settled yet at the synchronous call site).
       rafHandle = requestAnimationFrame(() => {
         rafHandle = 0;
-        const wasActuallyHidden = wasHidden;
-        scrollTracker.setVisible(true);
-        openTerminal();
-        // Rebuild the WebGL addon on hidden→visible transition to recover
-        // from GPU context corruption (layer re-composition, context drop
-        // without an event fire). Only needed after long hides (sleep/resume,
-        // display reconnect) — short hides (repo/tab switch, < 10s) don't
-        // cause GPU context loss. Skipping on short hides eliminates N
-        // expensive WebGL recreations during repo switch.
-        if (wasActuallyHidden && terminal) {
-          const hidDuration = performance.now() - hiddenSince;
-          if (hidDuration > 10_000) {
-            rebuildAtlas();
-          }
-          wasHidden = false;
-        }
-        // Only fit if the terminal was actually hidden or never fitted.
-        // When the visibility effect re-triggers without a real hide (e.g.,
-        // activeId flips null→id), skip the fit to avoid resetting scroll.
-        if (!terminal) {
-          // First mount — open xterm and fit. If container already has valid
-          // dimensions at first rAF, call initSession immediately (no 200ms
-          // defer). Otherwise fall back to ResizeObserver for authoritative
-          // dimensions once flex layout settles.
-          if (containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0) {
-            // Container ready — fit and init in one rAF, skip the defer chain.
-            // Re-check dimensions inside the rAF because a parent layout can
-            // collapse between now and the next frame (e.g. a sidebar opening
-            // mid-mount); without the re-check we'd fit against zero and the
-            // terminal would come up at 1×1.
+        if (!containerRef || containerRef.offsetWidth <= 0 || containerRef.offsetHeight <= 0) {
+          // Container not ready — retry on next frame
+          const retry = () => {
             requestAnimationFrame(() => {
-              if (!containerRef || containerRef.offsetWidth <= 0 || containerRef.offsetHeight <= 0) {
-                safeFit(() => initSession());
-                return;
-              }
-              doFit();
-              initSession();
-            });
-          } else {
-            deferInitToResize = true;
-            safeFit(() => {
-              // If ResizeObserver already fired while safeFit was retrying,
-              // deferInitToResize will be false — init was already called.
-              if (!deferInitToResize) return;
-              // safeFit succeeded but ResizeObserver hasn't fired yet.
-              // Fall back after 200ms in case ResizeObserver never fires
-              // (container already at final size, no resize event).
-              setTimeout(() => {
-                if (!deferInitToResize) return;
-                deferInitToResize = false;
-                pendingOnReady = null;
+              if (containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0) {
                 initSession();
-              }, 200);
+              } else {
+                retry();
+              }
             });
-          }
-        } else if (wasActuallyHidden) {
-          // Already mounted, was hidden → container reflow complete within
-          // this RAF. Direct fit avoids the 10-retry RAF storm during repo
-          // switch (N terminals × 10 retries saturates the rAF queue on
-          // CPU-loaded machines). Fall back to safeFit only if container
-          // dimensions aren't ready (edge case).
-          replayBuffer();
-          if (containerRef && containerRef.offsetWidth > 0 && containerRef.offsetHeight > 0) {
-            doFit();
-            initSession();
-          } else {
-            safeFit(() => initSession());
-          }
-        } else {
-          initSession();
+          };
+          retry();
+          return;
         }
+        initSession();
 
-        // Resume PTY reader if it was paused — hidden terminals skip the pause
-        // guard but a prior visible instance may have paused before hiding.
-        if (flow.forceResume() && sessionId) {
-          flow.reset(); // Clear stale counter from hidden state
-          pty.resume(sessionId).catch((err) => appLogger.warn("terminal", "PTY resume on show failed", { error: String(err) }));
-        }
-
-        // For reconnected terminals (existing sessionId), explicitly sync PTY dimensions.
-        // When a terminal was in the background while a panel opened/close, terminal.onResize
-        // may not fire (debounced 150ms + xterm may already report the fitted dimensions).
-        // Force a resize to ensure PTY is in sync with the newly-fitted container.
-        if (sessionId && terminal && terminal.rows > 0 && terminal.cols > 0) {
-
-          pty.resize(sessionId, terminal.rows, terminal.cols).catch(() => {
-            // Silently ignore resize errors (PTY may have exited)
-          });
-        }
-
-        // Start observing resize while active (disconnect when inactive to avoid fit on display:none).
-        // The ResizeObserver (100ms debounce) is the authoritative resize path — it handles
-        // panel open/close, window resize, and tab-switch layout changes.
-        if (resizeObserver && containerRef) {
-          resizeObserver.observe(containerRef);
-        }
-
-        // Auto-focus: when this terminal just became visible because it was selected,
-        // focus it now that the DOM is ready (the synchronous focus() in handleTerminalSelect
-        // fires before this rAF, so it fails on a still-hidden element).
         if (terminalsStore.state.activeId === props.id) {
-          if (isNative()) canvasTerminalRef?.focus();
-          else terminal?.focus();
+          canvasTerminalRef?.focus();
         }
-
-        // The ResizeObserver (100ms debounce) is the authoritative resize path
-        // and handles first-launch layout stabilization. No additional safety
-        // refit is needed — it was adding N extra doFit+IPC calls per terminal
-        // on every repo switch, compounding the visibility thundering herd.
       });
 
       onCleanup(() => {
         if (rafHandle) cancelAnimationFrame(rafHandle);
-        resizeObserver?.disconnect();
-        // Only mark hidden if the terminal is actually becoming invisible.
-        // SolidJS re-runs the effect (and its cleanup) when reactive deps
-        // change even if isVisible() stays true. Setting visible=false here
-        // would corrupt the tracker's wasAtBottom state.
-        if (!isVisible()) {
-          scrollTracker.setVisible(false);
-          wasHidden = true;
-          hiddenSince = performance.now();
-        }
       });
     }
   });
 
-  // Handle font size changes (per-terminal zoom OR global default).
-  // Recalculates atlas cleanup thresholds so zoomed terminals get more
-  // aggressive rebuild triggers (large glyphs fill atlas pages faster).
-  // fontSize change invalidates every glyph in the atlas (different metrics) —
-  // skipping the rebuild leaves a mix of old- and new-size glyphs visible.
-  let prevFontSize = settingsStore.state.defaultFontSize;
-  createEffect(() => {
-    const perTerminalSize = terminalsStore.state.terminals[props.id]?.fontSize;
-    const defaultSize = settingsStore.state.defaultFontSize;
-    if (!terminal) return;
-    const size = perTerminalSize ?? defaultSize;
-    terminal.options.fontSize = size;
-    terminal.options.lineHeight = snapLineHeight(size);
-    webglLife.updateThresholds(size);
-    doFit();
-    if (size !== prevFontSize) {
-      prevFontSize = size;
-      rebuildAtlas();
-    }
-  });
-
-  // When a foreground TUI agent exits (agentType Some → null), some agents
-  // (e.g. claude-code on double-Ctrl+C) fail to emit `\e[?1049l` to leave the
-  // alt-screen buffer, leaving xterm stuck on the agent's last frame while the
-  // shell runs beneath. Inject the exit sequences + show cursor + reset attrs
-  // so the primary buffer is restored deterministically. No-op if alt-screen
-  // was already exited cleanly by the agent.
-  //
-  // DEFERRED (2026-04-19) — layer 2: in rare cases (observed once on claude-code double
-  // Ctrl+C + blocking stop hook) the agent also leaves the PTY termios in raw
-  // mode with ICANON off, and zsh's ZLE wedges — it prints PROMPT_EOL_MARK (%)
-  // then fails to draw the actual prompt and emits zero bytes forever (not
-  // even echo for subsequent keystrokes). Only kill + respawn recovers. Fix
-  // would be a backend `tcsetattr(master_fd, sane)` on the agent→shell
-  // transition using `session.master.as_raw_fd()` + `nix::sys::termios`. Not
-  // wired yet — needs a reliable repro; frontend xterm.write() below doesn't
-  // help this case because xterm is a separate consumer of the PTY output
-  // stream and the issue is on the shell side.
+  // Alt-screen recovery: when an agent exits without leaving alt-screen,
+  // send the exit sequences via the PTY so alacritty processes them.
+  // DEFERRED (2026-04-19) — layer 2 termios reset on agent→shell transition.
   let lastAgentType: string | null = null;
   createEffect(() => {
     const curr = terminalsStore.get(props.id)?.agentType ?? null;
-    if (lastAgentType !== null && curr === null && terminal) {
-      terminal.write("\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m");
+    if (lastAgentType !== null && curr === null && sessionId) {
+      pty.write(sessionId, "\x1b[?1049l\x1b[?1047l\x1b[?47l\x1b[?25h\x1b[0m").catch(() => {});
       appLogger.debug("terminal", `[Recovery] ${props.id} wrote alt-screen exit after agent "${lastAgentType}" → null`);
     }
     lastAgentType = curr;
   });
 
-  // Handle font family + theme changes (global settings)
-  // Preload via CSS Font Loading API before applying — canvas/WebGL renderers
-  // cannot trigger @font-face loading on their own.
-  // fontFamily change rasterizes glyphs from a different font → cached atlas
-  // glyphs become wrong; rebuild after the family swap.
-  let prevFontFamily = settingsStore.state.font;
-  createEffect(() => {
-    const font = settingsStore.state.font;
-    const weight = settingsStore.state.fontWeight;
-    void settingsStore.state.theme;
-    if (!terminal) return;
-    terminal.options.theme = currentTheme();
-    terminal.options.fontWeight = String(weight) as any;
-    const familyChanged = font !== prevFontFamily;
-    prevFontFamily = font;
-    preloadFont(font).then(() => {
-      terminal!.options.fontFamily = getFontFamily();
-      doFit();
-      if (familyChanged) rebuildAtlas();
-    });
-  });
-
-  // Watch for devicePixelRatio changes (browser zoom, OS scale switch, monitor
-  // change). DPR changes the pixel size of rasterized glyphs — without a full
-  // atlas rebuild the renderer mixes glyphs at different DPR scales, producing
-  // misaligned blocks. This is what the user fixes manually with Ctrl+= → Ctrl+0.
-  // matchMedia queries are bound to a single value, so the listener must be
-  // re-attached at the new DPR every time it fires.
-  let dprMql: MediaQueryList | undefined;
-  const handleDPRChange = () => {
-    dprMql?.removeEventListener("change", handleDPRChange);
-    dprMql = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-    dprMql.addEventListener("change", handleDPRChange);
-    if (!terminal) return;
-    rebuildAtlas();
-    doFit();
-  };
-  onMount(() => {
-    dprMql = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-    dprMql.addEventListener("change", handleDPRChange);
-  });
-
-  // Cleanup on unmount - detach UI but keep PTY session alive
   onCleanup(() => {
     disposed = true;
-    clearTimeout(resizeTimer);
-    clearTimeout(resizeObserverTimer);
     clearTimeout(retryTimer);
     clearTimeout(agentDetectTimer);
-    dprMql?.removeEventListener("change", handleDPRChange);
-    resizeObserver?.disconnect();
     unsubscribePty?.();
     unsubscribePty = undefined;
     unlistenParsed?.();
@@ -1781,184 +734,90 @@ export const Terminal: Component<TerminalProps> = (props) => {
     unlistenClipboardStore = undefined;
     kittyFlags = 0;
 
-    // Resume reader if paused (don't leave PTY blocked after unmount)
-    if (flow.forceResume() && sessionId) {
-      pty.resume(sessionId).catch((err) => appLogger.warn("terminal", "PTY resume failed (cleanup)", { error: String(err) }));
-    }
-
-    // NOTE: We intentionally do NOT close the PTY session here.
-    // Sessions persist across branch/repo switches and reconnect on remount.
-    // PTY sessions are only closed via explicit closeTerminal() action.
-
-    // Clean up plugin line buffer for this session
     if (sessionId) pluginRegistry.removeSession(sessionId);
-
-    if (containerRef && handleCopyRef) containerRef.removeEventListener("copy", handleCopyRef, true);
-    if (containerRef && handleImagePasteRef) containerRef.removeEventListener("paste", handleImagePasteRef, true);
-    renderObserverCleanup?.();
-    scrollbarFixCleanup?.();
-    viewportLock.dispose();
-    terminal?.dispose();
   });
 
-  // Public methods exposed via ref pattern
-  const isNative = useNativeRenderer;
-
   const refMethods = {
-    fit: () => {
-      if (isNative()) canvasTerminalRef?.refresh();
-      else doFit();
-    },
+    fit: () => canvasTerminalRef?.refresh(),
     write: (data: string) => {
-      if (sessionId) {
-        pty.write(sessionId, data).catch((err) => {
-          appLogger.error("terminal", "Failed to write to PTY", err);
-        });
-      }
+      if (sessionId) pty.write(sessionId, data).catch((err) => appLogger.error("terminal", "Failed to write to PTY", err));
     },
     writeln: (data: string) => {
-      if (isNative()) {
-        if (sessionId) pty.write(sessionId, data + "\n").catch(() => {});
-      } else {
-        terminal?.writeln(data);
-      }
+      if (sessionId) pty.write(sessionId, data + "\n").catch(() => {});
     },
     input: (data: string) => {
-      if (isNative()) {
-        if (sessionId) pty.write(sessionId, data).catch(() => {});
-      } else {
-        terminal?.input(data, true);
-      }
+      if (sessionId) pty.write(sessionId, data).catch(() => {});
     },
     clear: () => {
-      if (isNative()) {
-        if (sessionId) pty.write(sessionId, "\x1b[2J\x1b[H\x1b[3J").catch(() => {});
-      } else {
-        terminal?.clear();
-      }
+      if (sessionId) pty.write(sessionId, "\x1b[2J\x1b[H\x1b[3J").catch(() => {});
     },
-    refresh: () => {
-      if (isNative()) {
-        canvasTerminalRef?.refresh();
-      } else {
-        rebuildAtlas();
-        if (terminal) {
-          fitAddon?.fit();
-          terminal.refresh(0, terminal.rows - 1);
-        }
-      }
-    },
+    refresh: () => canvasTerminalRef?.refresh(),
     focus: () => {
-      if (isNative()) {
-        if (canvasTerminalRef) canvasTerminalRef.focus();
-        else pendingCanvasFocus = true;
-      } else {
-        terminal?.focus();
-      }
+      if (canvasTerminalRef) canvasTerminalRef.focus();
+      else pendingCanvasFocus = true;
     },
     getSessionId: () => sessionId,
     openSearch: () => setSearchVisible(true),
     closeSearch: () => setSearchVisible(false),
     toggleCompose: () => {
-      if (isNative() && sessionId) {
+      if (sessionId) {
         invoke("terminal_get_cursor_line", { sessionId }).then((raw) => {
           setPendingComposeText(stripPrompt(raw as string));
           setComposeOpen(true);
         }).catch(() => setComposeOpen((p) => !p));
-        return;
       }
-      setComposeOpen((prev) => {
-        if (!prev && terminal) {
-          const input = extractCurrentInput(terminal);
-          setPendingComposeText(input);
-        }
-        return !prev;
-      });
     },
     openComposeWithText: (text: string) => {
       setPendingComposeText(text);
       setComposeOpen(true);
     },
     searchBuffer: (query: string) => {
-      if (isNative() && sessionId) {
-        type RustMatch = { line_index: number; line_text: string; match_start: number; match_end: number };
-        return invoke("terminal_search_buffer", { sessionId, query }).then((raw) => {
-          const name = terminalsStore.get(props.id)?.name ?? props.id;
-          return (raw as RustMatch[]).map((m) => ({
-            terminalId: props.id,
-            terminalName: name,
-            lineIndex: m.line_index,
-            lineText: m.line_text,
-            matchStart: m.match_start,
-            matchEnd: m.match_end,
-          }));
-        });
-      }
-      if (!terminal) return [];
-      const buf = terminal.buffer.active;
-      const lines: string[] = [];
-      for (let i = 0; i < buf.length; i++) {
-        lines.push(buf.getLine(i)?.translateToString(true) ?? "");
-      }
-      const name = terminalsStore.get(props.id)?.name ?? props.id;
-      return searchTerminalBuffer(lines, query, props.id, name);
+      if (!sessionId) return [];
+      type RustMatch = { line_index: number; line_text: string; match_start: number; match_end: number };
+      return invoke("terminal_search_buffer", { sessionId, query }).then((raw) => {
+        const name = terminalsStore.get(props.id)?.name ?? props.id;
+        return (raw as RustMatch[]).map((m) => ({
+          terminalId: props.id,
+          terminalName: name,
+          lineIndex: m.line_index,
+          lineText: m.line_text,
+          matchStart: m.match_start,
+          matchEnd: m.match_end,
+        }));
+      });
     },
     scrollToLine: (lineIndex: number) => {
-      if (isNative() && sessionId) {
-        invoke("terminal_scroll_to", { sessionId, line: lineIndex }).catch(() => {});
-      } else if (terminal) {
-        const viewportY = terminal.buffer.active.viewportY;
-        const delta = lineIndex - viewportY - Math.floor(terminal.rows / 2);
-        terminal.scrollLines(delta);
-      }
+      if (sessionId) invoke("terminal_scroll_to", { sessionId, line: lineIndex }).catch(() => {});
     },
     scrollToTop: () => {
-      if (isNative() && sessionId) {
+      if (sessionId) {
         invoke("terminal_scroll_info", { sessionId }).then((info) => {
           const [, total] = info as [number, number, number];
           invoke("terminal_scroll", { sessionId, delta: total }).catch(() => {});
         }).catch(() => {});
-      } else {
-        terminal?.scrollToTop();
       }
     },
     scrollToBottom: () => {
-      if (isNative() && sessionId) {
+      if (sessionId) {
         invoke("terminal_scroll_info", { sessionId }).then((info) => {
           const [offset] = info as [number, number, number];
           if (offset > 0) invoke("terminal_scroll", { sessionId, delta: -offset }).catch(() => {});
         }).catch(() => {});
-      } else {
-        terminal?.scrollToBottom();
       }
     },
     scrollPages: (pages: number) => {
-      if (isNative() && sessionId) {
+      if (sessionId) {
         invoke("terminal_scroll_info", { sessionId }).then((info) => {
           const [, , screenLines] = info as [number, number, number];
           const rows = screenLines || 24;
           invoke("terminal_scroll", { sessionId, delta: -(pages * rows) }).catch(() => {});
         }).catch(() => {});
-      } else {
-        terminal?.scrollPages(pages);
       }
     },
-    getSelection: () => {
-      if (isNative()) return canvasTerminalRef?.getSelectionText() ?? "";
-      return terminal?.getSelection() ?? "";
-    },
+    getSelection: () => canvasTerminalRef?.getSelectionText() ?? "",
     getBufferLines: (startLine: number, endLine: number) => {
-      if (isNative() && sessionId) {
-        return invoke("terminal_get_lines", { sessionId, start: startLine, end: endLine }) as Promise<string[]>;
-      }
-      if (!terminal) return [];
-      const buf = terminal.buffer.active;
-      const lines: string[] = [];
-      for (let i = startLine; i < endLine; i++) {
-        const line = buf.getLine(i);
-        lines.push(line ? line.translateToString(true) : "");
-      }
-      return lines;
+      if (!sessionId) return [];
+      return invoke("terminal_get_lines", { sessionId, start: startLine, end: endLine }) as Promise<string[]>;
     },
   };
 
@@ -1992,7 +851,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     e.preventDefault();
     e.stopPropagation();
     terminalsStore.update(props.id, { pendingResumeCommand: null });
-    terminal?.focus();
+    canvasTerminalRef?.focus();
   };
 
   const handleFileDragOver = (e: DragEvent) => {
@@ -2008,7 +867,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     e.preventDefault();
     const quoted = `'${path.replace(/'/g, "'\\''")}' `;
     pty.write(sessionId, quoted);
-    terminal?.focus();
+    canvasTerminalRef?.focus();
   };
 
   return (
@@ -2021,12 +880,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
     >
       <TerminalSearch
         visible={searchVisible()}
-        searchAddon={isNative() ? undefined : searchAddon()}
-        canvasRef={isNative() ? canvasTerminalRef : undefined}
+        canvasRef={canvasTerminalRef}
         onClose={() => {
           setSearchVisible(false);
-          if (isNative()) canvasTerminalRef?.focus();
-          else terminal?.focus();
+          canvasTerminalRef?.focus();
         }}
       />
       <Show when={reconnecting()}>
@@ -2042,29 +899,25 @@ export const Terminal: Component<TerminalProps> = (props) => {
           <button class={s.resumeDismiss} onClick={handleDismissResume} title="Dismiss">&times;</button>
         </div>
       </Show>
-      <Show when={useNativeRenderer() && _currentSessionId()} fallback={
-        <div
-          ref={containerRef}
-          class={s.content}
-          style={{ width: "100%", height: "100%", opacity: fitted() ? 1 : 0 }}
-        />
-      }>
-        {(sid) => <CanvasTerminal
-          sessionId={sid()}
-          terminalId={props.id}
-          onOpenFilePath={props.onOpenFilePath}
-          onSearchOpen={() => setSearchVisible(true)}
-          onSearchClose={() => setSearchVisible(false)}
-          searchVisible={searchVisible()}
-          onResume={handleResume}
-          onResumeDismiss={() => terminalsStore.update(props.id, { pendingResumeCommand: null })}
-          hasPendingResume={!!terminalsStore.get(props.id)?.pendingResumeCommand}
-          onFocus={() => props.onFocus?.(props.id)}
-          onCwdChange={props.onCwdChange}
-          onRef={(ref) => { canvasTerminalRef = ref; if (pendingCanvasFocus) { pendingCanvasFocus = false; ref.focus(); } }}
-          onBell={handleBell}
-        />}
-      </Show>
+      <div ref={containerRef} class={s.content} style={{ width: "100%", height: "100%" }}>
+        <Show when={_currentSessionId()}>
+          {(sid) => <CanvasTerminal
+            sessionId={sid()}
+            terminalId={props.id}
+            onOpenFilePath={props.onOpenFilePath}
+            onSearchOpen={() => setSearchVisible(true)}
+            onSearchClose={() => setSearchVisible(false)}
+            searchVisible={searchVisible()}
+            onResume={handleResume}
+            onResumeDismiss={() => terminalsStore.update(props.id, { pendingResumeCommand: null })}
+            hasPendingResume={!!terminalsStore.get(props.id)?.pendingResumeCommand}
+            onFocus={() => props.onFocus?.(props.id)}
+            onCwdChange={props.onCwdChange}
+            onRef={(ref) => { canvasTerminalRef = ref; if (pendingCanvasFocus) { pendingCanvasFocus = false; ref.focus(); } }}
+            onBell={handleBell}
+          />}
+        </Show>
+      </div>
       <Show when={!composeOpen()}>
         <div
           class={s.composeHint}
@@ -2082,7 +935,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
         initialText={pendingComposeText}
         onClose={() => {
           setComposeOpen(false);
-          terminal?.focus();
+          canvasTerminalRef?.focus();
         }}
         onSend={async (text) => {
           if (sessionId) {
@@ -2090,13 +943,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
               const term = terminalsStore.get(props.id);
               await pty.sendCommand(sessionId, text, term?.agentType);
               setComposeOpen(false);
-              terminal?.focus();
+              canvasTerminalRef?.focus();
             } catch (err) {
               appLogger.error("terminal", "ComposePanel send failed", { sessionId, error: err });
             }
           } else {
             setComposeOpen(false);
-            terminal?.focus();
+            canvasTerminalRef?.focus();
           }
         }}
       />

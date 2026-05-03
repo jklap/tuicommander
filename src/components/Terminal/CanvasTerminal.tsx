@@ -114,6 +114,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   // When true, next paint must redraw everything (scroll, resize, clear)
   let fullRepaintNeeded = true;
   let hidden = false;
+  let lastHistorySize = -1;
+
+  // Previous overlay rows — needed to invalidate stale overlay pixels on transition
+  let lastCursorRow = -1;
+  let lastSearchRows = new Set<number>();
+  let lastSelectionRows = new Set<number>();
+  let lastGutterRows = new Set<number>();
 
   // Memoized color strings: pack RGB into u32 key → "rgb(r,g,b)" string
   const colorStringCache = new Map<number, string>();
@@ -217,21 +224,91 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       }
       fullRepaintNeeded = false;
     } else {
-      // Incremental: only clear and repaint dirty rows
+      // Incremental: repaint dirty rows + previous/current overlay rows
+      const rowsToRepaint = new Set(dirtyIndices);
+
+      // Cursor: repaint previous/current rows, plus the swept range when the
+      // cursor moves vertically. TUIs often clear below the cursor; alacritty
+      // damage can arrive as sparse rows, so the canvas must invalidate the
+      // visible rows the cursor crossed instead of only the row marked dirty.
+      if (lastCursorRow >= 0) {
+        const start = Math.min(lastCursorRow, frame.cursorRow);
+        const end = Math.max(lastCursorRow, frame.cursorRow);
+        for (let r = start; r <= end; r++) rowsToRepaint.add(r);
+      }
+      rowsToRepaint.add(frame.cursorRow);
+
+      // Search highlights: previous + current viewport rows
+      for (const r of lastSearchRows) rowsToRepaint.add(r);
+      for (const match of searchMatches) {
+        const vpRow = absRowToViewport(match.row);
+        if (vpRow !== null) rowsToRepaint.add(vpRow);
+      }
+
+      // Selection: previous + current row range
+      for (const r of lastSelectionRows) rowsToRepaint.add(r);
+      if (selectionStart && selectionEnd) {
+        const s = Math.min(selectionStart.row, selectionEnd.row);
+        const e = Math.max(selectionStart.row, selectionEnd.row);
+        for (let r = s; r <= e; r++) rowsToRepaint.add(r);
+      }
+
+      // Gutter markers: previous + current
+      for (const r of lastGutterRows) rowsToRepaint.add(r);
+      const term = terminalsStore.get(props.terminalId);
+      if (term) {
+        for (const block of term.commandBlocks) {
+          if (block.exitCode !== null && block.exitCode !== 0) {
+            const vpRow = absRowToViewport(block.promptLine);
+            if (vpRow !== null) rowsToRepaint.add(vpRow);
+          }
+        }
+      }
+
       ctx.fillStyle = cachedBgDefault;
-      for (const idx of dirtyIndices) {
-        const row = rowMap.get(idx);
-        if (!row) continue;
+      for (const idx of rowsToRepaint) {
         const y = idx * m.cellHeight;
         ctx.fillRect(0, y, w, m.cellHeight);
-        paintRow(row, y, m, fontFamily);
+        const row = rowMap.get(idx);
+        if (row) paintRow(row, y, m, fontFamily);
       }
     }
+
 
     paintSelection(frame, m);
     paintSearchHighlights(m);
     paintGutterMarkers(m);
     paintCursor(frame, m);
+
+    // Update previous overlay state for next incremental frame
+    lastCursorRow = frame.cursorRow;
+
+    const newSearchRows = new Set<number>();
+    for (const match of searchMatches) {
+      const vpRow = absRowToViewport(match.row);
+      if (vpRow !== null) newSearchRows.add(vpRow);
+    }
+    lastSearchRows = newSearchRows;
+
+    const newSelectionRows = new Set<number>();
+    if (selectionStart && selectionEnd) {
+      const s = Math.min(selectionStart.row, selectionEnd.row);
+      const e = Math.max(selectionStart.row, selectionEnd.row);
+      for (let r = s; r <= e; r++) newSelectionRows.add(r);
+    }
+    lastSelectionRows = newSelectionRows;
+
+    const newGutterRows = new Set<number>();
+    const gutterTerm = terminalsStore.get(props.terminalId);
+    if (gutterTerm) {
+      for (const block of gutterTerm.commandBlocks) {
+        if (block.exitCode !== null && block.exitCode !== 0) {
+          const vpRow = absRowToViewport(block.promptLine);
+          if (vpRow !== null) newGutterRows.add(vpRow);
+        }
+      }
+    }
+    lastGutterRows = newGutterRows;
     updateScrollbar(frame);
     updateSuggestOverlay(frame, m, dirtyIndices);
   }
@@ -335,6 +412,42 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         ctx.fillRect(0, y, row.cells.length * m.cellWidth, m.cellHeight);
       }
     }
+  }
+
+  function getLocalSelectionText(): string {
+    if (!selectionStart || !selectionEnd) return "";
+    const startRow = Math.min(selectionStart.row, selectionEnd.row);
+    const endRow = Math.max(selectionStart.row, selectionEnd.row);
+    const lines: string[] = [];
+
+    for (let ri = startRow; ri <= endRow; ri++) {
+      const row = rowMap.get(ri);
+      if (!row) {
+        lines.push("");
+        continue;
+      }
+
+      let startCol = 0;
+      let endCol = row.cells.length - 1;
+      if (startRow === endRow) {
+        startCol = Math.min(selectionStart.col, selectionEnd.col);
+        endCol = Math.max(selectionStart.col, selectionEnd.col);
+      } else if (ri === startRow) {
+        const isStartFirst = selectionStart.row <= selectionEnd.row;
+        startCol = isStartFirst ? selectionStart.col : selectionEnd.col;
+      } else if (ri === endRow) {
+        const isStartFirst = selectionStart.row <= selectionEnd.row;
+        endCol = isStartFirst ? selectionEnd.col : selectionStart.col;
+      }
+
+      lines.push(row.cells
+        .slice(startCol, endCol + 1)
+        .map((cell) => cell.char || " ")
+        .join("")
+        .replace(/\s+$/, ""));
+    }
+
+    return lines.join("\n");
   }
 
   function resolveFg(cell: DecodedCell, defaultColor: string): string {
@@ -510,6 +623,215 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     startBlink();
   }
 
+  function drawBoxDrawingChar(cp: number, x: number, y: number, m: CellMetrics): boolean {
+    if (cp < 0x2500 || cp > 0x257F) return false;
+    const w = m.cellWidth;
+    const h = m.cellHeight;
+    const cx = x + Math.floor(w / 2);
+    const cy = y + Math.floor(h / 2);
+    const lw = Math.max(1, Math.round(w / 8));
+    const hlw = Math.max(1, Math.round(w / 4));
+
+    const line = (x1: number, y1: number, x2: number, y2: number, heavy = false) => {
+      ctx.lineWidth = heavy ? hlw : lw;
+      ctx.beginPath();
+      ctx.moveTo(x1 + 0.5, y1 + 0.5);
+      ctx.lineTo(x2 + 0.5, y2 + 0.5);
+      ctx.stroke();
+    };
+
+    const right = x + w;
+    const bottom = y + h;
+
+    const L = 1, R = 2, U = 4, D = 8;
+    const HL = 16, HR = 32, HU = 64, HD = 128;
+
+    let seg = 0;
+    switch (cp) {
+      case 0x2500: seg = L | R; break;           // ─
+      case 0x2501: seg = HL | HR; break;          // ━
+      case 0x2502: seg = U | D; break;            // │
+      case 0x2503: seg = HU | HD; break;          // ┃
+      case 0x250C: seg = R | D; break;            // ┌
+      case 0x250D: seg = HR | D; break;           // ┍
+      case 0x250E: seg = R | HD; break;           // ┎
+      case 0x250F: seg = HR | HD; break;          // ┏
+      case 0x2510: seg = L | D; break;            // ┐
+      case 0x2511: seg = HL | D; break;           // ┑
+      case 0x2512: seg = L | HD; break;           // ┒
+      case 0x2513: seg = HL | HD; break;          // ┓
+      case 0x2514: seg = R | U; break;            // └
+      case 0x2515: seg = HR | U; break;           // ┕
+      case 0x2516: seg = R | HU; break;           // ┖
+      case 0x2517: seg = HR | HU; break;          // ┗
+      case 0x2518: seg = L | U; break;            // ┘
+      case 0x2519: seg = HL | U; break;           // ┙
+      case 0x251A: seg = L | HU; break;           // ┚
+      case 0x251B: seg = HL | HU; break;          // ┛
+      case 0x251C: seg = U | D | R; break;        // ├
+      case 0x251D: seg = U | D | HR; break;       // ┝
+      case 0x251E: seg = HU | D | R; break;       // ┞
+      case 0x251F: seg = U | HD | R; break;       // ┟
+      case 0x2520: seg = HU | HD | R; break;      // ┠
+      case 0x2521: seg = HU | D | HR; break;      // ┡
+      case 0x2522: seg = U | HD | HR; break;      // ┢
+      case 0x2523: seg = HU | HD | HR; break;     // ┣
+      case 0x2524: seg = U | D | L; break;        // ┤
+      case 0x2525: seg = U | D | HL; break;       // ┥
+      case 0x2526: seg = HU | D | L; break;       // ┦
+      case 0x2527: seg = U | HD | L; break;       // ┧
+      case 0x2528: seg = HU | HD | L; break;      // ┨
+      case 0x2529: seg = HU | D | HL; break;      // ┩
+      case 0x252A: seg = U | HD | HL; break;      // ┪
+      case 0x252B: seg = HU | HD | HL; break;     // ┫
+      case 0x252C: seg = L | R | D; break;        // ┬
+      case 0x252D: seg = HL | R | D; break;       // ┭
+      case 0x252E: seg = L | HR | D; break;       // ┮
+      case 0x252F: seg = HL | HR | D; break;      // ┯
+      case 0x2530: seg = L | R | HD; break;       // ┰
+      case 0x2531: seg = HL | R | HD; break;      // ┱
+      case 0x2532: seg = L | HR | HD; break;      // ┲
+      case 0x2533: seg = HL | HR | HD; break;     // ┳
+      case 0x2534: seg = L | R | U; break;        // ┴
+      case 0x2535: seg = HL | R | U; break;       // ┵
+      case 0x2536: seg = L | HR | U; break;       // ┶
+      case 0x2537: seg = HL | HR | U; break;      // ┷
+      case 0x2538: seg = L | R | HU; break;       // ┸
+      case 0x2539: seg = HL | R | HU; break;      // ┹
+      case 0x253A: seg = L | HR | HU; break;      // ┺
+      case 0x253B: seg = HL | HR | HU; break;     // ┻
+      case 0x253C: seg = L | R | U | D; break;    // ┼
+      case 0x253D: seg = HL | R | U | D; break;   // ┽
+      case 0x253E: seg = L | HR | U | D; break;   // ┾
+      case 0x253F: seg = HL | HR | U | D; break;  // ┿
+      case 0x2540: seg = L | R | HU | D; break;   // ╀
+      case 0x2541: seg = L | R | U | HD; break;   // ╁
+      case 0x2542: seg = L | R | HU | HD; break;  // ╂
+      case 0x2543: seg = HL | R | HU | D; break;  // ╃
+      case 0x2544: seg = L | HR | HU | D; break;  // ╄
+      case 0x2545: seg = HL | R | U | HD; break;  // ╅
+      case 0x2546: seg = L | HR | U | HD; break;  // ╆
+      case 0x2547: seg = HL | HR | HU | D; break; // ╇
+      case 0x2548: seg = HL | HR | U | HD; break; // ╈
+      case 0x2549: seg = HL | R | HU | HD; break; // ╉
+      case 0x254A: seg = L | HR | HU | HD; break; // ╊
+      case 0x254B: seg = HL | HR | HU | HD; break;// ╋
+      case 0x2574: seg = L; break;                 // ╴
+      case 0x2575: seg = U; break;                 // ╵
+      case 0x2576: seg = R; break;                 // ╶
+      case 0x2577: seg = D; break;                 // ╷
+      case 0x2578: seg = HL; break;                // ╸
+      case 0x2579: seg = HU; break;                // ╹
+      case 0x257A: seg = HR; break;                // ╺
+      case 0x257B: seg = HD; break;                // ╻
+      case 0x257C: seg = L | HR; break;            // ╼
+      case 0x257D: seg = U | HD; break;            // ╽
+      case 0x257E: seg = HL | R; break;            // ╾
+      case 0x257F: seg = HU | D; break;            // ╿
+      // Dashes: render as regular line (close enough)
+      case 0x2504: case 0x2505: seg = L | R; break;   // ┄┅
+      case 0x2506: case 0x2507: seg = U | D; break;   // ┆┇
+      case 0x2508: case 0x2509: seg = L | R; break;   // ┈┉
+      case 0x250A: case 0x250B: seg = U | D; break;   // ┊┋
+      // Rounded corners
+      case 0x256D: seg = R | D; break;             // ╭
+      case 0x256E: seg = L | D; break;             // ╮
+      case 0x256F: seg = L | U; break;             // ╯
+      case 0x2570: seg = R | U; break;             // ╰
+      // Light/heavy dashes (additional)
+      case 0x254C: case 0x254D: seg = L | R; break;   // ╌╍
+      case 0x254E: case 0x254F: seg = U | D; break;   // ╎╏
+      // Diagonals
+      case 0x2571: {
+        line(right, y, x, bottom);
+        return true;
+      }
+      case 0x2572: {
+        line(x, y, right, bottom);
+        return true;
+      }
+      case 0x2573: {
+        line(right, y, x, bottom);
+        line(x, y, right, bottom);
+        return true;
+      }
+      // Double-line box drawing: two parallel lines with gap
+      case 0x2550: case 0x2551: case 0x2552: case 0x2553: case 0x2554:
+      case 0x2555: case 0x2556: case 0x2557: case 0x2558: case 0x2559:
+      case 0x255A: case 0x255B: case 0x255C: case 0x255D: case 0x255E:
+      case 0x255F: case 0x2560: case 0x2561: case 0x2562: case 0x2563:
+      case 0x2564: case 0x2565: case 0x2566: case 0x2567: case 0x2568:
+      case 0x2569: case 0x256A: case 0x256B: case 0x256C: {
+        const g = Math.max(1, Math.round(w / 6));
+        const dbl = (x1: number, y1: number, x2: number, y2: number, horiz: boolean) => {
+          const off = Math.floor(g / 2 + 0.5);
+          if (horiz) {
+            line(x1, y1 - off, x2, y2 - off);
+            line(x1, y1 + off, x2, y2 + off);
+          } else {
+            line(x1 - off, y1, x2 - off, y2);
+            line(x1 + off, y1, x2 + off, y2);
+          }
+        };
+        // Encode: which directions are single (s) vs double (d)
+        // Format: [sL, sR, sU, sD, dL, dR, dU, dD]
+        const t: Record<number, number[]> = {
+          0x2550: [0,0,0,0,1,1,0,0], // ═
+          0x2551: [0,0,0,0,0,0,1,1], // ║
+          0x2552: [0,1,0,0,0,0,0,1], // ╒
+          0x2553: [0,0,0,1,0,1,0,0], // ╓
+          0x2554: [0,0,0,0,0,1,0,1], // ╔
+          0x2555: [1,0,0,0,0,0,0,1], // ╕
+          0x2556: [0,0,0,1,1,0,0,0], // ╖
+          0x2557: [0,0,0,0,1,0,0,1], // ╗
+          0x2558: [0,1,0,0,0,0,1,0], // ╘
+          0x2559: [0,0,1,0,0,1,0,0], // ╙
+          0x255A: [0,0,0,0,0,1,1,0], // ╚
+          0x255B: [1,0,0,0,0,0,1,0], // ╛
+          0x255C: [0,0,1,0,1,0,0,0], // ╜
+          0x255D: [0,0,0,0,1,0,1,0], // ╝
+          0x255E: [0,1,0,0,0,0,1,1], // ╞
+          0x255F: [0,0,1,1,0,1,0,0], // ╟
+          0x2560: [0,0,0,0,0,1,1,1], // ╠
+          0x2561: [1,0,0,0,0,0,1,1], // ╡
+          0x2562: [0,0,1,1,1,0,0,0], // ╢
+          0x2563: [0,0,0,0,1,0,1,1], // ╣
+          0x2564: [0,0,0,1,1,1,0,0], // ╤
+          0x2565: [1,1,0,0,0,0,0,1], // ╥
+          0x2566: [0,0,0,0,1,1,0,1], // ╦
+          0x2567: [0,0,1,0,1,1,0,0], // ╧
+          0x2568: [1,1,0,0,0,0,1,0], // ╨
+          0x2569: [0,0,0,0,1,1,1,0], // ╩
+          0x256A: [0,0,1,1,1,1,0,0], // ╪
+          0x256B: [1,1,0,0,0,0,1,1], // ╫
+          0x256C: [0,0,0,0,1,1,1,1], // ╬
+        };
+        const d = t[cp];
+        if (!d) return false;
+        if (d[0]) line(x, cy, cx, cy);
+        if (d[1]) line(cx, cy, right, cy);
+        if (d[2]) line(cx, y, cx, cy);
+        if (d[3]) line(cx, cy, cx, bottom);
+        if (d[4]) dbl(x, cy, cx, cy, true);
+        if (d[5]) dbl(cx, cy, right, cy, true);
+        if (d[6]) dbl(cx, y, cx, cy, false);
+        if (d[7]) dbl(cx, cy, cx, bottom, false);
+        return true;
+      }
+      default: return false;
+    }
+
+    if (seg & L) line(x, cy, cx, cy);
+    if (seg & R) line(cx, cy, right, cy);
+    if (seg & U) line(cx, y, cx, cy);
+    if (seg & D) line(cx, cy, cx, bottom);
+    if (seg & HL) line(x, cy, cx, cy, true);
+    if (seg & HR) line(cx, cy, right, cy, true);
+    if (seg & HU) line(cx, y, cx, cy, true);
+    if (seg & HD) line(cx, cy, cx, bottom, true);
+    return true;
+  }
+
   function drawBlockChar(cp: number, x: number, y: number, m: CellMetrics): boolean {
     const w = m.cellWidth;
     const h = m.cellHeight;
@@ -546,9 +868,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   function paintRow(row: DecodedFrame["rows"][0], y: number, m: CellMetrics, fontFamily?: string) {
     fontFamily ??= settingsStore.getFontFamily();
 
+    let lastVisibleCol = -1;
+    for (let c = row.cells.length - 1; c >= 0; c--) {
+      const ch = row.cells[c].char;
+      if (ch && ch !== " ") {
+        lastVisibleCol = c;
+        break;
+      }
+    }
+
     // Pass 1: backgrounds (per-cell, attributes vary independently of text)
     for (let c = 0; c < row.cells.length; c++) {
       const cell = row.cells[c];
+      if (!cell.char || (cell.char === " " && c > lastVisibleCol)) continue;
       if (!cell.defaultBg || cell.inverse) {
         ctx.fillStyle = resolveBg(cell, cachedBgDefault);
         ctx.fillRect(c * m.cellWidth, y, m.cellWidth, m.cellHeight);
@@ -580,6 +912,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (!cell.char || cell.char === " ") { flushRun(); continue; }
 
       const cp = cell.char.codePointAt(0) ?? 0;
+      if (cp >= 0x2500 && cp <= 0x257F) {
+        flushRun();
+        ctx.fillStyle = resolveFg(cell, cachedFgDefault);
+        ctx.strokeStyle = ctx.fillStyle;
+        if (!drawBoxDrawingChar(cp, c * m.cellWidth, y, m)) {
+          ctx.font = buildFontStyle(cell, m.fontSize, fontFamily);
+          ctx.fillText(cell.char, c * m.cellWidth, y + m.baseline);
+        }
+        continue;
+      }
       if ((cp >= 0x2580 && cp <= 0x2593) || (cp >= 0x2596 && cp <= 0x259F)) {
         flushRun();
         ctx.fillStyle = resolveFg(cell, cachedFgDefault);
@@ -643,19 +985,36 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
     if (frame.bell) props.onBell?.();
 
-    // When scroll position or geometry changes, the entire visible content is different
-    if (frame.displayOffset !== lastDisplayOffset
-        || frame.screenRows !== lastScreenRows
-        || frame.screenCols !== lastScreenCols) {
+    // When geometry changes, viewport is entirely different — must clear and repaint
+    const geomChanged = frame.screenRows !== lastScreenRows || frame.screenCols !== lastScreenCols;
+    const scrollChanged = frame.displayOffset !== lastDisplayOffset || frame.historySize !== lastHistorySize;
+
+    if (geomChanged) {
       screenRows.clear();
       rowMap.clear();
       fullRepaintNeeded = true;
+    }
+
+    if (scrollChanged || geomChanged) {
       lastDisplayOffset = frame.displayOffset;
+      lastHistorySize = frame.historySize;
       lastScreenRows = frame.screenRows;
       lastScreenCols = frame.screenCols;
     }
 
-    // Merge incoming damaged rows into persistent stores
+    // When backend sends all screen rows, replace rowMap to discard stale entries
+    const screenRowCount = frame.screenRows || lastResizeRows || 24;
+    if (frame.rows.length >= screenRowCount) {
+      rowMap.clear();
+      screenRows.clear();
+      fullRepaintNeeded = true;
+    } else if (scrollChanged && !geomChanged) {
+      // Scroll changed but only partial rows arrived — old row indices are stale.
+      // DON'T clear rowMap (would cause blank flash). Instead request a full frame;
+      // when it arrives, the >= screenRowCount branch above will replace rowMap.
+      fullRepaintNeeded = true;
+      invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(() => {});
+    }
     for (const row of frame.rows) {
       screenRows.set(row.index, row);
       rowMap.set(row.index, row);
@@ -668,6 +1027,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       rows: frame.rows,
     };
 
+    // Ack on receive, not after paint. Otherwise the backend is forced to wait
+    // until the frontend has displayed an intermediate PTY state (for example a
+    // newline carrying the previous SGR background before the CLI writes reset/text).
+    invokeRef?.("ack_terminal_frame", { sessionId: props.sessionId }).catch(() => {});
+
     if (hidden) return;
     if (rafId === undefined) {
       rafId = requestAnimationFrame(() => {
@@ -678,7 +1042,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
           const dirty = pendingDirtyRows.size > 0 ? new Set(pendingDirtyRows) : undefined;
           pendingDirtyRows.clear();
           paintFrame(currentFrame, m, dirty);
-          invokeRef?.("ack_terminal_frame", { sessionId: props.sessionId }).catch(() => {});
         }
       });
     }
@@ -954,7 +1317,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         selectionStart = null;
         selectionEnd = null;
         cachedSelectionText = "";
-        invokeRef?.("terminal_select_clear", { sessionId: props.sessionId }).catch(() => {});
         const m = metrics();
         if (currentFrame && m) {
           fullRepaintNeeded = true;
@@ -1066,15 +1428,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
       if (clickCount === 2) {
         // Word select
-        invokeRef?.("terminal_select_start", { sessionId: props.sessionId, col: pos.col, row: pos.row, word: true }).catch(() => {});
         selectionStart = pos;
         selectionEnd = pos;
       } else if (clickCount >= 3) {
         // Line select
-        invokeRef?.("terminal_select_start", { sessionId: props.sessionId, col: 0, row: pos.row }).catch(() => {});
         const m = metrics();
         const maxCol = m ? Math.floor((canvasRef.getBoundingClientRect().width) / m.cellWidth) - 1 : 79;
-        invokeRef?.("terminal_select_update", { sessionId: props.sessionId, col: maxCol, row: pos.row }).catch(() => {});
         selectionStart = { col: 0, row: pos.row };
         selectionEnd = { col: maxCol, row: pos.row };
         clickCount = 3;
@@ -1082,7 +1441,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         // Start fresh selection
         selectionStart = pos;
         selectionEnd = null;
-        invokeRef?.("terminal_select_start", { sessionId: props.sessionId, col: pos.col, row: pos.row }).catch(() => {});
       }
       selecting = true;
       const m = metrics();
@@ -1093,7 +1451,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (selecting && selectionStart) {
         const pos = canvasToGrid(e);
         selectionEnd = pos;
-        invokeRef?.("terminal_select_update", { sessionId: props.sessionId, col: pos.col, row: pos.row }).catch(() => {});
         const m = metrics();
         if (currentFrame && m) paintFrame(currentFrame, m);
       }
@@ -1111,9 +1468,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const onMouseUp = () => {
       if (selecting && selectionStart && selectionEnd) {
         copySelection();
-        invokeRef?.("terminal_select_text", { sessionId: props.sessionId })
-          .then((t) => { cachedSelectionText = (t as string | null) ?? ""; })
-          .catch(() => {});
+        cachedSelectionText = getLocalSelectionText();
       }
       selecting = false;
     };
@@ -1312,11 +1667,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   });
 
   async function copySelection() {
-    if (!invokeRef) return;
     try {
-      const text = await invokeRef("terminal_select_text", { sessionId: props.sessionId }) as string | null;
+      const text = getLocalSelectionText();
       if (text) {
         const trimmed = text.split("\n").map(line => line.replace(/\s+$/, "")).join("\n");
+        cachedSelectionText = trimmed;
         await navigator.clipboard.writeText(trimmed);
       }
     } catch {
