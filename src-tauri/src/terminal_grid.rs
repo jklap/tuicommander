@@ -311,10 +311,13 @@ impl TerminalGrid {
         self.prev_rows.clear();
     }
 
-    /// Resize the terminal grid.
+    /// Resize the terminal grid without reflow.
+    ///
+    /// Reflow is disabled because cursor-addressed TUIs (Ink/Claude Code)
+    /// use CUU positioning that breaks when reflow merges or splits lines.
     pub fn resize(&mut self, rows: u16, cols: u16) {
         let size = GridSize { cols: cols as usize, lines: rows as usize };
-        self.term.resize(size);
+        self.term.resize_reflow(size, false);
         self.prev_rows.clear();
         self.force_full_next = true;
     }
@@ -1019,7 +1022,7 @@ mod tests {
 
     // --- Binary serialization tests ---
 
-    const TEST_HEADER_SIZE: usize = 18;
+    const TEST_HEADER_SIZE: usize = 22;
 
     /// Helper: decode the header from a serialized frame.
     fn decode_header(buf: &[u8]) -> (u16, u16, u16, bool) {
