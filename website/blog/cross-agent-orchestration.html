@@ -76,18 +76,12 @@
 
     <div class="blog-section">
       <h2>Setup: connecting Codex to TUICommander</h2>
-      <p>Codex CLI supports MCP servers as tool providers. Point it at TUICommander's MCP endpoint in your Codex config:</p>
-      <pre><code>// ~/.codex/config.json
-{
-  "mcpServers": {
-    "tuicommander": {
-      "type": "sse",
-      "url": "http://127.0.0.1:14319/mcp"
-    }
-  }
-}</code></pre>
+      <p>Codex CLI supports MCP servers as tool providers. TUICommander auto-installs itself into Codex's TOML config when you enable the MCP bridge in Settings &gt; Services. The result in <code>~/.codex/config.toml</code>:</p>
+      <pre><code># ~/.codex/config.toml
+[mcp_servers.tuicommander]
+command = "/path/to/tuic-bridge"</code></pre>
       <p>That's it. Codex now has access to all <code>ai_terminal_*</code> tools. Every write tool (send_input, send_key, drive_agent) prompts you for confirmation before executing — TUICommander never lets an external agent type into a terminal silently.</p>
-      <p>To find the correct port, check TUICommander's settings or look for the "Mission Control" URL in the app's status bar.</p>
+      <p>The bridge binary communicates with TUICommander over the local Unix socket — no port configuration needed.</p>
     </div>
 
     <div class="blog-section">
