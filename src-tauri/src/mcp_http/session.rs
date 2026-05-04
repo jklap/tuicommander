@@ -357,6 +357,7 @@ pub(super) fn spawn_pty_session(
             shell: shell.clone(),
         }),
     );
+    state.assign_term_alias(&session_id);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state.metrics.active_sessions.fetch_add(1, Ordering::Relaxed);
 

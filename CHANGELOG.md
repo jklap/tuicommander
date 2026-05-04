@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - **Delta cursor for MCP read tools** — `session action=output`, `read_screen`, and `drive_agent` now return a `cursor` field. Pass `since_cursor` on subsequent calls to receive only new scrollback lines, avoiding full re-reads.
 - **`drive_agent` MCP tool** — Atomic send→wait→read operation for external agents. Sends a command, waits for idle/pattern match, returns screen + shell state + cursor in a single call.
+- **Session aliases** — Human-friendly aliases for terminal sessions derived from repo directory name (e.g. `tuicommander` → `tc-1`). All `ai_terminal_*` tools accept aliases in place of UUIDs. Visible in tab tooltips and `list_sessions` output. Counters reset on app restart.
 
 ## [1.1.0] - 2026-05-04
 

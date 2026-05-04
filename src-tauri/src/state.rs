@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 // ---------------------------------------------------------------------------
 // AppEvent — unified event bus for all backend events
@@ -1035,9 +1035,74 @@ pub struct AppState {
     /// Sessions running in unrestricted (TrustLevel::Unrestricted) mode.
     /// Present = unrestricted; absent = standard safety gates apply.
     pub(crate) unrestricted_sessions: DashMap<String, ()>,
+    /// session_id → human alias (e.g. "tc-1", "nr-2"). Assigned on session creation/restore.
+    pub(crate) term_aliases: DashMap<String, String>,
+    /// Per-prefix counter for alias numbering (e.g. "tc" → 2 means next is tc-3).
+    pub(crate) term_alias_counters: DashMap<String, u32>,
 }
 
 impl AppState {
+    /// Assign a human-friendly alias based on the repo/cwd name.
+    /// E.g. `tuicommander` → `tc-1`, `night-recovery` → `nr-1`, no repo → `sh-1`.
+    ///
+    /// If the same repo name already has a prefix in `term_alias_counters`, reuse it.
+    /// Collision resolution only runs for new repo names whose base acronym clashes.
+    pub(crate) fn assign_term_alias(&self, session_id: &str) -> String {
+        let cwd = self.sessions.get(session_id)
+            .and_then(|s| s.lock().cwd.clone());
+        let repo_name = cwd.as_deref()
+            .and_then(|p| std::path::Path::new(p).file_name())
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Check if we already have a prefix for this exact repo name
+        let prefix = if let Some(existing) = self.find_prefix_for_repo(&repo_name) {
+            existing
+        } else {
+            repo_name_to_prefix(&repo_name, &self.term_aliases)
+        };
+
+        let mut counter = self.term_alias_counters.entry(prefix.clone()).or_insert(0);
+        *counter += 1;
+        let alias = format!("{prefix}-{}", *counter);
+        self.term_aliases.insert(session_id.to_string(), alias.clone());
+        if let Some(ref app) = *self.app_handle.read() {
+            let _ = app.emit("term-alias-assigned", serde_json::json!({
+                "session_id": session_id,
+                "alias": alias,
+            }));
+        }
+        alias
+    }
+
+    /// Find an existing prefix used by a session with the same repo name.
+    fn find_prefix_for_repo(&self, repo_name: &str) -> Option<String> {
+        for entry in self.term_aliases.iter() {
+            let sid = entry.key();
+            let alias = entry.value();
+            let other_cwd = self.sessions.get(sid.as_str())
+                .and_then(|s| s.lock().cwd.clone());
+            let other_name = other_cwd.as_deref()
+                .and_then(|p| std::path::Path::new(p).file_name())
+                .and_then(|n| n.to_str())
+                .unwrap_or("");
+            if other_name == repo_name {
+                if let Some(dash) = alias.rfind('-') {
+                    return Some(alias[..dash].to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// Look up session_id by alias (e.g. "tc-1" → UUID).
+    pub(crate) fn resolve_alias(&self, alias: &str) -> Option<String> {
+        self.term_aliases.iter()
+            .find(|e| e.value() == alias)
+            .map(|e| e.key().clone())
+    }
+
     /// Record a command outcome into this session's knowledge store and mark it
     /// dirty for the background persister. Creates the entry on first use.
     pub(crate) fn record_outcome(
@@ -1053,6 +1118,97 @@ impl AppState {
         self.knowledge_dirty.insert(session_id.to_string(), ());
         id
     }
+}
+
+/// Derive a short prefix from a repo directory name.
+///
+/// Split by `-`, `_`, `.`, and camelCase boundaries, then take initials.
+/// - Multi-word: `tuicommander` → `tc` (camel split), `night-recovery` → `nr`
+/// - Single word < 3 chars: use as-is (`go` → `go`)
+/// - Single word >= 3 chars: first 2 letters (`server` → `se`)
+/// - Empty/no repo: `sh`
+///
+/// If the result collides with an existing alias prefix, progressively add
+/// letters from the longest segment until unique (max 5 chars).
+fn repo_name_to_prefix(name: &str, existing: &DashMap<String, String>) -> String {
+    if name.is_empty() {
+        return "sh".to_string();
+    }
+
+    let segments = split_name_segments(name);
+    let base = if segments.len() >= 2 {
+        segments.iter().map(|s| &s[..1]).collect::<String>()
+    } else {
+        let s = &segments[0];
+        if s.len() < 3 { s.clone() } else { s[..2].to_string() }
+    };
+
+    let used_prefixes: std::collections::HashSet<String> = existing.iter()
+        .filter_map(|e| {
+            let v = e.value();
+            v.rfind('-').map(|i| v[..i].to_string())
+        })
+        .collect();
+
+    if !used_prefixes.contains(&base) {
+        return base;
+    }
+
+    // Collision: extend with letters from the longest segment
+    let longest = segments.iter().max_by_key(|s| s.len()).unwrap();
+    for len in (base.len() + 1)..=5.min(longest.len() + base.len()) {
+        let extended = if segments.len() >= 2 {
+            let mut ext = base.clone();
+            let extra_needed = len - base.len();
+            let chars_available: Vec<char> = longest.chars().skip(1).collect();
+            for c in chars_available.iter().take(extra_needed) {
+                ext.push(*c);
+            }
+            ext
+        } else {
+            name.chars().take(len).collect()
+        };
+        if !used_prefixes.contains(&extended) {
+            return extended;
+        }
+    }
+
+    // Last resort: append digit to base
+    for i in 2..=9 {
+        let fallback = format!("{base}{i}");
+        if !used_prefixes.contains(&fallback) {
+            return fallback;
+        }
+    }
+    base
+}
+
+/// Split a name into segments by `-`, `_`, `.`, and camelCase transitions.
+fn split_name_segments(name: &str) -> Vec<String> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+
+    for c in name.chars() {
+        if c == '-' || c == '_' || c == '.' {
+            if !current.is_empty() {
+                segments.push(current.to_lowercase());
+                current.clear();
+            }
+        } else if c.is_uppercase() && !current.is_empty() {
+            segments.push(current.to_lowercase());
+            current.clear();
+            current.push(c);
+        } else {
+            current.push(c);
+        }
+    }
+    if !current.is_empty() {
+        segments.push(current.to_lowercase());
+    }
+    if segments.is_empty() {
+        segments.push("sh".to_string());
+    }
+    segments
 }
 
 /// Cloud relay client state (connection + shutdown handle).
@@ -2039,6 +2195,8 @@ pub(crate) mod tests_support {
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),
+            term_aliases: DashMap::new(),
+            term_alias_counters: DashMap::new(),
         }
     }
 }
@@ -2046,6 +2204,177 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── split_name_segments ──────────────────────────────────
+
+    #[test]
+    fn segments_hyphen() {
+        assert_eq!(split_name_segments("night-recovery"), vec!["night", "recovery"]);
+    }
+
+    #[test]
+    fn segments_underscore() {
+        assert_eq!(split_name_segments("my_app"), vec!["my", "app"]);
+    }
+
+    #[test]
+    fn segments_camel_case() {
+        assert_eq!(split_name_segments("tuiCommander"), vec!["tui", "commander"]);
+    }
+
+    #[test]
+    fn segments_dot() {
+        assert_eq!(split_name_segments("my.project"), vec!["my", "project"]);
+    }
+
+    #[test]
+    fn segments_single_word() {
+        assert_eq!(split_name_segments("server"), vec!["server"]);
+    }
+
+    #[test]
+    fn segments_mixed() {
+        assert_eq!(split_name_segments("my-AwesomeProject_v2"), vec!["my", "awesome", "project", "v2"]);
+    }
+
+    #[test]
+    fn segments_empty() {
+        assert_eq!(split_name_segments(""), vec!["sh"]);
+    }
+
+    // ── repo_name_to_prefix ─────────────────────────────────
+
+    #[test]
+    fn prefix_multi_word_hyphen() {
+        let m = DashMap::new();
+        assert_eq!(repo_name_to_prefix("night-recovery", &m), "nr");
+    }
+
+    #[test]
+    fn prefix_multi_word_camel() {
+        let m = DashMap::new();
+        assert_eq!(repo_name_to_prefix("tuiCommander", &m), "tc");
+    }
+
+    #[test]
+    fn prefix_single_short() {
+        let m = DashMap::new();
+        assert_eq!(repo_name_to_prefix("go", &m), "go");
+    }
+
+    #[test]
+    fn prefix_single_long() {
+        let m = DashMap::new();
+        assert_eq!(repo_name_to_prefix("server", &m), "se");
+    }
+
+    #[test]
+    fn prefix_empty() {
+        let m = DashMap::new();
+        assert_eq!(repo_name_to_prefix("", &m), "sh");
+    }
+
+    #[test]
+    fn prefix_collision_extends() {
+        let m: DashMap<String, String> = DashMap::new();
+        m.insert("s1".into(), "ma-1".into()); // "ma" prefix is taken
+        let p = repo_name_to_prefix("my-app", &m);
+        assert_ne!(p, "ma", "should not collide");
+        assert!(p.starts_with("ma"), "should extend from base: {p}");
+    }
+
+    #[test]
+    fn prefix_three_word() {
+        let m = DashMap::new();
+        assert_eq!(repo_name_to_prefix("my-awesome-project", &m), "map");
+    }
+
+    // ── assign_term_alias (prefix + counter) ──────────────
+
+    #[test]
+    fn prefix_no_collision_when_map_empty() {
+        let m: DashMap<String, String> = DashMap::new();
+        let p = repo_name_to_prefix("night-recovery", &m);
+        assert_eq!(p, "nr");
+    }
+
+    #[test]
+    fn prefix_extends_on_self_collision() {
+        // repo_name_to_prefix doesn't know about repo identity — it only sees
+        // existing aliases. assign_term_alias handles same-repo reuse via
+        // find_prefix_for_repo. This test verifies the raw collision path.
+        let m: DashMap<String, String> = DashMap::new();
+        m.insert("s1".into(), "nr-1".into());
+        let p = repo_name_to_prefix("night-recorder", &m);
+        assert_ne!(p, "nr", "different repo should get extended prefix");
+    }
+
+    #[test]
+    fn alias_different_repos_different_prefixes() {
+        let m: DashMap<String, String> = DashMap::new();
+        let p1 = repo_name_to_prefix("night-recovery", &m);
+        m.insert("s1".into(), format!("{p1}-1"));
+        let p2 = repo_name_to_prefix("tuiCommander", &m);
+        assert_ne!(p1, p2, "different repos should get different prefixes");
+    }
+
+    // ── acronym collision tests ─────────────────────────────
+
+    #[test]
+    fn collision_my_app_vs_my_api() {
+        let m: DashMap<String, String> = DashMap::new();
+        let p1 = repo_name_to_prefix("my-app", &m);
+        assert_eq!(p1, "ma");
+        m.insert("s1".into(), format!("{p1}-1"));
+        let p2 = repo_name_to_prefix("my-api", &m);
+        assert_ne!(p2, "ma", "my-api must not collide with my-app: got {p2}");
+        assert!(p2.starts_with("ma"), "should extend from base 'ma': got {p2}");
+    }
+
+    #[test]
+    fn collision_three_way_ma_prefix() {
+        let m: DashMap<String, String> = DashMap::new();
+        let p1 = repo_name_to_prefix("my-app", &m);
+        m.insert("s1".into(), format!("{p1}-1"));
+        let p2 = repo_name_to_prefix("my-api", &m);
+        m.insert("s2".into(), format!("{p2}-1"));
+        let p3 = repo_name_to_prefix("my-auth", &m);
+        assert_ne!(p3, p1, "third collision must resolve: {p3} vs {p1}");
+        assert_ne!(p3, p2, "third collision must resolve: {p3} vs {p2}");
+    }
+
+    #[test]
+    fn collision_single_word_same_start() {
+        let m: DashMap<String, String> = DashMap::new();
+        let p1 = repo_name_to_prefix("server", &m);
+        assert_eq!(p1, "se");
+        m.insert("s1".into(), format!("{p1}-1"));
+        let p2 = repo_name_to_prefix("service", &m);
+        assert_ne!(p2, "se", "service must not collide with server: got {p2}");
+    }
+
+    #[test]
+    fn collision_two_char_repos() {
+        let m: DashMap<String, String> = DashMap::new();
+        let p1 = repo_name_to_prefix("go", &m);
+        assert_eq!(p1, "go");
+        m.insert("s1".into(), format!("{p1}-1"));
+        let p2 = repo_name_to_prefix("go-tools", &m);
+        // go-tools = "gt", different from "go" — no collision expected
+        assert_ne!(p2, p1, "go-tools should differ from go");
+    }
+
+    #[test]
+    fn collision_resolved_uniquely_for_five_similar_repos() {
+        let m: DashMap<String, String> = DashMap::new();
+        let mut prefixes = Vec::new();
+        for name in &["my-app", "my-api", "my-auth", "my-admin", "my-agent"] {
+            let p = repo_name_to_prefix(name, &m);
+            assert!(!prefixes.contains(&p), "duplicate prefix {p} for {name}, existing: {prefixes:?}");
+            m.insert(format!("s{}", prefixes.len()), format!("{p}-1"));
+            prefixes.push(p);
+        }
+    }
 
     #[test]
     fn test_utf8_buffer_ascii() {
@@ -2496,6 +2825,8 @@ mod tests {
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),
+            term_aliases: DashMap::new(),
+            term_alias_counters: DashMap::new(),
         }
     }
 

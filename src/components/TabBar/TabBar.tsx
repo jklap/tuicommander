@@ -649,7 +649,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
                   if (e.button === 1) handleCloseTab(e);
                 }}
                 onContextMenu={(e) => openTabContextMenu(e, id)}
-                title={`Terminal ${index() + 1}${index() < 9 ? ` (${keyFor(`switch-tab-${index() + 1}`)})` : ""}`}
+                title={`${terminal()?.alias ?? `Terminal ${index() + 1}`}${index() < 9 ? ` (${keyFor(`switch-tab-${index() + 1}`)})` : ""}`}
                 onMouseDown={(e) => !isEditing() && handleMouseDrag(e, id)}
                 onMouseEnter={() => setHovered(true)}
                 onMouseLeave={() => setHovered(false)}

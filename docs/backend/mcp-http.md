@@ -124,6 +124,7 @@ Client ──WebSocket──> /sessions/{session_id}/stream
 When sessions are created or closed (via HTTP, MCP, or PTY exit), the server broadcasts events through the SSE event bus:
 
 - **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id` and `cwd`. Frontend uses this to auto-add terminal tabs for remotely spawned agents.
+- **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Frontend uses this to update tab tooltips.
 - **`session-closed`** — Emitted when a session exits. Carries `session_id`. Frontend uses this for cleanup.
 
 These events are available on the SSE `/events` stream used by the mobile PWA and any connected WebSocket clients.
@@ -192,6 +193,8 @@ Seven terminal tools plus one search tool exposed to external MCP clients (e.g. 
 remote AI agent observe and interact with a TUICommander terminal. All input
 operations (`send_input`, `send_key`, `drive_agent`) require user confirmation and are
 rejected while an internal agent loop is active on the target session.
+
+**Session aliases** — Every tool that accepts a `session_id` also accepts a human-friendly alias (e.g. `tc-1`). Aliases are auto-assigned from the repo directory name: first letter of each segment joined + per-repo counter. `list_sessions` includes the `alias` field. Aliases reset on app restart.
 
 **Gated by `ai_terminal_mcp_enabled` config flag (default `false`).** When the flag is off, these tools are hidden from `tools/list` (via `filtered_native_tools`) and calls are rejected at dispatch time. Enable in `config.json` or Settings > Services. Note: no live-reload — a connected client may see a stale tools snapshot until it reconnects or `notifications/tools/list_changed` fires.
 

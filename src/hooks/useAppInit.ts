@@ -350,6 +350,14 @@ export async function initApp(deps: AppInitDeps) {
     appLogger.error("app", "Failed to register session-created listener", err),
   );
 
+  listen<{ session_id: string; alias: string }>("term-alias-assigned", (event) => {
+    const { session_id, alias } = event.payload;
+    const termId = terminalsStore.getTerminalForSession(session_id);
+    if (termId) terminalsStore.update(termId, { alias });
+  }).catch((err) =>
+    appLogger.error("app", "Failed to register term-alias-assigned listener", err),
+  );
+
   // Listen for UI tab open/update requests from MCP tools
   listen<{ id: string; title: string; html: string; pinned: boolean; url?: string; focus?: boolean; origin_repo_path?: string }>("ui-tab", (event) => {
     const { id, title, html, pinned, url, focus, origin_repo_path } = event.payload;

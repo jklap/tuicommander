@@ -1738,13 +1738,13 @@ impl ChunkProcessor {
                             let _ = a.emit(&format!("pty-clipboard-store-{session_id}"), &text);
                         }
                     }
-                    TermEvent::Osc133 { command, params } => {
+                    TermEvent::Osc133 { command, params, line } => {
                         state.has_osc133_integration.insert(session_id.to_string(), ());
                         self.handle_osc133_event(command, &params, session_id, state, app);
                         if let Some(a) = app {
                             let _ = a.emit(
                                 &format!("pty-osc133-{session_id}"),
-                                &Osc133Event { marker: command.to_string(), line: 0, exit_code: parse_osc133_exit_code(command, &params) },
+                                &Osc133Event { marker: command.to_string(), line, exit_code: parse_osc133_exit_code(command, &params) },
                             );
                         }
                     }
@@ -2193,6 +2193,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     state.last_prompts.remove(session_id);
     state.terminal_rows.remove(session_id);
     state.exit_codes.remove(session_id);
+    state.term_aliases.remove(session_id);
 }
 
 /// Reap transient per-session state that has no post-mortem value, and stamp
@@ -2654,6 +2655,14 @@ pub(crate) fn spawn_reader_thread(
                     let utf8_data = utf8_buf.push(&buf[..n]);
                     let esc_data = esc_buf.push(&utf8_data);
                     let (kitty_clean, kitty_actions) = strip_kitty_sequences(&esc_data);
+                    if kitty_clean.contains("1049l") && !kitty_clean.contains("\x1b[?1049l") {
+                        tracing::error!(source = "terminal", session_id = %session_id,
+                            "DECRST leak: kitty_clean has bare '1049l' without ESC[? prefix. \
+                             esc_data({} bytes)={:?}, kitty_clean({} bytes)={:?}, actions={:?}",
+                            esc_data.len(), esc_data.as_bytes().iter().take(200).collect::<Vec<_>>(),
+                            kitty_clean.len(), kitty_clean.as_bytes().iter().take(200).collect::<Vec<_>>(),
+                            kitty_actions);
+                    }
                     let data = kitty_clean;
 
                     process_kitty_actions(&kitty_actions, &session_id, &state, Some(&app));
@@ -2956,6 +2965,7 @@ pub(crate) async fn create_pty(
             shell: shell.clone(),
         }),
     );
+    state.assign_term_alias(&session_id);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state.metrics.active_sessions.fetch_add(1, Ordering::Relaxed);
 
@@ -3057,6 +3067,7 @@ pub(crate) async fn spawn_session_for_agent(
             shell: shell.clone(),
         }),
     );
+    state.assign_term_alias(&session_id);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state.metrics.active_sessions.fetch_add(1, Ordering::Relaxed);
 
@@ -3193,6 +3204,7 @@ pub(crate) async fn create_pty_with_worktree(
             shell,
         }),
     );
+    state.assign_term_alias(&session_id);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state.metrics.active_sessions.fetch_add(1, Ordering::Relaxed);
 

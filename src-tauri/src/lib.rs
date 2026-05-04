@@ -888,6 +888,8 @@ pub fn run() {
         desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
         server_start_time: std::time::Instant::now(),
         github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
+        term_aliases: DashMap::new(),
+        term_alias_counters: DashMap::new(),
     });
 
     // Wire the event bus into the upstream registry so status changes emit SSE events.

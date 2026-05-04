@@ -1003,6 +1003,8 @@ mod tests {
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),
+            term_aliases: dashmap::DashMap::new(),
+            term_alias_counters: dashmap::DashMap::new(),
         });
         // Override default disabled_native_tools so all 8 tools are visible in tests
         state.config.write().disabled_native_tools = Vec::new();

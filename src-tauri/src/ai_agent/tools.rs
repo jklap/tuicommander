@@ -57,12 +57,13 @@ pub fn tool_definitions() -> Value {
     json!([
         {
             "name": "read_screen",
-            "description": "Read the current visible terminal content. In TUI mode (alternate screen), returns the app's screen; in shell mode, returns recent scrollback lines.",
+            "description": "Read terminal content. Returns JSON {screen, cursor}. Pass since_cursor from a previous response to get only new lines (delta mode); omit for full viewport snapshot.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "session_id": { "type": "string", "description": "PTY session ID" },
-                    "lines": { "type": "integer", "description": "Max lines to return (default: 50)", "default": 50 }
+                    "lines": { "type": "integer", "description": "Max lines to return (default: 50)", "default": 50 },
+                    "since_cursor": { "type": "integer", "description": "Cursor from a previous call — returns only new log lines since this position" }
                 },
                 "required": ["session_id"]
             }
@@ -272,6 +273,22 @@ pub fn tool_definitions() -> Value {
                 },
                 "required": ["target_session_id"]
             }
+        },
+        {
+            "name": "drive_agent",
+            "description": "Atomic send→wait→read. Sends command to session, waits for idle/pattern, returns screen + structured state. Omit command to just wait+read. Returns cursor for delta reads.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Target PTY session ID" },
+                    "command": { "type": "string", "description": "Text to send (omit to just wait+read without sending)" },
+                    "timeout_ms": { "type": "integer", "description": "Max wait time in ms (default: 30000)", "default": 30000 },
+                    "wait_pattern": { "type": "string", "description": "Optional regex — return early when matched instead of waiting for idle" },
+                    "lines": { "type": "integer", "description": "Max screen lines to return (default: 80)", "default": 80 },
+                    "since_cursor": { "type": "integer", "description": "Cursor from a previous call — returns only new log lines since this position instead of the screen snapshot" }
+                },
+                "required": ["session_id"]
+            }
         }
     ])
 }
@@ -414,32 +431,42 @@ fn raw_pty_write(
 // ── Tool execution ────────────────────────────────────────────
 
 /// Execute `read_screen`: return visible terminal text.
+///
+/// With `since_cursor`: returns JSON `{"screen": "...", "cursor": N}` with only new
+/// log lines since the given cursor position (from a previous call).
+/// Without `since_cursor`: returns JSON `{"screen": "...", "cursor": N}` with the
+/// current viewport snapshot.
 fn exec_read_screen(state: &AppState, args: &Value) -> ToolResult {
     let session_id = match args["session_id"].as_str() {
         Some(s) => s,
         None => return ToolResult::err("Missing session_id"),
     };
     let max_lines = args["lines"].as_u64().unwrap_or(50) as usize;
+    let since_cursor = args["since_cursor"].as_u64().map(|v| v as usize);
 
     let vt_log = match state.vt_log_buffers.get(session_id) {
         Some(v) => v,
         None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
     };
     let vt = vt_log.lock();
-    let rows = vt.screen_rows();
 
-    // Trim trailing empty rows and limit
-    let trimmed: Vec<&str> = rows.iter()
-        .map(|s| s.as_str())
-        .collect::<Vec<_>>();
-    let last_non_empty = trimmed.iter()
-        .rposition(|r| !r.trim().is_empty())
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let visible = &trimmed[..last_non_empty.min(max_lines)];
+    let (text, cursor) = if let Some(since) = since_cursor {
+        let (log_lines, new_cursor) = vt.lines_since_owned(since, max_lines);
+        let content: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
+        (content.join("\n"), new_cursor)
+    } else {
+        let cursor = vt.total_lines();
+        let rows = vt.screen_rows();
+        // Trim trailing empty rows and limit
+        let last_non_empty = rows.iter()
+            .rposition(|r| !r.trim().is_empty())
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let visible = &rows[..last_non_empty.min(max_lines)];
+        (visible.join("\n"), cursor)
+    };
 
-    let output = redact_secrets(&visible.join("\n"));
-    ToolResult::ok(output)
+    ToolResult::ok(json!({"screen": redact_secrets(&text), "cursor": cursor}).to_string())
 }
 
 fn exec_send_input_inner(state: &AppState, args: &Value, skip_safety: bool) -> ToolResult {
@@ -512,7 +539,11 @@ async fn exec_wait_for(state: &Arc<AppState>, args: &Value) -> ToolResult {
     let timeout_ms = args["timeout_ms"].as_u64().unwrap_or(10_000).min(60_000);
     let stability_ms = args["stability_ms"].as_u64().unwrap_or(500).min(10_000);
 
+    const MAX_PATTERN_BYTES: usize = 512;
     let compiled = match pattern {
+        Some(p) if p.len() > MAX_PATTERN_BYTES => {
+            return ToolResult::err(format!("Pattern too long (max {MAX_PATTERN_BYTES} bytes)"));
+        }
         Some(p) => match regex::Regex::new(p) {
             Ok(r) => Some(r),
             Err(e) => return ToolResult::err(format!("Invalid regex: {e}")),
@@ -606,6 +637,144 @@ fn exec_get_context(state: &AppState, args: &Value) -> ToolResult {
     });
 
     ToolResult::ok(context.to_string())
+}
+
+// ── Drive agent (atomic send→wait→read) ─────────────────────
+
+async fn exec_drive_agent(state: &Arc<AppState>, args: &Value, skip_safety: bool) -> ToolResult {
+    let session_id = match args["session_id"].as_str() {
+        Some(s) => s.to_string(),
+        None => return ToolResult::err("Missing session_id"),
+    };
+    let command = args["command"].as_str();
+    let timeout_ms = args["timeout_ms"].as_u64().unwrap_or(30_000).min(120_000);
+    let wait_pattern = args["wait_pattern"].as_str();
+    let lines = args["lines"].as_u64().unwrap_or(80).min(500) as usize;
+
+    const MAX_PATTERN_BYTES: usize = 512;
+    let compiled = match wait_pattern {
+        Some(p) if p.len() > MAX_PATTERN_BYTES => {
+            return ToolResult::err(format!("wait_pattern too long (max {MAX_PATTERN_BYTES} bytes)"));
+        }
+        Some(p) => match regex::Regex::new(p) {
+            Ok(r) => Some(r),
+            Err(e) => return ToolResult::err(format!("Invalid wait_pattern regex: {e}")),
+        },
+        None => None,
+    };
+
+    // Step 1: send command (if provided)
+    if let Some(cmd) = command {
+        if !skip_safety {
+            let checker = RegexSafetyChecker::get();
+            match checker.evaluate(cmd) {
+                SafetyVerdict::Allow => {}
+                SafetyVerdict::NeedsApproval { reason } => {
+                    return ToolResult::approval(reason, cmd);
+                }
+                verdict => {
+                    let rejection = super::safety::format_rejection(&verdict).unwrap_or_default();
+                    return ToolResult::err(rejection);
+                }
+            }
+        }
+        if let Err(e) = safe_pty_write(state, &session_id, cmd) {
+            return ToolResult::err(e);
+        }
+        // Brief pause to let the PTY register the input before polling
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // Step 2: wait for idle or pattern
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    let stability_ms = 1500u64;
+    let mut last_content = String::new();
+    let mut stable_since = tokio::time::Instant::now();
+    let mut pattern_matched = false;
+
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            break; // timeout — still return what we have
+        }
+
+        // Check shell_state for idle (most reliable signal)
+        let is_idle = state.shell_states.get(&session_id)
+            .map(|atom| {
+                let s = atom.load(std::sync::atomic::Ordering::Relaxed);
+                crate::pty::shell_state_str(s) == "idle"
+            })
+            .unwrap_or(false);
+
+        let current = {
+            let vt_log = match state.vt_log_buffers.get(&session_id) {
+                Some(v) => v,
+                None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
+            };
+            vt_log.lock().screen_rows().join("\n")
+        };
+
+        // Pattern match takes priority
+        if let Some(ref re) = compiled {
+            if re.is_match(&current) {
+                pattern_matched = true;
+                break;
+            }
+        }
+
+        // Shell idle after command was sent = done
+        if command.is_some() && is_idle {
+            break;
+        }
+
+        // Stability fallback (no command, or shell_state not available)
+        if current != last_content {
+            last_content = current;
+            stable_since = tokio::time::Instant::now();
+        } else if stable_since.elapsed() >= std::time::Duration::from_millis(stability_ms) {
+            break;
+        }
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+
+    // Step 3: read screen + state
+    let since_cursor = args["since_cursor"].as_u64().map(|v| v as usize);
+    let vt_log = match state.vt_log_buffers.get(&session_id) {
+        Some(v) => v,
+        None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
+    };
+    let (screen_text, cursor) = {
+        let buf = vt_log.lock();
+        if let Some(since) = since_cursor {
+            let (log_lines, new_cursor) = buf.lines_since_owned(since, lines);
+            let text: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
+            (text.join("\n"), new_cursor)
+        } else {
+            let cursor = buf.total_lines();
+            let rows = buf.screen_rows();
+            let take = rows.len().min(lines);
+            (rows[rows.len() - take..].join("\n"), cursor)
+        }
+    };
+
+    let session_state = state.session_states.get(&session_id)
+        .and_then(|entry| serde_json::to_value(entry.value()).ok());
+
+    let shell_state = state.shell_states.get(&session_id)
+        .map(|atom| crate::pty::shell_state_str(
+            atom.load(std::sync::atomic::Ordering::Relaxed)
+        ).to_string())
+        .unwrap_or_else(|| "unknown".to_string());
+
+    let result = json!({
+        "screen": redact_secrets(&screen_text),
+        "cursor": cursor,
+        "shell_state": shell_state,
+        "session_state": session_state,
+        "pattern_matched": pattern_matched,
+    });
+
+    ToolResult::ok(result.to_string())
 }
 
 // ── Filesystem tools ──────────────────────────────────────────
@@ -1314,8 +1483,10 @@ fn exec_list_sessions(state: &AppState) -> ToolResult {
         let sid = entry_ref.key().clone();
         let pty = entry_ref.value().lock();
         let ss = state.session_states.get(&sid);
+        let alias = state.term_aliases.get(&sid).map(|e| e.value().clone());
         sessions.push(json!({
             "session_id": sid,
+            "alias": alias,
             "name": pty.display_name.as_deref().unwrap_or(""),
             "cwd": pty.cwd.as_deref().unwrap_or(""),
             "shell_state": ss.as_ref().and_then(|s| s.shell_state.as_deref()),
@@ -1552,7 +1723,25 @@ async fn dispatch_inner(
     args: &Value,
     skip_safety: bool,
 ) -> ToolResult {
-    if matches!(fn_name, "send_input" | "send_key")
+    // Resolve alias → UUID in session_id arg (e.g. "tc-1" → actual UUID)
+    let args = if let Some(sid) = args["session_id"].as_str() {
+        if let Some(resolved) = state.resolve_alias(sid) {
+            let mut a = args.clone();
+            a["session_id"] = serde_json::Value::String(resolved);
+            a
+        } else {
+            args.clone()
+        }
+    } else {
+        args.clone()
+    };
+    let args = &args;
+
+    // Cross-session reads (read_screen, drive_agent without command) are permitted.
+    // Only writes (send_input, send_key, drive_agent with command) are restricted.
+    let is_cross_session_write = matches!(fn_name, "send_input" | "send_key")
+        || (fn_name == "drive_agent" && args["command"].is_string());
+    if is_cross_session_write
         && let Some(target) = args["session_id"].as_str()
             && target != session_id
             && !is_session_unrestricted(state, session_id) {
@@ -1579,6 +1768,7 @@ async fn dispatch_inner(
         "list_sessions" => exec_list_sessions(state),
         "spawn_session" => exec_spawn_session(state, session_id, args).await,
         "get_agent_status" => exec_get_agent_status(args),
+        "drive_agent" => exec_drive_agent(state, args, skip_safety).await,
         other => ToolResult::err(format!("Unknown tool: {other}")),
     }
 }
@@ -1601,10 +1791,10 @@ mod tests {
     const FILESYSTEM_SEARCH_TOOLS: &[&str] = &["list_files", "search_files"];
 
     #[test]
-    fn definitions_returns_18_tools() {
+    fn definitions_returns_19_tools() {
         let defs = tool_definitions();
         let arr = defs.as_array().unwrap();
-        assert_eq!(arr.len(), 18);
+        assert_eq!(arr.len(), 19);
     }
 
     #[test]
@@ -1648,6 +1838,7 @@ mod tests {
                 "list_sessions",
                 "spawn_session",
                 "get_agent_status",
+                "drive_agent",
             ]
         );
     }
@@ -1960,6 +2151,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_screen_returns_cursor() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        state.vt_log_buffers.insert("rs-test".to_string(), parking_lot::Mutex::new(vt));
+        let result = dispatch(&state, "rs-test", "read_screen", &json!({
+            "session_id": "rs-test"
+        })).await;
+        assert!(result.success, "should succeed: {}", result.output);
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert!(parsed["cursor"].is_number(), "response must include cursor field");
+    }
+
+    #[tokio::test]
+    async fn read_screen_since_cursor_returns_delta() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        for i in 0..30u32 {
+            vt.process(format!("fill {i}\r\n").as_bytes());
+        }
+        let cursor_before = vt.total_lines();
+        assert!(cursor_before > 0, "need scrollback");
+        for i in 30..40u32 {
+            vt.process(format!("new {i}\r\n").as_bytes());
+        }
+        state.vt_log_buffers.insert("rs-delta".to_string(), parking_lot::Mutex::new(vt));
+        let result = dispatch(&state, "rs-delta", "read_screen", &json!({
+            "session_id": "rs-delta",
+            "since_cursor": cursor_before
+        })).await;
+        assert!(result.success, "should succeed: {}", result.output);
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert!(parsed["cursor"].is_number(), "response must include cursor");
+        assert!(parsed["screen"].is_string(), "response must include screen");
+        let new_cursor = parsed["cursor"].as_u64().unwrap();
+        assert!(new_cursor > cursor_before as u64, "cursor must advance");
+    }
+
+    #[tokio::test]
     async fn dispatch_send_input_sudo_needs_approval() {
         // sudo moved from Block to NeedsApproval in the local-trust-boundary model.
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
@@ -2064,6 +2293,145 @@ mod tests {
         })).await;
         assert!(!result.success);
         assert!(result.output.contains("Invalid regex"));
+    }
+
+    // ── drive_agent ──────────────────────────────────────���─────
+
+    #[tokio::test]
+    async fn drive_agent_missing_session_id() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let result = dispatch(&state, "test", "drive_agent", &json!({})).await;
+        assert!(!result.success);
+        assert!(result.output.contains("Missing session_id"));
+    }
+
+    #[tokio::test]
+    async fn drive_agent_no_vt_buffer() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        // Read-only drive_agent (no command) should be allowed cross-session
+        // but fail with VT buffer error for nonexistent session
+        let result = dispatch(&state, "test", "drive_agent", &json!({
+            "session_id": "nonexistent",
+            "timeout_ms": 200
+        })).await;
+        assert!(!result.success, "should fail: {}", result.output);
+        assert!(result.output.contains("No VT buffer"), "expected VT buffer error: {}", result.output);
+    }
+
+    #[tokio::test]
+    async fn drive_agent_invalid_wait_pattern() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let result = dispatch(&state, "test", "drive_agent", &json!({
+            "session_id": "test",
+            "wait_pattern": "[bad"
+        })).await;
+        assert!(!result.success);
+        assert!(result.output.contains("Invalid wait_pattern regex"));
+    }
+
+    #[tokio::test]
+    async fn drive_agent_safety_check_on_command() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let result = dispatch(&state, "test", "drive_agent", &json!({
+            "session_id": "test",
+            "command": "sudo rm -rf /"
+        })).await;
+        assert!(!result.success);
+        assert!(result.needs_approval, "dangerous command should require approval");
+    }
+
+    #[tokio::test]
+    async fn drive_agent_cross_session_write_blocked_without_unrestricted() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let result = dispatch(&state, "session-A", "drive_agent", &json!({
+            "session_id": "session-B",
+            "command": "echo hi"
+        })).await;
+        assert!(!result.success);
+        assert!(result.output.contains("Permission denied"), "write should be blocked: {}", result.output);
+    }
+
+    #[tokio::test]
+    async fn drive_agent_cross_session_read_only_allowed() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        // No command = read-only, should NOT be blocked by cross-session guard
+        // (will fail for other reasons like missing VT buffer, but not Permission denied)
+        let result = dispatch(&state, "session-A", "drive_agent", &json!({
+            "session_id": "session-B",
+            "timeout_ms": 200
+        })).await;
+        assert!(!result.success);
+        assert!(!result.output.contains("Permission denied"), "read-only should not be blocked: {}", result.output);
+    }
+
+    #[tokio::test]
+    async fn drive_agent_read_only_returns_state() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        // Insert a VtLogBuffer so the wait loop can read it
+        let vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        state.vt_log_buffers.insert("test-read".to_string(), parking_lot::Mutex::new(vt));
+        // Set shell state to idle so it returns immediately
+        state.shell_states.insert(
+            "test-read".to_string(),
+            std::sync::atomic::AtomicU8::new(0), // 0 = idle
+        );
+        let result = dispatch(&state, "test-read", "drive_agent", &json!({
+            "session_id": "test-read",
+            "timeout_ms": 500
+        })).await;
+        assert!(result.success, "read-only drive_agent should succeed: {}", result.output);
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert!(parsed["shell_state"].is_string());
+        assert!(parsed["screen"].is_string());
+    }
+
+    #[tokio::test]
+    async fn drive_agent_response_includes_cursor() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        state.vt_log_buffers.insert("cur-test".to_string(), parking_lot::Mutex::new(vt));
+        state.shell_states.insert(
+            "cur-test".to_string(),
+            std::sync::atomic::AtomicU8::new(0),
+        );
+        let result = dispatch(&state, "cur-test", "drive_agent", &json!({
+            "session_id": "cur-test",
+            "timeout_ms": 200
+        })).await;
+        assert!(result.success, "should succeed: {}", result.output);
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert!(parsed["cursor"].is_number(), "response must include cursor field");
+    }
+
+    #[tokio::test]
+    async fn drive_agent_since_cursor_returns_delta() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        // Fill viewport (24 rows) + overflow to push lines into scrollback log
+        for i in 0..30u32 {
+            vt.process(format!("line {i}\r\n").as_bytes());
+        }
+        let cursor_before = vt.total_lines();
+        assert!(cursor_before > 0, "scrollback must have lines after overflow");
+        // Feed more lines after recording cursor
+        for i in 30..40u32 {
+            vt.process(format!("new {i}\r\n").as_bytes());
+        }
+        state.vt_log_buffers.insert("delta-test".to_string(), parking_lot::Mutex::new(vt));
+        state.shell_states.insert(
+            "delta-test".to_string(),
+            std::sync::atomic::AtomicU8::new(0),
+        );
+        let result = dispatch(&state, "delta-test", "drive_agent", &json!({
+            "session_id": "delta-test",
+            "since_cursor": cursor_before,
+            "timeout_ms": 200
+        })).await;
+        assert!(result.success, "should succeed: {}", result.output);
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert!(parsed["cursor"].is_number(), "response must include cursor");
+        let new_cursor = parsed["cursor"].as_u64().unwrap();
+        assert!(new_cursor > cursor_before as u64, "cursor must advance after new lines");
     }
 
     // ── Filesystem tools ───────────────────────────────────────

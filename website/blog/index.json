@@ -1,6 +1,24 @@
 {
   "posts": [
     {
+      "slug": "cross-agent-orchestration",
+      "title": "Using Codex to orchestrate Claude Code through TUICommander",
+      "date": "2026-05-04",
+      "status": "published",
+      "feature": "Cross-agent orchestration / MCP bridge / drive_agent tool",
+      "summary": "Cross-agent orchestration without screen-scraping. TUICommander's MCP bridge gives external agents structured terminal state instead of raw ANSI bytes. Here's how to set it up and why it beats tmux.",
+      "screenshots": []
+    },
+    {
+      "slug": "native-terminal",
+      "title": "Why we replaced xterm.js with a native terminal",
+      "date": "2026-05-04",
+      "status": "published",
+      "feature": "Alacritty-based CanvasTerminal / xterm.js removal",
+      "summary": "After months of patching WebGL atlas corruption, scroll jump races, and scrollbar visibility hacks, we replaced xterm.js with an Alacritty-based terminal rendered to Canvas. Fewer workaround files than we had bug fixes.",
+      "screenshots": []
+    },
+    {
       "slug": "producthunt-launch",
       "title": "Launched on Product Hunt — and what real users say",
       "date": "2026-04-26",
