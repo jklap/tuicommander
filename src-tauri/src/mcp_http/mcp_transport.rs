@@ -279,7 +279,7 @@ fn native_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: Active sessions with cwd, process info. Call first to discover IDs.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read from ring buffer. Returns {data, total_written, exited, exit_code}.\n- status: Shell state for a session: {shell_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}. Use to poll agent progress without streaming output.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: Active sessions with cwd, process info. Call first to discover IDs.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, total_written, exited, exit_code}. Delta reads: pass since_cursor from a previous response to get only new lines. First call: omit since_cursor for full snapshot. Subsequent calls: pass the returned cursor value.\n- status: Shell state for a session: {shell_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}. Use to poll agent progress without streaming output.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, create, input, output, status, resize, close, kill, pause, resume" },
                 "session_id": { "type": "string", "description": "Session ID (required for input, output, resize, close, pause, resume)" },
@@ -290,7 +290,8 @@ fn native_tool_definitions() -> serde_json::Value {
                 "shell": { "type": "string", "description": "Shell binary path (action=create)" },
                 "cwd": { "type": "string", "description": "Working directory (action=create)" },
                 "limit": { "type": "integer", "description": "Bytes to read, default 8192 (action=output)" },
-                "format": { "type": "string", "description": "Output format: ANSI escape codes are stripped by default; pass 'raw' to preserve them (action=output)" }
+                "format": { "type": "string", "description": "Output format: ANSI escape codes are stripped by default; pass 'raw' to preserve them (action=output)" },
+                "since_cursor": { "type": "integer", "description": "Cursor from a previous output response — returns only new lines since this position. Omit for full snapshot (action=output)" }
             }, "required": ["action"] }
         },
         {
@@ -786,8 +787,10 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                 let shell_state = state.shell_states.get(&id).map(|atom| {
                     crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed))
                 });
+                let alias = state.term_aliases.get(&id).map(|e| e.value().clone());
                 serde_json::json!({
                     "session_id": id,
+                    "alias": alias,
                     "cwd": s.cwd,
                     "worktree_path": s.worktree.as_ref().map(|w| w.path.to_string_lossy().to_string()),
                     "worktree_branch": s.worktree.as_ref().and_then(|w| w.branch.clone()),
@@ -904,6 +907,15 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                 };
                 let buf = vt_log.lock();
                 let total = buf.total_lines();
+
+                // Delta read: if since_cursor provided, return only new scrollback lines.
+                if let Some(since) = args["since_cursor"].as_u64().map(|v| v as usize) {
+                    let (log_lines, new_cursor) = buf.lines_since_owned(since, limit);
+                    let data: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
+                    let data = data.join("\n");
+                    return serde_json::json!({"data": data, "data_length": data.len(), "cursor": new_cursor, "exited": exited, "exit_code": exit_code_json});
+                }
+
                 let offset = total.saturating_sub(limit);
                 let (log_lines, _) = buf.lines_since_owned(offset, limit);
                 let screen: Vec<String> = buf.screen_rows()
@@ -913,7 +925,7 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                 let mut all_lines: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
                 all_lines.extend(screen);
                 let data = all_lines.join("\n");
-                return serde_json::json!({"data": data, "data_length": data.len(), "total_written": total, "exited": exited, "exit_code": exit_code_json});
+                return serde_json::json!({"data": data, "data_length": data.len(), "cursor": total, "total_written": total, "exited": exited, "exit_code": exit_code_json});
             }
             let ring = match state.output_buffers.get(session_id) {
                 Some(r) => r,
@@ -2871,6 +2883,8 @@ mod tests {
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),
+            term_aliases: dashmap::DashMap::new(),
+            term_alias_counters: dashmap::DashMap::new(),
         });
         // Tests start with all native tools enabled (override production default
         // which disables config, knowledge, debug).
@@ -3248,8 +3262,9 @@ mod tests {
                 "ai_terminal_list_files",
                 "ai_terminal_search_files",
                 "ai_terminal_run_command",
+                "ai_terminal_drive_agent",
             ],
-            "native_tool_definitions must return 7 base tools + 12 ai_terminal_* tools in order"
+            "native_tool_definitions must return 7 base tools + 13 ai_terminal_* tools in order"
         );
     }
 
@@ -4236,6 +4251,94 @@ mod tests {
             clean_res["data"].as_str().unwrap().contains("hello from the crypt"),
             "Expected tombstoned output in clean response: {clean_res}"
         );
+    }
+
+    /// `session output` response includes `cursor` field (== total VtLog lines)
+    /// and `total_written` remains present for backwards compat.
+    #[test]
+    fn session_output_includes_cursor_field() {
+        use crate::state::VtLogBuffer;
+        use crate::OutputRingBuffer;
+        use std::sync::atomic::AtomicU64;
+
+        let state = test_state();
+        let sid = "cursor-field-test".to_string();
+
+        let mut ring = OutputRingBuffer::new(4096);
+        ring.write(b"line one\n");
+        state.output_buffers.insert(sid.clone(), parking_lot::Mutex::new(ring));
+
+        let mut vt = VtLogBuffer::new(24, 80, 200);
+        // Feed >24 lines so some scroll into log (total_pushed > 0).
+        for i in 0..30 {
+            vt.process(format!("line {i}\r\n").as_bytes());
+        }
+        state.vt_log_buffers.insert(sid.clone(), parking_lot::Mutex::new(vt));
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        state.last_output_ms.insert(sid.clone(), AtomicU64::new(now_ms));
+        state.exit_codes.insert(sid.clone(), 0);
+
+        let res = handle_session(
+            &state,
+            &serde_json::json!({"action": "output", "session_id": sid}),
+            None,
+        );
+        assert!(res.get("error").is_none(), "Unexpected error: {res}");
+        assert!(res.get("cursor").is_some(), "cursor field missing: {res}");
+        assert!(res.get("total_written").is_some(), "total_written missing (backwards compat): {res}");
+        let cursor = res["cursor"].as_u64().expect("cursor must be u64");
+        assert!(cursor > 0, "cursor should be > 0 after scrollback: {res}");
+        assert_eq!(res["cursor"], res["total_written"], "cursor and total_written must match");
+    }
+
+    /// `since_cursor` returns only new lines since the given position.
+    #[test]
+    fn session_output_since_cursor_returns_delta() {
+        use crate::state::VtLogBuffer;
+        use crate::OutputRingBuffer;
+        use std::sync::atomic::AtomicU64;
+
+        let state = test_state();
+        let sid = "since-cursor-test".to_string();
+
+        state.output_buffers.insert(sid.clone(), parking_lot::Mutex::new(OutputRingBuffer::new(4096)));
+
+        let mut vt = VtLogBuffer::new(24, 80, 200);
+        // Feed >24 lines so total_pushed > 0.
+        for i in 0..30 {
+            vt.process(format!("old line {i}\r\n").as_bytes());
+        }
+        let cursor_after_old = vt.total_lines();
+        assert!(cursor_after_old > 0, "scrollback must have lines");
+
+        // Feed >24 new lines so they overflow the viewport into scrollback.
+        for i in 0..30 {
+            vt.process(format!("new line {i}\r\n").as_bytes());
+        }
+        state.vt_log_buffers.insert(sid.clone(), parking_lot::Mutex::new(vt));
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        state.last_output_ms.insert(sid.clone(), AtomicU64::new(now_ms));
+        state.exit_codes.insert(sid.clone(), 0);
+
+        let res = handle_session(
+            &state,
+            &serde_json::json!({"action": "output", "session_id": sid, "since_cursor": cursor_after_old}),
+            None,
+        );
+        assert!(res.get("error").is_none(), "Unexpected error: {res}");
+        let data = res["data"].as_str().expect("data field");
+        // Delta includes lines scrolled in since cursor — includes new lines.
+        assert!(data.contains("new line"), "expected new lines in delta: {res}");
+        let new_cursor = res["cursor"].as_u64().expect("cursor must be u64");
+        assert!(new_cursor > cursor_after_old as u64, "cursor must advance: {res}");
     }
 
     /// A session with no trace (never existed or fully reaped) must return a

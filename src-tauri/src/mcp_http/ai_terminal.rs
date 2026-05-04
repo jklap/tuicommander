@@ -26,10 +26,12 @@ const EDIT_FILE: &str = "ai_terminal_edit_file";
 const LIST_FILES: &str = "ai_terminal_list_files";
 const SEARCH_FILES: &str = "ai_terminal_search_files";
 const RUN_COMMAND: &str = "ai_terminal_run_command";
+const DRIVE_AGENT: &str = "ai_terminal_drive_agent";
 
-pub(crate) const AI_TERMINAL_TOOL_NAMES: [&str; 12] = [
+pub(crate) const AI_TERMINAL_TOOL_NAMES: [&str; 13] = [
     READ_SCREEN, SEND_INPUT, SEND_KEY, WAIT_FOR, GET_STATE, GET_CONTEXT,
     READ_FILE, WRITE_FILE, EDIT_FILE, LIST_FILES, SEARCH_FILES, RUN_COMMAND,
+    DRIVE_AGENT,
 ];
 
 pub(crate) fn is_ai_terminal_tool(name: &str) -> bool {
@@ -43,10 +45,11 @@ pub(crate) fn tool_definitions() -> Vec<serde_json::Value> {
     vec![
         json!({
             "name": READ_SCREEN,
-            "description": "Read visible terminal text from a session. Output passes through secret redaction. Optional 'lines' caps the row count (default 50).",
+            "description": "Read terminal text from a session. Output passes through secret redaction. Optional 'lines' caps the row count (default 50). Returns {screen, cursor}. Pass since_cursor from a previous response to get only new scrollback lines (delta mode).",
             "inputSchema": { "type": "object", "properties": {
                 "session_id": { "type": "string" },
-                "lines": { "type": "integer" }
+                "lines": { "type": "integer" },
+                "since_cursor": { "type": "integer", "description": "Cursor from a previous call — returns only new lines since this position" }
             }, "required": ["session_id"] }
         }),
         json!({
@@ -149,6 +152,18 @@ pub(crate) fn tool_definitions() -> Vec<serde_json::Value> {
                 "cwd": { "type": "string" }
             }, "required": ["session_id", "command"] }
         }),
+        json!({
+            "name": DRIVE_AGENT,
+            "description": "Atomic send→wait→read. Sends command, waits for idle/pattern, returns screen + state + cursor. Requires user confirmation for the send. Pass since_cursor from a previous response to get only new scrollback lines (delta mode).",
+            "inputSchema": { "type": "object", "properties": {
+                "session_id": { "type": "string" },
+                "command": { "type": "string", "description": "Omit to just wait+read" },
+                "timeout_ms": { "type": "integer", "description": "Default 30000" },
+                "wait_pattern": { "type": "string", "description": "Regex — early return on match" },
+                "lines": { "type": "integer", "description": "Screen lines to return (default 80)" },
+                "since_cursor": { "type": "integer", "description": "Cursor from a previous call — returns only new scrollback lines since this position" }
+            }, "required": ["session_id"] }
+        }),
     ]
 }
 
@@ -166,12 +181,13 @@ fn strip_prefix(name: &str) -> Option<&'static str> {
         LIST_FILES => "list_files",
         SEARCH_FILES => "search_files",
         RUN_COMMAND => "run_command",
+        DRIVE_AGENT => "drive_agent",
         _ => return None,
     })
 }
 
 fn is_write_tool(name: &str) -> bool {
-    matches!(name, SEND_INPUT | SEND_KEY | WRITE_FILE | EDIT_FILE | RUN_COMMAND)
+    matches!(name, SEND_INPUT | SEND_KEY | WRITE_FILE | EDIT_FILE | RUN_COMMAND | DRIVE_AGENT)
 }
 
 /// Tools that require a per-session filesystem sandbox. For these we must
@@ -253,6 +269,7 @@ async fn confirm_external_write(
         WRITE_FILE => format!("Write file: {}", args["file_path"].as_str().unwrap_or("")),
         EDIT_FILE => format!("Edit file: {}", args["file_path"].as_str().unwrap_or("")),
         RUN_COMMAND => format!("Run command: {}", args["command"].as_str().unwrap_or("")),
+        DRIVE_AGENT => format!("Drive agent: {}", args["command"].as_str().unwrap_or("(wait+read only)")),
         _ => format!("Action: {tool_name}"),
     };
     let message = format!(
@@ -339,12 +356,13 @@ mod tests {
             .iter()
             .filter(|n| is_write_tool(n))
             .collect();
-        assert_eq!(writes.len(), 5);
+        assert_eq!(writes.len(), 6);
         assert!(is_write_tool(SEND_INPUT));
         assert!(is_write_tool(SEND_KEY));
         assert!(is_write_tool(WRITE_FILE));
         assert!(is_write_tool(EDIT_FILE));
         assert!(is_write_tool(RUN_COMMAND));
+        assert!(is_write_tool(DRIVE_AGENT));
     }
 
     #[tokio::test]
