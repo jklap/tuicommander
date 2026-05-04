@@ -105,7 +105,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   let linkCheckGeneration = 0;
   const ipcErr = (cmd: string) => (e: unknown) => appLogger.debug("terminal", `${cmd} failed`, { sessionId: props.sessionId, error: e });
 
-  // Selection state
+  // Selection state — row coordinates are absolute (viewportTop + viewportRow)
+  // so the highlight stays anchored to the original content when scrolling.
   let selecting = false;
   let selectionStart: { col: number; row: number } | null = null;
   let selectionEnd: { col: number; row: number } | null = null;
@@ -188,6 +189,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     };
   }
 
+  function viewportRowToAbs(viewportRow: number): number | null {
+    if (!currentFrame) return null;
+    return (currentFrame.historySize - currentFrame.displayOffset) + viewportRow;
+  }
+
   function remeasure() {
     if (!ctx) return;
     const rect = containerRef.getBoundingClientRect();
@@ -268,17 +274,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
   function repaintOverlay(frame: DecodedFrame, m: CellMetrics) {
     octx.clearRect(0, 0, overlayCanvasRef.width / m.dpr, overlayCanvasRef.height / m.dpr);
-    paintSelection(frame, m);
+    paintSelection(m);
     paintSearchHighlights(m);
     paintLinkUnderline(frame, m);
     paintGutterMarkers(m);
     paintCursor(frame, m);
   }
 
-  function paintLinkUnderline(frame: DecodedFrame, m: CellMetrics) {
+  function paintLinkUnderline(_frame: DecodedFrame, m: CellMetrics) {
     if (!hoveredLink) return;
-    const vpRow = hoveredLink.row - (frame.historySize - frame.displayOffset);
-    if (vpRow < 0 || vpRow >= (frame.screenRows || lastResizeRows)) return;
+    const vpRow = hoveredLink.row;
+    if (vpRow < 0 || vpRow >= (currentFrame?.screenRows || lastResizeRows)) return;
     const x = hoveredLink.colStart * m.cellWidth;
     const w = (hoveredLink.colEnd - hoveredLink.colStart) * m.cellWidth;
     const y = vpRow * m.cellHeight + m.cellHeight - 1;
@@ -363,27 +369,29 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     }
   }
 
-  function paintSelection(_frame: DecodedFrame, m: CellMetrics) {
+  function paintSelection(m: CellMetrics) {
     if (!selectionStart || !selectionEnd) return;
-    const startRow = Math.min(selectionStart.row, selectionEnd.row);
-    const endRow = Math.max(selectionStart.row, selectionEnd.row);
+    const absStartRow = Math.min(selectionStart.row, selectionEnd.row);
+    const absEndRow = Math.max(selectionStart.row, selectionEnd.row);
 
     octx.fillStyle = "rgba(58, 130, 220, 0.35)";
 
-    for (let ri = startRow; ri <= endRow; ri++) {
-      const row = rowMap.get(ri);
+    for (let absRi = absStartRow; absRi <= absEndRow; absRi++) {
+      const vpRow = absRowToViewport(absRi);
+      if (vpRow === null) continue;
+      const row = rowMap.get(vpRow);
       if (!row) continue;
-      const y = ri * m.cellHeight;
+      const y = vpRow * m.cellHeight;
 
-      if (startRow === endRow) {
+      if (absStartRow === absEndRow) {
         const c0 = Math.min(selectionStart.col, selectionEnd.col);
         const c1 = Math.max(selectionStart.col, selectionEnd.col);
         octx.fillRect(c0 * m.cellWidth, y, (c1 - c0 + 1) * m.cellWidth, m.cellHeight);
-      } else if (ri === startRow) {
+      } else if (absRi === absStartRow) {
         const isStartFirst = selectionStart.row <= selectionEnd.row;
         const startCol = isStartFirst ? selectionStart.col : selectionEnd.col;
         octx.fillRect(startCol * m.cellWidth, y, (row.count - startCol) * m.cellWidth, m.cellHeight);
-      } else if (ri === endRow) {
+      } else if (absRi === absEndRow) {
         const isStartFirst = selectionStart.row <= selectionEnd.row;
         const endCol = isStartFirst ? selectionEnd.col : selectionStart.col;
         octx.fillRect(0, y, (endCol + 1) * m.cellWidth, m.cellHeight);
@@ -395,12 +403,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
   function getLocalSelectionText(): string {
     if (!selectionStart || !selectionEnd) return "";
-    const startRow = Math.min(selectionStart.row, selectionEnd.row);
-    const endRow = Math.max(selectionStart.row, selectionEnd.row);
+    const absStartRow = Math.min(selectionStart.row, selectionEnd.row);
+    const absEndRow = Math.max(selectionStart.row, selectionEnd.row);
     const lines: string[] = [];
 
-    for (let ri = startRow; ri <= endRow; ri++) {
-      const row = rowMap.get(ri);
+    for (let absRi = absStartRow; absRi <= absEndRow; absRi++) {
+      const vpRow = absRowToViewport(absRi);
+      const row = vpRow !== null ? rowMap.get(vpRow) : null;
       if (!row) {
         lines.push("");
         continue;
@@ -408,13 +417,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
       let startCol = 0;
       let endCol = row.count - 1;
-      if (startRow === endRow) {
+      if (absStartRow === absEndRow) {
         startCol = Math.min(selectionStart.col, selectionEnd.col);
         endCol = Math.max(selectionStart.col, selectionEnd.col);
-      } else if (ri === startRow) {
+      } else if (absRi === absStartRow) {
         const isStartFirst = selectionStart.row <= selectionEnd.row;
         startCol = isStartFirst ? selectionStart.col : selectionEnd.col;
-      } else if (ri === endRow) {
+      } else if (absRi === absEndRow) {
         const isStartFirst = selectionStart.row <= selectionEnd.row;
         endCol = isStartFirst ? selectionEnd.col : selectionStart.col;
       }
@@ -979,7 +988,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const scrollChanged = frame.displayOffset !== lastDisplayOffset || frame.historySize !== lastHistorySize;
 
     if (geomChanged) {
-
+      selectionStart = null;
+      selectionEnd = null;
+      cachedSelectionText = "";
       rowMap.clear();
       fullRepaintNeeded = true;
     }
@@ -1401,6 +1412,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       canvasRef.focus();
       if (e.button !== 0) return;
       const pos = canvasToGrid(e);
+      const absRow = viewportRowToAbs(pos.row);
+      if (absRow === null) return;
+      const absPos = { col: pos.col, row: absRow };
       const now = Date.now();
 
       if (now - lastClickTime < 400) {
@@ -1411,19 +1425,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       lastClickTime = now;
 
       if (clickCount === 2) {
-        // Word select
-        selectionStart = pos;
-        selectionEnd = pos;
+        selectionStart = absPos;
+        selectionEnd = absPos;
       } else if (clickCount >= 3) {
-        // Line select
         const m = metrics();
         const maxCol = m ? Math.floor((canvasRef.getBoundingClientRect().width) / m.cellWidth) - 1 : 79;
-        selectionStart = { col: 0, row: pos.row };
-        selectionEnd = { col: maxCol, row: pos.row };
+        selectionStart = { col: 0, row: absRow };
+        selectionEnd = { col: maxCol, row: absRow };
         clickCount = 3;
       } else {
-        // Start fresh selection
-        selectionStart = pos;
+        selectionStart = absPos;
         selectionEnd = null;
       }
       selecting = true;
@@ -1434,7 +1445,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const onMouseMove = (e: MouseEvent) => {
       if (selecting && selectionStart) {
         const pos = canvasToGrid(e);
-        selectionEnd = pos;
+        const absRow = viewportRowToAbs(pos.row);
+        if (absRow === null) return;
+        selectionEnd = { col: pos.col, row: absRow };
         const m = metrics();
         if (currentFrame && m) paintFrame(currentFrame, m);
       }
@@ -1452,7 +1465,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const onMouseUp = () => {
       if (selecting && selectionStart && selectionEnd) {
         copySelection();
-        cachedSelectionText = getLocalSelectionText();
       }
       selecting = false;
     };
