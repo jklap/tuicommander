@@ -449,6 +449,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
   }
 
   function paintCursor(frame: DecodedFrame, m: CellMetrics) {
+    if (frame.displayOffset > 0) return;
     if (!cursorBlinkOn && focused()) return;
 
     const settingShape: CursorShape = settingsStore.state.cursorStyle === "block" ? "block"

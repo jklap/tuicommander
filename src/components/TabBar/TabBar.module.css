@@ -517,8 +517,15 @@
   bottom: 0;
   left: 0;
   height: 2px;
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--success) 0%, color-mix(in srgb, var(--success) 70%, white) 50%, var(--success) 100%);
+  background-size: 200% 100%;
+  animation: progressShimmer 1.5s ease-in-out infinite;
   transition: width 0.3s ease;
+}
+
+@keyframes progressShimmer {
+  0% { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
 }
 
 .progressLabel {

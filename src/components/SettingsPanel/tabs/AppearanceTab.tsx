@@ -3,7 +3,7 @@ import { settingsStore, FONT_FAMILIES } from "../../../stores/settings";
 import { uiStore } from "../../../stores/ui";
 import { repositoriesStore } from "../../../stores/repositories";
 import type { RepoGroup } from "../../../stores/repositories";
-import type { FontType, TerminalRenderer } from "../../../stores/settings";
+import type { FontType } from "../../../stores/settings";
 import { THEME_NAMES } from "../../../themes";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { UiLegend } from "../../HelpPanel/UiLegend";
@@ -168,16 +168,16 @@ export const AppearanceTab: Component = () => {
       </div>
 
       <div class={s.group}>
-        <label>{t("appearance.label.terminalRenderer", "Terminal Renderer")}</label>
+        <label>{t("appearance.label.cursorStyle", "Cursor Style")}</label>
         <select
-          value={settingsStore.state.terminalRenderer}
-          onChange={(e) => settingsStore.setTerminalRenderer(e.currentTarget.value as TerminalRenderer)}
+          value={settingsStore.state.cursorStyle}
+          onChange={(e) => settingsStore.setCursorStyle(e.currentTarget.value as "bar" | "block" | "underline")}
         >
-          <option value="webgl">{t("appearance.terminalRenderer.webgl", "WebGL (GPU-accelerated)")}</option>
-          <option value="canvas">{t("appearance.terminalRenderer.canvas", "Canvas 2D (stable)")}</option>
-          <option value="native">{t("appearance.terminalRenderer.native", "Native (experimental)")}</option>
+          <option value="bar">{t("appearance.cursorStyle.bar", "Bar")}</option>
+          <option value="block">{t("appearance.cursorStyle.block", "Block")}</option>
+          <option value="underline">{t("appearance.cursorStyle.underline", "Underline")}</option>
         </select>
-        <p class={s.hint}>{t("appearance.hint.terminalRenderer", "Rendering backend for terminal output. Native uses Rust-side terminal emulation (experimental). Canvas is more stable; WebGL is faster but may cause rendering artifacts. Applies to new terminals.")}</p>
+        <p class={s.hint}>{t("appearance.hint.cursorStyle", "Shape of the terminal cursor. Applies immediately to all terminals.")}</p>
       </div>
 
       <h3>{t("appearance.heading.tabs", "Tabs")}</h3>
