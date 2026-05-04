@@ -68,7 +68,7 @@
 
     <div class="blog-section">
       <h2>PTY write coalescing: 60 renders/sec, not 600</h2>
-      <p>AI agents produce output in bursts — hundreds of write events per second during streaming. The naive approach calls <code>terminal.write()</code> for every PTY event, which triggers a xterm.js render pass and WebGL texture upload each time. At 600 events/sec, the terminal becomes a bottleneck.</p>
+      <p>AI agents produce output in bursts — hundreds of write events per second during streaming. The naive approach renders every PTY event individually, triggering a canvas repaint each time. At 600 events/sec, the terminal becomes a bottleneck.</p>
       <p>We switched to write coalescing via <code>requestAnimationFrame</code>. PTY data accumulates in a buffer and gets flushed once per animation frame (~60/sec). The terminal renders the same content but with dramatically fewer render passes and texture uploads. The visual result is identical — smoother, actually — but CPU and GPU usage during burst output dropped significantly.</p>
     </div>
 
@@ -86,14 +86,14 @@
 
     <div class="blog-section">
       <h2>Frontend: load only what you need</h2>
-      <p>On the frontend side, Vite's <code>manualChunks</code> splits the bundle into separate chunks: xterm, CodeMirror, diff-view, and markdown each load independently. Heavy panels like Settings, ActivityDashboard, and Help are lazy-loaded with SolidJS <code>lazy()</code> and <code>Suspense</code> — they don't add to initial load time unless you open them.</p>
+      <p>On the frontend side, Vite's <code>manualChunks</code> splits the bundle into separate chunks: the terminal renderer, CodeMirror, diff-view, and markdown each load independently. Heavy panels like Settings, ActivityDashboard, and Help are lazy-loaded with SolidJS <code>lazy()</code> and <code>Suspense</code> — they don't add to initial load time unless you open them.</p>
       <p>The branch select operation — which used to cause multi-second freezes after hours of use — was optimized in three places: <code>getDiffStats</code> runs fire-and-forget instead of blocking, terminal adoption uses a pre-computed Set for O(N) instead of O(N×M), and saved terminal resume commands run in parallel with <code>Promise.all</code> instead of sequential awaits.</p>
     </div>
 
     <div class="blog-section">
       <h2>GPU-accelerated rendering</h2>
-      <p>The terminal renderer uses xterm.js with WebGL acceleration. On macOS, Tauri's WKWebView composites through Metal — terminal glyphs are rendered as GPU textures, not CPU-painted bitmaps. This matters when you have 6 split panes all receiving burst output simultaneously. The GPU handles the rendering pipeline while the CPU stays free for git operations and PTY I/O.</p>
-      <p>When WebGL isn't available (some Linux configurations, remote browser sessions), the renderer falls back gracefully to a canvas-based mode. Performance is lower but still usable — the app adapts instead of crashing. Tab switches trigger <code>clearTextureAtlas</code> followed by a full refresh to prevent gradual recomposition artifacts that would otherwise accumulate over long sessions.</p>
+      <p>The terminal uses a native renderer powered by <code>alacritty_terminal</code> — the same VT engine behind the Alacritty terminal emulator. On macOS, Tauri's WKWebView composites through Metal — terminal glyphs are rendered as GPU textures via canvas, not CPU-painted bitmaps. This matters when you have 6 split panes all receiving burst output simultaneously. The GPU handles the rendering pipeline while the CPU stays free for git operations and PTY I/O.</p>
+      <p>The native approach eliminates the overhead of JS-based terminal emulation entirely. VT parsing and grid state happen in Rust; the frontend receives pre-processed grid frames and paints them directly to canvas. Tab switches trigger a full atlas rebuild to prevent glyph corruption over long sessions.</p>
     </div>
 
     <div class="blog-section">
@@ -126,7 +126,7 @@
         <a href="https://github.com/sstraus/tuicommander/blob/main/docs/plugins.md" rel="noopener noreferrer">Plugin API</a>
       </div>
       <p>Apache License 2.0 &copy; 2026 Stefano Straus</p>
-      <p class="footer-tech">Built with Rust, Tauri v2, SolidJS, xterm.js</p>
+      <p class="footer-tech">Built with Rust, Tauri v2, SolidJS</p>
     </div>
   </footer>
 

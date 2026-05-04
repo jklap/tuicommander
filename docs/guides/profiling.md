@@ -225,6 +225,6 @@ The profiling targets map to these code areas:
 | PTY pipeline | `src-tauri/src/pty.rs` | Read buffer throughput, event emission rate |
 | IPC serialization | `src-tauri/src/pty.rs`, `git.rs` | JSON payload sizes, serde time |
 | State management | `src/stores/terminals.ts` | Signal propagation scope, batch effectiveness |
-| Rendering | `src/components/Terminal/Terminal.tsx` | xterm.js write batching, WebGL atlas rebuilds |
+| Rendering | `src/components/Terminal/CanvasTerminal.tsx` | Grid frame batching, canvas atlas rebuilds |
 | Polling | `src/hooks/useAgentPolling.ts`, `src/stores/github.ts` | Interval frequency, IPC calls per tick |
 | Bundle | `vite.config.ts` | Chunk sizes, initial parse/eval time |

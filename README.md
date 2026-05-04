@@ -240,7 +240,7 @@ See [docs/guides/development-setup.md](docs/guides/development-setup.md) for pla
 
 ## Built with
 
-Rust + [Tauri v2](https://tauri.app) backend, [SolidJS](https://solidjs.com) UI, [xterm.js](https://xtermjs.org) + WebGL terminals, [CodeMirror 6](https://codemirror.net) editor, [whisper-rs](https://github.com/tazz4843/whisper-rs) dictation, [Vite](https://vite.dev) + LightningCSS build. ~80 MB RAM.
+Rust + [Tauri v2](https://tauri.app) backend, [SolidJS](https://solidjs.com) UI, native terminal via [alacritty_terminal](https://crates.io/crates/alacritty_terminal) + canvas rendering, [CodeMirror 6](https://codemirror.net) editor, [whisper-rs](https://github.com/tazz4843/whisper-rs) dictation, [Vite](https://vite.dev) + LightningCSS build. ~80 MB RAM.
 
 ## Documentation
 

@@ -147,7 +147,7 @@ Search within terminal output with `Cmd+F`:
 5. Match counter shows "N of M" results
 6. Press `Escape` to close the search and refocus the terminal
 
-Uses `@xterm/addon-search` for native integration with the terminal buffer.
+Search is integrated directly with the terminal grid for accurate match highlighting.
 
 ## Cross-Terminal Search
 

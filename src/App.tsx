@@ -120,6 +120,7 @@ import { applyAppTheme, applyFontFamily } from "./themes";
 import { createLongPressHandlerFromHotkey } from "./hooks/useLongPressHotkey";
 import { sendCommand, getShellFamily } from "./utils/sendCommand";
 import { applyPlatformClass, getModifierSymbol, isQuickSwitcherActive, isQuickSwitcherRelease } from "./platform";
+import { keyFor } from "./utils/hotkey";
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke, listen } from "./invoke";
@@ -985,11 +986,11 @@ const App: Component = () => {
       })(),
     },
     { label: "Paste", shortcut: `${getModifierSymbol()}V`, action: terminalLifecycle.pasteToTerminal },
-    { label: "Split Right", shortcut: `${getModifierSymbol()}\\`, action: () => splitPanes.handleSplit("vertical"), disabled: splitDisabled() },
+    { label: "Split Right", shortcut: keyFor("split-vertical"), action: () => splitPanes.handleSplit("vertical"), disabled: splitDisabled() },
     { label: "Split Left", action: () => splitPanes.handleSplit("vertical"), disabled: splitDisabled() },
-    { label: "Split Down", shortcut: `${getModifierSymbol()}${"\u2325"}\\`, action: () => splitPanes.handleSplit("horizontal"), disabled: splitDisabled() },
+    { label: "Split Down", shortcut: keyFor("split-horizontal"), action: () => splitPanes.handleSplit("horizontal"), disabled: splitDisabled() },
     { label: "Split Up", action: () => splitPanes.handleSplit("horizontal"), disabled: splitDisabled(), separator: true },
-    { label: "Clear", shortcut: `${getModifierSymbol()}L`, action: terminalLifecycle.clearTerminal },
+    { label: "Clear", shortcut: keyFor("clear-terminal"), action: terminalLifecycle.clearTerminal },
     {
       label: "Reset Terminal",
       action: () => {
@@ -1055,7 +1056,7 @@ const App: Component = () => {
     })(),
     {
       label: "Close Terminal",
-      shortcut: `${getModifierSymbol()}W`,
+      shortcut: keyFor("close-terminal"),
       action: () => {
         const activeId = terminalsStore.state.activeId;
         if (activeId) terminalLifecycle.closeTerminal(activeId);

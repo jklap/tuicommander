@@ -223,6 +223,76 @@ pub(super) async fn put_notes(
     }
 }
 
+// --- Activity ---
+
+pub(super) async fn get_activity() -> impl IntoResponse {
+    Json(crate::config::load_activity())
+}
+
+pub(super) async fn put_activity(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(items): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if let Err(resp) = localhost_only(&addr) { return resp; }
+    match crate::config::save_activity(items) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))),
+    }
+}
+
+// --- Keybindings ---
+
+pub(super) async fn get_keybindings() -> impl IntoResponse {
+    Json(crate::config::load_keybindings())
+}
+
+pub(super) async fn put_keybindings(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(config): Json<serde_json::Value>,
+) -> impl IntoResponse {
+    if let Err(resp) = localhost_only(&addr) { return resp; }
+    match crate::config::save_keybindings(config) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))),
+    }
+}
+
+// --- Agents Config ---
+
+pub(super) async fn get_agents_config() -> impl IntoResponse {
+    Json(crate::config::load_agents_config())
+}
+
+pub(super) async fn put_agents_config(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(config): Json<crate::config::AgentsConfig>,
+) -> impl IntoResponse {
+    if let Err(resp) = localhost_only(&addr) { return resp; }
+    match crate::config::save_agents_config(config) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))),
+    }
+}
+
+// --- Provider Registry ---
+
+pub(super) async fn get_provider_registry() -> impl IntoResponse {
+    Json(crate::provider_registry::load_provider_registry())
+}
+
+pub(super) async fn put_provider_registry(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(registry): Json<crate::provider_registry::ProviderRegistry>,
+) -> impl IntoResponse {
+    if let Err(resp) = localhost_only(&addr) { return resp; }
+    match crate::provider_registry::save_provider_registry(registry) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": e}))),
+    }
+}
+
+// --- MCP Status ---
+
 pub(super) async fn get_mcp_status_http(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Real connect attempt — file.exists() is unreliable for stale sockets.
     #[cfg(unix)]

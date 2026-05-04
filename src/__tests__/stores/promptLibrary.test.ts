@@ -3,9 +3,15 @@ import { testInScope, testInScopeAsync } from "../helpers/store";
 
 const mockInvoke = vi.fn().mockResolvedValue(undefined);
 
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: mockInvoke,
+vi.mock("../../invoke", () => ({
+  invoke: (...args: unknown[]) => mockInvoke(...args),
+  listen: vi.fn().mockResolvedValue(() => {}),
 }));
+
+vi.mock("../../transport", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("../../transport")>();
+  return { ...orig, isTauri: () => true };
+});
 
 describe("promptLibraryStore", () => {
   let store: typeof import("../../stores/promptLibrary").promptLibraryStore;
@@ -16,9 +22,14 @@ describe("promptLibraryStore", () => {
     mockInvoke.mockReset().mockResolvedValue(undefined);
     localStorage.clear();
 
-    vi.doMock("@tauri-apps/api/core", () => ({
-      invoke: mockInvoke,
+    vi.doMock("../../invoke", () => ({
+      invoke: (...args: unknown[]) => mockInvoke(...args),
+      listen: vi.fn().mockResolvedValue(() => {}),
     }));
+    vi.doMock("../../transport", async (importOriginal) => {
+      const orig = await importOriginal<typeof import("../../transport")>();
+      return { ...orig, isTauri: () => true };
+    });
 
     store = (await import("../../stores/promptLibrary")).promptLibraryStore;
   });
@@ -166,6 +177,16 @@ describe("promptLibraryStore", () => {
         expect(store.getPrompt("p1")?.name).toBe("Test");
         expect(store.getPrompt("p1")?.content).toBe("content");
         expect(mockInvoke).toHaveBeenCalledWith("load_prompt_library");
+      });
+    });
+
+    it("handles backend failure gracefully", async () => {
+      mockInvoke.mockRejectedValueOnce(new Error("backend unavailable"));
+
+      await testInScopeAsync(async () => {
+        await store.hydrate();
+        // Store should remain usable with empty state after failure
+        expect(store.getAllPrompts()).toEqual([]);
       });
     });
 

@@ -6,12 +6,21 @@
  */
 
 import { getModifierSymbol, isMacOS } from "../platform";
+import type { ActionName } from "../keybindingDefaults";
+import { keybindingsStore } from "../stores/keybindings";
 
 /** All known modifier keys (UI format and macOS symbols) */
 const MODIFIER_KEYS = new Set([
   "Cmd", "Ctrl", "Alt", "Shift", "Super",
   "%", "\u2318", "\u21E7", "\u2325", "\u2303", // macOS symbols: ⌘ ⇧ ⌥ ⌃
 ]);
+
+/** Get display string for an action from the keybindings store, or fallback */
+export function keyFor(action: ActionName, fallback?: string): string {
+  const combo = keybindingsStore.getKeyForAction(action);
+  if (!combo) return fallback ?? "";
+  return comboToDisplay(combo);
+}
 
 /** Check whether a hotkey string contains at least one non-modifier key */
 export function isValidHotkey(hotkey: string): boolean {

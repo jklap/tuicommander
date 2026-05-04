@@ -1,5 +1,6 @@
 import { createStore } from "solid-js/store";
 import { invoke, listen } from "../invoke";
+import { isTauri } from "../transport";
 import { appLogger } from "./appLogger";
 
 /** Dictation config persisted to ~/.tuicommander/dictation-config.json */
@@ -141,6 +142,7 @@ function createDictationStore() {
   const actions = {
     /** Load config from Rust backend (file-based) */
     async refreshConfig(): Promise<void> {
+      if (!isTauri()) return;
       try {
         const config = await invoke<DictationConfig>("get_dictation_config");
         setState({

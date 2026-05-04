@@ -2,7 +2,7 @@
 
 ## What is TUICommander?
 
-TUICommander is a desktop terminal orchestrator for running multiple AI coding agents in parallel (Claude Code, Gemini CLI, Aider, OpenCode, Codex). Built with Tauri + SolidJS + xterm.js + Rust.
+TUICommander is a desktop terminal orchestrator for running multiple AI coding agents in parallel (Claude Code, Gemini CLI, Aider, OpenCode, Codex). Built with Tauri + SolidJS + Rust, with a native terminal engine powered by `alacritty_terminal`.
 
 **Key capabilities:**
 - Up to 50 concurrent terminal sessions with split panes and detachable tabs

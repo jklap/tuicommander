@@ -935,6 +935,23 @@ fn emit_shell_state(
     }
 }
 
+/// Attempt a shell state transition and emit the new state if it changed.
+/// Shared by OSC 133 A/C handlers and OSC 7770 `state=` handler.
+fn transition_shell_state(
+    state: &crate::state::AppState,
+    app: Option<&tauri::AppHandle>,
+    session_id: &str,
+    target: u8,
+    label: &str,
+) {
+    if let Some(atom) = state.shell_states.get(session_id) {
+        let prev = atom.load(std::sync::atomic::Ordering::Acquire);
+        if prev != target && try_shell_transition(state, session_id, prev, target, true) {
+            emit_shell_state(state, app, session_id, label);
+        }
+    }
+}
+
 /// Emit an ActiveSubtasks parsed event via both event bus and Tauri IPC.
 /// Used by the stale-subtasks recovery path to keep the frontend store in
 /// sync after `should_transition_idle` force-clears the in-memory counter.
@@ -1344,15 +1361,38 @@ impl ChunkProcessor {
         }
     }
 
+    /// Handle OSC 7770 `state=idle|busy` from the TUIC protocol.
+    fn handle_tuic_state(
+        &self,
+        payload: &str,
+        session_id: &str,
+        state: &AppState,
+        app: Option<&tauri::AppHandle>,
+    ) {
+        let (target, label) = match payload {
+            "idle" => (SHELL_IDLE, "idle"),
+            "busy" => (SHELL_BUSY, "busy"),
+            _ => return,
+        };
+        transition_shell_state(state, app, session_id, target, label);
+    }
+
     /// Handle a single OSC 133 event from the VTE handler.
     /// On 'C' captures the command text; on 'D' builds a `CommandOutcome`.
-    fn handle_osc133_event(&mut self, command: char, params: &str, session_id: &str, state: &AppState) {
+    fn handle_osc133_event(&mut self, command: char, params: &str, session_id: &str, state: &AppState, app: Option<&tauri::AppHandle>) {
         use crate::ai_agent::knowledge::{
             classify_error, CommandOutcome, OutcomeClass, SessionKnowledge,
         };
 
+        // Deterministic state transitions from shell integration markers.
+        // A = prompt shown (idle), C = command execution started (busy).
+        // These bypass the silence timer entirely when OSC 133 is available.
         match command {
+            'A' => {
+                transition_shell_state(state, app, session_id, SHELL_IDLE, "idle");
+            }
             'C' => {
+                transition_shell_state(state, app, session_id, SHELL_BUSY, "busy");
                 let cmd = state
                     .input_buffers
                     .get(session_id)
@@ -1602,7 +1642,7 @@ impl ChunkProcessor {
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
         // Also capture the post-process `total_lines` and `oldest_offset` so
         // we can emit a throttled growth/rotation event for the scrollback overlay.
-        let (changed_rows, vt_log_total, vt_log_oldest, term_events, screen_cache) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
+        let (changed_rows, vt_log_total, vt_log_oldest, term_events, screen_cache, cursor_row) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
             let changed = vt.process(data.as_bytes());
             let total = vt.total_lines();
@@ -1634,10 +1674,11 @@ impl ChunkProcessor {
 
             // Single owned snapshot for downstream parsers (slash-menu, choice-prompt).
             let screen = vt.screen_rows();
+            let cursor_row = vt.cursor_point().0;
 
-            (changed, Some(total), Some(oldest), tevts, Some(screen))
+            (changed, Some(total), Some(oldest), tevts, Some(screen), cursor_row)
         } else {
-            (Vec::new(), None, None, Vec::new(), None)
+            (Vec::new(), None, None, Vec::new(), None, 0)
         };
 
         // Emit scrollback-overlay growth/rotation event (throttled to 100ms).
@@ -1668,7 +1709,8 @@ impl ChunkProcessor {
             self.last_vt_log_oldest = new_oldest;
         }
 
-        // Handle terminal events from alacritty (title, clipboard, PTY writes, OSC 133)
+        // Handle terminal events from alacritty (title, clipboard, PTY writes, OSC 133, TUIC)
+        let mut tuic_events: Vec<ParsedEvent> = Vec::new();
         if !term_events.is_empty() {
             use crate::terminal_grid::{TermEvent, Osc133Event};
             for evt in term_events {
@@ -1698,7 +1740,7 @@ impl ChunkProcessor {
                     }
                     TermEvent::Osc133 { command, params } => {
                         state.has_osc133_integration.insert(session_id.to_string(), ());
-                        self.handle_osc133_event(command, &params, session_id, state);
+                        self.handle_osc133_event(command, &params, session_id, state, app);
                         if let Some(a) = app {
                             let _ = a.emit(
                                 &format!("pty-osc133-{session_id}"),
@@ -1714,6 +1756,30 @@ impl ChunkProcessor {
                             if let Some(a) = app {
                                 let _ = a.emit(&format!("pty-cwd-{session_id}"), &cwd);
                             }
+                        }
+                    }
+                    TermEvent::Tuic { verb, payload } => {
+                        match verb.as_str() {
+                            "state" => {
+                                self.handle_tuic_state(&payload, session_id, state, app);
+                            }
+                            "suggest" => {
+                                let items: Vec<String> = payload.split('|').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
+                                if !items.is_empty() {
+                                    tuic_events.push(ParsedEvent::Suggest { items });
+                                }
+                            }
+                            "intent" => {
+                                let (text, title) = if let Some(paren_start) = payload.rfind('(') {
+                                    let desc = payload[..paren_start].trim().to_string();
+                                    let t = payload[paren_start + 1..].trim_end_matches(')').trim().to_string();
+                                    (desc, if t.is_empty() { None } else { Some(t) })
+                                } else {
+                                    (payload.clone(), None)
+                                };
+                                tuic_events.push(ParsedEvent::Intent { text, title });
+                            }
+                            _ => {}
                         }
                     }
                     TermEvent::MouseCursorDirty | TermEvent::CursorBlinkingChange => {}
@@ -1744,14 +1810,34 @@ impl ChunkProcessor {
             (sl.is_resize_grace(), sl.is_startup_grace())
         };
         let suppress_notifications = in_resize_grace || in_startup_grace;
-        let mut events = Vec::new();
+        let mut events = tuic_events;
         if let Some(evt) = crate::output_parser::parse_osc94(data) {
             events.push(evt);
         }
         let agent_active_for_parse = state.session_states.get(session_id)
             .map(|s| s.agent_type.is_some())
             .unwrap_or(false);
-        events.extend(self.parser.parse_clean_lines(&changed_rows, agent_active_for_parse));
+        // Cursor-completeness guard: exclude rows at the cursor position that
+        // look like suggest/intent tokens still being written. This prevents
+        // cross-chunk partial parsing without needing suggest_line_buf hacks.
+        // Only clone+filter when a partial token is actually present at the cursor.
+        let has_partial_token = changed_rows.iter().any(|r| {
+            r.row_index == cursor_row && {
+                let t = r.text.trim_start();
+                t.starts_with("suggest:") || t.starts_with("intent:")
+            }
+        });
+        if has_partial_token {
+            let filtered: Vec<_> = changed_rows.iter().filter(|r| {
+                r.row_index != cursor_row || {
+                    let t = r.text.trim_start();
+                    !(t.starts_with("suggest:") || t.starts_with("intent:"))
+                }
+            }).cloned().collect();
+            events.extend(self.parser.parse_clean_lines(&filtered, agent_active_for_parse));
+        } else {
+            events.extend(self.parser.parse_clean_lines(&changed_rows, agent_active_for_parse));
+        }
 
         // screen_cache was computed once inside the vt_log lock scope above.
 
@@ -7097,5 +7183,208 @@ mod tests {
         let content: serde_json::Value =
             serde_json::from_str(&inbox.front().unwrap().content).unwrap();
         assert_eq!(content["state"], "exited", "the single message must be 'exited'");
+    }
+
+    #[test]
+    fn tuic_osc_suggest_parsed_from_pty_stream() {
+        use crate::terminal_grid::TerminalGrid;
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]7770;suggest=Fix bug|Run tests|Deploy\x07");
+        let events = grid.drain_events();
+        let tuic: Vec<_> = events.into_iter().filter(|e| {
+            matches!(e, crate::terminal_grid::TermEvent::Tuic { .. })
+        }).collect();
+        assert_eq!(tuic.len(), 1);
+        if let crate::terminal_grid::TermEvent::Tuic { verb, payload } = &tuic[0] {
+            assert_eq!(verb, "suggest");
+            let items: Vec<String> = payload.split('|').map(|s| s.trim().to_string()).collect();
+            assert_eq!(items, vec!["Fix bug", "Run tests", "Deploy"]);
+        }
+    }
+
+    #[test]
+    fn tuic_osc_intent_with_title_parsed() {
+        use crate::terminal_grid::TerminalGrid;
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]7770;intent=Refactoring auth (Auth)\x07");
+        let events = grid.drain_events();
+        let tuic: Vec<_> = events.into_iter().filter(|e| {
+            matches!(e, crate::terminal_grid::TermEvent::Tuic { .. })
+        }).collect();
+        assert_eq!(tuic.len(), 1);
+        if let crate::terminal_grid::TermEvent::Tuic { verb, payload } = &tuic[0] {
+            assert_eq!(verb, "intent");
+            assert_eq!(payload, "Refactoring auth (Auth)");
+        }
+    }
+
+    #[test]
+    fn tuic_osc_state_transitions_shell_state() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "test-tuic-state";
+        state.shell_states.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+        );
+        state.shell_state_since_ms.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU64::new(0),
+        );
+
+        let proc = ChunkProcessor::new(None, None);
+        proc.handle_tuic_state("busy", session_id, &state, None);
+
+        let current = state.shell_states.get(session_id).unwrap()
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert_eq!(current, SHELL_BUSY);
+
+        proc.handle_tuic_state("idle", session_id, &state, None);
+        let current = state.shell_states.get(session_id).unwrap()
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert_eq!(current, SHELL_IDLE);
+    }
+
+    #[test]
+    fn tuic_osc_state_emits_shell_state_event() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "test-tuic-emit";
+        state.shell_states.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+        );
+        state.shell_state_since_ms.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU64::new(0),
+        );
+
+        let mut rx = state.event_bus.subscribe();
+
+        let proc = ChunkProcessor::new(None, None);
+        proc.handle_tuic_state("busy", session_id, &state, None);
+
+        let evt = rx.try_recv();
+        assert!(evt.is_ok(), "event_bus should have received a shell state event");
+        if let Ok(crate::state::AppEvent::PtyParsed { session_id: sid, parsed }) = evt {
+            assert_eq!(sid, session_id);
+            assert_eq!(parsed["type"], "shell-state");
+            assert_eq!(parsed["state"], "busy");
+        } else {
+            panic!("expected PtyParsed event with shell-state");
+        }
+    }
+
+    #[test]
+    fn tuic_osc_state_unknown_verb_ignored() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "test-tuic-unknown";
+        state.shell_states.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+        );
+
+        let proc = ChunkProcessor::new(None, None);
+        proc.handle_tuic_state("thinking", session_id, &state, None);
+
+        let current = state.shell_states.get(session_id).unwrap()
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert_eq!(current, SHELL_IDLE, "unknown state should not change shell_states");
+    }
+
+    #[test]
+    fn osc133_a_transitions_to_idle_immediately() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "test-osc133-idle";
+        state.shell_states.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+        );
+        state.shell_state_since_ms.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU64::new(0),
+        );
+        state.has_osc133_integration.insert(session_id.to_string(), ());
+
+        let mut proc = ChunkProcessor::new(None, None);
+        proc.handle_osc133_event('A', "", session_id, &state, None);
+
+        let current = state.shell_states.get(session_id).unwrap()
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert_eq!(current, SHELL_IDLE, "OSC 133 A should transition to idle immediately");
+    }
+
+    #[test]
+    fn osc133_c_transitions_to_busy_immediately() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "test-osc133-busy";
+        state.shell_states.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+        );
+        state.shell_state_since_ms.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU64::new(0),
+        );
+        state.has_osc133_integration.insert(session_id.to_string(), ());
+
+        let mut proc = ChunkProcessor::new(None, None);
+        proc.handle_osc133_event('C', "", session_id, &state, None);
+
+        let current = state.shell_states.get(session_id).unwrap()
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert_eq!(current, SHELL_BUSY, "OSC 133 C should transition to busy immediately");
+    }
+
+    #[test]
+    fn osc133_a_emits_shell_state_event() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "test-osc133-emit";
+        state.shell_states.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+        );
+        state.shell_state_since_ms.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU64::new(0),
+        );
+
+        // Subscribe to event bus before transition
+        let mut rx = state.event_bus.subscribe();
+
+        let mut proc = ChunkProcessor::new(None, None);
+        proc.handle_osc133_event('A', "", session_id, &state, None);
+
+        // Check event_bus received a state change
+        let evt = rx.try_recv();
+        assert!(evt.is_ok(), "event_bus should have received a shell state event");
+        if let Ok(crate::state::AppEvent::PtyParsed { session_id: sid, parsed }) = evt {
+            assert_eq!(sid, session_id);
+            assert_eq!(parsed["type"], "shell-state");
+            assert_eq!(parsed["state"], "idle");
+        } else {
+            panic!("expected PtyParsed event with shell-state");
+        }
+    }
+
+    #[test]
+    fn osc133_d_does_not_transition_alone() {
+        // D means "command finished" but idle only happens when A arrives (prompt shown)
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "test-osc133-d";
+        state.shell_states.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+        );
+        state.shell_state_since_ms.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU64::new(0),
+        );
+        state.has_osc133_integration.insert(session_id.to_string(), ());
+
+        let mut proc = ChunkProcessor::new(None, None);
+        proc.handle_osc133_event('D', "0", session_id, &state, None);
+
+        let current = state.shell_states.get(session_id).unwrap()
+            .load(std::sync::atomic::Ordering::Acquire);
+        assert_eq!(current, SHELL_BUSY, "OSC 133 D alone should NOT transition — wait for A");
     }
 }

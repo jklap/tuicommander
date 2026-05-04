@@ -7,6 +7,7 @@
  */
 
 import { invoke, listen } from "../invoke";
+import { isTauri } from "../transport";
 import { pluginRegistry } from "./pluginRegistry";
 import { pluginStore } from "../stores/pluginStore";
 import { appLogger } from "../stores/appLogger";
@@ -306,6 +307,11 @@ async function handlePluginChanged(event: { payload: string[] }): Promise<void> 
  * Call once at app startup after built-in plugins are registered.
  */
 export async function loadUserPlugins(): Promise<void> {
+  if (!isTauri()) {
+    appLogger.debug("plugin", "User plugin loading skipped in browser mode");
+    return;
+  }
+
   // Sync disabled list from config
   await syncDisabledList();
 

@@ -1042,10 +1042,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     } catch { /* ignore — command may not exist on older backend */ }
     if (!alive || gen !== linkCheckGeneration) return;
 
-    const rowText = await invokeRef("terminal_get_row_text", {
-      sessionId: props.sessionId,
-      row,
-    }) as string;
+    let rowText: string;
+    try {
+      rowText = await invokeRef("terminal_get_row_text", {
+        sessionId: props.sessionId,
+        row,
+      }) as string;
+    } catch { return; }
     if (!alive || gen !== linkCheckGeneration) return;
 
     const cacheKey = `${row}:${rowText}`;

@@ -22,6 +22,7 @@ pub enum TermEvent {
     CursorBlinkingChange,
     Osc133 { command: char, params: String },
     Osc7(String),
+    Tuic { verb: String, payload: String },
 }
 
 #[derive(Clone)]
@@ -42,6 +43,7 @@ impl EventListener for TermEventCollector {
             Event::CursorBlinkingChange => { self.events.lock().unwrap().push(TermEvent::CursorBlinkingChange); }
             Event::Osc133 { command, params } => { self.events.lock().unwrap().push(TermEvent::Osc133 { command, params }); }
             Event::Osc7(url) => { self.events.lock().unwrap().push(TermEvent::Osc7(url)); }
+            Event::Tuic { verb, payload } => { self.events.lock().unwrap().push(TermEvent::Tuic { verb, payload }); }
             Event::ClipboardLoad(..) | Event::ColorRequest(..) | Event::TextAreaSizeRequest(..)
             | Event::Wakeup | Event::Exit | Event::ChildExit(_) => {}
         }
@@ -310,7 +312,6 @@ impl TerminalGrid {
     }
 
     /// Read the cursor position (line, column) in screen coordinates.
-    #[cfg(test)]
     pub fn cursor_point(&self) -> (usize, usize) {
         let point = self.term.grid().cursor.point;
         (point.line.0.max(0) as usize, point.column.0)
@@ -1504,5 +1505,171 @@ mod tests {
         let events = grid.drain_events();
         let osc_events: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Osc133 { .. })).collect();
         assert!(osc_events.is_empty());
+    }
+
+    #[test]
+    fn osc7770_state_event() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        // OSC 7770 ; state=idle BEL
+        grid.process(b"\x1b]7770;state=idle\x07");
+        let events = grid.drain_events();
+        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        assert_eq!(tuic.len(), 1);
+        match &tuic[0] {
+            TermEvent::Tuic { verb, payload } => {
+                assert_eq!(verb, "state");
+                assert_eq!(payload, "idle");
+            }
+            _ => panic!("expected Tuic event"),
+        }
+    }
+
+    #[test]
+    fn osc7770_suggest_event() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        // OSC 7770 ; suggest=Fix the bug|Run tests|Deploy BEL
+        grid.process(b"\x1b]7770;suggest=Fix the bug|Run tests|Deploy\x07");
+        let events = grid.drain_events();
+        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        assert_eq!(tuic.len(), 1);
+        match &tuic[0] {
+            TermEvent::Tuic { verb, payload } => {
+                assert_eq!(verb, "suggest");
+                assert_eq!(payload, "Fix the bug|Run tests|Deploy");
+            }
+            _ => panic!("expected Tuic event"),
+        }
+    }
+
+    #[test]
+    fn osc7770_intent_event() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]7770;intent=Refactoring auth module (Auth Refactor)\x07");
+        let events = grid.drain_events();
+        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        assert_eq!(tuic.len(), 1);
+        match &tuic[0] {
+            TermEvent::Tuic { verb, payload } => {
+                assert_eq!(verb, "intent");
+                assert_eq!(payload, "Refactoring auth module (Auth Refactor)");
+            }
+            _ => panic!("expected Tuic event"),
+        }
+    }
+
+    #[test]
+    fn osc7770_not_written_to_grid() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"before\x1b]7770;state=busy\x07after");
+        let row = grid.get_row_text(0);
+        assert!(row.contains("before"));
+        assert!(row.contains("after"));
+        assert!(!row.contains("7770"));
+        assert!(!row.contains("state"));
+    }
+
+    #[test]
+    fn osc7770_st_terminated() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        // ST terminator: ESC backslash
+        grid.process(b"\x1b]7770;state=busy\x1b\\");
+        let events = grid.drain_events();
+        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        assert_eq!(tuic.len(), 1);
+        match &tuic[0] {
+            TermEvent::Tuic { verb, payload } => {
+                assert_eq!(verb, "state");
+                assert_eq!(payload, "busy");
+            }
+            _ => panic!("expected Tuic event"),
+        }
+    }
+
+    #[test]
+    fn cursor_guard_partial_suggest_at_cursor_row() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        // Write a partial suggest line — cursor stays on that row
+        grid.process(b"suggest: Fix bug|Run te");
+        let (cursor_row, _) = grid.cursor_point();
+        assert_eq!(cursor_row, 0, "cursor should be on the partial row");
+        let row_text = grid.get_row_text(0);
+        let trimmed = row_text.trim_start();
+        assert!(trimmed.starts_with("suggest:"),
+            "row should start with suggest: but got: {row_text}");
+        // Verify the guard predicate: row at cursor starts with "suggest:" → should be excluded
+        let should_exclude = trimmed.starts_with("suggest:") || trimmed.starts_with("intent:");
+        assert!(should_exclude, "guard predicate should match this row for exclusion");
+    }
+
+    #[test]
+    fn cursor_guard_completed_suggest_cursor_moved() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        // Write a complete suggest line followed by a newline
+        grid.process(b"suggest: Fix bug|Run tests|Deploy\r\n");
+        let (cursor_row, _) = grid.cursor_point();
+        assert_eq!(cursor_row, 1, "cursor moved past completed line");
+        // The completed row is NOT at cursor, so the guard would NOT exclude it
+        let row_text = grid.get_row_text(0);
+        assert!(row_text.trim_start().starts_with("suggest:"));
+    }
+
+    #[test]
+    fn cursor_guard_intent_at_cursor_row() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"intent: Working on feat");
+        let (cursor_row, _) = grid.cursor_point();
+        assert_eq!(cursor_row, 0);
+        let trimmed = grid.get_row_text(0).trim_start().to_string();
+        assert!(trimmed.starts_with("intent:"), "guard should also match intent: prefix");
+    }
+
+    #[test]
+    fn osc7770_and_osc133_full_flow() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        // Shell displays prompt (OSC 133 A)
+        grid.process(b"\x1b]133;A\x07$ ");
+        let events = grid.drain_events();
+        assert!(events.iter().any(|e| matches!(e, TermEvent::Osc133 { command: 'A', .. })));
+
+        // User types and presses enter (OSC 133 C)
+        grid.process(b"ls\r\n\x1b]133;C\x07");
+        let events = grid.drain_events();
+        assert!(events.iter().any(|e| matches!(e, TermEvent::Osc133 { command: 'C', .. })));
+
+        // Command output + done (OSC 133 D)
+        grid.process(b"file1.txt\r\n\x1b]133;D;0\x07");
+        let events = grid.drain_events();
+        assert!(events.iter().any(|e| matches!(e, TermEvent::Osc133 { command: 'D', .. })));
+
+        // Prompt returns (OSC 133 A) + agent suggests via OSC 7770
+        grid.process(b"\x1b]133;A\x07$ \x1b]7770;suggest=Show details|Delete file|Open\x07");
+        let events = grid.drain_events();
+        assert!(events.iter().any(|e| matches!(e, TermEvent::Osc133 { command: 'A', .. })));
+        assert!(events.iter().any(|e| matches!(e, TermEvent::Tuic { verb, .. } if verb == "suggest")));
+    }
+
+    #[test]
+    fn osc7770_invalid_no_equals_ignored() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]7770;garbage\x07");
+        let events = grid.drain_events();
+        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        assert!(tuic.is_empty(), "malformed OSC 7770 should be ignored");
+    }
+
+    #[test]
+    fn osc7770_empty_payload() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"\x1b]7770;state=\x07");
+        let events = grid.drain_events();
+        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        assert_eq!(tuic.len(), 1);
+        match &tuic[0] {
+            TermEvent::Tuic { verb, payload } => {
+                assert_eq!(verb, "state");
+                assert_eq!(payload, "");
+            }
+            _ => panic!("expected Tuic event"),
+        }
     }
 }

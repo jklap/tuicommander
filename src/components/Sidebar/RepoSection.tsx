@@ -11,7 +11,7 @@ export { effectiveMergeMethod };
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import type { ContextMenuItem } from "../ContextMenu";
 import { PromptDialog } from "../PromptDialog";
-import { getModifierSymbol } from "../../platform";
+import { keyFor } from "../../utils/hotkey";
 import { compareBranches } from "../../utils/branchSort";
 import { invoke } from "../../invoke";
 import { cx } from "../../utils";
@@ -365,7 +365,7 @@ export const BranchItem: Component<{
         </Show>
       </div>
       <span class={s.branchShortcut} style={{ display: props.shortcutIndex !== undefined ? undefined : "none" }}>
-        {getModifierSymbol()}^{props.shortcutIndex}
+        {props.shortcutIndex !== undefined ? keyFor(`switch-branch-${props.shortcutIndex}`) : ""}
       </span>
       <ContextMenu
         items={contextMenuItems()}

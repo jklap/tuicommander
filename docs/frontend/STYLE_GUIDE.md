@@ -25,7 +25,7 @@ Reference for all UI/CSS/layout work. Every visual change MUST follow this guide
 │ │          │ │ #terminal-container          │ │ │ Diff or      │ │ │
 │ │ REPOS    │ │ (flex: 1, --bg-primary)      │ │ │ Markdown or  │ │ │
 │ │  section │ │                              │ │ │ Notes/Ideas  │ │ │
-│ │  title   │ │  xterm terminal fills this   │ │ │ panel        │ │ │
+│ │  title   │ │  terminal fills this          │ │ │ panel        │ │ │
 │ │  repo    │ │  entire area                 │ │ │              │ │ │
 │ │   header │ │                              │ │ │ panel-header │ │ │
 │ │   branch │ │                              │ │ │ panel-content│ │ │
@@ -520,7 +520,7 @@ Icon dimensions: 18px wide container for branch icons. `--font-md` or `--font-lg
 ::-webkit-scrollbar-thumb:hover { background: var(--fg-muted); }
 ```
 
-Terminal xterm scrollbar overridden to 8px with `!important`.
+Terminal scrollbar overridden to 8px with `!important`.
 
 ## Interactive States
 
@@ -609,6 +609,6 @@ When updating core palette colors in `global.css`, **also update `mobile.css`** 
 - **No hardcoded core colors** — use CSS variables for the four bg levels, three fg levels, and status colors.
 - **No icon libraries** — text/unicode/emoji only.
 - **No off-scale radius** — only `--radius-xs` through `--radius-full`.
-- **No `!important`** — except xterm scrollbar overrides.
+- **No `!important`** — except terminal scrollbar overrides.
 - **No pixel values outside the spacing scale** unless component-specific dimension (like 28px repo initials).
 - **No inline styles for theming** — all colors and spacing via CSS variables (desktop: `global.css`, mobile: `mobile.css`).

@@ -3,7 +3,7 @@
 > Canonical feature inventory. Update this file when adding, changing, or removing features.
 > See [AGENTS.md](../AGENTS.md) for the maintenance requirement.
 
-**Version:** 1.0.7 | **Last verified:** 2026-04-24
+**Version:** 1.1.0 | **Last verified:** 2026-05-04
 
 ---
 
@@ -57,7 +57,7 @@
 ### 1.5 Copy & Paste
 - Copy selection: `Cmd+C`
 - Paste to terminal: `Cmd+V`
-- **Trailing whitespace trimmed** — All copy paths (Cmd+C, Ctrl+C, copy-on-select) strip trailing spaces that xterm.js pads to the terminal width
+- **Trailing whitespace trimmed** — All copy paths (Cmd+C, Ctrl+C, copy-on-select) strip trailing spaces from terminal rows
 - **Copy on Select** — When enabled (Settings > General > Terminal or Settings > Appearance), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar.
 - **Copy feedback (Cmd+C)** — Copying via Cmd+C shows "Copied to clipboard" in the status bar, consistent with copy-on-select and Ctrl+C paths.
 
@@ -74,7 +74,7 @@
 
 ### 1.8 Find in Content
 - `Cmd+F` opens search overlay — context-aware: routes to terminal, markdown tab, or diff tab based on active view
-- **Terminal:** incremental search via `@xterm/addon-search` with highlight decorations
+- **Terminal:** incremental search with highlight decorations
 - **Markdown viewer:** DOM-based search with cross-element matching (finds text spanning inline tags)
 - **Diff viewer:** DOM-based search via SearchBar + DomSearchEngine (same engine as markdown viewer)
 - Yellow highlight for matches, orange for active match
@@ -95,7 +95,7 @@
 
 ### 1.11 OSC 7 CWD Tracking
 - Terminals report their current working directory via OSC 7 escape sequences
-- Parsed in the frontend via xterm.js `registerOscHandler(7, ...)`, then sent to Rust via `update_session_cwd` IPC and stored per-session as `session_cwd`
+- Parsed in the Rust backend from PTY output and stored per-session as `session_cwd`
 - When a terminal's CWD falls inside a known worktree path, the session is automatically reassigned to the correct branch in the sidebar
 - Enables accurate branch association even when the user `cd`s into a different worktree from a single terminal
 
@@ -128,6 +128,16 @@
 
 ### 1.16 Terminal Bell
 - **Terminal Bell** — Configurable bell behavior when the terminal receives a BEL character (`\x07`). Four modes: `none` (silent), `visual` (screen flash animation), `sound` (plays the Info notification sound), `both` (flash + sound). Configure in Settings > Appearance.
+
+### 1.17 Scrollback History Overlay (Experimental)
+- Read-only overlay for viewing full terminal scrollback beyond the visible buffer
+- Gated behind `scrollHistoryEnabled` settings flag (Settings > General > Experimental Features)
+- Content reconstructed from `VtLogBuffer` via LogSpan ANSI reconstruction — preserves colors, bold, underline, and other SGR attributes
+- Built as a read-only terminal overlay using ANSI reconstruction from VtLogBuffer
+- **Selection & copy**: select text in the overlay; auto-copies to clipboard with `::selection` highlight
+- **Search** (`Cmd+F`): incremental search with match highlighting via SearchAddon, "N of M" counter, Enter/Shift+Enter navigation
+- Theme-synced: ANSI CSS variables follow the active terminal theme
+- Grid-aligned positioning matches the underlying terminal metrics
 
 ---
 
@@ -399,6 +409,16 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Session-only (not persisted across restarts)
 - Toggle again to restore the previous layout
 
+### 3.17 Detachable Panels
+- Any panel (AI Chat, Activity Dashboard, Git Panel) can be detached into a separate OS window
+- Generic system via `open_panel_window` / `close_panel_window` Rust commands with per-panel adapters
+- Two-tier sync: self-sufficient panels (Git Panel) call Rust directly; projection panels (Activity Dashboard) receive state snapshots via `emitTo` at 1 Hz
+- Shared `PanelWindowControls` component provides consistent detach/reattach/close buttons across all panels
+- Closing a detached window automatically restores the panel to the main window
+- Tab bar "Detach to Window" context menu entry for per-tab detach (PTY session stays alive in Rust)
+- Generic lifecycle functions: `togglePanel()`, `detachPanel()`, `reattachPanel()` replace per-panel callsites
+- `uiStore.detachedPanels` map tracks all detached panels (replaces former `aiChatDetached` boolean)
+
 ---
 
 ## 4. Toolbar
@@ -644,7 +664,26 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Cross-session memory injection** — `build_cross_session_section()` scans all sessions whose CWD history overlaps the current session's repo root and injects a summarised memory block into the agent system prompt. The agent inherits knowledge from prior sessions in the same repo without manual intervention
 - **Cron scheduler** — time-triggered agent tasks defined in Settings > AI Chat > Scheduler. Cron expressions with goals, persisted to `<config_dir>/ai-cron.json`. Scheduler ticks every 30 s. Tauri commands: `load_scheduler_config`, `save_scheduler_config`
 
-### 6.16 ChoicePrompt Detection
+### 6.16 Provider Registry
+- Centralized multi-provider configuration replacing per-feature provider settings
+- Supported provider types: **Anthropic**, **OpenAI**, **OpenRouter**, **Ollama** (local, auto-detected), custom OpenAI-compatible endpoints
+- Per-provider API keys stored in OS keyring via `Credential::Provider` variant
+- Per-provider model lists with add/remove/reorder
+- **Slot resolver** — logical slots (`headless`, `chat`, `triage`) map to concrete provider+model pairs with a configurable fallback chain
+- **Legacy migration** — existing `ai-chat-config.json` provider/model/API key settings auto-migrated to `providers.json` on first load
+- **Settings > Providers tab** — full CRUD UI: add/edit/remove providers, manage model lists, assign slots, test connections
+- All Rust consumers (`ai_chat`, `ai_agent`, `headless`, `triage`) resolve models via the registry instead of reading config directly
+- Config file: `<config_dir>/providers.json`
+
+### 6.17 AI Diff Triage
+- LLM-powered code review panel for `git diff` changes
+- Progressive loading: diffs grouped by file with heuristic pre-classification (formatting-only, rename, test, config changes) before LLM analysis
+- Multi-turn conversation via `TriageSession` — ask follow-up questions about specific findings
+- "Diff" button on findings opens the relevant file diff in context
+- Refresh support: re-run triage when the diff changes
+- Backed by `run_diff_triage` Tauri command with `classify_multi_turn` for iterative refinement
+
+### 6.18 ChoicePrompt Detection
 - New `ParsedEvent::ChoicePrompt { title, options, dismiss_key, amend_key }` recognises Claude-Code-style numbered confirmation menus (footer matches `Esc to cancel · Tab to amend`)
 - Options parsed by regex with optional cursor marker (`❯`, `›`, `>`). Title heuristics require `?` or a verb prefix (`proceed`, `confirm`, `do you want`, …) to avoid matching Markdown numbered lists. Minimum two options
 - Destructive labels (`no`, `cancel`, `reject`, `abort`, `deny`, `don't`) flagged for styling
@@ -1032,6 +1071,10 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - See **6.9 Agent Configuration** for full details
 - Claude Usage Dashboard enable/disable toggle (under Claude agent section)
 
+### 11.8 Providers
+- Settings > Providers tab for centralized AI provider management
+- See **6.16 Provider Registry** for full details
+
 ---
 
 ## 12. Persistence
@@ -1047,6 +1090,7 @@ All data persisted to platform config directory via Rust:
 - `prompt_library.json` — saved prompts
 - `notes.json` — ideas panel data
 - `dictation_config.json` — dictation settings
+- `providers.json` — provider registry (providers, models, slot assignments)
 - `.tuic.json` — repo-root team config (read-only from app, highest precedence for overridable fields)
 - `claude-usage-cache.json` — incremental session transcript parse cache
 
@@ -1575,9 +1619,9 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 ## 20. Performance
 
 ### 20.1 PTY Write Coalescing
-- Terminal writes accumulated per animation frame via `requestAnimationFrame` (~60 flushes/sec)
-- High-throughput agent output (hundreds of events/sec) batched into single `terminal.write()` calls
-- Reduces xterm.js render passes and WebGL texture uploads during burst output
+- Paint triggers coalesced per animation frame via `requestAnimationFrame` (~60 repaints/sec)
+- High-throughput agent output (hundreds of events/sec) batched into single grid frame updates
+- Reduces canvas render passes during burst output
 - Flow control (pause/resume at HIGH_WATERMARK) unchanged
 
 ### 20.2 Async Git Commands
@@ -1605,7 +1649,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Reused for both Tauri IPC emit and event bus broadcast (was serialized twice)
 
 ### 20.7 Frontend Bundle Splitting
-- Vite `manualChunks`: xterm, codemirror, diff-view, markdown as separate chunks
+- Vite `manualChunks`: terminal, codemirror, diff-view, markdown as separate chunks
 - SettingsPanel, ActivityDashboard, HelpPanel lazy-loaded with `lazy()` + `Suspense`
 - PTY read buffer increased from 4KB to 64KB for natural batching
 

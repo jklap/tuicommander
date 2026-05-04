@@ -18,6 +18,7 @@ import { getSharedMetrics } from "./glyphCache";
 import { snapLineHeight } from "./canvasTerminalUtils";
 import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { ComposePanel } from "../ComposePanel";
+import { keyFor } from "../../utils/hotkey";
 import s from "./Terminal.module.css";
 
 
@@ -610,17 +611,17 @@ export const Terminal: Component<TerminalProps> = (props) => {
           appLogger.warn("terminal", `initSession(${props.id}) — resize failed for ${sessionId}, creating FRESH session`);
           sessionId = null;
           setCurrentSessionId(null);
-          unsubscribePty?.();
+          try { unsubscribePty?.(); } catch { /* listener already gone */ }
           unsubscribePty = undefined;
-          unlistenParsed?.();
+          try { unlistenParsed?.(); } catch { /* */ }
           unlistenParsed = undefined;
-          unlistenKitty?.();
+          try { unlistenKitty?.(); } catch { /* */ }
           unlistenKitty = undefined;
-          unlistenOsc133?.();
+          try { unlistenOsc133?.(); } catch { /* */ }
           unlistenOsc133 = undefined;
-          unlistenTitle?.();
+          try { unlistenTitle?.(); } catch { /* */ }
           unlistenTitle = undefined;
-          unlistenClipboardStore?.();
+          try { unlistenClipboardStore?.(); } catch { /* */ }
           unlistenClipboardStore = undefined;
         }
       }
@@ -720,17 +721,18 @@ export const Terminal: Component<TerminalProps> = (props) => {
     disposed = true;
     clearTimeout(retryTimer);
     clearTimeout(agentDetectTimer);
-    unsubscribePty?.();
+    const safeUnlisten = (fn: (() => void) | undefined) => { try { fn?.(); } catch { /* listener already gone */ } };
+    safeUnlisten(unsubscribePty);
     unsubscribePty = undefined;
-    unlistenParsed?.();
+    safeUnlisten(unlistenParsed);
     unlistenParsed = undefined;
-    unlistenKitty?.();
+    safeUnlisten(unlistenKitty);
     unlistenKitty = undefined;
-    unlistenOsc133?.();
+    safeUnlisten(unlistenOsc133);
     unlistenOsc133 = undefined;
-    unlistenTitle?.();
+    safeUnlisten(unlistenTitle);
     unlistenTitle = undefined;
-    unlistenClipboardStore?.();
+    safeUnlisten(unlistenClipboardStore);
     unlistenClipboardStore = undefined;
     kittyFlags = 0;
 
@@ -922,12 +924,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
         <div
           class={s.composeHint}
           onClick={() => setComposeOpen(true)}
-          title="Open compose editor (Cmd+I)"
+          title={`Open compose editor (${keyFor("toggle-compose-panel")})`}
         >
           <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style={{ "margin-right": "4px", opacity: 0.7 }}>
             <path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708L5.854 13.146a.5.5 0 0 1-.233.131l-3.5 1a.5.5 0 0 1-.617-.617l1-3.5a.5.5 0 0 1 .131-.233L12.146.854z" />
           </svg>
-          Compose ⌘I
+          Compose {keyFor("toggle-compose-panel")}
         </div>
       </Show>
       <ComposePanel

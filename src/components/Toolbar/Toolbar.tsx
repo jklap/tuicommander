@@ -8,7 +8,7 @@ import { editorTabsStore } from "../../stores/editorTabs";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { prNotificationsStore, type PrNotificationType } from "../../stores/prNotifications";
 import { activityStore } from "../../stores/activityStore";
-import { getModifierSymbol } from "../../platform";
+import { keyFor } from "../../utils/hotkey";
 import { IdeLauncher } from "../IdeLauncher";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
 import { SmartPromptsDropdown } from "../SmartPromptsDropdown/SmartPromptsDropdown";
@@ -194,7 +194,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
         <button
           class={s.sidebarToggle}
           onClick={() => uiStore.toggleSidebar()}
-          title={uiStore.state.sidebarVisible ? `${t("toolbar.hideSidebar", "Hide Sidebar")} (${getModifierSymbol()}[)` : `${t("toolbar.showSidebar", "Show Sidebar")} (${getModifierSymbol()}[)`}
+          title={uiStore.state.sidebarVisible ? `${t("toolbar.hideSidebar", "Hide Sidebar")} (${keyFor("toggle-sidebar")})` : `${t("toolbar.showSidebar", "Show Sidebar")} (${keyFor("toggle-sidebar")})`}
         >
           ◧
         </button>

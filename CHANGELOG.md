@@ -6,10 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-05-04
+
 ### Added
-- **Generic detachable panel system** — Any panel can be detached to a separate window via `open_panel_window` Rust command. Two-tier sync: self-sufficient panels call Rust directly, projection panels receive state snapshots via `emitTo`. Panel adapters define per-panel serialization, actions, and components.
+- **Provider Registry** — Centralized multi-provider configuration system. Define providers (Anthropic, OpenAI, OpenRouter, Ollama, custom OpenAI-compatible) with per-provider API keys and model lists. Slot resolver maps logical slots (`headless`, `chat`, `triage`) to concrete provider+model pairs with a fallback chain. Legacy `ai-chat-config.json` settings auto-migrated to `providers.json` on first load. New `Credential::Provider` variant stores keys in OS keyring. Settings > Providers tab with full CRUD UI for providers, models, and slot assignments. Rust consumers (`ai_chat`, `ai_agent`, `headless`, `triage`) resolve models via the registry instead of reading config directly.
+- **AI Diff Triage** — Holistic LLM-powered diff review panel. Shows `git diff` changes grouped by file with progressive loading. Heuristic pre-classification (formatting, rename, test, config) runs locally before sending to the LLM. Multi-turn conversation via `TriageSession` struct allows follow-up questions about specific findings. Diff button on individual findings opens the relevant file diff. `classify_multi_turn` wired into `run_diff_triage` with refresh support from the frontend.
+- **Scrollback History Overlay** — Experimental read-only overlay for viewing full terminal scrollback beyond the visible buffer. Gated behind `scrollHistoryEnabled` settings flag. Built with LogSpan ANSI reconstruction from `VtLogBuffer`. Features: selection with auto-copy, `::selection` highlight, `Cmd+F` search with match highlighting, theme-synced ANSI CSS variables, grid-aligned positioning.
+- **Generic detachable panel system** — Any panel can be detached to a separate window via `open_panel_window` Rust command. Two-tier sync: self-sufficient panels call Rust directly, projection panels receive state snapshots via `emitTo`. Panel adapters define per-panel serialization, actions, and components. Shared `PanelWindowControls` component replaces per-panel detach/close buttons. Generic lifecycle functions (`togglePanel`, `detachPanel`, `reattachPanel`) replace per-panel callsites.
 - **Activity Dashboard detach** — Detach button in Activity Dashboard header and "Open Activity Dashboard in separate window" Command Palette entry. Live state sync at 1 Hz via PanelSyncProvider/Receiver.
-- **AI Chat migrated to generic panel lifecycle** — `open_ai_chat_window` replaced by `open_panel_window("ai-chat", ...)`. Channel-based streaming sync preserved.
+- **Git Panel detach** — Git Panel can now be detached to a separate window via the panel header button or Command Palette.
+- **Tab detach** — Right-click any tab → "Detach to Window" opens it in a floating OS window. PTY session stays alive; closing the floating window returns the tab to the main window.
+- **GitHub PR/issues polling migrated to Rust** — Background PR and issues polling moved from TypeScript intervals to the Rust backend for reliability and lower overhead.
+- **GitHub API rate limit optimization** — Smarter API call batching to reduce rate limit consumption.
+- **Drag files from FileBrowser** — Drag files from the File Browser panel onto the terminal area or tab bar to paste shell-quoted paths.
+- **Notes enhancements** — Pending count badge, "Clear completed" action, batch asset delete for cleaned-up notes.
+- **Dictation autoSend** — When enabled, dictation transcription is automatically submitted via `sendCommand()` with sessionId safety.
+- **Daily-rotated log files** — App logs now rotate daily with automatic cleanup of old log files.
+- **CI release automation** — Auto-publish GitHub release after finalize step.
 
 ### Changed
 - **`uiStore.detachedPanels`** — Replaced `aiChatDetached: boolean` with generic `detachedPanels: Record<string, string>` map. `isDetached(panelId)` / `setDetached()` / `clearDetached()` replace per-panel flags.
@@ -18,10 +31,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Terminal perf: single screen snapshot per PTY chunk** — Chrome cutoff detection uses a borrowed `&[String]` view; downstream parsers share one owned snapshot instead of re-acquiring the lock.
 - **Terminal perf: in-place string trim** — `read_screen_text()` and `row_to_text()` trim trailing whitespace via `truncate()` instead of allocating a new String per row.
 - **Panel routing extracted** — `panelRouter.tsx` provides `registerPanel()`, `renderPanelMode()`, and panel adapter registry, replacing hardcoded panel routing in App.tsx.
+- **AI Chat migrated to generic panel lifecycle** — `open_ai_chat_window` replaced by `open_panel_window("ai-chat", ...)`. Channel-based streaming sync preserved.
+- **AltScreenHistory rewritten** — Replaced custom DOM renderer with a native read-only terminal overlay. Dead DOM-rendering CSS stripped.
+
+### Fixed
+- **Suggest overlay z-index** — Raised overlay above active terminal pane to prevent clipping.
+- **Provider schema migration** — Fixed reactivity and error handling during legacy config migration to provider registry.
+- **Editor unlock for external files** — External files opened via `tuic://open/` can now be unlocked for editing.
+- **Stale agentSessionId** — Prevented stale session IDs from resuming the wrong agent session on branch switch.
+- **Plugin panel refocus** — Stopped plugin panels from stealing terminal focus after tab switch.
+- **tuic://open/ paths** — External paths opened via deep link now correctly open as read-only editor tabs.
+- **Panel mode early-return** — Fixed early return in panel mode that skipped cleanup.
+- **WebGL atlas rebuild** — Atlas now rebuilds on font change and DPR change to prevent glyph corruption.
+- **GitHub CheckSummary** — Recomputed from fresh check details on popover open instead of using stale cached summary.
+- **Git lock contention** — Resolved `resolve_context` fan-out causing `index.lock` contention; optimized variable resolution.
+- **Alt-screen history guards** — Added safety guards for edge cases in scroll history overlay.
+- **Rust safety** — `index.lock` age guard, `vt_log` lock scope reduction, `saturating_mul` overflow protection, `let-chains` for nested `if-let` patterns, `is_some+unwrap` replaced with `if-let` per clippy.
+- **ANSI CSS variable sync** — Scroll history overlay now syncs CSS variables with the active terminal theme.
+- **Scroll history grid alignment** — Overlay correctly aligns with terminal grid metrics.
+- **Session conflict dedup** — Deduplicated session-conflict events and regenerate `tuicSession` in-memory.
+- **Network interface display** — Settings now shows network interface and QR code when remote access is enabled.
+- **Panel beforeunload** — JS `beforeunload` handler for OS window close + reattach reopens overlay correctly.
+- **License correction** — Fixed license from MIT to Apache 2.0 in README and website footer.
 
 ### Removed
 - `open_ai_chat_window` Rust command (replaced by generic `open_panel_window`)
-- `aiChatDetached` field in uiStore (replaced by `detachedPanels` map)
+- `aiChatDetached` field in uiStore (replaced by generic `detachedPanels` map)
 
 ## [1.0.7] - 2026-04-24
 

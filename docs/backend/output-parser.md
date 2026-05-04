@@ -127,7 +127,7 @@ Example: `intent: Reading auth module for token flow (Auth review)`
 
 The activity dashboard shows intent (crosshair icon) when available, falling back to user prompt (speech bubble) otherwise.
 
-**Colorization:** `colorize_intent()` wraps intent text in `\x1b[2;33m` (dim yellow) for the xterm.js stream. The optional `(title)` suffix is stripped from the display. Colorization is agent-gated to prevent false positives.
+**Colorization:** `colorize_intent()` wraps intent text in `\x1b[2;33m` (dim yellow) for the terminal output stream. The optional `(title)` suffix is stripped from the display. Colorization is agent-gated to prevent false positives.
 
 **PWA/REST stripping:** `LogLine::strip_structural_tokens()` removes `intent:` / `suggest:` plain-prefix tokens from log line spans before serving to mobile/browser clients.
 
@@ -155,7 +155,7 @@ ParsedEvent::Suggest {
 
 Detected as a single-line plain-prefix token at column 0: `suggest: A | B | C`.
 
-Items are pipe-delimited. The `conceal_suggest()` function strips the line from the PTY byte stream (replacing it with `\x1b[2K` erase-line) so the token never reaches xterm. Handles both `\n`-delimited and Ink-style `\r`-delimited segments with CUF cursor-forward encoding. Parsing is agent-gated.
+Items are pipe-delimited. The `conceal_suggest()` function strips the line from the PTY byte stream (replacing it with `\x1b[2K` erase-line) so the token never reaches the terminal. Handles both `\n`-delimited and Ink-style `\r`-delimited segments with CUF cursor-forward encoding. Parsing is agent-gated.
 
 ### UsageLimit
 

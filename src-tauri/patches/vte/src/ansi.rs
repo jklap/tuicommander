@@ -739,6 +739,9 @@ pub trait Handler {
 
     /// OSC 7 — current working directory.
     fn osc7(&mut self, _url: &str) {}
+
+    /// OSC 7770 — TUIC protocol event (verb=payload).
+    fn osc7770(&mut self, _verb: &str, _payload: &str) {}
 }
 
 bitflags! {
@@ -1556,6 +1559,17 @@ where
                         ""
                     };
                     self.handler.osc133(command, rest);
+                }
+            },
+
+            b"7770" => {
+                if params.len() >= 2 {
+                    let body = str::from_utf8(params[1]).unwrap_or("");
+                    if let Some(eq_pos) = body.find('=') {
+                        let verb = &body[..eq_pos];
+                        let payload = &body[eq_pos + 1..];
+                        self.handler.osc7770(verb, payload);
+                    }
                 }
             },
 

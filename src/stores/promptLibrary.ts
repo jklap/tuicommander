@@ -1,6 +1,7 @@
 import { createStore, reconcile } from "solid-js/store";
 import { createMemo } from "solid-js";
 import { invoke } from "../invoke";
+import { isTauri } from "../transport";
 import { appLogger } from "./appLogger";
 import { SMART_PROMPTS_BUILTIN } from "../data/smartPromptsBuiltIn";
 
@@ -72,7 +73,7 @@ function savePrompts(prompts: Record<string, SavedPrompt>): void {
       pinned: p.isFavorite,
     }));
     invoke("save_prompt_library", { config: { prompts: promptArray } }).catch((err) =>
-      appLogger.error("store", "Failed to save prompt library", err),
+      appLogger[isTauri() ? "error" : "debug"]("store", "Failed to save prompt library", err),
     );
   }, 500);
 }

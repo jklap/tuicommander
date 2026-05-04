@@ -40,7 +40,7 @@ When modifying PTY behavior, output parsing, shell state, or terminal UI:
 |------|----------------|
 | `docs/backend/pty.md` | PTY session lifecycle, reader threads, output handling |
 | `docs/backend/output-parser.md` | Rate limits, structured events, parsing rules |
-| `docs/frontend/canvas-terminal-audit.md` | CanvasTerminal vs xterm feature parity (update when closing gaps) |
+| `docs/frontend/canvas-terminal-audit.md` | CanvasTerminal feature completeness audit |
 | `docs/FEATURES.md` | Section 1 (Terminal Management) |
 | `docs/user-guide/terminals.md` | User-facing terminal features |
 | `docs/api/tauri-commands.md` | PTY commands (create_pty, write_pty, resize_pty, etc.) |

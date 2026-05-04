@@ -4,7 +4,7 @@ import { t } from "../../../i18n";
 import { keybindingsStore } from "../../../stores/keybindings";
 import { settingsStore } from "../../../stores/settings";
 import { normalizeCombo, type ActionName } from "../../../keybindingDefaults";
-import { comboToDisplay } from "../../../utils/hotkey";
+import { comboToDisplay, keyFor } from "../../../utils/hotkey";
 import { keyEventToCombo, validateGlobalHotkeyCombo } from "../../../utils/keyRecorder";
 import { isTauri } from "../../../transport";
 import { KeyComboCapture } from "../../shared/KeyComboCapture";
@@ -64,13 +64,6 @@ interface ShortcutEntry {
 interface ShortcutSection {
   title: string;
   shortcuts: ShortcutEntry[];
-}
-
-/** Get display string for an action from the keybindings store, or fallback */
-export function keyFor(action: ActionName, fallback?: string): string {
-  const combo = keybindingsStore.getKeyForAction(action);
-  if (!combo) return fallback ?? "";
-  return comboToDisplay(combo);
 }
 
 function getShortcutSections(): ShortcutSection[] {

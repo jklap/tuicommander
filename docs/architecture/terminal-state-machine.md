@@ -174,8 +174,8 @@ terminalsStore.update(id, { shellState: state })
 handleShellStateChange(prev, next)  ← existing debounced busy logic
 ```
 
-The frontend does NOT derive shellState from raw PTY data. `handlePtyData` writes to
-xterm and updates `lastDataAt` — but never touches `shellState`.
+The frontend does NOT derive shellState from raw PTY data. `handlePtyData` renders
+grid frames and updates `lastDataAt` — but never touches `shellState`.
 
 ### Transition table
 
@@ -798,7 +798,7 @@ t=5       API error while question is pending
 | `src-tauri/src/output_parser.rs` | `parse_question` (INK_FOOTER_RE), `parse_active_subtasks`, `ParsedEvent` enum |
 | `src-tauri/src/state.rs` | `AppState` (includes `shell_state`, `active_sub_tasks` maps) |
 | `src/stores/terminals.ts` | `shellState`, `awaitingInput`, `debouncedBusy`, `handleShellStateChange`, `onBusyToIdle` |
-| `src/components/Terminal/Terminal.tsx` | `handlePtyData` (xterm write), `pty-parsed` event handler, notification effect |
+| `src/components/Terminal/Terminal.tsx` | `handlePtyData` (grid frame render), `pty-parsed` event handler, notification effect |
 | `src/components/Terminal/awaitingInputSound.ts` | `getAwaitingInputSound` edge detection |
 | `src/App.tsx` | `onBusyToIdle` → completion notification with deferral + guards |
 | `src/stores/notifications.ts` | `play()`, `playQuestion()`, `playCompletion()` etc. |

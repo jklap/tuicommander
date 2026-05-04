@@ -13,7 +13,7 @@
 use std::path::Path;
 
 /// Zsh shell integration script.
-const ZSH_INTEGRATION: &str = r#"# TUIC Shell Integration — OSC 133 command block markers
+const ZSH_INTEGRATION: &str = r#"# TUIC Shell Integration — OSC 133 command block markers + OSC 7770 helpers
 __tuic_precmd() {
   local ec=$?
   if [[ -n "$__tuic_cmd" ]]; then
@@ -28,6 +28,10 @@ __tuic_preexec() {
 }
 [[ " ${precmd_functions[*]} " == *" __tuic_precmd "* ]] || precmd_functions+=(__tuic_precmd)
 [[ " ${preexec_functions[*]} " == *" __tuic_preexec "* ]] || preexec_functions+=(__tuic_preexec)
+# OSC 7770 TUIC protocol helpers
+tuic_state()   { printf '\e]7770;state=%s\a' "$1"; }
+tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
+tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --session-id for Claude Code so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
   claude() {
@@ -54,7 +58,7 @@ fi
 "#;
 
 /// Bash shell integration script.
-const BASH_INTEGRATION: &str = r#"# TUIC Shell Integration — OSC 133 command block markers
+const BASH_INTEGRATION: &str = r#"# TUIC Shell Integration — OSC 133 command block markers + OSC 7770 helpers
 __tuic_precmd() {
   local ec=$?
   if [[ -n "$__tuic_cmd" ]]; then
@@ -75,6 +79,10 @@ if [[ -z "$__tuic_installed" ]]; then
   PROMPT_COMMAND="__tuic_precmd${PROMPT_COMMAND:+;$PROMPT_COMMAND}"
   trap '__tuic_preexec_trap' DEBUG
 fi
+# OSC 7770 TUIC protocol helpers
+tuic_state()   { printf '\e]7770;state=%s\a' "$1"; }
+tuic_suggest() { printf '\e]7770;suggest=%s\a' "$*"; }
+tuic_intent()  { printf '\e]7770;intent=%s\a' "$*"; }
 # Auto-inject --session-id for Claude Code so tab↔session mapping is deterministic
 if [[ -n "$TUIC_SESSION" ]]; then
   claude() {
@@ -101,7 +109,7 @@ fi
 "#;
 
 /// Fish shell integration script.
-const FISH_INTEGRATION: &str = r#"# TUIC Shell Integration — OSC 133 command block markers
+const FISH_INTEGRATION: &str = r#"# TUIC Shell Integration — OSC 133 command block markers + OSC 7770 helpers
 function __tuic_prompt --on-event fish_prompt
   set -l ec $status
   if set -q __tuic_cmd
@@ -114,6 +122,10 @@ function __tuic_preexec --on-event fish_preexec
   printf '\e]133;C\a'
   set -g __tuic_cmd 1
 end
+# OSC 7770 TUIC protocol helpers
+function tuic_state;   printf '\e]7770;state=%s\a' $argv[1]; end
+function tuic_suggest; printf '\e]7770;suggest=%s\a' (string join " " $argv); end
+function tuic_intent;  printf '\e]7770;intent=%s\a' (string join " " $argv); end
 # Auto-inject --session-id for Claude Code so tab↔session mapping is deterministic
 if set -q TUIC_SESSION
   function claude --wraps claude

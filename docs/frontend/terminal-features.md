@@ -23,7 +23,7 @@ Consolidated reference for all terminal behaviors, keyboard shortcuts, and confi
 | Cmd+K | Clear scrollback | Clears entire scrollback buffer (common terminal convention) |
 | Cmd+C | Copy selection | |
 | Cmd+V | Paste | |
-| Cmd+F | Find in terminal | xterm SearchAddon overlay |
+| Cmd+F | Find in terminal | Search overlay with match highlighting |
 | Cmd+G | Find next match | |
 | Shift+Cmd+G | Find previous match | |
 
@@ -94,7 +94,7 @@ Consolidated reference for all terminal behaviors, keyboard shortcuts, and confi
 Auto-copies selected text to clipboard when text is selected in terminal. Configurable in settings (`copy_on_select`, default: on).
 
 ### URL Click
-Cmd+Click on URLs in terminal output opens them in the system browser. Powered by xterm.js `WebLinksAddon`.
+Cmd+Click on URLs in terminal output opens them in the system browser. URL detection handled by the native terminal link parser.
 
 ### File Path Click
 Clickable file paths in terminal output (absolute and relative paths with known extensions). Opens in IDE or markdown viewer.

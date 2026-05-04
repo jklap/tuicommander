@@ -1,7 +1,6 @@
 import { createStore } from "solid-js/store";
 import { invoke } from "../invoke";
 import { appLogger } from "./appLogger";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri } from "../transport";
 import {
   notificationManager,
@@ -147,6 +146,7 @@ function createNotificationsStore() {
       setState("badgeCount", newCount);
       try {
         if (isTauri()) {
+          const { getCurrentWindow } = await import("@tauri-apps/api/window");
           await getCurrentWindow().setBadgeCount(newCount);
         } else if ("setAppBadge" in navigator) {
           await (navigator as Navigator & { setAppBadge: (n: number) => Promise<void> }).setAppBadge(newCount);
@@ -162,6 +162,7 @@ function createNotificationsStore() {
       setState("badgeCount", 0);
       try {
         if (isTauri()) {
+          const { getCurrentWindow } = await import("@tauri-apps/api/window");
           await getCurrentWindow().setBadgeCount(0);
         } else if ("clearAppBadge" in navigator) {
           await (navigator as Navigator & { clearAppBadge: () => Promise<void> }).clearAppBadge();

@@ -2302,6 +2302,14 @@ impl<T: EventListener> Handler for Term<T> {
     fn osc7(&mut self, url: &str) {
         self.event_proxy.send_event(Event::Osc7(url.to_owned()));
     }
+
+    #[inline]
+    fn osc7770(&mut self, verb: &str, payload: &str) {
+        self.event_proxy.send_event(Event::Tuic {
+            verb: verb.to_owned(),
+            payload: payload.to_owned(),
+        });
+    }
 }
 
 /// The state of the [`Mode`] and [`PrivateMode`].

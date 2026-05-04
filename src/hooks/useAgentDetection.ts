@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
 import { invoke } from "../invoke";
 import { appLogger } from "../stores/appLogger";
+import { isTauri } from "../transport";
 import type { AgentType } from "../agents";
 
 /** Agent binary detection result */
@@ -40,6 +41,10 @@ export function useAgentDetection() {
 
   /** Detect all agents in a single batch call (fast, no version detection) */
   async function detectAll(): Promise<void> {
+    if (!isTauri()) {
+      appLogger.debug("app", "Agent binary detection skipped in browser mode");
+      return;
+    }
     setLoading(true);
 
     try {

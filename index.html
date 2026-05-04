@@ -74,6 +74,20 @@
         });
       })();
     </script>
+    <script>
+      // Shim for @tauri-apps/api — prevents module-load crash in browser mode.
+      // The Tauri SDK accesses window.__TAURI_INTERNALS__.transformCallback at
+      // import time. Without this stub, any static import of @tauri-apps/api
+      // throws in non-Tauri contexts (PWA, browser via Tailscale).
+      // The __TAURI_SHIM__ flag lets isTauri() distinguish real from stubbed.
+      if (!window.__TAURI_INTERNALS__) {
+        window.__TAURI_INTERNALS__ = {
+          transformCallback: function () { return 0; },
+          invoke: function () { return Promise.reject(new Error('not in Tauri')); },
+        };
+        window.__TAURI_SHIM__ = true;
+      }
+    </script>
     <script type="module" src="/src/index.tsx" defer></script>
   </head>
 

@@ -63,7 +63,7 @@ Safe String
     └──> Tauri Event ("pty-output", {session_id, data})
               │
               ▼
-         Frontend: xterm.js terminal.write(data)
+         Frontend: CanvasTerminal renders grid frame
               │
               ▼
          OutputParser detects special events

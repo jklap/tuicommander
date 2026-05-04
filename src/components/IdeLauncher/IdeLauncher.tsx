@@ -8,7 +8,7 @@ import type { IdeType } from "../../stores/settings";
 /** Code editors that can open individual files (as opposed to terminals, git clients, etc.) */
 const FILE_CAPABLE_IDES = new Set<string>(IDE_CATEGORIES.editors);
 import { useRepository } from "../../hooks/useRepository";
-import { getModifierSymbol } from "../../platform";
+import { keyFor } from "../../utils/hotkey";
 import { t } from "../../i18n";
 import { cx } from "../../utils";
 import s from "./IdeLauncher.module.css";
@@ -212,7 +212,7 @@ export const IdeLauncher: Component<IdeLauncherProps> = (props) => {
             >
               <span class={cx(s.icon, s.iconEmoji)}>▶</span>
               <span class={s.itemName}>{runLabel()}</span>
-              <span class={s.shortcut}>{getModifierSymbol()}R</span>
+              <span class={s.shortcut}>{keyFor("run-command")}</span>
             </button>
           </div>
         </div>

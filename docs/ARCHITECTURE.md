@@ -11,7 +11,7 @@ TUICommander is a Tauri application that provides a multi-terminal interface wit
 | Frontend | SolidJS + TypeScript |
 | Build | Vite |
 | Backend | Tauri (Rust) |
-| Terminal | xterm.js + WebGL renderer |
+| Terminal | alacritty_terminal + canvas renderer |
 | State | Custom reactive stores |
 
 ## Directory Structure
@@ -21,7 +21,7 @@ src/
 ├── components/
 │   ├── Sidebar/          # Repository tree, branch selection
 │   ├── TabBar/           # Terminal tabs per branch
-│   ├── Terminal/         # xterm.js wrapper
+│   ├── Terminal/         # Native terminal renderer (CanvasTerminal)
 │   ├── HelpPanel/        # Help overlay
 │   └── ...
 ├── stores/
@@ -131,7 +131,7 @@ const activeTerminals = () => {
 Create:
   terminalsStore.add() → Creates terminal record
   repositoriesStore.addTerminalToBranch() → Associates with branch
-  Terminal component mounts → Creates xterm instance → Spawns PTY
+  Terminal component mounts → Creates canvas terminal → Spawns PTY
 
 Close:
   pty.close(sessionId) → Closes PTY in backend

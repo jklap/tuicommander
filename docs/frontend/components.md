@@ -16,7 +16,7 @@ App.tsx (central orchestrator)
 │   └── PrDetailPopover/      # PR details popup (CI, reviews, labels)
 ├── main
 │   ├── TabBar/               # Terminal tabs with drag-to-reorder
-│   ├── Terminal/             # xterm.js wrapper (never unmounted)
+│   ├── Terminal/             # Native terminal renderer (never unmounted)
 │   ├── TerminalArea/         # Terminal + split pane layout (up to 6 panes)
 │   ├── SuggestOverlay/       # suggest: follow-up action chips
 │   ├── GitPanel/             # Git panel (6 tabs)
@@ -82,11 +82,11 @@ App.tsx (central orchestrator)
 
 ### Terminal (`Terminal/`)
 
-xterm.js wrapper with full PTY integration.
+Native terminal renderer with full PTY integration.
 
 **Responsibilities:**
-- Creates and manages xterm.js Terminal instance
-- Attaches WebGL renderer for GPU-accelerated rendering
+- Creates and manages CanvasTerminal instance backed by `alacritty_terminal`
+- Renders grid frames to HTML canvas for GPU-accelerated display
 - Subscribes to PTY output events
 - Handles terminal resize (with debouncing)
 - Applies font, theme, and zoom settings

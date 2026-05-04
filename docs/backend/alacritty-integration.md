@@ -12,7 +12,39 @@ TUICommander uses `alacritty_terminal` 0.26.0 as its terminal emulation backend.
 |------|--------|-----|
 | `src/term/mod.rs` | `pub fn resize_reflow(size, reflow: bool)` | Disable reflow on resize. Ink/Claude Code uses CUU cursor positioning that breaks when reflow merges/splits lines. |
 | `src/term/mod.rs` | `pub fn mark_fully_damaged()` (was `fn`) | Lets us force full-frame damage directly instead of maintaining a parallel flag. |
+| `src/term/mod.rs` | `fn osc7770(&mut self, verb, payload)` | OSC 7770 TUIC protocol handler. Fires `Event::Tuic { verb, payload }` for in-band state/suggest/intent signalling. |
 | `src/term/color.rs` | `pub fn named_color_to_index(NamedColor) -> Option<u8>` | Maps named colors to xterm-256 indices. Eliminates 30-line match duplication in our serializer. |
+| `src/event.rs` | `Event::Tuic { verb, payload }` variant | Carries parsed OSC 7770 events from VTE to the application layer. |
+
+## VTE patch (`src-tauri/patches/vte/`)
+
+We also patch the `vte` crate (0.15.0) to extend the `Handler` trait:
+
+| Method | Purpose |
+|--------|---------|
+| `fn osc133(&mut self, command: char, params: &str)` | Shell integration markers (A/B/C/D). Routes OSC `133;X` from `osc_dispatch`. |
+| `fn osc7(&mut self, url: &str)` | Current working directory. Routes OSC `7;url` from `osc_dispatch`. |
+| `fn osc7770(&mut self, verb: &str, payload: &str)` | TUIC protocol. Routes OSC `7770;verb=payload` from `osc_dispatch`. |
+
+## OSC 7770 — TUIC Protocol
+
+In-band signalling via the PTY stream. Never written to the grid (consumed by VTE before rendering).
+
+**Format:** `ESC ] 7770 ; verb=payload BEL` or `ESC ] 7770 ; verb=payload ST`
+
+**Verbs:**
+
+| Verb | Payload | Effect |
+|------|---------|--------|
+| `state` | `idle` or `busy` | Immediate shell state transition (bypasses silence timer). |
+| `suggest` | `A\|B\|C` (pipe-separated) | Emits `ParsedEvent::Suggest` — never hits the grid, no conceal needed. |
+| `intent` | `text` or `text (Title)` | Emits `ParsedEvent::Intent` with optional tab title. |
+
+**Advantages over text-based detection:**
+- Zero cross-chunk issues (OSC has delimiter-based framing in VTE)
+- Zero conceal (never written to grid cells)
+- Zero regex (structured parse in VTE dispatcher)
+- Zero stale rescan (not in visible buffer)
 
 ## Upstream API we use directly (no patch needed)
 
@@ -39,8 +71,12 @@ Zed maintains branches on their fork with patches not yet upstream:
 | Branch | What | Relevance |
 |--------|------|-----------|
 | `osc-133` | Semantic cell tagging — cells get `Osc133CellType` (Prompt/Input/Output) from OSC 133 sequences. Fires `Event::Osc133`. Requires Zed's VTE fork (`osc-133-2` branch). | **High** — would replace our regex-based `extract_osc133()` pre-parser. Enables prompt zone rendering. See story 1552. |
-| `v0.16-child-exit-patch` | Uses `exit_status.into_raw()` instead of `.code()` for `ChildExit`, so signal-killed processes are distinguishable from normal exits. | **Medium** — improves crash detection for shell sessions. See story 1553. |
-| `use-zed-vte` | Pins to Zed's VTE fork which adds `Serialize`/`Deserialize` to VTE parser state. | Prerequisite for OSC 133 branch and terminal state snapshotting. |
+| `v0.16-child-exit-patch` | ~~Uses `exit_status.into_raw()` for `ChildExit`.~~ **Removed from fork (confirmed 2026-05-04).** | Story 1553 needs re-evaluation — implement independently if needed. |
+| `use-zed-vte` | ~~Pins to Zed's VTE fork with `Serialize`/`Deserialize` on parser state.~~ **Removed from fork (confirmed 2026-05-04).** | Was prerequisite for OSC 133; check if osc-133 branch still depends on it. |
+| `grid-mut` | Makes `grid_mut()` public (removes `#[cfg(test)]`). | **Low** — we already expose grid access via our own patches. |
+| `click-links` | URL detection + click-to-open in grid. Ancient branch (pre-0.26 API). | **None** — we handle link detection in our Canvas renderer. |
+| `cursor-blink` | Cursor blink timer via `mio::Timer`. WIP with debug prints. | **None** — we handle blink in Canvas/JS. |
+| `cursor-config` | Restructures cursor config into `cursor.style`/`hide_when_typing`/`custom_colors`. | **None** — we don't use alacritty's config system. |
 | `scrollback` | Added scrollback buffer — already merged into upstream alacritty. | None (already upstream). |
 | `scroll/fix-alt-grid-size` | Alt screen gets zero scrollback — already merged upstream. | None (already upstream). |
 
@@ -97,8 +133,10 @@ gh api repos/zed-industries/alacritty/branches --jq '.[].name'
 
 ## Planned patches (stories)
 
-| Story | Priority | Description |
-|-------|----------|-------------|
-| 1552-02ff | P2 | Port Zed OSC 133 semantic cell tagging (requires VTE fork) |
-| 1550-64b1 | P3 | Move OSC 133 extraction into VTE handler (blocked by 1552) |
-| 1553-5e8c | P3 | Port Zed child-exit raw waitpid status |
+| Story | Priority | Description | Status |
+|-------|----------|-------------|--------|
+| 1552-02ff | P2 | Port Zed OSC 133 semantic cell tagging (requires VTE fork) | **Done** — cell_type tagging + VTE osc133/osc7 handlers implemented |
+| 1550-64b1 | P3 | Move OSC 133 extraction into VTE handler (blocked by 1552) | **Done** — VTE routes OSC 133 directly to `Handler::osc133()` |
+| — | P2 | OSC 7770 TUIC protocol (state/suggest/intent) | **Done** — full pipeline from VTE→Event→PTY→ParsedEvent |
+| — | P3 | Use cell_type for idle detection (OSC 133 shells) | Pending — next step after TUIC protocol |
+| 1553-5e8c | P3 | Port Zed child-exit raw waitpid status | Pending |

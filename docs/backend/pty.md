@@ -91,7 +91,7 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 
 ### Frontend Write Coalescing
 
-The frontend accumulates `pty-output` events and flushes them to `terminal.write()` once per animation frame via `requestAnimationFrame` (~60/sec). During high-throughput output (agent file writes, `find`, build logs), hundreds of events/sec are batched into a single xterm.js render pass, reducing WebGL texture uploads and layout recalculations. Flow control (pause/resume at HIGH_WATERMARK) and plugin dispatch remain per-chunk.
+The frontend coalesces paint triggers via `requestAnimationFrame` (~60 repaints/sec). During high-throughput output (agent file writes, `find`, build logs), hundreds of grid frame events/sec are batched into a single canvas render pass, reducing layout recalculations. Flow control (pause/resume at HIGH_WATERMARK) and plugin dispatch remain per-chunk.
 
 ### Headless Reader Thread
 

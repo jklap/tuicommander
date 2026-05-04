@@ -836,9 +836,9 @@ if agent.name == "claude" && context_capture_enabled {
 }
 ```
 
-**Important:** `stream-json` changes the PTY output. The existing `xterm.js` renderer in the frontend will receive JSON lines instead of ANSI terminal output. This requires either:
+**Important:** `stream-json` changes the PTY output. The terminal renderer will receive JSON lines instead of ANSI terminal output. This requires either:
 
-- **Option A:** Dual-pipe — launch with stream-json, render parsed content in a custom UI (not xterm.js)
+- **Option A:** Dual-pipe — launch with stream-json, render parsed content in a custom UI (not the terminal)
 - **Option B:** Post-process — launch in normal mode, use heuristic parsing
 - **Option C:** Tee — use a Claude Code hook or wrapper that tees structured output to a sideband while keeping terminal output normal
 

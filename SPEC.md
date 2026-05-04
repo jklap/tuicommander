@@ -1,7 +1,7 @@
 # TUICommander Specification
 
-**Version:** 1.0.7
-**Last Updated:** 2026-04-24
+**Version:** 1.1.0
+**Last Updated:** 2026-05-04
 
 ## Overview
 
@@ -22,13 +22,13 @@ TUICommander is a multi-agent terminal orchestrator designed to manage multiple 
 | Layer | Technology | Purpose |
 |-------|------------|---------|
 | Frontend | SolidJS | Reactive UI with fine-grained reactivity |
-| Terminal | xterm.js | Terminal emulation with WebGL-accelerated rendering |
+| Terminal | alacritty_terminal | Native VT engine with canvas rendering |
 | Backend | Rust + Tauri | Native PTY management, file system access |
 | Build | Vite | Fast HMR development, optimized production builds (bundle splitting via manualChunks) |
 
 ### Backend Execution Model
 
-All Tauri commands that perform I/O (git subprocesses, network, bcrypt) are `async` and run inside `tokio::task::spawn_blocking` to avoid blocking Tokio worker threads. Git data is cached with a 60s TTL, invalidated immediately by `repo_watcher` on file system changes. PTY output is serialized once and reused for both Tauri IPC and event bus broadcast. Frontend coalesces PTY writes via `requestAnimationFrame` (~60 flushes/sec) to reduce xterm.js render passes during burst output.
+All Tauri commands that perform I/O (git subprocesses, network, bcrypt) are `async` and run inside `tokio::task::spawn_blocking` to avoid blocking Tokio worker threads. Git data is cached with a 60s TTL, invalidated immediately by `repo_watcher` on file system changes. PTY output is serialized once and reused for both Tauri IPC and event bus broadcast. Frontend coalesces paint triggers via `requestAnimationFrame` (~60 repaints/sec) to reduce canvas render passes during burst output.
 
 ### Why SolidJS?
 
@@ -48,7 +48,7 @@ App
 ├── TabBar
 │   └── Terminal Tabs
 ├── Terminal Container
-│   ├── Terminal (xterm.js)
+│   ├── Terminal (CanvasTerminal)
 │   ├── MarkdownPanel
 │   └── IdeasPanel
 ├── GitPanel (side panel)
@@ -358,11 +358,6 @@ All stores persist to localStorage:
 
 ## Future Considerations
 
-### libghostty Integration
-When libghostty-vt becomes stable, consider replacing xterm.js for:
-- Better VT parsing accuracy
-- Native rendering performance
-
 ### WebSocket Backend
 For web deployment without Tauri:
 - Go backend with PTY multiplexing
@@ -372,6 +367,6 @@ For web deployment without Tauri:
 ## References
 
 - [SolidJS Documentation](https://www.solidjs.com/docs/latest)
-- [xterm.js Documentation](https://xtermjs.org/docs/)
+- [alacritty_terminal crate](https://crates.io/crates/alacritty_terminal)
 - [Tauri Documentation](https://tauri.app/v1/guides/)
 - [Feasibility Analysis](docs/FEASIBILITY-ANALYSIS.md)

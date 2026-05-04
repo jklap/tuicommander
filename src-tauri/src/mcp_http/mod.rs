@@ -507,6 +507,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/config/clear-repo-caches", post(config_routes::clear_repo_caches))
         .route("/config/repo-local-config", get(config_routes::get_repo_local_config))
         .route("/config/prompt-library", get(config_routes::get_prompt_library).put(config_routes::put_prompt_library))
+        .route("/config/activity", get(config_routes::get_activity).put(config_routes::put_activity))
+        .route("/config/keybindings", get(config_routes::get_keybindings).put(config_routes::put_keybindings))
+        .route("/config/agents", get(config_routes::get_agents_config).put(config_routes::put_agents_config))
+        .route("/config/provider-registry", get(config_routes::get_provider_registry).put(config_routes::put_provider_registry))
         // Logs
         .route("/logs", get(log_routes::get_logs).post(log_routes::push_log).delete(log_routes::clear_logs))
         // Worktrees

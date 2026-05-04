@@ -62,6 +62,9 @@ pub enum Event {
 
     /// OSC 7 current working directory (file://hostname/path).
     Osc7(String),
+
+    /// OSC 7770 TUIC protocol event (verb=payload).
+    Tuic { verb: String, payload: String },
 }
 
 impl Debug for Event {
@@ -82,6 +85,7 @@ impl Debug for Event {
             Event::ChildExit(status) => write!(f, "ChildExit({status:?})"),
             Event::Osc133 { command, params } => write!(f, "Osc133({command}, {params:?})"),
             Event::Osc7(url) => write!(f, "Osc7({url})"),
+            Event::Tuic { verb, payload } => write!(f, "Tuic({verb}={payload})"),
         }
     }
 }

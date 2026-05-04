@@ -13,7 +13,8 @@
   align-items: center;
   justify-content: center;
   gap: 4px;
-  padding: 2px 6px;
+  height: 26px;
+  padding: 0 6px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   color: var(--fg-secondary);
@@ -29,7 +30,7 @@
 
 .arrowBtn {
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
-  padding: 2px 5px;
+  padding: 0 5px;
   border-left: 1px solid var(--border);
 }
 

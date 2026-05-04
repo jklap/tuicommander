@@ -7,7 +7,7 @@
 | Frontend | SolidJS + TypeScript | Reactive UI with fine-grained updates |
 | Build | Vite + LightningCSS | Fast dev server, optimized CSS |
 | Backend | Tauri (Rust) | Native APIs, PTY, git, system integration |
-| Terminal | xterm.js + WebGL | GPU-accelerated terminal rendering |
+| Terminal | alacritty_terminal + canvas | Native VT engine with GPU-accelerated rendering |
 | State | SolidJS reactive stores | Frontend state management |
 | Persistence | JSON files via Rust | Platform-specific config directory |
 | Testing | Vitest + SolidJS Testing Library | Unit/integration tests (~830 tests) |
@@ -63,7 +63,7 @@ The project follows hexagonal architecture with clear separation between layers:
 ```
 src/
 ├── components/           # SolidJS UI components
-│   ├── Terminal/         # xterm.js wrapper with PTY integration
+│   ├── Terminal/         # Native terminal renderer (CanvasTerminal) with PTY integration
 │   ├── Sidebar/          # Repository tree, branch list, CI rings
 │   ├── TabBar/           # Terminal tabs with drag-to-reorder
 │   ├── Toolbar/          # Window drag region, repo/branch display

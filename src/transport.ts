@@ -51,7 +51,7 @@ export interface UpstreamMcpConfig {
 
 /** Detect whether we're running inside a Tauri webview */
 export function isTauri(): boolean {
-  return "__TAURI_INTERNALS__" in globalThis;
+  return "__TAURI_INTERNALS__" in globalThis && !(globalThis as Record<string, unknown>).__TAURI_SHIM__;
 }
 
 /** HTTP method + path mapping for a Tauri command */
@@ -338,6 +338,30 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
   load_prompt_library: { map: () => ({ method: "GET", path: "/config/prompt-library" }) },
   save_prompt_library: {
     map: (args) => ({ method: "PUT", path: "/config/prompt-library", body: args.config }),
+  },
+
+  // --- Config: activity ---
+  load_activity: { map: () => ({ method: "GET", path: "/config/activity" }) },
+  save_activity: {
+    map: (args) => ({ method: "PUT", path: "/config/activity", body: args.items ?? args }),
+  },
+
+  // --- Config: keybindings ---
+  load_keybindings: { map: () => ({ method: "GET", path: "/config/keybindings" }) },
+  save_keybindings: {
+    map: (args) => ({ method: "PUT", path: "/config/keybindings", body: args.config }),
+  },
+
+  // --- Config: agents ---
+  load_agents_config: { map: () => ({ method: "GET", path: "/config/agents" }) },
+  save_agents_config: {
+    map: (args) => ({ method: "PUT", path: "/config/agents", body: args.config }),
+  },
+
+  // --- Config: provider registry ---
+  load_provider_registry: { map: () => ({ method: "GET", path: "/config/provider-registry" }) },
+  save_provider_registry: {
+    map: (args) => ({ method: "PUT", path: "/config/provider-registry", body: args.registry }),
   },
 
   // --- Git/GitHub ---
@@ -714,6 +738,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
     }),
   },
   detect_agents: { map: () => ({ method: "GET", path: "/agents" }) },
+  detect_all_agent_binaries: { browserUnsupported: true },
   detect_agent_binary: {
     map: (_args, p) => ({ method: "GET", path: `/agents/detect?binary=${p("binary")}` }),
   },

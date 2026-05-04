@@ -7,7 +7,8 @@ import { diffTabsStore } from "../../stores/diffTabs";
 import { mdTabsStore } from "../../stores/mdTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { makeBranchKey } from "../../stores/tabManager";
-import { getModifierSymbol, shortenHomePath } from "../../platform";
+import { shortenHomePath } from "../../platform";
+import { keyFor } from "../../utils/hotkey";
 import { appLogger } from "../../stores/appLogger";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { GlobeIcon } from "../GlobeIcon";
@@ -124,13 +125,11 @@ export const TabBar: Component<TabBarProps> = (props) => {
     const root = paneLayoutStore.getRoot();
     return root ? computeLeafRects(root) : [];
   });
-  const mod = getModifierSymbol();
-
   const getNewTabMenuItems = (): ContextMenuItem[] => [
-    { label: t("tabBar.newTab", "New Tab"), shortcut: `${mod}T`, action: () => props.onNewTab() },
+    { label: t("tabBar.newTab", "New Tab"), shortcut: keyFor("new-terminal"), action: () => props.onNewTab() },
     { label: "", separator: true, action: () => {} },
-    { label: t("tabBar.splitVertical", "Split Vertically"), shortcut: `${mod}\\`, action: () => props.onSplitVertical?.(), disabled: !paneLayoutStore.isSplit() && !terminalsStore.state.activeId },
-    { label: t("tabBar.splitHorizontal", "Split Horizontally"), shortcut: `${mod}Alt+\\`, action: () => props.onSplitHorizontal?.(), disabled: !paneLayoutStore.isSplit() && !terminalsStore.state.activeId },
+    { label: t("tabBar.splitVertical", "Split Vertically"), shortcut: keyFor("split-vertical"), action: () => props.onSplitVertical?.(), disabled: !paneLayoutStore.isSplit() && !terminalsStore.state.activeId },
+    { label: t("tabBar.splitHorizontal", "Split Horizontally"), shortcut: keyFor("split-horizontal"), action: () => props.onSplitHorizontal?.(), disabled: !paneLayoutStore.isSplit() && !terminalsStore.state.activeId },
   ];
 
   const openNewTabMenu = (e: MouseEvent) => {
@@ -206,7 +205,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
     const detached = terminalsStore.isDetached(id);
     const worktreeTargets = props.getWorktreeTargets?.(id) ?? [];
     const items: ContextMenuItem[] = [
-      { label: exited ? t("tabBar.removeTab", "Remove Tab") : t("tabBar.closeTab", "Close Tab"), shortcut: `${getModifierSymbol()}W`, action: () => props.onTabClose(id) },
+      { label: exited ? t("tabBar.removeTab", "Remove Tab") : t("tabBar.closeTab", "Close Tab"), shortcut: keyFor("close-terminal"), action: () => props.onTabClose(id) },
       { label: t("tabBar.closeOthers", "Close Other Tabs"), action: () => props.onCloseOthers(id), disabled: ids.length <= 1 },
       { label: t("tabBar.closeRight", "Close Tabs to the Right"), action: () => props.onCloseToRight(id), disabled: idx >= ids.length - 1 },
       { label: "", separator: true, action: () => {} },
@@ -650,7 +649,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
                   if (e.button === 1) handleCloseTab(e);
                 }}
                 onContextMenu={(e) => openTabContextMenu(e, id)}
-                title={`Terminal ${index() + 1} (${getModifierSymbol()}${index() + 1})`}
+                title={`Terminal ${index() + 1}${index() < 9 ? ` (${keyFor(`switch-tab-${index() + 1}`)})` : ""}`}
                 onMouseDown={(e) => !isEditing() && handleMouseDrag(e, id)}
                 onMouseEnter={() => setHovered(true)}
                 onMouseLeave={() => setHovered(false)}
@@ -709,7 +708,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
                   </button>
                 </Show>
                 <Show when={props.quickSwitcherActive && index() < 9}>
-                  <span class={s.shortcutBadge}>{getModifierSymbol()}{index() + 1}</span>
+                  <span class={s.shortcutBadge}>{keyFor(`switch-tab-${index() + 1}`)}</span>
                 </Show>
                 <Show when={hovered() && globalWorkspaceStore.isActive() && repoName()}>
                   <span class={s.repoOverlay}>{repoName()}</span>
@@ -888,7 +887,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
       </div>{/* end .scrollRegion */}
 
       {/* New Tab button: outside scroll region so arrows don't overlap it */}
-      <button class={s.newBtn} onClick={() => props.onNewTab()} onContextMenu={openNewTabMenu} title={`${t("tabBar.newTab", "New Tab")} (${mod}T)`}>
+      <button class={s.newBtn} onClick={() => props.onNewTab()} onContextMenu={openNewTabMenu} title={`${t("tabBar.newTab", "New Tab")} (${keyFor("new-terminal")})`}>
         +
       </button>
 
