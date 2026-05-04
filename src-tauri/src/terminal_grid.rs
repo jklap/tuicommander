@@ -20,7 +20,7 @@ pub enum TermEvent {
     PtyWrite(String),
     MouseCursorDirty,
     CursorBlinkingChange,
-    Osc133 { command: char, params: String },
+    Osc133 { command: char, params: String, line: usize },
     Osc7(String),
     Tuic { verb: String, payload: String },
 }
@@ -41,7 +41,7 @@ impl EventListener for TermEventCollector {
             Event::PtyWrite(s) => { self.events.lock().unwrap().push(TermEvent::PtyWrite(s)); }
             Event::MouseCursorDirty => { self.events.lock().unwrap().push(TermEvent::MouseCursorDirty); }
             Event::CursorBlinkingChange => { self.events.lock().unwrap().push(TermEvent::CursorBlinkingChange); }
-            Event::Osc133 { command, params } => { self.events.lock().unwrap().push(TermEvent::Osc133 { command, params }); }
+            Event::Osc133 { command, params, line } => { self.events.lock().unwrap().push(TermEvent::Osc133 { command, params, line }); }
             Event::Osc7(url) => { self.events.lock().unwrap().push(TermEvent::Osc7(url)); }
             Event::Tuic { verb, payload } => { self.events.lock().unwrap().push(TermEvent::Tuic { verb, payload }); }
             Event::ClipboardLoad(..) | Event::ColorRequest(..) | Event::TextAreaSizeRequest(..)
@@ -1434,7 +1434,7 @@ mod tests {
         let events = grid.drain_events();
         assert_eq!(events.len(), 1);
         match &events[0] {
-            TermEvent::Osc133 { command, params } => {
+            TermEvent::Osc133 { command, params, .. } => {
                 assert_eq!(*command, 'D');
                 assert_eq!(params, "42");
             }
@@ -1462,7 +1462,7 @@ mod tests {
         let events = grid.drain_events();
         assert_eq!(events.len(), 1);
         match &events[0] {
-            TermEvent::Osc133 { command, params } => {
+            TermEvent::Osc133 { command, params, .. } => {
                 assert_eq!(*command, 'D');
                 assert_eq!(params, "0");
             }

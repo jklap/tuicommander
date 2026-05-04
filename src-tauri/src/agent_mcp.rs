@@ -91,9 +91,11 @@ fn get_mcp_config_spec(agent_type: &str) -> Option<McpConfigSpec> {
             config_path: h.join(".gemini/settings.json"),
             key_path: vec!["mcpServers"],
         }),
+        // codex uses TOML — handled separately in ensure_codex_mcp_entry / install/remove_codex_mcp
+        "codex" => None,
         // Agents that don't support MCP config files
         // Goose uses YAML config — auto-install not supported (JSON-only)
-        "aider" | "warp" | "opencode" | "codex" | "droid" | "goose" => None,
+        "aider" | "warp" | "opencode" | "droid" | "goose" => None,
         _ => None,
     }
 }
@@ -204,7 +206,7 @@ fn write_json_file(path: &std::path::Path, value: &serde_json::Value) -> Result<
 }
 
 /// Supported agent types for auto-install
-const SUPPORTED_AGENTS: &[&str] = &["claude", "cursor", "windsurf", "vscode", "zed", "amp", "gemini"];
+const SUPPORTED_AGENTS: &[&str] = &["claude", "cursor", "windsurf", "vscode", "zed", "amp", "gemini", "codex"];
 
 /// Ensure a single agent's MCP config has the correct bridge entry.
 /// Returns true if the config was written (installed or updated).
@@ -282,6 +284,125 @@ fn ensure_agent_mcp_entry(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Codex (TOML) support
+// ---------------------------------------------------------------------------
+
+/// Path to Codex config file
+fn codex_config_path() -> PathBuf {
+    home().join(".codex/config.toml")
+}
+
+/// Read a TOML file, returning an empty table if it doesn't exist.
+/// Parse/IO errors are logged and return an empty table.
+fn read_toml_file(path: &std::path::Path) -> toml::Value {
+    if !path.exists() {
+        return toml::Value::Table(Default::default());
+    }
+    match std::fs::read_to_string(path) {
+        Ok(content) => content.parse().unwrap_or_else(|e| {
+            tracing::error!(source = "mcp", path = %path.display(), "TOML parse error: {e}");
+            toml::Value::Table(Default::default())
+        }),
+        Err(e) => {
+            tracing::error!(source = "mcp", path = %path.display(), "Failed to read config: {e}");
+            toml::Value::Table(Default::default())
+        }
+    }
+}
+
+/// Write a TOML file atomically (temp + rename).
+fn write_toml_file(path: &std::path::Path, value: &toml::Value) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
+    }
+    let output = toml::to_string_pretty(value)
+        .map_err(|e| format!("Failed to serialize TOML: {e}"))?;
+    let temp = path.with_extension("tmp");
+    std::fs::write(&temp, &output)
+        .map_err(|e| format!("Failed to write temp file: {e}"))?;
+    std::fs::rename(&temp, path)
+        .map_err(|e| {
+            let _ = std::fs::remove_file(&temp);
+            format!("Failed to rename temp file: {e}")
+        })?;
+    Ok(())
+}
+
+/// Ensure the Codex TOML config has the correct bridge entry.
+/// Returns true if the config was written (installed or updated).
+fn ensure_codex_mcp_entry(config_path: &std::path::Path, bridge_path: &str) -> bool {
+    let mut root = read_toml_file(config_path);
+
+    // Check existing: mcp_servers.tuicommander.command
+    let existing_command = root.get("mcp_servers")
+        .and_then(|s| s.get(TUIC_MCP_KEY))
+        .and_then(|e| e.get("command"))
+        .and_then(|v| v.as_str());
+
+    match existing_command {
+        Some(cmd) if cmd == bridge_path => {
+            return false;
+        }
+        Some(old) => {
+            tracing::info!(source = "mcp", agent = "codex", "Updating path: {old} → {bridge_path}");
+        }
+        None => {
+            tracing::info!(source = "mcp", agent = "codex", "Installing bridge");
+        }
+    }
+
+    let Some(root_table) = root.as_table_mut() else {
+        tracing::error!(source = "mcp", agent = "codex", "TOML root is not a table");
+        return false;
+    };
+
+    let mcp_servers = root_table
+        .entry("mcp_servers")
+        .or_insert_with(|| toml::Value::Table(Default::default()));
+
+    if let Some(servers) = mcp_servers.as_table_mut() {
+        let mut entry = toml::value::Table::new();
+        entry.insert("command".to_string(), toml::Value::String(bridge_path.to_string()));
+        servers.insert(TUIC_MCP_KEY.to_string(), toml::Value::Table(entry));
+    }
+
+    match write_toml_file(config_path, &root) {
+        Ok(()) => {
+            tracing::info!(source = "mcp", agent = "codex", path = %config_path.display(), "Config written");
+            true
+        }
+        Err(e) => {
+            tracing::error!(source = "mcp", agent = "codex", "Write error: {e}");
+            false
+        }
+    }
+}
+
+/// Remove the tuicommander entry from Codex TOML config.
+fn remove_codex_mcp_entry(config_path: &std::path::Path) -> Result<(), String> {
+    if !config_path.exists() {
+        return Ok(());
+    }
+    let mut root = read_toml_file(config_path);
+    if let Some(servers) = root.get_mut("mcp_servers").and_then(|s| s.as_table_mut()) {
+        servers.remove(TUIC_MCP_KEY);
+    }
+    write_toml_file(config_path, &root)
+}
+
+/// Check if Codex TOML config has the tuicommander MCP entry installed.
+fn is_codex_mcp_installed(config_path: &std::path::Path) -> bool {
+    if !config_path.exists() {
+        return false;
+    }
+    let root = read_toml_file(config_path);
+    root.get("mcp_servers")
+        .and_then(|s| s.get(TUIC_MCP_KEY))
+        .is_some()
+}
+
 /// Ensure MCP bridge config is installed and up-to-date in all supported agent configs.
 /// Called on every app launch. Installs missing entries and updates stale paths.
 /// Agents in `disabled` are skipped (user opted out via Settings > Agents).
@@ -292,6 +413,10 @@ pub(crate) fn ensure_mcp_configs(disabled: &[String]) {
     for agent in SUPPORTED_AGENTS {
         if disabled.iter().any(|d| d == agent) {
             tracing::debug!(source = "mcp", agent, "Skipping (disabled by user)");
+            continue;
+        }
+        if *agent == "codex" {
+            ensure_codex_mcp_entry(&codex_config_path(), &bridge_path);
             continue;
         }
         let Some(spec) = get_mcp_config_spec(agent) else { continue };
@@ -306,6 +431,17 @@ pub(crate) fn ensure_mcp_configs(disabled: &[String]) {
 /// Check MCP installation status for an agent
 #[tauri::command]
 pub(crate) fn get_agent_mcp_status(agent_type: String) -> AgentMcpStatus {
+    // Codex uses TOML — handle separately
+    if agent_type == "codex" {
+        let path = codex_config_path();
+        let config_path_str = path.to_string_lossy().to_string();
+        return AgentMcpStatus {
+            supported: true,
+            installed: is_codex_mcp_installed(&path),
+            config_path: Some(config_path_str),
+        };
+    }
+
     let Some(spec) = get_mcp_config_spec(&agent_type) else {
         return AgentMcpStatus {
             supported: false,
@@ -343,10 +479,19 @@ pub(crate) fn install_agent_mcp(
     agent_type: String,
     state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
 ) -> Result<(), String> {
+    let bridge_path = detect_bridge_binary();
+
+    if agent_type == "codex" {
+        if !ensure_codex_mcp_entry(&codex_config_path(), &bridge_path) {
+            return Err("Failed to write Codex MCP config".to_string());
+        }
+        update_disabled_mcp_agents(state.inner(), |list| list.retain(|a| a != &agent_type));
+        return Ok(());
+    }
+
     let spec = get_mcp_config_spec(&agent_type)
         .ok_or_else(|| format!("Agent '{agent_type}' does not support MCP configuration"))?;
 
-    let bridge_path = detect_bridge_binary();
     let entry = TuicMcpEntry {
         transport_type: "stdio".to_string(),
         command: bridge_path,
@@ -380,6 +525,16 @@ pub(crate) fn remove_agent_mcp(
     agent_type: String,
     state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
 ) -> Result<(), String> {
+    if agent_type == "codex" {
+        remove_codex_mcp_entry(&codex_config_path())?;
+        update_disabled_mcp_agents(state.inner(), |list| {
+            if !list.contains(&agent_type) {
+                list.push(agent_type.clone());
+            }
+        });
+        return Ok(());
+    }
+
     let spec = get_mcp_config_spec(&agent_type)
         .ok_or_else(|| format!("Agent '{agent_type}' does not support MCP configuration"))?;
 
@@ -609,9 +764,9 @@ mod tests {
         for agent in &["claude", "cursor", "windsurf", "vscode", "zed", "amp", "gemini"] {
             assert!(get_mcp_config_spec(agent).is_some(), "{agent} should be supported");
         }
-        // Verify unsupported agents don't
-        for agent in &["aider", "warp", "opencode", "codex", "droid"] {
-            assert!(get_mcp_config_spec(agent).is_none(), "{agent} should not be supported");
+        // Verify unsupported agents don't (codex uses TOML, not JSON — handled separately)
+        for agent in &["aider", "warp", "opencode", "droid", "codex"] {
+            assert!(get_mcp_config_spec(agent).is_none(), "{agent} should not have a JSON config spec");
         }
     }
 
@@ -807,11 +962,155 @@ mod tests {
         }
 
         // Agents NOT in disabled list should proceed
-        for agent in &["cursor", "vscode", "zed", "amp", "gemini"] {
+        for agent in &["cursor", "vscode", "zed", "amp", "gemini", "codex"] {
             assert!(
                 !disabled.iter().any(|d| d == agent),
                 "{agent} should NOT be in disabled list",
             );
         }
+    }
+
+    // --- Codex (TOML) tests ---
+
+    #[test]
+    fn codex_install_creates_file_if_missing() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        assert!(!config_path.exists());
+
+        let wrote = ensure_codex_mcp_entry(&config_path, "/usr/local/bin/tuic-bridge");
+        assert!(wrote);
+        assert!(config_path.exists());
+
+        let root = read_toml_file(&config_path);
+        let cmd = root["mcp_servers"][TUIC_MCP_KEY]["command"].as_str().unwrap();
+        assert_eq!(cmd, "/usr/local/bin/tuic-bridge");
+    }
+
+    #[test]
+    fn codex_install_preserves_existing_config() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        // Pre-existing config with other settings
+        let initial = toml::toml! {
+            [model]
+            default = "o3"
+
+            [mcp_servers.other_tool]
+            command = "/usr/bin/other"
+        };
+        write_toml_file(&config_path, &toml::Value::Table(initial)).unwrap();
+
+        let wrote = ensure_codex_mcp_entry(&config_path, "/path/to/tuic-bridge");
+        assert!(wrote);
+
+        let root = read_toml_file(&config_path);
+        // Our entry was added
+        assert_eq!(
+            root["mcp_servers"][TUIC_MCP_KEY]["command"].as_str().unwrap(),
+            "/path/to/tuic-bridge",
+        );
+        // Other MCP server preserved
+        assert_eq!(
+            root["mcp_servers"]["other_tool"]["command"].as_str().unwrap(),
+            "/usr/bin/other",
+        );
+        // Other config preserved
+        assert_eq!(root["model"]["default"].as_str().unwrap(), "o3");
+    }
+
+    #[test]
+    fn codex_updates_stale_path() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        ensure_codex_mcp_entry(&config_path, "/old/path");
+        let wrote = ensure_codex_mcp_entry(&config_path, "/new/path");
+        assert!(wrote, "should write when path changed");
+
+        let root = read_toml_file(&config_path);
+        assert_eq!(
+            root["mcp_servers"][TUIC_MCP_KEY]["command"].as_str().unwrap(),
+            "/new/path",
+        );
+    }
+
+    #[test]
+    fn codex_skips_when_path_matches() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        ensure_codex_mcp_entry(&config_path, "/correct/path");
+        let mtime_before = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let wrote = ensure_codex_mcp_entry(&config_path, "/correct/path");
+        assert!(!wrote, "should not write when path already correct");
+
+        let mtime_after = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        assert_eq!(mtime_before, mtime_after, "file should not have been modified");
+    }
+
+    #[test]
+    fn codex_remove_entry() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        // Install with another server present
+        let initial = toml::toml! {
+            [mcp_servers.other_tool]
+            command = "/usr/bin/other"
+        };
+        write_toml_file(&config_path, &toml::Value::Table(initial)).unwrap();
+        ensure_codex_mcp_entry(&config_path, "/bridge");
+
+        // Verify both exist
+        let root = read_toml_file(&config_path);
+        assert!(root["mcp_servers"].get(TUIC_MCP_KEY).is_some());
+        assert!(root["mcp_servers"].get("other_tool").is_some());
+
+        // Remove
+        remove_codex_mcp_entry(&config_path).unwrap();
+
+        let root = read_toml_file(&config_path);
+        assert!(root["mcp_servers"].get(TUIC_MCP_KEY).is_none());
+        assert!(root["mcp_servers"].get("other_tool").is_some());
+    }
+
+    #[test]
+    fn codex_remove_from_nonexistent_file_is_ok() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("does-not-exist.toml");
+
+        let result = remove_codex_mcp_entry(&config_path);
+        assert!(result.is_ok());
+        assert!(!config_path.exists());
+    }
+
+    #[test]
+    fn codex_is_installed_check() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        // Not installed (file doesn't exist)
+        assert!(!is_codex_mcp_installed(&config_path));
+
+        // Install
+        ensure_codex_mcp_entry(&config_path, "/bridge");
+        assert!(is_codex_mcp_installed(&config_path));
+
+        // Remove
+        remove_codex_mcp_entry(&config_path).unwrap();
+        assert!(!is_codex_mcp_installed(&config_path));
+    }
+
+    #[test]
+    fn codex_in_supported_agents() {
+        assert!(
+            SUPPORTED_AGENTS.contains(&"codex"),
+            "codex must be in SUPPORTED_AGENTS",
+        );
     }
 }

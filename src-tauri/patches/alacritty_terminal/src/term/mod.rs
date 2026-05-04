@@ -2292,9 +2292,12 @@ impl<T: EventListener> Handler for Term<T> {
             _ => return,
         };
         self.grid.cursor.template.cell_type = cell_type;
+        let line = self.grid.history_size()
+            + usize::try_from(self.grid.cursor.point.line.0).unwrap_or(0);
         self.event_proxy.send_event(Event::Osc133 {
             command,
             params: params.to_owned(),
+            line,
         });
     }
 
