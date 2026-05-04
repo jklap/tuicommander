@@ -188,21 +188,22 @@ Custom URL schemes (`vscode://`, `x-devonthink://`, etc.) do **not** work inside
 
 ### MCP Tools: `ai_terminal_*` (external agent surface)
 
-Six terminal tools plus one search tool exposed to external MCP clients (e.g. Claude Code, Cursor) that let a
+Seven terminal tools plus one search tool exposed to external MCP clients (e.g. Claude Code, Cursor) that let a
 remote AI agent observe and interact with a TUICommander terminal. All input
-operations (`send_input`, `send_key`) require user confirmation and are
+operations (`send_input`, `send_key`, `drive_agent`) require user confirmation and are
 rejected while an internal agent loop is active on the target session.
 
 **Gated by `ai_terminal_mcp_enabled` config flag (default `false`).** When the flag is off, these tools are hidden from `tools/list` (via `filtered_native_tools`) and calls are rejected at dispatch time. Enable in `config.json` or Settings > Services. Note: no live-reload — a connected client may see a stale tools snapshot until it reconnects or `notifications/tools/list_changed` fires.
 
 | Tool | Params | Description |
 |------|--------|-------------|
-| `ai_terminal_read_screen` | `session_id`, `lines?` (default 50) | Read visible terminal text. Output passes through secret redaction. |
+| `ai_terminal_read_screen` | `session_id`, `lines?` (default 50), `since_cursor?` | Read terminal text. Returns `{screen, cursor}`. Pass `since_cursor` for delta mode. Output passes through secret redaction. |
 | `ai_terminal_send_input` | `session_id`, `text` | Send a text command to the session. Always prompts for confirmation. |
 | `ai_terminal_send_key` | `session_id`, `key` (enter/tab/ctrl+c/escape/up/down/…) | Send a single special key. Always prompts for confirmation. |
 | `ai_terminal_wait_for` | `session_id`, `pattern?`, `timeout_ms?` (10000), `stability_ms?` (500) | Wait for a regex match or for the screen to stabilise. |
 | `ai_terminal_get_state` | `session_id` | Return structured `SessionState` (shell_state, cwd, terminal_mode, agent_type, …). |
 | `ai_terminal_get_context` | `session_id` | Compact ~500-char context summary (mode, recent CWDs, recent errors, known fixes, TUI apps). |
+| `ai_terminal_drive_agent` | `session_id`, `command?`, `timeout_ms?` (30000), `wait_pattern?`, `lines?` (80), `since_cursor?` | Atomic send→wait→read. Sends command, waits for idle/pattern, returns `{screen, cursor, shell_state, session_state}`. Pass `since_cursor` for delta mode. Requires user confirmation. |
 | `ai_terminal_search_code` | `query`, `path?`, `limit?` | BM25 semantic search over repo files via `AppState::content_index`. Returns ranked file paths with relevance scores. Useful for codebase exploration without regex. |
 
 ### MCP Tool: `debug` — `invoke_js` and the Debug Registry
@@ -240,6 +241,9 @@ The `session` tool's `action=output` strips ANSI escape codes by default, return
 |-------|---------|-------------|
 | `limit` | `8192` | Max bytes to read |
 | `format` | (text) | `"raw"` preserves ANSI escape codes |
+| `since_cursor` | (none) | Cursor from a previous response — returns only new scrollback lines since this position |
+
+**Delta reads:** The non-raw output path returns a `cursor` field (monotonic scrollback position). Pass `since_cursor` on subsequent calls to receive only new lines since that position, avoiding full re-reads. The `total_written` field is kept alongside `cursor` for backwards compatibility. When `since_cursor` is provided, screen rows are excluded — only scrollback log lines are returned.
 
 ### MCP Tool: `repo` — Worktree Create (Claude Code Agent Hint)
 

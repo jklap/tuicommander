@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Delta cursor for MCP read tools** — `session action=output`, `read_screen`, and `drive_agent` now return a `cursor` field. Pass `since_cursor` on subsequent calls to receive only new scrollback lines, avoiding full re-reads.
+- **`drive_agent` MCP tool** — Atomic send→wait→read operation for external agents. Sends a command, waits for idle/pattern match, returns screen + shell state + cursor in a single call.
+
 ## [1.1.0] - 2026-05-04
 
 ### Added
