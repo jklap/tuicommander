@@ -1087,10 +1087,10 @@ impl AppState {
                 .and_then(|p| std::path::Path::new(p).file_name())
                 .and_then(|n| n.to_str())
                 .unwrap_or("");
-            if other_name == repo_name {
-                if let Some(dash) = alias.rfind('-') {
-                    return Some(alias[..dash].to_string());
-                }
+            if other_name == repo_name
+                && let Some(dash) = alias.rfind('-')
+            {
+                return Some(alias[..dash].to_string());
             }
         }
         None

@@ -714,11 +714,11 @@ async fn exec_drive_agent(state: &Arc<AppState>, args: &Value, skip_safety: bool
         };
 
         // Pattern match takes priority
-        if let Some(ref re) = compiled {
-            if re.is_match(&current) {
-                pattern_matched = true;
-                break;
-            }
+        if let Some(ref re) = compiled
+            && re.is_match(&current)
+        {
+            pattern_matched = true;
+            break;
         }
 
         // Shell idle after command was sent = done
