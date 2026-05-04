@@ -434,7 +434,7 @@ export const MCP_SUPPORT: Record<AgentType, boolean> = {
   gemini: true,
   opencode: false,
   aider: false,
-  codex: false,
+  codex: true,
   amp: true,
   cursor: true,
   warp: false,
