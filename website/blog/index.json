@@ -1,6 +1,15 @@
 {
   "posts": [
     {
+      "slug": "ai-triage",
+      "title": "AI Triage: code review that understands what changed",
+      "date": "2026-05-05",
+      "status": "draft",
+      "feature": "AI Diff Triage",
+      "summary": "Every AI IDE can generate code. None of them review the diff before you commit. AI Triage classifies every changed file by risk, relevance, and category — streaming results as the LLM works through your changes.",
+      "screenshots": ["hero.png", "command-palette.png"]
+    },
+    {
       "slug": "cross-agent-orchestration",
       "title": "Using Codex to orchestrate Claude Code through TUICommander",
       "date": "2026-05-04",
