@@ -2903,11 +2903,11 @@ pub(crate) async fn create_pty(
 
         if let Some(ref cwd) = config.cwd {
             let cwd = crate::cli::expand_tilde(cwd);
-            if is_wsl_shell(&shell) {
-                cmd.cwd(windows_to_wsl_path(&cwd));
-            } else {
-                cmd.cwd(cwd);
-            }
+            // Don't convert drive paths for WSL — cmd.cwd() sets the Windows
+            // process CWD via CreateProcessW, which can't resolve Linux paths.
+            // Windows translates drive paths to /mnt/... automatically when
+            // spawning wsl.exe. (GitHub #27)
+            cmd.cwd(cwd);
         }
 
         // Inject OSC 133 shell integration (command block markers)
@@ -3036,11 +3036,7 @@ pub(crate) async fn spawn_session_for_agent(
 
     if let Some(ref dir) = cwd {
         let expanded = crate::cli::expand_tilde(dir);
-        if is_wsl_shell(&shell) {
-            cmd.cwd(windows_to_wsl_path(&expanded));
-        } else {
-            cmd.cwd(expanded);
-        }
+        cmd.cwd(expanded);
     }
 
     if let Ok(data_dir) = app.path().app_data_dir() {
@@ -3153,12 +3149,7 @@ pub(crate) async fn create_pty_with_worktree(
         let shell = resolve_shell(pty_config.shell);
 
         let mut cmd = build_shell_command(&shell);
-        // Translate Windows drive-letter paths to /mnt/ for WSL shells
-        if is_wsl_shell(&shell) {
-            cmd.cwd(windows_to_wsl_path(&worktree_path.to_string_lossy()));
-        } else {
-            cmd.cwd(&worktree_path);
-        }
+        cmd.cwd(&worktree_path);
 
         // Inject OSC 133 shell integration (command block markers)
         if let Ok(data_dir) = app.path().app_data_dir() {

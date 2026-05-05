@@ -1,4 +1,4 @@
-use crate::pty::{build_shell_command, is_wsl_shell, resolve_shell, spawn_headless_reader_thread, spawn_reader_thread, windows_to_wsl_path};
+use crate::pty::{build_shell_command, resolve_shell, spawn_headless_reader_thread, spawn_reader_thread};
 use crate::{AppState, OutputRingBuffer, PtySession, MAX_CONCURRENT_SESSIONS};
 use crate::state::{OUTPUT_RING_BUFFER_CAPACITY, VtLogBuffer, VT_LOG_BUFFER_CAPACITY};
 use tauri::Emitter;
@@ -321,11 +321,7 @@ pub(super) fn spawn_pty_session(
     let mut cmd = build_shell_command(&shell);
     if let Some(ref dir) = cwd {
         let dir = crate::cli::expand_tilde(dir);
-        if is_wsl_shell(&shell) {
-            cmd.cwd(windows_to_wsl_path(&dir));
-        } else {
-            cmd.cwd(dir);
-        }
+        cmd.cwd(dir);
     }
 
     let child = pair.slave.spawn_command(cmd).map_err(|e| (
