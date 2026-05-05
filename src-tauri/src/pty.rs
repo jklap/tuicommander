@@ -4175,16 +4175,18 @@ pub(crate) fn ack_terminal_frame(
     session_id: String,
 ) {
     if let Some(flag) = state.grid_frame_in_flight.get(&session_id) {
-        flag.store(false, std::sync::atomic::Ordering::Relaxed);
-    }
-    // Flush dirty rows accumulated while in-flight (PTY went idle before
-    // the reader could send). Send directly via channel WITHOUT re-setting
-    // in_flight — prevents ACK→flush→ACK tight loop.
-    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
-        let frame = vt.lock().serialize_dirty_rows();
-        if !frame.is_empty() {
-            if let Some(ch) = state.grid_channels.get(&session_id) {
-                let _ = ch.send(frame);
+        let was_in_flight = flag.swap(false, std::sync::atomic::Ordering::Relaxed);
+        // Only flush if this ACK corresponds to a real in-flight frame
+        // (reader set it). Prevents flush→ACK→flush loop when the flush
+        // itself sends a frame that gets ACKed.
+        if was_in_flight {
+            if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+                let frame = vt.lock().serialize_dirty_rows();
+                if !frame.is_empty() {
+                    if let Some(ch) = state.grid_channels.get(&session_id) {
+                        let _ = ch.send(frame);
+                    }
+                }
             }
         }
     }

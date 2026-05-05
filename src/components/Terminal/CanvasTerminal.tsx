@@ -192,8 +192,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     };
   }
 
-  function sgrMouseSequence(button: number, col: number, row: number, press: boolean): string {
-    return `\x1b[<${button};${col + 1};${row + 1}${press ? "M" : "m"}`;
+  function mouseModifiers(e: MouseEvent): number {
+    return (e.shiftKey ? 4 : 0) | (e.altKey ? 8 : 0) | (e.ctrlKey ? 16 : 0);
+  }
+
+  function sgrMouseSequence(button: number, col: number, row: number, press: boolean, e?: MouseEvent): string {
+    const cb = button + (e ? mouseModifiers(e) : 0);
+    return `\x1b[<${cb};${col + 1};${row + 1}${press ? "M" : "m"}`;
   }
 
   function viewportRowToAbs(viewportRow: number): number | null {
@@ -1439,7 +1444,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
         const pos = canvasToGrid(e);
         if (currentFrame.sgrMouse) {
-          writePty(sgrMouseSequence(e.button, pos.col, pos.row, true));
+          writePty(sgrMouseSequence(e.button, pos.col, pos.row, true, e));
         }
         e.preventDefault();
         return;
@@ -1480,11 +1485,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
         if (currentFrame.mouseMode >= 3) {
           const pos = canvasToGrid(e);
-          writePty(sgrMouseSequence(35, pos.col, pos.row, true));
+          writePty(sgrMouseSequence(35, pos.col, pos.row, true, e));
         } else if (currentFrame.mouseMode >= 2 && e.buttons > 0) {
           const pos = canvasToGrid(e);
           const btn = e.buttons & 1 ? 0 : e.buttons & 4 ? 1 : 2;
-          writePty(sgrMouseSequence(32 + btn, pos.col, pos.row, true));
+          writePty(sgrMouseSequence(32 + btn, pos.col, pos.row, true, e));
         }
         return;
       }
@@ -1512,7 +1517,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
         const pos = canvasToGrid(e);
         if (currentFrame.sgrMouse) {
-          writePty(sgrMouseSequence(e.button, pos.col, pos.row, false));
+          writePty(sgrMouseSequence(e.button, pos.col, pos.row, false, e));
         }
         return;
       }
@@ -1545,7 +1550,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       if (currentFrame && currentFrame.mouseMode > 0) {
         const pos = canvasToGrid(e as unknown as MouseEvent);
         const btn = e.deltaY < 0 ? 64 : 65;
-        writePty(sgrMouseSequence(btn, pos.col, pos.row, true));
+        writePty(sgrMouseSequence(btn, pos.col, pos.row, true, e as unknown as MouseEvent));
         return;
       }
       const m = metrics();
