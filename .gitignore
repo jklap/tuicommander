@@ -64,3 +64,4 @@ docs/book
 # Local embedding cache (mdkb/fastembed model files)
 .fastembed_cache/
 .vscode/
+docs/superpowers/
