@@ -177,6 +177,14 @@
   src: url('/fonts/geist-mono-bold.woff2') format('woff2');
 }
 
+@font-face {
+  font-family: 'Symbols Nerd Font Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/symbols-nerd-font-mono.woff2') format('woff2');
+}
+
 * {
   margin: 0;
   padding: 0;

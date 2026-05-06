@@ -171,19 +171,19 @@ export const IDE_CATEGORIES: Record<string, IdeType[]> = {
   utilities: ["terminal", "finder"],
 };
 
-/** Font family CSS values (bundled font first, Nerd Font as optional override) */
+/** Font family CSS values — system Nerd Font (if installed) → bundled font → bundled symbols → monospace */
 export const FONT_FAMILIES: Record<FontType, string> = {
-  "JetBrains Mono": '"JetBrainsMono Nerd Font", "JetBrains Mono", monospace',
-  "Fira Code": '"FiraCode Nerd Font", "Fira Code", monospace',
-  "Hack": '"Hack Nerd Font", "Hack", monospace',
-  "Cascadia Code": '"CaskaydiaCove Nerd Font", "Cascadia Code", monospace',
-  "Iosevka": '"Iosevka Nerd Font", "Iosevka", monospace',
-  "Source Code Pro": '"SauceCodePro Nerd Font", "Source Code Pro", monospace',
-  "Inconsolata": '"Inconsolata Nerd Font", "Inconsolata", monospace',
-  "IBM Plex Mono": '"BlexMono Nerd Font", "IBM Plex Mono", monospace',
-  "Monaspace Neon": '"Monaspace Neon", monospace',
-  "Commit Mono": '"CommitMono Nerd Font", "Commit Mono", monospace',
-  "Geist Mono": '"GeistMono Nerd Font", "Geist Mono", monospace',
+  "JetBrains Mono": '"JetBrainsMono Nerd Font", "JetBrains Mono", "Symbols Nerd Font Mono", monospace',
+  "Fira Code": '"FiraCode Nerd Font", "Fira Code", "Symbols Nerd Font Mono", monospace',
+  "Hack": '"Hack Nerd Font", "Hack", "Symbols Nerd Font Mono", monospace',
+  "Cascadia Code": '"CaskaydiaCove Nerd Font", "Cascadia Code", "Symbols Nerd Font Mono", monospace',
+  "Iosevka": '"Iosevka Nerd Font", "Iosevka", "Symbols Nerd Font Mono", monospace',
+  "Source Code Pro": '"SauceCodePro Nerd Font", "Source Code Pro", "Symbols Nerd Font Mono", monospace',
+  "Inconsolata": '"Inconsolata Nerd Font", "Inconsolata", "Symbols Nerd Font Mono", monospace',
+  "IBM Plex Mono": '"BlexMono Nerd Font", "IBM Plex Mono", "Symbols Nerd Font Mono", monospace',
+  "Monaspace Neon": '"Monaspace Neon", "Symbols Nerd Font Mono", monospace',
+  "Commit Mono": '"CommitMono Nerd Font", "Commit Mono", "Symbols Nerd Font Mono", monospace',
+  "Geist Mono": '"GeistMono Nerd Font", "Geist Mono", "Symbols Nerd Font Mono", monospace',
 };
 
 /** Valid IDE values */

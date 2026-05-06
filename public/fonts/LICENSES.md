@@ -18,6 +18,7 @@ All fonts bundled in this directory are licensed under the
 | Monaspace Neon | Copyright 2023 GitHub Next | [github.com/githubnext/monaspace](https://github.com/githubnext/monaspace) |
 | Commit Mono | Copyright 2023 Eigil Nikolajsen | [github.com/eigilnikolajsen/commit-mono](https://github.com/eigilnikolajsen/commit-mono) |
 | Geist Mono | Copyright 2023 Vercel | [github.com/vercel/geist-font](https://github.com/vercel/geist-font) |
+| Symbols Nerd Font Mono | Copyright 2014 Ryan McIntyre | [github.com/ryanoasis/nerd-fonts](https://github.com/ryanoasis/nerd-fonts) |
 
 ## SIL Open Font License, Version 1.1
 
