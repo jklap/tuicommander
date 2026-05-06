@@ -1,3 +1,5 @@
+#![cfg_attr(not(feature = "desktop"), allow(dead_code, unused_imports, unused_variables))]
+
 pub(crate) mod agent;
 pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
@@ -71,7 +73,6 @@ pub(crate) mod content_index;
 mod updater;
 pub(crate) mod worktree;
 
-use dashmap::DashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 #[cfg(feature = "desktop")]
@@ -79,7 +80,9 @@ use tauri::{Emitter, Manager, State, WebviewWindow};
 
 // Re-export shared types from state module
 pub(crate) use state::{AppState, OutputRingBuffer, PtySession};
-pub(crate) use state::{SessionMetrics, MAX_CONCURRENT_SESSIONS};
+pub(crate) use state::MAX_CONCURRENT_SESSIONS;
+#[cfg(test)]
+pub(crate) use state::SessionMetrics;
 
 #[cfg(feature = "desktop")]
 /// Open a secondary window for multi-monitor use. The window loads the same
@@ -1089,7 +1092,6 @@ pub fn run() {
             let repos_json = config::load_repositories();
             let mut known_repo_paths: Vec<String> = Vec::new();
             if let Some(repos) = repos_json.get("repos").and_then(|r| r.as_object()) {
-                let handle = app.handle().clone();
                 for repo_path in repos.keys() {
                     known_repo_paths.push(repo_path.clone());
                     if let Err(e) = repo_watcher::start_watching(repo_path, app_state) {

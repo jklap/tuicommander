@@ -1762,6 +1762,7 @@ impl ChunkProcessor {
                         }
                     }
                     TermEvent::Osc7(url) => {
+                        #[allow(clippy::collapsible_if)]
                         if let Ok(cwd) = parse_osc7_cwd(&url) {
                             if let Some(entry) = state.sessions.get(session_id) {
                                 entry.lock().cwd = Some(cwd.clone());
@@ -2729,16 +2730,14 @@ pub(crate) fn spawn_reader_thread(
 
         let remaining = flush_eof(&mut utf8_buf, &mut esc_buf, &session_id, &state);
         #[cfg(feature = "desktop")]
-        if !remaining.is_empty() {
-            if let Some(app) = state.app_handle.read().as_ref() {
-                let _ = app.emit(
-                    &format!("pty-output-{session_id}"),
-                    PtyOutput {
-                        session_id: session_id.clone(),
-                        data: remaining,
-                    },
-                );
-            }
+        if !remaining.is_empty() && let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(
+                &format!("pty-output-{session_id}"),
+                PtyOutput {
+                    session_id: session_id.clone(),
+                    data: remaining,
+                },
+            );
         }
 
         let _ = state.event_bus.send(crate::state::AppEvent::PtyExit {

@@ -102,6 +102,7 @@ pub(crate) fn emit_close_html_tabs(state: &AppState, session_id: &str) {
         tab_ids: tab_ids.clone(),
     });
     #[cfg(feature = "desktop")]
+    #[allow(clippy::collapsible_if)]
     if let Some(app) = state.app_handle.read().as_ref() {
         if let Err(err) = app.emit("close-html-tabs", serde_json::json!({ "tab_ids": tab_ids })) {
             tracing::warn!(
@@ -1526,15 +1527,13 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
             {
                 let print_mode = args["print_mode"].as_bool().unwrap_or(false);
                 let app_handle = state.app_handle.read().clone();
-                if !print_mode {
-                    if let Some(ref app) = app_handle {
-                        let agent_type_val = args["agent_type"].as_str();
-                        let _ = app.emit("session-created", serde_json::json!({
-                            "session_id": session_id,
-                            "cwd": cwd_str,
-                            "agent_type": agent_type_val,
-                        }));
-                    }
+                if !print_mode && let Some(ref app) = app_handle {
+                    let agent_type_val = args["agent_type"].as_str();
+                    let _ = app.emit("session-created", serde_json::json!({
+                        "session_id": session_id,
+                        "cwd": cwd_str,
+                        "agent_type": agent_type_val,
+                    }));
                 }
             }
             spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
@@ -2296,7 +2295,7 @@ fn handle_notify(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Val
         "confirm" => {
             #[cfg(not(feature = "desktop"))]
             {
-                return serde_json::json!({"error": "Action 'confirm' requires desktop feature"});
+                serde_json::json!({"error": "Action 'confirm' requires desktop feature"})
             }
             #[cfg(feature = "desktop")]
             {
@@ -2729,7 +2728,7 @@ fn handle_debug_unified(state: &Arc<AppState>, addr: SocketAddr, args: &serde_js
         "invoke_js" => {
             #[cfg(not(feature = "desktop"))]
             {
-                return serde_json::json!({"error": "invoke_js requires desktop feature"});
+                serde_json::json!({"error": "invoke_js requires desktop feature"})
             }
             #[cfg(feature = "desktop")]
             {
