@@ -5,9 +5,11 @@ import d from "../shared/dialog.module.css";
 export interface PromptDialogProps {
   visible: boolean;
   title: string;
+  subtitle?: string;
   placeholder?: string;
   defaultValue?: string;
   confirmLabel?: string;
+  maxLength?: number;
   onClose: () => void;
   onConfirm: (value: string) => void;
 }
@@ -55,7 +57,12 @@ export const PromptDialog: Component<PromptDialogProps> = (props) => {
       <div class={d.overlay} onClick={props.onClose}>
         <div class={d.popover} onClick={(e) => e.stopPropagation()}>
           <div class={d.header}>
-            <h4>{props.title}</h4>
+            <div class={d.headerText}>
+              <h4>{props.title}</h4>
+              <Show when={props.subtitle}>
+                <p class={d.subtitle}>{props.subtitle}</p>
+              </Show>
+            </div>
           </div>
           <div class={d.body}>
             <input
@@ -64,6 +71,7 @@ export const PromptDialog: Component<PromptDialogProps> = (props) => {
               value={value()}
               onInput={(e) => setValue((e.target as HTMLInputElement).value)}
               placeholder={props.placeholder ?? ""}
+              maxLength={props.maxLength}
             />
           </div>
           <div class={d.actions}>

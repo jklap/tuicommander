@@ -3,9 +3,11 @@ import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { worktreeManagerStore } from "../../stores/worktreeManager";
 import { repositoriesStore } from "../../stores/repositories";
+import { repoSettingsStore } from "../../stores/repoSettings";
 import { githubStore } from "../../stores/github";
 import { formatRelativeTime } from "../../utils/time";
 import type { BranchPrStatus } from "../../types";
+import b from "../shared/branch.module.css";
 import s from "./WorktreeManager.module.css";
 
 /** Row data derived from repo/branch state */
@@ -294,7 +296,9 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
             </Show>
 
             <For each={worktrees()}>
-              {(wt) => (
+              {(wt) => {
+                const label = () => repoSettingsStore.getEffective(wt.repoPath)?.branchLabels?.[wt.branch];
+                return (
                 <div class={`${s.row} ${wt.isMain ? s.mainRow : ""}`}>
                   {/* Col 1: Checkbox */}
                   <Show when={!wt.isMain && selectableIds().length > 1} fallback={<span class={s.checkboxPlaceholder} />}>
@@ -309,7 +313,12 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
                   <span class={s.repo}>{wt.repoName}</span>
                   {/* Col 3: Branch + worktree path */}
                   <div class={s.branchCell}>
-                    <span class={s.branch}>{wt.branch}</span>
+                    <span class={s.branch}>
+                      {label() ?? wt.branch}
+                    </span>
+                    <Show when={label()}>
+                      <span class={b.subLabel}>{wt.branch}</span>
+                    </Show>
                     <span class={s.worktreePath}>{wt.worktreePath}</span>
                   </div>
                   {/* Col 4: Badges */}
@@ -356,7 +365,8 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
                     )}
                   </Show>
                 </div>
-              )}
+                );
+              }}
             </For>
 
             <For each={orphanRows()}>
