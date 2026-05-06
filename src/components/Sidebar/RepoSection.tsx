@@ -243,7 +243,7 @@ export const BranchItem: Component<{
       { label: "Add Terminal", action: props.onAddTerminal },
     ];
     if (!props.branch.isShell && props.branch.name) {
-      items.push({ label: "Set Label…", action: () => props.onSetLabel?.(branchLabel()) });
+      items.push({ label: "Set Label", action: () => props.onSetLabel?.(branchLabel()) });
       if (branchLabel()) {
         items.push({ label: "Clear Label", action: () => repoSettingsStore.setLabel(props.repoPath, props.branch.name, null) });
       }
