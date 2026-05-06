@@ -292,6 +292,7 @@ fn validate_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn chat_subscribe(
     registry: tauri::State<'_, ChatRegistry>,
@@ -302,6 +303,7 @@ pub(crate) async fn chat_subscribe(
     Ok(registry.subscribe(&chat_id, on_event).await)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn chat_unsubscribe(
     registry: tauri::State<'_, ChatRegistry>,
@@ -313,6 +315,7 @@ pub(crate) async fn chat_unsubscribe(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn chat_get_state(
     registry: tauri::State<'_, ChatRegistry>,
@@ -322,6 +325,7 @@ pub(crate) async fn chat_get_state(
     Ok(registry.snapshot(&chat_id).await)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn chat_attach_terminal(
     registry: tauri::State<'_, ChatRegistry>,
@@ -338,6 +342,7 @@ pub(crate) async fn chat_attach_terminal(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn chat_detach_terminal(
     registry: tauri::State<'_, ChatRegistry>,
@@ -352,6 +357,7 @@ pub(crate) async fn chat_detach_terminal(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn chat_clear(
     registry: tauri::State<'_, ChatRegistry>,
@@ -362,6 +368,7 @@ pub(crate) async fn chat_clear(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn chat_set_pinned(
     registry: tauri::State<'_, ChatRegistry>,
@@ -377,6 +384,7 @@ pub(crate) async fn chat_set_pinned(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn chat_push_message(
     registry: tauri::State<'_, ChatRegistry>,

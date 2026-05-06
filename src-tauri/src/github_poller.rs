@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 
@@ -359,6 +360,7 @@ fn process_repo_update(
 // Tauri commands
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn github_start_polling(
     state: tauri::State<'_, Arc<AppState>>,
@@ -382,6 +384,7 @@ pub(crate) async fn github_start_polling(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn github_stop_polling(
     state: tauri::State<'_, Arc<AppState>>,
@@ -393,6 +396,7 @@ pub(crate) async fn github_stop_polling(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn github_set_visibility(
     state: tauri::State<'_, Arc<AppState>>,
@@ -404,6 +408,7 @@ pub(crate) async fn github_set_visibility(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn github_poll_repo(
     state: tauri::State<'_, Arc<AppState>>,
@@ -415,6 +420,7 @@ pub(crate) async fn github_poll_repo(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn github_update_paths(
     state: tauri::State<'_, Arc<AppState>>,
@@ -426,6 +432,7 @@ pub(crate) async fn github_update_paths(
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn github_set_issue_filter(
     state: tauri::State<'_, Arc<AppState>>,

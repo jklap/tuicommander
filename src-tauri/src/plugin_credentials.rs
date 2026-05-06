@@ -38,7 +38,7 @@ fn is_valid_service_name(name: &str) -> bool {
 ///
 /// Returns `Ok(Some(json_string))` if found, `Ok(None)` if not found,
 /// `Err` on I/O or permission errors.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn plugin_read_credential(
     service_name: String,
     plugin_id: String,

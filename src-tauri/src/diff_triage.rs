@@ -944,7 +944,7 @@ fn emit_progress(
     );
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn run_diff_triage(
     app: tauri::AppHandle,
     repo_path: String,

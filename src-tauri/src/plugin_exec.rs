@@ -164,7 +164,7 @@ fn validate_cwd(cwd: &str) -> Result<std::path::PathBuf, String> {
 /// - 30-second timeout
 /// - 5 MB stdout limit
 /// - stderr is captured but not returned (logged on failure)
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn plugin_exec_cli(
     binary: String,
     args: Vec<String>,

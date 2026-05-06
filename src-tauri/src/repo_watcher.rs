@@ -343,13 +343,13 @@ pub(crate) fn stop_watching(repo_path: &str, state: &Arc<AppState>) {
 
 // --- Tauri commands ---
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn start_repo_watcher(repo_path: String, app_handle: AppHandle) -> Result<(), String> {
     let state = app_handle.state::<Arc<AppState>>();
     start_watching(&repo_path, Some(&app_handle), &state)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn stop_repo_watcher(repo_path: String, app_handle: AppHandle) {
     let state = app_handle.state::<Arc<AppState>>();
     stop_watching(&repo_path, &state);

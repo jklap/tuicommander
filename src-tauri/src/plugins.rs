@@ -329,7 +329,7 @@ pub fn register_plugin_protocol(builder: tauri::Builder<tauri::Wry>) -> tauri::B
 
 /// Scan the user plugins directory and return all valid manifests.
 /// Invalid manifests are logged and skipped — never cause an error.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn list_user_plugins() -> Vec<PluginManifest> {
     let dir = plugins_dir();
     if !dir.exists() {
@@ -407,7 +407,7 @@ pub fn list_user_plugins() -> Vec<PluginManifest> {
 ///
 /// Security: validates the claimed capabilities against the on-disk manifest.
 /// The frontend cannot self-register arbitrary capabilities.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn register_loaded_plugin(
     plugin_id: String,
     capabilities: Vec<String>,
@@ -445,7 +445,7 @@ pub(crate) fn read_single_manifest(plugin_id: &str) -> Result<PluginManifest, St
 }
 
 /// Unregister a plugin's capabilities when it is unloaded.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn unregister_loaded_plugin(
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
@@ -459,7 +459,7 @@ pub fn unregister_loaded_plugin(
 
 /// Return the absolute path to a plugin's README.md if it exists.
 /// Returns `None` if the file doesn't exist (not an error).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn get_plugin_readme_path(id: String) -> Option<String> {
     if id.is_empty() || is_path_escape(&id) {
         return None;
@@ -496,7 +496,7 @@ fn resolve_data_path(plugin_id: &str, relative_path: &str) -> Result<PathBuf, St
     Ok(data_dir.join(relative_path))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn read_plugin_data(plugin_id: String, path: String) -> Result<Option<String>, String> {
     let file_path = resolve_data_path(&plugin_id, &path)?;
     match std::fs::read_to_string(&file_path) {
@@ -506,7 +506,7 @@ pub fn read_plugin_data(plugin_id: String, path: String) -> Result<Option<String
     }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn write_plugin_data(plugin_id: String, path: String, content: String) -> Result<(), String> {
     let file_path = resolve_data_path(&plugin_id, &path)?;
     if let Some(parent) = file_path.parent() {
@@ -517,7 +517,7 @@ pub fn write_plugin_data(plugin_id: String, path: String, content: String) -> Re
         .map_err(|e| format!("Failed to write plugin data: {e}"))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn delete_plugin_data(plugin_id: String, path: String) -> Result<(), String> {
     let file_path = resolve_data_path(&plugin_id, &path)?;
     match std::fs::remove_file(&file_path) {
@@ -538,7 +538,7 @@ pub fn delete_plugin_data(plugin_id: String, path: String) -> Result<(), String>
 /// the `data/` subdirectory is preserved across the overwrite.
 ///
 /// Returns the validated manifest on success.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_plugin_from_zip(
     path: String,
     app_handle: AppHandle,
@@ -552,7 +552,7 @@ pub async fn install_plugin_from_zip(
 }
 
 /// Install a plugin from an HTTPS URL: download to a temp file, then extract.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_plugin_from_url(
     url: String,
     app_handle: AppHandle,
@@ -669,7 +669,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 
 /// Install a plugin from a local folder. Validates manifest, copies files to
 /// the plugins directory, preserves existing data/, and emits a reload event.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn install_plugin_from_folder(
     path: String,
     app_handle: AppHandle,
@@ -821,7 +821,7 @@ fn find_manifest_in_zip(archive: &zip::ZipArchive<std::fs::File>) -> Result<Stri
 // ---------------------------------------------------------------------------
 
 /// Remove a plugin and all its files (including data/).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub fn uninstall_plugin(id: String, app_handle: AppHandle) -> Result<(), String> {
     if id.is_empty() || is_path_escape(&id) {
         return Err("Invalid plugin ID".into());
