@@ -74,12 +74,14 @@ pub(crate) mod worktree;
 use dashmap::DashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(feature = "desktop")]
 use tauri::{Emitter, Manager, State, WebviewWindow};
 
 // Re-export shared types from state module
 pub(crate) use state::{AppState, OutputRingBuffer, PtySession};
 pub(crate) use state::{SessionMetrics, MAX_CONCURRENT_SESSIONS};
 
+#[cfg(feature = "desktop")]
 /// Open a secondary window for multi-monitor use. The window loads the same
 /// frontend with a `?mode=secondary` query param so App.tsx can render a
 /// pane-only layout without sidebar or tab bar.
@@ -102,6 +104,7 @@ async fn open_secondary_window(app: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(feature = "desktop")]
 /// Fix corrupted dimensions in the window-state JSON before the plugin reads it.
 /// titleBarStyle Overlay can persist width/height 0; SIZE is excluded from the
 /// plugin flags so these zeros stay fossilised forever. We patch them at startup.
@@ -131,10 +134,12 @@ fn sanitize_window_state() {
     }
 }
 
+#[cfg(feature = "desktop")]
 /// Ensure the window has valid dimensions and is positioned on a visible monitor.
 /// The window-state plugin can persist invalid state (e.g. width/height 0, or
 /// positions off-screen) which causes downstream failures like PTY garbage output.
 fn ensure_window_visible(window: &WebviewWindow) {
+#[cfg(feature = "desktop")]
     use tauri::PhysicalPosition;
 
     const MIN_WIDTH: u32 = 800;
@@ -181,12 +186,14 @@ fn ensure_window_visible(window: &WebviewWindow) {
     }
 }
 
+#[cfg(feature = "desktop")]
 /// Load configuration from cached AppState
 #[tauri::command]
 fn load_config(state: State<'_, Arc<AppState>>) -> config::AppConfig {
     state.config.read().clone()
 }
 
+#[cfg(feature = "desktop")]
 /// Save configuration to disk, update the AppState cache, and live-restart the HTTP server
 /// if MCP / Remote Access settings changed (no app restart required).
 #[tauri::command]
@@ -216,7 +223,7 @@ fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Re
 }
 
 /// Hash a plaintext password with bcrypt for remote access config
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 async fn hash_password(password: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         bcrypt::hash(&password, 12).map_err(|e| format!("Failed to hash password: {e}"))
@@ -226,12 +233,14 @@ async fn hash_password(password: String) -> Result<String, String> {
 }
 
 /// Clear all git/GitHub operation caches
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn clear_caches(state: State<'_, Arc<AppState>>) {
     state.clear_caches();
 }
 
 /// Clear git/GitHub caches for a specific repo path
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn clear_repo_caches(state: State<'_, Arc<AppState>>, path: String) {
     state.invalidate_repo_caches(&path);
@@ -261,6 +270,7 @@ pub(crate) fn get_local_ips_impl(state: &AppState) -> Vec<LocalIpEntry> {
     get_local_ips_with_config(ipv6_enabled)
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn get_local_ips(state: State<'_, Arc<AppState>>) -> Vec<LocalIpEntry> {
     get_local_ips_impl(&state)
@@ -420,6 +430,7 @@ pub(crate) fn pick_preferred_ip(ips: Vec<LocalIpEntry>) -> Option<String> {
 
 /// Legacy single-IP command kept for backwards compatibility.
 /// Returns the LAN/Tailscale IP preferred for remote access, or the default-route IP.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn get_local_ip(state: State<'_, Arc<AppState>>) -> Option<String> {
     pick_preferred_ip(get_local_ips(state))
@@ -505,7 +516,7 @@ pub(crate) fn list_markdown_files_impl(path: String) -> Result<Vec<MarkdownFileE
     Ok(entries)
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn list_markdown_files(path: String) -> Result<Vec<MarkdownFileEntry>, String> {
     list_markdown_files_impl(path)
 }
@@ -530,7 +541,7 @@ pub(crate) fn read_file_impl(path: String, file: String) -> Result<String, Strin
         .map_err(|e| format!("Failed to read file: {e}"))
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn read_file(path: String, file: String) -> Result<String, String> {
     read_file_impl(path, file)
 }
@@ -541,7 +552,7 @@ fn read_file(path: String, file: String) -> Result<String, String> {
 /// No TCC directory blocking: reading a specific file by known path does not
 /// trigger macOS permission dialogs (TCC guards directory enumeration, not
 /// individual reads). The HTTP endpoint has its own repo-root check.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn read_external_file(path: String) -> Result<String, String> {
     let p = std::path::Path::new(&path);
     if !p.is_absolute() {
@@ -556,7 +567,7 @@ fn read_external_file(path: String) -> Result<String, String> {
 ///
 /// Target must be inside the user's home directory — see
 /// [`crate::fs::validate_external_write_path`] for the full rationale (story 1273-c95e).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 fn write_external_file(path: String, content: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     let home = dirs::home_dir()
@@ -568,6 +579,7 @@ fn write_external_file(path: String, content: String) -> Result<(), String> {
 
 /// Get MCP server status (running, port, active sessions).
 /// Async to avoid blocking the Tauri IPC thread during the TCP self-test.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::Value, String> {
     // Collect config and session count synchronously first (fast, no I/O)
@@ -627,6 +639,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
 
 /// Execute an MCP tool call via deep link: `tuic://cmd/{tool}/{action}?{params}`.
 /// Reuses the same dispatch as the MCP `tools/call` handler — no HTTP round-trip.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn deep_link_mcp_call(
     state: State<'_, Arc<AppState>>,
@@ -655,6 +668,7 @@ async fn deep_link_mcp_call(
 }
 
 /// Regenerate the session token, invalidating all existing remote sessions.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn regenerate_session_token(state: State<'_, Arc<AppState>>) {
     let new_token = uuid::Uuid::new_v4().to_string();
@@ -670,6 +684,7 @@ fn regenerate_session_token(state: State<'_, Arc<AppState>>) {
 /// Build a QR-code connect URL server-side so the raw session token
 /// never reaches JS (where a malicious plugin could steal it).
 /// Uses HTTPS + Tailscale FQDN when TLS is active on a Tailscale IP.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn get_connect_url(state: State<'_, Arc<AppState>>, ip: String) -> String {
     let port = state.config.read().remote_access_port;
@@ -687,11 +702,13 @@ fn get_connect_url(state: State<'_, Arc<AppState>>, ip: String) -> String {
 }
 
 /// Get Tailscale daemon status for the frontend Settings panel.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn get_tailscale_status(state: State<'_, Arc<AppState>>) -> tailscale::TailscaleState {
     state.tailscale_state.read().clone()
 }
 
+#[cfg(feature = "desktop")]
 /// Provision TLS config from current Tailscale state.
 /// Returns Some(RustlsConfig) if Tailscale is running with HTTPS enabled and cert provisioning succeeds.
 async fn provision_tls_config(ts_state: &tailscale::TailscaleState) -> Option<axum_server::tls_rustls::RustlsConfig> {
@@ -712,6 +729,7 @@ async fn provision_tls_config(ts_state: &tailscale::TailscaleState) -> Option<ax
     None
 }
 
+#[cfg(feature = "desktop")]
 /// Restart the HTTP/MCP server with fresh TLS config (reuses the shutdown/spawn pattern from save_config).
 fn restart_server(state: &Arc<AppState>) {
     // Shutdown existing server
@@ -732,6 +750,7 @@ fn restart_server(state: &Arc<AppState>) {
 }
 
 /// Re-detect Tailscale daemon status and restart server if HTTPS availability changed.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 async fn recheck_tailscale_status(state: State<'_, Arc<AppState>>) -> Result<tailscale::TailscaleState, String> {
     let old_https = matches!(
@@ -760,6 +779,7 @@ async fn recheck_tailscale_status(state: State<'_, Arc<AppState>>) -> Result<tai
 }
 
 /// Get relay client status (enabled, connected, url, session_id).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 fn get_relay_status(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     let cfg = state.config.read();
@@ -772,6 +792,7 @@ fn get_relay_status(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     })
 }
 
+#[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Install the rustls CryptoProvider before anything touches TLS.
@@ -1153,7 +1174,7 @@ pub fn run() {
                 let handle = app.handle().clone();
                 for repo_path in repos.keys() {
                     known_repo_paths.push(repo_path.clone());
-                    if let Err(e) = repo_watcher::start_watching(repo_path, Some(&handle), app_state) {
+                    if let Err(e) = repo_watcher::start_watching(repo_path, app_state) {
                         app_logger::log_via_state(app_state, "warn", "app", &format!("[RepoWatcher] Failed to watch {repo_path}: {e}"));
                     }
                 }

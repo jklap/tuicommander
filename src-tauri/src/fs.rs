@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "desktop")]
 use tauri::Emitter;
 
 /// A directory entry returned by `list_directory`.
@@ -376,7 +377,8 @@ pub(crate) fn list_directory_impl(repo_path: String, subdir: String) -> Result<V
 /// Recursively search files in a repository matching a glob-like query.
 /// Returns up to `limit` results (default 200) to avoid blowing up on huge repos.
 /// Respects .gitignore natively via the `ignore` crate (no subprocess).
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub async fn search_files(
     app_state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
     repo_path: String,
@@ -387,7 +389,8 @@ pub async fn search_files(
     search_files_impl(repo_path, query, limit)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn search_content(
     app: tauri::AppHandle,
@@ -423,7 +426,7 @@ pub async fn search_content(
     let throttle_guard = app_state.indexer_throttle.begin_search();
 
     // Run search in blocking thread
-    tauri::async_runtime::spawn_blocking(move || {
+    tokio::task::spawn_blocking(move || {
         let _throttle_guard = throttle_guard;
         match search_content_indexed(
             &index_arc, repo_path, query, case_sensitive, use_regex, whole_word, limit,

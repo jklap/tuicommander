@@ -3,6 +3,7 @@ use parking_lot::Mutex;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::state::AppEvent;
@@ -22,7 +23,6 @@ pub(crate) struct DirChangedPayload {
 /// Emits `"dir-changed"` when files are created, deleted, or renamed.
 pub(crate) fn start_watching(
     dir_path: &str,
-    app_handle: Option<&AppHandle>,
     state: &Arc<AppState>,
 ) -> Result<(), String> {
     let path = PathBuf::from(dir_path);
@@ -34,9 +34,10 @@ pub(crate) fn start_watching(
     state.dir_watchers.remove(dir_path);
 
     let dir_path_owned = dir_path.to_string();
-    let handle = app_handle.cloned();
+    #[cfg(feature = "desktop")]
+    let handle = state.app_handle.read().clone();
     let event_bus = state.event_bus.clone();
-    let rt = tauri::async_runtime::handle().inner().clone();
+    let rt = tokio::runtime::Handle::current();
     let pending: Arc<Mutex<Option<tokio::task::AbortHandle>>> = Arc::new(Mutex::new(None));
 
     let mut watcher = notify::recommended_watcher(
@@ -44,16 +45,7 @@ pub(crate) fn start_watching(
             let _event = match result {
                 Ok(e) => e,
                 Err(err) => {
-                    if let Some(ref handle) = handle {
-                        crate::app_logger::log_via_handle(
-                            handle,
-                            "warn",
-                            "app",
-                            &format!("[dir_watcher] watcher error for {dir_path_owned}: {err}"),
-                        );
-                    } else {
-                        tracing::warn!(source = "dir_watcher", path = %dir_path_owned, "Watcher error: {err}");
-                    }
+                    tracing::warn!(source = "dir_watcher", path = %dir_path_owned, "Watcher error: {err}");
                     return;
                 }
             };
@@ -61,6 +53,7 @@ pub(crate) fn start_watching(
             // Trailing debounce: cancel previous timer, start new one
             let dir_path = dir_path_owned.clone();
             let bus = event_bus.clone();
+            #[cfg(feature = "desktop")]
             let h = handle.clone();
             let mut guard = pending.lock();
             if let Some(prev) = guard.take() {
@@ -71,6 +64,7 @@ pub(crate) fn start_watching(
                 let _ = bus.send(AppEvent::DirChanged {
                     dir_path: dir_path.clone(),
                 });
+                #[cfg(feature = "desktop")]
                 if let Some(ref handle) = h {
                     let _ = handle.emit(
                         "dir-changed",
@@ -99,13 +93,15 @@ pub(crate) fn stop_watching(dir_path: &str, state: &Arc<AppState>) {
 
 // --- Tauri commands ---
 
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub(crate) fn start_dir_watcher(path: String, app_handle: AppHandle) -> Result<(), String> {
     let state = app_handle.state::<Arc<AppState>>();
-    start_watching(&path, Some(&app_handle), &state)
+    start_watching(&path, &state)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub(crate) fn stop_dir_watcher(path: String, app_handle: AppHandle) {
     let state = app_handle.state::<Arc<AppState>>();
     stop_watching(&path, &state);
@@ -123,7 +119,7 @@ mod tests {
     #[test]
     fn test_watch_nonexistent_dir_returns_error() {
         let state = make_test_state();
-        let result = start_watching("/tmp/nonexistent-dir-watcher-test-12345", None, &state);
+        let result = start_watching("/tmp/nonexistent-dir-watcher-test-12345", &state);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("does not exist"));
     }
@@ -134,7 +130,7 @@ mod tests {
         let dir_path = tmp.path().to_str().unwrap().to_string();
         let state = make_test_state();
 
-        start_watching(&dir_path, None, &state).unwrap();
+        start_watching(&dir_path, &state).unwrap();
         assert!(state.dir_watchers.contains_key(&dir_path));
 
         stop_watching(&dir_path, &state);

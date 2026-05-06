@@ -118,6 +118,7 @@ pub(crate) struct GitHubPoller {
 }
 
 impl GitHubPoller {
+    #[cfg(feature = "desktop")]
     pub(crate) fn start(state: Arc<AppState>, handle: AppHandle) -> Self {
         let (tx, rx) = mpsc::channel(32);
         tokio::spawn(poll_loop(state, handle, rx));
@@ -125,9 +126,11 @@ impl GitHubPoller {
     }
 }
 
+#[cfg(feature = "desktop")]
 /// Per-repo previous PR state for transition comparison.
 type PrevState = HashMap<String, HashMap<String, BranchPrStatus>>;
 
+#[cfg(feature = "desktop")]
 struct PollMutableState {
     prev: PrevState,
     fail_count: u32,
@@ -135,6 +138,7 @@ struct PollMutableState {
     etag_cache: HashMap<String, String>,
 }
 
+#[cfg(feature = "desktop")]
 async fn poll_loop(
     state: Arc<AppState>,
     handle: AppHandle,
@@ -270,6 +274,7 @@ fn current_interval(visible: bool, fail_count: u32, rate_budget: u32) -> Duratio
     Duration::from_millis(backoff.min(MAX_INTERVAL.as_millis() as f64) as u64)
 }
 
+#[cfg(feature = "desktop")]
 /// Execute a unified batch poll (PRs + Issues) and emit Tauri events for both.
 async fn poll_batch(
     state: &AppState,
@@ -323,6 +328,7 @@ async fn poll_batch(
     }
 }
 
+#[cfg(feature = "desktop")]
 /// Process PR updates for a single repo. Returns `true` if any PR data changed.
 fn process_repo_update(
     state: &AppState,

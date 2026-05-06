@@ -117,7 +117,8 @@ fn url_matches_pattern(url: &str, pattern: &str) -> bool {
 /// - `body` — Optional request body
 /// - `allowed_urls` — URL patterns from the plugin's manifest (empty = unrestricted)
 /// - `plugin_id` — The requesting plugin's ID (for logging)
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub async fn plugin_http_fetch(
     url: String,
     method: Option<String>,

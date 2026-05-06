@@ -62,6 +62,7 @@ pub struct SubscribeResult {
 
 const MAX_MESSAGES: usize = 100;
 
+#[cfg(feature = "desktop")]
 struct Subscriber {
     id: SubscriptionId,
     channel: tauri::ipc::Channel<ChatEvent>,
@@ -69,7 +70,22 @@ struct Subscriber {
 
 struct ChatSlot {
     state: ConversationState,
+    #[cfg(feature = "desktop")]
     subscribers: Vec<Subscriber>,
+}
+
+#[cfg(not(feature = "desktop"))]
+impl ChatSlot {
+    fn new() -> Self {
+        Self { state: ConversationState::default() }
+    }
+}
+
+#[cfg(feature = "desktop")]
+impl ChatSlot {
+    fn new() -> Self {
+        Self { state: ConversationState::default(), subscribers: Vec::new() }
+    }
 }
 
 /// Mutable conversation state (not directly serialized — use `snapshot()`).
@@ -118,10 +134,7 @@ impl ChatRegistry {
         self.chats
             .entry(chat_id.to_string())
             .or_insert_with(|| {
-                Arc::new(Mutex::new(ChatSlot {
-                    state: ConversationState::default(),
-                    subscribers: Vec::new(),
-                }))
+                Arc::new(Mutex::new(ChatSlot::new()))
             })
             .clone()
     }
@@ -149,6 +162,7 @@ impl ChatRegistry {
         guard.state.snapshot()
     }
 
+    #[cfg(feature = "desktop")]
     /// Subscribe a Channel to receive events for a chat.
     /// Returns the subscription ID and a snapshot of the current state
     /// (taken under the same lock to prevent races).
@@ -171,6 +185,7 @@ impl ChatRegistry {
         }
     }
 
+    #[cfg(feature = "desktop")]
     /// Remove a subscriber by ID.
     pub async fn unsubscribe(&self, chat_id: &str, sub_id: SubscriptionId) {
         if let Some(slot) = self.chats.get(chat_id) {
@@ -185,6 +200,7 @@ impl ChatRegistry {
     /// mutex. We clone the subscriber handles under the lock, drop it, then
     /// send. Dead channels (send returns Err) are garbage-collected via a
     /// short re-lock.
+    #[cfg(feature = "desktop")]
     pub async fn fan_out(&self, chat_id: &str, event: ChatEvent) {
         let slot = match self.chats.get(chat_id) {
             Some(s) => s.clone(),
@@ -220,6 +236,10 @@ impl ChatRegistry {
             guard.subscribers.retain(|s| !dead_ids.contains(&s.id));
         }
     }
+
+    /// No-op fan-out when desktop feature is disabled (no IPC subscribers).
+    #[cfg(not(feature = "desktop"))]
+    pub async fn fan_out(&self, _chat_id: &str, _event: ChatEvent) {}
 
     /// Convenience: update state + fan_out a Snapshot event.
     pub async fn update_and_notify<F>(&self, chat_id: &str, f: F)
@@ -268,6 +288,7 @@ impl ChatRegistry {
     }
 
     /// Number of subscribers for a chat (for testing/debug).
+    #[cfg(feature = "desktop")]
     #[allow(dead_code)]
     pub async fn subscriber_count(&self, chat_id: &str) -> usize {
         match self.chats.get(chat_id) {

@@ -357,6 +357,7 @@ pub(crate) fn clear_logs(state: State<'_, Arc<AppState>>) {
     buf.clear();
 }
 
+#[cfg(feature = "desktop")]
 /// Push a log entry from internal Rust code using an AppHandle.
 ///
 /// Use this in contexts where you have an `AppHandle` but not a `State<>` extractor

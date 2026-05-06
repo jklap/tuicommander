@@ -2194,6 +2194,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     }
     state.output_buffers.remove(session_id);
     state.vt_log_buffers.remove(session_id);
+    #[cfg(feature = "desktop")]
     state.grid_channels.remove(session_id);
     state.grid_watch.remove(session_id);
     state.grid_frame_in_flight.remove(session_id);
@@ -2223,6 +2224,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
         .or_insert_with(|| AtomicU64::new(0))
         .store(now_ms, Ordering::Relaxed);
     state.ws_clients.remove(session_id);
+    #[cfg(feature = "desktop")]
     state.grid_channels.remove(session_id);
     state.grid_watch.remove(session_id);
     state.grid_frame_in_flight.remove(session_id);
@@ -4069,6 +4071,7 @@ pub(crate) fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>
     {
         let _ = watch_tx.send(frame.clone());
     }
+    #[cfg(feature = "desktop")]
     if let Some(ch) = state.grid_channels.get(session_id) {
         if let Some(flag) = state.grid_frame_in_flight.get(session_id) {
             flag.store(true, std::sync::atomic::Ordering::Relaxed);

@@ -87,6 +87,7 @@ pub(crate) async fn start_agent_loop(
     // subscribe via `listen("agent-loop-event", ...)`.
     if let Some(handle) = app_handle {
         tokio::spawn(async move {
+#[cfg(feature = "desktop")]
             use tauri::Emitter;
             while let Ok(event) = rx.recv().await {
                 let _ = handle.emit("agent-loop-event", &event);

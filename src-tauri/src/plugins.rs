@@ -12,7 +12,9 @@
 use crate::config;
 use serde::{Deserialize, Serialize};
 use std::path::{Component, Path, PathBuf};
+#[cfg(feature = "desktop")]
 use tauri::http::{Response, StatusCode};
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter};
 
 // ---------------------------------------------------------------------------
@@ -267,6 +269,7 @@ fn resolve_plugin_path(uri_path: &str) -> Option<PathBuf> {
 // URI protocol handler
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "desktop")]
 /// Register the `plugin://` custom URI scheme protocol on the Tauri builder.
 ///
 /// Serves JS files from `{config_dir}/plugins/{id}/{file}` with the
@@ -407,7 +410,8 @@ pub fn list_user_plugins() -> Vec<PluginManifest> {
 ///
 /// Security: validates the claimed capabilities against the on-disk manifest.
 /// The frontend cannot self-register arbitrary capabilities.
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub fn register_loaded_plugin(
     plugin_id: String,
     capabilities: Vec<String>,
@@ -445,7 +449,8 @@ pub(crate) fn read_single_manifest(plugin_id: &str) -> Result<PluginManifest, St
 }
 
 /// Unregister a plugin's capabilities when it is unloaded.
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub fn unregister_loaded_plugin(
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
@@ -538,7 +543,8 @@ pub fn delete_plugin_data(plugin_id: String, path: String) -> Result<(), String>
 /// the `data/` subdirectory is preserved across the overwrite.
 ///
 /// Returns the validated manifest on success.
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub async fn install_plugin_from_zip(
     path: String,
     app_handle: AppHandle,
@@ -552,7 +558,8 @@ pub async fn install_plugin_from_zip(
 }
 
 /// Install a plugin from an HTTPS URL: download to a temp file, then extract.
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub async fn install_plugin_from_url(
     url: String,
     app_handle: AppHandle,
@@ -621,6 +628,7 @@ fn prepare_plugin_target(manifest: &PluginManifest) -> Result<PreparedTarget, St
     Ok(PreparedTarget { path: target_dir, data_backup })
 }
 
+#[cfg(feature = "desktop")]
 /// Restore data/ backup, emit plugin-changed event, log success.
 fn finalize_plugin_install(
     target: PreparedTarget,
@@ -669,7 +677,8 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 
 /// Install a plugin from a local folder. Validates manifest, copies files to
 /// the plugins directory, preserves existing data/, and emits a reload event.
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub async fn install_plugin_from_folder(
     path: String,
     app_handle: AppHandle,
@@ -700,6 +709,7 @@ pub async fn install_plugin_from_folder(
     finalize_plugin_install(target, &manifest, &app_handle)
 }
 
+#[cfg(feature = "desktop")]
 /// Core ZIP extraction logic shared by install_plugin_from_zip and install_plugin_from_url.
 fn install_zip_inner(
     zip_path: &std::path::Path,
@@ -821,7 +831,8 @@ fn find_manifest_in_zip(archive: &zip::ZipArchive<std::fs::File>) -> Result<Stri
 // ---------------------------------------------------------------------------
 
 /// Remove a plugin and all its files (including data/).
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub fn uninstall_plugin(id: String, app_handle: AppHandle) -> Result<(), String> {
     if id.is_empty() || is_path_escape(&id) {
         return Err("Invalid plugin ID".into());
@@ -844,6 +855,7 @@ pub fn uninstall_plugin(id: String, app_handle: AppHandle) -> Result<(), String>
 // Plugin directory watcher (hot reload)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "desktop")]
 /// Start watching the plugins directory for changes and emit `plugin-changed`
 /// events to the frontend. Uses the same debouncer pattern as repo_watcher.
 pub fn start_plugin_watcher(app_handle: &AppHandle) {

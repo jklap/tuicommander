@@ -23,7 +23,8 @@ const DEFAULT_LINES: usize = 200;
 ///
 /// Requires the `pty:read` capability. Returns an error if the session does
 /// not exist (closed or never created).
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub async fn plugin_read_session_output(
     session_id: String,
     max_lines: Option<usize>,

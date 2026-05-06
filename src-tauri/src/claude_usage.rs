@@ -15,6 +15,7 @@ use std::io::{BufRead, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[cfg(feature = "desktop")]
 use tauri::State;
 
 // ---------------------------------------------------------------------------
@@ -958,7 +959,8 @@ pub async fn get_claude_usage_api() -> Result<UsageApiResponse, String> {
 /// Returns hourly token usage points aggregated from the session stats cache.
 /// The `scope` parameter filters which projects to include ("all" or a slug).
 /// The `days` parameter limits the time window (default 7).
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub async fn get_claude_usage_timeline(
     state: State<'_, Arc<crate::AppState>>,
     scope: String,
@@ -1013,7 +1015,8 @@ pub async fn get_claude_usage_timeline(
 /// - `"all"` — all projects
 /// - `"current"` — current project (determined from config / active repo)
 /// - Any other string — treated as a specific project slug
-#[cfg_attr(feature = "desktop", tauri::command)]
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub async fn get_claude_session_stats(
     state: State<'_, Arc<crate::AppState>>,
     scope: String,

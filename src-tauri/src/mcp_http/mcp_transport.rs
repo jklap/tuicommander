@@ -1522,12 +1522,12 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
                 agent_type: agent_type_str,
             });
 
-            let print_mode = args["print_mode"].as_bool().unwrap_or(false);
-            let app_handle = state.app_handle.read().clone();
-            if !print_mode {
-                if let Some(ref app) = app_handle {
-                    #[cfg(feature = "desktop")]
-                    {
+            #[cfg(feature = "desktop")]
+            {
+                let print_mode = args["print_mode"].as_bool().unwrap_or(false);
+                let app_handle = state.app_handle.read().clone();
+                if !print_mode {
+                    if let Some(ref app) = app_handle {
                         let agent_type_val = args["agent_type"].as_str();
                         let _ = app.emit("session-created", serde_json::json!({
                             "session_id": session_id,
@@ -2294,29 +2294,36 @@ fn handle_notify(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Val
             serde_json::json!({"ok": true})
         }
         "confirm" => {
-            if !addr.ip().is_loopback() {
-                return serde_json::json!({"error": "Action 'confirm' is restricted to localhost connections"});
+            #[cfg(not(feature = "desktop"))]
+            {
+                return serde_json::json!({"error": "Action 'confirm' requires desktop feature"});
             }
-            let title = match args["title"].as_str() {
-                Some(t) => t.to_string(),
-                None => return serde_json::json!({"error": "Action 'confirm' requires 'title'"}),
-            };
-            let message = args["message"].as_str().unwrap_or("").to_string();
+            #[cfg(feature = "desktop")]
+            {
+                if !addr.ip().is_loopback() {
+                    return serde_json::json!({"error": "Action 'confirm' is restricted to localhost connections"});
+                }
+                let title = match args["title"].as_str() {
+                    Some(t) => t.to_string(),
+                    None => return serde_json::json!({"error": "Action 'confirm' requires 'title'"}),
+                };
+                let message = args["message"].as_str().unwrap_or("").to_string();
 
-            let app_handle = state.app_handle.read();
-            let handle = match app_handle.as_ref() {
-                Some(h) => h,
-                None => return serde_json::json!({"error": "App handle not available (headless mode)"}),
-            };
+                let app_handle = state.app_handle.read();
+                let handle = match app_handle.as_ref() {
+                    Some(h) => h,
+                    None => return serde_json::json!({"error": "App handle not available (headless mode)"}),
+                };
 
-            use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-            let confirmed = handle.dialog()
-                .message(&message)
-                .title(&title)
-                .buttons(MessageDialogButtons::OkCancel)
-                .blocking_show();
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+                let confirmed = handle.dialog()
+                    .message(&message)
+                    .title(&title)
+                    .buttons(MessageDialogButtons::OkCancel)
+                    .blocking_show();
 
-            serde_json::json!({"confirmed": confirmed})
+                serde_json::json!({"confirmed": confirmed})
+            }
         }
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'notify'. Available: {}", other, LEGACY_NOTIFY_ACTIONS
@@ -2720,22 +2727,28 @@ fn handle_debug_unified(state: &Arc<AppState>, addr: SocketAddr, args: &serde_js
     };
     match action {
         "invoke_js" => {
-            if !addr.ip().is_loopback() {
-                return serde_json::json!({"error": "invoke_js is restricted to localhost connections"});
+            #[cfg(not(feature = "desktop"))]
+            {
+                return serde_json::json!({"error": "invoke_js requires desktop feature"});
             }
-            let script = match args["script"].as_str() {
-                Some(s) => s,
-                None => return serde_json::json!({"error": "script required (string)"}),
-            };
-            let app_handle = state.app_handle.read().clone();
-            let Some(handle) = app_handle else {
-                return serde_json::json!({"error": "AppHandle not initialized"});
-            };
-            let Some(window) = handle.get_webview_window("main") else {
-                return serde_json::json!({"error": "main window not found"});
-            };
-            let wrapped = format!(
-                r#"(async () => {{
+            #[cfg(feature = "desktop")]
+            {
+                if !addr.ip().is_loopback() {
+                    return serde_json::json!({"error": "invoke_js is restricted to localhost connections"});
+                }
+                let script = match args["script"].as_str() {
+                    Some(s) => s,
+                    None => return serde_json::json!({"error": "script required (string)"}),
+                };
+                let app_handle = state.app_handle.read().clone();
+                let Some(handle) = app_handle else {
+                    return serde_json::json!({"error": "AppHandle not initialized"});
+                };
+                let Some(window) = handle.get_webview_window("main") else {
+                    return serde_json::json!({"error": "main window not found"});
+                };
+                let wrapped = format!(
+                    r#"(async () => {{
   const __src = "eval_js";
   const __logs = [];
   const __origLog = console.log;
@@ -2763,13 +2776,14 @@ fn handle_debug_unified(state: &Arc<AppState>, addr: SocketAddr, args: &serde_js
     console.error = __origError;
   }}
 }})()"#
-            );
-            match window.eval(&wrapped) {
-                Ok(()) => serde_json::json!({
-                    "ok": true,
-                    "hint": "Result logged with source='eval_js'. Read via: debug(action='logs', source='eval_js', limit=1)"
-                }),
-                Err(e) => serde_json::json!({"error": format!("eval failed: {e}")}),
+                );
+                match window.eval(&wrapped) {
+                    Ok(()) => serde_json::json!({
+                        "ok": true,
+                        "hint": "Result logged with source='eval_js'. Read via: debug(action='logs', source='eval_js', limit=1)"
+                    }),
+                    Err(e) => serde_json::json!({"error": format!("eval failed: {e}")}),
+                }
             }
         }
         "agent_detection" | "logs" | "sessions" => handle_debug(state, args),
