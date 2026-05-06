@@ -2961,9 +2961,11 @@ mod tests {
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(uuid::Uuid::new_v4().to_string()),
+            #[cfg(feature = "desktop")]
             app_handle: parking_lot::RwLock::new(None),
             plugin_watchers: dashmap::DashMap::new(),
             vt_log_buffers: dashmap::DashMap::new(),
+            #[cfg(feature = "desktop")]
             grid_channels: dashmap::DashMap::new(),
             grid_watch: dashmap::DashMap::new(),
             grid_frame_in_flight: dashmap::DashMap::new(),

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter};
 
 // ---------------------------------------------------------------------------
@@ -886,16 +887,14 @@ pub struct AppState {
     /// Browsers auto-send cookies in fetch(), unlike stored Basic Auth credentials.
     /// Behind RwLock so it can be regenerated at runtime (invalidating all sessions).
     pub(crate) session_token: parking_lot::RwLock<String>,
-    /// Tauri AppHandle — stored after setup() so HTTP handlers can emit events.
-    /// None before Tauri initializes (or in headless/test scenarios).
+    #[cfg(feature = "desktop")]
     pub(crate) app_handle: parking_lot::RwLock<Option<AppHandle>>,
     /// Plugin filesystem watchers: watch_id → (plugin_id, watcher)
     pub plugin_watchers: DashMap<String, (String, notify::RecommendedWatcher)>,
     /// Per-session VT100 log buffers for clean mobile/REST output (session_id → buffer).
     /// Separate DashMap to avoid writer contention on PtySession.
     pub(crate) vt_log_buffers: DashMap<String, Mutex<VtLogBuffer>>,
-    /// Active Tauri Channel subscriptions for binary grid streaming (session_id → channel).
-    /// Frontend calls `subscribe_terminal_grid` to register; channel is dropped on session exit.
+    #[cfg(feature = "desktop")]
     pub(crate) grid_channels: DashMap<String, tauri::ipc::Channel<Vec<u8>>>,
     /// Watch channel for WebSocket grid streaming (session_id → sender).
     /// Uses latest-frame-wins semantics: slow WS clients skip intermediate frames.
@@ -1073,6 +1072,7 @@ impl AppState {
         *counter += 1;
         let alias = format!("{prefix}-{}", *counter);
         self.term_aliases.insert(session_id.to_string(), alias.clone());
+        #[cfg(feature = "desktop")]
         if let Some(ref app) = *self.app_handle.read() {
             let _ = app.emit("term-alias-assigned", serde_json::json!({
                 "session_id": session_id,
@@ -2160,9 +2160,11 @@ pub(crate) mod tests_support {
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(String::from("test-token")),
+            #[cfg(feature = "desktop")]
             app_handle: parking_lot::RwLock::new(None),
             plugin_watchers: dashmap::DashMap::new(),
             vt_log_buffers: dashmap::DashMap::new(),
+            #[cfg(feature = "desktop")]
             grid_channels: dashmap::DashMap::new(),
             grid_watch: dashmap::DashMap::new(),
             grid_frame_in_flight: dashmap::DashMap::new(),
@@ -2799,9 +2801,11 @@ mod tests {
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(String::from("test-token")),
+            #[cfg(feature = "desktop")]
             app_handle: parking_lot::RwLock::new(None),
             plugin_watchers: dashmap::DashMap::new(),
             vt_log_buffers: dashmap::DashMap::new(),
+            #[cfg(feature = "desktop")]
             grid_channels: dashmap::DashMap::new(),
             grid_watch: dashmap::DashMap::new(),
             grid_frame_in_flight: dashmap::DashMap::new(),

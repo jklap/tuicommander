@@ -850,9 +850,11 @@ pub fn run() {
         server_shutdown: parking_lot::Mutex::new(None),
         ipc_started: std::sync::atomic::AtomicBool::new(false),
         session_token: parking_lot::RwLock::new(config.session_token.clone()),
+        #[cfg(feature = "desktop")]
         app_handle: parking_lot::RwLock::new(None),
         plugin_watchers: DashMap::new(),
         vt_log_buffers: DashMap::new(),
+        #[cfg(feature = "desktop")]
         grid_channels: DashMap::new(),
         grid_watch: DashMap::new(),
         grid_frame_in_flight: DashMap::new(),
