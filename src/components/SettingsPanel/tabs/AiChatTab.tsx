@@ -241,14 +241,6 @@ export const AiChatTab: Component = () => {
         </p>
       </div>
 
-      {/* ── Experimental ── */}
-      <h3>Experimental</h3>
-
-      <p class={s.hint}>
-        Block enrichment is now configured in the{" "}
-        <strong>Providers</strong> tab (Enrichment slot).
-      </p>
-
       <p class={s.hint} style={{ "margin-top": "16px", color: "var(--fg-muted)" }}>
         Settings are saved automatically when changed
       </p>

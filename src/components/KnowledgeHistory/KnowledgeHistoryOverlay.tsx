@@ -33,7 +33,6 @@ interface HistoryCommand {
   duration_ms: number;
   kind: string;
   error_type: string | null;
-  semantic_intent: string | null;
 }
 
 interface SessionDetail {
@@ -286,9 +285,6 @@ export const KnowledgeHistoryOverlay: Component = () => {
                           </button>
                         </Show>
                       </div>
-                      <Show when={c.semantic_intent}>
-                        <div class={s.intent}>{c.semantic_intent}</div>
-                      </Show>
                       <div class={s.meta}>
                         <span>{formatRelativeTime(c.timestamp)}</span>
                         <Show when={c.exit_code !== null}>

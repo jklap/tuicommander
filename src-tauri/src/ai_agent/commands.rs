@@ -344,9 +344,6 @@ fn scan_sessions(filter: &KnowledgeListFilter, limit: usize) -> Result<Vec<Sessi
             let hit = k.commands.iter().any(|c| {
                 c.command.to_lowercase().contains(n)
                     || c.output_snippet.to_lowercase().contains(n)
-                    || c.semantic_intent
-                        .as_deref()
-                        .is_some_and(|s| s.to_lowercase().contains(n))
                     || match &c.classification {
                         OutcomeClass::Error { error_type } => error_type.to_lowercase().contains(n),
                         _ => false,
@@ -387,7 +384,6 @@ pub(crate) struct HistoryCommand {
     pub duration_ms: u64,
     pub kind: String,
     pub error_type: Option<String>,
-    pub semantic_intent: Option<String>,
 }
 
 #[derive(serde::Serialize, Clone, Debug)]
@@ -449,7 +445,6 @@ fn history_command(c: &super::knowledge::CommandOutcome) -> HistoryCommand {
         duration_ms: c.duration_ms,
         kind: kind.to_string(),
         error_type,
-        semantic_intent: c.semantic_intent.clone(),
     }
 }
 
@@ -555,7 +550,6 @@ mod tests {
                 },
                 duration_ms: 1,
                 id: 0,
-                semantic_intent: None,
             });
         }
         let s = SessionKnowledgeSummary::from_knowledge("s1", &k);

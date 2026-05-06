@@ -16,7 +16,7 @@ export type ModelTier = "economic" | "standard" | "premium";
 
 export type SlotName =
   | "chat" | "agent_mid" | "agent_low"
-  | "agent_high" | "headless" | "enrichment";
+  | "agent_high" | "headless";
 
 export interface ProviderEntry {
   id: string;
@@ -32,9 +32,7 @@ export interface ModelEntry {
   tier: ModelTier;
 }
 
-export interface Features {
-  enrichment_enabled: boolean;
-}
+export interface Features {}
 
 export interface ProviderRegistry {
   schema_version: number;
@@ -61,7 +59,7 @@ function createProviderRegistryStore() {
       providers: [],
       models: [],
       slots: {},
-      features: { enrichment_enabled: false },
+      features: {},
     },
     keyStatus: {},
     loaded: false,
@@ -199,7 +197,7 @@ function createProviderRegistryStore() {
           providers: [],
           models: [],
           slots: {},
-          features: { enrichment_enabled: false },
+          features: {},
         };
         s.keyStatus = {};
         s.loaded = false;

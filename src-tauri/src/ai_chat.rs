@@ -37,11 +37,6 @@ pub(crate) struct AiChatConfig {
     /// Max terminal context lines injected per turn
     #[serde(default = "default_context_lines")]
     pub context_lines: u32,
-    /// Opt-in: enrich completed OSC 133 command blocks with a one-line
-    /// semantic_intent via a cheap LLM call. Off by default — costs tokens
-    /// and leaks command output to the configured provider.
-    #[serde(default)]
-    pub experimental_ai_block_enrichment: bool,
     /// Per-phase model overrides for agent mode. Keys are ToolPhase variants
     /// (plan/search/read/write); values are model identifiers. Phases without
     /// an override use the main `model` field.
@@ -69,7 +64,6 @@ impl Default for AiChatConfig {
             base_url: None,
             temperature: default_temperature(),
             context_lines: default_context_lines(),
-            experimental_ai_block_enrichment: false,
             agent_model_overrides: None,
         }
     }
@@ -1048,7 +1042,6 @@ mod tests {
             base_url: None,
             temperature: 0.5,
             context_lines: 200,
-            experimental_ai_block_enrichment: false,
             agent_model_overrides: None,
         };
         let json = serde_json::to_string(&config).unwrap();
@@ -1068,7 +1061,6 @@ mod tests {
             base_url: Some("https://my-llm.internal/v1/".to_string()),
             temperature: 0.3,
             context_lines: 100,
-            experimental_ai_block_enrichment: false,
             agent_model_overrides: None,
         };
         let json = serde_json::to_string(&config).unwrap();

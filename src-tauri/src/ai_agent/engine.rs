@@ -1052,7 +1052,6 @@ mod tests {
                 },
                 duration_ms: 500,
                 id: 0,
-                semantic_intent: None,
             },
         );
 
@@ -1112,7 +1111,6 @@ mod tests {
                 },
                 duration_ms: 10,
                 id: 0,
-                semantic_intent: None,
             },
         );
 

@@ -81,13 +81,8 @@ pub struct CommandOutcome {
     pub classification: OutcomeClass,
     pub duration_ms: u64,
     /// Monotonic id within the session — assigned by `SessionKnowledge::record`.
-    /// Lets async enrichers reference this outcome without positional indexing.
     #[serde(default)]
     pub id: u64,
-    /// AI-generated one-line goal (opt-in via experimental_ai_block_enrichment).
-    /// `None` = not yet enriched or enrichment disabled.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub semantic_intent: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -126,23 +121,11 @@ impl SessionKnowledge {
         }
     }
 
-    /// Set the semantic_intent on a previously recorded outcome.
-    /// Used by the async enrichment worker. Returns `true` on hit.
-    pub fn set_semantic_intent(&mut self, id: u64, intent: String) -> bool {
-        if let Some(o) = self.commands.iter_mut().find(|o| o.id == id) {
-            o.semantic_intent = Some(intent);
-            true
-        } else {
-            false
-        }
-    }
-
     /// Record a command outcome. Updates cwd history, TUI app set, and
     /// auto-correlates an error→fix pair when this success follows a
     /// recent failure within `FIX_CORRELATION_WINDOW` commands.
     ///
-    /// Returns the monotonic id assigned to the stored outcome so async
-    /// enrichers can later target it via `set_semantic_intent`.
+    /// Returns the monotonic id assigned to the stored outcome.
     pub fn record(&mut self, mut outcome: CommandOutcome) -> u64 {
         // CWD history: dedup adjacent entries.
         if self
@@ -607,7 +590,6 @@ mod persist_tests {
             classification: OutcomeClass::Success,
             duration_ms: 42,
             id: 0,
-            semantic_intent: None,
         }
     }
 
@@ -788,7 +770,6 @@ mod persist_tests {
                 },
                 duration_ms: 500,
                 id: 0,
-                semantic_intent: None,
             },
         );
         state.record_outcome(
@@ -802,7 +783,6 @@ mod persist_tests {
                 classification: OutcomeClass::Success,
                 duration_ms: 400,
                 id: 0,
-                semantic_intent: None,
             },
         );
 
@@ -839,7 +819,6 @@ mod tests {
             classification: class,
             duration_ms: 100,
             id: 0,
-            semantic_intent: None,
         }
     }
 

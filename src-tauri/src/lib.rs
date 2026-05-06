@@ -1486,7 +1486,6 @@ fn spawn_background_tasks(state: &Arc<AppState>) {
     pty::spawn_tombstone_sweeper(state.clone());
     content_index::spawn_content_index_updater(state.clone());
     ai_agent::knowledge::spawn_persist_task(state.clone());
-    ai_agent::enrichment::spawn_worker(state.clone());
     {
         let sched_state = state.clone();
         tokio::spawn(async move {

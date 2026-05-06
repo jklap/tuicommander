@@ -105,14 +105,10 @@ pub(crate) enum SlotName {
     AgentLow,
     AgentHigh,
     Headless,
-    Enrichment,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) struct Features {
-    #[serde(default)]
-    pub enrichment_enabled: bool,
-}
+pub(crate) struct Features {}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ProviderRegistry {
@@ -244,7 +240,6 @@ fn migrate_from_legacy() -> ProviderRegistry {
 
         reg.slots.insert(SlotName::Chat, model_id.clone());
         reg.slots.insert(SlotName::AgentMid, model_id.clone());
-        reg.slots.insert(SlotName::Enrichment, model_id.clone());
 
         if let Ok(Some(key)) = crate::credentials::get(crate::credentials::Credential::AiChatApiKey) {
             let _ = crate::credentials::set(crate::credentials::Credential::Provider(&provider_id), &key);
@@ -271,7 +266,6 @@ fn migrate_from_legacy() -> ProviderRegistry {
             }
         }
 
-        reg.features.enrichment_enabled = chat_cfg.experimental_ai_block_enrichment;
     }
 
     if llm_cfg.is_configured() {
@@ -487,7 +481,6 @@ mod tests {
         assert!(reg.providers.is_empty());
         assert!(reg.models.is_empty());
         assert!(reg.slots.is_empty());
-        assert!(!reg.features.enrichment_enabled);
     }
 
     #[test]
@@ -506,7 +499,6 @@ mod tests {
         let mut slots = HashMap::new();
         slots.insert(SlotName::Chat, "sonnet-4".to_string());
         slots.insert(SlotName::AgentMid, "sonnet-4".to_string());
-        slots.insert(SlotName::Enrichment, "haiku".to_string());
 
         let reg = ProviderRegistry {
             schema_version: 1,
@@ -539,7 +531,7 @@ mod tests {
                 },
             ],
             slots,
-            features: Features { enrichment_enabled: true },
+            features: Features {},
         };
 
         let json = serde_json::to_string_pretty(&reg).unwrap();
@@ -559,8 +551,6 @@ mod tests {
         assert_eq!(loaded.models[1].tier, ModelTier::Economic);
         assert_eq!(loaded.slots.get(&SlotName::Chat), Some(&"sonnet-4".to_string()));
         assert_eq!(loaded.slots.get(&SlotName::AgentMid), Some(&"sonnet-4".to_string()));
-        assert_eq!(loaded.slots.get(&SlotName::Enrichment), Some(&"haiku".to_string()));
-        assert!(loaded.features.enrichment_enabled);
     }
 
     #[test]
@@ -571,7 +561,6 @@ mod tests {
         assert!(loaded.providers.is_empty());
         assert!(loaded.models.is_empty());
         assert!(loaded.slots.is_empty());
-        assert!(!loaded.features.enrichment_enabled);
     }
 
     #[test]
@@ -660,9 +649,8 @@ mod tests {
             (SlotName::AgentLow, "agent_low"),
             (SlotName::AgentHigh, "agent_high"),
             (SlotName::Headless, "headless"),
-            (SlotName::Enrichment, "enrichment"),
         ];
-        assert_eq!(variants.len(), 6, "All 6 slot names must be covered");
+        assert_eq!(variants.len(), 5, "All 5 slot names must be covered");
 
         for (variant, expected_str) in &variants {
             let json = serde_json::to_string(variant).unwrap();
@@ -717,12 +705,6 @@ mod tests {
     }
 
     #[test]
-    fn features_default() {
-        let f = Features::default();
-        assert!(!f.enrichment_enabled);
-    }
-
-    #[test]
     #[serial_test::serial]
     fn load_registry_returns_default_for_missing_file() {
         let dir = tempfile::TempDir::new().unwrap();
@@ -756,7 +738,7 @@ mod tests {
                 tier: ModelTier::Premium,
             }],
             slots,
-            features: Features { enrichment_enabled: true },
+            features: Features {},
         };
 
         save_registry(&reg).unwrap();
@@ -769,7 +751,6 @@ mod tests {
         assert_eq!(loaded.models[0].model_name, "gpt-4o");
         assert_eq!(loaded.models[0].tier, ModelTier::Premium);
         assert_eq!(loaded.slots.get(&SlotName::Chat), Some(&"m1".to_string()));
-        assert!(loaded.features.enrichment_enabled);
     }
 
     // -- resolve_slot tests --
@@ -902,9 +883,9 @@ mod tests {
     #[serial_test::serial]
     fn resolve_slot_ollama_gets_default_base_url() {
         let mut reg = test_registry();
-        reg.slots.insert(SlotName::Enrichment, "llama".to_string());
+        reg.slots.insert(SlotName::Headless, "llama".to_string());
 
-        let resolved = resolve_slot(&reg, SlotName::Enrichment).unwrap();
+        let resolved = resolve_slot(&reg, SlotName::Headless).unwrap();
         assert_eq!(resolved.config.model, "llama3.2");
         assert_eq!(resolved.config.base_url.as_deref(), Some("http://localhost:11434/v1/"));
         assert_eq!(resolved.api_key, "local");
@@ -913,8 +894,9 @@ mod tests {
 
     #[test]
     fn resolve_slot_error_no_slot_configured() {
-        let reg = test_registry();
-        let result = resolve_slot(&reg, SlotName::Enrichment);
+        let mut reg = test_registry();
+        reg.slots.remove(&SlotName::Headless);
+        let result = resolve_slot(&reg, SlotName::Headless);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("No model configured"));
     }
@@ -922,9 +904,9 @@ mod tests {
     #[test]
     fn resolve_slot_error_dangling_model_ref() {
         let mut reg = test_registry();
-        reg.slots.insert(SlotName::Enrichment, "nonexistent".to_string());
+        reg.slots.insert(SlotName::Headless, "nonexistent".to_string());
 
-        let result = resolve_slot(&reg, SlotName::Enrichment);
+        let result = resolve_slot(&reg, SlotName::Headless);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found in registry"));
     }
@@ -938,9 +920,9 @@ mod tests {
             model_name: "orphan-model".to_string(),
             tier: ModelTier::Standard,
         });
-        reg.slots.insert(SlotName::Enrichment, "orphan".to_string());
+        reg.slots.insert(SlotName::Headless, "orphan".to_string());
 
-        let result = resolve_slot(&reg, SlotName::Enrichment);
+        let result = resolve_slot(&reg, SlotName::Headless);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Provider 'deleted-provider' not found"));
     }
@@ -1011,7 +993,7 @@ mod tests {
                 "agent_search": "sonnet",
                 "agent_write": "sonnet"
             },
-            "features": { "enrichment_enabled": false }
+            "features": {}
         });
         let path = dir.path().join(CONFIG_FILE);
         std::fs::write(&path, serde_json::to_string_pretty(&v1_json).unwrap()).unwrap();
@@ -1064,7 +1046,6 @@ mod tests {
             provider: "anthropic".to_string(),
             model: "claude-sonnet-4-5-20241022".to_string(),
             base_url: None,
-            experimental_ai_block_enrichment: true,
             ..crate::ai_chat::AiChatConfig::default()
         };
         write_json(dir.path(), "ai-chat.json", &chat);
@@ -1079,8 +1060,6 @@ mod tests {
         assert_eq!(reg.models[0].model_name, "claude-sonnet-4-5-20241022");
         assert!(reg.slots.contains_key(&SlotName::Chat));
         assert!(reg.slots.contains_key(&SlotName::AgentMid));
-        assert!(reg.slots.contains_key(&SlotName::Enrichment));
-        assert!(reg.features.enrichment_enabled);
 
         let migrated_key = crate::credentials::get(
             crate::credentials::Credential::Provider("anthropic-chat")

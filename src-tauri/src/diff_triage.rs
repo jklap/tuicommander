@@ -1015,10 +1015,10 @@ pub(crate) async fn run_diff_triage(
     let registry = crate::provider_registry::load_registry();
     let resolved_slot = crate::provider_registry::resolve_slot(
         &registry,
-        crate::provider_registry::SlotName::Enrichment,
+        crate::provider_registry::SlotName::AgentMid,
     );
     let resolved = resolved_slot.map_err(|e| {
-        format!("No AI provider configured for triage. Set the Enrichment slot in Settings → Providers. ({e})")
+        format!("No AI provider configured for triage. Set the Agent (mid) slot in Settings → Providers. ({e})")
     })?;
     let model_name_for_session = resolved.config.model.clone();
 

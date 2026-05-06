@@ -15,7 +15,7 @@ const emptyRegistry: ProviderRegistry = {
   providers: [],
   models: [],
   slots: {},
-  features: { enrichment_enabled: false },
+  features: {},
 };
 
 const anthropic: ProviderEntry = {

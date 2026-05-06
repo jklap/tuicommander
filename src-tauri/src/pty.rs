@@ -1090,7 +1090,6 @@ fn record_inferred_outcome_if_no_osc133(state: &AppState, session_id: &str) {
         classification: OutcomeClass::Inferred,
         duration_ms: 0,
         id: 0,
-        semantic_intent: None,
     };
     state.record_outcome(session_id, outcome);
 }
@@ -1452,7 +1451,6 @@ impl ChunkProcessor {
                     classification,
                     duration_ms,
                     id: 0,
-                    semantic_intent: None,
                 };
                 {
                     let entry = state
@@ -1461,11 +1459,7 @@ impl ChunkProcessor {
                         .or_insert_with(|| Mutex::new(SessionKnowledge::new()));
                     entry.lock().terminal_mode = self.terminal_mode.clone();
                 }
-                let snapshot = outcome.clone();
-                let outcome_id = state.record_outcome(session_id, outcome);
-                let mut enriched = snapshot;
-                enriched.id = outcome_id;
-                crate::ai_agent::enrichment::try_enqueue_outcome(session_id, &enriched);
+                state.record_outcome(session_id, outcome);
             }
             _ => {}
         }

@@ -46,7 +46,6 @@ const SLOT_LABELS: Record<SlotName, string> = {
   agent_low:  "Agent (low)",
   agent_high: "Agent (high)",
   headless:   "Headless / Smart Prompts",
-  enrichment: "Enrichment",
 };
 
 const SLOT_DESCRIPTIONS: Record<SlotName, string> = {
@@ -55,7 +54,6 @@ const SLOT_DESCRIPTIONS: Record<SlotName, string> = {
   agent_low:  "Used during agent search and read phases — pick a cheaper/faster model to save costs.",
   agent_high: "Used during agent write phases — pick a higher-quality model for code generation.",
   headless:   "Used by Smart Prompts in API mode for one-shot LLM calls (e.g. commit messages, code review).",
-  enrichment: "Used for AI block enrichment (command intent labels) and diff triage annotations.",
 };
 
 const SLOT_NAMES: SlotName[] = [
@@ -407,38 +405,9 @@ const ProviderCard: Component<{ provider: ProviderEntry }> = (props) => {
 // Slot Assignments
 // ---------------------------------------------------------------------------
 
-interface AiChatConfig {
-  temperature: number;
-  context_lines: number;
-  experimental_ai_block_enrichment: boolean;
-}
-
 const SlotAssignments: Component<{ detection: ReturnType<typeof useAgentDetection> }> = (props) => {
   const allModels = () => providerRegistryStore.state.registry.models;
   const isExternalApi = () => agentConfigsStore.getHeadlessAgent() === "api";
-  const [enrichmentEnabled, setEnrichmentEnabled] = createSignal(false);
-  let cachedConfig: AiChatConfig | null = null;
-
-  onMount(async () => {
-    try {
-      cachedConfig = await invoke<AiChatConfig>("load_ai_chat_config");
-      setEnrichmentEnabled(cachedConfig.experimental_ai_block_enrichment ?? false);
-    } catch {
-      // leave default false
-    }
-  });
-
-  async function toggleEnrichment(enabled: boolean) {
-    setEnrichmentEnabled(enabled);
-    try {
-      if (!cachedConfig) cachedConfig = await invoke<AiChatConfig>("load_ai_chat_config");
-      cachedConfig = { ...cachedConfig, experimental_ai_block_enrichment: enabled };
-      await invoke("save_ai_chat_config", { config: cachedConfig });
-    } catch (e) {
-      appLogger.error("config", "Failed to save enrichment toggle", e);
-      setEnrichmentEnabled(!enabled);
-    }
-  }
 
   function modelLabel(modelId: string): string {
     const model = allModels().find((m) => m.id === modelId);
@@ -617,31 +586,6 @@ const SlotAssignments: Component<{ detection: ReturnType<typeof useAgentDetectio
         </p>
       </div>
 
-      {/* Enrichment — slot + enable toggle */}
-      <div class={s.group} data-testid="slot-row-enrichment">
-        <label>
-          {SLOT_LABELS.enrichment}
-          {" "}
-          <span class={s.infoBadge}>
-            ?
-            <span class={s.infoBadgeTip}>{SLOT_DESCRIPTIONS.enrichment}</span>
-          </span>
-        </label>
-        <div class={s.toggle}>
-          <input
-            type="checkbox"
-            checked={enrichmentEnabled()}
-            onChange={(e) => toggleEnrichment(e.currentTarget.checked)}
-          />
-          <span>Enrich command blocks with AI metadata</span>
-        </div>
-        <Show when={enrichmentEnabled()}>
-          <SlotRow slot="enrichment" showLabel={false} />
-          <p class={s.hint}>
-            Rate-limited to ~10/min. Sends command output to the provider.
-          </p>
-        </Show>
-      </div>
     </div>
   );
 };

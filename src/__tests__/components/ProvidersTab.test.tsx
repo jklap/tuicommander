@@ -23,7 +23,7 @@ const mockStore = vi.hoisted(() => ({
       providers: [] as typeof anthropic[],
       models: [] as typeof sonnet[],
       slots: {} as Record<string, string>,
-      features: { enrichment_enabled: false },
+      features: {},
     },
     keyStatus: {} as Record<string, boolean>,
     loaded: true,
@@ -152,9 +152,9 @@ describe("ProvidersTab", () => {
     expect(getByTestId("slot-assignments")).toBeTruthy();
   });
 
-  it("renders all 6 slot rows", () => {
+  it("renders all 5 slot rows", () => {
     const { getByTestId } = render(() => <ProvidersTab />);
-    for (const slot of ["chat", "agent_mid", "agent_low", "agent_high", "headless", "enrichment"]) {
+    for (const slot of ["chat", "agent_mid", "agent_low", "agent_high", "headless"]) {
       expect(getByTestId(`slot-row-${slot}`)).toBeTruthy();
     }
     for (const slot of ["chat", "agent_mid", "agent_low", "agent_high"]) {
