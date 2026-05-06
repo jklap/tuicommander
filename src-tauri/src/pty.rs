@@ -4,6 +4,7 @@ use serde::Serialize;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+#[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
@@ -2867,6 +2868,7 @@ pub(crate) fn spawn_headless_reader_thread(
 }
 
 /// Create a new PTY session with optional worktree
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn create_pty(
     app: AppHandle,
@@ -3112,6 +3114,7 @@ pub(crate) async fn spawn_session_for_agent(
 }
 
 /// Create a PTY session with a dedicated git worktree
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn create_pty_with_worktree(
     app: AppHandle,
@@ -3251,6 +3254,7 @@ pub(crate) async fn create_pty_with_worktree(
 }
 
 /// List all active worktrees
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn list_worktrees(state: State<'_, Arc<AppState>>) -> Vec<serde_json::Value> {
     state.sessions
@@ -3271,6 +3275,7 @@ pub(crate) fn list_worktrees(state: State<'_, Arc<AppState>>) -> Vec<serde_json:
 }
 
 /// Write data to a PTY session
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn write_pty(
     app: AppHandle,
@@ -3391,6 +3396,7 @@ pub(crate) async fn write_pty(
 
 /// Return the current content of the input line buffer for a PTY session.
 /// Empty string when the user has not started typing.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_input_buffer_content(
     state: State<'_, Arc<AppState>>,
@@ -3404,6 +3410,7 @@ pub(crate) fn get_input_buffer_content(
 }
 
 /// Get the last relevant user prompt (>= 10 words) for a PTY session.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_last_prompt(
     state: State<'_, Arc<AppState>>,
@@ -3415,6 +3422,7 @@ pub(crate) fn get_last_prompt(
 /// Get the current shell state for a PTY session.
 /// Used by the frontend on remount to sync state missed while unsubscribed.
 /// Returns "busy", "idle", or null (session never produced output / removed).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_shell_state(
     state: State<'_, Arc<AppState>>,
@@ -3429,6 +3437,7 @@ pub(crate) fn get_shell_state(
 /// Lets the frontend pick the correct control sequences (e.g. Ctrl-U as
 /// line-kill for POSIX readline vs. literal-char on cmd.exe/PowerShell)
 /// without re-deriving the classification on every keystroke.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_session_shell_family(
     state: State<'_, Arc<AppState>>,
@@ -3442,6 +3451,7 @@ pub(crate) fn get_session_shell_family(
 
 /// Enable or disable VT100 diff rendering for a PTY session.
 /// Resize a PTY session
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn resize_pty(
     state: State<'_, Arc<AppState>>,
@@ -3482,6 +3492,7 @@ pub(crate) fn resize_pty(
 }
 
 /// Pause PTY reader thread (flow control: frontend buffer full)
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn pause_pty(state: State<'_, Arc<AppState>>, session_id: String) -> Result<(), String> {
     let entry = state.sessions
@@ -3494,6 +3505,7 @@ pub(crate) fn pause_pty(state: State<'_, Arc<AppState>>, session_id: String) -> 
 }
 
 /// Resume PTY reader thread (flow control: frontend buffer drained)
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn resume_pty(state: State<'_, Arc<AppState>>, session_id: String) -> Result<(), String> {
     let entry = state.sessions
@@ -3506,6 +3518,7 @@ pub(crate) fn resume_pty(state: State<'_, Arc<AppState>>, session_id: String) ->
 
 /// Query current kitty keyboard protocol flags for a session.
 /// Returns 0 if the session has no kitty state (protocol not activated).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_kitty_flags(
     state: State<'_, Arc<AppState>>,
@@ -3631,6 +3644,7 @@ pub(crate) fn kill_pty_core(state: &AppState, session_id: &str) -> bool {
 /// Close a PTY session with graceful shutdown and optional worktree cleanup.
 /// Sends Ctrl-C (0x03) and waits briefly for the process to exit cleanly
 /// before forcibly dropping handles.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn close_pty(
     state: State<'_, Arc<AppState>>,
@@ -3855,6 +3869,7 @@ pub(crate) fn classify_agent(process_name: &str) -> Option<&'static str> {
 /// recognise (custom aliases, symlinks, wrapper scripts like "C2"), falls back
 /// to the pre-set `session_states.agent_type` so run-config launches are
 /// detected correctly without hardcoding every possible alias.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_session_foreground_process(
     state: State<'_, Arc<AppState>>,
@@ -3923,6 +3938,7 @@ pub(crate) fn get_session_foreground_process(
 /// Check if a PTY session has a non-shell foreground process running.
 /// Returns the process name (e.g. "htop", "node", "claude") or None if
 /// the foreground is the shell itself (zsh, bash, fish, etc.).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn has_foreground_process(
     state: State<'_, Arc<AppState>>,
@@ -3952,6 +3968,7 @@ pub(crate) fn has_foreground_process(
 
 /// Debug: diagnose agent detection for a PTY session.
 /// Returns each step of the detection pipeline so failures can be pinpointed.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn debug_agent_detection(
     state: State<'_, Arc<AppState>>,
@@ -3995,18 +4012,21 @@ pub(crate) fn debug_agent_detection(
 }
 
 /// Get orchestrator stats
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_orchestrator_stats(state: State<'_, Arc<AppState>>) -> OrchestratorStats {
     state.orchestrator_stats()
 }
 
 /// Get PTY session metrics for observability
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn get_session_metrics(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     state.session_metrics_json()
 }
 
 /// Check if we can spawn a new session
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn can_spawn_session(state: State<'_, Arc<AppState>>) -> bool {
     state.sessions.len() < MAX_CONCURRENT_SESSIONS
@@ -4024,6 +4044,7 @@ pub(crate) struct ActiveSessionInfo {
 /// Update the working directory of a running PTY session.
 /// Called from the frontend when an OSC 7 escape sequence is detected,
 /// keeping the Rust-side cwd in sync for restart recovery.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn update_session_cwd(
     state: State<'_, Arc<AppState>>,
@@ -4046,6 +4067,7 @@ pub(crate) fn update_session_cwd(
 }
 
 /// Set the display name of a PTY session (syncs tab title to backend for PWA visibility).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn set_session_name(
     state: State<'_, Arc<AppState>>,
@@ -4061,6 +4083,7 @@ pub(crate) fn set_session_name(
 }
 
 /// List all active PTY sessions for reconnection after frontend reload
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<ActiveSessionInfo> {
     state
@@ -4095,6 +4118,7 @@ pub struct VtLogChunk {
 /// This is the desktop IPC equivalent of the PWA WebSocket `format=log` path.
 /// `lines` are finalized scrollback lines (each appears once, oldest first).
 /// `screen` is the current visible screen with agent chrome trimmed.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn read_vt_log(
     state: State<'_, Arc<AppState>>,
@@ -4150,6 +4174,7 @@ pub(crate) fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>
 /// The frontend calls this once per terminal; subsequent PTY output triggers
 /// `serialize_dirty_rows()` on the session's TerminalGrid and sends the result
 /// via the channel. Replaces any previously registered channel for the session.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn subscribe_terminal_grid(
     state: State<'_, Arc<AppState>>,
@@ -4164,6 +4189,7 @@ pub(crate) fn subscribe_terminal_grid(
 /// Clears the in-flight flag so the PTY reader can send the next frame.
 /// If the VT grid has accumulated dirty rows while in-flight (PTY went idle
 /// before the reader could send another frame), flush them immediately.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn ack_terminal_frame(
     state: State<'_, Arc<AppState>>,
@@ -4188,6 +4214,7 @@ pub(crate) fn ack_terminal_frame(
 }
 
 /// Request a full frame for a session (used after subscribe to get initial state).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_request_frame(
     state: State<'_, Arc<AppState>>,
@@ -4204,6 +4231,7 @@ pub(crate) fn terminal_request_frame(
 }
 
 /// Unregister the grid channel for a session (called by the frontend on unmount).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn unsubscribe_terminal_grid(
     state: State<'_, Arc<AppState>>,
@@ -4216,6 +4244,7 @@ pub(crate) fn unsubscribe_terminal_grid(
 /// Exit alternate screen via the terminal grid (display side only, never touches PTY stdin).
 /// Only injects the exit sequences when the grid is actually in alternate-screen mode,
 /// preventing escape leaks into the shell when the agent already cleaned up normally.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_exit_alt_screen(
     state: State<'_, Arc<AppState>>,
@@ -4241,6 +4270,7 @@ pub(crate) fn terminal_exit_alt_screen(
 
 // --- Scroll commands ---
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_scroll(
     state: State<'_, Arc<AppState>>,
@@ -4257,6 +4287,7 @@ pub(crate) fn terminal_scroll(
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_scroll_to(
     state: State<'_, Arc<AppState>>,
@@ -4273,6 +4304,7 @@ pub(crate) fn terminal_scroll_to(
     }
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_scroll_info(
     state: State<'_, Arc<AppState>>,
@@ -4288,6 +4320,7 @@ pub(crate) fn terminal_scroll_info(
 
 // --- Search command ---
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_search(
     state: State<'_, Arc<AppState>>,
@@ -4299,6 +4332,7 @@ pub(crate) fn terminal_search(
         .unwrap_or_default()
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_search_buffer(
     state: State<'_, Arc<AppState>>,
@@ -4312,6 +4346,7 @@ pub(crate) fn terminal_search_buffer(
 
 // --- Row text command ---
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_get_row_text(
     state: State<'_, Arc<AppState>>,
@@ -4323,6 +4358,7 @@ pub(crate) fn terminal_get_row_text(
         .unwrap_or_default()
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_get_lines(
     state: State<'_, Arc<AppState>>,
@@ -4335,6 +4371,7 @@ pub(crate) fn terminal_get_lines(
         .unwrap_or_default()
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_get_cursor_line(
     state: State<'_, Arc<AppState>>,
@@ -4345,6 +4382,7 @@ pub(crate) fn terminal_get_cursor_line(
         .unwrap_or_default()
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_hyperlink_at(
     state: State<'_, Arc<AppState>>,

@@ -4,6 +4,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+#[cfg(feature = "desktop")]
 use tauri::State;
 
 use crate::git_cli::git_cmd;
@@ -162,6 +163,7 @@ pub(crate) fn get_repo_info_impl(path: &str) -> RepoInfo {
 }
 
 /// Get git repository info for a path (cached, 5s TTL)
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn get_repo_info(state: State<'_, Arc<AppState>>, path: String) -> Result<RepoInfo, String> {
     if let Some(cached) = AppState::get_cached(&state.git_cache.repo_info, &path, GIT_CACHE_TTL) {
@@ -178,7 +180,7 @@ pub(crate) async fn get_repo_info(state: State<'_, Arc<AppState>>, path: String)
 }
 
 /// Get the origin remote URL for a repository (returns None if not a git repo or no remote).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_remote_url(path: String) -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(move || read_remote_url(Path::new(&path)))
         .await
@@ -228,6 +230,7 @@ pub(crate) fn rename_branch_impl(path: &str, old_name: &str, new_name: &str) -> 
 }
 
 /// Rename a git branch (Tauri command with cache invalidation)
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn rename_branch(state: State<'_, Arc<AppState>>, path: String, old_name: String, new_name: String) -> Result<(), String> {
     let state_arc = state.inner().clone();
@@ -288,6 +291,7 @@ pub(crate) fn create_branch_impl(path: &str, name: &str, start_point: Option<&st
 }
 
 /// Create a git branch (Tauri command with cache invalidation)
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn create_branch(state: State<'_, Arc<AppState>>, path: String, name: String, start_point: Option<String>, checkout: bool) -> Result<(), String> {
     let state_arc = state.inner().clone();
@@ -301,7 +305,7 @@ pub(crate) async fn create_branch(state: State<'_, Arc<AppState>>, path: String,
 }
 
 /// Read the stored base ref for a branch (Tauri command).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_branch_base(path: String, branch_name: String) -> Result<Option<String>, String> {
     tokio::task::spawn_blocking(move || crate::worktree::get_branch_base(&path, &branch_name))
         .await
@@ -312,6 +316,7 @@ pub(crate) async fn get_branch_base(path: String, branch_name: String) -> Result
 ///
 /// Reads `branch.<name>.tuicommander-base` from git config, fetches if remote,
 /// then applies the chosen strategy. On conflict, aborts and returns error.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn update_from_base(
     state: State<'_, Arc<AppState>>,
@@ -417,6 +422,7 @@ pub(crate) fn delete_branch_impl(path: &str, name: &str, force: bool) -> Result<
 }
 
 /// Delete a git branch (Tauri command with cache invalidation)
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn delete_branch(state: State<'_, Arc<AppState>>, path: String, name: String, force: bool) -> Result<DeleteBranchResult, String> {
     let state_arc = state.inner().clone();
@@ -438,7 +444,7 @@ pub(crate) struct RecentCommit {
 }
 
 /// Get the N most recent commits
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_recent_commits(path: String, count: Option<u32>) -> Result<Vec<RecentCommit>, String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -485,7 +491,7 @@ fn diff_base_args(scope: &Option<String>) -> Result<Vec<String>, String> {
 }
 
 /// Get git diff for a repository
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_git_diff(path: String, scope: Option<String>) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -575,7 +581,7 @@ fn split_diff_output(output: &str, result: &mut HashMap<String, String>) {
 }
 
 /// Get diff stats (additions/deletions) for a repository
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 /// Sync implementation of diff stats retrieval.
 pub(crate) fn get_diff_stats_impl(path: &str, scope: Option<&str>) -> DiffStats {
     let repo_path = PathBuf::from(path);
@@ -611,7 +617,7 @@ pub(crate) fn get_diff_stats_impl(path: &str, scope: Option<&str>) -> DiffStats 
     DiffStats { additions: 0, deletions: 0 }
 }
 
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_diff_stats(path: String, scope: Option<String>) -> Result<DiffStats, String> {
     tokio::task::spawn_blocking(move || get_diff_stats_impl(&path, scope.as_deref()))
         .await
@@ -619,7 +625,7 @@ pub(crate) async fn get_diff_stats(path: String, scope: Option<String>) -> Resul
 }
 
 /// Get list of changed files with status and stats
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_changed_files(path: String, scope: Option<String>) -> Result<Vec<ChangedFile>, String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -731,7 +737,7 @@ const NULL_DEVICE: &str = "NUL";
 /// Get diff for a single file.
 /// When `untracked` is `Some(true)`, skip the `ls-files` probe and go directly
 /// to `--no-index` diff (the frontend already knows the file status).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_file_diff(path: String, file: String, scope: Option<String>, untracked: Option<bool>) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -817,7 +823,7 @@ pub(crate) fn get_repo_initials(name: &str) -> String {
 }
 
 /// Generate initials from a repository name (Tauri command)
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn get_initials(name: String) -> String {
     get_repo_initials(&name)
 }
@@ -832,7 +838,7 @@ pub(crate) fn is_main_branch(branch_name: &str) -> bool {
 }
 
 /// Check if a branch name is a main/primary branch (Tauri command)
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn check_is_main_branch(branch: String) -> bool {
     is_main_branch(&branch)
 }
@@ -938,6 +944,7 @@ fn packed_ref_exists(git_dir: &Path, ref_name: &str) -> bool {
 }
 
 /// Tauri command: get branches merged into the main branch (cached, 5s TTL)
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn get_merged_branches(
     state: State<'_, Arc<AppState>>,
@@ -1076,6 +1083,7 @@ pub(crate) async fn get_repo_summary_impl(state: &AppState, repo_path: String) -
 }
 
 /// Single IPC replacement for the N+2 calls in refreshAllBranchStats.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn get_repo_summary(
     state: State<'_, Arc<AppState>>,
@@ -1113,6 +1121,7 @@ pub(crate) async fn get_repo_structure_impl(state: &AppState, repo_path: String)
     Ok(RepoStructure { worktree_paths, merged_branches })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn get_repo_structure(
     state: State<'_, Arc<AppState>>,
@@ -1163,6 +1172,7 @@ pub(crate) async fn get_repo_diff_stats_impl(_state: &AppState, repo_path: Strin
     Ok(RepoDiffStats { diff_stats, last_commit_ts })
 }
 
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn get_repo_diff_stats(
     state: State<'_, Arc<AppState>>,
@@ -1172,7 +1182,7 @@ pub(crate) async fn get_repo_diff_stats(
 }
 
 /// Get git branches for a repository (Story 052)
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_git_branches(path: String) -> Result<Vec<serde_json::Value>, String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -1359,6 +1369,7 @@ fn parse_track_value(track: &str, key: &str) -> Option<u32> {
 }
 
 /// Get rich branch details for a repository (cached, 5s TTL).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn get_branches_detail(
     state: State<'_, Arc<AppState>>,
@@ -1413,7 +1424,7 @@ pub(crate) fn get_recent_branches_impl(path: &Path, limit: usize) -> Result<Vec<
 }
 
 /// Get recently checked-out branch names for a repository (most recent first).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_recent_branches(path: String, limit: Option<usize>) -> Result<Vec<String>, String> {
     tokio::task::spawn_blocking(move || get_recent_branches_impl(Path::new(&path), limit.unwrap_or(5)))
         .await
@@ -1577,6 +1588,7 @@ pub(crate) fn get_git_panel_context_impl(path: &Path) -> GitPanelContext {
 }
 
 /// Get rich git panel context in a single IPC call (cached, 5s TTL).
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn get_git_panel_context(
     state: State<'_, Arc<AppState>>,
@@ -1658,6 +1670,7 @@ exit /b 1
 /// Used by the sidebar Git Quick Actions (pull, push, fetch, stash).
 /// Async so network operations (pull/push/fetch) don't block the IPC thread.
 /// Sets SSH_ASKPASS so passphrase prompts show a native GUI dialog.
+#[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn run_git_command(
     state: State<'_, Arc<AppState>>,
@@ -1871,7 +1884,7 @@ pub(crate) fn enrich_with_numstat(repo_path: &Path, entries: &mut [StatusEntry],
 }
 
 /// Get full working tree status from porcelain v2 output.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_working_tree_status(path: String) -> Result<WorkingTreeStatus, String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -1936,7 +1949,7 @@ fn validate_paths_within_repo(repo_path: &Path, files: &[String]) -> Result<(), 
 }
 
 /// Stage files (`git add -- <files>`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn git_stage_files(path: String, files: Vec<String>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -1955,7 +1968,7 @@ pub(crate) async fn git_stage_files(path: String, files: Vec<String>) -> Result<
 }
 
 /// Unstage files (`git restore --staged -- <files>`).
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn git_unstage_files(path: String, files: Vec<String>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -1974,7 +1987,7 @@ pub(crate) async fn git_unstage_files(path: String, files: Vec<String>) -> Resul
 }
 
 /// Discard working tree changes (`git restore -- <files>`). Destructive!
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn git_discard_files(path: String, files: Vec<String>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -2001,7 +2014,7 @@ pub(crate) async fn git_discard_files(path: String, files: Vec<String>) -> Resul
 ///
 /// The `patch` must be a valid unified diff (starting with `diff --git` or `---`).
 /// Pipe the patch via stdin to avoid temp files.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn git_apply_reverse_patch(path: String, patch: String, scope: Option<String>) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -2059,7 +2072,7 @@ pub(crate) async fn git_apply_reverse_patch(path: String, patch: String, scope: 
 // --- git commit ---
 
 /// Commit staged changes and return the new commit hash.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn git_commit(path: String, message: String, amend: Option<bool>) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -2168,7 +2181,7 @@ pub(crate) fn get_commit_log_impl(path: String, count: Option<u32>, after: Optio
 }
 
 /// Get paginated commit log with full metadata.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_commit_log(
     path: String,
     count: Option<u32>,
@@ -2189,7 +2202,7 @@ pub(crate) struct StashEntry {
 }
 
 /// List all stash entries.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_stash_list(path: String) -> Result<Vec<StashEntry>, String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -2249,7 +2262,7 @@ fn validate_stash_ref(stash_ref: &str) -> Result<(), String> {
 }
 
 /// Apply a stash without removing it.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn git_stash_apply(path: String, stash_ref: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -2265,7 +2278,7 @@ pub(crate) async fn git_stash_apply(path: String, stash_ref: String) -> Result<(
 }
 
 /// Apply and remove a stash.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn git_stash_pop(path: String, stash_ref: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -2281,7 +2294,7 @@ pub(crate) async fn git_stash_pop(path: String, stash_ref: String) -> Result<(),
 }
 
 /// Drop (delete) a stash.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn git_stash_drop(path: String, stash_ref: String) -> Result<(), String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -2297,7 +2310,7 @@ pub(crate) async fn git_stash_drop(path: String, stash_ref: String) -> Result<()
 }
 
 /// Show diff for a stash entry.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn git_stash_show(path: String, stash_ref: String) -> Result<String, String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
@@ -2313,7 +2326,7 @@ pub(crate) async fn git_stash_show(path: String, stash_ref: String) -> Result<St
 }
 
 /// Get commit log for a specific file, following renames.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_file_history(
     path: String,
     file: String,
@@ -2428,7 +2441,7 @@ fn parse_blame_porcelain(output: &str) -> Vec<BlameLine> {
 }
 
 /// Get per-line blame information for a file.
-#[tauri::command]
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_file_blame(
     path: String,
     file: String,
