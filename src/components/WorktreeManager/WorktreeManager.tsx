@@ -7,6 +7,7 @@ import { repoSettingsStore } from "../../stores/repoSettings";
 import { githubStore } from "../../stores/github";
 import { formatRelativeTime } from "../../utils/time";
 import type { BranchPrStatus } from "../../types";
+import b from "../shared/branch.module.css";
 import s from "./WorktreeManager.module.css";
 
 /** Row data derived from repo/branch state */
@@ -295,7 +296,9 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
             </Show>
 
             <For each={worktrees()}>
-              {(wt) => (
+              {(wt) => {
+                const label = () => repoSettingsStore.getEffective(wt.repoPath)?.branchLabels?.[wt.branch];
+                return (
                 <div class={`${s.row} ${wt.isMain ? s.mainRow : ""}`}>
                   {/* Col 1: Checkbox */}
                   <Show when={!wt.isMain && selectableIds().length > 1} fallback={<span class={s.checkboxPlaceholder} />}>
@@ -311,10 +314,10 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
                   {/* Col 3: Branch + worktree path */}
                   <div class={s.branchCell}>
                     <span class={s.branch}>
-                      {repoSettingsStore.getEffective(wt.repoPath)?.branchLabels?.[wt.branch] ?? wt.branch}
+                      {label() ?? wt.branch}
                     </span>
-                    <Show when={repoSettingsStore.getEffective(wt.repoPath)?.branchLabels?.[wt.branch]}>
-                      <span class={s.branchSubLabel}>{wt.branch}</span>
+                    <Show when={label()}>
+                      <span class={b.subLabel}>{wt.branch}</span>
                     </Show>
                     <span class={s.worktreePath}>{wt.worktreePath}</span>
                   </div>
@@ -362,7 +365,8 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
                     )}
                   </Show>
                 </div>
-              )}
+                );
+              }}
             </For>
 
             <For each={orphanRows()}>

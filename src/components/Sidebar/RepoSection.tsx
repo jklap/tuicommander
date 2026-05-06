@@ -22,6 +22,7 @@ import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { SidebarPluginSection } from "./SidebarPluginSection";
 import { remoteUrlToGitHub } from "../GitPanel/BranchesTab";
 import { handleOpenUrl } from "../../utils/openUrl";
+import b from "../shared/branch.module.css";
 import s from "./Sidebar.module.css";
 
 const BRANCH_ICON_CLASSES: Record<string, string> = {
@@ -331,7 +332,7 @@ export const BranchItem: Component<{
           {branchLabel() ?? props.branch.name}
         </span>
         <Show when={branchLabel()}>
-          <span class={s.branchSubLabel} title={props.branch.name}>{props.branch.name}</span>
+          <span class={b.subLabel} title={props.branch.name}>{props.branch.name}</span>
         </Show>
       </div>
       <Show when={props.branch.isMerged && !props.branch.isMain && !props.branch.terminals.length && !(props.branch.additions + props.branch.deletions)}>
@@ -640,12 +641,13 @@ export const RepoSection: Component<{
         title="Set Label"
         placeholder="Human-readable name…"
         confirmLabel="Save"
+        maxLength={60}
         defaultValue={labelDialogBranch()?.current ?? ""}
         subtitle={labelDialogBranch()?.name}
         onClose={() => setLabelDialogBranch(null)}
         onConfirm={(label) => {
-          const b = labelDialogBranch();
-          if (b) repoSettingsStore.setLabel(props.repo.path, b.name, label || null);
+          const br = labelDialogBranch();
+          if (br) repoSettingsStore.setLabel(props.repo.path, br.name, label || null);
           setLabelDialogBranch(null);
         }}
       />

@@ -9,6 +9,7 @@ export interface PromptDialogProps {
   placeholder?: string;
   defaultValue?: string;
   confirmLabel?: string;
+  maxLength?: number;
   onClose: () => void;
   onConfirm: (value: string) => void;
 }
@@ -70,6 +71,7 @@ export const PromptDialog: Component<PromptDialogProps> = (props) => {
               value={value()}
               onInput={(e) => setValue((e.target as HTMLInputElement).value)}
               placeholder={props.placeholder ?? ""}
+              maxLength={props.maxLength}
             />
           </div>
           <div class={d.actions}>
