@@ -9,7 +9,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::ai_chat_registry::ChatRegistry;
 use crate::config::{load_json_config, save_json_config};
 use crate::llm_api;
 use crate::state::AppState;
@@ -167,7 +166,22 @@ pub(crate) fn assemble_terminal_context_for_engine(
     session_id: &str,
 ) -> String {
     let ctx = assemble_terminal_context(state, session_id, 150);
-    ctx.to_system_section()
+    let mut section = ctx.to_system_section();
+
+    // Prefer OSC 133 block context; fall back to VtLogBuffer output already in section.
+    if let Some(entry) = state.session_knowledge.get(session_id) {
+        let knowledge = entry.lock();
+        if let Some(block_ctx) = assemble_block_context(&knowledge, DEFAULT_CONTEXT_BUDGET) {
+            // Replace the VtLogBuffer "Recent Terminal Output" with structured blocks.
+            if let Some(pos) = section.find("\n### Recent Terminal Output\n") {
+                section.truncate(pos);
+                section.push('\n');
+            }
+            section.push_str(&block_ctx);
+        }
+    }
+
+    section
 }
 
 /// Quick connection test: first validate the API key, then send a minimal completion.
@@ -361,25 +375,6 @@ pub(crate) fn new_conversation_id() -> String {
 // Streaming chat types
 // ---------------------------------------------------------------------------
 
-/// Token usage summary sent to the frontend at stream end.
-#[derive(Clone, Debug, Default, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ChatUsage {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt_tokens: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub completion_tokens: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cached_tokens: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cache_creation_tokens: Option<i32>,
-    /// Estimated cost in USD, calculated from pricing table. None if model is unknown.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cost_usd: Option<f64>,
-}
-
 /// Per-million-token pricing: (input_usd, output_usd, cached_input_usd).
 /// Cached input price = standard input * cache_discount (typically 0.10 for Anthropic, 0.50 for OpenAI).
 struct ModelPricing {
@@ -443,20 +438,6 @@ pub(crate) fn estimate_cost_usd(
         + completion * pricing.output_per_m)
         / 1_000_000.0;
     Some(cost)
-}
-
-/// Events sent to the frontend via `tauri::ipc::Channel`.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase", tag = "event", content = "data")]
-pub(crate) enum ChatStreamEvent {
-    Chunk { text: String },
-    #[serde(rename_all = "camelCase")]
-    End {
-        full_text: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        usage: Option<ChatUsage>,
-    },
-    Error { message: String },
 }
 
 /// Default context budget in characters (~4K tokens).
@@ -582,6 +563,73 @@ impl TerminalContext {
     }
 }
 
+/// Build structured context from OSC 133 CommandOutcome blocks.
+///
+/// Selects the most recent blocks that fit within `budget` characters.
+/// Returns `None` when no blocks are recorded (caller falls back to VtLogBuffer).
+pub(crate) fn assemble_block_context(
+    knowledge: &crate::ai_agent::knowledge::SessionKnowledge,
+    budget: usize,
+) -> Option<String> {
+    if knowledge.commands.is_empty() {
+        return None;
+    }
+
+    // Collect blocks from most-recent to oldest, respecting the budget.
+    let mut blocks: Vec<String> = Vec::new();
+    let mut used = 0usize;
+
+    for outcome in knowledge.commands.iter().rev() {
+        let block = format_command_block(outcome);
+        if used + block.len() > budget && !blocks.is_empty() {
+            break;
+        }
+        used += block.len();
+        blocks.push(block);
+    }
+
+    if blocks.is_empty() {
+        return None;
+    }
+
+    blocks.reverse();
+    let mut out = String::with_capacity(used + 64);
+    out.push_str("### Recent Commands (OSC 133)\n\n");
+    for block in blocks {
+        out.push_str(&block);
+    }
+    Some(out)
+}
+
+fn format_command_block(outcome: &crate::ai_agent::knowledge::CommandOutcome) -> String {
+    use std::fmt::Write as _;
+
+    let mut s = String::new();
+    let exit = match outcome.exit_code {
+        Some(c) => c.to_string(),
+        None => "?".to_string(),
+    };
+    let _ = writeln!(
+        s,
+        "[cmd: {}] [cwd: {}] [exit: {}] [duration: {}ms]",
+        outcome.command.trim(),
+        outcome.cwd,
+        exit,
+        outcome.duration_ms,
+    );
+    let snippet = outcome.output_snippet.trim();
+    if !snippet.is_empty() {
+        s.push_str("```\n");
+        s.push_str(snippet);
+        if !snippet.ends_with('\n') {
+            s.push('\n');
+        }
+        s.push_str("```\n");
+    }
+    s.push('\n');
+    s
+}
+
 /// Build context from a terminal session's VtLogBuffer and state.
 fn assemble_terminal_context(
     state: &AppState,
@@ -649,313 +697,6 @@ fn assemble_terminal_context(
     }
 
     ctx
-}
-
-const SYSTEM_PROMPT_PREFIX: &str = "\
-You are a terminal assistant embedded in TUICommander. \
-You can see the user's terminal output. Be concise and practical.\n\
-CRITICAL RULES FOR CODE BLOCKS:\n\
-- Every fenced code block gets a ▶ Run button the user clicks to execute it.\n\
-- Put EXACTLY ONE command per code block. Never combine multiple commands in one block.\n\
-- Never put alternative commands in the same block. Each alternative gets its own block.\n\
-- Never put comments (lines starting with #) inside code blocks.\n\
-- Do NOT explain what a command does unless the user asks.\n\
-- Do NOT ask for confirmation. Do NOT ask \"do you want to run this?\".\n\
-- Do NOT offer alternatives unless the user asks. Pick the best command and give it.\n\
-- Do not repeat terminal output back unless highlighting a specific line.";
-
-fn build_system_prompt(ctx: &TerminalContext) -> String {
-    let mut prompt = String::with_capacity(SYSTEM_PROMPT_PREFIX.len() + 256);
-    prompt.push_str(SYSTEM_PROMPT_PREFIX);
-    prompt.push_str("\n\n");
-    prompt.push_str(&ctx.to_system_section());
-    prompt
-}
-
-// ---------------------------------------------------------------------------
-// Cancellation
-// ---------------------------------------------------------------------------
-
-use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::Mutex as TokioMutex;
-
-lazy_static::lazy_static! {
-    static ref ACTIVE_CHATS: TokioMutex<HashMap<String, Arc<AtomicBool>>> =
-        TokioMutex::new(HashMap::new());
-}
-
-// ---------------------------------------------------------------------------
-// Streaming command
-// ---------------------------------------------------------------------------
-
-/// Input message from the frontend.
-#[derive(Debug, Clone, Deserialize)]
-pub(crate) struct StreamChatMessage {
-    pub role: String,
-    pub content: String,
-}
-
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn stream_ai_chat(
-    state: tauri::State<'_, Arc<AppState>>,
-    registry: tauri::State<'_, ChatRegistry>,
-    session_id: String,
-    messages: Vec<StreamChatMessage>,
-    chat_id: String,
-    on_event: tauri::ipc::Channel<ChatStreamEvent>,
-) -> Result<(), String> {
-    let resolved = match crate::provider_registry::resolve_slot(
-        &crate::provider_registry::load_registry(),
-        crate::provider_registry::SlotName::Main,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            let err_msg = format!("AI Chat not configured — {e}");
-            let _ = on_event.send(ChatStreamEvent::Error { message: err_msg.clone() });
-            registry.update_and_notify(&chat_id, |s| { s.set_error(Some(err_msg)); }).await;
-            return Ok(());
-        }
-    };
-
-    let temperature: f32 = load_json_config::<AiChatConfig>(CONFIG_FILE).temperature;
-    // DEFERRED (2026-05-06) — context_lines removed from AiChatConfig.
-    // Will be replaced by OSC 133 block-based context (story 1611-375b).
-    let ctx = assemble_terminal_context(&state, &session_id, 150);
-    let mut system_prompt = build_system_prompt(&ctx);
-    if let Some(section) = crate::ai_agent::context::build_knowledge_section(&state, &session_id) {
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(&section);
-    }
-
-    let llm_config = &resolved.config;
-    let api_key = &resolved.api_key;
-    let client = llm_api::build_client(llm_config, api_key);
-
-    use genai::chat::{CacheControl, ChatMessage as GenaiMessage, ChatOptions, ChatRequest, MessageOptions};
-
-    // System prompt gets cache hint — it's stable across turns
-    let system_msg = GenaiMessage::system(&system_prompt)
-        .with_options(MessageOptions::from(CacheControl::Ephemeral));
-    let mut chat_req = ChatRequest::default().append_message(system_msg);
-
-    for (i, msg) in messages.iter().enumerate() {
-        let is_last_user = i == messages.len() - 1 && msg.role == "user";
-        match msg.role.as_str() {
-            "user" => {
-                let m = GenaiMessage::user(&msg.content);
-                // Mark the last user message as cache breakpoint so the
-                // growing conversation prefix stays cacheable.
-                chat_req = if is_last_user {
-                    chat_req.append_message(
-                        m.with_options(MessageOptions::from(CacheControl::Ephemeral)),
-                    )
-                } else {
-                    chat_req.append_message(m)
-                };
-            }
-            "assistant" => {
-                chat_req = chat_req.append_message(GenaiMessage::assistant(&msg.content))
-            }
-            _ => {}
-        }
-    }
-
-    let chat_options = ChatOptions::default()
-        .with_capture_usage(true)
-        .with_temperature(temperature.into());
-
-    // Set up cancellation
-    let cancelled = Arc::new(AtomicBool::new(false));
-    {
-        let mut active = ACTIVE_CHATS.lock().await;
-        active.insert(chat_id.clone(), cancelled.clone());
-    }
-
-    // Mark streaming start in registry
-    registry.update_and_notify(&chat_id, |s| {
-        s.set_streaming(true);
-        s.set_streaming_text(String::new());
-        s.set_error(None);
-    }).await;
-
-    // Stream
-    let result = stream_with_batching(
-        client,
-        &llm_config.model,
-        chat_req,
-        chat_options,
-        &on_event,
-        &cancelled,
-        &registry,
-        &chat_id,
-    )
-    .await;
-
-    // Cleanup cancellation token
-    {
-        let mut active = ACTIVE_CHATS.lock().await;
-        active.remove(&chat_id);
-    }
-
-    match &result {
-        Ok(full_text) => {
-            let ts = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            let msg = crate::ai_chat_registry::ChatMessage {
-                role: "assistant".to_string(),
-                content: full_text.clone(),
-                timestamp: ts,
-            };
-            registry.update_and_notify(&chat_id, |s| {
-                s.set_streaming(false);
-                s.set_streaming_text(String::new());
-                s.push_message(msg);
-            }).await;
-        }
-        Err(e) => {
-            let err_msg = e.clone();
-            let _ = on_event.send(ChatStreamEvent::Error {
-                message: err_msg.clone(),
-            });
-            registry.update_and_notify(&chat_id, |s| {
-                s.set_streaming(false);
-                s.set_error(Some(err_msg));
-            }).await;
-        }
-    }
-
-    Ok(())
-}
-
-#[cfg(feature = "desktop")]
-/// Stream LLM response with ~50ms chunk batching to avoid IPC saturation.
-/// Returns the full response text on success.
-#[allow(clippy::too_many_arguments)]
-async fn stream_with_batching(
-    client: genai::Client,
-    model: &str,
-    chat_req: genai::chat::ChatRequest,
-    chat_options: genai::chat::ChatOptions,
-    on_event: &tauri::ipc::Channel<ChatStreamEvent>,
-    cancelled: &AtomicBool,
-    registry: &ChatRegistry,
-    chat_id: &str,
-) -> Result<String, String> {
-    use futures_util::StreamExt;
-    use genai::chat::ChatStreamEvent as GenaiStreamEvent;
-
-    let stream_resp = client
-        .exec_chat_stream(model, chat_req, Some(&chat_options))
-        .await
-        .map_err(|e| format!("Failed to start stream: {e}"))?;
-
-    let mut stream = stream_resp.stream;
-    let mut full_text = String::new();
-    let mut batch_buf = String::new();
-    let mut interval = tokio::time::interval(Duration::from_millis(50));
-    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    loop {
-        // Check cancellation at top of each iteration
-        if cancelled.load(Ordering::Relaxed) {
-            if !batch_buf.is_empty() {
-                let _ = on_event.send(ChatStreamEvent::Chunk { text: batch_buf.clone() });
-                registry.append_streaming_chunk(chat_id, &batch_buf).await;
-                full_text.push_str(&batch_buf);
-            }
-            let _ = on_event.send(ChatStreamEvent::End { full_text: full_text.clone(), usage: None });
-            return Ok(full_text);
-        }
-
-        tokio::select! {
-            _ = interval.tick() => {
-                if !batch_buf.is_empty() {
-                    let _ = on_event.send(ChatStreamEvent::Chunk { text: batch_buf.clone() });
-                    registry.append_streaming_chunk(chat_id, &batch_buf).await;
-                    full_text.push_str(&batch_buf);
-                    batch_buf.clear();
-                }
-            }
-            event = stream.next() => {
-                match event {
-                    Some(Ok(GenaiStreamEvent::Chunk(chunk))) => {
-                        batch_buf.push_str(&chunk.content);
-                    }
-                    Some(Ok(GenaiStreamEvent::End(end))) => {
-                        if !batch_buf.is_empty() {
-                            let _ = on_event.send(ChatStreamEvent::Chunk { text: batch_buf.clone() });
-                            registry.append_streaming_chunk(chat_id, &batch_buf).await;
-                            full_text.push_str(&batch_buf);
-                        }
-                        let usage = end.captured_usage.map(|u| {
-                            let details = u.prompt_tokens_details.as_ref();
-                            let cached = details.and_then(|d| d.cached_tokens);
-                            let cache_creation = details.and_then(|d| d.cache_creation_tokens);
-                            if cached.is_some() || cache_creation.is_some() {
-                                tracing::info!(
-                                    prompt = u.prompt_tokens,
-                                    completion = u.completion_tokens,
-                                    cached = cached,
-                                    cache_creation = cache_creation,
-                                    "AI chat usage (cache active)"
-                                );
-                            } else {
-                                tracing::debug!(
-                                    prompt = u.prompt_tokens,
-                                    completion = u.completion_tokens,
-                                    "AI chat usage"
-                                );
-                            }
-                            let cost_usd = estimate_cost_usd(model, u.prompt_tokens, u.completion_tokens, cached);
-                            ChatUsage {
-                                prompt_tokens: u.prompt_tokens,
-                                completion_tokens: u.completion_tokens,
-                                total_tokens: match (u.prompt_tokens, u.completion_tokens) {
-                                    (Some(p), Some(c)) => Some(p + c),
-                                    _ => None,
-                                },
-                                cached_tokens: cached,
-                                cache_creation_tokens: cache_creation,
-                                cost_usd,
-                            }
-                        });
-                        let _ = on_event.send(ChatStreamEvent::End { full_text: full_text.clone(), usage });
-                        return Ok(full_text);
-                    }
-                    Some(Err(e)) => {
-                        if !batch_buf.is_empty() {
-                            let _ = on_event.send(ChatStreamEvent::Chunk { text: batch_buf.clone() });
-                            registry.append_streaming_chunk(chat_id, &batch_buf).await;
-                            full_text.push_str(&batch_buf);
-                        }
-                        return Err(format!("Stream error: {e}"));
-                    }
-                    None => {
-                        if !batch_buf.is_empty() {
-                            let _ = on_event.send(ChatStreamEvent::Chunk { text: batch_buf.clone() });
-                            registry.append_streaming_chunk(chat_id, &batch_buf).await;
-                            full_text.push_str(&batch_buf);
-                        }
-                        let _ = on_event.send(ChatStreamEvent::End { full_text: full_text.clone(), usage: None });
-                        return Ok(full_text);
-                    }
-                    _ => {} // Start, ReasoningChunk, etc.
-                }
-            }
-        }
-    }
-}
-
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn cancel_ai_chat(chat_id: String) -> Result<(), String> {
-    let active = ACTIVE_CHATS.lock().await;
-    if let Some(flag) = active.get(&chat_id) {
-        flag.store(true, Ordering::Relaxed);
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1370,52 +1111,6 @@ mod tests {
         assert_eq!(result, "abcde");
     }
 
-    // -- ChatStreamEvent serialization tests --
-
-    #[test]
-    fn chat_stream_event_chunk_serializes() {
-        let event = ChatStreamEvent::Chunk { text: "hello".to_string() };
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains(r#""event":"chunk""#), "json: {json}");
-        assert!(json.contains("hello"), "json: {json}");
-    }
-
-    #[test]
-    fn chat_stream_event_end_serializes() {
-        let event = ChatStreamEvent::End { full_text: "full response".to_string(), usage: None };
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains(r#""event":"end""#), "json: {json}");
-        assert!(json.contains(r#""fullText""#), "field must be camelCase: {json}");
-        assert!(json.contains("full response"), "json: {json}");
-    }
-
-    #[test]
-    fn chat_stream_event_end_with_usage_serializes() {
-        let event = ChatStreamEvent::End {
-            full_text: "ok".to_string(),
-            usage: Some(ChatUsage {
-                prompt_tokens: Some(100),
-                completion_tokens: Some(50),
-                total_tokens: Some(150),
-                cached_tokens: Some(80),
-                cache_creation_tokens: None,
-                cost_usd: None,
-            }),
-        };
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains(r#""cachedTokens":80"#), "cachedTokens camelCase: {json}");
-        assert!(json.contains(r#""promptTokens":100"#), "promptTokens camelCase: {json}");
-        assert!(!json.contains("cacheCreationTokens"), "None fields should be skipped: {json}");
-    }
-
-    #[test]
-    fn chat_stream_event_error_serializes() {
-        let event = ChatStreamEvent::Error { message: "connection failed".to_string() };
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains(r#""event":"error""#), "json: {json}");
-        assert!(json.contains("connection failed"), "json: {json}");
-    }
-
     // -- Context assembly tests --
 
     #[test]
@@ -1474,29 +1169,6 @@ mod tests {
         assert!(section.contains("Awaiting user input"));
     }
 
-    #[test]
-    fn build_system_prompt_includes_prefix_and_context() {
-        let ctx = TerminalContext {
-            terminal_output: "$ ls\nfile.rs".to_string(),
-            shell_state: Some("idle".to_string()),
-            ..Default::default()
-        };
-        let prompt = build_system_prompt(&ctx);
-        assert!(prompt.starts_with("You are a terminal assistant"));
-        assert!(prompt.contains("## Terminal Context"));
-        assert!(prompt.contains("file.rs"));
-    }
-
-    // -- StreamChatMessage deserialization --
-
-    #[test]
-    fn stream_chat_message_deserializes() {
-        let json = r#"{"role":"user","content":"explain this error"}"#;
-        let msg: StreamChatMessage = serde_json::from_str(json).unwrap();
-        assert_eq!(msg.role, "user");
-        assert_eq!(msg.content, "explain this error");
-    }
-
     // -- Cost estimation --
 
     #[test]
@@ -1522,17 +1194,86 @@ mod tests {
         assert!(cost.is_none());
     }
 
-    #[test]
-    fn estimate_cost_serializes_in_usage() {
-        let usage = ChatUsage {
-            prompt_tokens: Some(100),
-            completion_tokens: Some(50),
-            total_tokens: Some(150),
-            cached_tokens: None,
-            cache_creation_tokens: None,
-            cost_usd: Some(0.001),
-        };
-        let json = serde_json::to_string(&usage).unwrap();
-        assert!(json.contains(r#""costUsd":0.001"#), "json: {json}");
+    // ── assemble_block_context ────────────────────────────────────────
+
+    fn make_outcome(cmd: &str, cwd: &str, exit_code: Option<i32>, output: &str, duration_ms: u64)
+        -> crate::ai_agent::knowledge::CommandOutcome
+    {
+        crate::ai_agent::knowledge::CommandOutcome {
+            timestamp: 0,
+            command: cmd.into(),
+            cwd: cwd.into(),
+            exit_code,
+            output_snippet: output.into(),
+            classification: crate::ai_agent::knowledge::OutcomeClass::Success,
+            duration_ms,
+            id: 0,
+        }
     }
+
+    #[test]
+    fn block_context_empty_when_no_commands() {
+        let k = crate::ai_agent::knowledge::SessionKnowledge::new();
+        assert!(assemble_block_context(&k, 16_000).is_none());
+    }
+
+    #[test]
+    fn block_context_contains_command_fields() {
+        let mut k = crate::ai_agent::knowledge::SessionKnowledge::new();
+        k.commands.push_back(make_outcome("cargo test", "/repo", Some(0), "test passed", 120));
+        let out = assemble_block_context(&k, 16_000).unwrap();
+        assert!(out.contains("[cmd: cargo test]"));
+        assert!(out.contains("[cwd: /repo]"));
+        assert!(out.contains("[exit: 0]"));
+        assert!(out.contains("[duration: 120ms]"));
+        assert!(out.contains("test passed"));
+    }
+
+    #[test]
+    fn block_context_no_exit_code_shows_question_mark() {
+        let mut k = crate::ai_agent::knowledge::SessionKnowledge::new();
+        k.commands.push_back(make_outcome("sleep 10", "/", None, "", 0));
+        let out = assemble_block_context(&k, 16_000).unwrap();
+        assert!(out.contains("[exit: ?]"));
+    }
+
+    #[test]
+    fn block_context_most_recent_last_in_output() {
+        let mut k = crate::ai_agent::knowledge::SessionKnowledge::new();
+        k.commands.push_back(make_outcome("first", "/", Some(0), "", 1));
+        k.commands.push_back(make_outcome("second", "/", Some(0), "", 2));
+        let out = assemble_block_context(&k, 16_000).unwrap();
+        let pos_first = out.find("first").unwrap();
+        let pos_second = out.find("second").unwrap();
+        assert!(pos_first < pos_second, "oldest command should appear before newest");
+    }
+
+    #[test]
+    fn block_context_respects_budget() {
+        let mut k = crate::ai_agent::knowledge::SessionKnowledge::new();
+        // Add many large blocks
+        for i in 0..50 {
+            k.commands.push_back(make_outcome(
+                &format!("cmd-{i}"),
+                "/",
+                Some(0),
+                &"x".repeat(500),
+                10,
+            ));
+        }
+        let budget = 5_000;
+        let out = assemble_block_context(&k, budget).unwrap();
+        assert!(out.len() <= budget + 200, "output should stay near budget");
+        // Most recent commands should be present
+        assert!(out.contains("cmd-49"));
+    }
+
+    #[test]
+    fn block_context_empty_snippet_omits_code_block() {
+        let mut k = crate::ai_agent::knowledge::SessionKnowledge::new();
+        k.commands.push_back(make_outcome("ls", "/", Some(0), "", 5));
+        let out = assemble_block_context(&k, 16_000).unwrap();
+        assert!(!out.contains("```"), "no code fence for empty output");
+    }
+
 }
