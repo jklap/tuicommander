@@ -1152,6 +1152,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     if (currentFrame) { const m = metrics(); if (m) repaintOverlay(currentFrame, m); }
   }
 
+  let inertiaRaf = 0;
+
   onMount(async () => {
     const baseCtx = canvasRef.getContext("2d", { alpha: false });
     const overlayCtx = overlayCanvasRef.getContext("2d");
@@ -1555,10 +1557,42 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       }
     });
 
-    // --- Scroll ---
+    // --- Scroll (acceleration + inertia) ---
+    let scrollVelocity = 0;
+    let lastWheelTime = 0;
+    let residualLines = 0;
+    const ACCEL_WINDOW = 120;
+    const ACCEL_SCALE = 0.15;
+    const ACCEL_MAX = 8;
+    const INERTIA_DECAY = 0.88;
+    const INERTIA_MIN = 0.3;
+
     function resetScrollGesture() {
       scrollAccumPx = 0;
       scrollGestureDistPx = 0;
+    }
+
+    function applyScrollDelta(linesDelta: number) {
+      const rounded = Math.trunc(linesDelta);
+      residualLines += linesDelta - rounded;
+      let extra = Math.trunc(residualLines);
+      residualLines -= extra;
+      const total = rounded + extra;
+      if (total !== 0) {
+        invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta: -total }).catch(ipcErr("terminal_scroll"));
+      }
+    }
+
+    function tickInertia() {
+      inertiaRaf = 0;
+      if (Math.abs(scrollVelocity) < INERTIA_MIN) {
+        scrollVelocity = 0;
+        residualLines = 0;
+        return;
+      }
+      applyScrollDelta(scrollVelocity);
+      scrollVelocity *= INERTIA_DECAY;
+      inertiaRaf = requestAnimationFrame(tickInertia);
     }
 
     function handleWheel(e: WheelEvent) {
@@ -1571,36 +1605,21 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         return;
       }
       const m = metrics();
-      const ch = m?.cellHeight ?? 20;
-      const screenPx = ch * (lastResizeRows || 24);
+      const rawLines = m ? e.deltaY / m.cellHeight : Math.sign(e.deltaY);
+      const now = performance.now();
+      const dt = now - lastWheelTime;
+      lastWheelTime = now;
 
-      // Boundary check: don't accumulate past scroll limits
-      const dy = e.deltaY;
-      const atBottom = currentFrame && currentFrame.displayOffset === 0;
-      const atTop = currentFrame && currentFrame.displayOffset >= currentFrame.historySize;
-      if ((atBottom && dy > 0) || (atTop && dy < 0)) {
-        // Can't scroll further in this direction — ignore
-        return;
+      if (dt < ACCEL_WINDOW && Math.sign(rawLines) === Math.sign(scrollVelocity)) {
+        const boost = Math.min(Math.abs(scrollVelocity) * ACCEL_SCALE, ACCEL_MAX);
+        scrollVelocity = rawLines + Math.sign(rawLines) * boost;
+      } else {
+        scrollVelocity = rawLines;
       }
 
-      // Accumulate pixel delta with progressive acceleration:
-      // First screenful of gesture distance uses 0.5× factor (damped),
-      // then linearly ramps up beyond that.
-      scrollGestureDistPx += Math.abs(dy);
-      const excess = Math.max(0, scrollGestureDistPx - screenPx);
-      const factor = 0.5 + 0.5 * (excess / screenPx);
-      scrollAccumPx += dy * factor;
-
-      const lines = Math.trunc(scrollAccumPx / ch);
-      if (lines !== 0) {
-        scrollAccumPx -= lines * ch;
-        invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta: -lines }).catch(ipcErr("terminal_scroll"));
-      }
-
-
-      // Reset gesture state after trackpad inactivity
-      clearTimeout(scrollGestureEndTimer);
-      scrollGestureEndTimer = setTimeout(resetScrollGesture, 200);
+      if (inertiaRaf) { cancelAnimationFrame(inertiaRaf); inertiaRaf = 0; }
+      applyScrollDelta(scrollVelocity);
+      inertiaRaf = requestAnimationFrame(tickInertia);
     }
     canvasRef.addEventListener("wheel", handleWheel, { passive: false });
     scrollbarRef.addEventListener("wheel", handleWheel, { passive: false });
@@ -1817,6 +1836,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     alive = false;
     stopBlink();
     if (rafId !== undefined) { cancelAnimationFrame(rafId); rafId = undefined; }
+    if (inertiaRaf) { cancelAnimationFrame(inertiaRaf); inertiaRaf = 0; }
     clearTimeout(resizeDebounce);
     resizeObserver?.disconnect();
     visibilityObserver?.disconnect();
