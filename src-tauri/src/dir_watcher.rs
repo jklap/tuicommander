@@ -37,7 +37,12 @@ pub(crate) fn start_watching(
     #[cfg(feature = "desktop")]
     let handle = state.app_handle.read().clone();
     let event_bus = state.event_bus.clone();
-    let rt = tokio::runtime::Handle::current();
+    let rt = {
+        #[cfg(feature = "desktop")]
+        { tauri::async_runtime::handle().inner().clone() }
+        #[cfg(not(feature = "desktop"))]
+        { tokio::runtime::Handle::current() }
+    };
     let pending: Arc<Mutex<Option<tokio::task::AbortHandle>>> = Arc::new(Mutex::new(None));
 
     let mut watcher = notify::recommended_watcher(

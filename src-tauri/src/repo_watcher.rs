@@ -210,9 +210,13 @@ pub(crate) fn start_watching(
     let handle = state.app_handle.read().clone();
     let event_bus = state.event_bus.clone();
     let state_cb = Arc::clone(state);
-    let emitter = Arc::new(CategoryEmitter::new(
-        tokio::runtime::Handle::current(),
-    ));
+    let rt_handle = {
+        #[cfg(feature = "desktop")]
+        { tauri::async_runtime::handle().inner().clone() }
+        #[cfg(not(feature = "desktop"))]
+        { tokio::runtime::Handle::current() }
+    };
+    let emitter = Arc::new(CategoryEmitter::new(rt_handle));
 
     let repo_for_cb = repo.clone();
     let git_dir_for_cb = git_dir.clone();
