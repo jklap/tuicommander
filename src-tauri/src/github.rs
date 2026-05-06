@@ -414,7 +414,7 @@ pub(crate) struct GitHubStatus {
 }
 
 /// Summary of CI check states for a PR
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, PartialEq)]
 pub(crate) struct CheckSummary {
     pub(crate) passed: u32,
     pub(crate) failed: u32,

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
@@ -98,6 +98,11 @@ const DEBOUNCE_WINDOW: Duration = Duration::from_secs(2);
 const RATE_BUDGET_LOW: u32 = 500;
 /// Proactive throttle: pause at MAX_INTERVAL when critically low on budget.
 const RATE_BUDGET_CRITICAL: u32 = 100;
+/// Repos with PR changes within this window are polled every tick.
+/// Repos idle longer are polled every IDLE_POLL_DIVISOR ticks.
+const ACTIVE_WINDOW: Duration = Duration::from_secs(15 * 60);
+/// Idle repos are included every Nth poll cycle.
+const IDLE_POLL_DIVISOR: u32 = 5;
 
 pub(crate) enum PollerCmd {
     SetVisibility(bool),
@@ -133,6 +138,8 @@ async fn poll_loop(
     let mut prev: PrevState = HashMap::new();
     let mut fail_count: u32 = 0;
     let mut startup = true;
+    let mut poll_cycle: u32 = 0;
+    let mut last_changed: HashMap<String, Instant> = HashMap::new();
     // Pending on-demand poll: set by PollRepo/SetIssueFilter to fire the batch
     // early rather than spawning a separate single-repo API call.
     let mut pending_poll_at: Option<tokio::time::Instant> = None;
@@ -153,16 +160,21 @@ async fn poll_loop(
             _ = pending_sleep => {
                 pending_poll_at = None;
                 let rate_budget = state.github_rate_limit_remaining.load(std::sync::atomic::Ordering::Relaxed);
-                poll_batch(&state, &handle, &paths, false, &issue_filter, &mut prev, &mut fail_count).await;
-                // Reset the periodic interval so the next scheduled tick is a full interval away.
+                poll_batch(&state, &handle, &paths, false, &issue_filter, &mut prev, &mut fail_count, &mut last_changed).await;
                 interval = tokio::time::interval(current_interval(visible, fail_count, rate_budget));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             }
             _ = interval.tick() => {
                 let rate_budget = state.github_rate_limit_remaining.load(std::sync::atomic::Ordering::Relaxed);
-                poll_batch(&state, &handle, &paths, startup, &issue_filter, &mut prev, &mut fail_count).await;
+                let batch_paths = if startup {
+                    paths.clone()
+                } else {
+                    tiered_paths(&paths, &last_changed, poll_cycle)
+                };
+                poll_batch(&state, &handle, &batch_paths, startup, &issue_filter, &mut prev, &mut fail_count, &mut last_changed).await;
                 startup = false;
-                pending_poll_at = None; // Periodic tick covers any pending request too
+                poll_cycle = poll_cycle.wrapping_add(1);
+                pending_poll_at = None;
                 interval = tokio::time::interval(current_interval(visible, fail_count, rate_budget));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             }
@@ -201,6 +213,30 @@ async fn poll_loop(
     }
 }
 
+/// Select which repos to include in this poll cycle.
+/// Active repos (PR data changed within ACTIVE_WINDOW) are polled every tick.
+/// Idle repos are polled every IDLE_POLL_DIVISOR ticks.
+/// Repos never seen yet are always included (ensures first fetch).
+fn tiered_paths(
+    all_paths: &[String],
+    last_changed: &HashMap<String, Instant>,
+    cycle: u32,
+) -> Vec<String> {
+    let now = Instant::now();
+    all_paths.iter().filter(|p| {
+        match last_changed.get(p.as_str()) {
+            None => true,
+            Some(t) => {
+                if now.duration_since(*t) < ACTIVE_WINDOW {
+                    true
+                } else {
+                    cycle % IDLE_POLL_DIVISOR == 0
+                }
+            }
+        }
+    }).cloned().collect()
+}
+
 /// Compute the next poll interval based on visibility, failure count, and rate-limit budget.
 fn current_interval(visible: bool, fail_count: u32, rate_budget: u32) -> Duration {
     if !visible {
@@ -231,6 +267,7 @@ async fn poll_batch(
     issue_filter: &str,
     prev: &mut PrevState,
     fail_count: &mut u32,
+    last_changed: &mut HashMap<String, Instant>,
 ) {
     if paths.is_empty() { return; }
     if state.github_circuit_breaker.check().is_err() { return; }
@@ -238,10 +275,15 @@ async fn poll_batch(
     match crate::github::get_all_batch_impl(paths, include_merged, issue_filter, state).await {
         Ok(result) => {
             *fail_count = 0;
+            let now = Instant::now();
 
-            // Emit PR updates + detect transitions
             for (repo_path, statuses) in &result.prs {
-                process_repo_update(state, handle, repo_path, statuses, prev);
+                let changed = process_repo_update(state, handle, repo_path, statuses, prev);
+                if changed {
+                    last_changed.insert(repo_path.clone(), now);
+                } else {
+                    last_changed.entry(repo_path.clone()).or_insert(now);
+                }
             }
             for (repo_path, statuses) in result.prs {
                 let _ = handle.emit("github-pr-update", PrUpdatePayload {
@@ -251,7 +293,6 @@ async fn poll_batch(
                 let _ = state.event_bus.send(AppEvent::GitHubPrUpdate { repo_path, statuses });
             }
 
-            // Emit issue updates
             for (repo_path, issues) in result.issues {
                 let _ = handle.emit("github-issues-update", IssuesUpdatePayload {
                     repo_path: repo_path.clone(),
@@ -270,24 +311,37 @@ async fn poll_batch(
     }
 }
 
+/// Process PR updates for a single repo. Returns `true` if any PR data changed.
 fn process_repo_update(
     state: &AppState,
     handle: &AppHandle,
     repo_path: &str,
     statuses: &[BranchPrStatus],
     prev: &mut PrevState,
-) {
+) -> bool {
     let old_map = prev.entry(repo_path.to_string()).or_default();
+    let mut changed = false;
     for new_pr in statuses {
-        if let Some(old_pr) = old_map.get(&new_pr.branch) {
+        let is_new = if let Some(old_pr) = old_map.get(&new_pr.branch) {
             let transitions = detect_transitions(repo_path, old_pr, new_pr);
+            if !transitions.is_empty() {
+                changed = true;
+            }
             for t in transitions {
                 let _ = handle.emit("github-transition", &t);
                 let _ = state.event_bus.send(AppEvent::GitHubTransition { transition: t });
             }
-        }
+            old_pr.updated_at != new_pr.updated_at
+                || old_pr.checks != new_pr.checks
+                || old_pr.state != new_pr.state
+        } else {
+            true
+        };
+        if is_new { changed = true; }
         old_map.insert(new_pr.branch.clone(), new_pr.clone());
     }
+    if old_map.len() != statuses.len() { changed = true; }
+    changed
 }
 
 // ---------------------------------------------------------------------------
