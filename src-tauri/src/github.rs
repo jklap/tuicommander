@@ -1463,9 +1463,8 @@ pub(crate) async fn filter_changed_repos(
     };
 
     let client = &state.http_client;
-    let mut changed = Vec::new();
 
-    for (path, owner, name) in repos {
+    let futures: Vec<_> = repos.iter().map(|(path, owner, name)| {
         let url = format!("https://api.github.com/repos/{owner}/{name}/pulls?state=open&sort=updated&direction=desc&per_page=1");
         let mut req = client.get(&url)
             .header("Authorization", format!("Bearer {token}"))
@@ -1477,7 +1476,16 @@ pub(crate) async fn filter_changed_repos(
             req = req.header("If-None-Match", etag.as_str());
         }
 
-        match req.send().await {
+        let path = path.clone();
+        let owner = owner.clone();
+        let name = name.clone();
+        async move { (req.send().await, path, owner, name, cache_key) }
+    }).collect();
+
+    let results = futures_util::future::join_all(futures).await;
+    let mut changed = Vec::new();
+    for (result, path, owner, name, cache_key) in results {
+        match result {
             Ok(resp) => {
                 if resp.status().as_u16() == 304 {
                     continue;
@@ -1485,10 +1493,11 @@ pub(crate) async fn filter_changed_repos(
                 if let Some(etag) = resp.headers().get("etag").and_then(|v| v.to_str().ok()) {
                     etag_cache.insert(cache_key, etag.to_string());
                 }
-                changed.push((path.clone(), owner.clone(), name.clone()));
+                changed.push((path, owner, name));
             }
-            Err(_) => {
-                changed.push((path.clone(), owner.clone(), name.clone()));
+            Err(e) => {
+                tracing::debug!("ETag check failed for {owner}/{name}: {e}");
+                changed.push((path, owner, name));
             }
         }
     }

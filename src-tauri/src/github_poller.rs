@@ -127,6 +127,13 @@ impl GitHubPoller {
 /// Per-repo previous PR state for transition comparison.
 type PrevState = HashMap<String, HashMap<String, BranchPrStatus>>;
 
+struct PollMutableState {
+    prev: PrevState,
+    fail_count: u32,
+    last_changed: HashMap<String, Instant>,
+    etag_cache: HashMap<String, String>,
+}
+
 async fn poll_loop(
     state: Arc<AppState>,
     handle: AppHandle,
@@ -135,17 +142,19 @@ async fn poll_loop(
     let mut visible = true;
     let mut paths: Vec<String> = Vec::new();
     let mut issue_filter = String::new();
-    let mut prev: PrevState = HashMap::new();
-    let mut fail_count: u32 = 0;
+    let mut ps = PollMutableState {
+        prev: HashMap::new(),
+        fail_count: 0,
+        last_changed: HashMap::new(),
+        etag_cache: HashMap::new(),
+    };
     let mut startup = true;
     let mut poll_cycle: u32 = 0;
-    let mut last_changed: HashMap<String, Instant> = HashMap::new();
-    let mut etag_cache: HashMap<String, String> = HashMap::new();
     // Pending on-demand poll: set by PollRepo/SetIssueFilter to fire the batch
     // early rather than spawning a separate single-repo API call.
     let mut pending_poll_at: Option<tokio::time::Instant> = None;
 
-    let mut interval = tokio::time::interval(current_interval(visible, fail_count, u32::MAX));
+    let mut interval = tokio::time::interval(current_interval(visible, ps.fail_count, u32::MAX));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
@@ -161,8 +170,8 @@ async fn poll_loop(
             _ = pending_sleep => {
                 pending_poll_at = None;
                 let rate_budget = state.github_rate_limit_remaining.load(std::sync::atomic::Ordering::Relaxed);
-                poll_batch(&state, &handle, &paths, false, &issue_filter, &mut prev, &mut fail_count, &mut last_changed, None).await;
-                interval = tokio::time::interval(current_interval(visible, fail_count, rate_budget));
+                poll_batch(&state, &handle, &paths, false, &issue_filter, &mut ps, false).await;
+                interval = tokio::time::interval(current_interval(visible, ps.fail_count, rate_budget));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             }
             _ = interval.tick() => {
@@ -170,14 +179,14 @@ async fn poll_loop(
                 let batch_paths = if startup {
                     paths.clone()
                 } else {
-                    tiered_paths(&paths, &last_changed, poll_cycle)
+                    tiered_paths(&paths, &ps.last_changed, poll_cycle)
                 };
                 let use_etag = !startup;
-                poll_batch(&state, &handle, &batch_paths, startup, &issue_filter, &mut prev, &mut fail_count, &mut last_changed, if use_etag { Some(&mut etag_cache) } else { None }).await;
+                poll_batch(&state, &handle, &batch_paths, startup, &issue_filter, &mut ps, use_etag).await;
                 startup = false;
                 poll_cycle = poll_cycle.wrapping_add(1);
                 pending_poll_at = None;
-                interval = tokio::time::interval(current_interval(visible, fail_count, rate_budget));
+                interval = tokio::time::interval(current_interval(visible, ps.fail_count, rate_budget));
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             }
             cmd = rx.recv() => {
@@ -232,7 +241,7 @@ fn tiered_paths(
                 if now.duration_since(*t) < ACTIVE_WINDOW {
                     true
                 } else {
-                    cycle % IDLE_POLL_DIVISOR == 0
+                    cycle.is_multiple_of(IDLE_POLL_DIVISOR)
                 }
             }
         }
@@ -267,25 +276,24 @@ async fn poll_batch(
     paths: &[String],
     include_merged: bool,
     issue_filter: &str,
-    prev: &mut PrevState,
-    fail_count: &mut u32,
-    last_changed: &mut HashMap<String, Instant>,
-    etag_cache: Option<&mut HashMap<String, String>>,
+    ps: &mut PollMutableState,
+    use_etag: bool,
 ) {
     if paths.is_empty() { return; }
     if state.github_circuit_breaker.check().is_err() { return; }
 
-    match crate::github::get_all_batch_impl(paths, include_merged, issue_filter, state, etag_cache).await {
+    let etag = if use_etag { Some(&mut ps.etag_cache) } else { None };
+    match crate::github::get_all_batch_impl(paths, include_merged, issue_filter, state, etag).await {
         Ok(result) => {
-            *fail_count = 0;
+            ps.fail_count = 0;
             let now = Instant::now();
 
             for (repo_path, statuses) in &result.prs {
-                let changed = process_repo_update(state, handle, repo_path, statuses, prev);
+                let changed = process_repo_update(state, handle, repo_path, statuses, &mut ps.prev);
                 if changed {
-                    last_changed.insert(repo_path.clone(), now);
+                    ps.last_changed.insert(repo_path.clone(), now);
                 } else {
-                    last_changed.entry(repo_path.clone()).or_insert(now);
+                    ps.last_changed.entry(repo_path.clone()).or_insert(now);
                 }
             }
             for (repo_path, statuses) in result.prs {
@@ -307,7 +315,7 @@ async fn poll_batch(
         Err(e) => {
             let msg = e.to_string();
             if !msg.starts_with("rate-limit:") {
-                *fail_count = fail_count.saturating_add(1);
+                ps.fail_count = ps.fail_count.saturating_add(1);
             }
             tracing::warn!(source = "github_poller", "poll_all failed: {msg}");
         }

@@ -77,8 +77,8 @@ describe("transport", () => {
       expect(result.method).toBe("GET");
       expect(result.path).toBe("/sessions/abc/foreground");
       expect(result.transform).toBeDefined();
-      expect(result.transform!({ agent: "claude" })).toBe("claude");
-      expect(result.transform!({ agent: null })).toBeNull();
+      expect(result.transform?.({ agent: "claude" })).toBe("claude");
+      expect(result.transform?.({ agent: null })).toBeNull();
     });
 
     it("maps get_orchestrator_stats to GET /stats", () => {
@@ -123,13 +123,14 @@ describe("transport", () => {
       expect(() => mapCommandToHttp("unknown_cmd", {})).toThrow("No HTTP mapping for command: unknown_cmd");
     });
 
-    it("throws for browser-unsupported commands", () => {
-      expect(() => mapCommandToHttp("start_dictation", {})).toThrow(
-        /requires native OS features.*not available in browser mode/,
-      );
-      expect(() => mapCommandToHttp("open_in_app", {})).toThrow(
-        /requires native OS features/,
-      );
+    it("maps previously browser-unsupported commands to HTTP", () => {
+      const dictation = mapCommandToHttp("start_dictation", {});
+      expect(dictation.method).toBe("POST");
+      expect(dictation.path).toBe("/dictation/start");
+
+      const openInApp = mapCommandToHttp("open_in_app", { path: "/tmp/x", app: "vscode" });
+      expect(openInApp.method).toBe("POST");
+      expect(openInApp.path).toBe("/agents/open-in-app");
     });
 
     it("maps hash_password to POST /config/hash-password with transform", () => {
@@ -138,14 +139,14 @@ describe("transport", () => {
       expect(result.path).toBe("/config/hash-password");
       expect(result.body).toEqual({ password: "secret" });
       expect(result.transform).toBeDefined();
-      expect(result.transform!({ hash: "abc123" })).toBe("abc123");
+      expect(result.transform?.({ hash: "abc123" })).toBe("abc123");
     });
 
     it("maps can_spawn_session with transform", () => {
       const result = mapCommandToHttp("can_spawn_session", {});
       expect(result.transform).toBeDefined();
-      expect(result.transform!({ active_sessions: 2, max_sessions: 5 })).toBe(true);
-      expect(result.transform!({ active_sessions: 5, max_sessions: 5 })).toBe(false);
+      expect(result.transform?.({ active_sessions: 2, max_sessions: 5 })).toBe(true);
+      expect(result.transform?.({ active_sessions: 5, max_sessions: 5 })).toBe(false);
     });
 
     it("maps detect_agents to GET /agents", () => {
@@ -244,7 +245,7 @@ describe("transport", () => {
       expect(result.method).toBe("POST");
       expect(result.path).toBe("/sessions/s1/terminal/search");
       expect(result.body).toEqual({ query: "foo" });
-      expect(result.transform!({ matches: [{ row: 0, col: 1 }] })).toEqual([{ row: 0, col: 1 }]);
+      expect(result.transform?.({ matches: [{ row: 0, col: 1 }] })).toEqual([{ row: 0, col: 1 }]);
     });
 
     it("maps terminal_search_buffer to POST with transform", () => {
@@ -252,36 +253,36 @@ describe("transport", () => {
       expect(result.method).toBe("POST");
       expect(result.path).toBe("/sessions/s1/terminal/search-buffer");
       expect(result.body).toEqual({ query: "bar" });
-      expect(result.transform!({ matches: [] })).toEqual([]);
+      expect(result.transform?.({ matches: [] })).toEqual([]);
     });
 
     it("maps terminal_get_row_text to GET with transform", () => {
       const result = mapCommandToHttp("terminal_get_row_text", { sessionId: "s1", row: 5 });
       expect(result.method).toBe("GET");
       expect(result.path).toBe("/sessions/s1/terminal/row-text?row=5");
-      expect(result.transform!({ text: "hello" })).toBe("hello");
+      expect(result.transform?.({ text: "hello" })).toBe("hello");
     });
 
     it("maps terminal_get_lines to GET with transform", () => {
       const result = mapCommandToHttp("terminal_get_lines", { sessionId: "s1", start: 0, end: 3 });
       expect(result.method).toBe("GET");
       expect(result.path).toBe("/sessions/s1/terminal/lines?start=0&end=3");
-      expect(result.transform!({ lines: ["a", "b"] })).toEqual(["a", "b"]);
+      expect(result.transform?.({ lines: ["a", "b"] })).toEqual(["a", "b"]);
     });
 
     it("maps terminal_get_cursor_line to GET with transform", () => {
       const result = mapCommandToHttp("terminal_get_cursor_line", { sessionId: "s1" });
       expect(result.method).toBe("GET");
       expect(result.path).toBe("/sessions/s1/terminal/cursor-line");
-      expect(result.transform!({ text: "$ " })).toBe("$ ");
+      expect(result.transform?.({ text: "$ " })).toBe("$ ");
     });
 
     it("maps terminal_hyperlink_at to GET with transform", () => {
       const result = mapCommandToHttp("terminal_hyperlink_at", { sessionId: "s1", row: 2, col: 10 });
       expect(result.method).toBe("GET");
       expect(result.path).toBe("/sessions/s1/terminal/hyperlink?row=2&col=10");
-      expect(result.transform!({ url: "https://example.com" })).toBe("https://example.com");
-      expect(result.transform!({ url: null })).toBeNull();
+      expect(result.transform?.({ url: "https://example.com" })).toBe("https://example.com");
+      expect(result.transform?.({ url: null })).toBeNull();
     });
 
     it("maps terminal_request_frame to POST /sessions/{id}/terminal/request-frame", () => {

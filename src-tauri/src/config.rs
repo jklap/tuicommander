@@ -813,6 +813,8 @@ impl RepoSettingsEntry {
             || self.after_merge.is_some()
             || self.auto_fetch_interval_minutes.is_some()
             || self.auto_delete_on_pr_close.is_some()
+            || self.mcp_upstreams.is_some()
+            || !self.branch_labels.is_empty()
     }
 }
 
@@ -1048,10 +1050,11 @@ pub(crate) fn set_branch_label(repo_path: String, branch_name: String, label: Op
 /// Remove a branch label — called by worktree deletion to keep config tidy.
 pub(crate) fn remove_branch_label(repo_path: &str, branch_name: &str) {
     let mut settings: RepoSettingsMap = load_json_config(REPO_SETTINGS_FILE);
-    if let Some(entry) = settings.repos.get_mut(repo_path) {
-        if entry.branch_labels.remove(branch_name).is_some() {
-            let _ = save_json_config(REPO_SETTINGS_FILE, &settings);
-        }
+    if let Some(entry) = settings.repos.get_mut(repo_path)
+        && entry.branch_labels.remove(branch_name).is_some()
+        && let Err(e) = save_json_config(REPO_SETTINGS_FILE, &settings)
+    {
+        tracing::warn!("Failed to save config after removing branch label: {e}");
     }
 }
 

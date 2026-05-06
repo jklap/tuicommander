@@ -779,6 +779,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
     }
 
     repositoriesStore.removeBranch(repoPath, branchName);
+    repoSettingsStore.setLabel(repoPath, branchName, null);
   };
 
   const handleOpenRenameBranchDialog = (repoPath: string, branchName: string) => {
