@@ -289,6 +289,38 @@ pub fn tool_definitions() -> Value {
                 },
                 "required": ["session_id"]
             }
+        },
+        {
+            "name": "schedule_task",
+            "description": "Schedule a recurring or one-shot agent task. The agent will run automatically at the specified interval.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "goal": { "type": "string", "description": "Goal or task description for the scheduled agent (max 500 chars)" },
+                    "interval_minutes": { "type": "integer", "description": "Run interval in minutes (minimum 5)", "minimum": 5 },
+                    "one_shot": { "type": "boolean", "description": "If true, run once and disable. Default false.", "default": false }
+                },
+                "required": ["goal", "interval_minutes"]
+            }
+        },
+        {
+            "name": "list_schedules",
+            "description": "List all scheduled agent tasks with their id, goal, interval, and enabled status.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "cancel_schedule",
+            "description": "Remove a scheduled agent task by id.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "string", "description": "Job id to cancel" }
+                },
+                "required": ["id"]
+            }
         }
     ])
 }
@@ -1695,6 +1727,89 @@ async fn exec_run_command_inner(state: &AppState, session_id: &str, args: &Value
 /// `session_id` is the identity of the agent's PTY session — threaded through
 /// so filesystem tools can look up their sandbox without the LLM needing to
 /// pass it explicitly. Terminal tools continue to read `session_id` from
+// ── schedule_task / list_schedules / cancel_schedule ─────────────────────
+
+fn exec_schedule_task(args: &Value) -> ToolResult {
+    use super::scheduler::{load_config, save_config, ScheduledJob};
+
+    let goal = match args["goal"].as_str() {
+        Some(g) if !g.trim().is_empty() => g.trim().to_string(),
+        _ => return ToolResult::err("goal is required"),
+    };
+    if goal.len() > 500 {
+        return ToolResult::err("goal must be 500 characters or fewer");
+    }
+
+    let interval_minutes = match args["interval_minutes"].as_u64() {
+        Some(m) if m >= 5 => m,
+        Some(_) => return ToolResult::err("interval_minutes must be at least 5"),
+        None => return ToolResult::err("interval_minutes is required"),
+    };
+
+    let one_shot = args["one_shot"].as_bool().unwrap_or(false);
+
+    let mut config = load_config();
+
+    let active_count = config.jobs.iter().filter(|j| j.enabled).count();
+    if active_count >= 10 {
+        return ToolResult::err("Maximum 10 active scheduled jobs reached — cancel an existing job first");
+    }
+
+    let id = format!("agent-{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("x"));
+    // 6-field cron: sec min hour dom month dow
+    let cron_expr = format!("0 0/{} * * * *", interval_minutes);
+
+    let job = ScheduledJob {
+        id: id.clone(),
+        cron_expr,
+        goal,
+        target_session: None,
+        max_duration_secs: super::scheduler::DEFAULT_MAX_DURATION_SECS_PUB,
+        enabled: true,
+        one_shot,
+    };
+
+    config.jobs.push(job);
+    if let Err(e) = save_config(&config) {
+        return ToolResult::err(format!("Failed to save schedule: {e}"));
+    }
+
+    ToolResult::ok(json!({ "id": id, "interval_minutes": interval_minutes, "one_shot": one_shot }).to_string())
+}
+
+fn exec_list_schedules() -> ToolResult {
+    let config = super::scheduler::load_config();
+    let jobs: Vec<Value> = config.jobs.iter().map(|j| json!({
+        "id": j.id,
+        "goal": j.goal,
+        "cron_expr": j.cron_expr,
+        "enabled": j.enabled,
+        "one_shot": j.one_shot,
+        "max_duration_secs": j.max_duration_secs,
+    })).collect();
+    ToolResult::ok(serde_json::to_string(&jobs).unwrap_or_default())
+}
+
+fn exec_cancel_schedule(args: &Value) -> ToolResult {
+    let id = match args["id"].as_str() {
+        Some(id) if !id.trim().is_empty() => id.trim().to_string(),
+        _ => return ToolResult::err("id is required"),
+    };
+
+    let mut config = super::scheduler::load_config();
+    let before = config.jobs.len();
+    config.jobs.retain(|j| j.id != id);
+    if config.jobs.len() == before {
+        return ToolResult::err(format!("No job found with id '{id}'"));
+    }
+
+    if let Err(e) = super::scheduler::save_config(&config) {
+        return ToolResult::err(format!("Failed to save schedule: {e}"));
+    }
+
+    ToolResult::ok(json!({ "cancelled": id }).to_string())
+}
+
 /// `args` (the LLM still supplies it) but the dispatch-level value is the
 /// source of truth for cross-session isolation.
 pub async fn dispatch(
@@ -1769,6 +1884,9 @@ async fn dispatch_inner(
         "spawn_session" => exec_spawn_session(state, session_id, args).await,
         "get_agent_status" => exec_get_agent_status(args),
         "drive_agent" => exec_drive_agent(state, args, skip_safety).await,
+        "schedule_task" => exec_schedule_task(args),
+        "list_schedules" => exec_list_schedules(),
+        "cancel_schedule" => exec_cancel_schedule(args),
         other => ToolResult::err(format!("Unknown tool: {other}")),
     }
 }
@@ -1791,10 +1909,10 @@ mod tests {
     const FILESYSTEM_SEARCH_TOOLS: &[&str] = &["list_files", "search_files"];
 
     #[test]
-    fn definitions_returns_19_tools() {
+    fn definitions_returns_22_tools() {
         let defs = tool_definitions();
         let arr = defs.as_array().unwrap();
-        assert_eq!(arr.len(), 19);
+        assert_eq!(arr.len(), 22);
     }
 
     #[test]
@@ -1839,6 +1957,9 @@ mod tests {
                 "spawn_session",
                 "get_agent_status",
                 "drive_agent",
+                "schedule_task",
+                "list_schedules",
+                "cancel_schedule",
             ]
         );
     }
@@ -3316,5 +3437,49 @@ mod tests {
         let r = dispatch(&state, "s1", "call_tool", &json!({ "tool_name": "no_such__tool" })).await;
         assert!(!r.success);
         assert!(!r.output.contains("Unknown tool:"), "should route call_tool, not fall through to unknown-tool handler");
+    }
+
+    // ── schedule_task validation ────────────────────────────────
+
+    #[test]
+    fn schedule_task_rejects_missing_goal() {
+        let r = exec_schedule_task(&json!({ "interval_minutes": 10 }));
+        assert!(!r.success);
+        assert!(r.output.contains("goal"));
+    }
+
+    #[test]
+    fn schedule_task_rejects_goal_too_long() {
+        let long_goal = "x".repeat(501);
+        let r = exec_schedule_task(&json!({ "goal": long_goal, "interval_minutes": 10 }));
+        assert!(!r.success);
+        assert!(r.output.contains("500"));
+    }
+
+    #[test]
+    fn schedule_task_rejects_interval_below_5() {
+        let r = exec_schedule_task(&json!({ "goal": "do something", "interval_minutes": 4 }));
+        assert!(!r.success);
+        assert!(r.output.contains("at least 5"));
+    }
+
+    #[test]
+    fn schedule_task_rejects_missing_interval() {
+        let r = exec_schedule_task(&json!({ "goal": "do something" }));
+        assert!(!r.success);
+        assert!(r.output.contains("interval_minutes"));
+    }
+
+    #[test]
+    fn cancel_schedule_rejects_missing_id() {
+        let r = exec_cancel_schedule(&json!({}));
+        assert!(!r.success);
+        assert!(r.output.contains("id"));
+    }
+
+    #[test]
+    fn cancel_schedule_rejects_nonexistent_id() {
+        let r = exec_cancel_schedule(&json!({ "id": "nonexistent-job-xyz" }));
+        assert!(!r.success);
     }
 }

@@ -17,6 +17,7 @@ use crate::state::AppState;
 const CONFIG_FILE: &str = "ai-cron.json";
 const TICK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(30);
 const DEFAULT_MAX_DURATION_SECS: u64 = 300;
+pub(crate) const DEFAULT_MAX_DURATION_SECS_PUB: u64 = DEFAULT_MAX_DURATION_SECS;
 
 // ── Job definition ───────────────────────────────────────────────
 
@@ -30,6 +31,8 @@ pub(crate) struct ScheduledJob {
     pub max_duration_secs: u64,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub one_shot: bool,
 }
 
 fn default_max_duration() -> u64 {
@@ -147,12 +150,55 @@ impl Scheduler {
             bypassed_tools: HashSet::new(),
         };
 
+        let timeout = std::time::Duration::from_secs(job.max_duration_secs);
+        let job_id = job.id.clone();
+        let one_shot = job.one_shot;
+
         match start_conversation(self.state.clone(), session_id.clone(), job.goal.clone(), config).await {
-            Ok(_rx) => {
-                tracing::info!(job_id = %job.id, session_id, "Scheduled agent started");
+            Ok(mut rx) => {
+                tracing::info!(job_id = %job_id, session_id, "Scheduled agent started");
+                // Consume events in a background task; enforce max_duration_secs.
+                tauri::async_runtime::spawn(async move {
+                    let deadline = tokio::time::sleep(timeout);
+                    tokio::pin!(deadline);
+                    loop {
+                        tokio::select! {
+                            _ = &mut deadline => {
+                                tracing::warn!(job_id = %job_id, "Scheduled job timed out after {}s", timeout.as_secs());
+                                if let Err(e) = super::conversation_engine::cancel_conversation(&session_id) {
+                                    tracing::warn!(job_id = %job_id, "Failed to cancel timed-out job: {e}");
+                                }
+                                break;
+                            }
+                            msg = rx.recv() => {
+                                match msg {
+                                    Ok(event) => {
+                                        tracing::debug!(job_id = %job_id, event = ?event, "Scheduled job event");
+                                        match &event {
+                                            super::conversation_engine::ConversationEvent::Completed { .. }
+                                            | super::conversation_engine::ConversationEvent::Error { .. } => break,
+                                            _ => {}
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                        }
+                    }
+                    // Disable one-shot jobs after completion.
+                    if one_shot {
+                        let mut cfg = crate::config::load_json_config::<SchedulerConfig>(CONFIG_FILE);
+                        if let Some(j) = cfg.jobs.iter_mut().find(|j| j.id == job_id) {
+                            j.enabled = false;
+                        }
+                        if let Err(e) = crate::config::save_json_config(CONFIG_FILE, &cfg) {
+                            tracing::warn!(job_id = %job_id, "Failed to disable one-shot job: {e}");
+                        }
+                    }
+                });
             }
             Err(e) => {
-                tracing::error!(job_id = %job.id, "Failed to start agent: {e}");
+                tracing::error!(job_id = %job_id, "Failed to start agent: {e}");
             }
         }
     }
@@ -205,6 +251,7 @@ mod tests {
             target_session: None,
             max_duration_secs: 300,
             enabled: true,
+            one_shot: false,
         };
         assert!(job.parse_schedule().is_ok());
     }
@@ -218,6 +265,7 @@ mod tests {
             target_session: None,
             max_duration_secs: 300,
             enabled: true,
+            one_shot: false,
         };
         assert!(job.parse_schedule().is_err());
     }
@@ -250,6 +298,7 @@ mod tests {
                 target_session: None,
                 max_duration_secs: 300,
                 enabled: false,
+                one_shot: false,
             }],
         };
         assert!(!config.jobs[0].enabled);
@@ -265,6 +314,7 @@ mod tests {
                 target_session: Some("sess-1".into()),
                 max_duration_secs: 600,
                 enabled: true,
+                one_shot: false,
             }],
         };
         let json = serde_json::to_string(&config).unwrap();
@@ -293,6 +343,7 @@ mod tests {
                 target_session: None,
                 max_duration_secs: 300,
                 enabled: true,
+                one_shot: false,
             }],
         };
         assert!(save_config(&config).is_err());
