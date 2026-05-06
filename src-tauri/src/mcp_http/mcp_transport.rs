@@ -1140,9 +1140,9 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
             let mut results: Vec<serde_json::Value> = Vec::new();
             for path_val in &repo_order {
                 let Some(path) = path_val.as_str() else { continue };
-                let info = crate::git::get_repo_info_cached(&state, path);
+                let info = crate::git::get_repo_info_cached(state, path);
                 if !info.is_git_repo { continue; }
-                let gh = crate::github::get_github_status_cached(&state, path);
+                let gh = crate::github::get_github_status_cached(state, path);
                 let cached_prs: Vec<crate::github::BranchPrStatus> =
                     crate::state::AppState::get_cached(
                         &state.git_cache.github_status,
@@ -2105,8 +2105,8 @@ fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_js
                     .unwrap_or("")
                     .to_string();
 
-                let info = crate::git::get_repo_info_cached(&state, path);
-                let worktrees = crate::worktree::get_worktree_paths_cached(&state, path);
+                let info = crate::git::get_repo_info_cached(state, path);
+                let worktrees = crate::worktree::get_worktree_paths_cached(state, path);
 
                 let mut entry = serde_json::json!({
                     "path": path,
@@ -2117,7 +2117,7 @@ fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_js
                 });
                 // Include ahead/behind for git repos with remotes
                 if info.is_git_repo {
-                    let gh = crate::github::get_github_status_cached(&state, path);
+                    let gh = crate::github::get_github_status_cached(state, path);
                     if gh.has_remote {
                         entry["ahead"] = serde_json::json!(gh.ahead);
                         entry["behind"] = serde_json::json!(gh.behind);
@@ -2140,7 +2140,7 @@ fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_js
                 None => return serde_json::json!({"active": null}),
             };
 
-            let info = crate::git::get_repo_info_cached(&state, &active_path);
+            let info = crate::git::get_repo_info_cached(state, &active_path);
 
             // Find group membership
             let groups = repo_data.get("groups").cloned().unwrap_or(serde_json::json!({}));
