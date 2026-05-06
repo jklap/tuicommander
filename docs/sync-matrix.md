@@ -237,6 +237,7 @@ When adding or changing `tuic://` schemes:
 | `SPEC.md` | Feature specification, architecture, version |
 | `CHANGELOG.md` | Release history (Keep a Changelog format) |
 | `AGENTS.md` | Project rules, compact reference |
+| `CONTRIBUTING.md` | Contributor guide (test requirements, PR quality gates) |
 | `to-test.md` | Manual testing tracker |
 | **docs/** | |
 | `docs/FEATURES.md` | Canonical feature inventory (single source of truth) |

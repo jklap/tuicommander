@@ -4,6 +4,20 @@ All notable changes to TUICommander will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+- **Contributing guide** — `CONTRIBUTING.md` with test requirements, quality gates, PR guidelines, and common rejection reasons.
+- **Parallel GitHub ETag filtering** — `filter_changed_repos` now fires all ETag requests concurrently via `join_all`, reducing poll latency for multi-repo setups.
+
+### Fixed
+- **`has_custom_settings()` completeness** — Now includes `mcp_upstreams` and `branch_labels` fields, preventing premature config pruning.
+- **`remove_branch_label` silent failure** — Save errors now logged via `tracing::warn!` instead of being silently dropped.
+- **GitHub ETag error logging** — Network errors during ETag checks now logged via `tracing::debug!` for debugging.
+- **Branch label cleanup on worktree deletion** — Frontend store now clears the label when a worktree is removed, preventing stale labels.
+- **Link detection regex sharing** — `checkLinksAtRow` hover path reuses hoisted regex constants instead of allocating new instances per call.
+- **GitHub poller clippy fixes** — Replaced manual `% == 0` with `is_multiple_of()`, extracted `PollMutableState` struct to reduce `poll_batch` argument count.
+
 ## [1.1.1] - 2026-05-05
 
 ### Added
