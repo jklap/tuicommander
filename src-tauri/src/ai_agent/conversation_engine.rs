@@ -1,0 +1,671 @@
+//! Unified conversation engine — single entry point for both chat and agent modes.
+//!
+//! Replaces the dual-engine architecture (stream_ai_chat + run_loop) with a single
+//! `start_conversation()` that always includes tools and routes via `Autonomy`.
+
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use dashmap::DashMap;
+use parking_lot::{Mutex, RwLock};
+use serde::Serialize;
+use tokio::sync::{broadcast, oneshot, Notify};
+
+use crate::state::AppState;
+use super::engine::{
+    self, AgentState, RateLimiter, RepetitionDetector,
+    classify_phase, compose_system_prompt, redact_json_values, select_model_for_phase,
+    MAX_ITERATIONS, LOOP_TIMEOUT,
+    RATE_LIMIT_PER_MINUTE, RATE_LIMIT_PER_SESSION,
+    TOOL_DISPATCH_LIMIT_PER_MINUTE, TOOL_DISPATCH_LIMIT_PER_SESSION,
+};
+use super::tools;
+
+// ── Autonomy ──────────────────────────────────────────────────
+
+/// Controls tool approval and step limits for a conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum Autonomy {
+    /// Approval required for destructive tools; bypass set skips per-tool prompts.
+    #[default]
+    Assisted,
+    /// No approval gates; runs up to max_steps iterations.
+    Autonomous,
+}
+
+// ── ConversationConfig ────────────────────────────────────────
+
+pub(crate) struct ConversationConfig {
+    pub autonomy: Autonomy,
+    /// None = stop after first text response (chat-like). Some(n) = up to n iterations.
+    pub max_steps: Option<usize>,
+    pub temperature: f32,
+    /// Override the main model from the provider registry.
+    pub model_override: Option<String>,
+    /// Tool names pre-approved for this session — bypass approval prompt.
+    pub bypassed_tools: HashSet<String>,
+}
+
+impl Default for ConversationConfig {
+    fn default() -> Self {
+        Self {
+            autonomy: Autonomy::Assisted,
+            max_steps: None,
+            temperature: 0.7,
+            model_override: None,
+            bypassed_tools: HashSet::new(),
+        }
+    }
+}
+
+// ── ConversationEvent ─────────────────────────────────────────
+
+/// Unified event stream — step 5 (1610-5162) will expand and replace this with
+/// the final ConversationEvent enum used as the Channel transport.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub(crate) enum ConversationEvent {
+    Thinking { iteration: usize },
+    TextChunk { text: String },
+    ToolCall { tool_name: String, args: serde_json::Value },
+    ToolResult { tool_name: String, success: bool, output: String, duration_ms: u64 },
+    NeedsApproval { tool_name: String, command: String, reason: String },
+    /// Tool was executed without prompting because it's in the bypass set.
+    Bypassed { tool_name: String },
+    Paused,
+    Resumed,
+    RateLimited { wait_ms: u64 },
+    Error { message: String },
+    Completed { reason: String },
+}
+
+// ── Active conversations registry ─────────────────────────────
+
+pub(crate) static ACTIVE_CONVERSATIONS: std::sync::LazyLock<DashMap<String, ConversationHandle>> =
+    std::sync::LazyLock::new(DashMap::new);
+
+pub(crate) struct ConversationHandle {
+    pub cancel: Arc<AtomicBool>,
+    pub state: Arc<RwLock<AgentState>>,
+    pub pause_notify: Arc<Notify>,
+    pub event_tx: broadcast::Sender<ConversationEvent>,
+    pub approval_tx: Arc<Mutex<Option<oneshot::Sender<bool>>>>,
+}
+
+// ── System prompt ─────────────────────────────────────────────
+
+/// Merged system prompt combining the agent tool documentation and the terminal
+/// assistant code-block rules from the chat path.
+fn build_base_system_prompt(session_id: &str) -> String {
+    format!(
+        "You are a terminal assistant and AI agent embedded in TUICommander (session: {session_id}).\n\
+         You can see the user's terminal output and use tools to act on it.\n\n\
+         ## Code block rules (for inline responses)\n\
+         - Every fenced code block gets a ▶ Run button — put EXACTLY ONE command per block.\n\
+         - Never combine multiple commands or alternatives in one block.\n\
+         - Never put comments (lines starting with #) inside code blocks.\n\
+         - Do NOT ask for confirmation before suggesting a command.\n\n\
+         ## Terminal tools\n\
+         - read_screen / get_context — observe terminal state\n\
+         - send_input — type a command into the interactive shell\n\
+         - send_key — send a special key (ctrl+c, enter, …)\n\
+         - wait_for — wait until a regex appears or the screen stabilizes\n\
+         - get_state — structured session metadata (cwd, git, shell state)\n\n\
+         ## Filesystem tools\n\
+         - read_file — read a file with line numbers (paginated, max 2000 lines)\n\
+         - write_file — create or overwrite a file (atomic, creates dirs)\n\
+         - edit_file — surgical search-and-replace\n\
+         - list_files — glob-match files in the repo\n\
+         - search_files — regex search across files with context lines\n\
+         - run_command — run a shell command and capture stdout/stderr\n\n\
+         ## Code search\n\
+         - search_code — BM25 semantic search across the codebase\n\n\
+         ## MCP bridge\n\
+         - search_tools — discover available MCP upstream tools\n\
+         - call_tool — invoke an MCP upstream tool by name\n\n\
+         ## Multi-session orchestration\n\
+         - list_sessions — enumerate active PTY sessions\n\
+         - spawn_session — create a new PTY tab\n\
+         - get_agent_status — query another agent's state\n\n\
+         Always observe before acting. Prefer targeted, minimal commands. \
+         When a task is complete, stop calling tools and summarize what you did."
+    )
+}
+
+// ── Context assembly ──────────────────────────────────────────
+
+/// Assemble terminal context using VtLogBuffer.
+/// DEFERRED (2026-05-06) — will use OSC 133 blocks when available (story 1611-375b).
+fn assemble_context(state: &AppState, session_id: &str) -> String {
+    // Re-use the existing TerminalContext builder from ai_chat.
+    // We call assemble_terminal_context with 150 lines (same default as before).
+    // The result is formatted via TerminalContext::to_system_section().
+    // Since that function is private to ai_chat, we call it via the public
+    // assemble_terminal_context_section helper we expose below.
+    crate::ai_chat::assemble_terminal_context_for_engine(state, session_id)
+}
+
+// ── Public entry point ────────────────────────────────────────
+
+/// Start a unified conversation on `session_id`. Returns a broadcast receiver
+/// for `ConversationEvent`s. The caller is responsible for bridging to a
+/// Tauri Channel (step 5 will wrap this in a proper Tauri command).
+pub(crate) async fn start_conversation(
+    state: Arc<AppState>,
+    session_id: String,
+    message: String,
+    config: ConversationConfig,
+) -> Result<broadcast::Receiver<ConversationEvent>, String> {
+    if ACTIVE_CONVERSATIONS.contains_key(&session_id) {
+        return Err(format!("Conversation already active on session {session_id}"));
+    }
+
+    let cancel = Arc::new(AtomicBool::new(false));
+    let conv_state = Arc::new(RwLock::new(AgentState::Running));
+    let pause_notify = Arc::new(Notify::new());
+    let (event_tx, event_rx) = broadcast::channel(256);
+    let approval_tx: Arc<Mutex<Option<oneshot::Sender<bool>>>> = Arc::new(Mutex::new(None));
+
+    ACTIVE_CONVERSATIONS.insert(session_id.clone(), ConversationHandle {
+        cancel: cancel.clone(),
+        state: conv_state.clone(),
+        pause_notify: pause_notify.clone(),
+        event_tx: event_tx.clone(),
+        approval_tx: approval_tx.clone(),
+    });
+
+    if config.autonomy == Autonomy::Autonomous {
+        state.unrestricted_sessions.insert(session_id.clone(), ());
+    }
+
+    let sid = session_id.clone();
+    tokio::spawn(async move {
+        let result = run_conversation(
+            state.clone(),
+            sid.clone(),
+            message,
+            config,
+            cancel,
+            conv_state.clone(),
+            pause_notify,
+            event_tx.clone(),
+            approval_tx,
+        ).await;
+
+        state.unrestricted_sessions.remove(&sid);
+        state.file_sandboxes.remove(&sid);
+        ACTIVE_CONVERSATIONS.remove(&sid);
+
+        match result {
+            Ok(reason) => {
+                *conv_state.write() = AgentState::Completed;
+                let _ = event_tx.send(ConversationEvent::Completed { reason });
+            }
+            Err(e) => {
+                tracing::error!(session_id = %sid, error = %e, "Conversation failed");
+                *conv_state.write() = AgentState::Error;
+                let _ = event_tx.send(ConversationEvent::Error { message: e });
+            }
+        }
+    });
+
+    Ok(event_rx)
+}
+
+/// Cancel an active conversation.
+pub(crate) fn cancel_conversation(session_id: &str) -> Result<(), String> {
+    let entry = ACTIVE_CONVERSATIONS.get(session_id)
+        .ok_or_else(|| format!("No active conversation on session {session_id}"))?;
+    entry.cancel.store(true, Ordering::Release);
+    *entry.state.write() = AgentState::Cancelled;
+    Ok(())
+}
+
+/// Pause an active conversation.
+pub(crate) fn pause_conversation(session_id: &str) -> Result<(), String> {
+    let entry = ACTIVE_CONVERSATIONS.get(session_id)
+        .ok_or_else(|| format!("No active conversation on session {session_id}"))?;
+    *entry.state.write() = AgentState::Paused;
+    let _ = entry.event_tx.send(ConversationEvent::Paused);
+    Ok(())
+}
+
+/// Resume a paused conversation.
+pub(crate) fn resume_conversation(session_id: &str) -> Result<(), String> {
+    let entry = ACTIVE_CONVERSATIONS.get(session_id)
+        .ok_or_else(|| format!("No active conversation on session {session_id}"))?;
+    *entry.state.write() = AgentState::Running;
+    entry.pause_notify.notify_one();
+    let _ = entry.event_tx.send(ConversationEvent::Resumed);
+    Ok(())
+}
+
+/// Respond to a NeedsApproval event. `approved = true` runs the tool;
+/// `false` rejects it and sends a rejection result back to the LLM.
+pub(crate) fn approve_conversation_action(session_id: &str, approved: bool) -> Result<(), String> {
+    let entry = ACTIVE_CONVERSATIONS.get(session_id)
+        .ok_or_else(|| format!("No active conversation on session {session_id}"))?;
+    if let Some(tx) = entry.approval_tx.lock().take() {
+        let _ = tx.send(approved);
+    }
+    Ok(())
+}
+
+// ── Internal loop ─────────────────────────────────────────────
+
+#[allow(clippy::too_many_arguments)]
+async fn run_conversation(
+    state: Arc<AppState>,
+    session_id: String,
+    initial_message: String,
+    config: ConversationConfig,
+    cancel: Arc<AtomicBool>,
+    conv_state: Arc<RwLock<AgentState>>,
+    pause_notify: Arc<Notify>,
+    event_tx: broadcast::Sender<ConversationEvent>,
+    approval_tx: Arc<Mutex<Option<oneshot::Sender<bool>>>>,
+) -> Result<String, String> {
+    use futures_util::StreamExt;
+    use genai::chat::{
+        ChatMessage, ChatOptions, ChatRequest, ChatStreamEvent as GenaiStreamEvent,
+        ContentPart, Tool, ToolResponse,
+    };
+
+    // Resolve LLM from provider registry
+    let registry = crate::provider_registry::load_registry();
+    let resolved = crate::provider_registry::resolve_slot(
+        &registry,
+        crate::provider_registry::SlotName::Main,
+    ).map_err(|e| format!("AI not configured — {e}"))?;
+
+    let llm_config = resolved.config;
+    let api_key = resolved.api_key;
+
+    // Model: registry main + per-phase overrides, or model_override if specified
+    let base_model = config.model_override
+        .as_deref()
+        .unwrap_or(&llm_config.model)
+        .to_string();
+
+    // Build phase overrides from registry
+    let model_overrides: std::collections::HashMap<engine::ToolPhase, String> = registry
+        .phase_overrides
+        .iter()
+        .filter_map(|(phase, model_id)| {
+            registry.models.iter().find(|m| &m.id == model_id)
+                .map(|m| (*phase, m.model_name.clone()))
+        })
+        .collect();
+
+    let client = crate::llm_api::build_client(&llm_config, &api_key);
+
+    // Build tools
+    let tool_defs = tools::tool_definitions();
+    let genai_tools: Vec<Tool> = tool_defs
+        .as_array()
+        .unwrap_or(&Vec::new())
+        .iter()
+        .filter_map(|t| {
+            let name = t["name"].as_str()?;
+            let mut tool = Tool::new(name);
+            if let Some(desc) = t["description"].as_str() {
+                tool = tool.with_description(desc);
+            }
+            if let Some(schema) = t.get("inputSchema") {
+                tool = tool.with_schema(schema.clone());
+            }
+            Some(tool)
+        })
+        .collect();
+
+    let chat_options = ChatOptions::default()
+        .with_capture_tool_calls(true)
+        .with_temperature(config.temperature.into());
+
+    // Build system prompt — merged from agent + chat rules
+    let base_system_prompt = build_base_system_prompt(&session_id);
+    let context_section = assemble_context(&state, &session_id);
+    let cross_session = super::context::build_cross_session_section(&state, &session_id);
+    let mut last_knowledge = super::context::build_knowledge_section(&state, &session_id);
+
+    // Inject context as part of base; cross-session + knowledge appended
+    let base_with_context = format!("{base_system_prompt}\n\n{context_section}");
+
+    let mut chat_req = ChatRequest::default()
+        .with_system(compose_system_prompt(
+            &base_with_context,
+            cross_session.as_deref(),
+            last_knowledge.as_deref(),
+        ))
+        .with_tools(genai_tools.clone())
+        .append_message(ChatMessage::user(&initial_message));
+
+    let mut rate_limiter = RateLimiter::new(RATE_LIMIT_PER_MINUTE, RATE_LIMIT_PER_SESSION);
+    let mut tool_limiter = RateLimiter::new(TOOL_DISPATCH_LIMIT_PER_MINUTE, TOOL_DISPATCH_LIMIT_PER_SESSION);
+    let mut repetition = RepetitionDetector::new();
+    let deadline = tokio::time::Instant::now() + LOOP_TIMEOUT;
+    let mut last_tool_names: Vec<String> = Vec::new();
+    let max_iterations = config.max_steps.unwrap_or(MAX_ITERATIONS);
+    let is_single_response = config.max_steps.is_none();
+
+    for iteration in 0..max_iterations {
+        if cancel.load(Ordering::Acquire) {
+            return Ok("cancelled".into());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Ok("timeout".into());
+        }
+
+        // Refresh knowledge each iteration
+        if iteration > 0 {
+            let current = super::context::build_knowledge_section(&state, &session_id);
+            if current != last_knowledge {
+                chat_req.system = Some(compose_system_prompt(
+                    &base_with_context,
+                    cross_session.as_deref(),
+                    current.as_deref(),
+                ));
+                last_knowledge = current;
+            }
+        }
+
+        // Pause check
+        while *conv_state.read() == AgentState::Paused {
+            tokio::select! {
+                _ = pause_notify.notified() => {}
+                _ = tokio::time::sleep(Duration::from_millis(100)) => {}
+            }
+            if cancel.load(Ordering::Acquire) {
+                return Ok("cancelled".into());
+            }
+        }
+
+        // Rate limit
+        if let Err(wait) = rate_limiter.check() {
+            if wait == Duration::ZERO {
+                return Ok("session_rate_limit".into());
+            }
+            let _ = event_tx.send(ConversationEvent::RateLimited { wait_ms: wait.as_millis() as u64 });
+            tokio::time::sleep(wait).await;
+            if cancel.load(Ordering::Acquire) {
+                return Ok("cancelled".into());
+            }
+        }
+        rate_limiter.record();
+
+        let _ = event_tx.send(ConversationEvent::Thinking { iteration });
+
+        // Phase-based model selection
+        let phase_refs: Vec<&str> = last_tool_names.iter().map(|s| s.as_str()).collect();
+        let phase = classify_phase(&phase_refs);
+        let model = select_model_for_phase(&base_model, &model_overrides, phase);
+
+        let stream_resp = client
+            .exec_chat_stream(model, chat_req.clone(), Some(&chat_options))
+            .await
+            .map_err(|e| format!("LLM stream error: {e}"))?;
+
+        let mut stream = stream_resp.stream;
+        let mut tool_calls = Vec::new();
+        let mut text_buf = String::new();
+        let mut assistant_parts: Vec<ContentPart> = Vec::new();
+
+        loop {
+            tokio::select! {
+                event = stream.next() => {
+                    match event {
+                        Some(Ok(GenaiStreamEvent::Chunk(chunk))) => {
+                            text_buf.push_str(&chunk.content);
+                            let _ = event_tx.send(ConversationEvent::TextChunk { text: chunk.content });
+                        }
+                        Some(Ok(GenaiStreamEvent::End(end))) => {
+                            if let Some(content) = end.captured_content {
+                                for part in content.into_parts() {
+                                    match part {
+                                        ContentPart::ToolCall(tc) => tool_calls.push(tc),
+                                        other => assistant_parts.push(other),
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        Some(Err(e)) => {
+                            return Err(format!("Stream error at iteration {iteration}: {e}"));
+                        }
+                        None => break,
+                        _ => {}
+                    }
+                }
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {
+                    if cancel.load(Ordering::Acquire) {
+                        return Ok("cancelled".into());
+                    }
+                }
+            }
+        }
+
+        // Append assistant text to history
+        if !text_buf.is_empty() {
+            chat_req = chat_req.append_message(ChatMessage::assistant(&text_buf));
+        }
+
+        // In single-response mode (max_steps = None), stop after first response
+        if is_single_response || tool_calls.is_empty() {
+            if tool_calls.is_empty() {
+                return Ok("end_turn".into());
+            }
+            // In single-response mode with tool calls: still process them once
+            if is_single_response && iteration > 0 {
+                return Ok("end_turn".into());
+            }
+        }
+
+        if tool_calls.is_empty() {
+            return Ok("end_turn".into());
+        }
+
+        // Append assistant message with tool calls
+        chat_req = chat_req.append_message(tool_calls.clone());
+
+        // Execute tool calls
+        for tc in &tool_calls {
+            if let Err(wait) = tool_limiter.check() {
+                if wait == Duration::ZERO {
+                    return Ok("tool_dispatch_session_limit".into());
+                }
+                let _ = event_tx.send(ConversationEvent::RateLimited { wait_ms: wait.as_millis() as u64 });
+                tokio::time::sleep(wait).await;
+                if cancel.load(Ordering::Acquire) {
+                    return Ok("cancelled".into());
+                }
+            }
+            tool_limiter.record();
+
+            // Repetition detection
+            let sig = format!("{}:{}", tc.fn_name, tc.fn_arguments);
+            if repetition.record(&sig) {
+                return Ok(format!("repetition_detected: {}", tc.fn_name));
+            }
+
+            let redacted_args = redact_json_values(&tc.fn_arguments);
+            let _ = event_tx.send(ConversationEvent::ToolCall {
+                tool_name: tc.fn_name.clone(),
+                args: redacted_args,
+            });
+
+            let start = std::time::Instant::now();
+            let mut result = tools::dispatch(&state, &session_id, &tc.fn_name, &tc.fn_arguments).await;
+
+            if result.needs_approval {
+                let reason = result.approval_reason.clone().unwrap_or_default();
+                let command = result.approval_command.clone().unwrap_or_default();
+
+                if config.autonomy == Autonomy::Autonomous {
+                    result = tools::dispatch_approved(&state, &session_id, &tc.fn_name, &tc.fn_arguments).await;
+                } else if config.bypassed_tools.contains(&tc.fn_name) {
+                    let _ = event_tx.send(ConversationEvent::Bypassed { tool_name: tc.fn_name.clone() });
+                    result = tools::dispatch_approved(&state, &session_id, &tc.fn_name, &tc.fn_arguments).await;
+                } else {
+                    let _ = event_tx.send(ConversationEvent::NeedsApproval {
+                        tool_name: tc.fn_name.clone(),
+                        command: command.clone(),
+                        reason: reason.clone(),
+                    });
+
+                    let (tx, rx) = oneshot::channel();
+                    *approval_tx.lock() = Some(tx);
+
+                    let approved = tokio::select! {
+                        res = rx => res.unwrap_or(false),
+                        _ = async {
+                            while !cancel.load(Ordering::Acquire) {
+                                tokio::time::sleep(Duration::from_millis(100)).await;
+                            }
+                        } => false,
+                    };
+                    *approval_tx.lock() = None;
+
+                    if cancel.load(Ordering::Acquire) {
+                        return Ok("cancelled".into());
+                    }
+
+                    if approved {
+                        result = tools::dispatch_approved(&state, &session_id, &tc.fn_name, &tc.fn_arguments).await;
+                    } else {
+                        result = tools::ToolResult::err(format!("User rejected: {reason}"));
+                    }
+                }
+            }
+
+            let duration_ms = start.elapsed().as_millis() as u64;
+            let _ = event_tx.send(ConversationEvent::ToolResult {
+                tool_name: tc.fn_name.clone(),
+                success: result.success,
+                output: result.output.clone(),
+                duration_ms,
+            });
+
+            let tool_resp = ToolResponse::new(tc.call_id.clone(), result.output);
+            chat_req = chat_req.append_message(tool_resp);
+        }
+
+        last_tool_names = tool_calls.iter().map(|tc| tc.fn_name.clone()).collect();
+    }
+
+    Ok("max_iterations".into())
+}
+
+// ── Tests ─────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn autonomy_default_is_assisted() {
+        assert_eq!(ConversationConfig::default().autonomy, Autonomy::Assisted);
+    }
+
+    #[test]
+    fn config_default_max_steps_is_none() {
+        assert!(ConversationConfig::default().max_steps.is_none());
+    }
+
+    #[test]
+    fn config_bypassed_tools_empty_by_default() {
+        assert!(ConversationConfig::default().bypassed_tools.is_empty());
+    }
+
+    #[test]
+    fn conversation_event_thinking_serializes() {
+        let evt = ConversationEvent::Thinking { iteration: 3 };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"thinking\""));
+        assert!(json.contains("\"iteration\":3"));
+    }
+
+    #[test]
+    fn conversation_event_tool_call_serializes() {
+        let evt = ConversationEvent::ToolCall {
+            tool_name: "read_file".into(),
+            args: serde_json::json!({"path": "src/main.rs"}),
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"tool_call\""));
+        assert!(json.contains("\"tool_name\":\"read_file\""));
+    }
+
+    #[test]
+    fn conversation_event_bypassed_serializes() {
+        let evt = ConversationEvent::Bypassed { tool_name: "send_input".into() };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"bypassed\""));
+        assert!(json.contains("\"tool_name\":\"send_input\""));
+    }
+
+    #[test]
+    fn conversation_event_completed_serializes() {
+        let evt = ConversationEvent::Completed { reason: "end_turn".into() };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"completed\""));
+        assert!(json.contains("\"reason\":\"end_turn\""));
+    }
+
+    #[test]
+    fn conversation_event_needs_approval_serializes() {
+        let evt = ConversationEvent::NeedsApproval {
+            tool_name: "run_command".into(),
+            command: "rm -rf /tmp/test".into(),
+            reason: "destructive command".into(),
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"needs_approval\""));
+    }
+
+    #[test]
+    fn cancel_missing_session_errors() {
+        assert!(cancel_conversation("nonexistent-conv").is_err());
+    }
+
+    #[test]
+    fn pause_missing_session_errors() {
+        assert!(pause_conversation("nonexistent-conv").is_err());
+    }
+
+    #[test]
+    fn resume_missing_session_errors() {
+        assert!(resume_conversation("nonexistent-conv").is_err());
+    }
+
+    #[test]
+    fn approve_missing_session_errors() {
+        assert!(approve_conversation_action("nonexistent-conv", true).is_err());
+    }
+
+    #[test]
+    fn bypassed_tool_check() {
+        let mut config = ConversationConfig::default();
+        config.bypassed_tools.insert("send_input".into());
+        assert!(config.bypassed_tools.contains("send_input"));
+        assert!(!config.bypassed_tools.contains("run_command"));
+    }
+
+    #[test]
+    fn single_response_mode_has_no_max_steps() {
+        let config = ConversationConfig { max_steps: None, ..Default::default() };
+        assert!(config.max_steps.is_none());
+    }
+
+    #[test]
+    fn autonomous_mode_sets_max_steps() {
+        let config = ConversationConfig {
+            autonomy: Autonomy::Autonomous,
+            max_steps: Some(20),
+            ..Default::default()
+        };
+        assert_eq!(config.max_steps, Some(20));
+        assert_eq!(config.autonomy, Autonomy::Autonomous);
+    }
+}

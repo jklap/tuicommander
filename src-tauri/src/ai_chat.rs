@@ -160,6 +160,16 @@ pub(crate) fn save_ai_chat_config(config: AiChatConfig) -> Result<(), String> {
     save_json_config(CONFIG_FILE, &config)
 }
 
+/// Assemble terminal context string for use by conversation_engine.rs.
+/// Returns the formatted system section (terminal state + recent output).
+pub(crate) fn assemble_terminal_context_for_engine(
+    state: &crate::state::AppState,
+    session_id: &str,
+) -> String {
+    let ctx = assemble_terminal_context(state, session_id, 150);
+    ctx.to_system_section()
+}
+
 /// Quick connection test: first validate the API key, then send a minimal completion.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn test_ai_chat_connection() -> Result<String, String> {

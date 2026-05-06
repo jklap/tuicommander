@@ -19,14 +19,14 @@ use super::tools;
 
 // ── Constants ─────────────────────────────────────────────────
 
-const MAX_ITERATIONS: usize = 20;
-const LOOP_TIMEOUT: Duration = Duration::from_secs(300); // 5 min
-const MAX_IDENTICAL_CALLS: usize = 3;
-const RATE_WINDOW: Duration = Duration::from_secs(60);
-const RATE_LIMIT_PER_MINUTE: usize = 30;
-const RATE_LIMIT_PER_SESSION: usize = 200;
-const TOOL_DISPATCH_LIMIT_PER_MINUTE: usize = 60;
-const TOOL_DISPATCH_LIMIT_PER_SESSION: usize = 500;
+pub(crate) const MAX_ITERATIONS: usize = 20;
+pub(crate) const LOOP_TIMEOUT: Duration = Duration::from_secs(300); // 5 min
+pub(crate) const MAX_IDENTICAL_CALLS: usize = 3;
+pub(crate) const RATE_WINDOW: Duration = Duration::from_secs(60);
+pub(crate) const RATE_LIMIT_PER_MINUTE: usize = 30;
+pub(crate) const RATE_LIMIT_PER_SESSION: usize = 200;
+pub(crate) const TOOL_DISPATCH_LIMIT_PER_MINUTE: usize = 60;
+pub(crate) const TOOL_DISPATCH_LIMIT_PER_SESSION: usize = 500;
 
 // ── Active agents registry ────────────────────────────────────
 
@@ -76,7 +76,7 @@ pub enum AgentLoopEvent {
 
 // ── Rate limiter ──────────────────────────────────────────────
 
-struct RateLimiter {
+pub(crate) struct RateLimiter {
     window: VecDeque<tokio::time::Instant>,
     total: usize,
     per_minute: usize,
@@ -84,7 +84,7 @@ struct RateLimiter {
 }
 
 impl RateLimiter {
-    fn new(per_minute: usize, per_session: usize) -> Self {
+    pub(crate) fn new(per_minute: usize, per_session: usize) -> Self {
         Self {
             window: VecDeque::new(),
             total: 0,
@@ -94,7 +94,7 @@ impl RateLimiter {
     }
 
     /// Check if we can make another call. Returns Ok or the wait duration.
-    fn check(&mut self) -> Result<(), Duration> {
+    pub(crate) fn check(&mut self) -> Result<(), Duration> {
         let now = tokio::time::Instant::now();
 
         if self.total >= self.per_session {
@@ -118,7 +118,7 @@ impl RateLimiter {
         Ok(())
     }
 
-    fn record(&mut self) {
+    pub(crate) fn record(&mut self) {
         self.window.push_back(tokio::time::Instant::now());
         self.total += 1;
     }
@@ -126,19 +126,19 @@ impl RateLimiter {
 
 // ── Repetition detector ───────────────────────────────────────
 
-struct RepetitionDetector {
+pub(crate) struct RepetitionDetector {
     recent_calls: VecDeque<String>,
 }
 
 impl RepetitionDetector {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             recent_calls: VecDeque::new(),
         }
     }
 
     /// Record a tool call signature and return true if it's a repetition.
-    fn record(&mut self, signature: &str) -> bool {
+    pub(crate) fn record(&mut self, signature: &str) -> bool {
         self.recent_calls.push_back(signature.to_string());
         if self.recent_calls.len() > MAX_IDENTICAL_CALLS {
             self.recent_calls.pop_front();
@@ -155,7 +155,7 @@ impl RepetitionDetector {
 /// per-session knowledge sections (each separated by a blank line).
 /// `cross_session` is injected once at session start and never refreshed.
 /// `knowledge` is refreshed every iteration.
-fn compose_system_prompt(
+pub(crate) fn compose_system_prompt(
     base: &str,
     cross_session: Option<&str>,
     knowledge: Option<&str>,
@@ -215,7 +215,7 @@ fn build_system_prompt(session_id: &str) -> String {
 // ── JSON value redaction ─────────────────────────────────────
 
 /// Recursively apply `redact_secrets` to all string values in a JSON value.
-fn redact_json_values(val: &serde_json::Value) -> serde_json::Value {
+pub(crate) fn redact_json_values(val: &serde_json::Value) -> serde_json::Value {
     match val {
         serde_json::Value::String(s) => {
             serde_json::Value::String(tools::redact_secrets(s))
@@ -687,7 +687,7 @@ pub(crate) enum ToolPhase {
     Write,
 }
 
-fn classify_phase(tool_names: &[&str]) -> ToolPhase {
+pub(crate) fn classify_phase(tool_names: &[&str]) -> ToolPhase {
     let mut has_write = false;
     let mut has_search = false;
     let mut has_read = false;
@@ -707,7 +707,7 @@ fn classify_phase(tool_names: &[&str]) -> ToolPhase {
     else { ToolPhase::Plan }
 }
 
-fn select_model_for_phase<'a>(
+pub(crate) fn select_model_for_phase<'a>(
     base: &'a str,
     overrides: &'a std::collections::HashMap<ToolPhase, String>,
     phase: ToolPhase,
