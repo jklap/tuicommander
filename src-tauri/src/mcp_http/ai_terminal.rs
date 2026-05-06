@@ -234,7 +234,7 @@ pub(crate) async fn handle(
 
     if is_write_tool(name) {
         if let Some(sid) = args["session_id"].as_str()
-            && crate::ai_agent::engine::ACTIVE_AGENTS.contains_key(sid) {
+            && crate::ai_agent::conversation_engine::ACTIVE_CONVERSATIONS.contains_key(sid) {
                 return serde_json::json!({
                     "error": "Session is controlled by an active agent loop"
                 });
@@ -382,11 +382,12 @@ mod tests {
         use std::sync::atomic::AtomicBool;
         use parking_lot::{Mutex, RwLock};
         use tokio::sync::{broadcast, Notify};
-        use crate::ai_agent::engine::{ACTIVE_AGENTS, AgentHandle, AgentState};
+        use crate::ai_agent::engine::AgentState;
+        use crate::ai_agent::conversation_engine::{ACTIVE_CONVERSATIONS, ConversationHandle, ConversationEvent};
 
         let sid = "mcp-guard-test-session";
-        let (tx, _rx) = broadcast::channel(4);
-        ACTIVE_AGENTS.insert(sid.to_string(), AgentHandle {
+        let (tx, _rx) = broadcast::channel::<ConversationEvent>(4);
+        ACTIVE_CONVERSATIONS.insert(sid.to_string(), ConversationHandle {
             cancel: Arc::new(AtomicBool::new(false)),
             state: Arc::new(RwLock::new(AgentState::Running)),
             pause_notify: Arc::new(Notify::new()),
@@ -415,6 +416,6 @@ mod tests {
             e.as_str().unwrap() != "Session is controlled by an active agent loop"
         }));
 
-        ACTIVE_AGENTS.remove(sid);
+        ACTIVE_CONVERSATIONS.remove(sid);
     }
 }

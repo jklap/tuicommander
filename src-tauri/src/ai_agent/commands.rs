@@ -6,102 +6,10 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::state::AppState;
-use super::engine::{self, ACTIVE_AGENTS, LlmRuntime, TrustLevel};
+use super::engine;
+use super::conversation_engine::ACTIVE_CONVERSATIONS;
 use super::knowledge::{OutcomeClass, SessionKnowledge};
 use super::tui_detect::TerminalMode;
-
-/// Build the LLM runtime (provider/model/base_url/api key) that the agent
-/// loop uses. Lives here — at the Tauri command boundary — so `engine.rs`
-/// stays decoupled from `ai_chat` config and keyring I/O.
-pub(crate) fn build_llm_runtime_for_scheduler() -> Result<LlmRuntime, String> {
-    build_llm_runtime()
-}
-
-fn build_llm_runtime() -> Result<LlmRuntime, String> {
-    use crate::provider_registry::{SlotName, load_registry, resolve_slot};
-    use super::engine::ToolPhase;
-
-    let registry = load_registry();
-    let resolved = resolve_slot(&registry, SlotName::Main)?;
-
-    // Build model_overrides from registry.phase_overrides.
-    // Only include overrides that differ from the main model.
-    let mut model_overrides = std::collections::HashMap::new();
-    for (phase, model_id) in &registry.phase_overrides {
-        if let Some(model) = registry.models.iter().find(|m| &m.id == model_id) {
-            if model.model_name != resolved.config.model {
-                model_overrides.insert(*phase, model.model_name.clone());
-            }
-        }
-    }
-
-    // Ensure Search and Read are both set if either is present.
-    if let Some(s) = model_overrides.get(&ToolPhase::Search).cloned() {
-        model_overrides.entry(ToolPhase::Read).or_insert(s);
-    } else if let Some(r) = model_overrides.get(&ToolPhase::Read).cloned() {
-        model_overrides.entry(ToolPhase::Search).or_insert(r);
-    }
-
-    Ok(LlmRuntime {
-        config: resolved.config,
-        api_key: resolved.api_key,
-        model_overrides,
-    })
-}
-
-/// Start an agent loop on a terminal session.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn start_agent_loop(
-    state: State<'_, Arc<AppState>>,
-    session_id: String,
-    goal: String,
-    #[allow(unused_variables)]
-    unrestricted: Option<bool>,
-) -> Result<String, String> {
-    let state = Arc::clone(&state);
-    let app_handle = state.app_handle.read().clone();
-    let runtime = build_llm_runtime()?;
-    let trust_level = if unrestricted.unwrap_or(false) {
-        TrustLevel::Unrestricted
-    } else {
-        TrustLevel::Standard
-    };
-
-    // Wire up the file sandbox before starting the loop. Without this, every
-    // file tool returns "No filesystem sandbox for session" in standard mode.
-    let sandbox_root: Option<String> = state
-        .sessions
-        .get(&session_id)
-        .and_then(|s| s.lock().cwd.clone());
-    if let Some(root) = sandbox_root {
-        match super::sandbox::FileSandbox::new(&root) {
-            Ok(sandbox) => {
-                state.file_sandboxes.insert(session_id.clone(), sandbox);
-            }
-            Err(e) => {
-                tracing::warn!("Could not create file sandbox for {session_id} (root={root}): {e}");
-            }
-        }
-    }
-
-    let mut rx =
-        engine::start_agent_loop(state, session_id.clone(), goal, runtime, trust_level).await?;
-
-    // Bridge broadcast events to Tauri's emit system so the frontend can
-    // subscribe via `listen("agent-loop-event", ...)`.
-    if let Some(handle) = app_handle {
-        tokio::spawn(async move {
-#[cfg(feature = "desktop")]
-            use tauri::Emitter;
-            while let Ok(event) = rx.recv().await {
-                let _ = handle.emit("agent-loop-event", &event);
-            }
-        });
-    }
-
-    Ok(format!("Agent started on session {session_id}"))
-}
 
 /// Start a unified conversation via the new conversation_engine.
 /// Uses per-conversation Channel transport with 50ms TextChunk batching.
@@ -214,39 +122,12 @@ pub(crate) fn approve_conversation_action(
     super::conversation_engine::approve_conversation_action(&session_id, approved)
 }
 
-/// Cancel an active agent loop.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn cancel_agent_loop(
-    session_id: String,
-) -> Result<String, String> {
-    engine::cancel_agent_loop(&session_id)?;
-    Ok(format!("Agent cancelled on session {session_id}"))
-}
-
-/// Pause an active agent loop.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn pause_agent_loop(
-    session_id: String,
-) -> Result<String, String> {
-    engine::pause_agent_loop(&session_id)?;
-    Ok(format!("Agent paused on session {session_id}"))
-}
-
-/// Resume a paused agent loop.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn resume_agent_loop(
-    session_id: String,
-) -> Result<String, String> {
-    engine::resume_agent_loop(&session_id)?;
-    Ok(format!("Agent resumed on session {session_id}"))
-}
-
 /// Get the status of an agent loop.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn agent_loop_status(
     session_id: String,
 ) -> Result<serde_json::Value, String> {
-    let entry = ACTIVE_AGENTS.get(&session_id);
+    let entry = ACTIVE_CONVERSATIONS.get(&session_id);
     match entry {
         Some(handle) => {
             let state = *handle.state.read();
@@ -262,25 +143,6 @@ pub(crate) async fn agent_loop_status(
             "session_id": session_id,
         })),
     }
-}
-
-/// Approve or reject a pending destructive command from the agent.
-/// Resolves the oneshot channel that the engine is blocking on.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn approve_agent_action(
-    session_id: String,
-    approved: bool,
-) -> Result<String, String> {
-    let entry = ACTIVE_AGENTS.get(&session_id)
-        .ok_or_else(|| format!("No active agent on session {session_id}"))?;
-    let tx = entry.approval_tx.lock().take()
-        .ok_or_else(|| format!("No pending approval on session {session_id}"))?;
-    tx.send(approved)
-        .map_err(|_| format!("Approval channel closed for session {session_id}"))?;
-    Ok(format!(
-        "Action {} for session {session_id}",
-        if approved { "approved" } else { "rejected" }
-    ))
 }
 
 /// Compact outcome shape for the frontend session-knowledge bar. Omits full
@@ -605,35 +467,17 @@ pub(crate) async fn get_session_knowledge(
 mod tests {
     use super::*;
 
-    #[test]
-    fn cancel_nonexistent_errors() {
-        let result = engine::cancel_agent_loop("nonexistent");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn pause_nonexistent_errors() {
-        let result = engine::pause_agent_loop("nonexistent");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn resume_nonexistent_errors() {
-        let result = engine::resume_agent_loop("nonexistent");
-        assert!(result.is_err());
-    }
-
     #[tokio::test]
     async fn status_nonexistent_returns_inactive() {
         // Simulate what agent_loop_status does without Tauri State
-        let entry = ACTIVE_AGENTS.get("nonexistent");
+        let entry = ACTIVE_CONVERSATIONS.get("nonexistent");
         assert!(entry.is_none());
     }
 
     #[test]
     fn active_agents_is_empty_initially() {
         // Fresh test — no agents should be active for random IDs
-        assert!(!ACTIVE_AGENTS.contains_key("test-fresh-id-12345"));
+        assert!(!ACTIVE_CONVERSATIONS.contains_key("test-fresh-id-12345"));
     }
 
     #[test]

@@ -1516,7 +1516,7 @@ fn exec_get_agent_status(args: &Value) -> ToolResult {
     let Some(target) = args["target_session_id"].as_str() else {
         return missing_arg("target_session_id");
     };
-    match super::engine::ACTIVE_AGENTS.get(target) {
+    match super::conversation_engine::ACTIVE_CONVERSATIONS.get(target) {
         Some(handle) => {
             let state = *handle.state.read();
             ToolResult::ok(json!({ "session_id": target, "state": state }).to_string())

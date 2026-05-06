@@ -163,7 +163,7 @@ describe("conversationStore terminal lifecycle (1410-1be8)", () => {
     // T1 is streaming; close it
     await store.onTerminalClose("T1");
 
-    const cancelCalls = mockInvoke.mock.calls.filter((c) => c[0] === "cancel_ai_chat");
+    const cancelCalls = mockInvoke.mock.calls.filter((c) => c[0] === "cancel_conversation");
     expect(cancelCalls.length).toBe(1);
 
     // State should be freed — getOrCreate returns a fresh empty state

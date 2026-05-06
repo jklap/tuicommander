@@ -104,7 +104,7 @@ impl Scheduler {
 
             self.last_fire.lock().insert(job.id.clone(), now);
 
-            if super::engine::ACTIVE_AGENTS.contains_key(
+            if super::conversation_engine::ACTIVE_CONVERSATIONS.contains_key(
                 job.target_session.as_deref().unwrap_or(""),
             ) {
                 tracing::info!(job_id = %job.id, "Skipping: target session busy");
@@ -136,23 +136,18 @@ impl Scheduler {
             }
         };
 
-        let runtime = match super::commands::build_llm_runtime_for_scheduler() {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(job_id = %job.id, "LLM runtime unavailable: {e}");
-                return;
-            }
+        use super::conversation_engine::{Autonomy, ConversationConfig, start_conversation};
+        use std::collections::HashSet;
+
+        let config = ConversationConfig {
+            autonomy: Autonomy::Autonomous,
+            max_steps: None,
+            temperature: 0.7,
+            model_override: None,
+            bypassed_tools: HashSet::new(),
         };
 
-        match super::engine::start_agent_loop(
-            self.state.clone(),
-            session_id.clone(),
-            job.goal.clone(),
-            runtime,
-            super::engine::TrustLevel::Standard,
-        )
-        .await
-        {
+        match start_conversation(self.state.clone(), session_id.clone(), job.goal.clone(), config).await {
             Ok(_rx) => {
                 tracing::info!(job_id = %job.id, session_id, "Scheduled agent started");
             }
