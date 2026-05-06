@@ -862,48 +862,19 @@ pub fn run() {
     // Tailscale detection + TLS provisioning happens inside the server thread (non-blocking to Tauri setup)
     {
         let remote_enabled = config.remote_access_enabled;
-        let mcp_state = state.clone();
-        let accumulator_state = state.clone();
-        let boot_registry_state = state.clone();
-        let ts_state_ref = state.clone();
+        let server_state = state.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new()
                 .expect("Failed to create tokio runtime for HTTP server");
             rt.block_on(async move {
-                // Start session state accumulator (consumes broadcast events)
-                AppState::spawn_session_state_accumulator(accumulator_state);
-
-                // Start tool search index updater (rebuilds on mcp_tools_changed)
-                crate::mcp_http::mcp_transport::spawn_tool_search_index_updater(boot_registry_state.clone());
-
-                // Start tombstone sweeper (reaps exited-session buffers after TTL)
-                crate::pty::spawn_tombstone_sweeper(boot_registry_state.clone());
-
-                // Start content index updater (rebuilds on repo-changed)
-                crate::content_index::spawn_content_index_updater(boot_registry_state.clone());
-
-                // Start session-knowledge debounced persister (flushes dirty sessions every 2s).
-                crate::ai_agent::knowledge::spawn_persist_task(boot_registry_state.clone());
-
-                // Start AI block enrichment worker (drains the opt-in queue populated
-                // at OSC 133 D markers). No-op unless the user enables the setting.
-                crate::ai_agent::enrichment::spawn_worker(boot_registry_state.clone());
-
-                // Start cron scheduler for time-triggered agent tasks
-                {
-                    let sched_state = boot_registry_state.clone();
-                    tokio::spawn(async move {
-                        let scheduler = crate::ai_agent::scheduler::Scheduler::new(sched_state);
-                        scheduler.run().await;
-                    });
-                }
+                spawn_background_tasks(&server_state);
 
                 // Detect Tailscale and provision TLS cert (async, doesn't block window render)
                 let tls_config = if remote_enabled {
                     let ts_state = tokio::task::spawn_blocking(tailscale::detect).await
                         .unwrap_or(tailscale::TailscaleState::NotInstalled);
                     tracing::info!(source = "tailscale", ?ts_state, "Tailscale detection result");
-                    *ts_state_ref.tailscale_state.write() = ts_state.clone();
+                    *server_state.tailscale_state.write() = ts_state.clone();
                     provision_tls_config(&ts_state).await
                 } else {
                     None
@@ -913,10 +884,11 @@ pub fn run() {
                 // bridge is reachable as soon as possible. Upstream connections
                 // can be slow (network timeouts, OAuth) and must not delay socket
                 // availability — that causes "MCP disconnected" in Claude Code.
-                mcp_http::start_server(mcp_state, true, remote_enabled, tls_config).await;
+                let srv_state = server_state.clone();
+                mcp_http::start_server(srv_state, true, remote_enabled, tls_config).await;
 
                 // Auto-connect saved upstream MCP servers (after socket is live)
-                crate::mcp_upstream_config::auto_connect_saved_upstreams(&boot_registry_state).await;
+                crate::mcp_upstream_config::auto_connect_saved_upstreams(&server_state).await;
             });
         });
     }
@@ -1507,6 +1479,23 @@ fn build_connect_url(scheme: &str, host: &str, port: u16, token: &str) -> String
     format!("{scheme}://{host}:{port}/?token={token}")
 }
 
+/// Spawn background tasks shared by both desktop and headless modes.
+fn spawn_background_tasks(state: &Arc<AppState>) {
+    AppState::spawn_session_state_accumulator(state.clone());
+    mcp_http::mcp_transport::spawn_tool_search_index_updater(state.clone());
+    pty::spawn_tombstone_sweeper(state.clone());
+    content_index::spawn_content_index_updater(state.clone());
+    ai_agent::knowledge::spawn_persist_task(state.clone());
+    ai_agent::enrichment::spawn_worker(state.clone());
+    {
+        let sched_state = state.clone();
+        tokio::spawn(async move {
+            let scheduler = ai_agent::scheduler::Scheduler::new(sched_state);
+            scheduler.run().await;
+        });
+    }
+}
+
 /// Run the headless (non-desktop) server.
 /// Called by the `tuicommander-remote` binary.
 #[cfg(not(feature = "desktop"))]
@@ -1518,7 +1507,22 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
 
     let mut app_config = config::load_app_config();
     app_config.remote_access_enabled = true;
-    app_config.remote_access_port = port;
+    if app_config.remote_access_port != port {
+        tracing::info!(
+            source = "remote",
+            config_port = app_config.remote_access_port,
+            override_port = port,
+            "Port overridden by TUIC_PORT / CLI argument"
+        );
+        app_config.remote_access_port = port;
+    }
+    if app_config.lan_auth_bypass {
+        tracing::warn!(
+            source = "remote",
+            "lan_auth_bypass is not supported in headless mode — forcing off"
+        );
+        app_config.lan_auth_bypass = false;
+    }
     if app_config.session_token.is_empty() {
         app_config.session_token = uuid::Uuid::new_v4().to_string();
     }
@@ -1536,25 +1540,22 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
     let state = Arc::new(app_state);
     state.wire_event_bus();
 
-    AppState::spawn_session_state_accumulator(state.clone());
-    mcp_http::mcp_transport::spawn_tool_search_index_updater(state.clone());
-    pty::spawn_tombstone_sweeper(state.clone());
-    content_index::spawn_content_index_updater(state.clone());
-    ai_agent::knowledge::spawn_persist_task(state.clone());
-    ai_agent::enrichment::spawn_worker(state.clone());
-    {
-        let sched_state = state.clone();
-        tokio::spawn(async move {
-            let scheduler = ai_agent::scheduler::Scheduler::new(sched_state);
-            scheduler.run().await;
-        });
-    }
+    spawn_background_tasks(&state);
 
     agent_mcp::ensure_mcp_configs(&app_config.disabled_mcp_agents);
 
     tracing::info!(source = "remote", port, "Starting tuicommander-remote");
 
-    mcp_http::start_server(state, true, true, None).await;
+    // Run server until SIGINT/SIGTERM, then shut down gracefully.
+    tokio::select! {
+        _ = mcp_http::start_server(state.clone(), true, true, None) => {}
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!(source = "remote", "Received shutdown signal");
+            if let Some(tx) = state.server_shutdown.lock().take() {
+                let _ = tx.send(());
+            }
+        }
+    }
 
     Ok(())
 }
