@@ -1165,7 +1165,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
     const fontFamily = settingsStore.getFontFamily();
     const fontSize = settingsStore.state.defaultFontSize;
     const fontWeight = settingsStore.state.fontWeight;
-    await document.fonts.load(`${fontWeight} ${fontSize}px ${fontFamily}`, "M").catch(() => document.fonts.ready);
+    await Promise.all([
+      document.fonts.load(`${fontWeight} ${fontSize}px ${fontFamily}`, "M"),
+      document.fonts.load(`400 ${fontSize}px "Symbols Nerd Font Mono"`, ""),
+    ]).catch(() => document.fonts.ready);
     remeasure();
 
     resizeObserver = new ResizeObserver(() => {
@@ -1295,8 +1298,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         } else if (e.key.length === 1) {
           props.onResumeDismiss?.();
           // Let the keystroke pass through to PTY
-          const seq = keyToSequence(e);
-          if (seq !== null) writePty(seq);
+          // macOS Right Option: send composed char directly, skip ESC prefix
+          if (isMacOS() && e.altKey && !leftOptionHeld) {
+            writePty(e.key);
+          } else {
+            const seq = keyToSequence(e);
+            if (seq !== null) writePty(seq);
+          }
         } else if (e.key === "Escape" || e.key === "Backspace" || e.key === "Delete" || e.key === "Tab") {
           e.preventDefault();
           props.onResumeDismiss?.();
@@ -1374,7 +1382,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
         }
       }
 
-      // macOS Alt/Option key handling (left Option only)
+      // macOS Alt/Option key handling
+      // Left Option → ESC sequences (word-jump, backward-kill-word, etc.)
+      // Right Option → compose characters (~ @ # [ ] { } on international keyboards)
       if (isMacOS() && e.altKey && !e.metaKey && !e.ctrlKey) {
         if (e.code === "AltLeft") {
           leftOptionHeld = true;
@@ -1387,6 +1397,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
             writePty(altSeq);
             return;
           }
+        }
+        // Right Option: send the composed character directly (e.g. ~ @ # [ ])
+        if (!leftOptionHeld && e.key.length === 1) {
+          e.preventDefault();
+          writePty(e.key);
+          return;
         }
       }
       if (!e.altKey) leftOptionHeld = false;
