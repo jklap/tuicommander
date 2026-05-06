@@ -6,10 +6,13 @@ use axum::Json;
 use super::types::*;
 use super::{err_500, json_result, validate_repo_path};
 
-pub(super) async fn repo_info(Query(q): Query<PathQuery>) -> Response {
+pub(super) async fn repo_info(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::AppState>>,
+    Query(q): Query<PathQuery>,
+) -> Response {
     if let Err(e) = validate_repo_path(&q.path) { return e.into_response(); }
     let path = q.path;
-    match tokio::task::spawn_blocking(move || crate::git::get_repo_info_impl(&path)).await {
+    match tokio::task::spawn_blocking(move || crate::git::get_repo_info_cached(&state, &path)).await {
         Ok(info) => Json(info).into_response(),
         Err(e) => err_500(&format!("Task failed: {e}")),
     }

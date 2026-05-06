@@ -161,6 +161,16 @@ pub(crate) fn get_repo_info_impl(path: &str) -> RepoInfo {
     }
 }
 
+/// Cached repo info for synchronous callers (MCP handlers, etc.).
+pub(crate) fn get_repo_info_cached(state: &AppState, path: &str) -> RepoInfo {
+    if let Some(cached) = AppState::get_cached(&state.git_cache.repo_info, path, GIT_CACHE_TTL) {
+        return cached;
+    }
+    let info = get_repo_info_impl(path);
+    AppState::set_cached(&state.git_cache.repo_info, path.to_string(), info.clone());
+    info
+}
+
 /// Get git repository info for a path (cached, 5s TTL)
 #[tauri::command]
 pub(crate) async fn get_repo_info(state: State<'_, Arc<AppState>>, path: String) -> Result<RepoInfo, String> {

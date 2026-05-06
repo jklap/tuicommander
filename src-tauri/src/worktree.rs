@@ -467,13 +467,31 @@ pub(crate) fn delete_local_branch(state: State<'_, Arc<AppState>>, repo_path: St
     Ok(())
 }
 
+/// Cached worktree paths for synchronous callers (MCP handlers, etc.).
+pub(crate) fn get_worktree_paths_cached(
+    state: &crate::state::AppState,
+    repo_path: &str,
+) -> HashMap<String, String> {
+    if let Some(cached) = crate::state::AppState::get_cached(
+        &state.git_cache.worktree_paths,
+        repo_path,
+        crate::state::GIT_CACHE_TTL,
+    ) {
+        return cached;
+    }
+    let paths = get_worktree_paths(repo_path.to_string()).unwrap_or_default();
+    crate::state::AppState::set_cached(
+        &state.git_cache.worktree_paths,
+        repo_path.to_string(),
+        paths.clone(),
+    );
+    paths
+}
+
 /// Get worktree paths for a repo: maps branch name -> worktree directory
 #[tauri::command]
 pub(crate) fn get_worktree_paths(repo_path: String) -> Result<HashMap<String, String>, String> {
     let base_repo = PathBuf::from(&repo_path);
-
-    // Prune stale worktree entries (directories that no longer exist on disk)
-    let _ = git_cmd(&base_repo).args(["worktree", "prune"]).run();
 
     let out = git_cmd(&base_repo)
         .args(["worktree", "list", "--porcelain"])

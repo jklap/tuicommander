@@ -4300,9 +4300,27 @@ pub(crate) fn terminal_search(
     session_id: String,
     query: String,
 ) -> Vec<crate::terminal_grid::SearchMatch> {
-    state.vt_log_buffers.get(&session_id)
-        .map(|vt| vt.lock().grid_search(&query))
-        .unwrap_or_default()
+    match state.vt_log_buffers.get(&session_id) {
+        Some(vt) => {
+            let buf = vt.lock();
+            let is_alt = buf.is_alternate_screen();
+            let results = buf.grid_search(&query);
+            tracing::info!(
+                session_id = %session_id,
+                query = %query,
+                is_alt_screen = is_alt,
+                result_count = results.len(),
+                history_size = buf.grid_history_size(),
+                screen_lines = buf.grid_screen_lines(),
+                "terminal_search"
+            );
+            results
+        }
+        None => {
+            tracing::warn!(session_id = %session_id, query = %query, "terminal_search: session not found in vt_log_buffers");
+            Vec::new()
+        }
+    }
 }
 
 #[tauri::command]

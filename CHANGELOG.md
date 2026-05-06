@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-05-06
+
+### Added
+- **Cached git helpers for MCP** — `get_repo_info_cached`, `get_github_status_cached`, `get_worktree_paths_cached` avoid redundant git subprocess spawns in synchronous MCP handlers.
+- **Content index in-flight guard** — `DashSet`-based dedup prevents concurrent index rebuilds for the same repo on rapid `RepoChanged` events.
+- **Worktree switch agent notification** — When an agent is running, worktree switch dialog offers "Move & Notify" which reassigns the terminal to the new branch and sends a message to the agent instead of blindly `cd`-ing.
+
+### Fixed
+- **Terminal search broken** — `canvasTerminalRef` in `Terminal.tsx` was a plain `let` variable, invisible to SolidJS reactivity. `TerminalSearch` always saw `undefined` and silently returned no results. Converted to `createSignal`.
+- **Worktree `git worktree prune`** — Removed automatic prune from `get_worktree_paths` (was running on every call, including cached paths; prune is a write operation that shouldn't happen in a read path).
+
 ## [1.1.2] - 2026-05-06
 
 ### Added

@@ -9,6 +9,7 @@
 //! incrementally on `RepoChanged` events via file mtime tracking.
 
 use bm25::{Language, SearchEngineBuilder, SearchResult};
+use dashmap::DashSet;
 use ignore::WalkBuilder;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -247,7 +248,10 @@ impl ContentIndex {
 /// Without this supervisor the `JoinHandle` would be dropped, silently
 /// swallowing panics (e.g. allocation failure, poisoned locks) and leaving
 /// the index in a stale/empty state with no diagnostic.
-fn spawn_build<F>(repo: String, build_fn: F)
+///
+/// When `in_flight` is provided, the repo key is removed on completion
+/// (success or panic) so future rebuilds are not permanently blocked.
+fn spawn_build<F>(repo: String, build_fn: F, in_flight: Option<Arc<DashSet<String>>>)
 where
     F: FnOnce() + Send + 'static,
 {
@@ -255,6 +259,9 @@ where
     tokio::spawn(async move {
         if let Err(e) = handle.await {
             tracing::error!(repo = %repo, error = ?e, "content index build task panicked");
+        }
+        if let Some(set) = in_flight {
+            set.remove(&repo);
         }
     });
 }
@@ -289,20 +296,30 @@ pub fn ensure_index(
         let built = ContentIndex::build(PathBuf::from(&repo), Some(&throttle));
         *index_ref.write() = built;
         tracing::info!(repo = %repo, "content index built");
-    });
+    }, None);
 
     index
 }
 
 /// Rebuild the content index for a repo (called on RepoChanged events).
-/// Runs in background, does not block.
-pub fn rebuild_index(state: &Arc<crate::state::AppState>, repo_path: &str) {
+/// Runs in background, does not block. Skips if a build is already in-flight
+/// for this repo — the next `RepoChanged` will pick up any missed changes.
+pub fn rebuild_index(
+    state: &Arc<crate::state::AppState>,
+    repo_path: &str,
+    in_flight: &Arc<DashSet<String>>,
+) {
     let index = if let Some(existing) = state.content_indices.get(repo_path) {
         Arc::clone(existing.value())
     } else {
         // No index yet — nothing to rebuild
         return;
     };
+
+    if !in_flight.insert(repo_path.to_string()) {
+        tracing::debug!(repo = %repo_path, "content index rebuild skipped (already in-flight)");
+        return;
+    }
 
     let repo = repo_path.to_string();
     let throttle = Arc::clone(&state.indexer_throttle);
@@ -311,18 +328,19 @@ pub fn rebuild_index(state: &Arc<crate::state::AppState>, repo_path: &str) {
         let built = ContentIndex::build(PathBuf::from(&repo), Some(&throttle));
         *index.write() = built;
         tracing::debug!(repo = %repo, "content index rebuilt");
-    });
+    }, Some(Arc::clone(in_flight)));
 }
 
 /// Spawn a background task that listens to the event bus and rebuilds
 /// content indices when repos change. Should be called once at startup.
 pub fn spawn_content_index_updater(state: Arc<crate::state::AppState>) {
     let mut rx = state.event_bus.subscribe();
+    let in_flight: Arc<DashSet<String>> = Arc::new(DashSet::new());
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
                 Ok(crate::state::AppEvent::RepoChanged { repo_path }) => {
-                    rebuild_index(&state, &repo_path);
+                    rebuild_index(&state, &repo_path, &in_flight);
                 }
                 Ok(other) => {
                     // Other AppEvent variants intentionally ignored by the

@@ -129,7 +129,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
   let sessionId: string | null = null;
   const [_currentSessionId, setCurrentSessionId] = createSignal<string | null>(null);
 
-  let canvasTerminalRef: CanvasTerminalRef | undefined;
+  const [canvasTerminalRef, setCanvasTerminalRef] = createSignal<CanvasTerminalRef | undefined>();
   let pendingCanvasFocus = false;
 
   const [searchVisible, setSearchVisible] = createSignal(false);
@@ -699,7 +699,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
         initSession();
 
         if (terminalsStore.state.activeId === props.id) {
-          canvasTerminalRef?.focus();
+          canvasTerminalRef()?.focus();
         }
       });
 
@@ -748,7 +748,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
   });
 
   const refMethods = {
-    fit: () => canvasTerminalRef?.refresh(),
+    fit: () => canvasTerminalRef()?.refresh(),
     write: (data: string) => {
       if (sessionId) pty.write(sessionId, data).catch((err) => appLogger.error("terminal", "Failed to write to PTY", err));
     },
@@ -761,9 +761,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
     clear: () => {
       if (sessionId) pty.write(sessionId, "\x1b[2J\x1b[H\x1b[3J").catch(() => {});
     },
-    refresh: () => canvasTerminalRef?.refresh(),
+    refresh: () => canvasTerminalRef()?.refresh(),
     focus: () => {
-      if (canvasTerminalRef) canvasTerminalRef.focus();
+      const ref = canvasTerminalRef();
+      if (ref) ref.focus();
       else pendingCanvasFocus = true;
     },
     getSessionId: () => sessionId,
@@ -824,7 +825,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
         }).catch(() => {});
       }
     },
-    getSelection: () => canvasTerminalRef?.getSelectionText() ?? "",
+    getSelection: () => canvasTerminalRef()?.getSelectionText() ?? "",
     getBufferLines: (startLine: number, endLine: number) => {
       if (!sessionId) return [];
       return invoke("terminal_get_lines", { sessionId, start: startLine, end: endLine }) as Promise<string[]>;
@@ -861,7 +862,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     e.preventDefault();
     e.stopPropagation();
     terminalsStore.update(props.id, { pendingResumeCommand: null });
-    canvasTerminalRef?.focus();
+    canvasTerminalRef()?.focus();
   };
 
   const handleFileDragOver = (e: DragEvent) => {
@@ -877,7 +878,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
     e.preventDefault();
     const quoted = `'${path.replace(/'/g, "'\\''")}' `;
     pty.write(sessionId, quoted);
-    canvasTerminalRef?.focus();
+    canvasTerminalRef()?.focus();
   };
 
   return (
@@ -890,10 +891,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
     >
       <TerminalSearch
         visible={searchVisible()}
-        canvasRef={canvasTerminalRef}
+        canvasRef={canvasTerminalRef()}
         onClose={() => {
           setSearchVisible(false);
-          canvasTerminalRef?.focus();
+          canvasTerminalRef()?.focus();
         }}
       />
       <Show when={reconnecting()}>
@@ -923,7 +924,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
             hasPendingResume={!!terminalsStore.get(props.id)?.pendingResumeCommand}
             onFocus={() => props.onFocus?.(props.id)}
             onCwdChange={props.onCwdChange}
-            onRef={(ref) => { canvasTerminalRef = ref; if (pendingCanvasFocus) { pendingCanvasFocus = false; ref.focus(); } }}
+            onRef={(ref) => { setCanvasTerminalRef(ref); if (pendingCanvasFocus) { pendingCanvasFocus = false; ref.focus(); } }}
             onBell={handleBell}
           />}
         </Show>
@@ -945,7 +946,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
         initialText={pendingComposeText}
         onClose={() => {
           setComposeOpen(false);
-          canvasTerminalRef?.focus();
+          canvasTerminalRef()?.focus();
         }}
         onSend={async (text) => {
           if (sessionId) {
@@ -953,13 +954,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
               const term = terminalsStore.get(props.id);
               await pty.sendCommand(sessionId, text, term?.agentType);
               setComposeOpen(false);
-              canvasTerminalRef?.focus();
+              canvasTerminalRef()?.focus();
             } catch (err) {
               appLogger.error("terminal", "ComposePanel send failed", { sessionId, error: err });
             }
           } else {
             setComposeOpen(false);
-            canvasTerminalRef?.focus();
+            canvasTerminalRef()?.focus();
           }
         }}
       />

@@ -1504,6 +1504,16 @@ pub(crate) async fn filter_changed_repos(
     changed
 }
 
+/// Cached github status for synchronous callers (MCP handlers, etc.).
+pub(crate) fn get_github_status_cached(state: &AppState, path: &str) -> GitHubStatus {
+    if let Some(cached) = AppState::get_cached(&state.git_cache.git_status, path, GIT_CACHE_TTL) {
+        return cached;
+    }
+    let status = get_github_status_impl(path);
+    AppState::set_cached(&state.git_cache.git_status, path.to_string(), status.clone());
+    status
+}
+
 /// Tauri command wrapper — cached with GIT_CACHE_TTL to avoid spawning git subprocesses every poll.
 #[tauri::command]
 pub(crate) async fn get_github_status(

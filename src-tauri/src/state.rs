@@ -1236,6 +1236,7 @@ pub(crate) struct GitCacheState {
     pub(crate) github_status: DashMap<String, (Vec<crate::github::BranchPrStatus>, Instant)>,
     pub(crate) git_status: DashMap<String, (crate::github::GitHubStatus, Instant)>,
     pub(crate) git_panel_context: DashMap<String, (crate::git::GitPanelContext, Instant)>,
+    pub(crate) worktree_paths: DashMap<String, (std::collections::HashMap<String, String>, Instant)>,
     /// Repos that returned null from GitHub GraphQL (not found / no access).
     /// Keyed by "owner/name", value is the cooldown expiry time.
     /// Excluded from batch queries until the cooldown expires (1 hour).
@@ -1251,6 +1252,7 @@ impl GitCacheState {
             github_status: DashMap::new(),
             git_status: DashMap::new(),
             git_panel_context: DashMap::new(),
+            worktree_paths: DashMap::new(),
             github_repo_cooldown: DashMap::new(),
         }
     }
@@ -1267,6 +1269,7 @@ impl GitCacheState {
         self.github_status.clear();
         self.git_status.clear();
         self.git_panel_context.clear();
+        self.worktree_paths.clear();
     }
 
     /// Invalidate caches for a specific repo path.
@@ -1277,6 +1280,7 @@ impl GitCacheState {
         self.github_status.remove(path);
         self.git_status.remove(path);
         self.git_panel_context.remove(path);
+        self.worktree_paths.remove(path);
     }
 }
 
@@ -2049,6 +2053,10 @@ impl VtLogBuffer {
 
     pub(crate) fn grid_screen_lines(&self) -> usize {
         self.grid.screen_lines()
+    }
+
+    pub(crate) fn grid_history_size(&self) -> usize {
+        self.grid.scrollback_count()
     }
 
     // --- Search delegate ---

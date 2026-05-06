@@ -1,8 +1,10 @@
-import { onCleanup } from "solid-js";
+import { onCleanup, batch } from "solid-js";
 import { listen, invoke } from "../invoke";
 import { terminalsStore } from "../stores/terminals";
+import { repositoriesStore } from "../stores/repositories";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
+import { sendCommand } from "../utils/sendCommand";
 import type { ConfirmOptions } from "./useConfirmDialog";
 
 interface WorktreeSwitchDeps {
@@ -53,25 +55,55 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
     branch: string,
     worktreePath: string,
   ): Promise<void> {
+    const activeTerm = terminalsStore.getActive();
+    const isAgentRunning = activeTerm?.agentType != null;
+
+    const message = isAgentRunning
+      ? `Worktree "${branch}" was created.\nAn agent is running — it cannot switch directories mid-session.\nMove this terminal to the worktree branch and notify the agent?`
+      : `Worktree "${branch}" was created.\nSwitch to it now?`;
+
     const confirmed = await deps.confirm({
       title: "Switch to new worktree?",
-      message: `Worktree "${branch}" was created.\nSwitch to it now?`,
-      okLabel: "Switch",
+      message,
+      okLabel: isAgentRunning ? "Move & Notify" : "Switch",
       cancelLabel: "Stay",
       kind: "info",
     });
     if (!confirmed) return;
 
-    // Switch the tab/branch
+    // Switch the sidebar tab/branch
     await deps.handleBranchSelect(repoPath, branch);
 
-    // cd the active terminal into the worktree path
-    const activeTerm = terminalsStore.getActive();
+    // Move the active terminal to the new branch in the store
     if (activeTerm?.sessionId) {
-      await invoke("write_pty", {
-        id: activeTerm.sessionId,
-        data: `cd ${shellEscape(worktreePath)}\n`,
+      const terminalId = activeTerm.id;
+      const currentMapping = repositoriesStore.findOwnerForTerminal(terminalId);
+
+      batch(() => {
+        if (currentMapping) {
+          repositoriesStore.removeTerminalFromBranch(currentMapping.repoPath, currentMapping.branchName, terminalId);
+        }
+        repositoriesStore.addTerminalToBranch(repoPath, branch, terminalId);
       });
+
+      if (isAgentRunning) {
+        const writeFn = async (data: string): Promise<void> => { await invoke("write_pty", { id: activeTerm.sessionId, data }); };
+        await sendCommand(
+          writeFn,
+          `A worktree for branch "${branch}" was created at ${worktreePath}. ` +
+          `You cannot switch directories mid-session. ` +
+          `Stop what you are doing and instruct the user to start a new session in the worktree. ` +
+          `The user should open a new terminal in the "${branch}" branch tab in the sidebar.`,
+          activeTerm.agentType,
+        );
+        appLogger.info("terminal", `[WorktreeSwitch] ${terminalId} → ${branch} (notified agent)`);
+      } else {
+        await invoke("write_pty", {
+          id: activeTerm.sessionId,
+          data: `cd ${shellEscape(worktreePath)}\n`,
+        });
+        appLogger.info("terminal", `[WorktreeSwitch] ${terminalId} → ${branch}`);
+      }
     }
   }
 }
