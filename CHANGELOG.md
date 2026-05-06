@@ -6,9 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-05-06
+
 ### Added
 - **Contributing guide** — `CONTRIBUTING.md` with test requirements, quality gates, PR guidelines, and common rejection reasons.
 - **Parallel GitHub ETag filtering** — `filter_changed_repos` now fires all ETag requests concurrently via `join_all`, reducing poll latency for multi-repo setups.
+- **Browser-mode dictation routes** — HTTP endpoint mappings for dictation, notification sound, relay status, update channel, and `detect_all_agent_binaries`. Dictation settings tab hidden in browser mode.
+- **Terminal link underlines** — Detected links always show dashed underlines; solid underline on hover.
+
+### Changed
+- **Scroll reverted to progressive acceleration** — Replaced inertia-based scrolling with previous progressive acceleration approach.
 
 ### Fixed
 - **`has_custom_settings()` completeness** — Now includes `mcp_upstreams` and `branch_labels` fields, preventing premature config pruning.
