@@ -26,8 +26,8 @@ vi.mock("../../panelRouter", () => ({
   closePanel: mockClosePanel,
 }));
 
-vi.mock("../../stores/aiChatStore", () => ({
-  aiChatStore: {
+vi.mock("../../stores/conversationStore", () => ({
+  conversationStore: {
     messages: () => [],
     isStreaming: () => false,
     streamingText: () => "",
@@ -42,25 +42,19 @@ vi.mock("../../stores/aiChatStore", () => ({
     listAllConversations: vi.fn().mockResolvedValue([]),
     loadConversation: vi.fn(),
     resetChatId: vi.fn(),
-  },
-}));
-
-vi.mock("../../stores/aiAgentStore", () => ({
-  aiAgentStore: {
     agentState: () => "idle",
     toolCalls: () => [],
     textChunks: () => null,
-    agentType: () => null,
     unrestricted: () => false,
     setUnrestricted: vi.fn(),
     startAgent: vi.fn(),
-    stopAgent: vi.fn(),
     pauseAgent: vi.fn(),
     resumeAgent: vi.fn(),
     cancelAgent: vi.fn(),
     pendingApproval: () => null,
     approveAction: vi.fn(),
     currentIteration: () => 0,
+    reset: vi.fn(),
   },
 }));
 

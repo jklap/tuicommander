@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 
-// Mock @tauri-apps/api/core — aiChatStore dynamic-imports invoke from here.
+// Mock @tauri-apps/api/core — conversationStore dynamic-imports invoke from here.
 const mockInvoke = vi.fn();
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: mockInvoke,
@@ -24,15 +24,15 @@ vi.mock("../../stores/appLogger", () => ({
   },
 }));
 
-describe("aiChatStore persistence (1385-87c6)", () => {
-  let store: typeof import("../../stores/aiChatStore").aiChatStore;
+describe("conversationStore persistence (1385-87c6)", () => {
+  let store: typeof import("../../stores/conversationStore").conversationStore;
 
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();
     mockInvoke.mockReset();
     globalThis.localStorage?.clear();
-    store = (await import("../../stores/aiChatStore")).aiChatStore;
+    store = (await import("../../stores/conversationStore")).conversationStore;
   });
 
   afterEach(() => {
@@ -140,15 +140,15 @@ describe("aiChatStore persistence (1385-87c6)", () => {
   });
 });
 
-describe("aiChatStore terminal lifecycle (1410-1be8)", () => {
-  let store: typeof import("../../stores/aiChatStore").aiChatStore;
+describe("conversationStore terminal lifecycle (1410-1be8)", () => {
+  let store: typeof import("../../stores/conversationStore").conversationStore;
 
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();
     mockInvoke.mockReset();
     globalThis.localStorage?.clear();
-    store = (await import("../../stores/aiChatStore")).aiChatStore;
+    store = (await import("../../stores/conversationStore")).conversationStore;
     mockInvoke.mockResolvedValue(undefined);
   });
 
@@ -199,9 +199,9 @@ describe("aiChatStore terminal lifecycle (1410-1be8)", () => {
   });
 });
 
-describe("aiChatStore streaming — per-terminal (1408-a8d8)", () => {
-  let store: typeof import("../../stores/aiChatStore").aiChatStore;
-  // Capture Channel instances by chatId so we can fire callbacks manually
+describe("conversationStore streaming — per-terminal (1408-a8d8)", () => {
+  let store: typeof import("../../stores/conversationStore").conversationStore;
+  // Capture Channel instances so we can fire callbacks manually
   const channels: Map<string, { onmessage: ((msg: unknown) => void) | null }> = new Map();
 
   beforeEach(async () => {
@@ -212,39 +212,35 @@ describe("aiChatStore streaming — per-terminal (1408-a8d8)", () => {
     globalThis.localStorage?.clear();
 
     mockInvoke.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
-      if (cmd === "stream_ai_chat") {
-        // Capture the channel by chatId
+      if (cmd === "start_conversation") {
+        // Capture the channel by the active terminal key (we don't have chatId here, use a counter)
         const ch = args?.["onEvent"] as { onmessage: ((msg: unknown) => void) | null };
-        if (ch && args?.["chatId"]) channels.set(args["chatId"] as string, ch);
+        // Use sessionId as the channel key since that's what start_conversation receives
+        if (ch && args?.["sessionId"]) channels.set(args["sessionId"] as string, ch);
         return Promise.resolve();
       }
       if (cmd === "new_conversation_id") return Promise.resolve("new-id");
       return Promise.resolve();
     });
 
-    store = (await import("../../stores/aiChatStore")).aiChatStore;
+    store = (await import("../../stores/conversationStore")).conversationStore;
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("chunk from T1 stream updates T1 streamingText, not T2 (1408-a8d8)", async () => {
-    // Start stream on T1 (await so channel is registered before we switch)
+  it("text_chunk from T1 stream updates T1 streamingText, not T2 (1408-a8d8)", async () => {
     store.setActiveTerminal("T1");
     await store.sendMessage("hello from T1", "sess-T1");
-    const t1ChatId = store.chatId();
 
-    // Switch to T2 — T1 channel callback still targets T1
     store.setActiveTerminal("T2");
     await store.sendMessage("hello from T2", "sess-T2");
-    const t2ChatId = store.chatId();
-    expect(t1ChatId).not.toBe(t2ChatId);
 
-    // Fire chunk for T1's channel
-    const ch1 = channels.get(t1ChatId);
+    // Fire text_chunk for T1's channel (keyed by sessionId "sess-T1")
+    const ch1 = channels.get("sess-T1");
     expect(ch1).toBeDefined();
-    ch1!.onmessage?.({ event: "chunk", data: { text: "T1 chunk" } });
+    ch1!.onmessage?.({ type: "text_chunk", text: "T1 chunk" });
 
     // T1 should have streaming text, T2 should not
     store.setActiveTerminal("T1");
@@ -253,18 +249,18 @@ describe("aiChatStore streaming — per-terminal (1408-a8d8)", () => {
     expect(store.streamingText()).toBe("");
   });
 
-  it("end event for T1 finalizes T1 messages, T2 unaffected (1408-a8d8)", async () => {
+  it("completed event for T1 finalizes T1 messages, T2 unaffected (1408-a8d8)", async () => {
     store.setActiveTerminal("T1");
     await store.sendMessage("q", "sess-T1");
-    const t1ChatId = store.chatId();
 
     store.setActiveTerminal("T2");
     await store.sendMessage("q2", "sess-T2");
 
-    // End T1 stream while T2 is active
-    const ch1 = channels.get(t1ChatId);
+    // Fire text_chunk then completed for T1 while T2 is active
+    const ch1 = channels.get("sess-T1");
     expect(ch1).toBeDefined();
-    ch1!.onmessage?.({ event: "end", data: { fullText: "T1 response" } });
+    ch1!.onmessage?.({ type: "text_chunk", text: "T1 response" });
+    ch1!.onmessage?.({ type: "completed", reason: "end_turn", usage: null });
 
     store.setActiveTerminal("T1");
     expect(store.isStreaming()).toBe(false);
@@ -277,15 +273,15 @@ describe("aiChatStore streaming — per-terminal (1408-a8d8)", () => {
   });
 });
 
-describe("aiChatStore persistence — per-terminal (1407-56ca)", () => {
-  let store: typeof import("../../stores/aiChatStore").aiChatStore;
+describe("conversationStore persistence — per-terminal (1407-56ca)", () => {
+  let store: typeof import("../../stores/conversationStore").conversationStore;
 
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();
     mockInvoke.mockReset();
     globalThis.localStorage?.clear();
-    store = (await import("../../stores/aiChatStore")).aiChatStore;
+    store = (await import("../../stores/conversationStore")).conversationStore;
     mockInvoke.mockResolvedValue(undefined);
   });
 
@@ -324,7 +320,6 @@ describe("aiChatStore persistence — per-terminal (1407-56ca)", () => {
     const saves = mockInvoke.mock.calls.filter((c) => c[0] === "save_conversation");
     expect(saves.length).toBe(2);
     const sessionIds = saves.map((c) => c[1]?.conversation?.meta?.session_id as string);
-    // session_id in meta = chat key (tuicSession) — stable across PTY respawns
     expect(sessionIds).toContain("termA");
     expect(sessionIds).toContain("termB");
   });
@@ -356,21 +351,20 @@ describe("aiChatStore persistence — per-terminal (1407-56ca)", () => {
 
     expect(store.messages().length).toBe(2);
     expect(store.chatId()).toBe("conv-new");
-    // Should have loaded the most-recent match (updated=5), not the old one
     const loadCalls = mockInvoke.mock.calls.filter((c) => c[0] === "load_conversation");
     expect(loadCalls[0]?.[1]).toEqual({ id: "conv-new" });
   });
 });
 
-describe("aiChatStore history panel (1412-ae57)", () => {
-  let store: typeof import("../../stores/aiChatStore").aiChatStore;
+describe("conversationStore history panel (1412-ae57)", () => {
+  let store: typeof import("../../stores/conversationStore").conversationStore;
 
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.resetModules();
     mockInvoke.mockReset();
     globalThis.localStorage?.clear();
-    store = (await import("../../stores/aiChatStore")).aiChatStore;
+    store = (await import("../../stores/conversationStore")).conversationStore;
     mockInvoke.mockResolvedValue(undefined);
   });
 

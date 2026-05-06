@@ -107,7 +107,7 @@ import { useCiHeal } from "./hooks/useCiHeal";
 import { useSmartPrompts } from "./hooks/useSmartPrompts";
 import { registerAiChatContextActions } from "./components/AIChatPanel/contextMenuActions";
 import { AIChatPanel } from "./components/AIChatPanel/AIChatPanel";
-import { aiChatStore } from "./stores/aiChatStore";
+import { conversationStore } from "./stores/conversationStore";
 import { renderPanelMode, registerPanel, panelRegistry, togglePanel, detachPanel } from "./panelRouter";
 import { createPanelSyncProvider, type PanelAction } from "./utils/panelSync";
 import { activityPanelAdapter } from "./panelAdapters/activity";
@@ -115,7 +115,6 @@ import { gitPanelAdapter } from "./panelAdapters/git";
 import { fileBrowserPanelAdapter } from "./panelAdapters/fileBrowser";
 import { markdownPanelAdapter } from "./panelAdapters/markdown";
 import { notesPanelAdapter } from "./panelAdapters/notes";
-import { aiAgentStore } from "./stores/aiAgentStore";
 import { applyAppTheme, applyFontFamily } from "./themes";
 import { createLongPressHandlerFromHotkey } from "./hooks/useLongPressHotkey";
 import { sendCommand, getShellFamily } from "./utils/sendCommand";
@@ -141,10 +140,10 @@ registerPanel({
   title: "AI Chat",
   defaultSize: { width: 500, height: 700 },
   toggle: () => uiStore.toggleAiChatPanel(),
-  detachParams: () => ({ chatId: aiChatStore.chatId() }),
+  detachParams: () => ({ chatId: conversationStore.chatId() }),
   Component: (props: { params: URLSearchParams }) => {
     const chatId = props.params.get("chatId");
-    if (chatId) aiChatStore.setChatId(chatId);
+    if (chatId) conversationStore.setChatId(chatId);
     return <AIChatPanel visible={true} onClose={() => window.close()} />;
   },
 });
@@ -454,7 +453,7 @@ const App: Component = () => {
     aiChatDisposables = [];
     if (settingsStore.isAiChatEnabled()) {
       aiChatDisposables = registerAiChatContextActions();
-      void aiChatStore.initFromDisk();
+      void conversationStore.initFromDisk();
     } else if (uiStore.state.aiChatPanelVisible) {
       uiStore.setAiChatPanelVisible(false);
     }
@@ -469,7 +468,7 @@ const App: Component = () => {
   {
     let unlisten: (() => void) | undefined;
     listen<{ type: string; [key: string]: unknown }>("agent-loop-event", (event) => {
-      aiAgentStore.processEvent(event.payload);
+      conversationStore.processEvent(event.payload);
     }).then((fn) => { unlisten = fn; });
     onCleanup(() => unlisten?.());
   }
@@ -661,21 +660,21 @@ const App: Component = () => {
     if (id) { diffTabsStore.setActive(null); mdTabsStore.setActive(null); editorTabsStore.setActive(null); }
   }, { defer: true }));
 
-  // Wire terminal tab switches → aiChatStore per-terminal context
+  // Wire terminal tab switches → conversationStore per-terminal context
   createEffect(on(() => terminalsStore.state.activeId, (id) => {
     if (!id) return;
     const term = terminalsStore.get(id);
     const key = term?.tuicSession ?? id;
-    aiChatStore.setActiveTerminal(key);
-    void aiChatStore.initFromDisk(term?.tuicSession ?? undefined);
+    conversationStore.setActiveTerminal(key);
+    void conversationStore.initFromDisk(term?.tuicSession ?? undefined);
   }, { defer: true }));
 
-  // Wire terminal close → aiChatStore cleanup
+  // Wire terminal close → conversationStore cleanup
   {
     const dispose = terminalsStore.onRemove((id) => {
       const term = terminalsStore.get(id);
       const key = term?.tuicSession ?? id;
-      void aiChatStore.onTerminalClose(key);
+      void conversationStore.onTerminalClose(key);
     });
     onCleanup(dispose);
   }

@@ -8,8 +8,8 @@ vi.mock("../../../stores/ui", () => ({
   uiStore: { setAiChatPanelVisible: vi.fn() },
 }));
 
-vi.mock("../../../stores/aiChatStore", () => ({
-  aiChatStore: {
+vi.mock("../../../stores/conversationStore", () => ({
+  conversationStore: {
     setActiveTerminal: vi.fn(),
     sendMessage: vi.fn(),
   },
@@ -33,7 +33,7 @@ vi.mock("../../../stores/appLogger", () => ({
 }));
 
 import { uiStore } from "../../../stores/ui";
-import { aiChatStore } from "../../../stores/aiChatStore";
+import { conversationStore } from "../../../stores/conversationStore";
 
 describe("truncateText", () => {
   it("returns text as-is when under limit", () => {
@@ -95,11 +95,11 @@ describe("registerAiChatContextActions", () => {
     await explain.action({ target: "terminal", sessionId: "sess-1" });
 
     expect(uiStore.setAiChatPanelVisible).toHaveBeenCalledWith(true);
-    expect(aiChatStore.sendMessage).toHaveBeenCalledWith(
+    expect(conversationStore.sendMessage).toHaveBeenCalledWith(
       expect.stringContaining("Explain this terminal output"),
       "sess-1",
     );
-    expect(aiChatStore.sendMessage).toHaveBeenCalledWith(
+    expect(conversationStore.sendMessage).toHaveBeenCalledWith(
       expect.stringContaining("some selected output"),
       "sess-1",
     );
@@ -117,11 +117,11 @@ describe("registerAiChatContextActions", () => {
     await fixError.action({ target: "terminal", sessionId: "sess-2" });
 
     expect(uiStore.setAiChatPanelVisible).toHaveBeenCalledWith(true);
-    expect(aiChatStore.sendMessage).toHaveBeenCalledWith(
+    expect(conversationStore.sendMessage).toHaveBeenCalledWith(
       expect.stringContaining("Analyze this terminal error"),
       "sess-2",
     );
-    expect(aiChatStore.sendMessage).toHaveBeenCalledWith(
+    expect(conversationStore.sendMessage).toHaveBeenCalledWith(
       expect.stringContaining("How to fix it"),
       "sess-2",
     );
@@ -138,6 +138,6 @@ describe("registerAiChatContextActions", () => {
 
     explain.action({ target: "terminal", sessionId: "sess-3" });
 
-    expect(aiChatStore.sendMessage).not.toHaveBeenCalled();
+    expect(conversationStore.sendMessage).not.toHaveBeenCalled();
   });
 });

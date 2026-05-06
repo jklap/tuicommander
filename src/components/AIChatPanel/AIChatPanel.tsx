@@ -1,6 +1,5 @@
 import { Component, For, Show, createSignal, createEffect, createMemo, onCleanup } from "solid-js";
-import { aiChatStore, type ConversationMeta } from "../../stores/aiChatStore";
-import { aiAgentStore, type ToolCallEntry } from "../../stores/aiAgentStore";
+import { conversationStore, type ConversationMeta, type ToolCallEntry } from "../../stores/conversationStore";
 import { terminalsStore } from "../../stores/terminals";
 import { ContentRenderer } from "../ui/ContentRenderer";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
@@ -14,7 +13,7 @@ import { SessionKnowledgeBar } from "./SessionKnowledgeBar";
 
 const isPanelMode = () => new URLSearchParams(window.location.search).get("mode") === "panel";
 
-// DEFERRED (2026-04-25) — In detached panel mode, terminalsStore/aiAgentStore are empty
+// DEFERRED (2026-04-25) — In detached panel mode, terminalsStore/conversationStore are empty
 // (separate window = separate JS stores). Chat streaming works (Rust Channel), but sending
 // messages and agent controls are broken. Fix: sync active session ID via panel-action or
 // pass it as a URL param + listen for changes via emitTo.
@@ -213,7 +212,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
   const [historyList, setHistoryList] = createSignal<ConversationMeta[]>([]);
 
   const openHistory = () => {
-    void aiChatStore.listAllConversations().then(setHistoryList);
+    void conversationStore.listAllConversations().then(setHistoryList);
     setShowHistory(true);
   };
 
@@ -228,7 +227,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
   };
 
   const handleLoadConversation = async (id: string) => {
-    await aiChatStore.loadConversation(id);
+    await conversationStore.loadConversation(id);
     setShowHistory(false);
   };
 
@@ -242,18 +241,18 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 
   // ── Registry subscription lifecycle ─────────────────────────────────────
   createEffect(() => {
-    const id = aiChatStore.chatId();
-    void aiChatStore.subscribeToRegistry(id);
+    const id = conversationStore.chatId();
+    void conversationStore.subscribeToRegistry(id);
   });
   onCleanup(() => {
-    void aiChatStore.unsubscribeFromRegistry();
+    void conversationStore.unsubscribeFromRegistry();
   });
 
   // ── Auto-scroll on new messages / streaming chunks ──────────────────────
   createEffect(() => {
     // Subscribe to reactive dependencies
-    aiChatStore.streamingText();
-    aiChatStore.messages().length;
+    conversationStore.streamingText();
+    conversationStore.messages().length;
     if (messageListRef) {
       messageListRef.scrollTop = messageListRef.scrollHeight;
     }
@@ -273,12 +272,12 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
     const sid = activeSessionId();
 
     if (agentMode()) {
-      const st = aiAgentStore.agentState();
+      const st = conversationStore.agentState();
       if (st === "running" || st === "paused") return;
-      if (sid) aiAgentStore.startAgent(sid, text, aiAgentStore.unrestricted());
+      if (sid) conversationStore.startAgent(sid, text, conversationStore.unrestricted());
     } else {
-      if (aiChatStore.isStreaming()) return;
-      aiChatStore.sendMessage(text, sid);
+      if (conversationStore.isStreaming()) return;
+      conversationStore.sendMessage(text, sid);
     }
 
     setInputText("");
@@ -389,11 +388,11 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 
   // ── Retry last message on error ────────────────────────────────────────
   const handleRetry = () => {
-    const msgs = aiChatStore.messages();
+    const msgs = conversationStore.messages();
     const lastUser = [...msgs].reverse().find((m) => m.role === "user");
     if (lastUser) {
-      aiChatStore.setError(null);
-      aiChatStore.sendMessage(lastUser.content, activeSessionId());
+      conversationStore.setError(null);
+      conversationStore.sendMessage(lastUser.content, activeSessionId());
     }
   };
 
@@ -417,15 +416,15 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
         <div class={s.headerActions}>
           <Show when={agentMode()}>
             <button
-              class={cx(s.headerBtn, aiAgentStore.unrestricted() && s.headerBtnDanger)}
+              class={cx(s.headerBtn, conversationStore.unrestricted() && s.headerBtnDanger)}
               onClick={() => {
-                if (aiAgentStore.unrestricted()) {
-                  aiAgentStore.setUnrestricted(false);
+                if (conversationStore.unrestricted()) {
+                  conversationStore.setUnrestricted(false);
                 } else {
                   setShowUnrestrictedConfirm(true);
                 }
               }}
-              title={aiAgentStore.unrestricted() ? "Disable unrestricted mode" : "Enable unrestricted mode (no approval prompts)"}
+              title={conversationStore.unrestricted() ? "Disable unrestricted mode" : "Enable unrestricted mode (no approval prompts)"}
             >
               <IconUnlock />
             </button>
@@ -446,7 +445,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
           </button>
           <button
             class={s.headerBtn}
-            onClick={() => aiChatStore.clearHistory()}
+            onClick={() => conversationStore.clearHistory()}
             title="Clear conversation"
           >
             <IconTrash />
@@ -460,9 +459,9 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
       </div>
 
       {/* ── Error banner ────────────────────────────────────── */}
-      <Show when={aiChatStore.error()}>
+      <Show when={conversationStore.error()}>
         <div class={s.errorBanner}>
-          <span class={s.errorText}>{aiChatStore.error()}</span>
+          <span class={s.errorText}>{conversationStore.error()}</span>
           <button class={s.retryBtn} onClick={handleRetry}>Retry</button>
         </div>
       </Show>
@@ -482,7 +481,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
             <button
               class={cx(s.approvalBtn, s.denyBtn)}
               onClick={() => {
-                aiAgentStore.setUnrestricted(true);
+                conversationStore.setUnrestricted(true);
                 setShowUnrestrictedConfirm(false);
               }}
             >
@@ -499,38 +498,38 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
       </Show>
 
       {/* ── Unrestricted banner ───────────────────────────── */}
-      <Show when={aiAgentStore.unrestricted()}>
+      <Show when={conversationStore.unrestricted()}>
         <div class={s.unrestrictedBanner}>UNRESTRICTED</div>
       </Show>
 
       {/* ── Agent banner ──────────────────────────────────── */}
-      <Show when={aiAgentStore.agentState() === "running" || aiAgentStore.agentState() === "paused"}>
+      <Show when={conversationStore.agentState() === "running" || conversationStore.agentState() === "paused"}>
         <div class={s.agentBanner}>
           <IconRobot />
           <span class={s.agentBannerText}>
-            Agent {aiAgentStore.agentState() === "paused" ? "paused" : "running"}
+            Agent {conversationStore.agentState() === "paused" ? "paused" : "running"}
           </span>
           <span class={s.agentBannerIteration}>
-            iter {aiAgentStore.currentIteration() + 1}
+            iter {conversationStore.currentIteration() + 1}
           </span>
-          <Show when={aiAgentStore.agentState() === "running"}>
+          <Show when={conversationStore.agentState() === "running"}>
             <button
               class={s.agentBannerBtn}
               onClick={() => {
                 const sid = activeSessionId();
-                if (sid) aiAgentStore.pauseAgent(sid);
+                if (sid) conversationStore.pauseAgent(sid);
               }}
               title="Pause agent"
             >
               <IconPause />
             </button>
           </Show>
-          <Show when={aiAgentStore.agentState() === "paused"}>
+          <Show when={conversationStore.agentState() === "paused"}>
             <button
               class={s.agentBannerBtn}
               onClick={() => {
                 const sid = activeSessionId();
-                if (sid) aiAgentStore.resumeAgent(sid);
+                if (sid) conversationStore.resumeAgent(sid);
               }}
               title="Resume agent"
             >
@@ -541,7 +540,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
             class={cx(s.agentBannerBtn, s.agentBannerBtnDanger)}
             onClick={() => {
               const sid = activeSessionId();
-              if (sid) aiAgentStore.cancelAgent(sid);
+              if (sid) conversationStore.cancelAgent(sid);
             }}
             title="Stop agent"
           >
@@ -551,21 +550,21 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
       </Show>
 
       {/* ── Agent completion/error banner ─────────────────── */}
-      <Show when={["completed", "cancelled", "error"].includes(aiAgentStore.agentState())}>
-        <div class={cx(s.agentDoneBanner, aiAgentStore.agentState() === "error" && s.agentDoneBannerError)}>
+      <Show when={["completed", "cancelled", "error"].includes(conversationStore.agentState())}>
+        <div class={cx(s.agentDoneBanner, conversationStore.agentState() === "error" && s.agentDoneBannerError)}>
           <span class={s.agentBannerText}>
-            {aiAgentStore.agentState() === "completed"
-              ? `Agent done${aiAgentStore.completionReason() ? ` — ${aiAgentStore.completionReason()}` : ""}`
-              : aiAgentStore.agentState() === "cancelled"
+            {conversationStore.agentState() === "completed"
+              ? `Agent done${conversationStore.completionReason() ? ` — ${conversationStore.completionReason()}` : ""}`
+              : conversationStore.agentState() === "cancelled"
               ? "Agent cancelled"
-              : `Agent error: ${aiAgentStore.agentError() ?? "unknown error"}`}
+              : `Agent error: ${conversationStore.agentError() ?? "unknown error"}`}
           </span>
-          <button class={s.agentBannerBtn} onClick={() => aiAgentStore.reset()} title="Dismiss">✕</button>
+          <button class={s.agentBannerBtn} onClick={() => conversationStore.reset()} title="Dismiss">✕</button>
         </div>
       </Show>
 
       {/* ── Approval prompt ────────────────────────────────── */}
-      <Show when={aiAgentStore.pendingApproval()}>
+      <Show when={conversationStore.pendingApproval()}>
         {(approval) => (
           <div class={s.approvalCard}>
             <div class={s.approvalText}>
@@ -578,13 +577,13 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
             <div class={s.approvalActions}>
               <button
                 class={cx(s.approvalBtn, s.approveBtn)}
-                onClick={() => aiAgentStore.approveAction(approval().sessionId, true)}
+                onClick={() => conversationStore.approveAction(approval().sessionId, true)}
               >
                 Approve
               </button>
               <button
                 class={cx(s.approvalBtn, s.denyBtn)}
-                onClick={() => aiAgentStore.approveAction(approval().sessionId, false)}
+                onClick={() => conversationStore.approveAction(approval().sessionId, false)}
               >
                 Deny
               </button>
@@ -623,12 +622,12 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
       {/* ── Message list ────────────────────────────────────── */}
       <div class={cx(s.messageList, showHistory() && s.hidden)} ref={messageListRef}>
         <Show
-          when={aiChatStore.messages().length > 0 || aiChatStore.isStreaming()}
+          when={conversationStore.messages().length > 0 || conversationStore.isStreaming()}
           fallback={
             <div class={s.emptyState}>Ask me about your terminal output</div>
           }
         >
-          <For each={aiChatStore.messages()}>
+          <For each={conversationStore.messages()}>
             {(msg) => (
               <Show
                 when={msg.role === "user"}
@@ -651,23 +650,23 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
           </For>
 
           {/* Streaming text: render as markdown so formatting is progressive */}
-          <Show when={aiChatStore.isStreaming() && aiChatStore.streamingText()}>
+          <Show when={conversationStore.isStreaming() && conversationStore.streamingText()}>
             <div class={s.assistantMsg}>
-              <ContentRenderer content={aiChatStore.streamingText()!} />
+              <ContentRenderer content={conversationStore.streamingText()!} />
             </div>
           </Show>
 
           {/* Agent tool call cards */}
-          <Show when={aiAgentStore.toolCalls().length > 0}>
-            <For each={aiAgentStore.toolCalls()}>
+          <Show when={conversationStore.toolCalls().length > 0}>
+            <For each={conversationStore.toolCalls()}>
               {(entry) => <ToolCallCard entry={entry} />}
             </For>
           </Show>
 
           {/* Agent text output */}
-          <Show when={aiAgentStore.textChunks()}>
+          <Show when={conversationStore.textChunks()}>
             <div class={s.assistantMsg}>
-              <ContentRenderer content={aiAgentStore.textChunks()!} />
+              <ContentRenderer content={conversationStore.textChunks()!} />
             </div>
           </Show>
         </Show>
@@ -698,12 +697,12 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
           disabled={isFrozen()}
         />
         <Show
-          when={aiChatStore.isStreaming()}
+          when={conversationStore.isStreaming()}
           fallback={
             <button
               class={s.sendBtn}
               onClick={handleSend}
-              disabled={!inputText().trim() || aiChatStore.isStreaming() || isFrozen() || (agentMode() && (aiAgentStore.agentState() === "running" || aiAgentStore.agentState() === "paused"))}
+              disabled={!inputText().trim() || conversationStore.isStreaming() || isFrozen() || (agentMode() && (conversationStore.agentState() === "running" || conversationStore.agentState() === "paused"))}
               title="Send (Enter)"
             >
               <IconSend />
@@ -712,7 +711,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
         >
           <button
             class={s.stopBtn}
-            onClick={() => aiChatStore.cancelStream()}
+            onClick={() => conversationStore.cancelStream()}
             title="Stop generating"
           >
             <IconStop />
@@ -721,7 +720,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
       </div>
 
       {/* ── Usage footer ────────────────────────────────────── */}
-      <Show when={aiChatStore.sessionUsage()}>
+      <Show when={conversationStore.sessionUsage()}>
         {(usage) => {
           const prompt = () => usage().promptTokens ?? 0;
           const completion = () => usage().completionTokens ?? 0;

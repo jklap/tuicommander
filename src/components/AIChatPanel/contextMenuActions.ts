@@ -4,7 +4,7 @@
  */
 
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
-import { aiChatStore } from "../../stores/aiChatStore";
+import { conversationStore } from "../../stores/conversationStore";
 import { uiStore } from "../../stores/ui";
 import { terminalsStore } from "../../stores/terminals";
 import { appLogger } from "../../stores/appLogger";
@@ -23,7 +23,7 @@ function switchToTerminalBySession(sessionId: string): void {
     const t = terminalsStore.get(id);
     if (t?.sessionId === sessionId) {
       const key = t.tuicSession ?? id;
-      aiChatStore.setActiveTerminal(key);
+      conversationStore.setActiveTerminal(key);
       terminalsStore.setActive(id);
       return;
     }
@@ -83,7 +83,7 @@ export function registerAiChatContextActions(): Array<{ dispose(): void }> {
         const text = truncateText(raw, MAX_CHARS);
         uiStore.setAiChatPanelVisible(true);
         if (ctx.sessionId) switchToTerminalBySession(ctx.sessionId);
-        aiChatStore.sendMessage(
+        conversationStore.sendMessage(
           `Explain this terminal output:\n\n\`\`\`\n${text}\n\`\`\``,
           ctx.sessionId ?? null,
         );
@@ -106,7 +106,7 @@ export function registerAiChatContextActions(): Array<{ dispose(): void }> {
         const text = truncateText(raw, MAX_CHARS);
         uiStore.setAiChatPanelVisible(true);
         if (ctx.sessionId) switchToTerminalBySession(ctx.sessionId);
-        aiChatStore.sendMessage(
+        conversationStore.sendMessage(
           `Analyze this terminal error and suggest a fix:\n\n\`\`\`\n${text}\n\`\`\`\n\nExplain: 1) What went wrong 2) The root cause 3) How to fix it`,
           ctx.sessionId ?? null,
         );
