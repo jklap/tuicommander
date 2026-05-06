@@ -103,6 +103,117 @@ pub(crate) async fn start_agent_loop(
     Ok(format!("Agent started on session {session_id}"))
 }
 
+/// Start a unified conversation via the new conversation_engine.
+/// Uses per-conversation Channel transport with 50ms TextChunk batching.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn start_conversation(
+    state: tauri::State<'_, Arc<AppState>>,
+    session_id: String,
+    message: String,
+    autonomy: Option<String>,
+    max_steps: Option<usize>,
+    temperature: Option<f32>,
+    model_override: Option<String>,
+    bypassed_tools: Option<Vec<String>>,
+    on_event: tauri::ipc::Channel<super::conversation_engine::ConversationEvent>,
+) -> Result<(), String> {
+    use super::conversation_engine::{Autonomy, ConversationConfig, ConversationEvent, start_conversation as engine_start};
+    use std::collections::HashSet;
+
+    let config = ConversationConfig {
+        autonomy: match autonomy.as_deref() {
+            Some("autonomous") => Autonomy::Autonomous,
+            _ => Autonomy::Assisted,
+        },
+        max_steps,
+        temperature: temperature.unwrap_or(0.7),
+        model_override,
+        bypassed_tools: bypassed_tools.unwrap_or_default().into_iter().collect::<HashSet<_>>(),
+    };
+
+    let mut rx = engine_start(state.inner().clone(), session_id, message, config).await?;
+
+    // Bridge broadcast→Channel with 50ms TextChunk batching
+    tokio::spawn(async move {
+        let mut text_batch = String::new();
+        let mut interval = tokio::time::interval(std::time::Duration::from_millis(50));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(ConversationEvent::TextChunk { text }) => {
+                            text_batch.push_str(&text);
+                        }
+                        Ok(other) => {
+                            // Flush pending text batch before non-text event
+                            if !text_batch.is_empty() {
+                                let _ = on_event.send(ConversationEvent::TextChunk { text: text_batch.clone() });
+                                text_batch.clear();
+                            }
+                            let done = matches!(other, ConversationEvent::Completed { .. } | ConversationEvent::Error { .. });
+                            let _ = on_event.send(other);
+                            if done { break; }
+                        }
+                        Err(_) => {
+                            // Flush remaining text on channel close
+                            if !text_batch.is_empty() {
+                                let _ = on_event.send(ConversationEvent::TextChunk { text: text_batch.clone() });
+                            }
+                            break;
+                        }
+                    }
+                }
+                _ = interval.tick() => {
+                    if !text_batch.is_empty() {
+                        let _ = on_event.send(ConversationEvent::TextChunk { text: text_batch.clone() });
+                        text_batch.clear();
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// Cancel an active conversation (conversation_engine).
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn cancel_conversation(
+    session_id: String,
+) -> Result<String, String> {
+    super::conversation_engine::cancel_conversation(&session_id)?;
+    Ok(format!("Conversation cancelled on session {session_id}"))
+}
+
+/// Pause an active conversation.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn pause_conversation(
+    session_id: String,
+) -> Result<String, String> {
+    super::conversation_engine::pause_conversation(&session_id)?;
+    Ok(format!("Conversation paused on session {session_id}"))
+}
+
+/// Resume a paused conversation.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn resume_conversation(
+    session_id: String,
+) -> Result<String, String> {
+    super::conversation_engine::resume_conversation(&session_id)?;
+    Ok(format!("Conversation resumed on session {session_id}"))
+}
+
+/// Approve or reject a tool action in an active conversation.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn approve_conversation_action(
+    session_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    super::conversation_engine::approve_conversation_action(&session_id, approved)
+}
+
 /// Cancel an active agent loop.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn cancel_agent_loop(

@@ -78,7 +78,13 @@ pub(crate) enum ConversationEvent {
     Resumed,
     RateLimited { wait_ms: u64 },
     Error { message: String },
-    Completed { reason: String },
+    Completed { reason: String, usage: Option<ConversationUsage> },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ConversationUsage {
+    pub input_tokens: u32,
+    pub output_tokens: u32,
 }
 
 // ── Active conversations registry ─────────────────────────────
@@ -201,7 +207,7 @@ pub(crate) async fn start_conversation(
         match result {
             Ok(reason) => {
                 *conv_state.write() = AgentState::Completed;
-                let _ = event_tx.send(ConversationEvent::Completed { reason });
+                let _ = event_tx.send(ConversationEvent::Completed { reason, usage: None });
             }
             Err(e) => {
                 tracing::error!(session_id = %sid, error = %e, "Conversation failed");
@@ -607,7 +613,7 @@ mod tests {
 
     #[test]
     fn conversation_event_completed_serializes() {
-        let evt = ConversationEvent::Completed { reason: "end_turn".into() };
+        let evt = ConversationEvent::Completed { reason: "end_turn".into(), usage: None };
         let json = serde_json::to_string(&evt).unwrap();
         assert!(json.contains("\"type\":\"completed\""));
         assert!(json.contains("\"reason\":\"end_turn\""));
@@ -642,6 +648,60 @@ mod tests {
     #[test]
     fn approve_missing_session_errors() {
         assert!(approve_conversation_action("nonexistent-conv", true).is_err());
+    }
+
+    #[test]
+    fn conversation_event_paused_serializes() {
+        let json = serde_json::to_string(&ConversationEvent::Paused).unwrap();
+        assert!(json.contains("\"type\":\"paused\""));
+    }
+
+    #[test]
+    fn conversation_event_resumed_serializes() {
+        let json = serde_json::to_string(&ConversationEvent::Resumed).unwrap();
+        assert!(json.contains("\"type\":\"resumed\""));
+    }
+
+    #[test]
+    fn conversation_event_rate_limited_serializes() {
+        let evt = ConversationEvent::RateLimited { wait_ms: 2000 };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"rate_limited\""));
+        assert!(json.contains("\"wait_ms\":2000"));
+    }
+
+    #[test]
+    fn conversation_event_error_serializes() {
+        let evt = ConversationEvent::Error { message: "LLM timeout".into() };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"error\""));
+        assert!(json.contains("\"message\":\"LLM timeout\""));
+    }
+
+    #[test]
+    fn conversation_event_tool_result_serializes() {
+        let evt = ConversationEvent::ToolResult {
+            tool_name: "run_command".into(),
+            success: true,
+            output: "ok".into(),
+            duration_ms: 123,
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"tool_result\""));
+        assert!(json.contains("\"success\":true"));
+        assert!(json.contains("\"duration_ms\":123"));
+    }
+
+    #[test]
+    fn conversation_event_completed_with_usage_serializes() {
+        let evt = ConversationEvent::Completed {
+            reason: "end_turn".into(),
+            usage: Some(ConversationUsage { input_tokens: 100, output_tokens: 50 }),
+        };
+        let json = serde_json::to_string(&evt).unwrap();
+        assert!(json.contains("\"type\":\"completed\""));
+        assert!(json.contains("\"input_tokens\":100"));
+        assert!(json.contains("\"output_tokens\":50"));
     }
 
     #[test]
