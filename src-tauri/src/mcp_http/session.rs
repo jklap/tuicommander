@@ -1,6 +1,7 @@
 use crate::pty::{build_shell_command, resolve_shell, spawn_headless_reader_thread, spawn_reader_thread};
 use crate::{AppState, OutputRingBuffer, PtySession, MAX_CONCURRENT_SESSIONS};
 use crate::state::{OUTPUT_RING_BUFFER_CAPACITY, VtLogBuffer, VT_LOG_BUFFER_CAPACITY};
+#[cfg(feature = "desktop")]
 use tauri::Emitter;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
@@ -280,6 +281,7 @@ pub(super) async fn close_session(
             session_id: session_id.clone(),
             reason: "explicit_close".to_string(),
         });
+        #[cfg(feature = "desktop")]
         if let Some(app) = state.app_handle.read().as_ref() {
             let _ = app.emit("session-closed", serde_json::json!({
                 "session_id": session_id,
@@ -389,6 +391,7 @@ pub(super) fn spawn_pty_session(
     }
 
     // Tauri IPC for desktop backward compat
+    #[cfg(feature = "desktop")]
     if let Some(app) = app_handle {
         let _ = app.emit("session-created", serde_json::json!({
             "session_id": session_id,

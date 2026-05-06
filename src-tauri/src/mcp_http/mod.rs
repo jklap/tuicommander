@@ -934,6 +934,7 @@ mod tests {
     pub(super) fn test_state() -> Arc<AppState> {
         let state = Arc::new(AppState {
             sessions: DashMap::new(),
+            data_dir: std::env::temp_dir().join("test-tuic-data"),
             worktrees_dir: std::env::temp_dir().join("test-worktrees"),
             metrics: crate::SessionMetrics::new(),
             output_buffers: DashMap::new(),

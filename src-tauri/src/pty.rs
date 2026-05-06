@@ -4,7 +4,7 @@ use serde::Serialize;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use crate::input_line_buffer::{InputAction, InputLineBuffer};
@@ -2916,9 +2916,7 @@ pub(crate) async fn create_pty(
         }
 
         // Inject OSC 133 shell integration (command block markers)
-        if let Ok(data_dir) = app.path().app_data_dir() {
-            crate::shell_integration::inject(&data_dir, &shell, &mut cmd);
-        }
+        crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
 
         // Inject stable session UUID so agents can use it for session binding
         // (e.g. `claude --session-id $TUIC_SESSION`, then `claude --resume $TUIC_SESSION`)
@@ -3044,9 +3042,7 @@ pub(crate) async fn spawn_session_for_agent(
         cmd.cwd(expanded);
     }
 
-    if let Ok(data_dir) = app.path().app_data_dir() {
-        crate::shell_integration::inject(&data_dir, &shell, &mut cmd);
-    }
+    crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
 
     let child = pair
         .slave
@@ -3157,9 +3153,7 @@ pub(crate) async fn create_pty_with_worktree(
         cmd.cwd(&worktree_path);
 
         // Inject OSC 133 shell integration (command block markers)
-        if let Ok(data_dir) = app.path().app_data_dir() {
-            crate::shell_integration::inject(&data_dir, &shell, &mut cmd);
-        }
+        crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
 
         // Inject env flags (feature flags configured in Settings → Agents)
         for (key, value) in &pty_config.env {

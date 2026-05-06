@@ -130,6 +130,11 @@ pub enum AppEvent {
         repo_path: String,
         issues: Vec<crate::github::GitHubIssue>,
     },
+    /// Close HTML tabs owned by a session (emitted on session exit)
+    #[serde(rename = "close-html-tabs")]
+    CloseHtmlTabs {
+        tab_ids: Vec<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -831,6 +836,7 @@ pub(crate) const AGENT_MESSAGE_MAX_BYTES: usize = 64 * 1024;
 /// Global state for managing PTY sessions and worktrees
 pub struct AppState {
     pub sessions: DashMap<String, Mutex<PtySession>>,
+    pub(crate) data_dir: PathBuf,
     pub(crate) worktrees_dir: PathBuf,
     pub(crate) metrics: SessionMetrics,
     /// Ring buffers for MCP output access (one per session)
@@ -1592,7 +1598,8 @@ impl AppState {
             | AppEvent::UiTab { .. }
             | AppEvent::GitHubPrUpdate { .. }
             | AppEvent::GitHubTransition { .. }
-            | AppEvent::GitHubIssuesUpdate { .. } => {}
+            | AppEvent::GitHubIssuesUpdate { .. }
+            | AppEvent::CloseHtmlTabs { .. } => {}
         }
     }
 
@@ -2133,6 +2140,7 @@ pub(crate) mod tests_support {
     pub fn make_test_app_state() -> AppState {
         AppState {
             sessions: dashmap::DashMap::new(),
+            data_dir: std::env::temp_dir().join("test-tuic-data"),
             worktrees_dir: std::env::temp_dir().join("test-worktrees"),
             metrics: SessionMetrics::new(),
             output_buffers: dashmap::DashMap::new(),
@@ -2214,6 +2222,14 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── data_dir ─────────────────────────────────────────────
+
+    #[test]
+    fn test_state_has_data_dir() {
+        let state = tests_support::make_test_app_state();
+        assert_eq!(state.data_dir, std::env::temp_dir().join("test-tuic-data"));
+    }
 
     // ── split_name_segments ──────────────────────────────────
 
@@ -2763,6 +2779,7 @@ mod tests {
     fn make_test_app_state() -> AppState {
         AppState {
             sessions: dashmap::DashMap::new(),
+            data_dir: std::env::temp_dir().join("test-tuic-data"),
             worktrees_dir: std::env::temp_dir().join("test-worktrees"),
             metrics: SessionMetrics::new(),
             output_buffers: dashmap::DashMap::new(),

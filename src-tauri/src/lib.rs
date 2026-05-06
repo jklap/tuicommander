@@ -7,6 +7,7 @@ pub(crate) mod chrome;
 pub(crate) mod claude_usage;
 pub(crate) mod cli;
 pub(crate) mod config;
+#[cfg(feature = "desktop")]
 mod dictation;
 pub(crate) mod diff_triage;
 pub(crate) mod error_classification;
@@ -14,7 +15,9 @@ pub(crate) mod fs;
 mod input_line_buffer;
 pub(crate) mod git;
 pub(crate) mod git_cli;
+#[cfg(feature = "desktop")]
 mod global_hotkey;
+#[cfg(feature = "desktop")]
 mod tab_shortcut;
 pub(crate) mod git_graph;
 pub(crate) mod github;
@@ -29,8 +32,11 @@ pub(crate) mod mcp_proxy;
 pub(crate) mod mcp_upstream_config;
 #[allow(dead_code)] // Used by OAuth discovery (story 1193-7f78), not yet wired
 pub(crate) mod mcp_upstream_credentials;
+#[cfg(feature = "desktop")]
 mod menu;
+#[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
+#[cfg(feature = "desktop")]
 mod panel_window;
 mod output_parser;
 pub(crate) mod plugin_credentials;
@@ -49,8 +55,10 @@ pub(crate) mod credentials;
 pub(crate) mod registry;
 pub(crate) mod pty;
 pub(crate) mod relay_client;
+#[cfg(feature = "desktop")]
 mod tuic_cli;
 mod shell_integration;
+#[cfg(feature = "desktop")]
 pub(crate) mod sleep_prevention;
 pub(crate) mod push;
 pub(crate) mod state;
@@ -59,6 +67,7 @@ pub(crate) mod tailscale;
 pub(crate) mod tool_search;
 pub(crate) mod text_rank;
 pub(crate) mod content_index;
+#[cfg(feature = "desktop")]
 mod updater;
 pub(crate) mod worktree;
 
@@ -818,8 +827,11 @@ pub fn run() {
 
     let mcp_upstream_registry_arc = Arc::new(mcp_proxy::registry::UpstreamRegistry::new());
 
+    let data_dir = config::config_dir();
+
     let state = Arc::new(AppState {
         sessions: DashMap::new(),
+        data_dir,
         worktrees_dir,
         metrics: SessionMetrics::new(),
         output_buffers: DashMap::new(),
@@ -1061,10 +1073,13 @@ pub fn run() {
         .manage(state)
         .manage(ai_chat_registry::ChatRegistry::new())
         .manage(crate::fs::ContentSearchCancel(std::sync::Mutex::new(None)))
-        .manage(dictation::DictationState::new())
-        .manage(sleep_prevention::SleepBlocker::new())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init());
+
+    #[cfg(feature = "desktop")]
+    let builder = builder
+        .manage(dictation::DictationState::new())
+        .manage(sleep_prevention::SleepBlocker::new());
 
     // Single-instance lock only in release builds — allows tauri dev to run
     // alongside the installed TUIC-preview.app (they share the same identifier).
@@ -1082,11 +1097,14 @@ pub fn run() {
             #[cfg(desktop)]
             app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
 
-            let m = menu::build_menu(app)?;
-            app.set_menu(m)?;
-            app.on_menu_event(|app_handle, event| {
-                let _ = app_handle.emit("menu-action", event.id().0.as_str());
-            });
+            #[cfg(feature = "desktop")]
+            {
+                let m = menu::build_menu(app)?;
+                app.set_menu(m)?;
+                app.on_menu_event(|app_handle, event| {
+                    let _ = app_handle.emit("menu-action", event.id().0.as_str());
+                });
+            }
 
             // Store AppHandle so HTTP handlers can emit Tauri events
             let app_state: &Arc<AppState> = app.state::<Arc<AppState>>().inner();
@@ -1105,18 +1123,21 @@ pub fn run() {
                 });
             }
 
-            // Install global hotkey plugin (registers handler, no shortcuts yet)
-            if let Err(e) = global_hotkey::init(app.handle()) {
-                tracing::warn!(source = "global-hotkey", "Failed to init plugin: {e}");
-            } else {
-                global_hotkey::restore_from_config(app.handle());
+            #[cfg(feature = "desktop")]
+            {
+                // Install global hotkey plugin (registers handler, no shortcuts yet)
+                if let Err(e) = global_hotkey::init(app.handle()) {
+                    tracing::warn!(source = "global-hotkey", "Failed to init plugin: {e}");
+                } else {
+                    global_hotkey::restore_from_config(app.handle());
+                }
+
+                // Install Fn/Globe key monitor for push-to-talk dictation
+                dictation::fn_key_monitor::install(app.handle().clone());
+
+                // Install Ctrl+Tab monitor (macOS swallows it before JS/WKWebView)
+                tab_shortcut::install(app.handle().clone());
             }
-
-            // Install Fn/Globe key monitor for push-to-talk dictation
-            dictation::fn_key_monitor::install(app.handle().clone());
-
-            // Install Ctrl+Tab monitor (macOS swallows it before JS/WKWebView)
-            tab_shortcut::install(app.handle().clone());
 
             // Start plugin directory watcher for hot-reload
             plugins::start_plugin_watcher(app.handle());
@@ -1137,6 +1158,7 @@ pub fn run() {
             }
 
             // Auto-update CLI binary if installed
+            #[cfg(feature = "desktop")]
             tuic_cli::auto_update_cli(app.handle());
 
             // Pre-warm content indices for known repos: one at a time, after a

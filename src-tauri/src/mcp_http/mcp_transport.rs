@@ -11,6 +11,7 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+#[cfg(feature = "desktop")]
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
 
@@ -97,18 +98,20 @@ pub(crate) fn emit_close_html_tabs(state: &AppState, session_id: &str) {
     let Some((_, tab_ids)) = state.session_html_tabs.remove(session_id) else {
         return;
     };
-    let Some(app) = state.app_handle.read().as_ref().cloned() else {
-        // No app handle (test mode or pre-init). Tabs were already drained.
-        return;
-    };
-    if let Err(err) = app.emit("close-html-tabs", serde_json::json!({ "tab_ids": tab_ids })) {
-        tracing::warn!(
-            source = "session",
-            session_id = %session_id,
-            tab_count = tab_ids.len(),
-            error = %err,
-            "failed to emit close-html-tabs — frontend tabs may be orphaned"
-        );
+    let _ = state.event_bus.send(crate::state::AppEvent::CloseHtmlTabs {
+        tab_ids: tab_ids.clone(),
+    });
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        if let Err(err) = app.emit("close-html-tabs", serde_json::json!({ "tab_ids": tab_ids })) {
+            tracing::warn!(
+                source = "session",
+                session_id = %session_id,
+                tab_count = tab_ids.len(),
+                error = %err,
+                "failed to emit close-html-tabs — frontend tabs may be orphaned"
+            );
+        }
     }
 }
 
@@ -995,6 +998,7 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                     session_id: session_id.to_string(),
                     reason: "closed".to_string(),
                 });
+                #[cfg(feature = "desktop")]
                 if let Some(app) = state.app_handle.read().as_ref() {
                     let _ = app.emit("session-closed", serde_json::json!({
                         "session_id": session_id,
@@ -1024,6 +1028,7 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                     session_id: session_id.to_string(),
                     reason: "killed".to_string(),
                 });
+                #[cfg(feature = "desktop")]
                 if let Some(app) = state.app_handle.read().as_ref() {
                     let _ = app.emit("session-closed", serde_json::json!({
                         "session_id": session_id,
@@ -1274,6 +1279,7 @@ fn handle_worktree(state: &Arc<AppState>, args: &serde_json::Value, is_claude_co
                         branch: branch_name.clone(),
                         worktree_path: wt_path.clone(),
                     });
+                    #[cfg(feature = "desktop")]
                     if let Some(handle) = state.app_handle.read().as_ref() {
                         let _ = handle.emit("worktree-created", serde_json::json!({
                             "repo_path": path,
@@ -1520,12 +1526,15 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
             let app_handle = state.app_handle.read().clone();
             if !print_mode {
                 if let Some(ref app) = app_handle {
-                    let agent_type_val = args["agent_type"].as_str();
-                    let _ = app.emit("session-created", serde_json::json!({
-                        "session_id": session_id,
-                        "cwd": cwd_str,
-                        "agent_type": agent_type_val,
-                    }));
+                    #[cfg(feature = "desktop")]
+                    {
+                        let agent_type_val = args["agent_type"].as_str();
+                        let _ = app.emit("session-created", serde_json::json!({
+                            "session_id": session_id,
+                            "cwd": cwd_str,
+                            "agent_type": agent_type_val,
+                        }));
+                    }
                     spawn_reader_thread(reader, paused, session_id.clone(), app.clone(), state.clone(), None);
                 } else {
                     spawn_headless_reader_thread(reader, paused, session_id.clone(), state.clone());
@@ -2238,6 +2247,7 @@ fn handle_ui(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_id: Op
                     .push(id.clone());
             }
             // Emit to Tauri webview (native mode)
+            #[cfg(feature = "desktop")]
             if let Some(app) = state.app_handle.read().as_ref() {
                 let _ = app.emit("ui-tab", &payload);
             }
@@ -2935,6 +2945,7 @@ mod tests {
     fn test_state() -> Arc<AppState> {
         let state = Arc::new(AppState {
             sessions: dashmap::DashMap::new(),
+            data_dir: std::env::temp_dir().join("test-tuic-data"),
             worktrees_dir: std::env::temp_dir().join("test-worktrees"),
             metrics: crate::SessionMetrics::new(),
             output_buffers: dashmap::DashMap::new(),

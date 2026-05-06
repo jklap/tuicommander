@@ -87,7 +87,8 @@ cron = "0.16"
 toml = "0.8"
 
 [features]
-default = []
+default = ["desktop"]
+desktop = []
 # GPU features for Linux builds (macOS always has Metal, Windows always has Vulkan via target deps)
 cuda = ["whisper-rs/cuda"]
 vulkan = ["whisper-rs/vulkan"]
