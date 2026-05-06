@@ -1,4 +1,4 @@
-use crate::pty::{resolve_shell, spawn_headless_reader_thread, spawn_reader_thread};
+use crate::pty::{resolve_shell, spawn_reader_thread};
 use crate::{AppState, OutputRingBuffer, PtySession, MAX_CONCURRENT_SESSIONS};
 use crate::state::{OUTPUT_RING_BUFFER_CAPACITY, VtLogBuffer, VT_LOG_BUFFER_CAPACITY};
 use axum::extract::{ConnectInfo, State};
@@ -1535,13 +1535,9 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
                             "agent_type": agent_type_val,
                         }));
                     }
-                    spawn_reader_thread(reader, paused, session_id.clone(), app.clone(), state.clone(), None);
-                } else {
-                    spawn_headless_reader_thread(reader, paused, session_id.clone(), state.clone());
                 }
-            } else {
-                spawn_headless_reader_thread(reader, paused, session_id.clone(), state.clone());
             }
+            spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
 
             // Auto-register child as peer + pre-init inbox when spawned in swarm context.
             if let Some(ref parent_id) = caller_tuic {

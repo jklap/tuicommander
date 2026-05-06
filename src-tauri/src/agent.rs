@@ -529,7 +529,7 @@ pub(crate) fn detect_claude_binary() -> Result<String, String> {
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn spawn_agent(
-    app: AppHandle,
+    _app: AppHandle,
     state: State<'_, Arc<AppState>>,
     pty_config: PtyConfig,
     agent_config: AgentConfig,
@@ -653,7 +653,6 @@ pub(crate) async fn spawn_agent(
         reader,
         paused,
         session_id.clone(),
-        app,
         state.inner().clone(),
         None,
     );

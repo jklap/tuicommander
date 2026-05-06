@@ -920,7 +920,6 @@ fn should_transition_idle(state: &crate::state::AppState, session_id: &str) -> I
 /// Emit a ShellState parsed event via both event bus and Tauri IPC.
 fn emit_shell_state(
     state: &crate::state::AppState,
-    app: Option<&tauri::AppHandle>,
     session_id: &str,
     shell_state: &str,
 ) {
@@ -933,7 +932,8 @@ fn emit_shell_state(
             parsed: json,
         });
     }
-    if let Some(app) = app {
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
         let _ = app.emit(
             &format!("pty-parsed-{session_id}"),
             &parsed,
@@ -945,7 +945,6 @@ fn emit_shell_state(
 /// Shared by OSC 133 A/C handlers and OSC 7770 `state=` handler.
 fn transition_shell_state(
     state: &crate::state::AppState,
-    app: Option<&tauri::AppHandle>,
     session_id: &str,
     target: u8,
     label: &str,
@@ -953,7 +952,7 @@ fn transition_shell_state(
     if let Some(atom) = state.shell_states.get(session_id) {
         let prev = atom.load(std::sync::atomic::Ordering::Acquire);
         if prev != target && try_shell_transition(state, session_id, prev, target, true) {
-            emit_shell_state(state, app, session_id, label);
+            emit_shell_state(state, session_id, label);
         }
     }
 }
@@ -963,7 +962,6 @@ fn transition_shell_state(
 /// sync after `should_transition_idle` force-clears the in-memory counter.
 fn emit_active_subtasks(
     state: &crate::state::AppState,
-    app: Option<&tauri::AppHandle>,
     session_id: &str,
     count: u32,
     task_type: &str,
@@ -975,7 +973,8 @@ fn emit_active_subtasks(
             parsed: json,
         });
     }
-    if let Some(app) = app {
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
         let _ = app.emit(
             &format!("pty-parsed-{session_id}"),
             &parsed,
@@ -1114,7 +1113,6 @@ fn spawn_silence_timer(
     running: Arc<AtomicBool>,
     session_id: String,
     state: Arc<AppState>,
-    app: Option<AppHandle>,
 ) {
     let event_bus = state.event_bus.clone();
     tokio::spawn(async move {
@@ -1142,9 +1140,9 @@ fn spawn_silence_timer(
                         // but the frontend store only learns from this stream.
                         // Without an explicit count=0 emission, the UI keeps a
                         // non-zero badge and notifications stay suppressed.
-                        emit_active_subtasks(&state, app.as_ref(), &session_id, 0, "");
+                        emit_active_subtasks(&state, &session_id, 0, "");
                     }
-                    emit_shell_state(&state, app.as_ref(), &session_id, "idle");
+                    emit_shell_state(&state, &session_id, "idle");
                     record_inferred_outcome_if_no_osc133(&state, &session_id);
                 }
             }
@@ -1163,7 +1161,8 @@ fn spawn_silence_timer(
             if let Some(text) = silence.lock().check_tool_error() {
                 let parsed = ParsedEvent::ToolError { matched_text: text };
                 if let Ok(json) = serde_json::to_value(&parsed) {
-                    if let Some(ref app) = app {
+                    #[cfg(feature = "desktop")]
+                    if let Some(app) = state.app_handle.read().as_ref() {
                         let _ = app.emit(
                             &format!("pty-parsed-{session_id}"),
                             &json,
@@ -1189,7 +1188,8 @@ fn spawn_silence_timer(
             {
                 let parsed = ParsedEvent::Suggest { items };
                 if let Ok(json) = serde_json::to_value(&parsed) {
-                    if let Some(ref app) = app {
+                    #[cfg(feature = "desktop")]
+                    if let Some(app) = state.app_handle.read().as_ref() {
                         let _ = app.emit(
                             &format!("pty-parsed-{session_id}"),
                             &json,
@@ -1268,7 +1268,8 @@ fn spawn_silence_timer(
                 confident: false,
             };
             if let Ok(json) = serde_json::to_value(&parsed) {
-                if let Some(ref app) = app {
+                #[cfg(feature = "desktop")]
+                if let Some(app) = state.app_handle.read().as_ref() {
                     let _ = app.emit(
                         &format!("pty-parsed-{session_id}"),
                         &json,
@@ -1289,7 +1290,7 @@ fn spawn_silence_timer(
 
 /// Per-session mutable state for processing PTY output chunks.
 /// Holds dedup state, parser, and session CWD for PlanFile resolution.
-/// Used by both `spawn_reader_thread` (desktop) and `spawn_headless_reader_thread`.
+/// Used by `spawn_reader_thread`.
 struct ChunkProcessor {
     parser: OutputParser,
     /// Dedup: only emit StatusLine when task_name actually changes
@@ -1373,19 +1374,18 @@ impl ChunkProcessor {
         payload: &str,
         session_id: &str,
         state: &AppState,
-        app: Option<&tauri::AppHandle>,
     ) {
         let (target, label) = match payload {
             "idle" => (SHELL_IDLE, "idle"),
             "busy" => (SHELL_BUSY, "busy"),
             _ => return,
         };
-        transition_shell_state(state, app, session_id, target, label);
+        transition_shell_state(state, session_id, target, label);
     }
 
     /// Handle a single OSC 133 event from the VTE handler.
     /// On 'C' captures the command text; on 'D' builds a `CommandOutcome`.
-    fn handle_osc133_event(&mut self, command: char, params: &str, session_id: &str, state: &AppState, app: Option<&tauri::AppHandle>) {
+    fn handle_osc133_event(&mut self, command: char, params: &str, session_id: &str, state: &AppState) {
         use crate::ai_agent::knowledge::{
             classify_error, CommandOutcome, OutcomeClass, SessionKnowledge,
         };
@@ -1395,10 +1395,10 @@ impl ChunkProcessor {
         // These bypass the silence timer entirely when OSC 133 is available.
         match command {
             'A' => {
-                transition_shell_state(state, app, session_id, SHELL_IDLE, "idle");
+                transition_shell_state(state, session_id, SHELL_IDLE, "idle");
             }
             'C' => {
-                transition_shell_state(state, app, session_id, SHELL_BUSY, "busy");
+                transition_shell_state(state, session_id, SHELL_BUSY, "busy");
                 let cmd = state
                     .input_buffers
                     .get(session_id)
@@ -1586,7 +1586,6 @@ impl ChunkProcessor {
         &mut self,
         session_id: &str,
         state: &AppState,
-        app: Option<&AppHandle>,
     ) {
         if self.pending_planfiles.is_empty() {
             return;
@@ -1610,7 +1609,8 @@ impl ChunkProcessor {
                         session_id: session_id.to_string(),
                         parsed: json.clone(),
                     });
-                    if let Some(a) = app {
+                    #[cfg(feature = "desktop")]
+                    if let Some(a) = state.app_handle.read().as_ref() {
                         let _ = a.emit("pty-parsed", serde_json::json!({
                             "session_id": session_id,
                             "parsed": json,
@@ -1636,14 +1636,13 @@ impl ChunkProcessor {
         silence: &Arc<Mutex<SilenceState>>,
         session_id: &str,
         state: &AppState,
-        app: Option<&AppHandle>,
     ) -> Option<String> {
         if data.is_empty() {
             return None;
         }
 
         // Check pending plan files: emit if file appeared, drop if deadline expired.
-        self.check_pending_planfiles(session_id, state, app);
+        self.check_pending_planfiles(session_id, state);
 
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
         // Also capture the post-process `total_lines` and `oldest_offset` so
@@ -1697,15 +1696,14 @@ impl ChunkProcessor {
                 .last_vt_log_emit
                 .map(|t| t.elapsed() >= std::time::Duration::from_millis(100))
                 .unwrap_or(true);
-            if should_emit
-                && let Some(a) = app
-            {
-                // Emit as a bare number — wrapping in an object corrupts
-                // the cache's internal counter (Tauri serialization issue).
-                let _ = a.emit(
-                    &format!("pty-vt-log-total-{session_id}"),
-                    new_total,
-                );
+            if should_emit {
+                #[cfg(feature = "desktop")]
+                if let Some(a) = state.app_handle.read().as_ref() {
+                    let _ = a.emit(
+                        &format!("pty-vt-log-total-{session_id}"),
+                        new_total,
+                    );
+                }
                 self.last_vt_log_emit = Some(std::time::Instant::now());
             }
             self.last_vt_log_total = new_total;
@@ -1735,24 +1733,28 @@ impl ChunkProcessor {
                         }
                     }
                     TermEvent::Title(title) => {
-                        if let Some(a) = app {
+                        #[cfg(feature = "desktop")]
+                        if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), &title);
                         }
                     }
                     TermEvent::ResetTitle => {
-                        if let Some(a) = app {
+                        #[cfg(feature = "desktop")]
+                        if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), "");
                         }
                     }
                     TermEvent::ClipboardStore(text) => {
-                        if let Some(a) = app {
+                        #[cfg(feature = "desktop")]
+                        if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-clipboard-store-{session_id}"), &text);
                         }
                     }
                     TermEvent::Osc133 { command, params, line } => {
                         state.has_osc133_integration.insert(session_id.to_string(), ());
-                        self.handle_osc133_event(command, &params, session_id, state, app);
-                        if let Some(a) = app {
+                        self.handle_osc133_event(command, &params, session_id, state);
+                        #[cfg(feature = "desktop")]
+                        if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(
                                 &format!("pty-osc133-{session_id}"),
                                 &Osc133Event { marker: command.to_string(), line, exit_code: parse_osc133_exit_code(command, &params) },
@@ -1764,7 +1766,8 @@ impl ChunkProcessor {
                             if let Some(entry) = state.sessions.get(session_id) {
                                 entry.lock().cwd = Some(cwd.clone());
                             }
-                            if let Some(a) = app {
+                            #[cfg(feature = "desktop")]
+                            if let Some(a) = state.app_handle.read().as_ref() {
                                 let _ = a.emit(&format!("pty-cwd-{session_id}"), &cwd);
                             }
                         }
@@ -1772,7 +1775,7 @@ impl ChunkProcessor {
                     TermEvent::Tuic { verb, payload } => {
                         match verb.as_str() {
                             "state" => {
-                                self.handle_tuic_state(&payload, session_id, state, app);
+                                self.handle_tuic_state(&payload, session_id, state);
                             }
                             "suggest" => {
                                 let items: Vec<String> = payload.split('|').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
@@ -1983,14 +1986,13 @@ impl ChunkProcessor {
 
             // Serialize once, reuse for both broadcast and Tauri IPC
             if let Ok(json) = serde_json::to_value(emit_event) {
-                // Tauri IPC for desktop mode (emit the pre-serialized Value)
-                if let Some(app) = app {
+                #[cfg(feature = "desktop")]
+                if let Some(app) = state.app_handle.read().as_ref() {
                     let _ = app.emit(
                         &format!("pty-parsed-{session_id}"),
                         &json,
                     );
                 }
-                // Broadcast to SSE/WebSocket consumers
                 let _ = state.event_bus.send(crate::state::AppEvent::PtyParsed {
                     session_id: session_id.to_string(),
                     parsed: json,
@@ -2082,7 +2084,7 @@ impl ChunkProcessor {
             if prev != SHELL_BUSY
                 && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
             {
-                emit_shell_state(state, app, session_id, "busy");
+                emit_shell_state(state, session_id, "busy");
             }
         }
 
@@ -2114,7 +2116,6 @@ fn process_kitty_actions(
     kitty_actions: &[KittyAction],
     session_id: &str,
     state: &AppState,
-    app: Option<&AppHandle>,
 ) {
     if kitty_actions.is_empty() {
         return;
@@ -2147,7 +2148,8 @@ fn process_kitty_actions(
     }
     let flags = ks.current_flags();
     drop(ks);
-    if let Some(app) = app {
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
         let _ = app.emit(
             &format!("kitty-keyboard-{session_id}"),
             flags,
@@ -2617,30 +2619,26 @@ fn clamp_cursor_up(data: &str, max_rows: u16) -> String {
     result
 }
 
-/// Spawn a reader thread that reads from a PTY, emits Tauri events, and writes to the ring buffer.
-/// Shared by `create_pty`, `create_pty_with_worktree`, and `spawn_agent` to avoid duplication.
+/// Spawn a reader thread that reads from a PTY, processes output, and emits events.
+/// Unified for both desktop (Tauri IPC) and headless (event_bus only) modes.
 pub(crate) fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
     paused: Arc<AtomicBool>,
     session_id: String,
-    app: AppHandle,
     state: Arc<AppState>,
     tuic_session: Option<String>,
 ) {
     let silence = Arc::new(Mutex::new(SilenceState::new()));
     let running = Arc::new(AtomicBool::new(true));
 
-    // Register in AppState so write_pty can suppress user-typed question lines
     state.silence_states.insert(session_id.clone(), silence.clone());
     state.shell_states.insert(session_id.clone(), std::sync::atomic::AtomicU8::new(SHELL_NULL));
 
-    // Spawn silence-detection timer thread
     spawn_silence_timer(
         silence.clone(),
         running.clone(),
         session_id.clone(),
         state.clone(),
-        Some(app.clone()),
     );
 
     std::thread::spawn(move || {
@@ -2676,9 +2674,9 @@ pub(crate) fn spawn_reader_thread(
                     }
                     let data = kitty_clean;
 
-                    process_kitty_actions(&kitty_actions, &session_id, &state, Some(&app));
+                    process_kitty_actions(&kitty_actions, &session_id, &state);
 
-                    if let Some(processed) = processor.process_chunk(&data, &silence, &session_id, &state, Some(&app))
+                    if let Some(processed) = processor.process_chunk(&data, &silence, &session_id, &state)
                         && let Some(xterm_data) = processor.transform_xterm(processed)
                     {
                         let clamped_data = xterm_data;
@@ -2693,18 +2691,18 @@ pub(crate) fn spawn_reader_thread(
                             }
                         }
 
-                        let _ = app.emit(
-                            &format!("pty-output-{session_id}"),
-                            PtyOutput {
-                                session_id: session_id.clone(),
-                                data: clamped_data,
-                            },
-                        );
+                        #[cfg(feature = "desktop")]
+                        if let Some(app) = state.app_handle.read().as_ref() {
+                            let _ = app.emit(
+                                &format!("pty-output-{session_id}"),
+                                PtyOutput {
+                                    session_id: session_id.clone(),
+                                    data: clamped_data,
+                                },
+                            );
+                        }
                     }
 
-                    // Send grid frame if the frontend has acked the previous one.
-                    // When in-flight, damage accumulates in alacritty's grid and
-                    // the next frame will carry all pending changes (natural coalescing).
                     let in_flight = state.grid_frame_in_flight.get(&session_id)
                         .map(|f| f.load(std::sync::atomic::Ordering::Relaxed))
                         .unwrap_or(false);
@@ -2721,47 +2719,51 @@ pub(crate) fn spawn_reader_thread(
                 }
             }
         }
-        // Signal timer thread to stop
         running.store(false, Ordering::Relaxed);
 
-        // Ensure shell state is idle on session end (frontend indicator only).
-        // notify_parent=false: mark_session_exited sends the sole "exited" notification.
         if try_shell_transition(&state, &session_id, SHELL_BUSY, SHELL_IDLE, false) {
-            emit_shell_state(&state, Some(&app), &session_id, "idle");
+            emit_shell_state(&state, &session_id, "idle");
         }
 
-        // Flush remaining bytes at EOF
         let remaining = flush_eof(&mut utf8_buf, &mut esc_buf, &session_id, &state);
+        #[cfg(feature = "desktop")]
         if !remaining.is_empty() {
-            let _ = app.emit(
-                &format!("pty-output-{session_id}"),
-                PtyOutput {
-                    session_id: session_id.clone(),
-                    data: remaining,
-                },
-            );
+            if let Some(app) = state.app_handle.read().as_ref() {
+                let _ = app.emit(
+                    &format!("pty-output-{session_id}"),
+                    PtyOutput {
+                        session_id: session_id.clone(),
+                        data: remaining,
+                    },
+                );
+            }
         }
 
-        // Broadcast exit events
         let _ = state.event_bus.send(crate::state::AppEvent::PtyExit {
             session_id: session_id.clone(),
         });
-        let _ = app.emit(
-            &format!("pty-exit-{session_id}"),
-            serde_json::json!({ "session_id": session_id }),
-        );
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(
+                &format!("pty-exit-{session_id}"),
+                serde_json::json!({ "session_id": session_id }),
+            );
+        }
         tracing::info!(source = "pty", session_id = %session_id, "Session closed: process exited");
         let _ = state.event_bus.send(crate::state::AppEvent::SessionClosed {
             session_id: session_id.clone(),
             reason: "process_exit".to_string(),
         });
-        let agent_type = state.session_states.get(&session_id)
-            .and_then(|s| s.agent_type.clone());
-        let _ = app.emit("session-closed", serde_json::json!({
-            "session_id": session_id,
-            "reason": "process_exit",
-            "agent_type": agent_type,
-        }));
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let agent_type = state.session_states.get(&session_id)
+                .and_then(|s| s.agent_type.clone());
+            let _ = app.emit("session-closed", serde_json::json!({
+                "session_id": session_id,
+                "reason": "process_exit",
+                "agent_type": agent_type,
+            }));
+        }
 
         mark_session_exited(&session_id, &state);
         })); // end catch_unwind
@@ -2779,99 +2781,11 @@ pub(crate) fn spawn_reader_thread(
     });
 }
 
-/// Reader thread for sessions created via HTTP (no AppHandle available).
-/// Writes to ring buffer only — MCP consumers poll via GET /sessions/{id}/output.
-pub(crate) fn spawn_headless_reader_thread(
-    mut reader: Box<dyn Read + Send>,
-    paused: Arc<AtomicBool>,
-    session_id: String,
-    state: Arc<AppState>,
-) {
-    let silence = Arc::new(Mutex::new(SilenceState::new()));
-    let running = Arc::new(AtomicBool::new(true));
-
-    state.silence_states.insert(session_id.clone(), silence.clone());
-    state.shell_states.insert(session_id.clone(), std::sync::atomic::AtomicU8::new(SHELL_NULL));
-
-    // Spawn silence-detection timer (headless: event_bus only, no Tauri IPC)
-    spawn_silence_timer(
-        silence.clone(),
-        running.clone(),
-        session_id.clone(),
-        state.clone(),
-        None,
-    );
-
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 65536];
-        let mut utf8_buf = Utf8ReadBuffer::new();
-        let mut esc_buf = EscapeAwareBuffer::new();
-        let session_cwd: Option<String> = state
-            .sessions
-            .get(&session_id)
-            .and_then(|s| s.lock().cwd.clone());
-        let mut processor = ChunkProcessor::new(session_cwd, None);
-        loop {
-            while paused.load(Ordering::Relaxed) {
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
-            match reader.read(&mut buf) {
-                Ok(0) => break,
-                Ok(n) => {
-                    state.metrics.bytes_emitted.fetch_add(n, Ordering::Relaxed);
-                    let utf8_data = utf8_buf.push(&buf[..n]);
-                    let esc_data = esc_buf.push(&utf8_data);
-                    let (kitty_clean, kitty_actions) = strip_kitty_sequences(&esc_data);
-                    let data = kitty_clean;
-
-                    process_kitty_actions(&kitty_actions, &session_id, &state, None);
-
-                    // Headless: no xterm output — just process for events and state
-                    processor.process_chunk(&data, &silence, &session_id, &state, None);
-                }
-                Err(e) => {
-                    tracing::error!(session_id = %session_id, "PTY reader error: {e}");
-                    break;
-                }
-            }
-        }
-        // Signal silence timer thread to stop
-        running.store(false, Ordering::Relaxed);
-
-        // Ensure shell state is idle on session end (frontend indicator only).
-        // notify_parent=false: mark_session_exited sends the sole "exited" notification.
-        if try_shell_transition(&state, &session_id, SHELL_BUSY, SHELL_IDLE, false) {
-            emit_shell_state(&state, None, &session_id, "idle");
-        }
-
-        // Flush remaining bytes at EOF
-        flush_eof(&mut utf8_buf, &mut esc_buf, &session_id, &state);
-
-        // Broadcast exit so SSE/WebSocket consumers and Tauri frontend can clean up
-        tracing::info!(source = "pty", session_id = %session_id, "Headless session closed: process exited");
-        let _ = state.event_bus.send(crate::state::AppEvent::SessionClosed {
-            session_id: session_id.clone(),
-            reason: "process_exit".to_string(),
-        });
-        if let Some(app) = state.app_handle.read().as_ref() {
-            let agent_type = state.session_states.get(&session_id)
-                .and_then(|s| s.agent_type.clone());
-            let _ = app.emit("session-closed", serde_json::json!({
-                "session_id": session_id,
-                "reason": "process_exit",
-                "agent_type": agent_type,
-            }));
-        }
-
-        mark_session_exited(&session_id, &state);
-    });
-}
-
 /// Create a new PTY session with optional worktree
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn create_pty(
-    app: AppHandle,
+    _app: AppHandle,
     state: State<'_, Arc<AppState>>,
     config: PtyConfig,
 ) -> Result<String, String> {
@@ -3006,7 +2920,6 @@ pub(crate) async fn create_pty(
         reader,
         paused,
         session_id.clone(),
-        app,
         state.inner().clone(),
         tuic_session,
     );
@@ -3021,12 +2934,6 @@ pub(crate) async fn spawn_session_for_agent(
     cwd: Option<String>,
     display_name: Option<String>,
 ) -> Result<String, String> {
-    let app = state
-        .app_handle
-        .read()
-        .clone()
-        .ok_or_else(|| "AppHandle not available".to_string())?;
-
     let session_id = Uuid::new_v4().to_string();
     let pty_system = native_pty_system();
     let rows: u16 = 24;
@@ -3102,13 +3009,14 @@ pub(crate) async fn spawn_session_for_agent(
         cwd: state.sessions.get(&session_id).and_then(|s| s.lock().cwd.clone()),
         agent_type: None,
     });
+    #[cfg(feature = "desktop")]
     if let Some(ref a) = *state.app_handle.read() {
         let _ = a.emit("session-created", serde_json::json!({
             "session_id": session_id,
         }));
     }
 
-    spawn_reader_thread(reader, paused, session_id.clone(), app, state.clone(), None);
+    spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
 
     Ok(session_id)
 }
@@ -3117,7 +3025,7 @@ pub(crate) async fn spawn_session_for_agent(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn create_pty_with_worktree(
-    app: AppHandle,
+    _app: AppHandle,
     state: State<'_, Arc<AppState>>,
     pty_config: PtyConfig,
     worktree_config: WorktreeConfig,
@@ -3241,7 +3149,6 @@ pub(crate) async fn create_pty_with_worktree(
         reader,
         paused,
         session_id.clone(),
-        app,
         state.inner().clone(),
         None,
     );
@@ -6329,7 +6236,7 @@ mod tests {
 
         // Subscribe BEFORE emitting so the broadcast is captured.
         let mut rx = state.event_bus.subscribe();
-        emit_active_subtasks(&state, None, sid, 0, "");
+        emit_active_subtasks(&state, sid, 0, "");
 
         let event = rx.try_recv().expect("event bus must receive PtyParsed");
         match event {
@@ -6573,7 +6480,7 @@ mod tests {
         let raw = b"* Reading files...";
         let utf8_data = utf8_buf.push(raw);
         let esc_data = esc_buf.push(&utf8_data);
-        let result1 = cp.process_chunk(&esc_data, &silence, sid, &state, None);
+        let result1 = cp.process_chunk(&esc_data, &silence, sid, &state);
 
         // Count how many PtyParsed events were sent with StatusLine
         let mut rx = state.event_bus.subscribe();
@@ -6581,7 +6488,7 @@ mod tests {
         let raw2 = b"\r\n* Reading files...";
         let utf8_data2 = utf8_buf.push(raw2);
         let esc_data2 = esc_buf.push(&utf8_data2);
-        let _result2 = cp.process_chunk(&esc_data2, &silence, sid, &state, None);
+        let _result2 = cp.process_chunk(&esc_data2, &silence, sid, &state);
 
         // Collect events from the second call
         let mut status_count = 0;
@@ -6626,7 +6533,7 @@ mod tests {
               Esc to cancel \xc2\xb7 Tab to amend\r\n";
         let utf8_data = utf8_buf.push(screen_bytes);
         let esc_data = esc_buf.push(&utf8_data);
-        let _ = cp.process_chunk(&esc_data, &silence, sid, &state, None);
+        let _ = cp.process_chunk(&esc_data, &silence, sid, &state);
 
         // Drain events from the first chunk and count ChoicePrompt emits.
         let mut rx = state.event_bus.subscribe();
@@ -6635,7 +6542,7 @@ mod tests {
         // Same (title, option keys) signature → must be deduped.
         let utf8_data2 = utf8_buf.push(screen_bytes);
         let esc_data2 = esc_buf.push(&utf8_data2);
-        let _ = cp.process_chunk(&esc_data2, &silence, sid, &state, None);
+        let _ = cp.process_chunk(&esc_data2, &silence, sid, &state);
 
         let mut choice_count = 0;
         while let Ok(evt) = rx.try_recv() {
@@ -7335,13 +7242,13 @@ mod tests {
         );
 
         let proc = ChunkProcessor::new(None, None);
-        proc.handle_tuic_state("busy", session_id, &state, None);
+        proc.handle_tuic_state("busy", session_id, &state);
 
         let current = state.shell_states.get(session_id).unwrap()
             .load(std::sync::atomic::Ordering::Acquire);
         assert_eq!(current, SHELL_BUSY);
 
-        proc.handle_tuic_state("idle", session_id, &state, None);
+        proc.handle_tuic_state("idle", session_id, &state);
         let current = state.shell_states.get(session_id).unwrap()
             .load(std::sync::atomic::Ordering::Acquire);
         assert_eq!(current, SHELL_IDLE);
@@ -7363,7 +7270,7 @@ mod tests {
         let mut rx = state.event_bus.subscribe();
 
         let proc = ChunkProcessor::new(None, None);
-        proc.handle_tuic_state("busy", session_id, &state, None);
+        proc.handle_tuic_state("busy", session_id, &state);
 
         let evt = rx.try_recv();
         assert!(evt.is_ok(), "event_bus should have received a shell state event");
@@ -7386,7 +7293,7 @@ mod tests {
         );
 
         let proc = ChunkProcessor::new(None, None);
-        proc.handle_tuic_state("thinking", session_id, &state, None);
+        proc.handle_tuic_state("thinking", session_id, &state);
 
         let current = state.shell_states.get(session_id).unwrap()
             .load(std::sync::atomic::Ordering::Acquire);
@@ -7408,7 +7315,7 @@ mod tests {
         state.has_osc133_integration.insert(session_id.to_string(), ());
 
         let mut proc = ChunkProcessor::new(None, None);
-        proc.handle_osc133_event('A', "", session_id, &state, None);
+        proc.handle_osc133_event('A', "", session_id, &state);
 
         let current = state.shell_states.get(session_id).unwrap()
             .load(std::sync::atomic::Ordering::Acquire);
@@ -7430,7 +7337,7 @@ mod tests {
         state.has_osc133_integration.insert(session_id.to_string(), ());
 
         let mut proc = ChunkProcessor::new(None, None);
-        proc.handle_osc133_event('C', "", session_id, &state, None);
+        proc.handle_osc133_event('C', "", session_id, &state);
 
         let current = state.shell_states.get(session_id).unwrap()
             .load(std::sync::atomic::Ordering::Acquire);
@@ -7454,7 +7361,7 @@ mod tests {
         let mut rx = state.event_bus.subscribe();
 
         let mut proc = ChunkProcessor::new(None, None);
-        proc.handle_osc133_event('A', "", session_id, &state, None);
+        proc.handle_osc133_event('A', "", session_id, &state);
 
         // Check event_bus received a state change
         let evt = rx.try_recv();
@@ -7484,7 +7391,7 @@ mod tests {
         state.has_osc133_integration.insert(session_id.to_string(), ());
 
         let mut proc = ChunkProcessor::new(None, None);
-        proc.handle_osc133_event('D', "0", session_id, &state, None);
+        proc.handle_osc133_event('D', "0", session_id, &state);
 
         let current = state.shell_states.get(session_id).unwrap()
             .load(std::sync::atomic::Ordering::Acquire);
