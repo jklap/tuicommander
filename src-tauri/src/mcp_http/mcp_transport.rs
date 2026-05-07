@@ -1,16 +1,16 @@
 use crate::pty::{resolve_shell, spawn_reader_thread};
-use crate::{AppState, OutputRingBuffer, PtySession, MAX_CONCURRENT_SESSIONS};
-use crate::state::{OUTPUT_RING_BUFFER_CAPACITY, VtLogBuffer, VT_LOG_BUFFER_CAPACITY};
+use crate::state::{OUTPUT_RING_BUFFER_CAPACITY, VT_LOG_BUFFER_CAPACITY, VtLogBuffer};
+use crate::{AppState, MAX_CONCURRENT_SESSIONS, OutputRingBuffer, PtySession};
+use axum::Json;
 use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
-use axum::Json;
 use parking_lot::Mutex;
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::io::Write;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "desktop")]
 use tauri::{Emitter, Manager};
 use uuid::Uuid;
@@ -183,7 +183,9 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
         out.push_str("- **Discover:** `repo action=list|prs|active` · `agent action=detect`.\n");
         out.push_str("- **Spawn:** `session action=create` (shell) · `agent action=spawn` (AI) · `repo action=worktree_create` (isolated). `agent_type` resolves run config names first (case-insensitive), then agent binary names.\n");
         out.push_str("- **Observe:** `session action=status|output` · `agent action=inbox`.\n");
-        out.push_str("- **Coordinate:** `agent action=register/send/inbox` for peer messaging.\n\n");
+        out.push_str(
+            "- **Coordinate:** `agent action=register/send/inbox` for peer messaging.\n\n",
+        );
     }
 
     // ── Multi-agent work — critical pre-spawn knowledge only ─────────
@@ -229,11 +231,19 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
     }
 
     // ── Dynamic: sessions ───────────────────────────────────────────
-    let sessions: Vec<_> = state.sessions.iter().map(|entry| {
-        let id = entry.key().clone();
-        let session = entry.value().lock();
-        (id, session.cwd.clone(), session.worktree.as_ref().and_then(|w| w.branch.clone()))
-    }).collect();
+    let sessions: Vec<_> = state
+        .sessions
+        .iter()
+        .map(|entry| {
+            let id = entry.key().clone();
+            let session = entry.value().lock();
+            (
+                id,
+                session.cwd.clone(),
+                session.worktree.as_ref().and_then(|w| w.branch.clone()),
+            )
+        })
+        .collect();
 
     if !sessions.is_empty() {
         out.push_str("## Sessions\n\n");
@@ -251,13 +261,14 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
 
 /// Validate a repo path for MCP tool calls, returning a JSON error value on failure.
 fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
-    super::validate_path_string(path)
-        .map_err(|msg| serde_json::json!({"error": msg}))
+    super::validate_path_string(path).map_err(|msg| serde_json::json!({"error": msg}))
 }
 
-const SESSION_ACTIONS: &str = "list, create, input, output, resize, close, kill, pause, resume, status";
+const SESSION_ACTIONS: &str =
+    "list, create, input, output, resize, close, kill, pause, resume, status";
 const AGENT_ACTIONS: &str = "spawn, detect, stats, metrics, register, list_peers, send, inbox";
-const REPO_ACTIONS: &str = "list, active, prs, status, worktree_list, worktree_create, worktree_remove";
+const REPO_ACTIONS: &str =
+    "list, active, prs, status, worktree_list, worktree_create, worktree_remove";
 const UI_ACTIONS: &str = "tab, toast, confirm";
 const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
@@ -486,12 +497,18 @@ fn meta_tool_definitions(state: &Arc<AppState>) -> serde_json::Value {
 ///
 /// Returns `None` when the session has no repo_path or the repo has no
 /// custom upstream allowlist (meaning: inherit all globally-enabled upstreams).
-fn resolve_allowed_upstreams(state: &Arc<AppState>, mcp_session_id: Option<&str>) -> Option<Vec<String>> {
+fn resolve_allowed_upstreams(
+    state: &Arc<AppState>,
+    mcp_session_id: Option<&str>,
+) -> Option<Vec<String>> {
     let repo_path = mcp_session_id
         .and_then(|sid| state.mcp_sessions.get(sid))
         .and_then(|meta| meta.repo_path.clone())?;
     let repo_settings = crate::config::load_repo_settings();
-    repo_settings.repos.get(&repo_path).and_then(|entry| entry.mcp_upstreams.clone())
+    repo_settings
+        .repos
+        .get(&repo_path)
+        .and_then(|entry| entry.mcp_upstreams.clone())
 }
 
 /// Apply the two config-driven filters (`disabled_native_tools`,
@@ -520,16 +537,19 @@ fn filtered_native_tools(state: &Arc<AppState>) -> Vec<serde_json::Value> {
         .collect()
 }
 
-fn merged_tool_definitions(state: &Arc<AppState>, mcp_session_id: Option<&str>) -> serde_json::Value {
+fn merged_tool_definitions(
+    state: &Arc<AppState>,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     if state.config.read().collapse_tools {
         return meta_tool_definitions(state);
     }
 
     let mut tools = filtered_native_tools(state);
     let allowed = resolve_allowed_upstreams(state, mcp_session_id);
-    let upstream_tools = state.mcp_upstream_registry.aggregated_tools_for_repo(
-        allowed.as_deref(),
-    );
+    let upstream_tools = state
+        .mcp_upstream_registry
+        .aggregated_tools_for_repo(allowed.as_deref());
     tools.extend(upstream_tools);
 
     serde_json::Value::Array(tools)
@@ -566,23 +586,33 @@ fn translate_special_key(key: &str) -> Option<&'static str> {
 }
 
 /// Extract action from args, returning a guidance error if missing
-fn require_action<'a>(args: &'a serde_json::Value, tool: &str, available: &str) -> Result<&'a str, serde_json::Value> {
+fn require_action<'a>(
+    args: &'a serde_json::Value,
+    tool: &str,
+    available: &str,
+) -> Result<&'a str, serde_json::Value> {
     args["action"]
         .as_str()
         .ok_or_else(|| serde_json::json!({"error": format!("Missing 'action'. Available actions for '{}': {}", tool, available)}))
 }
 
 /// Extract session_id from args with guidance error
-fn require_session_id<'a>(args: &'a serde_json::Value, action: &str) -> Result<&'a str, serde_json::Value> {
+fn require_session_id<'a>(
+    args: &'a serde_json::Value,
+    action: &str,
+) -> Result<&'a str, serde_json::Value> {
     args["session_id"]
         .as_str()
         .ok_or_else(|| serde_json::json!({"error": format!("Action '{}' requires 'session_id'. Get valid IDs with session action='list'", action)}))
 }
 
-fn require_string<'a>(args: &'a serde_json::Value, field: &str) -> Result<&'a str, serde_json::Value> {
-    args[field]
-        .as_str()
-        .ok_or_else(|| serde_json::json!({"error": format!("Missing required parameter '{field}'")}))
+fn require_string<'a>(
+    args: &'a serde_json::Value,
+    field: &str,
+) -> Result<&'a str, serde_json::Value> {
+    args[field].as_str().ok_or_else(
+        || serde_json::json!({"error": format!("Missing required parameter '{field}'")}),
+    )
 }
 
 /// Extract path from args with guidance error
@@ -630,7 +660,11 @@ pub(crate) fn spawn_tool_search_index_updater(state: Arc<AppState>) {
             match rx.recv().await {
                 Ok(()) => rebuild_tool_search_index(&state),
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(source = "tool_search_index", lagged = n, "tools_changed bus lagged — rebuilding");
+                    tracing::warn!(
+                        source = "tool_search_index",
+                        lagged = n,
+                        "tools_changed bus lagged — rebuilding"
+                    );
                     rebuild_tool_search_index(&state);
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -643,9 +677,11 @@ pub(crate) fn spawn_tool_search_index_updater(state: Arc<AppState>) {
 fn handle_search_tools(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
     let query = match args["query"].as_str() {
         Some(q) if !q.trim().is_empty() => q,
-        _ => return serde_json::json!({
-            "error": "search_tools requires non-empty 'query' (natural-language string describing what you want to do)"
-        }),
+        _ => {
+            return serde_json::json!({
+                "error": "search_tools requires non-empty 'query' (natural-language string describing what you want to do)"
+            });
+        }
     };
     let limit = args["limit"].as_u64().unwrap_or(10).clamp(1, 100) as usize;
 
@@ -663,9 +699,11 @@ fn handle_search_tools(state: &Arc<AppState>, args: &serde_json::Value) -> serde
 fn handle_get_tool_schema(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
     let tool_name = match args["tool_name"].as_str() {
         Some(n) if !n.trim().is_empty() => n,
-        _ => return serde_json::json!({
-            "error": "get_tool_schema requires non-empty 'tool_name' (exact tool name from search_tools)"
-        }),
+        _ => {
+            return serde_json::json!({
+                "error": "get_tool_schema requires non-empty 'tool_name' (exact tool name from search_tools)"
+            });
+        }
     };
 
     let index = state.tool_search_index.read();
@@ -692,9 +730,11 @@ async fn handle_call_tool(
 ) -> serde_json::Value {
     let tool_name = match args["tool_name"].as_str() {
         Some(n) if !n.trim().is_empty() => n.to_string(),
-        _ => return serde_json::json!({
-            "error": "call_tool requires non-empty 'tool_name' (exact tool name from search_tools or get_tool_schema)"
-        }),
+        _ => {
+            return serde_json::json!({
+                "error": "call_tool requires non-empty 'tool_name' (exact tool name from search_tools or get_tool_schema)"
+            });
+        }
     };
 
     // Block recursive meta-tool invocation — meta-tools are invoked directly,
@@ -708,7 +748,10 @@ async fn handle_call_tool(
         });
     }
 
-    let tool_args = args.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+    let tool_args = args
+        .get("arguments")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
 
     let is_upstream = tool_name.contains("__");
     if is_upstream {
@@ -736,7 +779,13 @@ async fn handle_call_tool(
 
 /// Handle an MCP tools/call request, executing against the app state directly (no HTTP round-trip).
 /// Also used by the `deep_link_mcp_call` Tauri command for the `tuic://cmd/` gateway.
-pub(crate) async fn handle_mcp_tool_call(state: &Arc<AppState>, addr: SocketAddr, name: &str, args: &serde_json::Value, mcp_session_id: Option<&str>) -> serde_json::Value {
+pub(crate) async fn handle_mcp_tool_call(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    name: &str,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     // Enforce disabled_native_tools on every call path (not just the call_tool meta-tool).
     // Read-guard does not span an await and is released at the end of the `if` expression.
     if state
@@ -782,7 +831,11 @@ pub(crate) async fn handle_mcp_tool_call(state: &Arc<AppState>, addr: SocketAddr
     }
 }
 
-fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_id: Option<&str>) -> serde_json::Value {
+fn handle_session(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     let action = match require_action(args, "session", SESSION_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -832,7 +885,9 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
 
             match super::session::spawn_pty_session(state.clone(), shell, cwd, rows, cols, None) {
                 Ok(session_id) => serde_json::json!({"session_id": session_id}),
-                Err((_, body)) => serde_json::json!({"error": body.0.get("error").and_then(|v| v.as_str()).unwrap_or("spawn failed")}),
+                Err((_, body)) => {
+                    serde_json::json!({"error": body.0.get("error").and_then(|v| v.as_str()).unwrap_or("spawn failed")})
+                }
             }
         }
         "input" => {
@@ -841,11 +896,15 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                 Err(e) => return e,
             };
             let mut data = String::new();
-            if let Some(input) = args["input"].as_str() { data.push_str(input); }
+            if let Some(input) = args["input"].as_str() {
+                data.push_str(input);
+            }
             if let Some(key) = args["special_key"].as_str() {
                 match translate_special_key(key) {
                     Some(seq) => data.push_str(seq),
-                    None => return serde_json::json!({"error": format!("Unknown special key: {}", key)}),
+                    None => {
+                        return serde_json::json!({"error": format!("Unknown special key: {}", key)});
+                    }
                 }
             }
             if data.is_empty() {
@@ -896,12 +955,15 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                             status.exit_code() as i64
                         };
                         (true, Some(code))
-                    },
+                    }
                     _ => (false, None),
                 }
             } else if buffers_present {
                 // Tombstoned — the reader thread captured the exit code if it could.
-                (true, state.exit_codes.get(session_id).map(|e| *e.value() as i64))
+                (
+                    true,
+                    state.exit_codes.get(session_id).map(|e| *e.value() as i64),
+                )
             } else {
                 // Unknown — no session entry, no buffers, no tombstone.
                 (false, None)
@@ -916,10 +978,12 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
             if args["format"].as_str() != Some("raw") {
                 let vt_log = match state.vt_log_buffers.get(session_id) {
                     Some(b) => b,
-                    None => return serde_json::json!({
-                        "error": "Session not found",
-                        "reason": "session_not_found_or_reaped"
-                    }),
+                    None => {
+                        return serde_json::json!({
+                            "error": "Session not found",
+                            "reason": "session_not_found_or_reaped"
+                        });
+                    }
                 };
                 let buf = vt_log.lock();
                 let total = buf.total_lines();
@@ -934,7 +998,8 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
 
                 let offset = total.saturating_sub(limit);
                 let (log_lines, _) = buf.lines_since_owned(offset, limit);
-                let screen: Vec<String> = buf.screen_rows()
+                let screen: Vec<String> = buf
+                    .screen_rows()
                     .into_iter()
                     .filter(|r| !r.is_empty())
                     .collect();
@@ -945,10 +1010,12 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
             }
             let ring = match state.output_buffers.get(session_id) {
                 Some(r) => r,
-                None => return serde_json::json!({
-                    "error": "Session not found",
-                    "reason": "session_not_found_or_reaped"
-                }),
+                None => {
+                    return serde_json::json!({
+                        "error": "Session not found",
+                        "reason": "session_not_found_or_reaped"
+                    });
+                }
             };
             let (bytes, total_written) = ring.lock().read_last(limit);
             let data = String::from_utf8_lossy(&bytes).to_string();
@@ -968,7 +1035,12 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                 Some(e) => e,
                 None => return serde_json::json!({"error": "Session not found"}),
             };
-            if let Err(e) = entry.lock().master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) {
+            if let Err(e) = entry.lock().master.resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            }) {
                 return serde_json::json!({"error": format!("Resize failed: {}", e)});
             }
             serde_json::json!({"ok": true})
@@ -1001,10 +1073,13 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                 });
                 #[cfg(feature = "desktop")]
                 if let Some(app) = state.app_handle.read().as_ref() {
-                    let _ = app.emit("session-closed", serde_json::json!({
-                        "session_id": session_id,
-                        "reason": "closed",
-                    }));
+                    let _ = app.emit(
+                        "session-closed",
+                        serde_json::json!({
+                            "session_id": session_id,
+                            "reason": "closed",
+                        }),
+                    );
                 }
             }
             // SIMP-1: drain HTML tabs registered by this session and emit close.
@@ -1031,10 +1106,13 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                 });
                 #[cfg(feature = "desktop")]
                 if let Some(app) = state.app_handle.read().as_ref() {
-                    let _ = app.emit("session-closed", serde_json::json!({
-                        "session_id": session_id,
-                        "reason": "killed",
-                    }));
+                    let _ = app.emit(
+                        "session-closed",
+                        serde_json::json!({
+                            "session_id": session_id,
+                            "reason": "killed",
+                        }),
+                    );
                 }
                 // SIMP-1: drain HTML tabs registered by this session and emit close.
                 emit_close_html_tabs(state, session_id);
@@ -1079,10 +1157,16 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_millis() as u64;
-                    let since_ms = state.shell_state_since_ms.get(session_id)
+                    let since_ms = state
+                        .shell_state_since_ms
+                        .get(session_id)
                         .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
                         .unwrap_or(0);
-                    let elapsed = if since_ms > 0 { now_ms.saturating_sub(since_ms) } else { 0 };
+                    let elapsed = if since_ms > 0 {
+                        now_ms.saturating_sub(since_ms)
+                    } else {
+                        0
+                    };
                     let is_idle = ss.shell_state.as_deref() == Some("idle");
                     let is_busy = ss.shell_state.as_deref() == Some("busy");
                     serde_json::json!({
@@ -1096,7 +1180,7 @@ fn handle_session(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_i
                         "idle_since_ms": if is_idle && elapsed > 0 { serde_json::json!(elapsed) } else { serde_json::Value::Null },
                         "busy_duration_ms": if is_busy && elapsed > 0 { serde_json::json!(elapsed) } else { serde_json::Value::Null },
                     })
-                },
+                }
                 None => serde_json::json!({"error": format!("Session '{}' not found", session_id)}),
             }
         }
@@ -1117,7 +1201,9 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if let Err(e) = validate_mcp_repo_path(&path) { return e; }
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
             let statuses = if let Some(cached) = crate::state::AppState::get_cached(
                 &state.git_cache.github_status,
                 &path,
@@ -1133,22 +1219,28 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
             // Cross-repo aggregate: for each workspace repo, return branch/ahead/behind/open PRs
             // Reads from poller cache to avoid fan-out API calls
             let repo_data = crate::config::load_repositories();
-            let repo_order = repo_data.get("repoOrder")
+            let repo_order = repo_data
+                .get("repoOrder")
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
             let mut results: Vec<serde_json::Value> = Vec::new();
             for path_val in &repo_order {
-                let Some(path) = path_val.as_str() else { continue };
+                let Some(path) = path_val.as_str() else {
+                    continue;
+                };
                 let info = crate::git::get_repo_info_cached(state, path);
-                if !info.is_git_repo { continue; }
+                if !info.is_git_repo {
+                    continue;
+                }
                 let gh = crate::github::get_github_status_cached(state, path);
                 let cached_prs: Vec<crate::github::BranchPrStatus> =
                     crate::state::AppState::get_cached(
                         &state.git_cache.github_status,
                         path,
                         crate::state::GITHUB_CACHE_TTL,
-                    ).unwrap_or_default();
+                    )
+                    .unwrap_or_default();
                 let open_prs = cached_prs.len();
                 let failing_ci = cached_prs.iter().filter(|p| p.checks.failed > 0).count();
                 results.push(serde_json::json!({
@@ -1168,9 +1260,16 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if let Err(e) = validate_mcp_repo_path(&path) { return e; }
-            let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("assigned");
-            let result = crate::github::get_all_issues_impl(std::slice::from_ref(&path), filter, state).await;
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
+            let filter = args
+                .get("filter")
+                .and_then(|v| v.as_str())
+                .unwrap_or("assigned");
+            let result =
+                crate::github::get_all_issues_impl(std::slice::from_ref(&path), filter, state)
+                    .await;
             match result {
                 Ok(mut map) => serde_json::json!(map.remove(&path).unwrap_or_default()),
                 Err(e) => serde_json::json!({"error": e}),
@@ -1181,8 +1280,13 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if let Err(e) = validate_mcp_repo_path(&path) { return e; }
-            let issue_number = args.get("issue_number").and_then(|v| v.as_i64()).unwrap_or(0);
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
+            let issue_number = args
+                .get("issue_number")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
             if issue_number == 0 {
                 return serde_json::json!({"error": "Missing required parameter: issue_number"});
             }
@@ -1196,8 +1300,13 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if let Err(e) = validate_mcp_repo_path(&path) { return e; }
-            let issue_number = args.get("issue_number").and_then(|v| v.as_i64()).unwrap_or(0);
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
+            let issue_number = args
+                .get("issue_number")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
             if issue_number == 0 {
                 return serde_json::json!({"error": "Missing required parameter: issue_number"});
             }
@@ -1217,10 +1326,20 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
 fn create_session_in_dir(state: &Arc<AppState>, cwd: &str) -> Result<String, String> {
     let shell = resolve_shell(None);
     super::session::spawn_pty_session(state.clone(), shell, Some(cwd.to_string()), 24, 80, None)
-        .map_err(|(_, body)| body.0.get("error").and_then(|v| v.as_str()).unwrap_or("spawn failed").to_string())
+        .map_err(|(_, body)| {
+            body.0
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("spawn failed")
+                .to_string()
+        })
 }
 
-fn handle_worktree(state: &Arc<AppState>, args: &serde_json::Value, is_claude_code: bool) -> serde_json::Value {
+fn handle_worktree(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    is_claude_code: bool,
+) -> serde_json::Value {
     let action = match require_action(args, "worktree", LEGACY_WORKTREE_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -1231,7 +1350,9 @@ fn handle_worktree(state: &Arc<AppState>, args: &serde_json::Value, is_claude_co
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if let Err(e) = validate_mcp_repo_path(&path) { return e; }
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
             match crate::worktree::get_worktree_paths(path) {
                 Ok(wts) => to_json_or_error(wts),
                 Err(e) => serde_json::json!({"error": e}),
@@ -1242,13 +1363,16 @@ fn handle_worktree(state: &Arc<AppState>, args: &serde_json::Value, is_claude_co
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if let Err(e) = validate_mcp_repo_path(&path) { return e; }
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
             let branch = args["branch"].as_str().map(|s| s.to_string());
             let base_ref = args["base_ref"].as_str();
 
             // Generate a branch name if not specified
             let branch_name = branch.unwrap_or_else(|| {
-                let existing: Vec<String> = match crate::worktree::get_worktree_paths(path.clone()) {
+                let existing: Vec<String> = match crate::worktree::get_worktree_paths(path.clone())
+                {
                     Ok(wts) => wts.keys().cloned().collect(),
                     Err(e) => {
                         tracing::warn!("Failed to list worktrees for name generation: {e}");
@@ -1275,18 +1399,23 @@ fn handle_worktree(state: &Arc<AppState>, args: &serde_json::Value, is_claude_co
                     let wt_path = wt.path.to_string_lossy().to_string();
                     let branch_name = wt.branch.clone().unwrap_or_default();
                     // Notify frontend so it can offer to switch to the new worktree
-                    let _ = state.event_bus.send(crate::state::AppEvent::WorktreeCreated {
-                        repo_path: path.clone(),
-                        branch: branch_name.clone(),
-                        worktree_path: wt_path.clone(),
-                    });
+                    let _ = state
+                        .event_bus
+                        .send(crate::state::AppEvent::WorktreeCreated {
+                            repo_path: path.clone(),
+                            branch: branch_name.clone(),
+                            worktree_path: wt_path.clone(),
+                        });
                     #[cfg(feature = "desktop")]
                     if let Some(handle) = state.app_handle.read().as_ref() {
-                        let _ = handle.emit("worktree-created", serde_json::json!({
-                            "repo_path": path,
-                            "branch": branch_name,
-                            "worktree_path": wt_path,
-                        }));
+                        let _ = handle.emit(
+                            "worktree-created",
+                            serde_json::json!({
+                                "repo_path": path,
+                                "branch": branch_name,
+                                "worktree_path": wt_path,
+                            }),
+                        );
                     }
                     let mut response = serde_json::json!({
                         "worktree_path": wt_path,
@@ -1295,8 +1424,12 @@ fn handle_worktree(state: &Arc<AppState>, args: &serde_json::Value, is_claude_co
                     // Optionally spawn a PTY session in the new worktree
                     if args["spawn_session"].as_bool().unwrap_or(false) {
                         match create_session_in_dir(state, &wt_path) {
-                            Ok(sid) => { response["session_id"] = serde_json::json!(sid); }
-                            Err(e) => { response["session_error"] = serde_json::json!(e); }
+                            Ok(sid) => {
+                                response["session_id"] = serde_json::json!(sid);
+                            }
+                            Err(e) => {
+                                response["session_error"] = serde_json::json!(e);
+                            }
                         }
                     }
                     // Add structured hint for Claude Code clients to spawn a subagent in the worktree
@@ -1323,13 +1456,22 @@ fn handle_worktree(state: &Arc<AppState>, args: &serde_json::Value, is_claude_co
                 Ok(p) => p,
                 Err(e) => return e,
             };
-            if let Err(e) = validate_mcp_repo_path(&path) { return e; }
+            if let Err(e) = validate_mcp_repo_path(&path) {
+                return e;
+            }
             let branch = match args["branch"].as_str() {
                 Some(b) => b.to_string(),
-                None => return serde_json::json!({"error": "Action 'remove' requires 'branch' parameter"}),
+                None => {
+                    return serde_json::json!({"error": "Action 'remove' requires 'branch' parameter"});
+                }
             };
             let archive = crate::worktree::resolve_archive_script(&path);
-            match crate::worktree::remove_worktree_by_branch(&path, &branch, true, archive.as_deref()) {
+            match crate::worktree::remove_worktree_by_branch(
+                &path,
+                &branch,
+                true,
+                archive.as_deref(),
+            ) {
                 Ok(()) => {
                     state.invalidate_repo_caches(&path);
                     serde_json::json!({"ok": true})
@@ -1365,7 +1507,12 @@ fn build_spawn_prompt(prompt: &str, parent_tuic: Option<&str>, session_id: &str)
     )
 }
 
-fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Value, mcp_session_id: Option<&str>) -> serde_json::Value {
+fn handle_agent(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     let action = match require_action(args, "agent", LEGACY_AGENT_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -1373,10 +1520,13 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
     match action {
         "detect" => {
             let known = ["claude", "codex", "aider", "goose"];
-            let results: Vec<serde_json::Value> = known.iter().map(|name| {
-                let det = crate::agent::detect_agent_binary(name.to_string());
-                serde_json::json!({"name": name, "path": det.path, "version": det.version})
-            }).collect();
+            let results: Vec<serde_json::Value> = known
+                .iter()
+                .map(|name| {
+                    let det = crate::agent::detect_agent_binary(name.to_string());
+                    serde_json::json!({"name": name, "path": det.path, "version": det.version})
+                })
+                .collect();
             serde_json::json!(results)
         }
         "spawn" => {
@@ -1412,7 +1562,9 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
                 let detection = crate::agent::detect_agent_binary(bin.clone());
                 match detection.path {
                     Some(p) => (p, Some(rc)),
-                    None => return serde_json::json!({"error": format!("Agent binary '{}' not found", bin)}),
+                    None => {
+                        return serde_json::json!({"error": format!("Agent binary '{}' not found", bin)});
+                    }
                 }
             };
 
@@ -1424,7 +1576,12 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
 
             let session_id = Uuid::new_v4().to_string();
             let pty_system = native_pty_system();
-            let pair = match pty_system.openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 }) {
+            let pair = match pty_system.openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            }) {
                 Ok(p) => p,
                 Err(e) => return serde_json::json!({"error": format!("Failed to open PTY: {}", e)}),
             };
@@ -1455,7 +1612,9 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
             if let Some(raw_args) = args.get("args").and_then(|a| a.as_array()) {
                 // Explicit args from caller override everything
                 for arg in raw_args {
-                    if let Some(s) = arg.as_str() { cmd.arg(s); }
+                    if let Some(s) = arg.as_str() {
+                        cmd.arg(s);
+                    }
                 }
             } else if let Some(ref rc) = resolved {
                 if let Some(ref rc_args) = rc.args {
@@ -1475,53 +1634,98 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
                     }
                 } else {
                     // Run config matched but no args override — use default MCP param logic
-                    if args["print_mode"].as_bool().unwrap_or(false) { cmd.arg("--print"); }
-                    if let Some(format) = args["output_format"].as_str() { cmd.arg("--output-format"); cmd.arg(format); }
-                    if let Some(model) = args["model"].as_str() { cmd.arg("--model"); cmd.arg(model); }
+                    if args["print_mode"].as_bool().unwrap_or(false) {
+                        cmd.arg("--print");
+                    }
+                    if let Some(format) = args["output_format"].as_str() {
+                        cmd.arg("--output-format");
+                        cmd.arg(format);
+                    }
+                    if let Some(model) = args["model"].as_str() {
+                        cmd.arg("--model");
+                        cmd.arg(model);
+                    }
                     cmd.arg(&effective_prompt);
                 }
             } else {
                 // No run config, no explicit args — default MCP param logic
-                if args["print_mode"].as_bool().unwrap_or(false) { cmd.arg("--print"); }
-                if let Some(format) = args["output_format"].as_str() { cmd.arg("--output-format"); cmd.arg(format); }
-                if let Some(model) = args["model"].as_str() { cmd.arg("--model"); cmd.arg(model); }
+                if args["print_mode"].as_bool().unwrap_or(false) {
+                    cmd.arg("--print");
+                }
+                if let Some(format) = args["output_format"].as_str() {
+                    cmd.arg("--output-format");
+                    cmd.arg(format);
+                }
+                if let Some(model) = args["model"].as_str() {
+                    cmd.arg("--model");
+                    cmd.arg(model);
+                }
                 cmd.arg(&effective_prompt);
             }
-            if let Some(cwd) = args["cwd"].as_str() { cmd.cwd(crate::cli::expand_tilde(cwd)); }
+            if let Some(cwd) = args["cwd"].as_str() {
+                cmd.cwd(crate::cli::expand_tilde(cwd));
+            }
 
             let child = match pair.slave.spawn_command(cmd) {
                 Ok(c) => c,
-                Err(e) => return serde_json::json!({"error": format!("Failed to spawn agent: {}", e)}),
+                Err(e) => {
+                    return serde_json::json!({"error": format!("Failed to spawn agent: {}", e)});
+                }
             };
             let writer = match pair.master.take_writer() {
                 Ok(w) => w,
-                Err(e) => return serde_json::json!({"error": format!("Failed to get PTY writer: {}", e)}),
+                Err(e) => {
+                    return serde_json::json!({"error": format!("Failed to get PTY writer: {}", e)});
+                }
             };
             let reader = match pair.master.try_clone_reader() {
                 Ok(r) => r,
-                Err(e) => return serde_json::json!({"error": format!("Failed to get PTY reader: {}", e)}),
+                Err(e) => {
+                    return serde_json::json!({"error": format!("Failed to get PTY reader: {}", e)});
+                }
             };
 
             let paused = Arc::new(AtomicBool::new(false));
-            state.sessions.insert(session_id.clone(), Mutex::new(PtySession {
-                writer, master: pair.master, _child: child, paused: paused.clone(), worktree: None,
-                cwd: args["cwd"].as_str().map(|s| s.to_string()), display_name: None,
-                shell: binary_path.clone(),
-            }));
+            state.sessions.insert(
+                session_id.clone(),
+                Mutex::new(PtySession {
+                    writer,
+                    master: pair.master,
+                    _child: child,
+                    paused: paused.clone(),
+                    worktree: None,
+                    cwd: args["cwd"].as_str().map(|s| s.to_string()),
+                    display_name: None,
+                    shell: binary_path.clone(),
+                }),
+            );
             state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
-            state.metrics.active_sessions.fetch_add(1, Ordering::Relaxed);
-            state.output_buffers.insert(session_id.clone(), Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)));
-            state.vt_log_buffers.insert(session_id.clone(), Mutex::new(VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY)));
-            state.last_output_ms.insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
+            state
+                .metrics
+                .active_sessions
+                .fetch_add(1, Ordering::Relaxed);
+            state.output_buffers.insert(
+                session_id.clone(),
+                Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
+            );
+            state.vt_log_buffers.insert(
+                session_id.clone(),
+                Mutex::new(VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY)),
+            );
+            state
+                .last_output_ms
+                .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
 
             // Broadcast session-created to SSE/WebSocket consumers
             let cwd_str = args["cwd"].as_str().map(|s| s.to_string());
             let agent_type_str = args["agent_type"].as_str().map(|s| s.to_string());
-            let _ = state.event_bus.send(crate::state::AppEvent::SessionCreated {
-                session_id: session_id.clone(),
-                cwd: cwd_str.clone(),
-                agent_type: agent_type_str,
-            });
+            let _ = state
+                .event_bus
+                .send(crate::state::AppEvent::SessionCreated {
+                    session_id: session_id.clone(),
+                    cwd: cwd_str.clone(),
+                    agent_type: agent_type_str,
+                });
 
             #[cfg(feature = "desktop")]
             {
@@ -1529,11 +1733,14 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
                 let app_handle = state.app_handle.read().clone();
                 if !print_mode && let Some(ref app) = app_handle {
                     let agent_type_val = args["agent_type"].as_str();
-                    let _ = app.emit("session-created", serde_json::json!({
-                        "session_id": session_id,
-                        "cwd": cwd_str,
-                        "agent_type": agent_type_val,
-                    }));
+                    let _ = app.emit(
+                        "session-created",
+                        serde_json::json!({
+                            "session_id": session_id,
+                            "cwd": cwd_str,
+                            "agent_type": agent_type_val,
+                        }),
+                    );
                 }
             }
             spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
@@ -1544,15 +1751,20 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
-                state.peer_agents.insert(session_id.clone(), crate::state::PeerAgent {
-                    tuic_session: session_id.clone(),
-                    mcp_session_id: String::new(), // filled when child connects via MCP
-                    name: "agent".to_string(),
-                    project: args["cwd"].as_str().map(|s| s.to_string()),
-                    registered_at: now_ms,
-                });
+                state.peer_agents.insert(
+                    session_id.clone(),
+                    crate::state::PeerAgent {
+                        tuic_session: session_id.clone(),
+                        mcp_session_id: String::new(), // filled when child connects via MCP
+                        name: "agent".to_string(),
+                        project: args["cwd"].as_str().map(|s| s.to_string()),
+                        registered_at: now_ms,
+                    },
+                );
                 state.agent_inbox.entry(session_id.clone()).or_default();
-                state.session_parent.insert(session_id.clone(), parent_id.clone());
+                state
+                    .session_parent
+                    .insert(session_id.clone(), parent_id.clone());
             }
 
             let spawn_ts = std::time::SystemTime::now()
@@ -1596,7 +1808,11 @@ fn handle_agent(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Valu
     }
 }
 
-fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_id: Option<&str>) -> serde_json::Value {
+fn handle_messaging(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     let action = match require_action(args, "messaging", LEGACY_MESSAGING_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -1605,7 +1821,9 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
         "register" => {
             let tuic_session = match args["tuic_session"].as_str() {
                 Some(s) if !s.is_empty() => s,
-                _ => return serde_json::json!({"error": "Action 'register' requires 'tuic_session' (your $TUIC_SESSION env var)"}),
+                _ => {
+                    return serde_json::json!({"error": "Action 'register' requires 'tuic_session' (your $TUIC_SESSION env var)"});
+                }
             };
             // Validate UUID format to prevent prompt-injection via preamble interpolation (SEC-1).
             // $TUIC_SESSION is always a UUID v4; reject anything that isn't.
@@ -1614,7 +1832,9 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
             }
             let mcp_sid = match mcp_session_id {
                 Some(sid) => sid.to_string(),
-                None => return serde_json::json!({"error": "No MCP session — send an initialize request first"}),
+                None => {
+                    return serde_json::json!({"error": "No MCP session — send an initialize request first"});
+                }
             };
             let name = args["name"].as_str().unwrap_or("agent").to_string();
             let project = args["project"].as_str().map(|s| s.to_string());
@@ -1633,15 +1853,20 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
             state.peer_agents.insert(tuic_session.to_string(), peer);
             // Map MCP session → PTY session for self-close guard resolution.
             // Reverse index (session_to_mcp) keeps tombstone cleanup O(1).
-            state.mcp_to_session.insert(mcp_sid.clone(), tuic_session.to_string());
-            state.session_to_mcp
+            state
+                .mcp_to_session
+                .insert(mcp_sid.clone(), tuic_session.to_string());
+            state
+                .session_to_mcp
                 .entry(tuic_session.to_string())
                 .or_default()
                 .push(mcp_sid);
-            let _ = state.event_bus.send(crate::state::AppEvent::PeerRegistered {
-                tuic_session: tuic_session.to_string(),
-                name: name.clone(),
-            });
+            let _ = state
+                .event_bus
+                .send(crate::state::AppEvent::PeerRegistered {
+                    tuic_session: tuic_session.to_string(),
+                    name: name.clone(),
+                });
             // Teach the full multi-agent workflow in the register response so the
             // static instructions can stay compact (AC1 token budget). Any agent
             // that registers immediately receives the operational details it needs
@@ -1664,7 +1889,9 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
         }
         "list_peers" => {
             let project_filter = args["project"].as_str();
-            let peers: Vec<serde_json::Value> = state.peer_agents.iter()
+            let peers: Vec<serde_json::Value> = state
+                .peer_agents
+                .iter()
                 .filter(|entry| {
                     if let Some(filter) = project_filter {
                         entry.value().project.as_deref() == Some(filter)
@@ -1687,7 +1914,9 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
         "send" => {
             let to = match args["to"].as_str() {
                 Some(s) if !s.is_empty() => s,
-                _ => return serde_json::json!({"error": "Action 'send' requires 'to' (recipient's tuic_session UUID)"}),
+                _ => {
+                    return serde_json::json!({"error": "Action 'send' requires 'to' (recipient's tuic_session UUID)"});
+                }
             };
             let message = match args["message"].as_str() {
                 Some(s) if !s.is_empty() => s,
@@ -1701,10 +1930,16 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
             // Resolve sender via O(1) mcp_to_session reverse map (RUST-3/PERF-2).
             let sender = match mcp_session_id
                 .and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()))
-                .and_then(|tuic| state.peer_agents.get(&tuic).map(|p| (p.tuic_session.clone(), p.name.clone())))
-            {
+                .and_then(|tuic| {
+                    state
+                        .peer_agents
+                        .get(&tuic)
+                        .map(|p| (p.tuic_session.clone(), p.name.clone()))
+                }) {
                 Some(s) => s,
-                None => return serde_json::json!({"error": "You are not registered. Register first with messaging action=register"}),
+                None => {
+                    return serde_json::json!({"error": "You are not registered. Register first with messaging action=register"});
+                }
             };
             // Check recipient exists
             if !state.peer_agents.contains_key(to) {
@@ -1729,7 +1964,9 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
             let recipient_mcp_sid = state.peer_agents.get(to).map(|p| p.mcp_session_id.clone());
             let mut pushed = false;
             if let Some(ref mcp_sid) = recipient_mcp_sid {
-                let has_sse = state.mcp_sessions.get(mcp_sid)
+                let has_sse = state
+                    .mcp_sessions
+                    .get(mcp_sid)
                     .map(|m| m.has_sse_stream)
                     .unwrap_or(false);
                 if has_sse && let Some(tx) = state.messaging_channels.get(mcp_sid) {
@@ -1745,7 +1982,10 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
                             }
                         }
                     });
-                    if tx.send(serde_json::to_string(&notification).unwrap_or_default()).is_ok() {
+                    if tx
+                        .send(serde_json::to_string(&notification).unwrap_or_default())
+                        .is_ok()
+                    {
                         pushed = true;
                         msg.delivered_via_channel = true;
                     }
@@ -1756,7 +1996,10 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
             let mut inbox = state.agent_inbox.entry(to.to_string()).or_default();
             if inbox.len() >= crate::state::AGENT_INBOX_CAPACITY {
                 inbox.pop_front();
-                *state.agent_inbox_evictions.entry(to.to_string()).or_insert(0) += 1;
+                *state
+                    .agent_inbox_evictions
+                    .entry(to.to_string())
+                    .or_insert(0) += 1;
             }
             inbox.push_back(msg);
             serde_json::json!({"ok": true, "message_id": msg_id, "delivered_via_channel": pushed})
@@ -1768,33 +2011,40 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
                 .filter(|tuic| state.peer_agents.contains_key(tuic))
             {
                 Some(ts) => ts,
-                None => return serde_json::json!({"error": "You are not registered. Register first with messaging action=register"}),
+                None => {
+                    return serde_json::json!({"error": "You are not registered. Register first with messaging action=register"});
+                }
             };
             let limit = args["limit"].as_u64().unwrap_or(50) as usize;
             let since = args["since"].as_u64().unwrap_or(0);
-            let messages: Vec<serde_json::Value> = state.agent_inbox
+            let messages: Vec<serde_json::Value> = state
+                .agent_inbox
                 .get(&tuic_session)
                 .map(|inbox| {
-                    inbox.iter()
+                    inbox
+                        .iter()
                         .filter(|m| m.timestamp > since)
                         .rev() // newest first
                         .take(limit)
                         .collect::<Vec<_>>()
                         .into_iter()
                         .rev() // restore chronological order
-                        .map(|m| serde_json::json!({
-                            "id": m.id,
-                            "from_tuic_session": m.from_tuic_session,
-                            "from_name": m.from_name,
-                            "content": m.content,
-                            "timestamp": m.timestamp,
-                            "delivered_via_channel": m.delivered_via_channel,
-                        }))
+                        .map(|m| {
+                            serde_json::json!({
+                                "id": m.id,
+                                "from_tuic_session": m.from_tuic_session,
+                                "from_name": m.from_name,
+                                "content": m.content,
+                                "timestamp": m.timestamp,
+                                "delivered_via_channel": m.delivered_via_channel,
+                            })
+                        })
                         .collect()
                 })
                 .unwrap_or_default();
             // Consume and reset eviction counter (so caller knows since last read)
-            let missed_count = state.agent_inbox_evictions
+            let missed_count = state
+                .agent_inbox_evictions
                 .remove(&tuic_session)
                 .map(|(_, n)| n)
                 .unwrap_or(0);
@@ -1810,7 +2060,11 @@ fn handle_messaging(state: &Arc<AppState>, args: &serde_json::Value, mcp_session
     }
 }
 
-fn handle_config(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Value) -> serde_json::Value {
+fn handle_config(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+) -> serde_json::Value {
     let action = match require_action(args, "config", CONFIG_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -1840,18 +2094,23 @@ fn handle_config(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Val
             }
             let config_val = match args.get("config") {
                 Some(c) => c,
-                None => return serde_json::json!({"error": "Action 'save' requires 'config' object"}),
+                None => {
+                    return serde_json::json!({"error": "Action 'save' requires 'config' object"});
+                }
             };
-            let mut config: crate::config::AppConfig = match serde_json::from_value(config_val.clone()) {
-                Ok(c) => c,
-                Err(e) => return serde_json::json!({"error": format!("Invalid config: {}", e)}),
-            };
+            let mut config: crate::config::AppConfig =
+                match serde_json::from_value(config_val.clone()) {
+                    Ok(c) => c,
+                    Err(e) => return serde_json::json!({"error": format!("Invalid config: {}", e)}),
+                };
             // Preserve server-managed secrets
             {
                 let current = state.config.read();
                 config.services.auth.session_token = current.services.auth.session_token.clone();
-                config.services.push.vapid_private_key = current.services.push.vapid_private_key.clone();
-                config.services.push.vapid_public_key = current.services.push.vapid_public_key.clone();
+                config.services.push.vapid_private_key =
+                    current.services.push.vapid_private_key.clone();
+                config.services.push.vapid_public_key =
+                    current.services.push.vapid_public_key.clone();
             }
             match crate::config::save_app_config(config.clone()) {
                 Ok(()) => {
@@ -1860,7 +2119,9 @@ fn handle_config(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Val
                         (c.disabled_native_tools.clone(), c.collapse_tools)
                     };
                     *state.config.write() = config.clone();
-                    if old_disabled != config.disabled_native_tools || old_collapse != config.collapse_tools {
+                    if old_disabled != config.disabled_native_tools
+                        || old_collapse != config.collapse_tools
+                    {
                         let _ = state.mcp_tools_changed.send(());
                     }
                     serde_json::json!({"ok": true})
@@ -1907,7 +2168,9 @@ fn handle_config(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Val
             };
             match service {
                 "diff_triage" => {
-                    let prompt = args.get("prompt").and_then(|v| v.as_str())
+                    let prompt = args
+                        .get("prompt")
+                        .and_then(|v| v.as_str())
                         .filter(|s| !s.trim().is_empty())
                         .map(|s| s.to_string());
                     let mut config = crate::config::load_ai_prompts();
@@ -1955,14 +2218,22 @@ fn handle_config(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Val
                 Ok(s) => s.to_string(),
                 Err(e) => return e,
             };
-            let pinned = args.get("pinned").and_then(|v| v.as_bool()).unwrap_or(false);
+            let pinned = args
+                .get("pinned")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let mut lib = crate::config::load_prompt_library();
             if let Some(existing) = lib.prompts.iter_mut().find(|p| p.id == id) {
                 existing.label = label;
                 existing.text = text;
                 existing.pinned = pinned;
             } else {
-                lib.prompts.push(crate::config::PromptEntry { id, label, text, pinned });
+                lib.prompts.push(crate::config::PromptEntry {
+                    id,
+                    label,
+                    text,
+                    pinned,
+                });
             }
             match crate::config::save_prompt_library(lib) {
                 Ok(()) => serde_json::json!({"ok": true}),
@@ -2031,7 +2302,8 @@ fn handle_debug(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::
             let limit = args["limit"].as_u64().unwrap_or(50) as usize;
             let buf = state.log_buffer.lock();
             let all = buf.get_entries(0);
-            let filtered: Vec<_> = all.into_iter()
+            let filtered: Vec<_> = all
+                .into_iter()
                 .filter(|e| level_filter.is_none_or(|l| e.level == l))
                 .filter(|e| source_filter.is_none_or(|s| e.source == s))
                 .collect();
@@ -2039,25 +2311,30 @@ fn handle_debug(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::
             serde_json::json!(filtered[start..])
         }
         "sessions" => {
-            let sessions: Vec<serde_json::Value> = state.sessions.iter().map(|entry| {
-                let sid = entry.key().clone();
-                let session = entry.value().lock();
-                #[cfg(not(windows))]
-                let pgid = session.master.process_group_leader();
-                #[cfg(windows)]
-                let pgid = session._child.process_id();
-                #[cfg(not(windows))]
-                let process_name = pgid.and_then(|p| crate::pty::process_name_from_pid(p as u32));
-                #[cfg(windows)]
-                let process_name = pgid.and_then(crate::pty::process_name_from_pid);
-                serde_json::json!({
-                    "session_id": sid,
-                    "cwd": session.cwd,
-                    "child_pid": session._child.process_id(),
-                    "foreground_pgid": pgid,
-                    "foreground_process": process_name,
+            let sessions: Vec<serde_json::Value> = state
+                .sessions
+                .iter()
+                .map(|entry| {
+                    let sid = entry.key().clone();
+                    let session = entry.value().lock();
+                    #[cfg(not(windows))]
+                    let pgid = session.master.process_group_leader();
+                    #[cfg(windows)]
+                    let pgid = session._child.process_id();
+                    #[cfg(not(windows))]
+                    let process_name =
+                        pgid.and_then(|p| crate::pty::process_name_from_pid(p as u32));
+                    #[cfg(windows)]
+                    let process_name = pgid.and_then(crate::pty::process_name_from_pid);
+                    serde_json::json!({
+                        "session_id": sid,
+                        "cwd": session.cwd,
+                        "child_pid": session._child.process_id(),
+                        "foreground_pgid": pgid,
+                        "foreground_process": process_name,
+                    })
                 })
-            }).collect();
+                .collect();
             serde_json::json!(sessions)
         }
         "invoke_js" => {
@@ -2079,15 +2356,23 @@ fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_js
     match action {
         "list" => {
             let repo_data = crate::config::load_repositories();
-            let repos = repo_data.get("repos").cloned().unwrap_or(serde_json::json!({}));
-            let repo_order = repo_data.get("repoOrder")
+            let repos = repo_data
+                .get("repos")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
+            let repo_order = repo_data
+                .get("repoOrder")
                 .and_then(|v| v.as_array())
                 .cloned()
                 .unwrap_or_default();
-            let groups = repo_data.get("groups").cloned().unwrap_or(serde_json::json!({}));
+            let groups = repo_data
+                .get("groups")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
 
             // Build group membership lookup: repo_path → group name
-            let mut repo_group: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            let mut repo_group: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             if let Some(groups_obj) = groups.as_object() {
                 for (_gid, group) in groups_obj {
                     let group_name = group["name"].as_str().unwrap_or("").to_string();
@@ -2151,7 +2436,10 @@ fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_js
             let info = crate::git::get_repo_info_cached(state, &active_path);
 
             // Find group membership
-            let groups = repo_data.get("groups").cloned().unwrap_or(serde_json::json!({}));
+            let groups = repo_data
+                .get("groups")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
             let mut group_name: Option<String> = None;
             if let Some(groups_obj) = groups.as_object() {
                 for (_gid, group) in groups_obj {
@@ -2181,7 +2469,11 @@ fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_js
     }
 }
 
-fn handle_ui(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_id: Option<&str>) -> serde_json::Value {
+fn handle_ui(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     let action = match require_action(args, "ui", LEGACY_UI_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -2201,8 +2493,12 @@ fn handle_ui(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_id: Op
             let html = match (&html_arg, &url_arg) {
                 (Some(h), None) => h.clone(),
                 (None, Some(_)) => String::new(), // URL mode — html is empty, frontend uses url
-                (Some(_), Some(_)) => return serde_json::json!({"error": "Provide either 'html' or 'url', not both"}),
-                (None, None) => return serde_json::json!({"error": "Action 'tab' requires 'html' or 'url'"}),
+                (Some(_), Some(_)) => {
+                    return serde_json::json!({"error": "Provide either 'html' or 'url', not both"});
+                }
+                (None, None) => {
+                    return serde_json::json!({"error": "Action 'tab' requires 'html' or 'url'"});
+                }
             };
             // Guard: if a tuic session_id is provided and it already has a terminal,
             // decline to create an HTML tab (agent should use the terminal instead).
@@ -2222,10 +2518,11 @@ fn handle_ui(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_id: Op
             let caller_tuic = mcp_session_id
                 .and_then(|mcp_sid| state.mcp_to_session.get(mcp_sid).map(|s| s.value().clone()));
             let origin_repo_path: Option<String> = caller_tuic.as_ref().and_then(|tuic| {
-                state.peer_agents.get(tuic)
+                state
+                    .peer_agents
+                    .get(tuic)
                     .and_then(|p| p.project.clone())
-                    .or_else(|| state.sessions.get(tuic)
-                        .and_then(|s| s.lock().cwd.clone()))
+                    .or_else(|| state.sessions.get(tuic).and_then(|s| s.lock().cwd.clone()))
             });
             let mut payload = serde_json::json!({
                 "id": id,
@@ -2243,7 +2540,8 @@ fn handle_ui(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_id: Op
             // Register this tab under the creator's tuic session so it can be
             // closed automatically when that session exits.
             if let Some(ref tuic_session) = caller_tuic {
-                state.session_html_tabs
+                state
+                    .session_html_tabs
                     .entry(tuic_session.clone())
                     .or_default()
                     .push(id.clone());
@@ -2271,7 +2569,11 @@ fn handle_ui(state: &Arc<AppState>, args: &serde_json::Value, mcp_session_id: Op
     }
 }
 
-fn handle_notify(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Value) -> serde_json::Value {
+fn handle_notify(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+) -> serde_json::Value {
     let action = match require_action(args, "notify", LEGACY_NOTIFY_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -2286,9 +2588,11 @@ fn handle_notify(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Val
             let level = args["level"].as_str().unwrap_or("info");
             let level = match level {
                 "info" | "warn" | "error" => level.to_string(),
-                other => return serde_json::json!({"error": format!(
-                    "Invalid level '{}'. Must be: info, warn, error", other
-                )}),
+                other => {
+                    return serde_json::json!({"error": format!(
+                        "Invalid level '{}'. Must be: info, warn, error", other
+                    )});
+                }
             };
             let sound = args["sound"].as_bool().unwrap_or(false);
             let _ = state.event_bus.send(crate::state::AppEvent::McpToast {
@@ -2311,18 +2615,23 @@ fn handle_notify(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Val
                 }
                 let title = match args["title"].as_str() {
                     Some(t) => t.to_string(),
-                    None => return serde_json::json!({"error": "Action 'confirm' requires 'title'"}),
+                    None => {
+                        return serde_json::json!({"error": "Action 'confirm' requires 'title'"});
+                    }
                 };
                 let message = args["message"].as_str().unwrap_or("").to_string();
 
                 let app_handle = state.app_handle.read();
                 let handle = match app_handle.as_ref() {
                     Some(h) => h,
-                    None => return serde_json::json!({"error": "App handle not available (headless mode)"}),
+                    None => {
+                        return serde_json::json!({"error": "App handle not available (headless mode)"});
+                    }
                 };
 
                 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
-                let confirmed = handle.dialog()
+                let confirmed = handle
+                    .dialog()
                     .message(&message)
                     .title(&title)
                     .buttons(MessageDialogButtons::OkCancel)
@@ -2384,19 +2693,24 @@ pub(super) async fn mcp_post(
                 .and_then(|root| root["uri"].as_str())
                 .and_then(|uri| uri.strip_prefix("file://"))
                 .map(|path| {
-                    let known: Vec<String> = state.repo_watchers.iter()
+                    let known: Vec<String> = state
+                        .repo_watchers
+                        .iter()
                         .map(|entry| entry.key().clone())
                         .collect();
                     resolve_repo_for_path(path, &known)
                 });
 
             let now = std::time::Instant::now();
-            state.mcp_sessions.insert(session_id.clone(), crate::state::McpSessionMeta {
-                last_activity: now,
-                is_claude_code,
-                has_sse_stream: false,
-                repo_path,
-            });
+            state.mcp_sessions.insert(
+                session_id.clone(),
+                crate::state::McpSessionMeta {
+                    last_activity: now,
+                    is_claude_code,
+                    has_sse_stream: false,
+                    repo_path,
+                },
+            );
             let instructions = build_mcp_instructions(&state, client_name);
 
             let response = serde_json::json!({
@@ -2420,15 +2734,16 @@ pub(super) async fn mcp_post(
                 StatusCode::OK,
                 [(MCP_SESSION_HEADER, session_id)],
                 Json(response),
-            ).into_response()
+            )
+                .into_response()
         }
 
-        "notifications/initialized" => {
-            StatusCode::ACCEPTED.into_response()
-        }
+        "notifications/initialized" => StatusCode::ACCEPTED.into_response(),
 
         "tools/list" => {
-            let list_session_id = headers.get(MCP_SESSION_HEADER).and_then(|v| v.to_str().ok());
+            let list_session_id = headers
+                .get(MCP_SESSION_HEADER)
+                .and_then(|v| v.to_str().ok());
             if let Some(sid) = list_session_id
                 && let Some(mut meta) = state.mcp_sessions.get_mut(sid)
             {
@@ -2441,7 +2756,9 @@ pub(super) async fn mcp_post(
                 "result": { "tools": tools }
             });
             let mut resp = Json(response).into_response();
-            if let Some(sid) = headers.get(MCP_SESSION_HEADER).and_then(|v| v.to_str().ok())
+            if let Some(sid) = headers
+                .get(MCP_SESSION_HEADER)
+                .and_then(|v| v.to_str().ok())
                 && let Ok(val) = sid.parse()
             {
                 resp.headers_mut().insert(MCP_SESSION_HEADER, val);
@@ -2471,12 +2788,15 @@ pub(super) async fn mcp_post(
                              is_claude_code={recovered_cc} (from User-Agent)"
                         );
                         let now = std::time::Instant::now();
-                        state.mcp_sessions.insert(sid.to_string(), crate::state::McpSessionMeta {
-                            last_activity: now,
-                            is_claude_code: recovered_cc,
-                            has_sse_stream: false,
-                            repo_path: None,
-                        });
+                        state.mcp_sessions.insert(
+                            sid.to_string(),
+                            crate::state::McpSessionMeta {
+                                last_activity: now,
+                                is_claude_code: recovered_cc,
+                                has_sse_stream: false,
+                                repo_path: None,
+                            },
+                        );
                         true
                     }
                 })
@@ -2491,9 +2811,15 @@ pub(super) async fn mcp_post(
                 return Json(response).into_response();
             }
 
-            let params = body.get("params").cloned().unwrap_or(serde_json::Value::Null);
+            let params = body
+                .get("params")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let tool_name = params["name"].as_str().unwrap_or("").to_string();
-            let args = params.get("arguments").cloned().unwrap_or(serde_json::json!({}));
+            let args = params
+                .get("arguments")
+                .cloned()
+                .unwrap_or(serde_json::json!({}));
             let session_id_str = headers
                 .get(MCP_SESSION_HEADER)
                 .and_then(|v| v.to_str().ok())
@@ -2503,12 +2829,23 @@ pub(super) async fn mcp_post(
             // Native tools (no "__") go through the sync handler via spawn_blocking.
             let allowed = resolve_allowed_upstreams(&state, session_id_str.as_deref());
             let (result, is_error) = if tool_name.contains("__") {
-                match state.mcp_upstream_registry.proxy_tool_call_for_repo(&tool_name, args.clone(), allowed.as_deref()).await {
+                match state
+                    .mcp_upstream_registry
+                    .proxy_tool_call_for_repo(&tool_name, args.clone(), allowed.as_deref())
+                    .await
+                {
                     Ok(v) => (v, false),
                     Err(e) => (serde_json::json!({"error": e}), true),
                 }
             } else {
-                let result = handle_mcp_tool_call(&state, addr, &tool_name, &args, session_id_str.as_deref()).await;
+                let result = handle_mcp_tool_call(
+                    &state,
+                    addr,
+                    &tool_name,
+                    &args,
+                    session_id_str.as_deref(),
+                )
+                .await;
                 let is_error = result.get("error").is_some();
                 (result, is_error)
             };
@@ -2522,7 +2859,9 @@ pub(super) async fn mcp_post(
                 }
             });
             let mut resp = Json(response).into_response();
-            if let Some(sid) = headers.get(MCP_SESSION_HEADER).and_then(|v| v.to_str().ok())
+            if let Some(sid) = headers
+                .get(MCP_SESSION_HEADER)
+                .and_then(|v| v.to_str().ok())
                 && let Ok(val) = sid.parse()
             {
                 resp.headers_mut().insert(MCP_SESSION_HEADER, val);
@@ -2553,26 +2892,32 @@ pub(super) async fn mcp_get(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
     let is_cc_ua = detect_claude_code_from_headers(&headers);
-    let session_valid = session_id.as_deref().map(|sid| {
-        if !state.mcp_sessions.contains_key(sid) {
-            tracing::warn!(
-                "MCP SSE session auto-recovered (stale session_id: {sid}); \
+    let session_valid = session_id
+        .as_deref()
+        .map(|sid| {
+            if !state.mcp_sessions.contains_key(sid) {
+                tracing::warn!(
+                    "MCP SSE session auto-recovered (stale session_id: {sid}); \
                  is_claude_code={is_cc_ua} (from User-Agent)"
-            );
-            let now = std::time::Instant::now();
-            state.mcp_sessions.insert(sid.to_string(), crate::state::McpSessionMeta {
-                last_activity: now,
-                is_claude_code: is_cc_ua,
-                has_sse_stream: false,
-                repo_path: None,
-            });
-        }
-        // Mark this session as having an active SSE stream
-        if let Some(mut meta) = state.mcp_sessions.get_mut(sid) {
-            meta.has_sse_stream = true;
-        }
-        true
-    }).unwrap_or(false);
+                );
+                let now = std::time::Instant::now();
+                state.mcp_sessions.insert(
+                    sid.to_string(),
+                    crate::state::McpSessionMeta {
+                        last_activity: now,
+                        is_claude_code: is_cc_ua,
+                        has_sse_stream: false,
+                        repo_path: None,
+                    },
+                );
+            }
+            // Mark this session as having an active SSE stream
+            if let Some(mut meta) = state.mcp_sessions.get_mut(sid) {
+                meta.has_sse_stream = true;
+            }
+            true
+        })
+        .unwrap_or(false);
     if !session_valid {
         return StatusCode::UNAUTHORIZED.into_response();
     }
@@ -2580,7 +2925,8 @@ pub(super) async fn mcp_get(
 
     // Create or subscribe to per-session messaging channel
     let msg_rx = {
-        let tx = state.messaging_channels
+        let tx = state
+            .messaging_channels
             .entry(sid.clone())
             .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
         tx.subscribe()
@@ -2640,9 +2986,7 @@ pub(super) async fn mcp_get(
 }
 
 /// GET /mcp/instructions — Returns dynamic server instructions for the bridge binary
-pub(super) async fn mcp_instructions_http(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+pub(super) async fn mcp_instructions_http(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     Json(serde_json::json!({"instructions": build_mcp_instructions(&state, None)}))
 }
 
@@ -2651,19 +2995,26 @@ pub(super) async fn mcp_delete(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
 ) -> impl IntoResponse {
-    if let Some(sid) = headers.get(MCP_SESSION_HEADER).and_then(|v| v.to_str().ok()) {
+    if let Some(sid) = headers
+        .get(MCP_SESSION_HEADER)
+        .and_then(|v| v.to_str().ok())
+    {
         state.mcp_sessions.remove(sid);
         // Clean up peer agents and inboxes for this MCP session
-        let removed_tuic: Vec<String> = state.peer_agents.iter()
+        let removed_tuic: Vec<String> = state
+            .peer_agents
+            .iter()
             .filter(|e| e.value().mcp_session_id == sid)
             .map(|e| e.key().clone())
             .collect();
         for tuic in &removed_tuic {
             state.peer_agents.remove(tuic);
             state.agent_inbox.remove(tuic);
-            let _ = state.event_bus.send(crate::state::AppEvent::PeerUnregistered {
-                tuic_session: tuic.clone(),
-            });
+            let _ = state
+                .event_bus
+                .send(crate::state::AppEvent::PeerUnregistered {
+                    tuic_session: tuic.clone(),
+                });
         }
     }
     StatusCode::OK
@@ -2672,7 +3023,11 @@ pub(super) async fn mcp_delete(
 // ── Unified handlers (merged tools) ──────────────────────────────────────
 
 /// Merged repo tool: dispatches to workspace, github, or worktree handlers.
-async fn handle_repo(state: &Arc<AppState>, args: &serde_json::Value, is_claude_code: bool) -> serde_json::Value {
+async fn handle_repo(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    is_claude_code: bool,
+) -> serde_json::Value {
     let action = match require_action(args, "repo", REPO_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -2692,7 +3047,12 @@ async fn handle_repo(state: &Arc<AppState>, args: &serde_json::Value, is_claude_
 }
 
 /// Merged agent tool: original agent actions + messaging actions.
-fn handle_agent_unified(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Value, mcp_session_id: Option<&str>) -> serde_json::Value {
+fn handle_agent_unified(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     let action = match require_action(args, "agent", AGENT_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -2711,7 +3071,12 @@ fn handle_agent_unified(state: &Arc<AppState>, addr: SocketAddr, args: &serde_js
 }
 
 /// Merged ui tool: original tab action + notify toast/confirm.
-fn handle_ui_unified(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Value, mcp_session_id: Option<&str>) -> serde_json::Value {
+fn handle_ui_unified(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
     let action = match require_action(args, "ui", UI_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -2726,7 +3091,11 @@ fn handle_ui_unified(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json:
 }
 
 /// Extended debug tool: original actions + plugin_guide.
-fn handle_debug_unified(state: &Arc<AppState>, addr: SocketAddr, args: &serde_json::Value) -> serde_json::Value {
+fn handle_debug_unified(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+) -> serde_json::Value {
     let action = match require_action(args, "debug", DEBUG_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
@@ -2861,7 +3230,10 @@ struct ResolvedRunConfig {
 ///
 /// Returns `ResolvedRunConfig` with overrides when a run config matches,
 /// or just the agent_type passthrough when it doesn't.
-fn resolve_run_config(agent_type: &str, agents_cfg: &crate::config::AgentsConfig) -> ResolvedRunConfig {
+fn resolve_run_config(
+    agent_type: &str,
+    agents_cfg: &crate::config::AgentsConfig,
+) -> ResolvedRunConfig {
     let needle = agent_type.to_ascii_lowercase();
 
     // Pass 1: try to match as a run config name across all agents
@@ -2891,9 +3263,7 @@ fn resolve_run_config(agent_type: &str, agents_cfg: &crate::config::AgentsConfig
 fn substitute_prompt_in_args(args: &[String], prompt: &str) -> Vec<String> {
     let has_placeholder = args.iter().any(|a| a.contains("{prompt}"));
     if has_placeholder {
-        args.iter()
-            .map(|a| a.replace("{prompt}", prompt))
-            .collect()
+        args.iter().map(|a| a.replace("{prompt}", prompt)).collect()
     } else {
         let mut result: Vec<String> = args.to_vec();
         result.push(prompt.to_string());
@@ -2995,16 +3365,22 @@ mod tests {
             last_prompts: dashmap::DashMap::new(),
             silence_states: dashmap::DashMap::new(),
             claude_usage_cache: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            log_buffer: std::sync::Arc::new(parking_lot::Mutex::new(crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY))),
+            log_buffer: std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
+            )),
             event_bus: tokio::sync::broadcast::channel(256).0,
             event_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_states: dashmap::DashMap::new(),
-            mcp_upstream_registry: std::sync::Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new()),
+            mcp_upstream_registry: std::sync::Arc::new(
+                crate::mcp_proxy::registry::UpstreamRegistry::new(),
+            ),
             oauth_flow_manager: std::sync::Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new(
                 std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             )),
             mcp_tools_changed: tokio::sync::broadcast::channel(16).0,
-            tool_search_index: std::sync::Arc::new(parking_lot::RwLock::new(crate::tool_search::ToolSearchIndex::build(&[]))),
+            tool_search_index: std::sync::Arc::new(parking_lot::RwLock::new(
+                crate::tool_search::ToolSearchIndex::build(&[]),
+            )),
             content_indices: dashmap::DashMap::new(),
             indexer_throttle: std::sync::Arc::new(crate::content_index::IndexerThrottle::default()),
             slash_mode: dashmap::DashMap::new(),
@@ -3030,14 +3406,18 @@ mod tests {
             unrestricted_sessions: dashmap::DashMap::new(),
             #[cfg(unix)]
             bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
-            tailscale_state: parking_lot::RwLock::new(crate::tailscale::TailscaleState::NotInstalled),
+            tailscale_state: parking_lot::RwLock::new(
+                crate::tailscale::TailscaleState::NotInstalled,
+            ),
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),
             term_aliases: dashmap::DashMap::new(),
             term_alias_counters: dashmap::DashMap::new(),
+            watcher_engine: std::sync::OnceLock::new(),
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: dashmap::DashMap::new(),
+            grid_frame_dirty: dashmap::DashMap::new(),
         });
         // Tests start with all native tools enabled (override production default
         // which disables config, knowledge, debug).
@@ -3064,10 +3444,15 @@ mod tests {
         }
 
         // Session should have been created successfully
-        assert!(result.get("session_id").is_some(), "Expected session_id in result: {result}");
+        assert!(
+            result.get("session_id").is_some(),
+            "Expected session_id in result: {result}"
+        );
 
         // event_bus should have received SessionCreated
-        let event = rx.try_recv().expect("Expected SessionCreated event on event_bus");
+        let event = rx
+            .try_recv()
+            .expect("Expected SessionCreated event on event_bus");
         match event {
             crate::state::AppEvent::SessionCreated { session_id, .. } => {
                 assert_eq!(session_id, result["session_id"].as_str().unwrap());
@@ -3090,9 +3475,18 @@ mod tests {
 
         let sid = result["session_id"].as_str().unwrap();
 
-        assert!(state.vt_log_buffers.contains_key(sid), "vt_log_buffers should contain session");
-        assert!(state.last_output_ms.contains_key(sid), "last_output_ms should contain session");
-        assert!(state.output_buffers.contains_key(sid), "output_buffers should contain session");
+        assert!(
+            state.vt_log_buffers.contains_key(sid),
+            "vt_log_buffers should contain session"
+        );
+        assert!(
+            state.last_output_ms.contains_key(sid),
+            "last_output_ms should contain session"
+        );
+        assert!(
+            state.output_buffers.contains_key(sid),
+            "output_buffers should contain session"
+        );
     }
 
     // ── messaging tool tests ────────────────────────────────────────
@@ -3118,25 +3512,41 @@ mod tests {
         let state = test_state();
 
         // Register two agents
-        let r1 = handle_messaging(&state, &serde_json::json!({
-            "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01", "name": "worker-1", "project": "/repo/a"
-        }), Some("mcp-1"));
+        let r1 = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01", "name": "worker-1", "project": "/repo/a"
+            }),
+            Some("mcp-1"),
+        );
         assert_eq!(r1["ok"], true);
         assert_eq!(r1["name"], "worker-1");
 
-        let r2 = handle_messaging(&state, &serde_json::json!({
-            "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a02", "name": "worker-2", "project": "/repo/a"
-        }), Some("mcp-2"));
+        let r2 = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a02", "name": "worker-2", "project": "/repo/a"
+            }),
+            Some("mcp-2"),
+        );
         assert_eq!(r2["ok"], true);
 
         // List all peers
-        let list = handle_messaging(&state, &serde_json::json!({"action": "list_peers"}), Some("mcp-1"));
+        let list = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "list_peers"}),
+            Some("mcp-1"),
+        );
         assert_eq!(list["count"], 2);
 
         // Filter by project
-        let filtered = handle_messaging(&state, &serde_json::json!({
-            "action": "list_peers", "project": "/repo/b"
-        }), Some("mcp-1"));
+        let filtered = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "list_peers", "project": "/repo/b"
+            }),
+            Some("mcp-1"),
+        );
         assert_eq!(filtered["count"], 0);
     }
 
@@ -3144,33 +3554,63 @@ mod tests {
     fn messaging_register_updates_existing() {
         let state = test_state();
 
-        handle_messaging(&state, &serde_json::json!({
-            "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01", "name": "old-name"
-        }), Some("mcp-1"));
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01", "name": "old-name"
+            }),
+            Some("mcp-1"),
+        );
 
         // Re-register with new name
-        handle_messaging(&state, &serde_json::json!({
-            "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01", "name": "new-name"
-        }), Some("mcp-2"));
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01", "name": "new-name"
+            }),
+            Some("mcp-2"),
+        );
 
         assert_eq!(state.peer_agents.len(), 1);
-        assert_eq!(state.peer_agents.get("550e8400-e29b-41d4-a716-446655440a01").unwrap().name, "new-name");
-        assert_eq!(state.peer_agents.get("550e8400-e29b-41d4-a716-446655440a01").unwrap().mcp_session_id, "mcp-2");
+        assert_eq!(
+            state
+                .peer_agents
+                .get("550e8400-e29b-41d4-a716-446655440a01")
+                .unwrap()
+                .name,
+            "new-name"
+        );
+        assert_eq!(
+            state
+                .peer_agents
+                .get("550e8400-e29b-41d4-a716-446655440a01")
+                .unwrap()
+                .mcp_session_id,
+            "mcp-2"
+        );
     }
 
     #[test]
     fn messaging_register_default_name() {
         let state = test_state();
-        let r = handle_messaging(&state, &serde_json::json!({
-            "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01"
-        }), Some("mcp-1"));
+        let r = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01"
+            }),
+            Some("mcp-1"),
+        );
         assert_eq!(r["name"], "agent");
     }
 
     fn register_peer(state: &Arc<AppState>, tuic: &str, name: &str, mcp: &str) {
-        handle_messaging(state, &serde_json::json!({
-            "action": "register", "tuic_session": tuic, "name": name
-        }), Some(mcp));
+        handle_messaging(
+            state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": tuic, "name": name
+            }),
+            Some(mcp),
+        );
     }
 
     #[test]
@@ -3188,114 +3628,212 @@ mod tests {
             "forward index must be populated"
         );
         let reverse = state.session_to_mcp.get(tuic).map(|e| e.value().clone());
-        assert_eq!(reverse, Some(vec![mcp.to_string()]),
-            "reverse index must be populated to enable O(1) cleanup");
+        assert_eq!(
+            reverse,
+            Some(vec![mcp.to_string()]),
+            "reverse index must be populated to enable O(1) cleanup"
+        );
     }
 
     #[test]
     fn messaging_send_requires_to_and_message() {
         let state = test_state();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a01", "sender", "mcp-1");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a01",
+            "sender",
+            "mcp-1",
+        );
 
-        let r1 = handle_messaging(&state, &serde_json::json!({
-            "action": "send", "message": "hello"
-        }), Some("mcp-1"));
+        let r1 = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "message": "hello"
+            }),
+            Some("mcp-1"),
+        );
         assert!(r1["error"].as_str().unwrap().contains("'to'"));
 
-        let r2 = handle_messaging(&state, &serde_json::json!({
-            "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02"
-        }), Some("mcp-1"));
+        let r2 = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02"
+            }),
+            Some("mcp-1"),
+        );
         assert!(r2["error"].as_str().unwrap().contains("'message'"));
     }
 
     #[test]
     fn messaging_send_to_unregistered_peer() {
         let state = test_state();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a01", "sender", "mcp-1");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a01",
+            "sender",
+            "mcp-1",
+        );
 
-        let r = handle_messaging(&state, &serde_json::json!({
-            "action": "send", "to": "tab-999", "message": "hello"
-        }), Some("mcp-1"));
+        let r = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": "tab-999", "message": "hello"
+            }),
+            Some("mcp-1"),
+        );
         assert!(r["error"].as_str().unwrap().contains("not registered"));
     }
 
     #[test]
     fn messaging_send_and_inbox() {
         let state = test_state();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a01", "alice", "mcp-1");
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a02", "bob", "mcp-2");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a01",
+            "alice",
+            "mcp-1",
+        );
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a02",
+            "bob",
+            "mcp-2",
+        );
 
         // Alice sends to Bob
-        let r = handle_messaging(&state, &serde_json::json!({
-            "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": "hello bob"
-        }), Some("mcp-1"));
+        let r = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": "hello bob"
+            }),
+            Some("mcp-1"),
+        );
         assert_eq!(r["ok"], true);
 
         // Bob checks inbox
-        let inbox = handle_messaging(&state, &serde_json::json!({
-            "action": "inbox"
-        }), Some("mcp-2"));
+        let inbox = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "inbox"
+            }),
+            Some("mcp-2"),
+        );
         let msgs = inbox["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["from_name"], "alice");
         assert_eq!(msgs[0]["content"], "hello bob");
-        assert_eq!(msgs[0]["from_tuic_session"], "550e8400-e29b-41d4-a716-446655440a01");
+        assert_eq!(
+            msgs[0]["from_tuic_session"],
+            "550e8400-e29b-41d4-a716-446655440a01"
+        );
     }
 
     #[test]
     fn messaging_inbox_limit_and_since() {
         let state = test_state();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a01", "alice", "mcp-1");
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a02", "bob", "mcp-2");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a01",
+            "alice",
+            "mcp-1",
+        );
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a02",
+            "bob",
+            "mcp-2",
+        );
 
         // Send 3 messages
         for i in 0..3 {
-            handle_messaging(&state, &serde_json::json!({
-                "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("msg-{}", i)
-            }), Some("mcp-1"));
+            handle_messaging(
+                &state,
+                &serde_json::json!({
+                    "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("msg-{}", i)
+                }),
+                Some("mcp-1"),
+            );
         }
 
         // Limit to 2
-        let inbox = handle_messaging(&state, &serde_json::json!({
-            "action": "inbox", "limit": 2
-        }), Some("mcp-2"));
+        let inbox = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "inbox", "limit": 2
+            }),
+            Some("mcp-2"),
+        );
         assert_eq!(inbox["messages"].as_array().unwrap().len(), 2);
 
         // Since filter — get timestamp of first message
         let first_ts = inbox["messages"][0]["timestamp"].as_u64().unwrap();
-        let since_inbox = handle_messaging(&state, &serde_json::json!({
-            "action": "inbox", "since": first_ts
-        }), Some("mcp-2"));
+        let since_inbox = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "inbox", "since": first_ts
+            }),
+            Some("mcp-2"),
+        );
         // Should return messages after that timestamp (at least the remaining ones)
         let msgs = since_inbox["messages"].as_array().unwrap();
-        assert!(msgs.iter().all(|m| m["timestamp"].as_u64().unwrap() > first_ts));
+        assert!(
+            msgs.iter()
+                .all(|m| m["timestamp"].as_u64().unwrap() > first_ts)
+        );
     }
 
     #[test]
     fn messaging_send_requires_sender_registration() {
         let state = test_state();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a02", "bob", "mcp-2");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a02",
+            "bob",
+            "mcp-2",
+        );
 
-        let r = handle_messaging(&state, &serde_json::json!({
-            "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": "hello"
-        }), Some("mcp-unknown"));
+        let r = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": "hello"
+            }),
+            Some("mcp-unknown"),
+        );
         assert!(r["error"].as_str().unwrap().contains("Register first"));
     }
 
     #[test]
     fn messaging_inbox_fifo_eviction() {
         let state = test_state();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a01", "alice", "mcp-1");
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a02", "bob", "mcp-2");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a01",
+            "alice",
+            "mcp-1",
+        );
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a02",
+            "bob",
+            "mcp-2",
+        );
 
         // Send more than AGENT_INBOX_CAPACITY messages
         for i in 0..(crate::state::AGENT_INBOX_CAPACITY + 10) {
-            handle_messaging(&state, &serde_json::json!({
-                "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("msg-{}", i)
-            }), Some("mcp-1"));
+            handle_messaging(
+                &state,
+                &serde_json::json!({
+                    "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("msg-{}", i)
+                }),
+                Some("mcp-1"),
+            );
         }
 
-        let inbox = handle_messaging(&state, &serde_json::json!({"action": "inbox", "limit": 200}), Some("mcp-2"));
+        let inbox = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "limit": 200}),
+            Some("mcp-2"),
+        );
         let msgs = inbox["messages"].as_array().unwrap();
         assert_eq!(msgs.len(), crate::state::AGENT_INBOX_CAPACITY);
         // First message should be msg-10 (oldest 10 evicted)
@@ -3305,42 +3843,98 @@ mod tests {
     #[test]
     fn messaging_inbox_missed_count_on_eviction() {
         let state = test_state();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a01", "alice", "mcp-1");
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a02", "bob", "mcp-2");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a01",
+            "alice",
+            "mcp-1",
+        );
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a02",
+            "bob",
+            "mcp-2",
+        );
 
         // Fill to capacity — no eviction yet
         for i in 0..crate::state::AGENT_INBOX_CAPACITY {
-            handle_messaging(&state, &serde_json::json!({
-                "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("msg-{}", i)
-            }), Some("mcp-1"));
+            handle_messaging(
+                &state,
+                &serde_json::json!({
+                    "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("msg-{}", i)
+                }),
+                Some("mcp-1"),
+            );
         }
-        let inbox = handle_messaging(&state, &serde_json::json!({"action": "inbox"}), Some("mcp-2"));
-        assert_eq!(inbox["missed_count"].as_u64().unwrap_or(0), 0, "no evictions yet");
+        let inbox = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-2"),
+        );
+        assert_eq!(
+            inbox["missed_count"].as_u64().unwrap_or(0),
+            0,
+            "no evictions yet"
+        );
 
         // 5 more messages → 5 evictions
         for i in 0..5 {
-            handle_messaging(&state, &serde_json::json!({
-                "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("extra-{}", i)
-            }), Some("mcp-1"));
+            handle_messaging(
+                &state,
+                &serde_json::json!({
+                    "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": format!("extra-{}", i)
+                }),
+                Some("mcp-1"),
+            );
         }
-        let inbox = handle_messaging(&state, &serde_json::json!({"action": "inbox"}), Some("mcp-2"));
-        assert_eq!(inbox["missed_count"].as_u64().unwrap(), 5, "5 evictions reported");
+        let inbox = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-2"),
+        );
+        assert_eq!(
+            inbox["missed_count"].as_u64().unwrap(),
+            5,
+            "5 evictions reported"
+        );
 
         // Second read — counter reset after first read
-        let inbox2 = handle_messaging(&state, &serde_json::json!({"action": "inbox"}), Some("mcp-2"));
-        assert_eq!(inbox2["missed_count"].as_u64().unwrap_or(0), 0, "counter reset after read");
+        let inbox2 = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-2"),
+        );
+        assert_eq!(
+            inbox2["missed_count"].as_u64().unwrap_or(0),
+            0,
+            "counter reset after read"
+        );
     }
 
     #[test]
     fn messaging_send_message_size_limit() {
         let state = test_state();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a01", "alice", "mcp-1");
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440a02", "bob", "mcp-2");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a01",
+            "alice",
+            "mcp-1",
+        );
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440a02",
+            "bob",
+            "mcp-2",
+        );
 
         let big_msg = "x".repeat(crate::state::AGENT_MESSAGE_MAX_BYTES + 1);
-        let r = handle_messaging(&state, &serde_json::json!({
-            "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": big_msg
-        }), Some("mcp-1"));
+        let r = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": "550e8400-e29b-41d4-a716-446655440a02", "message": big_msg
+            }),
+            Some("mcp-1"),
+        );
         assert!(r["error"].as_str().unwrap().contains("64 KB"));
     }
 
@@ -3368,7 +3962,10 @@ mod tests {
         // Each must have a non-empty description and an inputSchema object.
         for tool in defs.as_array().unwrap() {
             assert!(
-                tool["description"].as_str().map(|s| !s.is_empty()).unwrap_or(false),
+                tool["description"]
+                    .as_str()
+                    .map(|s| !s.is_empty())
+                    .unwrap_or(false),
                 "meta tool {:?} missing description",
                 tool["name"]
             );
@@ -3424,49 +4021,111 @@ mod tests {
     #[test]
     fn session_description_mentions_tmux_pane_semantics() {
         let defs = native_tool_definitions();
-        let session = defs.as_array().unwrap().iter().find(|t| t["name"] == "session").unwrap();
+        let session = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "session")
+            .unwrap();
         let desc = session["description"].as_str().unwrap();
-        assert!(desc.contains("tmux"), "session description must reference tmux for discoverability");
-        assert!(desc.contains("send-keys") || desc.contains("send_keys"), "session description must mention send-keys equivalent");
-        assert!(desc.contains("capture-pane") || desc.contains("capture_pane"), "session description must mention capture-pane equivalent");
+        assert!(
+            desc.contains("tmux"),
+            "session description must reference tmux for discoverability"
+        );
+        assert!(
+            desc.contains("send-keys") || desc.contains("send_keys"),
+            "session description must mention send-keys equivalent"
+        );
+        assert!(
+            desc.contains("capture-pane") || desc.contains("capture_pane"),
+            "session description must mention capture-pane equivalent"
+        );
     }
 
     #[test]
     fn agent_tool_includes_messaging_actions() {
         let defs = native_tool_definitions();
-        let agent = defs.as_array().unwrap().iter().find(|t| t["name"] == "agent").unwrap();
-        let action_desc = agent["inputSchema"]["properties"]["action"]["description"].as_str().unwrap();
+        let agent = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "agent")
+            .unwrap();
+        let action_desc = agent["inputSchema"]["properties"]["action"]["description"]
+            .as_str()
+            .unwrap();
         for action in &["register", "list_peers", "send", "inbox"] {
-            assert!(action_desc.contains(action), "agent action description must include '{action}'");
+            assert!(
+                action_desc.contains(action),
+                "agent action description must include '{action}'"
+            );
         }
     }
 
     #[test]
     fn repo_tool_includes_workspace_github_worktree_actions() {
         let defs = native_tool_definitions();
-        let repo = defs.as_array().unwrap().iter().find(|t| t["name"] == "repo").unwrap();
-        let action_desc = repo["inputSchema"]["properties"]["action"]["description"].as_str().unwrap();
-        for action in &["list", "active", "prs", "status", "worktree_list", "worktree_create", "worktree_remove"] {
-            assert!(action_desc.contains(action), "repo action description must include '{action}'");
+        let repo = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "repo")
+            .unwrap();
+        let action_desc = repo["inputSchema"]["properties"]["action"]["description"]
+            .as_str()
+            .unwrap();
+        for action in &[
+            "list",
+            "active",
+            "prs",
+            "status",
+            "worktree_list",
+            "worktree_create",
+            "worktree_remove",
+        ] {
+            assert!(
+                action_desc.contains(action),
+                "repo action description must include '{action}'"
+            );
         }
     }
 
     #[test]
     fn ui_tool_includes_notify_actions() {
         let defs = native_tool_definitions();
-        let ui = defs.as_array().unwrap().iter().find(|t| t["name"] == "ui").unwrap();
-        let action_desc = ui["inputSchema"]["properties"]["action"]["description"].as_str().unwrap();
+        let ui = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "ui")
+            .unwrap();
+        let action_desc = ui["inputSchema"]["properties"]["action"]["description"]
+            .as_str()
+            .unwrap();
         for action in &["tab", "toast", "confirm"] {
-            assert!(action_desc.contains(action), "ui action description must include '{action}'");
+            assert!(
+                action_desc.contains(action),
+                "ui action description must include '{action}'"
+            );
         }
     }
 
     #[test]
     fn debug_tool_includes_sessions_action() {
         let defs = native_tool_definitions();
-        let debug = defs.as_array().unwrap().iter().find(|t| t["name"] == "debug").unwrap();
-        let action_desc = debug["inputSchema"]["properties"]["action"]["description"].as_str().unwrap();
-        assert!(action_desc.contains("sessions"), "debug action description must include 'sessions'");
+        let debug = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "debug")
+            .unwrap();
+        let action_desc = debug["inputSchema"]["properties"]["action"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            action_desc.contains("sessions"),
+            "debug action description must include 'sessions'"
+        );
     }
 
     #[test]
@@ -3485,7 +4144,10 @@ mod tests {
             names, native,
             "collapse_tools=false should return all native tools"
         );
-        assert!(names.len() > 3, "baseline native tool set must exceed 3 tools");
+        assert!(
+            names.len() > 3,
+            "baseline native tool set must exceed 3 tools"
+        );
     }
 
     #[test]
@@ -3590,12 +4252,20 @@ mod tests {
         // Query targets the PTY multiplexer specifically — distinguishes
         // `session` from the ai_terminal_* observation tools that also
         // mention "terminal".
-        let r = handle_search_tools(&state, &serde_json::json!({ "query": "PTY multiplexer tmux pane lifecycle" }));
+        let r = handle_search_tools(
+            &state,
+            &serde_json::json!({ "query": "PTY multiplexer tmux pane lifecycle" }),
+        );
         let results = r["results"].as_array().unwrap();
         assert!(!results.is_empty(), "expected non-empty results");
         assert_eq!(results[0]["name"], "session");
         // summary is the first sentence of the description — must be populated.
-        assert!(results[0]["summary"].as_str().map(|s| !s.is_empty()).unwrap_or(false));
+        assert!(
+            results[0]["summary"]
+                .as_str()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false)
+        );
     }
 
     #[test]
@@ -3616,13 +4286,19 @@ mod tests {
         let results = r["results"].as_array().unwrap();
         // "session" must not appear at all.
         let has_session = results.iter().any(|v| v["name"] == "session");
-        assert!(!has_session, "disabled 'session' tool must be absent from search results");
+        assert!(
+            !has_session,
+            "disabled 'session' tool must be absent from search results"
+        );
     }
 
     #[test]
     fn search_tools_nonsense_query_returns_empty() {
         let state = test_state();
-        let r = handle_search_tools(&state, &serde_json::json!({ "query": "xyzzyplugh nonsense qqq" }));
+        let r = handle_search_tools(
+            &state,
+            &serde_json::json!({ "query": "xyzzyplugh nonsense qqq" }),
+        );
         let results = r["results"].as_array().unwrap();
         assert_eq!(results.len(), 0);
         assert_eq!(r["count"], 0);
@@ -3631,7 +4307,10 @@ mod tests {
     #[test]
     fn search_tools_respects_limit() {
         let state = test_state();
-        let r = handle_search_tools(&state, &serde_json::json!({ "query": "action", "limit": 2 }));
+        let r = handle_search_tools(
+            &state,
+            &serde_json::json!({ "query": "action", "limit": 2 }),
+        );
         let results = r["results"].as_array().unwrap();
         assert!(results.len() <= 2);
     }
@@ -3658,10 +4337,16 @@ mod tests {
     #[test]
     fn get_tool_schema_returns_error_for_unknown_tool() {
         let state = test_state();
-        let r = handle_get_tool_schema(&state, &serde_json::json!({ "tool_name": "does_not_exist" }));
+        let r = handle_get_tool_schema(
+            &state,
+            &serde_json::json!({ "tool_name": "does_not_exist" }),
+        );
         let err = r["error"].as_str().unwrap();
         assert!(err.contains("not found"));
-        assert!(err.contains("search_tools"), "error should guide user to search_tools");
+        assert!(
+            err.contains("search_tools"),
+            "error should guide user to search_tools"
+        );
     }
 
     #[test]
@@ -3694,7 +4379,10 @@ mod tests {
             )
             .await;
             let err = r["error"].as_str().unwrap();
-            assert!(err.contains("cannot invoke meta-tool"), "meta '{meta}' should be blocked: {err}");
+            assert!(
+                err.contains("cannot invoke meta-tool"),
+                "meta '{meta}' should be blocked: {err}"
+            );
         }
     }
 
@@ -3739,7 +4427,10 @@ mod tests {
         )
         .await;
         let err = r["error"].as_str().unwrap();
-        assert!(err.contains("action"), "expected handle_session's 'action' guidance error: {err}");
+        assert!(
+            err.contains("action"),
+            "expected handle_session's 'action' guidance error: {err}"
+        );
     }
 
     #[tokio::test]
@@ -3795,7 +4486,10 @@ mod tests {
         let err = r["error"].as_str().unwrap();
         // proxy_tool_call returns an error string — just assert it's an error and
         // that the native unknown-tool message is NOT what we got.
-        assert!(!err.contains("Unknown tool"), "upstream-prefixed name must not hit native fallthrough: {err}");
+        assert!(
+            !err.contains("Unknown tool"),
+            "upstream-prefixed name must not hit native fallthrough: {err}"
+        );
     }
 
     // Route via the top-level dispatcher too, to cover the match-arm wiring.
@@ -3845,11 +4539,18 @@ mod tests {
     async fn handle_mcp_tool_call_routes_repo() {
         let state = test_state();
         let r = handle_mcp_tool_call(
-            &state, loopback_addr(), "repo",
-            &serde_json::json!({ "action": "list" }), None,
-        ).await;
+            &state,
+            loopback_addr(),
+            "repo",
+            &serde_json::json!({ "action": "list" }),
+            None,
+        )
+        .await;
         // repo action=list returns an array of repos (may be empty in test)
-        assert!(r.is_array(), "repo action=list should return array, got: {r}");
+        assert!(
+            r.is_array(),
+            "repo action=list should return array, got: {r}"
+        );
     }
 
     #[tokio::test]
@@ -3857,30 +4558,51 @@ mod tests {
         let state = test_state();
         // agent action=register without tuic_session should return an error
         let r = handle_mcp_tool_call(
-            &state, loopback_addr(), "agent",
-            &serde_json::json!({ "action": "register" }), None,
-        ).await;
-        assert!(r["error"].is_string(), "agent action=register without tuic_session should error");
+            &state,
+            loopback_addr(),
+            "agent",
+            &serde_json::json!({ "action": "register" }),
+            None,
+        )
+        .await;
+        assert!(
+            r["error"].is_string(),
+            "agent action=register without tuic_session should error"
+        );
     }
 
     #[tokio::test]
     async fn handle_mcp_tool_call_routes_ui_toast() {
         let state = test_state();
         let r = handle_mcp_tool_call(
-            &state, loopback_addr(), "ui",
-            &serde_json::json!({ "action": "toast", "title": "test" }), None,
-        ).await;
-        assert!(!r["error"].is_string(), "ui action=toast should succeed, got: {r}");
+            &state,
+            loopback_addr(),
+            "ui",
+            &serde_json::json!({ "action": "toast", "title": "test" }),
+            None,
+        )
+        .await;
+        assert!(
+            !r["error"].is_string(),
+            "ui action=toast should succeed, got: {r}"
+        );
     }
 
     #[tokio::test]
     async fn handle_mcp_tool_call_routes_debug_sessions() {
         let state = test_state();
         let r = handle_mcp_tool_call(
-            &state, loopback_addr(), "debug",
-            &serde_json::json!({ "action": "sessions" }), None,
-        ).await;
-        assert!(r.is_array(), "debug action=sessions should return array of sessions");
+            &state,
+            loopback_addr(),
+            "debug",
+            &serde_json::json!({ "action": "sessions" }),
+            None,
+        )
+        .await;
+        assert!(
+            r.is_array(),
+            "debug action=sessions should return array of sessions"
+        );
     }
 
     #[tokio::test]
@@ -3888,9 +4610,13 @@ mod tests {
         let state = test_state();
         for old_name in &["github", "worktree", "workspace", "messaging", "notify"] {
             let r = handle_mcp_tool_call(
-                &state, loopback_addr(), old_name,
-                &serde_json::json!({ "action": "list" }), None,
-            ).await;
+                &state,
+                loopback_addr(),
+                old_name,
+                &serde_json::json!({ "action": "list" }),
+                None,
+            )
+            .await;
             assert!(
                 r["error"].as_str().unwrap_or("").contains("Unknown tool"),
                 "old tool name '{old_name}' should return Unknown tool error, got: {r}"
@@ -3906,7 +4632,10 @@ mod tests {
         let out = build_mcp_instructions(&state, None);
         // Tools bullets + concrete workflow references are present.
         assert!(out.contains("## Tools\n"), "expected classic Tools section");
-        assert!(out.contains("- `session` ("), "expected session bullet in tools list");
+        assert!(
+            out.contains("- `session` ("),
+            "expected session bullet in tools list"
+        );
         assert!(out.contains("## Workflow"), "expected Workflow section");
         assert!(!out.contains("## Tools — Lazy Discovery"));
         assert!(!out.contains("search_tools"));
@@ -3921,13 +4650,22 @@ mod tests {
         // Slim section referencing meta-tools (detail lives in tool descriptions).
         assert!(out.contains("## Tools"), "expected tools header");
         assert!(out.contains("`search_tools`"), "must mention search_tools");
-        assert!(out.contains("`get_tool_schema`"), "must mention get_tool_schema");
+        assert!(
+            out.contains("`get_tool_schema`"),
+            "must mention get_tool_schema"
+        );
         assert!(out.contains("`call_tool`"), "must mention call_tool");
         assert!(out.contains("worktree"), "must mention worktree caveat");
         // The concrete tools list and legacy workflow must NOT appear — those
         // reference tool names the model cannot invoke directly in collapse mode.
-        assert!(!out.contains("- `session` ("), "tools list must be suppressed in collapse mode");
-        assert!(!out.contains("## Workflow"), "legacy workflow must be suppressed in collapse mode");
+        assert!(
+            !out.contains("- `session` ("),
+            "tools list must be suppressed in collapse mode"
+        );
+        assert!(
+            !out.contains("## Workflow"),
+            "legacy workflow must be suppressed in collapse mode"
+        );
     }
 
     // ---- Swarm Layer 4: MCP tool descriptions (#1165-b124) -------------------
@@ -3935,27 +4673,56 @@ mod tests {
     #[test]
     fn session_description_includes_status_action() {
         let defs = native_tool_definitions();
-        let session = defs.as_array().unwrap().iter().find(|t| t["name"] == "session").unwrap();
+        let session = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "session")
+            .unwrap();
         let desc = session["description"].as_str().unwrap();
-        assert!(desc.contains("status:"), "session description must document the status action");
-        let action_enum = session["inputSchema"]["properties"]["action"]["description"].as_str().unwrap();
-        assert!(action_enum.contains("status"), "session action enum must include status");
+        assert!(
+            desc.contains("status:"),
+            "session description must document the status action"
+        );
+        let action_enum = session["inputSchema"]["properties"]["action"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            action_enum.contains("status"),
+            "session action enum must include status"
+        );
     }
 
     #[test]
     fn print_mode_description_clarifies_visible_vs_headless() {
         let defs = native_tool_definitions();
-        let agent = defs.as_array().unwrap().iter().find(|t| t["name"] == "agent").unwrap();
-        let pm_desc = agent["inputSchema"]["properties"]["print_mode"]["description"].as_str().unwrap();
-        assert!(pm_desc.contains("visible") || pm_desc.contains("TUI tab"), "print_mode must mention visible TUI tab");
-        assert!(pm_desc.contains("headless"), "print_mode must mention headless mode");
+        let agent = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "agent")
+            .unwrap();
+        let pm_desc = agent["inputSchema"]["properties"]["print_mode"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(
+            pm_desc.contains("visible") || pm_desc.contains("TUI tab"),
+            "print_mode must mention visible TUI tab"
+        );
+        assert!(
+            pm_desc.contains("headless"),
+            "print_mode must mention headless mode"
+        );
     }
 
     #[test]
     fn instructions_include_session_status_for_polling() {
         let state = test_state();
         let out = build_mcp_instructions(&state, None);
-        assert!(out.contains("status"), "instructions must mention session status for swarm polling");
+        assert!(
+            out.contains("status"),
+            "instructions must mention session status for swarm polling"
+        );
     }
 
     #[test]
@@ -3964,7 +4731,10 @@ mod tests {
         let state = test_state();
         let out = build_mcp_instructions(&state, None);
         for action in SESSION_ACTIONS.split(", ") {
-            assert!(out.contains(action), "instructions must mention session action '{action}'");
+            assert!(
+                out.contains(action),
+                "instructions must mention session action '{action}'"
+            );
         }
     }
 
@@ -4003,10 +4773,22 @@ mod tests {
     #[test]
     fn rebuild_tool_search_index_respects_disabled_native_tools() {
         let state = test_state();
-        assert!(state.tool_search_index.read().get_schema("session").is_some());
+        assert!(
+            state
+                .tool_search_index
+                .read()
+                .get_schema("session")
+                .is_some()
+        );
         state.config.write().disabled_native_tools = vec!["session".to_string()];
         rebuild_tool_search_index(&state);
-        assert!(state.tool_search_index.read().get_schema("session").is_none());
+        assert!(
+            state
+                .tool_search_index
+                .read()
+                .get_schema("session")
+                .is_none()
+        );
     }
 
     /// The background updater task subscribes to `mcp_tools_changed` and
@@ -4021,7 +4803,13 @@ mod tests {
         spawn_tool_search_index_updater(state.clone());
         // Give the initial build a moment to land.
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        assert!(state.tool_search_index.read().get_schema("session").is_some());
+        assert!(
+            state
+                .tool_search_index
+                .read()
+                .get_schema("session")
+                .is_some()
+        );
 
         // Mutate config and fire the signal; the updater must rebuild.
         state.config.write().disabled_native_tools = vec!["session".to_string()];
@@ -4030,7 +4818,12 @@ mod tests {
         // Poll for the rebuild with a short deadline — the task is async.
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(500);
         while std::time::Instant::now() < deadline {
-            if state.tool_search_index.read().get_schema("session").is_none() {
+            if state
+                .tool_search_index
+                .read()
+                .get_schema("session")
+                .is_none()
+            {
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -4053,9 +4846,18 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         let after = state.tool_search_index.read().len();
-        assert_eq!(before, after, "collapse_tools toggle must not change searchable corpus size");
+        assert_eq!(
+            before, after,
+            "collapse_tools toggle must not change searchable corpus size"
+        );
         // And native tools must still be searchable.
-        assert!(state.tool_search_index.read().get_schema("session").is_some());
+        assert!(
+            state
+                .tool_search_index
+                .read()
+                .get_schema("session")
+                .is_some()
+        );
     }
 
     #[test]
@@ -4063,25 +4865,40 @@ mod tests {
         let state = test_state();
         let mut rx = state.event_bus.subscribe();
 
-        let result = handle_ui(&state, &serde_json::json!({
-            "action": "tab",
-            "id": "test-panel",
-            "title": "Test",
-            "html": "<p>hello</p>"
-        }), None);
+        let result = handle_ui(
+            &state,
+            &serde_json::json!({
+                "action": "tab",
+                "id": "test-panel",
+                "title": "Test",
+                "html": "<p>hello</p>"
+            }),
+            None,
+        );
         assert_eq!(result["ok"], true);
         assert_eq!(result["id"], "test-panel");
 
         let event = rx.try_recv().expect("Expected UiTab event");
         match event {
-            crate::state::AppEvent::UiTab { id, title, html, url, pinned, focus, origin_repo_path } => {
+            crate::state::AppEvent::UiTab {
+                id,
+                title,
+                html,
+                url,
+                pinned,
+                focus,
+                origin_repo_path,
+            } => {
                 assert_eq!(id, "test-panel");
                 assert_eq!(title, "Test");
                 assert_eq!(html, "<p>hello</p>");
                 assert!(url.is_none(), "url should be None for html tab");
                 assert!(pinned, "pinned should default to true");
                 assert!(focus, "focus should default to true");
-                assert!(origin_repo_path.is_none(), "origin_repo_path should be None when no mcp_session");
+                assert!(
+                    origin_repo_path.is_none(),
+                    "origin_repo_path should be None when no mcp_session"
+                );
             }
             other => panic!("Expected UiTab, got {:?}", other),
         }
@@ -4095,28 +4912,40 @@ mod tests {
         let tuic = "00000000-0000-0000-0000-000000000001".to_string();
         // Register an MCP→tuic mapping and a peer agent with a project path.
         state.mcp_to_session.insert(mcp_sid.clone(), tuic.clone());
-        state.peer_agents.insert(tuic.clone(), PeerAgent {
-            tuic_session: tuic.clone(),
-            mcp_session_id: mcp_sid.clone(),
-            name: "wiz".to_string(),
-            project: Some("/Gits/personal/alpha".to_string()),
-            registered_at: 0,
-        });
+        state.peer_agents.insert(
+            tuic.clone(),
+            PeerAgent {
+                tuic_session: tuic.clone(),
+                mcp_session_id: mcp_sid.clone(),
+                name: "wiz".to_string(),
+                project: Some("/Gits/personal/alpha".to_string()),
+                registered_at: 0,
+            },
+        );
 
         let mut rx = state.event_bus.subscribe();
-        let result = handle_ui(&state, &serde_json::json!({
-            "action": "tab",
-            "id": "mcf",
-            "title": "MCF",
-            "html": "<p/>"
-        }), Some(&mcp_sid));
+        let result = handle_ui(
+            &state,
+            &serde_json::json!({
+                "action": "tab",
+                "id": "mcf",
+                "title": "MCF",
+                "html": "<p/>"
+            }),
+            Some(&mcp_sid),
+        );
         assert_eq!(result["ok"], true);
 
         let event = rx.try_recv().expect("Expected UiTab event");
         match event {
-            crate::state::AppEvent::UiTab { origin_repo_path, .. } => {
-                assert_eq!(origin_repo_path.as_deref(), Some("/Gits/personal/alpha"),
-                    "caller's repo path must be propagated so the tab lands in the right repo");
+            crate::state::AppEvent::UiTab {
+                origin_repo_path, ..
+            } => {
+                assert_eq!(
+                    origin_repo_path.as_deref(),
+                    Some("/Gits/personal/alpha"),
+                    "caller's repo path must be propagated so the tab lands in the right repo"
+                );
             }
             other => panic!("Expected UiTab, got {:?}", other),
         }
@@ -4126,7 +4955,7 @@ mod tests {
     #[ignore = "requires real PTY (openpty) — fails in sandboxed CI; covered by integration tests"]
     fn ui_tab_falls_back_to_pty_cwd_when_no_peer_agent() {
         use crate::state::PtySession;
-        use portable_pty::{native_pty_system, PtySize};
+        use portable_pty::{PtySize, native_pty_system};
 
         let state = test_state();
         let mcp_sid = "mcp-no-peer".to_string();
@@ -4135,34 +4964,49 @@ mod tests {
 
         // Spawn a minimal PTY session with cwd set so we can exercise the fallback.
         let pty_system = native_pty_system();
-        let pair = pty_system.openpty(PtySize { rows: 24, cols: 80, pixel_width: 0, pixel_height: 0 })
+        let pair = pty_system
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
             .expect("openpty");
         let mut cmd = portable_pty::CommandBuilder::new("true");
         cmd.cwd("/tmp");
         let child = pair.slave.spawn_command(cmd).expect("spawn");
         let writer = pair.master.take_writer().expect("writer");
-        state.sessions.insert(tuic.clone(), parking_lot::Mutex::new(PtySession {
-            writer,
-            master: pair.master,
-            _child: child,
-            paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            worktree: None,
-            cwd: Some("/Gits/personal/beta".to_string()),
-            display_name: None,
-            shell: "true".to_string(),
-        }));
+        state.sessions.insert(
+            tuic.clone(),
+            parking_lot::Mutex::new(PtySession {
+                writer,
+                master: pair.master,
+                _child: child,
+                paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                worktree: None,
+                cwd: Some("/Gits/personal/beta".to_string()),
+                display_name: None,
+                shell: "true".to_string(),
+            }),
+        );
 
         let mut rx = state.event_bus.subscribe();
-        handle_ui(&state, &serde_json::json!({
-            "action": "tab",
-            "id": "beta-tab",
-            "title": "Beta",
-            "html": "<p/>"
-        }), Some(&mcp_sid));
+        handle_ui(
+            &state,
+            &serde_json::json!({
+                "action": "tab",
+                "id": "beta-tab",
+                "title": "Beta",
+                "html": "<p/>"
+            }),
+            Some(&mcp_sid),
+        );
 
         let event = rx.try_recv().expect("Expected UiTab event");
         match event {
-            crate::state::AppEvent::UiTab { origin_repo_path, .. } => {
+            crate::state::AppEvent::UiTab {
+                origin_repo_path, ..
+            } => {
                 assert_eq!(origin_repo_path.as_deref(), Some("/Gits/personal/beta"));
             }
             other => panic!("Expected UiTab, got {:?}", other),
@@ -4175,19 +5019,35 @@ mod tests {
         let r = handle_ui(&state, &serde_json::json!({"action": "tab"}), None);
         assert!(r["error"].as_str().unwrap().contains("'id'"));
 
-        let r = handle_ui(&state, &serde_json::json!({"action": "tab", "id": "x"}), None);
+        let r = handle_ui(
+            &state,
+            &serde_json::json!({"action": "tab", "id": "x"}),
+            None,
+        );
         assert!(r["error"].as_str().unwrap().contains("'title'"));
 
         // Requires either html or url — url is accepted as alternative to html
-        let r = handle_ui(&state, &serde_json::json!({"action": "tab", "id": "x", "title": "t"}), None);
+        let r = handle_ui(
+            &state,
+            &serde_json::json!({"action": "tab", "id": "x", "title": "t"}),
+            None,
+        );
         assert!(r["error"].as_str().unwrap().contains("'html' or 'url'"));
 
         // url alone is accepted
-        let r = handle_ui(&state, &serde_json::json!({"action": "tab", "id": "x", "title": "t", "url": "http://localhost/"}), None);
+        let r = handle_ui(
+            &state,
+            &serde_json::json!({"action": "tab", "id": "x", "title": "t", "url": "http://localhost/"}),
+            None,
+        );
         assert_eq!(r["ok"], true);
 
         // Both html and url is rejected
-        let r = handle_ui(&state, &serde_json::json!({"action": "tab", "id": "x", "title": "t", "html": "<p/>", "url": "http://localhost/"}), None);
+        let r = handle_ui(
+            &state,
+            &serde_json::json!({"action": "tab", "id": "x", "title": "t", "html": "<p/>", "url": "http://localhost/"}),
+            None,
+        );
         assert!(r["error"].as_str().unwrap().contains("not both"));
     }
 
@@ -4196,13 +5056,17 @@ mod tests {
         let state = test_state();
         let mut rx = state.event_bus.subscribe();
 
-        handle_ui(&state, &serde_json::json!({
-            "action": "tab",
-            "id": "bg",
-            "title": "Background",
-            "html": "<p/>",
-            "focus": false
-        }), None);
+        handle_ui(
+            &state,
+            &serde_json::json!({
+                "action": "tab",
+                "id": "bg",
+                "title": "Background",
+                "html": "<p/>",
+                "focus": false
+            }),
+            None,
+        );
 
         let event = rx.try_recv().expect("Expected UiTab event");
         match event {
@@ -4218,13 +5082,17 @@ mod tests {
         let state = test_state();
         let mut rx = state.event_bus.subscribe();
 
-        handle_ui(&state, &serde_json::json!({
-            "action": "tab",
-            "id": "unpinned",
-            "title": "T",
-            "html": "<p/>",
-            "pinned": false
-        }), None);
+        handle_ui(
+            &state,
+            &serde_json::json!({
+                "action": "tab",
+                "id": "unpinned",
+                "title": "T",
+                "html": "<p/>",
+                "pinned": false
+            }),
+            None,
+        );
 
         let event = rx.try_recv().expect("Expected UiTab event");
         match event {
@@ -4248,29 +5116,42 @@ mod tests {
         );
 
         // Calling ui(tab) with session_id = active session should warn, not create tab
-        let r = handle_ui(&state, &serde_json::json!({
-            "action": "tab",
-            "id": "status-tab",
-            "title": "Status",
-            "html": "<p>status</p>",
-            "session_id": "sess-active"
-        }), None);
-        assert!(r.get("warning").and_then(|v| v.as_str()).is_some(),
-            "should return warning when session_id has an active terminal");
-        assert_eq!(r["ok"], serde_json::json!(false),
-            "should not create tab when session already has terminal");
+        let r = handle_ui(
+            &state,
+            &serde_json::json!({
+                "action": "tab",
+                "id": "status-tab",
+                "title": "Status",
+                "html": "<p>status</p>",
+                "session_id": "sess-active"
+            }),
+            None,
+        );
+        assert!(
+            r.get("warning").and_then(|v| v.as_str()).is_some(),
+            "should return warning when session_id has an active terminal"
+        );
+        assert_eq!(
+            r["ok"],
+            serde_json::json!(false),
+            "should not create tab when session already has terminal"
+        );
     }
 
     #[test]
     fn ui_tab_no_warning_without_session_id() {
         let state = test_state();
         // No session_id → normal tab creation, no warning
-        let r = handle_ui(&state, &serde_json::json!({
-            "action": "tab",
-            "id": "standalone-tab",
-            "title": "My Tab",
-            "html": "<p>hello</p>"
-        }), None);
+        let r = handle_ui(
+            &state,
+            &serde_json::json!({
+                "action": "tab",
+                "id": "standalone-tab",
+                "title": "My Tab",
+                "html": "<p>hello</p>"
+            }),
+            None,
+        );
         assert_eq!(r["ok"], serde_json::json!(true));
         assert!(r.get("warning").is_none());
     }
@@ -4279,37 +5160,61 @@ mod tests {
     fn ui_tab_no_warning_for_unknown_session_id() {
         let state = test_state();
         // session_id refers to a session that doesn't exist → no warning, tab created normally
-        let r = handle_ui(&state, &serde_json::json!({
-            "action": "tab",
-            "id": "status-tab",
-            "title": "Status",
-            "html": "<p>hi</p>",
-            "session_id": "nonexistent-session"
-        }), None);
-        assert_eq!(r["ok"], serde_json::json!(true),
-            "nonexistent session_id should not block tab creation");
+        let r = handle_ui(
+            &state,
+            &serde_json::json!({
+                "action": "tab",
+                "id": "status-tab",
+                "title": "Status",
+                "html": "<p>hi</p>",
+                "session_id": "nonexistent-session"
+            }),
+            None,
+        );
+        assert_eq!(
+            r["ok"],
+            serde_json::json!(true),
+            "nonexistent session_id should not block tab creation"
+        );
     }
 
     #[test]
     fn ui_tab_registers_creator_and_clears_on_session_close() {
         use crate::state::VtLogBuffer;
         let state = test_state();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440b02", "orchestrator", "mcp-orch");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440b02",
+            "orchestrator",
+            "mcp-orch",
+        );
         // Map mcp_session_id → tuic_session
-        state.mcp_to_session.insert("mcp-orch".to_string(), "550e8400-e29b-41d4-a716-446655440b02".to_string());
+        state.mcp_to_session.insert(
+            "mcp-orch".to_string(),
+            "550e8400-e29b-41d4-a716-446655440b02".to_string(),
+        );
 
         // Create HTML tab as orchestrator
-        let r = handle_ui(&state, &serde_json::json!({
-            "action": "tab",
-            "id": "orch-status",
-            "title": "Orchestrator",
-            "html": "<p>running</p>"
-        }), Some("mcp-orch"));
+        let r = handle_ui(
+            &state,
+            &serde_json::json!({
+                "action": "tab",
+                "id": "orch-status",
+                "title": "Orchestrator",
+                "html": "<p>running</p>"
+            }),
+            Some("mcp-orch"),
+        );
         assert_eq!(r["ok"], serde_json::json!(true));
 
         // session_html_tabs should have the tab registered under the creator's session
-        let tabs = state.session_html_tabs.get("550e8400-e29b-41d4-a716-446655440b02");
-        assert!(tabs.is_some(), "tab should be registered under creator session");
+        let tabs = state
+            .session_html_tabs
+            .get("550e8400-e29b-41d4-a716-446655440b02");
+        assert!(
+            tabs.is_some(),
+            "tab should be registered under creator session"
+        );
         assert!(tabs.unwrap().contains(&"orch-status".to_string()));
 
         // Insert vt_log_buffers so close succeeds
@@ -4318,10 +5223,19 @@ mod tests {
             parking_lot::Mutex::new(VtLogBuffer::new(24, 220, 500)),
         );
         // Close the session — should clear its html tabs
-        handle_session(&state, &serde_json::json!({"action": "close", "session_id": "550e8400-e29b-41d4-a716-446655440b02"}), None);
+        handle_session(
+            &state,
+            &serde_json::json!({"action": "close", "session_id": "550e8400-e29b-41d4-a716-446655440b02"}),
+            None,
+        );
 
-        assert!(state.session_html_tabs.get("550e8400-e29b-41d4-a716-446655440b02").is_none(),
-            "session_html_tabs should be cleared after session close");
+        assert!(
+            state
+                .session_html_tabs
+                .get("550e8400-e29b-41d4-a716-446655440b02")
+                .is_none(),
+            "session_html_tabs should be cleared after session close"
+        );
     }
 
     /// Characterization for SIMP-1: when a session has registered HTML tabs and is
@@ -4331,16 +5245,24 @@ mod tests {
     fn session_close_drains_session_html_tabs_entry() {
         let target = "550e8400-e29b-41d4-a716-446655440d01";
         let state = test_state();
-        state.session_html_tabs.insert(target.to_string(), vec!["html-tab-1".to_string()]);
+        state
+            .session_html_tabs
+            .insert(target.to_string(), vec!["html-tab-1".to_string()]);
 
         use crate::state::VtLogBuffer;
         state.vt_log_buffers.insert(
             target.to_string(),
             parking_lot::Mutex::new(VtLogBuffer::new(24, 220, 500)),
         );
-        handle_session(&state, &serde_json::json!({"action": "close", "session_id": target}), None);
-        assert!(state.session_html_tabs.get(target).is_none(),
-            "html tabs entry must be removed after close (drives SIMP-1 helper)");
+        handle_session(
+            &state,
+            &serde_json::json!({"action": "close", "session_id": target}),
+            None,
+        );
+        assert!(
+            state.session_html_tabs.get(target).is_none(),
+            "html tabs entry must be removed after close (drives SIMP-1 helper)"
+        );
     }
 
     // -------- Tombstone / post-mortem output regression tests --------
@@ -4351,8 +5273,8 @@ mod tests {
     /// return "Session not found".
     #[test]
     fn tombstoned_session_output_returns_last_buffer_and_exit_code() {
-        use crate::state::VtLogBuffer;
         use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
         use std::sync::atomic::AtomicU64;
 
         let state = test_state();
@@ -4361,17 +5283,23 @@ mod tests {
         // Pre-populate buffers with sample output.
         let mut ring = OutputRingBuffer::new(4096);
         ring.write(b"hello from the crypt\n");
-        state.output_buffers.insert(sid.clone(), parking_lot::Mutex::new(ring));
+        state
+            .output_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(ring));
 
         let mut vt = VtLogBuffer::new(24, 80, 100);
         vt.process(b"hello from the crypt\r\n");
-        state.vt_log_buffers.insert(sid.clone(), parking_lot::Mutex::new(vt));
+        state
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        state.last_output_ms.insert(sid.clone(), AtomicU64::new(now_ms));
+        state
+            .last_output_ms
+            .insert(sid.clone(), AtomicU64::new(now_ms));
         state.exit_codes.insert(sid.clone(), 42);
 
         // Sanity: session entry is absent (this IS the tombstone).
@@ -4383,11 +5311,17 @@ mod tests {
             &serde_json::json!({"action": "output", "session_id": sid, "format": "raw"}),
             None,
         );
-        assert!(raw_res.get("error").is_none(), "Unexpected error: {raw_res}");
+        assert!(
+            raw_res.get("error").is_none(),
+            "Unexpected error: {raw_res}"
+        );
         assert_eq!(raw_res["exited"], serde_json::json!(true));
         assert_eq!(raw_res["exit_code"], serde_json::json!(42));
         assert!(
-            raw_res["data"].as_str().unwrap().contains("hello from the crypt"),
+            raw_res["data"]
+                .as_str()
+                .unwrap()
+                .contains("hello from the crypt"),
             "Expected tombstoned output in raw response: {raw_res}"
         );
 
@@ -4397,11 +5331,17 @@ mod tests {
             &serde_json::json!({"action": "output", "session_id": sid}),
             None,
         );
-        assert!(clean_res.get("error").is_none(), "Unexpected error: {clean_res}");
+        assert!(
+            clean_res.get("error").is_none(),
+            "Unexpected error: {clean_res}"
+        );
         assert_eq!(clean_res["exited"], serde_json::json!(true));
         assert_eq!(clean_res["exit_code"], serde_json::json!(42));
         assert!(
-            clean_res["data"].as_str().unwrap().contains("hello from the crypt"),
+            clean_res["data"]
+                .as_str()
+                .unwrap()
+                .contains("hello from the crypt"),
             "Expected tombstoned output in clean response: {clean_res}"
         );
     }
@@ -4410,8 +5350,8 @@ mod tests {
     /// and `total_written` remains present for backwards compat.
     #[test]
     fn session_output_includes_cursor_field() {
-        use crate::state::VtLogBuffer;
         use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
         use std::sync::atomic::AtomicU64;
 
         let state = test_state();
@@ -4419,20 +5359,26 @@ mod tests {
 
         let mut ring = OutputRingBuffer::new(4096);
         ring.write(b"line one\n");
-        state.output_buffers.insert(sid.clone(), parking_lot::Mutex::new(ring));
+        state
+            .output_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(ring));
 
         let mut vt = VtLogBuffer::new(24, 80, 200);
         // Feed >24 lines so some scroll into log (total_pushed > 0).
         for i in 0..30 {
             vt.process(format!("line {i}\r\n").as_bytes());
         }
-        state.vt_log_buffers.insert(sid.clone(), parking_lot::Mutex::new(vt));
+        state
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        state.last_output_ms.insert(sid.clone(), AtomicU64::new(now_ms));
+        state
+            .last_output_ms
+            .insert(sid.clone(), AtomicU64::new(now_ms));
         state.exit_codes.insert(sid.clone(), 0);
 
         let res = handle_session(
@@ -4442,23 +5388,32 @@ mod tests {
         );
         assert!(res.get("error").is_none(), "Unexpected error: {res}");
         assert!(res.get("cursor").is_some(), "cursor field missing: {res}");
-        assert!(res.get("total_written").is_some(), "total_written missing (backwards compat): {res}");
+        assert!(
+            res.get("total_written").is_some(),
+            "total_written missing (backwards compat): {res}"
+        );
         let cursor = res["cursor"].as_u64().expect("cursor must be u64");
         assert!(cursor > 0, "cursor should be > 0 after scrollback: {res}");
-        assert_eq!(res["cursor"], res["total_written"], "cursor and total_written must match");
+        assert_eq!(
+            res["cursor"], res["total_written"],
+            "cursor and total_written must match"
+        );
     }
 
     /// `since_cursor` returns only new lines since the given position.
     #[test]
     fn session_output_since_cursor_returns_delta() {
-        use crate::state::VtLogBuffer;
         use crate::OutputRingBuffer;
+        use crate::state::VtLogBuffer;
         use std::sync::atomic::AtomicU64;
 
         let state = test_state();
         let sid = "since-cursor-test".to_string();
 
-        state.output_buffers.insert(sid.clone(), parking_lot::Mutex::new(OutputRingBuffer::new(4096)));
+        state.output_buffers.insert(
+            sid.clone(),
+            parking_lot::Mutex::new(OutputRingBuffer::new(4096)),
+        );
 
         let mut vt = VtLogBuffer::new(24, 80, 200);
         // Feed >24 lines so total_pushed > 0.
@@ -4472,13 +5427,17 @@ mod tests {
         for i in 0..30 {
             vt.process(format!("new line {i}\r\n").as_bytes());
         }
-        state.vt_log_buffers.insert(sid.clone(), parking_lot::Mutex::new(vt));
+        state
+            .vt_log_buffers
+            .insert(sid.clone(), parking_lot::Mutex::new(vt));
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-        state.last_output_ms.insert(sid.clone(), AtomicU64::new(now_ms));
+        state
+            .last_output_ms
+            .insert(sid.clone(), AtomicU64::new(now_ms));
         state.exit_codes.insert(sid.clone(), 0);
 
         let res = handle_session(
@@ -4489,9 +5448,15 @@ mod tests {
         assert!(res.get("error").is_none(), "Unexpected error: {res}");
         let data = res["data"].as_str().expect("data field");
         // Delta includes lines scrolled in since cursor — includes new lines.
-        assert!(data.contains("new line"), "expected new lines in delta: {res}");
+        assert!(
+            data.contains("new line"),
+            "expected new lines in delta: {res}"
+        );
         let new_cursor = res["cursor"].as_u64().expect("cursor must be u64");
-        assert!(new_cursor > cursor_after_old as u64, "cursor must advance: {res}");
+        assert!(
+            new_cursor > cursor_after_old as u64,
+            "cursor must advance: {res}"
+        );
     }
 
     /// A session with no trace (never existed or fully reaped) must return a
@@ -4523,9 +5488,9 @@ mod tests {
     /// must survive, while transient per-session state must be reaped.
     #[test]
     fn mark_session_exited_preserves_tombstone_state() {
-        use crate::state::VtLogBuffer;
         use crate::OutputRingBuffer;
-        use std::sync::atomic::{AtomicU64, AtomicU8};
+        use crate::state::VtLogBuffer;
+        use std::sync::atomic::{AtomicU8, AtomicU64};
 
         let state = test_state();
         let sid = "mark-exited-test".to_string();
@@ -4540,20 +5505,39 @@ mod tests {
             parking_lot::Mutex::new(VtLogBuffer::new(24, 80, 100)),
         );
         state.last_output_ms.insert(sid.clone(), AtomicU64::new(0));
-        state.shell_states.insert(sid.clone(), AtomicU8::new(crate::pty::SHELL_BUSY));
-        state.terminal_rows.insert(sid.clone(), std::sync::atomic::AtomicU16::new(24));
+        state
+            .shell_states
+            .insert(sid.clone(), AtomicU8::new(crate::pty::SHELL_BUSY));
+        state
+            .terminal_rows
+            .insert(sid.clone(), std::sync::atomic::AtomicU16::new(24));
 
         // No `sessions` entry — emulate the reader-thread path where the
         // session has already been removed by the caller before mark.
         crate::pty::mark_session_exited(&sid, &state);
 
         // Tombstone survivors.
-        assert!(state.output_buffers.contains_key(&sid), "output buffer must survive");
-        assert!(state.vt_log_buffers.contains_key(&sid), "vt log must survive");
-        assert!(state.last_output_ms.contains_key(&sid), "last_output_ms must survive");
+        assert!(
+            state.output_buffers.contains_key(&sid),
+            "output buffer must survive"
+        );
+        assert!(
+            state.vt_log_buffers.contains_key(&sid),
+            "vt log must survive"
+        );
+        assert!(
+            state.last_output_ms.contains_key(&sid),
+            "last_output_ms must survive"
+        );
         // Transient state must be reaped.
-        assert!(!state.shell_states.contains_key(&sid), "shell_states reaped");
-        assert!(!state.terminal_rows.contains_key(&sid), "terminal_rows reaped");
+        assert!(
+            !state.shell_states.contains_key(&sid),
+            "shell_states reaped"
+        );
+        assert!(
+            !state.terminal_rows.contains_key(&sid),
+            "terminal_rows reaped"
+        );
     }
 
     // --- build_spawn_prompt ---
@@ -4567,18 +5551,33 @@ mod tests {
     #[test]
     fn build_spawn_prompt_with_parent_prepends_preamble() {
         let result = build_spawn_prompt("do the task", Some("parent-456"), "child-123");
-        assert!(result.contains("parent-456"), "preamble must mention parent");
-        assert!(result.contains("do the task"), "original prompt must be preserved");
+        assert!(
+            result.contains("parent-456"),
+            "preamble must mention parent"
+        );
+        assert!(
+            result.contains("do the task"),
+            "original prompt must be preserved"
+        );
         let preamble_end = result.find("do the task").unwrap();
         assert!(preamble_end > 0, "preamble must precede prompt");
-        assert!(result.contains("register"), "preamble must instruct register");
+        assert!(
+            result.contains("register"),
+            "preamble must instruct register"
+        );
     }
 
     #[test]
     fn build_spawn_prompt_with_parent_includes_send_instruction() {
         let result = build_spawn_prompt("my task", Some("orch-789"), "child-abc");
-        assert!(result.contains("orch-789"), "preamble must include parent session for send target");
-        assert!(result.contains("send"), "preamble must instruct send on completion");
+        assert!(
+            result.contains("orch-789"),
+            "preamble must include parent session for send target"
+        );
+        assert!(
+            result.contains("send"),
+            "preamble must instruct send on completion"
+        );
     }
 
     // --- spawn auto-registration + inbox pre-init ---
@@ -4588,7 +5587,12 @@ mod tests {
     async fn spawn_auto_registers_child_in_peer_list() {
         let state = test_state();
         let addr = "127.0.0.1:0".parse().unwrap();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440b01", "orchestrator", "mcp-orch");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440b01",
+            "orchestrator",
+            "mcp-orch",
+        );
 
         let result = handle_agent(
             &state,
@@ -4602,7 +5606,11 @@ mod tests {
             Some("mcp-orch"),
         );
         // Skip if PTY cannot be opened (sandbox/CI without /dev/ptmx access)
-        if result.get("error").and_then(|e| e.as_str()).map_or(false, |e| e.contains("Failed to open PTY")) {
+        if result
+            .get("error")
+            .and_then(|e| e.as_str())
+            .map_or(false, |e| e.contains("Failed to open PTY"))
+        {
             eprintln!("Skipping: PTY not available in this environment");
             return;
         }
@@ -4620,7 +5628,10 @@ mod tests {
             .iter()
             .map(|p| p["tuic_session"].as_str().unwrap())
             .collect();
-        assert!(sessions.contains(&session_id), "child {session_id} not in list_peers: {sessions:?}");
+        assert!(
+            sessions.contains(&session_id),
+            "child {session_id} not in list_peers: {sessions:?}"
+        );
     }
 
     #[cfg(unix)]
@@ -4628,7 +5639,12 @@ mod tests {
     async fn spawn_pre_initializes_child_inbox() {
         let state = test_state();
         let addr = "127.0.0.1:0".parse().unwrap();
-        register_peer(&state, "550e8400-e29b-41d4-a716-446655440b01", "orchestrator", "mcp-orch");
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440b01",
+            "orchestrator",
+            "mcp-orch",
+        );
 
         let result = handle_agent(
             &state,
@@ -4642,7 +5658,11 @@ mod tests {
             Some("mcp-orch"),
         );
         // Skip if PTY cannot be opened (sandbox/CI without /dev/ptmx access)
-        if result.get("error").and_then(|e| e.as_str()).map_or(false, |e| e.contains("Failed to open PTY")) {
+        if result
+            .get("error")
+            .and_then(|e| e.as_str())
+            .map_or(false, |e| e.contains("Failed to open PTY"))
+        {
             eprintln!("Skipping: PTY not available in this environment");
             return;
         }
@@ -4672,11 +5692,18 @@ mod tests {
             Some("mcp-anon"),
         );
         // Skip if PTY cannot be opened (sandbox/CI without /dev/ptmx access)
-        if result.get("error").and_then(|e| e.as_str()).map_or(false, |e| e.contains("Failed to open PTY")) {
+        if result
+            .get("error")
+            .and_then(|e| e.as_str())
+            .map_or(false, |e| e.contains("Failed to open PTY"))
+        {
             eprintln!("Skipping: PTY not available in this environment");
             return;
         }
-        assert!(result.get("error").is_none(), "non-swarm spawn must succeed: {result}");
+        assert!(
+            result.get("error").is_none(),
+            "non-swarm spawn must succeed: {result}"
+        );
         assert!(result["session_id"].as_str().is_some());
     }
 
@@ -4691,15 +5718,23 @@ mod tests {
             None,
         );
         let err = result["error"].as_str().unwrap_or("");
-        assert!(err.contains("not found"), "expected 'not found' error, got: {result}");
+        assert!(
+            err.contains("not found"),
+            "expected 'not found' error, got: {result}"
+        );
     }
 
     #[test]
     fn session_status_includes_exit_code_when_exited() {
         let state = test_state();
         let sid = "s-exit-test";
-        state.session_states.insert(sid.to_string(), crate::state::SessionState::default());
-        state.shell_states.insert(sid.to_string(), std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE));
+        state
+            .session_states
+            .insert(sid.to_string(), crate::state::SessionState::default());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
         state.exit_codes.insert(sid.to_string(), 42);
 
         let result = handle_session(
@@ -4708,20 +5743,32 @@ mod tests {
             None,
         );
         assert!(result.get("error").is_none(), "unexpected error: {result}");
-        assert_eq!(result["exit_code"], serde_json::json!(42), "exit_code missing: {result}");
+        assert_eq!(
+            result["exit_code"],
+            serde_json::json!(42),
+            "exit_code missing: {result}"
+        );
     }
 
     #[test]
     fn session_status_includes_idle_since_ms_when_idle() {
         let state = test_state();
         let sid = "s-idle-test";
-        state.session_states.insert(sid.to_string(), crate::state::SessionState::default());
-        state.shell_states.insert(sid.to_string(), std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE));
+        state
+            .session_states
+            .insert(sid.to_string(), crate::state::SessionState::default());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
         let since = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis() as u64 - 500;
-        state.shell_state_since_ms.insert(sid.to_string(), std::sync::atomic::AtomicU64::new(since));
+            .as_millis() as u64
+            - 500;
+        state
+            .shell_state_since_ms
+            .insert(sid.to_string(), std::sync::atomic::AtomicU64::new(since));
 
         let result = handle_session(
             &state,
@@ -4730,22 +5777,39 @@ mod tests {
         );
         assert!(result.get("error").is_none(), "unexpected error: {result}");
         let idle_ms = result["idle_since_ms"].as_u64();
-        assert!(idle_ms.is_some(), "idle_since_ms must be present when idle: {result}");
-        assert!(idle_ms.unwrap() >= 400, "idle_since_ms must reflect elapsed time: {result}");
-        assert!(result["busy_duration_ms"].is_null(), "busy_duration_ms must be absent when idle: {result}");
+        assert!(
+            idle_ms.is_some(),
+            "idle_since_ms must be present when idle: {result}"
+        );
+        assert!(
+            idle_ms.unwrap() >= 400,
+            "idle_since_ms must reflect elapsed time: {result}"
+        );
+        assert!(
+            result["busy_duration_ms"].is_null(),
+            "busy_duration_ms must be absent when idle: {result}"
+        );
     }
 
     #[test]
     fn session_status_includes_busy_duration_ms_when_busy() {
         let state = test_state();
         let sid = "s-busy-test";
-        state.session_states.insert(sid.to_string(), crate::state::SessionState::default());
-        state.shell_states.insert(sid.to_string(), std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY));
+        state
+            .session_states
+            .insert(sid.to_string(), crate::state::SessionState::default());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
         let since = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_millis() as u64 - 300;
-        state.shell_state_since_ms.insert(sid.to_string(), std::sync::atomic::AtomicU64::new(since));
+            .as_millis() as u64
+            - 300;
+        state
+            .shell_state_since_ms
+            .insert(sid.to_string(), std::sync::atomic::AtomicU64::new(since));
 
         let result = handle_session(
             &state,
@@ -4754,9 +5818,18 @@ mod tests {
         );
         assert!(result.get("error").is_none(), "unexpected error: {result}");
         let busy_ms = result["busy_duration_ms"].as_u64();
-        assert!(busy_ms.is_some(), "busy_duration_ms must be present when busy: {result}");
-        assert!(busy_ms.unwrap() >= 200, "busy_duration_ms must reflect elapsed time: {result}");
-        assert!(result["idle_since_ms"].is_null(), "idle_since_ms must be absent when busy: {result}");
+        assert!(
+            busy_ms.is_some(),
+            "busy_duration_ms must be present when busy: {result}"
+        );
+        assert!(
+            busy_ms.unwrap() >= 200,
+            "busy_duration_ms must reflect elapsed time: {result}"
+        );
+        assert!(
+            result["idle_since_ms"].is_null(),
+            "idle_since_ms must be absent when busy: {result}"
+        );
     }
 
     #[test]
@@ -4767,15 +5840,23 @@ mod tests {
         // Integration coverage via manual QA — list with running session must show shell_state.
         // Here we just verify the status handler path we control returns shell_state.
         let sid = "s-list-test";
-        state.session_states.insert(sid.to_string(), crate::state::SessionState::default());
-        state.shell_states.insert(sid.to_string(), std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE));
+        state
+            .session_states
+            .insert(sid.to_string(), crate::state::SessionState::default());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
 
         let result = handle_session(
             &state,
             &serde_json::json!({"action": "status", "session_id": sid}),
             None,
         );
-        assert!(result["shell_state"].as_str().is_some(), "shell_state must be in status response: {result}");
+        assert!(
+            result["shell_state"].as_str().is_some(),
+            "shell_state must be in status response: {result}"
+        );
     }
 
     #[cfg(unix)]
@@ -4800,10 +5881,22 @@ mod tests {
             return;
         }
 
-        assert!(result["session_id"].as_str().is_some(), "session_id missing: {result}");
-        assert!(result["server_ts"].as_u64().is_some(), "server_ts missing: {result}");
-        assert!(result["monitor_with"].as_str().is_some(), "monitor_with missing: {result}");
-        assert!(result["status_with"].as_str().is_some(), "status_with missing: {result}");
+        assert!(
+            result["session_id"].as_str().is_some(),
+            "session_id missing: {result}"
+        );
+        assert!(
+            result["server_ts"].as_u64().is_some(),
+            "server_ts missing: {result}"
+        );
+        assert!(
+            result["monitor_with"].as_str().is_some(),
+            "monitor_with missing: {result}"
+        );
+        assert!(
+            result["status_with"].as_str().is_some(),
+            "status_with missing: {result}"
+        );
         // ARCH-1: monitor_with must be canonical session(output), not branched
         // on caller identity. Standalone spawn (no registered caller) must
         // not include peer_monitor_with.
@@ -4845,12 +5938,15 @@ mod tests {
             eprintln!("Skipping: PTY not available in this environment");
             return;
         }
-        let monitor = result["monitor_with"].as_str().expect("monitor_with required");
+        let monitor = result["monitor_with"]
+            .as_str()
+            .expect("monitor_with required");
         assert!(
             monitor.starts_with("session(action=output"),
             "monitor_with must be canonical session(output) regardless of caller: {monitor}"
         );
-        let peer_hint = result["peer_monitor_with"].as_str()
+        let peer_hint = result["peer_monitor_with"]
+            .as_str()
             .expect("peer_monitor_with must be present for registered caller");
         assert!(
             peer_hint.starts_with("agent(action=inbox"),
@@ -4872,7 +5968,7 @@ mod tests {
         assert!(!is_valid_uuid("short"));
         assert!(!is_valid_uuid(""));
         assert!(!is_valid_uuid("550e8400-e29b-41d4-a716-44665544000g")); // non-hex char
-        assert!(!is_valid_uuid("550e8400e29b41d4a716446655440000"));      // no dashes
+        assert!(!is_valid_uuid("550e8400e29b41d4a716446655440000")); // no dashes
     }
 
     // ── session(kill) self-kill guard ────────────────────────────────────────
@@ -4882,16 +5978,24 @@ mod tests {
         let state = test_state();
         let mcp_sid = "mcp-kill-guard-test";
         let tuic_sid = "550e8400-e29b-41d4-a716-446655440001";
-        state.mcp_to_session.insert(mcp_sid.to_string(), tuic_sid.to_string());
+        state
+            .mcp_to_session
+            .insert(mcp_sid.to_string(), tuic_sid.to_string());
 
         let result = handle_session(
             &state,
             &serde_json::json!({"action": "kill", "session_id": tuic_sid}),
             Some(mcp_sid),
         );
-        assert!(result["error"].as_str().is_some(), "kill own session must return error: {result}");
         assert!(
-            result["error"].as_str().unwrap().contains("Cannot kill own session"),
+            result["error"].as_str().is_some(),
+            "kill own session must return error: {result}"
+        );
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("Cannot kill own session"),
             "error message must mention 'Cannot kill own session': {result}"
         );
     }
@@ -4902,7 +6006,9 @@ mod tests {
         let mcp_sid = "mcp-kill-other-test";
         let own_tuic = "550e8400-e29b-41d4-a716-446655440002";
         let other_tuic = "550e8400-e29b-41d4-a716-446655440003";
-        state.mcp_to_session.insert(mcp_sid.to_string(), own_tuic.to_string());
+        state
+            .mcp_to_session
+            .insert(mcp_sid.to_string(), own_tuic.to_string());
 
         // Killing a different session — should NOT be blocked by self-kill guard.
         // It will return "Session not found" (no real PTY), not the self-kill error.
@@ -4929,7 +6035,9 @@ mod tests {
             Some("mcp-reg-test"),
         );
         assert!(
-            result["error"].as_str().map_or(false, |e| e.contains("UUID")),
+            result["error"]
+                .as_str()
+                .map_or(false, |e| e.contains("UUID")),
             "register with non-UUID tuic_session must fail: {result}"
         );
     }
@@ -4945,7 +6053,10 @@ mod tests {
             }),
             Some("mcp-reg-valid-test"),
         );
-        assert!(result["ok"].as_bool() == Some(true), "register with valid UUID must succeed: {result}");
+        assert!(
+            result["ok"].as_bool() == Some(true),
+            "register with valid UUID must succeed: {result}"
+        );
     }
 
     // ── agent(send) + agent(inbox) caller resolution (RUST-3/PERF-2 — must use mcp_to_session O(1)) ──
@@ -4969,8 +6080,15 @@ mod tests {
             }),
             Some(sender_mcp),
         );
-        assert_eq!(result["ok"].as_bool(), Some(true), "send must succeed: {result}");
-        let inbox = state.agent_inbox.get(recipient_tuic).expect("recipient inbox exists");
+        assert_eq!(
+            result["ok"].as_bool(),
+            Some(true),
+            "send must succeed: {result}"
+        );
+        let inbox = state
+            .agent_inbox
+            .get(recipient_tuic)
+            .expect("recipient inbox exists");
         assert_eq!(inbox.len(), 1, "recipient should have 1 buffered message");
         assert_eq!(inbox[0].from_tuic_session, sender_tuic);
         assert_eq!(inbox[0].from_name, "alice");
@@ -4992,7 +6110,9 @@ mod tests {
             Some("mcp-not-registered"),
         );
         assert!(
-            result["error"].as_str().map_or(false, |e| e.contains("not registered")),
+            result["error"]
+                .as_str()
+                .map_or(false, |e| e.contains("not registered")),
             "send from unregistered MCP session must error: {result}"
         );
     }
@@ -5010,15 +6130,25 @@ mod tests {
             &serde_json::json!({"action": "send", "to": tuic, "message": "note to self"}),
             Some(mcp_sid),
         );
-        assert_eq!(send_result["ok"].as_bool(), Some(true), "send-to-self must succeed: {send_result}");
+        assert_eq!(
+            send_result["ok"].as_bool(),
+            Some(true),
+            "send-to-self must succeed: {send_result}"
+        );
 
         let result = handle_messaging(
             &state,
             &serde_json::json!({"action": "inbox"}),
             Some(mcp_sid),
         );
-        let messages = result["messages"].as_array().expect("inbox returns messages array");
-        assert_eq!(messages.len(), 1, "inbox should contain 1 message: {result}");
+        let messages = result["messages"]
+            .as_array()
+            .expect("inbox returns messages array");
+        assert_eq!(
+            messages.len(),
+            1,
+            "inbox should contain 1 message: {result}"
+        );
         assert_eq!(messages[0]["content"].as_str(), Some("note to self"));
     }
 
@@ -5029,38 +6159,52 @@ mod tests {
     fn make_agents_config() -> crate::config::AgentsConfig {
         use crate::config::{AgentRunConfig, AgentSettings, AgentsConfig};
         let mut agents = std::collections::HashMap::new();
-        agents.insert("claude".to_string(), AgentSettings {
-            run_configs: vec![
-                AgentRunConfig {
-                    name: "claude qwen3.5".to_string(),
-                    command: "ollama".to_string(),
-                    args: vec!["launch".to_string(), "claude".to_string(), "--model".to_string(), "qwen3.5".to_string()],
-                    env: [("OLLAMA_HOST".to_string(), "localhost:11434".to_string())].into_iter().collect(),
-                    is_default: false,
-                },
-                AgentRunConfig {
-                    name: "Default".to_string(),
-                    command: "claude".to_string(),
-                    args: vec![],
-                    env: std::collections::HashMap::new(),
-                    is_default: true,
-                },
-            ],
-            ..Default::default()
-        });
-        agents.insert("codex".to_string(), AgentSettings {
-            run_configs: vec![
-                AgentRunConfig {
+        agents.insert(
+            "claude".to_string(),
+            AgentSettings {
+                run_configs: vec![
+                    AgentRunConfig {
+                        name: "claude qwen3.5".to_string(),
+                        command: "ollama".to_string(),
+                        args: vec![
+                            "launch".to_string(),
+                            "claude".to_string(),
+                            "--model".to_string(),
+                            "qwen3.5".to_string(),
+                        ],
+                        env: [("OLLAMA_HOST".to_string(), "localhost:11434".to_string())]
+                            .into_iter()
+                            .collect(),
+                        is_default: false,
+                    },
+                    AgentRunConfig {
+                        name: "Default".to_string(),
+                        command: "claude".to_string(),
+                        args: vec![],
+                        env: std::collections::HashMap::new(),
+                        is_default: true,
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+        agents.insert(
+            "codex".to_string(),
+            AgentSettings {
+                run_configs: vec![AgentRunConfig {
                     name: "codex-fast".to_string(),
                     command: "codex".to_string(),
                     args: vec!["--fast".to_string()],
                     env: std::collections::HashMap::new(),
                     is_default: true,
-                },
-            ],
-            ..Default::default()
-        });
-        AgentsConfig { agents, headless_agent: None }
+                }],
+                ..Default::default()
+            },
+        );
+        AgentsConfig {
+            agents,
+            headless_agent: None,
+        }
     }
 
     #[test]
@@ -5069,8 +6213,17 @@ mod tests {
         let resolved = resolve_run_config("Claude Qwen3.5", &cfg);
         assert_eq!(resolved.agent_type, "claude");
         assert_eq!(resolved.command.as_deref(), Some("ollama"));
-        assert!(resolved.args.as_ref().unwrap().contains(&"qwen3.5".to_string()));
-        assert_eq!(resolved.env.get("OLLAMA_HOST").map(|s| s.as_str()), Some("localhost:11434"));
+        assert!(
+            resolved
+                .args
+                .as_ref()
+                .unwrap()
+                .contains(&"qwen3.5".to_string())
+        );
+        assert_eq!(
+            resolved.env.get("OLLAMA_HOST").map(|s| s.as_str()),
+            Some("localhost:11434")
+        );
     }
 
     #[test]
@@ -5097,7 +6250,11 @@ mod tests {
 
     #[test]
     fn substitute_prompt_placeholder_present() {
-        let args = vec!["-p".to_string(), "{prompt}".to_string(), "--no-input".to_string()];
+        let args = vec![
+            "-p".to_string(),
+            "{prompt}".to_string(),
+            "--no-input".to_string(),
+        ];
         let result = substitute_prompt_in_args(&args, "fix the bug");
         assert_eq!(result, vec!["-p", "fix the bug", "--no-input"]);
     }
@@ -5111,7 +6268,11 @@ mod tests {
 
     #[test]
     fn substitute_prompt_multiple_placeholders() {
-        let args = vec!["{prompt}".to_string(), "--echo".to_string(), "{prompt}".to_string()];
+        let args = vec![
+            "{prompt}".to_string(),
+            "--echo".to_string(),
+            "{prompt}".to_string(),
+        ];
         let result = substitute_prompt_in_args(&args, "hello");
         assert_eq!(result, vec!["hello", "--echo", "hello"]);
     }
@@ -5175,7 +6336,9 @@ mod tests {
             Some("mcp-no-register"),
         );
         assert!(
-            result["error"].as_str().map_or(false, |e| e.contains("not registered")),
+            result["error"]
+                .as_str()
+                .map_or(false, |e| e.contains("not registered")),
             "inbox call from unregistered MCP session must error: {result}"
         );
     }
@@ -5249,7 +6412,11 @@ mod tests {
     #[test]
     fn config_list_ai_prompts_returns_services() {
         let state = test_state();
-        let r = handle_config(&state, localhost(), &serde_json::json!({"action": "list_ai_prompts"}));
+        let r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({"action": "list_ai_prompts"}),
+        );
         let services = r["services"].as_array().unwrap();
         assert_eq!(services.len(), 1);
         assert_eq!(services[0]["name"], "diff_triage");
@@ -5258,10 +6425,16 @@ mod tests {
     #[test]
     fn config_load_ai_prompt_returns_default_when_no_custom() {
         let state = test_state();
-        let _guard = crate::config::set_config_dir_override(std::env::temp_dir().join("test-ai-prompts-load"));
-        let r = handle_config(&state, localhost(), &serde_json::json!({
-            "action": "load_ai_prompt", "service": "diff_triage"
-        }));
+        let _guard = crate::config::set_config_dir_override(
+            std::env::temp_dir().join("test-ai-prompts-load"),
+        );
+        let r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "load_ai_prompt", "service": "diff_triage"
+            }),
+        );
         assert_eq!(r["is_custom"], false);
         assert_eq!(r["service"], "diff_triage");
         assert!(r["prompt"].as_str().unwrap().len() > 10);
@@ -5271,9 +6444,13 @@ mod tests {
     #[test]
     fn config_load_ai_prompt_unknown_service_errors() {
         let state = test_state();
-        let r = handle_config(&state, localhost(), &serde_json::json!({
-            "action": "load_ai_prompt", "service": "nonexistent"
-        }));
+        let r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "load_ai_prompt", "service": "nonexistent"
+            }),
+        );
         assert!(r["error"].as_str().unwrap().contains("Unknown"));
     }
 
@@ -5284,14 +6461,22 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let _guard = crate::config::set_config_dir_override(dir);
 
-        let save_r = handle_config(&state, localhost(), &serde_json::json!({
-            "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Custom prompt"
-        }));
+        let save_r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Custom prompt"
+            }),
+        );
         assert_eq!(save_r["ok"], true);
 
-        let load_r = handle_config(&state, localhost(), &serde_json::json!({
-            "action": "load_ai_prompt", "service": "diff_triage"
-        }));
+        let load_r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "load_ai_prompt", "service": "diff_triage"
+            }),
+        );
         assert_eq!(load_r["is_custom"], true);
         assert_eq!(load_r["prompt"], "Custom prompt");
     }
@@ -5303,25 +6488,41 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let _guard = crate::config::set_config_dir_override(dir);
 
-        handle_config(&state, localhost(), &serde_json::json!({
-            "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Custom"
-        }));
-        handle_config(&state, localhost(), &serde_json::json!({
-            "action": "save_ai_prompt", "service": "diff_triage", "prompt": ""
-        }));
+        handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Custom"
+            }),
+        );
+        handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "save_ai_prompt", "service": "diff_triage", "prompt": ""
+            }),
+        );
 
-        let r = handle_config(&state, localhost(), &serde_json::json!({
-            "action": "load_ai_prompt", "service": "diff_triage"
-        }));
+        let r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "load_ai_prompt", "service": "diff_triage"
+            }),
+        );
         assert_eq!(r["is_custom"], false);
     }
 
     #[test]
     fn config_save_ai_prompt_blocked_from_remote() {
         let state = test_state();
-        let r = handle_config(&state, remote_addr(), &serde_json::json!({
-            "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Hack"
-        }));
+        let r = handle_config(
+            &state,
+            remote_addr(),
+            &serde_json::json!({
+                "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Hack"
+            }),
+        );
         assert!(r["error"].as_str().unwrap().contains("localhost"));
     }
 
@@ -5332,9 +6533,13 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let _guard = crate::config::set_config_dir_override(dir);
 
-        handle_config(&state, localhost(), &serde_json::json!({
-            "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Custom"
-        }));
+        handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "save_ai_prompt", "service": "diff_triage", "prompt": "Custom"
+            }),
+        );
 
         let config = crate::config::load_ai_prompts();
         assert_eq!(config.diff_triage_system_prompt.as_deref(), Some("Custom"));
@@ -5347,7 +6552,11 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let _guard = crate::config::set_config_dir_override(dir);
 
-        let r = handle_config(&state, localhost(), &serde_json::json!({"action": "list_prompts"}));
+        let r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({"action": "list_prompts"}),
+        );
         assert_eq!(r["prompts"].as_array().unwrap().len(), 0);
     }
 
@@ -5358,14 +6567,22 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let _guard = crate::config::set_config_dir_override(dir);
 
-        let save_r = handle_config(&state, localhost(), &serde_json::json!({
-            "action": "save_prompt", "id": "p1", "label": "My Prompt", "text": "Do stuff"
-        }));
+        let save_r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "save_prompt", "id": "p1", "label": "My Prompt", "text": "Do stuff"
+            }),
+        );
         assert_eq!(save_r["ok"], true);
 
-        let load_r = handle_config(&state, localhost(), &serde_json::json!({
-            "action": "load_prompt", "id": "p1"
-        }));
+        let load_r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "load_prompt", "id": "p1"
+            }),
+        );
         assert_eq!(load_r["label"], "My Prompt");
         assert_eq!(load_r["text"], "Do stuff");
         assert_eq!(load_r["pinned"], false);
@@ -5378,14 +6595,26 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let _guard = crate::config::set_config_dir_override(dir);
 
-        handle_config(&state, localhost(), &serde_json::json!({
-            "action": "save_prompt", "id": "p1", "label": "V1", "text": "Old"
-        }));
-        handle_config(&state, localhost(), &serde_json::json!({
-            "action": "save_prompt", "id": "p1", "label": "V2", "text": "New", "pinned": true
-        }));
+        handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "save_prompt", "id": "p1", "label": "V1", "text": "Old"
+            }),
+        );
+        handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "save_prompt", "id": "p1", "label": "V2", "text": "New", "pinned": true
+            }),
+        );
 
-        let list_r = handle_config(&state, localhost(), &serde_json::json!({"action": "list_prompts"}));
+        let list_r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({"action": "list_prompts"}),
+        );
         let prompts = list_r["prompts"].as_array().unwrap();
         assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0]["label"], "V2");
@@ -5395,9 +6624,13 @@ mod tests {
     #[test]
     fn config_save_prompt_blocked_from_remote() {
         let state = test_state();
-        let r = handle_config(&state, remote_addr(), &serde_json::json!({
-            "action": "save_prompt", "id": "p1", "label": "X", "text": "Y"
-        }));
+        let r = handle_config(
+            &state,
+            remote_addr(),
+            &serde_json::json!({
+                "action": "save_prompt", "id": "p1", "label": "X", "text": "Y"
+            }),
+        );
         assert!(r["error"].as_str().unwrap().contains("localhost"));
     }
 
@@ -5408,9 +6641,13 @@ mod tests {
         let _ = std::fs::create_dir_all(&dir);
         let _guard = crate::config::set_config_dir_override(dir);
 
-        let r = handle_config(&state, localhost(), &serde_json::json!({
-            "action": "load_prompt", "id": "nonexistent"
-        }));
+        let r = handle_config(
+            &state,
+            localhost(),
+            &serde_json::json!({
+                "action": "load_prompt", "id": "nonexistent"
+            }),
+        );
         assert!(r["error"].as_str().unwrap().contains("not found"));
     }
 }

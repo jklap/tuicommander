@@ -4,9 +4,9 @@ pub(crate) mod auth;
 mod config_routes;
 mod fs_routes;
 mod git_routes;
+mod github_routes;
 mod guards;
 mod log_routes;
-mod github_routes;
 pub(crate) mod mcp_transport;
 mod plugin_docs;
 mod session;
@@ -18,10 +18,13 @@ mod worktree_routes;
 
 use crate::AppState;
 use axum::http::header::{AUTHORIZATION, CONTENT_TYPE};
-use axum::http::{header, Method, StatusCode};
+use axum::http::{Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
-use axum::{extract::{Path as AxumPath, State}, Json, Router};
+use axum::{
+    Json, Router,
+    extract::{Path as AxumPath, State},
+};
 use std::sync::Arc;
 use tower_http::compression::CompressionLayer;
 use tower_http::compression::predicate::{DefaultPredicate, Predicate, SizeAbove};
@@ -34,10 +37,14 @@ const MAX_TERMINAL_DIMENSION: u16 = 500;
 /// Validate terminal dimensions (rows/cols) are within sane bounds.
 fn validate_terminal_size(rows: u16, cols: u16) -> Result<(), String> {
     if rows == 0 || rows > MAX_TERMINAL_DIMENSION {
-        return Err(format!("rows must be between 1 and {MAX_TERMINAL_DIMENSION}, got {rows}"));
+        return Err(format!(
+            "rows must be between 1 and {MAX_TERMINAL_DIMENSION}, got {rows}"
+        ));
     }
     if cols == 0 || cols > MAX_TERMINAL_DIMENSION {
-        return Err(format!("cols must be between 1 and {MAX_TERMINAL_DIMENSION}, got {cols}"));
+        return Err(format!(
+            "cols must be between 1 and {MAX_TERMINAL_DIMENSION}, got {cols}"
+        ));
     }
     Ok(())
 }
@@ -72,8 +79,12 @@ fn validate_path_string(path: &str) -> Result<(), String> {
 
 /// Validate a repo path for HTTP handlers, returning a 400 error response on failure.
 fn validate_repo_path(path: &str) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    validate_path_string(path)
-        .map_err(|msg| (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": msg}))))
+    validate_path_string(path).map_err(|msg| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": msg})),
+        )
+    })
 }
 
 /// Wrap an `Ok(T)` / `Err(String)` into a JSON HTTP response.
@@ -87,7 +98,11 @@ fn json_result<T: serde::Serialize>(result: Result<T, String>) -> Response {
 
 /// Shorthand for a 500 Internal Server Error with `{"error": msg}` body.
 fn err_500(msg: &str) -> Response {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": msg}))).into_response()
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"error": msg})),
+    )
+        .into_response()
 }
 
 /// Default IPC endpoint path for local MCP bridge connections (Unix domain socket).
@@ -124,16 +139,21 @@ fn resolve_socket_path() -> std::path::PathBuf {
 #[cfg(unix)]
 fn cleanup_stale_sockets() {
     let config_dir = crate::config::config_dir();
-    let Ok(entries) = std::fs::read_dir(&config_dir) else { return };
+    let Ok(entries) = std::fs::read_dir(&config_dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name();
-        let Some(name_str) = name.to_str() else { continue };
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
         // Match pattern: mcp-{digits}.sock
         if let Some(rest) = name_str.strip_prefix("mcp-")
             && let Some(pid_str) = rest.strip_suffix(".sock")
             && let Ok(pid) = pid_str.parse::<u32>()
         {
-            // Check if process is still alive (signal 0 = existence check)
+            // SAFETY: signal 0 does not deliver a signal — it is a POSIX existence
+            // check. pid_t is i32; valid PIDs are always non-negative, so u32→i32 is safe.
             let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
             if !alive {
                 let path = entry.path();
@@ -186,7 +206,10 @@ impl axum::serve::Listener for NamedPipeListener {
                         {
                             Ok(s) => s,
                             Err(e) => {
-                                tracing::error!(source = "mcp_http", "Failed to create next pipe instance: {e}");
+                                tracing::error!(
+                                    source = "mcp_http",
+                                    "Failed to create next pipe instance: {e}"
+                                );
                                 // Sleep briefly then retry — the pipe name might be transiently busy
                                 tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                                 continue;
@@ -231,10 +254,15 @@ async fn save_mcp_upstreams_http(
     }
     let old_config: crate::mcp_upstream_config::UpstreamMcpConfig =
         crate::config::load_json_config(crate::mcp_upstream_config::UPSTREAMS_FILE);
-    if let Err(e) = crate::config::save_json_config(crate::mcp_upstream_config::UPSTREAMS_FILE, &config) {
+    if let Err(e) =
+        crate::config::save_json_config(crate::mcp_upstream_config::UPSTREAMS_FILE, &config)
+    {
         return err_500(&e);
     }
-    state.mcp_upstream_registry.apply_config_diff(&old_config, &config, self_port).await;
+    state
+        .mcp_upstream_registry
+        .apply_config_diff(&old_config, &config, self_port)
+        .await;
     StatusCode::OK.into_response()
 }
 
@@ -252,7 +280,13 @@ async fn reconnect_mcp_upstream_http(
     let self_port = state.config.read().services.server.port;
     let server = match config.servers.into_iter().find(|s| s.name == name) {
         Some(s) => s,
-        None => return (StatusCode::NOT_FOUND, format!("Upstream '{name}' not found")).into_response(),
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                format!("Upstream '{name}' not found"),
+            )
+                .into_response();
+        }
     };
     let registry = &state.mcp_upstream_registry;
     registry.emit_status_change(&name, "connecting");
@@ -292,17 +326,13 @@ async fn delete_mcp_upstream_credential_http(Json(body): Json<serde_json::Value>
 }
 
 /// GET /mcp/upstream-status — returns status + metrics for all upstream MCP servers.
-async fn upstream_status_handler(
-    State(state): State<Arc<AppState>>,
-) -> Json<serde_json::Value> {
+async fn upstream_status_handler(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
     Json(state.mcp_upstream_registry.status_snapshot())
 }
 
 /// Serve plugin data files over HTTP.
 /// Reuses the same sandboxed read logic as the Tauri `read_plugin_data` command.
-async fn plugin_data_http(
-    AxumPath((plugin_id, path)): AxumPath<(String, String)>,
-) -> Response {
+async fn plugin_data_http(AxumPath((plugin_id, path)): AxumPath<(String, String)>) -> Response {
     match crate::plugins::read_plugin_data(plugin_id, path) {
         Ok(Some(content)) => {
             let content_type = if content.starts_with('{') || content.starts_with('[') {
@@ -310,7 +340,12 @@ async fn plugin_data_http(
             } else {
                 "text/plain"
             };
-            (StatusCode::OK, [(header::CONTENT_TYPE, content_type)], content).into_response()
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, content_type)],
+                content,
+            )
+                .into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
@@ -323,7 +358,11 @@ async fn push_vapid_key(State(state): State<Arc<AppState>>) -> Response {
     let public_key = {
         let config = state.config.read();
         if config.services.push.vapid_public_key.is_empty() {
-            return (StatusCode::NOT_FOUND, "VAPID keys not generated — restart the app").into_response();
+            return (
+                StatusCode::NOT_FOUND,
+                "VAPID keys not generated — restart the app",
+            )
+                .into_response();
         }
         config.services.push.vapid_public_key.clone()
     };
@@ -375,17 +414,34 @@ async fn push_unsubscribe(
 
 /// Send a test push notification to all registered subscribers.
 /// Useful for debugging from console: `curl -X POST http://localhost:PORT/api/push/test`
-async fn push_test(State(state): State<Arc<AppState>>, body: Option<Json<serde_json::Value>>) -> Response {
+async fn push_test(
+    State(state): State<Arc<AppState>>,
+    body: Option<Json<serde_json::Value>>,
+) -> Response {
     let subs = state.push_store.list();
     if subs.is_empty() {
         return (StatusCode::NOT_FOUND, "No push subscriptions registered").into_response();
     }
     let config = state.config.read().clone();
-    let title = body.as_ref().and_then(|b| b.get("title")).and_then(|v| v.as_str()).unwrap_or("TUICommander Test");
-    let msg = body.as_ref().and_then(|b| b.get("body")).and_then(|v| v.as_str()).unwrap_or("Test push notification");
+    let title = body
+        .as_ref()
+        .and_then(|b| b.get("title"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("TUICommander Test");
+    let msg = body
+        .as_ref()
+        .and_then(|b| b.get("body"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Test push notification");
     let stale = crate::push::send_push_batch(
-        subs.clone(), &config, &state.http_client, title, msg, "/mobile",
-    ).await;
+        subs.clone(),
+        &config,
+        &state.http_client,
+        title,
+        msg,
+        "/mobile",
+    )
+    .await;
     for endpoint in &stale {
         state.push_store.remove(endpoint);
     }
@@ -401,7 +457,8 @@ async fn inject_localhost_connect_info(
     next: axum::middleware::Next,
 ) -> axum::response::Response {
     use axum::extract::connect_info::ConnectInfo;
-    req.extensions_mut().insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+    req.extensions_mut()
+        .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
     next.run(req).await
 }
 
@@ -418,10 +475,18 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             .allow_headers([AUTHORIZATION, CONTENT_TYPE])
     } else {
         let allowed_origins = [
-            "http://localhost".parse::<axum::http::HeaderValue>().unwrap(),
-            "http://127.0.0.1".parse::<axum::http::HeaderValue>().unwrap(),
-            "tauri://localhost".parse::<axum::http::HeaderValue>().unwrap(),
-            "https://tauri.localhost".parse::<axum::http::HeaderValue>().unwrap(),
+            "http://localhost"
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+            "http://127.0.0.1"
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+            "tauri://localhost"
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+            "https://tauri.localhost"
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
         ];
         CorsLayer::new()
             .allow_origin(allowed_origins.to_vec())
@@ -434,7 +499,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/health", get(session::health))
         .route("/api/version", get(session::app_version))
         // Session lifecycle
-        .route("/sessions", get(session::list_sessions).post(session::create_session))
+        .route(
+            "/sessions",
+            get(session::list_sessions).post(session::create_session),
+        )
         .route("/sessions/{id}/write", post(session::write_to_session))
         .route("/sessions/{id}/name", put(session::set_session_name))
         .route("/sessions/{id}/resize", post(session::resize_session))
@@ -442,24 +510,60 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/sessions/{id}/pause", post(session::pause_session))
         .route("/sessions/{id}/resume", post(session::resume_session))
         .route("/sessions/{id}/kitty-flags", get(session::get_kitty_flags))
-        .route("/sessions/{id}/foreground", get(session::get_foreground_process))
+        .route(
+            "/sessions/{id}/foreground",
+            get(session::get_foreground_process),
+        )
         .route("/sessions/{id}", delete(session::close_session))
         // WebSocket streaming
         .route("/sessions/{id}/stream", get(session::ws_stream))
         // Terminal grid commands
-        .route("/sessions/{id}/terminal/scroll", post(session::terminal_scroll))
-        .route("/sessions/{id}/terminal/scroll-to", post(session::terminal_scroll_to))
-        .route("/sessions/{id}/terminal/scroll-info", get(session::terminal_scroll_info))
-        .route("/sessions/{id}/terminal/search", post(session::terminal_search))
-        .route("/sessions/{id}/terminal/search-buffer", post(session::terminal_search_buffer))
-        .route("/sessions/{id}/terminal/row-text", get(session::terminal_get_row_text))
-        .route("/sessions/{id}/terminal/lines", get(session::terminal_get_lines))
-        .route("/sessions/{id}/terminal/cursor-line", get(session::terminal_get_cursor_line))
-        .route("/sessions/{id}/terminal/hyperlink", get(session::terminal_hyperlink_at))
-        .route("/sessions/{id}/terminal/request-frame", post(session::terminal_request_frame))
+        .route(
+            "/sessions/{id}/terminal/scroll",
+            post(session::terminal_scroll),
+        )
+        .route(
+            "/sessions/{id}/terminal/scroll-to",
+            post(session::terminal_scroll_to),
+        )
+        .route(
+            "/sessions/{id}/terminal/scroll-info",
+            get(session::terminal_scroll_info),
+        )
+        .route(
+            "/sessions/{id}/terminal/search",
+            post(session::terminal_search),
+        )
+        .route(
+            "/sessions/{id}/terminal/search-buffer",
+            post(session::terminal_search_buffer),
+        )
+        .route(
+            "/sessions/{id}/terminal/row-text",
+            get(session::terminal_get_row_text),
+        )
+        .route(
+            "/sessions/{id}/terminal/lines",
+            get(session::terminal_get_lines),
+        )
+        .route(
+            "/sessions/{id}/terminal/cursor-line",
+            get(session::terminal_get_cursor_line),
+        )
+        .route(
+            "/sessions/{id}/terminal/hyperlink",
+            get(session::terminal_hyperlink_at),
+        )
+        .route(
+            "/sessions/{id}/terminal/request-frame",
+            post(session::terminal_request_frame),
+        )
         // Agent sessions
         .route("/sessions/agent", post(agent_routes::spawn_agent_session))
-        .route("/sessions/worktree", post(session::create_session_with_worktree))
+        .route(
+            "/sessions/worktree",
+            post(session::create_session_with_worktree),
+        )
         // Orchestrator
         .route("/stats", get(session::get_stats))
         .route("/metrics", get(session::get_metrics))
@@ -475,77 +579,228 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/repo/ci", get(github_routes::repo_ci_checks))
         .route("/repo/pr-diff", get(github_routes::repo_pr_diff))
         .route("/repo/approve-pr", post(github_routes::repo_approve_pr))
-        .route("/repo/branches/merged", get(git_routes::repo_merged_branches))
+        .route(
+            "/repo/branches/merged",
+            get(git_routes::repo_merged_branches),
+        )
         .route("/repo/summary", get(git_routes::repo_summary))
         .route("/repo/structure", get(git_routes::repo_structure))
-        .route("/repo/diff-stats/batch", get(git_routes::repo_diff_stats_batch))
+        .route(
+            "/repo/diff-stats/batch",
+            get(git_routes::repo_diff_stats_batch),
+        )
         .route("/repo/prs/batch", post(github_routes::repo_all_pr_statuses))
         .route("/repo/issues", get(github_routes::repo_issues))
         .route("/repo/issues/close", post(github_routes::repo_close_issue))
-        .route("/repo/issues/reopen", post(github_routes::repo_reopen_issue))
+        .route(
+            "/repo/issues/reopen",
+            post(github_routes::repo_reopen_issue),
+        )
         // GitHub poller
-        .route("/repo/github-poller/start", post(github_routes::poller_start))
+        .route(
+            "/repo/github-poller/start",
+            post(github_routes::poller_start),
+        )
         .route("/repo/github-poller/stop", post(github_routes::poller_stop))
-        .route("/repo/github-poller/visibility", post(github_routes::poller_set_visibility))
-        .route("/repo/github-poller/poll-repo", post(github_routes::poller_poll_repo))
-        .route("/repo/github-poller/update-paths", post(github_routes::poller_update_paths))
-        .route("/repo/github-poller/set-issue-filter", post(github_routes::poller_set_issue_filter))
+        .route(
+            "/repo/github-poller/visibility",
+            post(github_routes::poller_set_visibility),
+        )
+        .route(
+            "/repo/github-poller/poll-repo",
+            post(github_routes::poller_poll_repo),
+        )
+        .route(
+            "/repo/github-poller/update-paths",
+            post(github_routes::poller_update_paths),
+        )
+        .route(
+            "/repo/github-poller/set-issue-filter",
+            post(github_routes::poller_set_issue_filter),
+        )
         // Watchers (for browser/mobile clients)
-        .route("/watchers/repo", post(watcher_routes::start_repo_watcher_http).delete(watcher_routes::stop_repo_watcher_http))
-        .route("/watchers/dir", post(watcher_routes::start_dir_watcher_http).delete(watcher_routes::stop_dir_watcher_http))
+        .route(
+            "/watchers/repo",
+            post(watcher_routes::start_repo_watcher_http)
+                .delete(watcher_routes::stop_repo_watcher_http),
+        )
+        .route(
+            "/watchers/dir",
+            post(watcher_routes::start_dir_watcher_http)
+                .delete(watcher_routes::stop_dir_watcher_http),
+        )
         // Config
-        .route("/config", get(config_routes::get_config).put(config_routes::put_config))
-        .route("/config/hash-password", post(config_routes::hash_password_http))
-        .route("/api/auth/rotate-token", post(config_routes::rotate_session_token))
-        .route("/config/notifications", get(config_routes::get_notification_config).put(config_routes::put_notification_config))
-        .route("/config/ui-prefs", get(config_routes::get_ui_prefs).put(config_routes::put_ui_prefs))
-        .route("/config/repo-settings", get(config_routes::get_repo_settings).put(config_routes::put_repo_settings))
-        .route("/config/repo-settings/has-custom", get(config_routes::check_has_custom_settings_http))
-        .route("/config/repo-defaults", get(config_routes::get_repo_defaults).put(config_routes::put_repo_defaults))
-        .route("/config/repositories", get(config_routes::get_repositories).put(config_routes::put_repositories))
-        .route("/config/pane-layout", get(config_routes::get_pane_layout).put(config_routes::put_pane_layout))
+        .route(
+            "/config",
+            get(config_routes::get_config).put(config_routes::put_config),
+        )
+        .route(
+            "/config/hash-password",
+            post(config_routes::hash_password_http),
+        )
+        .route(
+            "/api/auth/rotate-token",
+            post(config_routes::rotate_session_token),
+        )
+        .route(
+            "/config/notifications",
+            get(config_routes::get_notification_config).put(config_routes::put_notification_config),
+        )
+        .route(
+            "/config/ui-prefs",
+            get(config_routes::get_ui_prefs).put(config_routes::put_ui_prefs),
+        )
+        .route(
+            "/config/repo-settings",
+            get(config_routes::get_repo_settings).put(config_routes::put_repo_settings),
+        )
+        .route(
+            "/config/repo-settings/has-custom",
+            get(config_routes::check_has_custom_settings_http),
+        )
+        .route(
+            "/config/repo-defaults",
+            get(config_routes::get_repo_defaults).put(config_routes::put_repo_defaults),
+        )
+        .route(
+            "/config/repositories",
+            get(config_routes::get_repositories).put(config_routes::put_repositories),
+        )
+        .route(
+            "/config/pane-layout",
+            get(config_routes::get_pane_layout).put(config_routes::put_pane_layout),
+        )
         .route("/config/clear-caches", post(config_routes::clear_caches))
-        .route("/config/clear-repo-caches", post(config_routes::clear_repo_caches))
-        .route("/config/repo-local-config", get(config_routes::get_repo_local_config))
-        .route("/config/prompt-library", get(config_routes::get_prompt_library).put(config_routes::put_prompt_library))
-        .route("/config/activity", get(config_routes::get_activity).put(config_routes::put_activity))
-        .route("/config/keybindings", get(config_routes::get_keybindings).put(config_routes::put_keybindings))
-        .route("/config/agents", get(config_routes::get_agents_config).put(config_routes::put_agents_config))
-        .route("/config/provider-registry", get(config_routes::get_provider_registry).put(config_routes::put_provider_registry))
+        .route(
+            "/config/clear-repo-caches",
+            post(config_routes::clear_repo_caches),
+        )
+        .route(
+            "/config/repo-local-config",
+            get(config_routes::get_repo_local_config),
+        )
+        .route(
+            "/config/prompt-library",
+            get(config_routes::get_prompt_library).put(config_routes::put_prompt_library),
+        )
+        .route(
+            "/config/activity",
+            get(config_routes::get_activity).put(config_routes::put_activity),
+        )
+        .route(
+            "/config/keybindings",
+            get(config_routes::get_keybindings).put(config_routes::put_keybindings),
+        )
+        .route(
+            "/config/agents",
+            get(config_routes::get_agents_config).put(config_routes::put_agents_config),
+        )
+        .route(
+            "/config/provider-registry",
+            get(config_routes::get_provider_registry).put(config_routes::put_provider_registry),
+        )
         // Logs
-        .route("/logs", get(log_routes::get_logs).post(log_routes::push_log).delete(log_routes::clear_logs))
+        .route(
+            "/logs",
+            get(log_routes::get_logs)
+                .post(log_routes::push_log)
+                .delete(log_routes::clear_logs),
+        )
         // Worktrees
-        .route("/worktrees", get(worktree_routes::list_worktrees_http).post(worktree_routes::create_worktree_http))
-        .route("/worktrees/dir", get(worktree_routes::get_worktrees_dir_http))
-        .route("/worktrees/paths", get(worktree_routes::get_worktree_paths_http))
-        .route("/worktrees/generate-name", post(worktree_routes::generate_worktree_name_http))
-        .route("/worktrees/finalize", post(worktree_routes::finalize_merged_worktree_http))
-        .route("/worktrees/{branch}", delete(worktree_routes::remove_worktree_http))
+        .route(
+            "/worktrees",
+            get(worktree_routes::list_worktrees_http).post(worktree_routes::create_worktree_http),
+        )
+        .route(
+            "/worktrees/dir",
+            get(worktree_routes::get_worktrees_dir_http),
+        )
+        .route(
+            "/worktrees/paths",
+            get(worktree_routes::get_worktree_paths_http),
+        )
+        .route(
+            "/worktrees/generate-name",
+            post(worktree_routes::generate_worktree_name_http),
+        )
+        .route(
+            "/worktrees/finalize",
+            post(worktree_routes::finalize_merged_worktree_http),
+        )
+        .route(
+            "/worktrees/{branch}",
+            delete(worktree_routes::remove_worktree_http),
+        )
         // File operations
         .route("/repo/file", get(git_routes::read_file_http))
         .route("/repo/file-diff", get(git_routes::get_file_diff_http))
-        .route("/repo/markdown-files", get(git_routes::list_markdown_files_http))
+        .route(
+            "/repo/markdown-files",
+            get(git_routes::list_markdown_files_http),
+        )
         // Branch operations
-        .route("/repo/local-branches", get(worktree_routes::list_local_branches_http))
-        .route("/repo/checkout-remote", post(worktree_routes::checkout_remote_branch_http))
-        .route("/repo/orphan-worktrees", get(worktree_routes::detect_orphan_worktrees_http))
-        .route("/repo/remove-orphan", post(worktree_routes::remove_orphan_worktree_http))
-        .route("/repo/merge-pr", post(worktree_routes::merge_pr_via_github_http))
+        .route(
+            "/repo/local-branches",
+            get(worktree_routes::list_local_branches_http),
+        )
+        .route(
+            "/repo/checkout-remote",
+            post(worktree_routes::checkout_remote_branch_http),
+        )
+        .route(
+            "/repo/orphan-worktrees",
+            get(worktree_routes::detect_orphan_worktrees_http),
+        )
+        .route(
+            "/repo/remove-orphan",
+            post(worktree_routes::remove_orphan_worktree_http),
+        )
+        .route(
+            "/repo/merge-pr",
+            post(worktree_routes::merge_pr_via_github_http),
+        )
         .route("/repo/branch/rename", post(git_routes::rename_branch_http))
         .route("/repo/initials", get(git_routes::get_initials_http))
-        .route("/repo/is-main-branch", get(git_routes::check_is_main_branch_http))
+        .route(
+            "/repo/is-main-branch",
+            get(git_routes::check_is_main_branch_http),
+        )
         // Prompt processing
         .route("/prompt/process", post(agent_routes::process_prompt_http))
-        .route("/prompt/extract-variables", post(agent_routes::extract_prompt_variables_http))
-        .route("/prompt/resolve-variables", post(agent_routes::resolve_context_variables_http))
-        .route("/prompt/resolve-prompt-variables", post(agent_routes::resolve_prompt_variables_http))
-        .route("/prompt/execute-headless", post(agent_routes::execute_headless_prompt_http))
-        .route("/prompt/execute-api", post(agent_routes::execute_api_prompt_http))
+        .route(
+            "/prompt/extract-variables",
+            post(agent_routes::extract_prompt_variables_http),
+        )
+        .route(
+            "/prompt/resolve-variables",
+            post(agent_routes::resolve_context_variables_http),
+        )
+        .route(
+            "/prompt/resolve-prompt-variables",
+            post(agent_routes::resolve_prompt_variables_http),
+        )
+        .route(
+            "/prompt/execute-headless",
+            post(agent_routes::execute_headless_prompt_http),
+        )
+        .route(
+            "/prompt/execute-api",
+            post(agent_routes::execute_api_prompt_http),
+        )
         // Agents
-        .route("/agents/verify-session", post(agent_routes::verify_agent_session_http))
+        .route(
+            "/agents/verify-session",
+            post(agent_routes::verify_agent_session_http),
+        )
         .route("/agents", get(agent_routes::detect_agents))
-        .route("/agents/detect", get(agent_routes::detect_agent_binary_http))
-        .route("/agents/ides", get(agent_routes::detect_installed_ides_http))
+        .route(
+            "/agents/detect",
+            get(agent_routes::detect_agent_binary_http),
+        )
+        .route(
+            "/agents/ides",
+            get(agent_routes::detect_installed_ides_http),
+        )
         // File browser
         .route("/fs/list", get(fs_routes::list_directory_http))
         .route("/fs/search", get(fs_routes::search_files_http))
@@ -559,17 +814,29 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/fs/copy", post(fs_routes::copy_path_http))
         .route("/fs/gitignore", post(fs_routes::add_to_gitignore_http))
         // Notes
-        .route("/config/notes", get(config_routes::get_notes).put(config_routes::put_notes))
+        .route(
+            "/config/notes",
+            get(config_routes::get_notes).put(config_routes::put_notes),
+        )
         // Recent commits
-        .route("/repo/recent-commits", get(git_routes::get_recent_commits_http))
+        .route(
+            "/repo/recent-commits",
+            get(git_routes::get_recent_commits_http),
+        )
         // GitPanel commands
         .route("/repo/panel-context", get(git_routes::git_panel_context))
         .route("/repo/run-git", post(git_routes::run_git_command_http))
-        .route("/repo/working-tree-status", get(git_routes::working_tree_status))
+        .route(
+            "/repo/working-tree-status",
+            get(git_routes::working_tree_status),
+        )
         .route("/repo/stage", post(git_routes::stage_files_http))
         .route("/repo/unstage", post(git_routes::unstage_files_http))
         .route("/repo/discard", post(git_routes::discard_files_http))
-        .route("/repo/apply-reverse-patch", post(git_routes::apply_reverse_patch_http))
+        .route(
+            "/repo/apply-reverse-patch",
+            post(git_routes::apply_reverse_patch_http),
+        )
         .route("/repo/commit", post(git_routes::git_commit_http))
         .route("/repo/commit-log", get(git_routes::commit_log_http))
         .route("/repo/stash", get(git_routes::stash_list_http))
@@ -589,25 +856,45 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // MCP status + instructions
         .route("/mcp/status", get(config_routes::get_mcp_status_http))
         .route("/mcp/upstream-status", get(upstream_status_handler))
-        .route("/mcp/upstreams", get(load_mcp_upstreams_http).put(save_mcp_upstreams_http))
-        .route("/mcp/upstreams/reconnect", post(reconnect_mcp_upstream_http))
-        .route("/mcp/upstreams/credential", post(save_mcp_upstream_credential_http).delete(delete_mcp_upstream_credential_http))
-        .route("/mcp/instructions", get(mcp_transport::mcp_instructions_http))
+        .route(
+            "/mcp/upstreams",
+            get(load_mcp_upstreams_http).put(save_mcp_upstreams_http),
+        )
+        .route(
+            "/mcp/upstreams/reconnect",
+            post(reconnect_mcp_upstream_http),
+        )
+        .route(
+            "/mcp/upstreams/credential",
+            post(save_mcp_upstream_credential_http).delete(delete_mcp_upstream_credential_http),
+        )
+        .route(
+            "/mcp/instructions",
+            get(mcp_transport::mcp_instructions_http),
+        )
         // Plugin docs (for MCP bridge)
         .route("/plugins/docs", get(plugin_dev_guide_handler))
         // Plugin data (for external HTTP clients)
-        .route("/api/plugins/{plugin_id}/data/{*path}", get(plugin_data_http))
+        .route(
+            "/api/plugins/{plugin_id}/data/{*path}",
+            get(plugin_data_http),
+        )
         // Push notification API
         .route("/api/push/vapid-key", get(push_vapid_key))
-        .route("/api/push/subscribe", post(push_subscribe).delete(push_unsubscribe))
+        .route(
+            "/api/push/subscribe",
+            post(push_subscribe).delete(push_unsubscribe),
+        )
         .route("/api/push/test", post(push_test));
 
     // MCP Streamable HTTP transport — only when MCP is enabled
     if mcp_enabled {
-        routes = routes
-            .route("/mcp", post(mcp_transport::mcp_post)
-                          .get(mcp_transport::mcp_get)
-                          .delete(mcp_transport::mcp_delete));
+        routes = routes.route(
+            "/mcp",
+            post(mcp_transport::mcp_post)
+                .get(mcp_transport::mcp_get)
+                .delete(mcp_transport::mcp_delete),
+        );
     }
 
     // Static files — SPA frontend
@@ -618,11 +905,15 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .layer(cors)
         // DefaultPredicate auto-excludes SSE (text/event-stream) and WebSocket upgrades.
         // Do NOT replace with a bare SizeAbove — it would break streaming endpoints.
-        .layer(CompressionLayer::new()
-            .compress_when(DefaultPredicate::new().and(SizeAbove::new(860))));
+        .layer(
+            CompressionLayer::new().compress_when(DefaultPredicate::new().and(SizeAbove::new(860))),
+        );
 
     if remote_auth {
-        routes.layer(axum::middleware::from_fn_with_state(state, auth::basic_auth_middleware))
+        routes.layer(axum::middleware::from_fn_with_state(
+            state,
+            auth::basic_auth_middleware,
+        ))
     } else {
         routes
     }
@@ -673,7 +964,9 @@ pub async fn start_server(
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(60)).await;
                 let now = std::time::Instant::now();
-                let reaped: Vec<String> = reaper_state.mcp_sessions.iter()
+                let reaped: Vec<String> = reaper_state
+                    .mcp_sessions
+                    .iter()
                     .filter(|e| now.duration_since(e.value().last_activity) >= MCP_SESSION_TTL)
                     .map(|e| e.key().clone())
                     .collect();
@@ -681,30 +974,40 @@ pub async fn start_server(
                     tracing::warn!("MCP session reaped (idle ≥1h): {sid}");
                     reaper_state.mcp_sessions.remove(sid);
                     // Clean up peer agents whose MCP session was reaped — emit events
-                    let removed: Vec<String> = reaper_state.peer_agents.iter()
+                    let removed: Vec<String> = reaper_state
+                        .peer_agents
+                        .iter()
                         .filter(|e| e.value().mcp_session_id == *sid)
                         .map(|e| e.key().clone())
                         .collect();
                     for tuic in &removed {
                         reaper_state.peer_agents.remove(tuic);
-                        let _ = reaper_state.event_bus.send(crate::state::AppEvent::PeerUnregistered {
-                            tuic_session: tuic.clone(),
-                        });
+                        let _ =
+                            reaper_state
+                                .event_bus
+                                .send(crate::state::AppEvent::PeerUnregistered {
+                                    tuic_session: tuic.clone(),
+                                });
                     }
                 }
                 // Evict orphaned inboxes for peers that no longer exist
                 if !reaped.is_empty() {
-                    let known_tuic: std::collections::HashSet<String> = reaper_state.peer_agents.iter()
-                        .map(|e| e.key().clone()).collect();
-                    reaper_state.agent_inbox.retain(|tuic, _| known_tuic.contains(tuic));
+                    let known_tuic: std::collections::HashSet<String> = reaper_state
+                        .peer_agents
+                        .iter()
+                        .map(|e| e.key().clone())
+                        .collect();
+                    reaper_state
+                        .agent_inbox
+                        .retain(|tuic, _| known_tuic.contains(tuic));
                 }
             }
         });
 
         // Spawn upstream health checker: pings Ready upstreams every 60s
-        crate::mcp_proxy::registry::UpstreamRegistry::spawn_health_checker(
-            Arc::clone(&state.mcp_upstream_registry),
-        );
+        crate::mcp_proxy::registry::UpstreamRegistry::spawn_health_checker(Arc::clone(
+            &state.mcp_upstream_registry,
+        ));
 
         // --- Unix socket listener (always on, no auth) ---
         #[cfg(unix)]
@@ -721,7 +1024,9 @@ pub async fn start_server(
             // resolve_socket_path() already verified the primary socket is not live,
             // so remove_file here only cleans up stale/dead sockets.
             const MAX_BIND_ATTEMPTS: u8 = 3;
-            async fn bind_unix_socket(sock: &std::path::Path) -> Result<tokio::net::UnixListener, std::io::Error> {
+            async fn bind_unix_socket(
+                sock: &std::path::Path,
+            ) -> Result<tokio::net::UnixListener, std::io::Error> {
                 let mut last_err = std::io::Error::other("no bind attempts");
                 for attempt in 0..MAX_BIND_ATTEMPTS {
                     let _ = std::fs::remove_file(sock);
@@ -754,9 +1059,13 @@ pub async fn start_server(
                         let mut uds = initial_uds;
                         loop {
                             let app = build_router(watchdog_state.clone(), false, mcp_enabled);
-                            let app = app.layer(axum::middleware::from_fn(inject_localhost_connect_info));
+                            let app =
+                                app.layer(axum::middleware::from_fn(inject_localhost_connect_info));
                             if let Err(e) = axum::serve(uds, app.into_make_service()).await {
-                                tracing::error!(source = "mcp_http", "Unix socket server error: {e}");
+                                tracing::error!(
+                                    source = "mcp_http",
+                                    "Unix socket server error: {e}"
+                                );
                             } else {
                                 // Clean exit (should not happen now — nobody aborts us).
                                 break;
@@ -785,7 +1094,11 @@ pub async fn start_server(
         {
             match NamedPipeListener::new() {
                 Ok(pipe) => {
-                    tracing::info!(source = "mcp_http", pipe = PIPE_NAME, "Named pipe listening");
+                    tracing::info!(
+                        source = "mcp_http",
+                        pipe = PIPE_NAME,
+                        "Named pipe listening"
+                    );
                     let app = build_router(state.clone(), false, mcp_enabled);
                     let app = app.layer(axum::middleware::from_fn(inject_localhost_connect_info));
                     tokio::spawn(async move {
@@ -795,7 +1108,11 @@ pub async fn start_server(
                     });
                 }
                 Err(e) => {
-                    tracing::error!(source = "mcp_http", pipe = PIPE_NAME, "Failed to create named pipe: {e}");
+                    tracing::error!(
+                        source = "mcp_http",
+                        pipe = PIPE_NAME,
+                        "Failed to create named pipe: {e}"
+                    );
                 }
             }
         }
@@ -805,7 +1122,11 @@ pub async fn start_server(
     // Supports dual-protocol (HTTP+HTTPS on same port) when TLS cert is available.
     let tcp_handle = if remote_enabled {
         let base_port = config.services.server.port;
-        let host = if config.services.server.ipv6_enabled { "[::]" } else { "0.0.0.0" };
+        let host = if config.services.server.ipv6_enabled {
+            "[::]"
+        } else {
+            "0.0.0.0"
+        };
         const MAX_PORT_ATTEMPTS: u16 = 3;
 
         let mut listener_result: Option<std::net::TcpListener> = None;
@@ -827,15 +1148,18 @@ pub async fn start_server(
                     tracing::warn!(source = "mcp_http", "Port {port} busy, trying {}", port + 1);
                 }
                 Err(e) => {
-                    tracing::error!(source = "mcp_http", "Failed to bind TCP on ports {base_port}–{port}: {e}");
+                    tracing::error!(
+                        source = "mcp_http",
+                        "Failed to bind TCP on ports {base_port}–{port}: {e}"
+                    );
                 }
             }
         }
 
         if let Some(listener) = listener_result {
-            let addr = listener.local_addr().unwrap_or_else(|_| {
-                std::net::SocketAddr::from(([0, 0, 0, 0], 0))
-            });
+            let addr = listener
+                .local_addr()
+                .unwrap_or_else(|_| std::net::SocketAddr::from(([0, 0, 0, 0], 0)));
 
             let app = build_router(state.clone(), true, mcp_enabled);
             let svc = app.into_make_service_with_connect_info::<std::net::SocketAddr>();
@@ -855,10 +1179,7 @@ pub async fn start_server(
             } else {
                 tracing::info!(source = "mcp_http", %addr, "TCP listening (HTTP only, remote access enabled)");
                 Some(tokio::spawn(async move {
-                    if let Err(e) = axum_server::from_tcp(listener)
-                        .serve(svc)
-                        .await
-                    {
+                    if let Err(e) = axum_server::from_tcp(listener).serve(svc).await {
                         tracing::error!(source = "mcp_http", "TCP server error: {e}");
                     }
                 }))
@@ -875,7 +1196,11 @@ pub async fn start_server(
     // Spawn TLS cert renewal task (checks every 24h, renews if < 30 days to expiry)
     let renewal_handle = if let Some(ref tls) = tls_config {
         let ts_state = state.tailscale_state.read().clone();
-        if let crate::tailscale::TailscaleState::Running { fqdn, https_enabled: true } = ts_state {
+        if let crate::tailscale::TailscaleState::Running {
+            fqdn,
+            https_enabled: true,
+        } = ts_state
+        {
             let tls_clone = tls.clone();
             Some(tokio::spawn(async move {
                 crate::tailscale::cert_renewal_loop(fqdn, tls_clone).await;
@@ -907,18 +1232,24 @@ pub async fn start_server(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::MAX_CONCURRENT_SESSIONS;
     use axum::body::Body;
     use axum::extract::connect_info::ConnectInfo;
     use axum::http::{Request, StatusCode};
     use dashmap::DashMap;
     use tower::ServiceExt;
-    use crate::MAX_CONCURRENT_SESSIONS;
 
     /// Build a POST request with ConnectInfo from the given address.
-    fn mcp_post_from(url: &str, body: &serde_json::Value, addr: std::net::SocketAddr) -> Request<Body> {
+    fn mcp_post_from(
+        url: &str,
+        body: &serde_json::Value,
+        addr: std::net::SocketAddr,
+    ) -> Request<Body> {
         let mut req = Request::post(url)
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(body).expect("serialize JSON body")))
+            .body(Body::from(
+                serde_json::to_string(body).expect("serialize JSON body"),
+            ))
             .expect("build POST request");
         req.extensions_mut().insert(ConnectInfo(addr));
         req
@@ -929,11 +1260,22 @@ mod tests {
         mcp_post_from(url, body, std::net::SocketAddr::from(([127, 0, 0, 1], 0)))
     }
 
+    fn get_localhost(url: &str) -> Request<Body> {
+        let mut req = Request::get(url)
+            .body(Body::empty())
+            .expect("build GET request");
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+        req
+    }
+
     /// Build a PUT request with ConnectInfo from the given address.
     fn put_from(url: &str, body: &serde_json::Value, addr: std::net::SocketAddr) -> Request<Body> {
         let mut req = Request::put(url)
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_string(body).expect("serialize JSON body")))
+            .body(Body::from(
+                serde_json::to_string(body).expect("serialize JSON body"),
+            ))
             .expect("build PUT request");
         req.extensions_mut().insert(ConnectInfo(addr));
         req
@@ -976,16 +1318,22 @@ mod tests {
             last_prompts: DashMap::new(),
             silence_states: DashMap::new(),
             claude_usage_cache: parking_lot::Mutex::new(std::collections::HashMap::new()),
-            log_buffer: std::sync::Arc::new(parking_lot::Mutex::new(crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY))),
+            log_buffer: std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
+            )),
             event_bus: tokio::sync::broadcast::channel(256).0,
             event_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_states: dashmap::DashMap::new(),
-            mcp_upstream_registry: std::sync::Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new()),
+            mcp_upstream_registry: std::sync::Arc::new(
+                crate::mcp_proxy::registry::UpstreamRegistry::new(),
+            ),
             oauth_flow_manager: std::sync::Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new(
                 std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
             )),
             mcp_tools_changed: tokio::sync::broadcast::channel(16).0,
-            tool_search_index: std::sync::Arc::new(parking_lot::RwLock::new(crate::tool_search::ToolSearchIndex::build(&[]))),
+            tool_search_index: std::sync::Arc::new(parking_lot::RwLock::new(
+                crate::tool_search::ToolSearchIndex::build(&[]),
+            )),
             content_indices: DashMap::new(),
             indexer_throttle: std::sync::Arc::new(crate::content_index::IndexerThrottle::default()),
             slash_mode: DashMap::new(),
@@ -1011,14 +1359,18 @@ mod tests {
             unrestricted_sessions: DashMap::new(),
             #[cfg(unix)]
             bound_socket_path: parking_lot::RwLock::new(std::path::PathBuf::new()),
-            tailscale_state: parking_lot::RwLock::new(crate::tailscale::TailscaleState::NotInstalled),
+            tailscale_state: parking_lot::RwLock::new(
+                crate::tailscale::TailscaleState::NotInstalled,
+            ),
             push_store: crate::push::PushStore::load(&std::env::temp_dir()),
             desktop_window_focused: std::sync::atomic::AtomicBool::new(true),
             server_start_time: std::time::Instant::now(),
             term_aliases: dashmap::DashMap::new(),
             term_alias_counters: dashmap::DashMap::new(),
+            watcher_engine: std::sync::OnceLock::new(),
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: dashmap::DashMap::new(),
+            grid_frame_dirty: dashmap::DashMap::new(),
         });
         // Override default disabled_native_tools so all 8 tools are visible in tests
         state.config.write().disabled_native_tools = Vec::new();
@@ -1035,7 +1387,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["ok"], true);
     }
@@ -1049,7 +1403,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json, serde_json::json!([]));
     }
@@ -1063,7 +1419,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["active_sessions"], 0);
         assert_eq!(json["max_sessions"], MAX_CONCURRENT_SESSIONS);
@@ -1078,7 +1436,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["total_spawned"], 0);
         assert_eq!(json["active_sessions"], 0);
@@ -1105,12 +1465,11 @@ mod tests {
 
         // GET config
         let app = build_router(state.clone(), false, true);
-        let resp = app
-            .oneshot(Request::get("/config").body(Body::empty()).unwrap())
+        let resp = app.oneshot(get_localhost("/config")).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
         // Should have default font_family
         assert!(config["font_family"].as_str().is_some());
@@ -1120,15 +1479,16 @@ mod tests {
     async fn test_config_strips_password_hash() {
         let state = test_state();
         let app = build_router(state, false, true);
-        let resp = app
-            .oneshot(Request::get("/config").body(Body::empty()).unwrap())
+        let resp = app.oneshot(get_localhost("/config")).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(config.pointer("/services/auth/password_hash").is_none(),
-            "Password hash should be stripped from HTTP response");
+        assert!(
+            config.pointer("/services/auth/password_hash").is_none(),
+            "Password hash should be stripped from HTTP response"
+        );
     }
 
     #[tokio::test]
@@ -1142,8 +1502,11 @@ mod tests {
             .oneshot(put_from("/config", &body, remote_addr))
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-            "Config save from non-loopback address should be rejected");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Config save from non-loopback address should be rejected"
+        );
     }
 
     #[tokio::test]
@@ -1151,10 +1514,17 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([192, 168, 1, 100], 12345));
-        let body = serde_json::json!({"sound_enabled": false, "flash_enabled": false, "defer_secs": 10});
-        let resp = app.oneshot(put_from("/config/notifications", &body, remote_addr)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-            "Notification config save from non-loopback should be rejected");
+        let body =
+            serde_json::json!({"sound_enabled": false, "flash_enabled": false, "defer_secs": 10});
+        let resp = app
+            .oneshot(put_from("/config/notifications", &body, remote_addr))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Notification config save from non-loopback should be rejected"
+        );
     }
 
     #[tokio::test]
@@ -1163,9 +1533,15 @@ mod tests {
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([10, 0, 0, 1], 9999));
         let body = serde_json::json!({});
-        let resp = app.oneshot(put_from("/config/ui-prefs", &body, remote_addr)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-            "UI prefs save from non-loopback should be rejected");
+        let resp = app
+            .oneshot(put_from("/config/ui-prefs", &body, remote_addr))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "UI prefs save from non-loopback should be rejected"
+        );
     }
 
     #[tokio::test]
@@ -1174,9 +1550,15 @@ mod tests {
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([172, 16, 0, 5], 4000));
         let body = serde_json::json!({});
-        let resp = app.oneshot(put_from("/config/repo-settings", &body, remote_addr)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-            "Repo settings save from non-loopback should be rejected");
+        let resp = app
+            .oneshot(put_from("/config/repo-settings", &body, remote_addr))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Repo settings save from non-loopback should be rejected"
+        );
     }
 
     #[tokio::test]
@@ -1185,9 +1567,15 @@ mod tests {
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([192, 168, 1, 50], 8080));
         let body = serde_json::json!({});
-        let resp = app.oneshot(put_from("/config/repositories", &body, remote_addr)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-            "Repositories save from non-loopback should be rejected");
+        let resp = app
+            .oneshot(put_from("/config/repositories", &body, remote_addr))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Repositories save from non-loopback should be rejected"
+        );
     }
 
     #[tokio::test]
@@ -1196,9 +1584,15 @@ mod tests {
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([10, 10, 10, 1], 3000));
         let body = serde_json::json!({"prompts": []});
-        let resp = app.oneshot(put_from("/config/prompt-library", &body, remote_addr)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-            "Prompt library save from non-loopback should be rejected");
+        let resp = app
+            .oneshot(put_from("/config/prompt-library", &body, remote_addr))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Prompt library save from non-loopback should be rejected"
+        );
     }
 
     #[tokio::test]
@@ -1207,9 +1601,15 @@ mod tests {
         let app = build_router(state, false, true);
         let remote_addr = std::net::SocketAddr::from(([192, 168, 0, 1], 5000));
         let body = serde_json::json!({});
-        let resp = app.oneshot(put_from("/config/notes", &body, remote_addr)).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-            "Notes save from non-loopback should be rejected");
+        let resp = app
+            .oneshot(put_from("/config/notes", &body, remote_addr))
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "Notes save from non-loopback should be rejected"
+        );
     }
 
     #[tokio::test]
@@ -1218,11 +1618,18 @@ mod tests {
         let app = build_router(state, false, true);
         // No repos registered in test_state → any path should be rejected
         let resp = app
-            .oneshot(Request::get("/fs/read-external?path=/etc/passwd").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/fs/read-external?path=/etc/passwd")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::FORBIDDEN,
-            "read-external should reject paths outside registered repos");
+        assert_eq!(
+            resp.status(),
+            StatusCode::FORBIDDEN,
+            "read-external should reject paths outside registered repos"
+        );
     }
 
     // --- Path validation tests ---
@@ -1314,7 +1721,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let agents = json.as_array().unwrap();
         assert_eq!(agents.len(), 4);
@@ -1381,15 +1790,17 @@ mod tests {
                 "clientInfo": { "name": "test", "version": "1.0" }
             }
         });
-        let resp = app
-            .oneshot(mcp_post("/mcp", &body))
-            .await
-            .unwrap();
+        let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         // Verify Mcp-Session-Id header is present
         let session_id = resp.headers().get("mcp-session-id");
-        assert!(session_id.is_some(), "Initialize should return Mcp-Session-Id header");
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert!(
+            session_id.is_some(),
+            "Initialize should return Mcp-Session-Id header"
+        );
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["jsonrpc"], "2.0");
         assert_eq!(json["id"], 1);
@@ -1411,8 +1822,17 @@ mod tests {
         });
         let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let sid = resp.headers().get("mcp-session-id").unwrap().to_str().unwrap().to_string();
-        let meta = state.mcp_sessions.get(&sid).expect("session should be stored");
+        let sid = resp
+            .headers()
+            .get("mcp-session-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let meta = state
+            .mcp_sessions
+            .get(&sid)
+            .expect("session should be stored");
         assert!(meta.is_claude_code, "Claude Code client should be detected");
     }
 
@@ -1429,8 +1849,17 @@ mod tests {
         });
         let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let sid = resp.headers().get("mcp-session-id").unwrap().to_str().unwrap().to_string();
-        let meta = state.mcp_sessions.get(&sid).expect("session should be stored");
+        let sid = resp
+            .headers()
+            .get("mcp-session-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let meta = state
+            .mcp_sessions
+            .get(&sid)
+            .expect("session should be stored");
         assert!(!meta.is_claude_code, "Non-CC client should not be flagged");
     }
 
@@ -1448,8 +1877,17 @@ mod tests {
         });
         let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let sid = resp.headers().get("mcp-session-id").unwrap().to_str().unwrap().to_string();
-        let meta = state.mcp_sessions.get(&sid).expect("session should be stored");
+        let sid = resp
+            .headers()
+            .get("mcp-session-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let meta = state
+            .mcp_sessions
+            .get(&sid)
+            .expect("session should be stored");
         assert_eq!(
             meta.repo_path.as_deref(),
             Some("/home/user/project"),
@@ -1470,8 +1908,17 @@ mod tests {
         });
         let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let sid = resp.headers().get("mcp-session-id").unwrap().to_str().unwrap().to_string();
-        let meta = state.mcp_sessions.get(&sid).expect("session should be stored");
+        let sid = resp
+            .headers()
+            .get("mcp-session-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let meta = state
+            .mcp_sessions
+            .get(&sid)
+            .expect("session should be stored");
         assert_eq!(
             meta.repo_path, None,
             "repo_path should be None when initialize has no roots"
@@ -1496,13 +1943,18 @@ mod tests {
         std::fs::write(
             tmp.path().join("repo-settings.json"),
             serde_json::to_string_pretty(&repo_settings).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let state = test_state();
 
         // Register two upstream servers with tools
-        state.mcp_upstream_registry.inject_ready_upstream("allowed-server", &["my_tool"]);
-        state.mcp_upstream_registry.inject_ready_upstream("blocked-server", &["my_tool"]);
+        state
+            .mcp_upstream_registry
+            .inject_ready_upstream("allowed-server", &["my_tool"]);
+        state
+            .mcp_upstream_registry
+            .inject_ready_upstream("blocked-server", &["my_tool"]);
 
         // Initialize session with roots pointing to /test/repo
         let app = build_router(state.clone(), false, true);
@@ -1515,23 +1967,40 @@ mod tests {
             }
         });
         let resp = app.oneshot(mcp_post("/mcp", &init_body)).await.unwrap();
-        let sid = resp.headers().get("mcp-session-id").unwrap().to_str().unwrap().to_string();
+        let sid = resp
+            .headers()
+            .get("mcp-session-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
 
         // Call tools/list with the session
         let app2 = build_router(state.clone(), false, true);
         let list_body = serde_json::json!({
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}
         });
-        let resp = app2.oneshot(mcp_post_with_session("/mcp", &list_body, &sid)).await.unwrap();
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let resp = app2
+            .oneshot(mcp_post_with_session("/mcp", &list_body, &sid))
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().filter_map(|t| t["name"].as_str()).collect();
 
         // allowed-server__my_tool should be present
-        assert!(names.contains(&"allowed-server__my_tool"), "allowed upstream tool missing: {names:?}");
+        assert!(
+            names.contains(&"allowed-server__my_tool"),
+            "allowed upstream tool missing: {names:?}"
+        );
         // blocked-server__my_tool should NOT be present
-        assert!(!names.contains(&"blocked-server__my_tool"), "blocked upstream tool should be filtered: {names:?}");
+        assert!(
+            !names.contains(&"blocked-server__my_tool"),
+            "blocked upstream tool should be filtered: {names:?}"
+        );
     }
 
     #[tokio::test]
@@ -1552,10 +2021,13 @@ mod tests {
         std::fs::write(
             tmp.path().join("repo-settings.json"),
             serde_json::to_string_pretty(&repo_settings).unwrap(),
-        ).unwrap();
+        )
+        .unwrap();
 
         let state = test_state();
-        state.mcp_upstream_registry.inject_ready_upstream("blocked-server", &["some_tool"]);
+        state
+            .mcp_upstream_registry
+            .inject_ready_upstream("blocked-server", &["some_tool"]);
 
         // Initialize session with roots pointing to /test/repo
         let app = build_router(state.clone(), false, true);
@@ -1568,7 +2040,13 @@ mod tests {
             }
         });
         let resp = app.oneshot(mcp_post("/mcp", &init_body)).await.unwrap();
-        let sid = resp.headers().get("mcp-session-id").unwrap().to_str().unwrap().to_string();
+        let sid = resp
+            .headers()
+            .get("mcp-session-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
 
         // Try to call a tool on the blocked upstream
         let app2 = build_router(state.clone(), false, true);
@@ -1579,12 +2057,23 @@ mod tests {
                 "arguments": {}
             }
         });
-        let resp = app2.oneshot(mcp_post_with_session("/mcp", &call_body, &sid)).await.unwrap();
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let resp = app2
+            .oneshot(mcp_post_with_session("/mcp", &call_body, &sid))
+            .await
+            .unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let text = json["result"]["content"][0]["text"].as_str().unwrap_or("");
-        assert!(text.contains("not enabled"), "expected 'not enabled' error, got: {text}");
-        assert!(json["result"]["isError"].as_bool().unwrap_or(false), "should be an error response");
+        assert!(
+            text.contains("not enabled"),
+            "expected 'not enabled' error, got: {text}"
+        );
+        assert!(
+            json["result"]["isError"].as_bool().unwrap_or(false),
+            "should be an error response"
+        );
     }
 
     #[tokio::test]
@@ -1599,11 +2088,19 @@ mod tests {
         });
         let app = build_router(state, false, true);
         let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
-        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
         let instructions = json["result"]["instructions"].as_str().unwrap();
-        assert!(instructions.contains("cc_agent_hint"), "CC instructions should mention cc_agent_hint: {instructions}");
-        assert!(instructions.contains("absolute paths"), "CC instructions should mention absolute paths");
+        assert!(
+            instructions.contains("cc_agent_hint"),
+            "CC instructions should mention cc_agent_hint: {instructions}"
+        );
+        assert!(
+            instructions.contains("absolute paths"),
+            "CC instructions should mention absolute paths"
+        );
     }
 
     #[tokio::test]
@@ -1621,21 +2118,28 @@ mod tests {
     async fn test_mcp_delete_session() {
         let state = test_state();
         let now = std::time::Instant::now();
-        state.mcp_sessions.insert("test-sid".to_string(), crate::state::McpSessionMeta {
-            last_activity: now,
-            is_claude_code: false,
-            has_sse_stream: false,
-            repo_path: None,
-        });
+        state.mcp_sessions.insert(
+            "test-sid".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: now,
+                is_claude_code: false,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
         let app = build_router(state.clone(), false, true);
         let mut req = Request::delete("/mcp")
             .header("mcp-session-id", "test-sid")
             .body(Body::empty())
             .unwrap();
-        req.extensions_mut().insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
         let resp = app.oneshot(req).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        assert!(state.mcp_sessions.get("test-sid").is_none(), "Session should be removed after DELETE");
+        assert!(
+            state.mcp_sessions.get("test-sid").is_none(),
+            "Session should be removed after DELETE"
+        );
     }
 
     #[tokio::test]
@@ -1649,12 +2153,11 @@ mod tests {
             "method": "tools/list",
             "params": {}
         });
-        let resp = app
-            .oneshot(mcp_post("/mcp", &body))
+        let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
@@ -1683,19 +2186,24 @@ mod tests {
             "method": "tools/list",
             "params": {}
         });
-        let resp = app
-            .oneshot(mcp_post("/mcp", &body))
+        let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
-        let total = mcp_transport::test_mcp_tool_definitions().as_array().unwrap().len();
+        let total = mcp_transport::test_mcp_tool_definitions()
+            .as_array()
+            .unwrap()
+            .len();
         // total native − 1 disabled
         assert_eq!(tools.len(), total - 1);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert!(!names.contains(&"debug"), "disabled tool must not appear in tools/list");
+        assert!(
+            !names.contains(&"debug"),
+            "disabled tool must not appear in tools/list"
+        );
         assert!(names.contains(&"session"));
     }
 
@@ -1704,15 +2212,28 @@ mod tests {
         let tools = mcp_transport::test_mcp_tool_definitions();
         let arr = tools.as_array().unwrap();
         // Must have at least the core tools (session, agent, repo, ui, config, debug, plugin_dev_guide)
-        assert!(arr.len() >= 13, "expected at least 13 tools, got {}", arr.len());
+        assert!(
+            arr.len() >= 13,
+            "expected at least 13 tools, got {}",
+            arr.len()
+        );
     }
 
     #[test]
     fn test_translate_special_key() {
-        assert_eq!(mcp_transport::test_translate_special_key("enter"), Some("\r"));
-        assert_eq!(mcp_transport::test_translate_special_key("ctrl+c"), Some("\x03"));
+        assert_eq!(
+            mcp_transport::test_translate_special_key("enter"),
+            Some("\r")
+        );
+        assert_eq!(
+            mcp_transport::test_translate_special_key("ctrl+c"),
+            Some("\x03")
+        );
         assert_eq!(mcp_transport::test_translate_special_key("tab"), Some("\t"));
-        assert_eq!(mcp_transport::test_translate_special_key("up"), Some("\x1b[A"));
+        assert_eq!(
+            mcp_transport::test_translate_special_key("up"),
+            Some("\x1b[A")
+        );
         assert_eq!(mcp_transport::test_translate_special_key("unknown"), None);
     }
 
@@ -1720,13 +2241,20 @@ mod tests {
     // Test tool calls through the SSE transport (tools/call via /messages endpoint)
 
     /// Build a POST request to /mcp with an mcp-session-id header.
-    fn mcp_post_with_session(url: &str, body: &serde_json::Value, session_id: &str) -> Request<Body> {
+    fn mcp_post_with_session(
+        url: &str,
+        body: &serde_json::Value,
+        session_id: &str,
+    ) -> Request<Body> {
         let mut req = Request::post(url)
             .header("content-type", "application/json")
             .header("mcp-session-id", session_id)
-            .body(Body::from(serde_json::to_string(body).expect("serialize JSON body")))
+            .body(Body::from(
+                serde_json::to_string(body).expect("serialize JSON body"),
+            ))
             .expect("build POST request");
-        req.extensions_mut().insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
+        req.extensions_mut()
+            .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
         req
     }
 
@@ -1775,7 +2303,12 @@ mod tests {
     }
 
     /// Send a tools/call MCP request with a specific session_id and return the parsed result.
-    async fn call_mcp_tool_with_session(state: &Arc<AppState>, tool_name: &str, args: serde_json::Value, session_id: &str) -> serde_json::Value {
+    async fn call_mcp_tool_with_session(
+        state: &Arc<AppState>,
+        tool_name: &str,
+        args: serde_json::Value,
+        session_id: &str,
+    ) -> serde_json::Value {
         let body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 99,
@@ -1792,7 +2325,9 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
         assert_eq!(json["jsonrpc"], "2.0");
         assert_eq!(json["id"], 99);
@@ -1801,7 +2336,11 @@ mod tests {
         serde_json::from_str(text).unwrap_or_else(|_| serde_json::json!(text))
     }
 
-    async fn call_mcp_tool(state: &Arc<AppState>, tool_name: &str, args: serde_json::Value) -> serde_json::Value {
+    async fn call_mcp_tool(
+        state: &Arc<AppState>,
+        tool_name: &str,
+        args: serde_json::Value,
+    ) -> serde_json::Value {
         let session_id = mcp_initialize(state).await;
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -1819,7 +2358,9 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
-        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
         assert_eq!(json["jsonrpc"], "2.0");
         assert_eq!(json["id"], 99);
@@ -1843,74 +2384,121 @@ mod tests {
     async fn test_session_input_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "input"})).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'session_id'"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'session_id'")
+        );
     }
 
     #[tokio::test]
     async fn test_session_input_nonexistent_session() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({
-            "action": "input",
-            "session_id": "nonexistent",
-            "input": "hello"
-        })).await;
+        let result = call_mcp_tool(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "input",
+                "session_id": "nonexistent",
+                "input": "hello"
+            }),
+        )
+        .await;
         assert_eq!(result["error"], "Session not found");
     }
 
     #[tokio::test]
     async fn test_session_input_no_input_or_key() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({
-            "action": "input",
-            "session_id": "some-id"
-        })).await;
+        let result = call_mcp_tool(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "input",
+                "session_id": "some-id"
+            }),
+        )
+        .await;
         assert!(result["error"].as_str().unwrap().contains("'input'"));
     }
 
     #[tokio::test]
     async fn test_session_input_unknown_special_key() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({
-            "action": "input",
-            "session_id": "some-id",
-            "special_key": "nonexistent_key"
-        })).await;
-        assert!(result["error"].as_str().unwrap().contains("Unknown special key"));
+        let result = call_mcp_tool(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "input",
+                "session_id": "some-id",
+                "special_key": "nonexistent_key"
+            }),
+        )
+        .await;
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("Unknown special key")
+        );
     }
 
     #[tokio::test]
     async fn test_session_output_missing_session_id() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "output"})).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'session_id'"));
+        let result =
+            call_mcp_tool(&state, "session", serde_json::json!({"action": "output"})).await;
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'session_id'")
+        );
     }
 
     #[tokio::test]
     async fn test_session_output_nonexistent_session() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({
-            "action": "output",
-            "session_id": "nonexistent"
-        })).await;
+        let result = call_mcp_tool(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "output",
+                "session_id": "nonexistent"
+            }),
+        )
+        .await;
         assert_eq!(result["error"], "Session not found");
     }
 
     #[tokio::test]
     async fn test_session_resize_missing_session_id() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "resize"})).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'session_id'"));
+        let result =
+            call_mcp_tool(&state, "session", serde_json::json!({"action": "resize"})).await;
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'session_id'")
+        );
     }
 
     #[tokio::test]
     async fn test_session_resize_nonexistent_session() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({
-            "action": "resize",
-            "session_id": "nonexistent",
-            "rows": 40,
-            "cols": 120
-        })).await;
+        let result = call_mcp_tool(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "resize",
+                "session_id": "nonexistent",
+                "rows": 40,
+                "cols": 120
+            }),
+        )
+        .await;
         assert_eq!(result["error"], "Session not found");
     }
 
@@ -1918,17 +2506,27 @@ mod tests {
     async fn test_session_close_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "close"})).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'session_id'"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'session_id'")
+        );
     }
 
     #[tokio::test]
     async fn test_session_close_nonexistent_is_idempotent() {
         // close is idempotent: returns ok even for unknown sessions (tombstone design)
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({
-            "action": "close",
-            "session_id": "nonexistent"
-        })).await;
+        let result = call_mcp_tool(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "close",
+                "session_id": "nonexistent"
+            }),
+        )
+        .await;
         assert_eq!(result["ok"], true);
     }
 
@@ -1936,33 +2534,54 @@ mod tests {
     async fn test_session_pause_missing_session_id() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "pause"})).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'session_id'"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'session_id'")
+        );
     }
 
     #[tokio::test]
     async fn test_session_pause_nonexistent() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({
-            "action": "pause",
-            "session_id": "nonexistent"
-        })).await;
+        let result = call_mcp_tool(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "pause",
+                "session_id": "nonexistent"
+            }),
+        )
+        .await;
         assert_eq!(result["error"], "Session not found");
     }
 
     #[tokio::test]
     async fn test_session_resume_missing_session_id() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "resume"})).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'session_id'"));
+        let result =
+            call_mcp_tool(&state, "session", serde_json::json!({"action": "resume"})).await;
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'session_id'")
+        );
     }
 
     #[tokio::test]
     async fn test_session_resume_nonexistent() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({
-            "action": "resume",
-            "session_id": "nonexistent"
-        })).await;
+        let result = call_mcp_tool(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "resume",
+                "session_id": "nonexistent"
+            }),
+        )
+        .await;
         assert_eq!(result["error"], "Session not found");
     }
 
@@ -1998,17 +2617,27 @@ mod tests {
     async fn test_agent_spawn_missing_prompt() {
         let state = test_state();
         let result = call_mcp_tool(&state, "agent", serde_json::json!({"action": "spawn"})).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'prompt'"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'prompt'")
+        );
     }
 
     #[tokio::test]
     async fn test_agent_spawn_unknown_binary() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "agent", serde_json::json!({
-            "action": "spawn",
-            "prompt": "test task",
-            "agent_type": "nonexistent-agent"
-        })).await;
+        let result = call_mcp_tool(
+            &state,
+            "agent",
+            serde_json::json!({
+                "action": "spawn",
+                "prompt": "test task",
+                "agent_type": "nonexistent-agent"
+            }),
+        )
+        .await;
         assert!(result["error"].as_str().unwrap().contains("not found"));
     }
 
@@ -2019,24 +2648,36 @@ mod tests {
         let state = test_state();
         let result = call_mcp_tool(&state, "config", serde_json::json!({"action": "get"})).await;
         assert!(result["font_family"].as_str().is_some());
-        assert!(result.pointer("/services/auth/password_hash").is_none(),
-            "Password hash should be stripped from MCP tool response");
+        assert!(
+            result.pointer("/services/auth/password_hash").is_none(),
+            "Password hash should be stripped from MCP tool response"
+        );
     }
 
     #[tokio::test]
     async fn test_config_save_missing_config() {
         let state = test_state();
         let result = call_mcp_tool(&state, "config", serde_json::json!({"action": "save"})).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'config'"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'config'")
+        );
     }
 
     #[tokio::test]
     async fn test_config_save_invalid_config() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "config", serde_json::json!({
-            "action": "save",
-            "config": "not an object"
-        })).await;
+        let result = call_mcp_tool(
+            &state,
+            "config",
+            serde_json::json!({
+                "action": "save",
+                "config": "not an object"
+            }),
+        )
+        .await;
         assert!(result["error"].as_str().unwrap().contains("Invalid config"));
     }
 
@@ -2046,24 +2687,49 @@ mod tests {
     async fn test_repo_prs_missing_path() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({"action": "prs"})).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'path'"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'path'")
+        );
     }
 
     #[tokio::test]
     async fn test_repo_worktree_list_missing_path() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "repo", serde_json::json!({"action": "worktree_list"})).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'path'"));
+        let result = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({"action": "worktree_list"}),
+        )
+        .await;
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'path'")
+        );
     }
 
     #[tokio::test]
     async fn test_repo_worktree_remove_missing_branch() {
         let state = test_state();
-        let result = call_mcp_tool(&state, "repo", serde_json::json!({
-            "action": "worktree_remove",
-            "path": "/tmp/test-repo"
-        })).await;
-        assert!(result["error"].as_str().unwrap().contains("requires 'branch'"));
+        let result = call_mcp_tool(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_remove",
+                "path": "/tmp/test-repo"
+            }),
+        )
+        .await;
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("requires 'branch'")
+        );
     }
 
     // --- Action routing error tests ---
@@ -2072,7 +2738,12 @@ mod tests {
     async fn test_session_missing_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({})).await;
-        assert!(result["error"].as_str().unwrap().contains("Missing 'action'"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("Missing 'action'")
+        );
         assert!(result["error"].as_str().unwrap().contains("list, create"));
     }
 
@@ -2080,7 +2751,12 @@ mod tests {
     async fn test_session_unknown_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "session", serde_json::json!({"action": "bogus"})).await;
-        assert!(result["error"].as_str().unwrap().contains("Unknown action 'bogus'"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("Unknown action 'bogus'")
+        );
         assert!(result["error"].as_str().unwrap().contains("session"));
     }
 
@@ -2088,26 +2764,56 @@ mod tests {
     async fn test_repo_missing_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({})).await;
-        assert!(result["error"].as_str().unwrap().contains("Missing 'action'"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("Missing 'action'")
+        );
     }
 
     #[tokio::test]
     async fn test_repo_unknown_action() {
         let state = test_state();
         let result = call_mcp_tool(&state, "repo", serde_json::json!({"action": "commit"})).await;
-        assert!(result["error"].as_str().unwrap().contains("Unknown action 'commit'"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("Unknown action 'commit'")
+        );
     }
 
     /// Helper: create a temporary git repo with an initial commit for worktree tests.
     fn create_temp_git_repo() -> tempfile::TempDir {
         let dir = tempfile::tempdir().expect("create temp dir");
         let path = dir.path();
-        std::process::Command::new("git").args(["init"]).current_dir(path).output().unwrap();
-        std::process::Command::new("git").args(["config", "user.email", "test@test.com"]).current_dir(path).output().unwrap();
-        std::process::Command::new("git").args(["config", "user.name", "Test"]).current_dir(path).output().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(path)
+            .output()
+            .unwrap();
         std::fs::write(path.join("README.md"), "test").unwrap();
-        std::process::Command::new("git").args(["add", "."]).current_dir(path).output().unwrap();
-        std::process::Command::new("git").args(["commit", "-m", "initial"]).current_dir(path).output().unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(path)
+            .output()
+            .unwrap();
         dir
     }
 
@@ -2117,19 +2823,43 @@ mod tests {
         let repo_path = repo.path().to_str().unwrap();
         let state = test_state();
         let sid = mcp_initialize_as(&state, "claude-code").await;
-        let result = call_mcp_tool_with_session(&state, "repo", serde_json::json!({
-            "action": "worktree_create",
-            "path": repo_path,
-            "branch": "test-cc-hint"
-        }), &sid).await;
-        assert!(result.get("worktree_path").is_some(), "should have worktree_path: {result}");
+        let result = call_mcp_tool_with_session(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_create",
+                "path": repo_path,
+                "branch": "test-cc-hint"
+            }),
+            &sid,
+        )
+        .await;
+        assert!(
+            result.get("worktree_path").is_some(),
+            "should have worktree_path: {result}"
+        );
         let hint = &result["cc_agent_hint"];
-        assert!(hint.is_object(), "CC client should receive cc_agent_hint: {result}");
-        assert!(hint["worktree_path"].as_str().is_some(), "hint should have worktree_path");
-        assert!(hint["suggested_prompt"].as_str().unwrap().contains("absolute paths"), "hint prompt should mention absolute paths");
+        assert!(
+            hint.is_object(),
+            "CC client should receive cc_agent_hint: {result}"
+        );
+        assert!(
+            hint["worktree_path"].as_str().is_some(),
+            "hint should have worktree_path"
+        );
+        assert!(
+            hint["suggested_prompt"]
+                .as_str()
+                .unwrap()
+                .contains("absolute paths"),
+            "hint prompt should mention absolute paths"
+        );
         // Cleanup
         let wt_path = result["worktree_path"].as_str().unwrap();
-        let _ = std::process::Command::new("git").args(["worktree", "remove", "--force", wt_path]).current_dir(repo_path).output();
+        let _ = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force", wt_path])
+            .current_dir(repo_path)
+            .output();
     }
 
     #[tokio::test]
@@ -2138,16 +2868,31 @@ mod tests {
         let repo_path = repo.path().to_str().unwrap();
         let state = test_state();
         let sid = mcp_initialize_as(&state, "cursor").await;
-        let result = call_mcp_tool_with_session(&state, "repo", serde_json::json!({
-            "action": "worktree_create",
-            "path": repo_path,
-            "branch": "test-no-hint"
-        }), &sid).await;
-        assert!(result.get("worktree_path").is_some(), "should have worktree_path: {result}");
-        assert!(result.get("cc_agent_hint").is_none(), "Non-CC client should NOT receive cc_agent_hint: {result}");
+        let result = call_mcp_tool_with_session(
+            &state,
+            "repo",
+            serde_json::json!({
+                "action": "worktree_create",
+                "path": repo_path,
+                "branch": "test-no-hint"
+            }),
+            &sid,
+        )
+        .await;
+        assert!(
+            result.get("worktree_path").is_some(),
+            "should have worktree_path: {result}"
+        );
+        assert!(
+            result.get("cc_agent_hint").is_none(),
+            "Non-CC client should NOT receive cc_agent_hint: {result}"
+        );
         // Cleanup
         let wt_path = result["worktree_path"].as_str().unwrap();
-        let _ = std::process::Command::new("git").args(["worktree", "remove", "--force", wt_path]).current_dir(repo_path).output();
+        let _ = std::process::Command::new("git")
+            .args(["worktree", "remove", "--force", wt_path])
+            .current_dir(repo_path)
+            .output();
     }
 
     #[tokio::test]
@@ -2155,7 +2900,12 @@ mod tests {
         let state = test_state();
         let result = call_mcp_tool(&state, "nonexistent_tool", serde_json::json!({})).await;
         assert!(result["error"].as_str().unwrap().contains("Unknown tool"));
-        assert!(result["error"].as_str().unwrap().contains("session, agent, repo, ui"));
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("session, agent, repo, ui")
+        );
     }
 
     // --- isError flag tests ---
@@ -2179,9 +2929,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
-        assert_eq!(json["result"]["isError"], true, "Error responses should set isError=true");
+        assert_eq!(
+            json["result"]["isError"], true,
+            "Error responses should set isError=true"
+        );
     }
 
     #[tokio::test]
@@ -2203,9 +2958,14 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
-        assert_eq!(json["result"]["isError"], false, "Success responses should set isError=false");
+        assert_eq!(
+            json["result"]["isError"], false,
+            "Success responses should set isError=false"
+        );
     }
 
     #[tokio::test]
@@ -2218,15 +2978,22 @@ mod tests {
             "params": {}
         });
         let app = build_router(state, false, true);
-        let resp = app
-            .oneshot(mcp_post("/mcp", &body))
+        let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
-        assert_eq!(json["error"]["code"], -32601, "Unknown method should return -32601");
-        assert!(json["error"]["message"].as_str().unwrap().contains("Method not found"));
+        assert_eq!(
+            json["error"]["code"], -32601,
+            "Unknown method should return -32601"
+        );
+        assert!(
+            json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("Method not found")
+        );
     }
 
     #[tokio::test]
@@ -2243,15 +3010,22 @@ mod tests {
         });
         let app = build_router(state, false, true);
         // Send without mcp-session-id header — should be rejected
-        let resp = app
-            .oneshot(mcp_post("/mcp", &body))
+        let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
-        assert_eq!(resp.status(), StatusCode::OK);
-        let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
-        assert_eq!(json["error"]["code"], -32600, "Missing session should return -32600");
-        assert!(json["error"]["message"].as_str().unwrap().contains("mcp-session-id"));
+        assert_eq!(
+            json["error"]["code"], -32600,
+            "Missing session should return -32600"
+        );
+        assert!(
+            json["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("mcp-session-id")
+        );
     }
 
     // --- Auth validation tests ---
@@ -2263,8 +3037,8 @@ mod tests {
 
     fn basic_header(username: &str, password: &str) -> String {
         use base64::Engine;
-        let encoded = base64::engine::general_purpose::STANDARD
-            .encode(format!("{username}:{password}"));
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("{username}:{password}"));
         format!("Basic {encoded}")
     }
 
@@ -2337,10 +3111,7 @@ mod tests {
     fn test_auth_no_colon_separator() {
         let hash = test_hash("secret123");
         // base64 of "nocolon" (no colon separator)
-        let encoded = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            "nocolon",
-        );
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "nocolon");
         let header = format!("Basic {encoded}");
         assert!(matches!(
             auth::validate_basic_auth(Some(&header), "admin", &hash),
@@ -2359,11 +3130,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
         assert!(ct.contains("text/html"), "Expected text/html, got {ct}");
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let text = String::from_utf8_lossy(&body);
-        assert!(text.contains("<!DOCTYPE html>") || text.contains("<html"), "index.html should contain HTML");
+        assert!(
+            text.contains("<!DOCTYPE html>") || text.contains("<html"),
+            "index.html should contain HTML"
+        );
     }
 
     #[tokio::test]
@@ -2382,8 +3163,16 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
-            let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
-            assert!(ct.contains("javascript"), "Expected javascript MIME, got {ct}");
+            let ct = resp
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(
+                ct.contains("javascript"),
+                "Expected javascript MIME, got {ct}"
+            );
         }
     }
 
@@ -2402,9 +3191,16 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(resp.status(), StatusCode::OK);
-            let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
-            assert!(ct.contains("font") || ct.contains("woff2") || ct.contains("octet-stream"),
-                "Expected font MIME, got {ct}");
+            let ct = resp
+                .headers()
+                .get("content-type")
+                .unwrap()
+                .to_str()
+                .unwrap();
+            assert!(
+                ct.contains("font") || ct.contains("woff2") || ct.contains("octet-stream"),
+                "Expected font MIME, got {ct}"
+            );
         }
     }
 
@@ -2413,12 +3209,24 @@ mod tests {
         let state = test_state();
         let app = build_router(state, false, true);
         let resp = app
-            .oneshot(Request::get("/some/unknown/spa/route").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::get("/some/unknown/spa/route")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
-        assert!(ct.contains("text/html"), "SPA fallback should return HTML, got {ct}");
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            ct.contains("text/html"),
+            "SPA fallback should return HTML, got {ct}"
+        );
     }
 
     #[tokio::test]
@@ -2437,7 +3245,11 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         // Unknown origin should not get CORS allow header
         let cors = resp.headers().get("access-control-allow-origin");
-        assert!(cors.is_none(), "Unknown origin should not be allowed, got: {:?}", cors);
+        assert!(
+            cors.is_none(),
+            "Unknown origin should not be allowed, got: {:?}",
+            cors
+        );
     }
 
     #[tokio::test]
@@ -2488,7 +3300,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json, serde_json::json!([]));
     }
@@ -2521,8 +3335,16 @@ mod tests {
         let (tx2, _rx2) = tokio::sync::mpsc::unbounded_channel::<String>();
 
         // Add clients
-        state.ws_clients.entry("session-1".to_string()).or_default().push(tx1);
-        state.ws_clients.entry("session-1".to_string()).or_default().push(tx2);
+        state
+            .ws_clients
+            .entry("session-1".to_string())
+            .or_default()
+            .push(tx1);
+        state
+            .ws_clients
+            .entry("session-1".to_string())
+            .or_default()
+            .push(tx2);
         assert_eq!(state.ws_clients.get("session-1").unwrap().len(), 2);
 
         // Remove session cleans up all clients
@@ -2537,8 +3359,16 @@ mod tests {
         let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel::<String>();
         let (tx2, rx2) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-        state.ws_clients.entry("sess".to_string()).or_default().push(tx1);
-        state.ws_clients.entry("sess".to_string()).or_default().push(tx2);
+        state
+            .ws_clients
+            .entry("sess".to_string())
+            .or_default()
+            .push(tx1);
+        state
+            .ws_clients
+            .entry("sess".to_string())
+            .or_default()
+            .push(tx2);
 
         // Drop rx2 so tx2 is closed
         drop(rx2);
@@ -2563,7 +3393,11 @@ mod tests {
         // Simulate 10 connect/disconnect cycles (mobile reconnects)
         for _ in 0..10 {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            state.ws_clients.entry(session_id.clone()).or_default().push(tx);
+            state
+                .ws_clients
+                .entry(session_id.clone())
+                .or_default()
+                .push(tx);
             // Client disconnects — rx is dropped, making tx a dead sender
             drop(rx);
         }
@@ -2577,7 +3411,9 @@ mod tests {
 
         // After cleanup, all dead senders should be removed
         // Vec may remain as empty entry, or be removed entirely
-        let remaining = state.ws_clients.get(&session_id)
+        let remaining = state
+            .ws_clients
+            .get(&session_id)
             .map(|c| c.len())
             .unwrap_or(0);
         assert_eq!(remaining, 0, "dead senders should be purged on WS close");
@@ -2592,8 +3428,16 @@ mod tests {
         let (tx_live, _rx_live) = tokio::sync::mpsc::unbounded_channel::<String>();
         let (tx_dead, rx_dead) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-        state.ws_clients.entry(session_id.clone()).or_default().push(tx_live);
-        state.ws_clients.entry(session_id.clone()).or_default().push(tx_dead);
+        state
+            .ws_clients
+            .entry(session_id.clone())
+            .or_default()
+            .push(tx_live);
+        state
+            .ws_clients
+            .entry(session_id.clone())
+            .or_default()
+            .push(tx_dead);
 
         // Kill one sender
         drop(rx_dead);
@@ -2618,11 +3462,16 @@ mod tests {
         });
         let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         let tools = json["result"]["tools"].as_array().unwrap();
         // No upstream → all native tools only
-        let expected = mcp_transport::test_mcp_tool_definitions().as_array().unwrap().len();
+        let expected = mcp_transport::test_mcp_tool_definitions()
+            .as_array()
+            .unwrap()
+            .len();
         assert_eq!(tools.len(), expected);
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"session"));
@@ -2641,12 +3490,15 @@ mod tests {
         let state = test_state();
         // Inject a session so the session_valid check passes
         let now = std::time::Instant::now();
-        state.mcp_sessions.insert("test-sid-proxy".to_string(), crate::state::McpSessionMeta {
-            last_activity: now,
-            is_claude_code: false,
-            has_sse_stream: false,
-            repo_path: None,
-        });
+        state.mcp_sessions.insert(
+            "test-sid-proxy".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: now,
+                is_claude_code: false,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
 
         let app = build_router(state, false, true);
         let body = serde_json::json!({
@@ -2659,10 +3511,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         // Should be an error response with isError:true
-        assert_eq!(json["result"]["isError"], true, "Expected isError:true, got: {json}");
+        assert_eq!(
+            json["result"]["isError"], true,
+            "Expected isError:true, got: {json}"
+        );
     }
 
     /// tools/call with a native tool name still works after wiring.
@@ -2670,12 +3527,15 @@ mod tests {
     async fn test_native_tool_call_still_works_after_wiring() {
         let state = test_state();
         let now = std::time::Instant::now();
-        state.mcp_sessions.insert("test-sid-native".to_string(), crate::state::McpSessionMeta {
-            last_activity: now,
-            is_claude_code: false,
-            has_sse_stream: false,
-            repo_path: None,
-        });
+        state.mcp_sessions.insert(
+            "test-sid-native".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: now,
+                is_claude_code: false,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
         let app = build_router(state, false, true);
         let body = serde_json::json!({
             "jsonrpc": "2.0", "id": 1,
@@ -2687,10 +3547,15 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
         // Native tool — should succeed (empty session list, no error)
-        assert_eq!(json["result"]["isError"], false, "Native tool should not error: {json}");
+        assert_eq!(
+            json["result"]["isError"], false,
+            "Native tool should not error: {json}"
+        );
     }
 
     /// Changing disabled_native_tools via put_config fires mcp_tools_changed.
@@ -2709,12 +3574,22 @@ mod tests {
         config.disabled_native_tools = vec!["session".to_string()];
         let app = build_router(state.clone(), false, true);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-        let resp = app.oneshot(put_from("/config", &serde_json::to_value(&config).unwrap(), addr)).await.unwrap();
+        let resp = app
+            .oneshot(put_from(
+                "/config",
+                &serde_json::to_value(&config).unwrap(),
+                addr,
+            ))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         // Should have received a tools_changed signal
         let result = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
-        assert!(result.is_ok(), "expected tools_changed signal after config change");
+        assert!(
+            result.is_ok(),
+            "expected tools_changed signal after config change"
+        );
     }
 
     /// Changing collapse_tools via put_config fires mcp_tools_changed.
@@ -2733,11 +3608,21 @@ mod tests {
         config.collapse_tools = true;
         let app = build_router(state.clone(), false, true);
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
-        let resp = app.oneshot(put_from("/config", &serde_json::to_value(&config).unwrap(), addr)).await.unwrap();
+        let resp = app
+            .oneshot(put_from(
+                "/config",
+                &serde_json::to_value(&config).unwrap(),
+                addr,
+            ))
+            .await
+            .unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
 
         let result = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv()).await;
-        assert!(result.is_ok(), "expected tools_changed signal when collapse_tools toggled");
+        assert!(
+            result.is_ok(),
+            "expected tools_changed signal when collapse_tools toggled"
+        );
     }
 
     /// GET /mcp with valid session returns SSE stream that emits tools/list_changed
@@ -2751,8 +3636,12 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
-            axum::serve(listener, app.into_make_service_with_connect_info::<std::net::SocketAddr>())
-                .await.unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .unwrap();
         });
 
         let client = reqwest::Client::new();
@@ -2764,22 +3653,41 @@ mod tests {
             "params": { "protocolVersion": "2025-03-26", "capabilities": {},
                         "clientInfo": { "name": "test", "version": "0.1" } }
         });
-        let resp = client.post(format!("http://{addr}/mcp"))
+        let resp = client
+            .post(format!("http://{addr}/mcp"))
             .json(&init_body)
-            .send().await.unwrap();
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200);
-        let session_id = resp.headers()
-            .get("mcp-session-id").expect("initialize should return session id")
-            .to_str().unwrap().to_string();
+        let session_id = resp
+            .headers()
+            .get("mcp-session-id")
+            .expect("initialize should return session id")
+            .to_str()
+            .unwrap()
+            .to_string();
 
         // GET /mcp with session header → SSE stream
-        let resp = client.get(format!("http://{addr}/mcp"))
+        let resp = client
+            .get(format!("http://{addr}/mcp"))
             .header("mcp-session-id", &session_id)
             .header("Accept", "text/event-stream")
-            .send().await.unwrap();
+            .send()
+            .await
+            .unwrap();
         assert_eq!(resp.status(), 200, "GET /mcp should return 200 for SSE");
-        let ct = resp.headers().get("content-type").unwrap().to_str().unwrap().to_string();
-        assert!(ct.contains("text/event-stream"), "expected SSE content-type, got: {ct}");
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        assert!(
+            ct.contains("text/event-stream"),
+            "expected SSE content-type, got: {ct}"
+        );
 
         // Signal tools changed after a small delay so SSE stream is ready
         let tools_tx = state.mcp_tools_changed.clone();
@@ -2800,10 +3708,13 @@ mod tests {
                 }
             }
             false
-        }).await;
+        })
+        .await;
 
-        assert!(result.unwrap_or(false),
-            "expected tools/list_changed notification in SSE stream, got: {collected}");
+        assert!(
+            result.unwrap_or(false),
+            "expected tools/list_changed notification in SSE stream, got: {collected}"
+        );
     }
 
     /// Unix socket listener: binds, serves health check, cleans up socket file on drop.
@@ -2814,7 +3725,8 @@ mod tests {
 
         let state = test_state();
         // Use /tmp directly — macOS $TMPDIR can exceed SUN_LEN (104 bytes)
-        let tmp_dir = std::path::PathBuf::from("/tmp").join(format!("tuic-{}", &uuid::Uuid::new_v4().to_string()[..8]));
+        let tmp_dir = std::path::PathBuf::from("/tmp")
+            .join(format!("tuic-{}", &uuid::Uuid::new_v4().to_string()[..8]));
         match std::fs::create_dir_all(&tmp_dir) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -2844,8 +3756,14 @@ mod tests {
         let mut buf = Vec::new();
         stream.read_to_end(&mut buf).await.unwrap();
         let response = String::from_utf8_lossy(&buf);
-        assert!(response.contains("200 OK"), "expected 200 OK, got: {response}");
-        assert!(response.contains("\"ok\":true"), "expected JSON health body, got: {response}");
+        assert!(
+            response.contains("200 OK"),
+            "expected 200 OK, got: {response}"
+        );
+        assert!(
+            response.contains("\"ok\":true"),
+            "expected JSON health body, got: {response}"
+        );
 
         server.abort();
         let _ = std::fs::remove_file(&sock_path);
@@ -2858,8 +3776,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_unix_socket_rebind_no_race() {
-        let tmp_dir = std::path::PathBuf::from("/tmp")
-            .join(format!("tuic-race-{}", &uuid::Uuid::new_v4().to_string()[..8]));
+        let tmp_dir = std::path::PathBuf::from("/tmp").join(format!(
+            "tuic-race-{}",
+            &uuid::Uuid::new_v4().to_string()[..8]
+        ));
         match std::fs::create_dir_all(&tmp_dir) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -2897,7 +3817,10 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // Socket file must still exist — the first instance's abort must not have removed it
-        assert!(sock_path.exists(), "socket file removed by first instance abort — race condition present");
+        assert!(
+            sock_path.exists(),
+            "socket file removed by first instance abort — race condition present"
+        );
 
         server2.abort();
         let _ = std::fs::remove_file(&sock_path);
@@ -2908,8 +3831,10 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn test_multi_instance_socket_coexistence() {
-        let tmp_dir = std::path::PathBuf::from("/tmp")
-            .join(format!("tuic-multi-{}", &uuid::Uuid::new_v4().to_string()[..8]));
+        let tmp_dir = std::path::PathBuf::from("/tmp").join(format!(
+            "tuic-multi-{}",
+            &uuid::Uuid::new_v4().to_string()[..8]
+        ));
         match std::fs::create_dir_all(&tmp_dir) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -2976,8 +3901,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn test_cleanup_stale_sockets() {
-        let tmp_dir = std::path::PathBuf::from("/tmp")
-            .join(format!("tuic-stale-{}", &uuid::Uuid::new_v4().to_string()[..8]));
+        let tmp_dir = std::path::PathBuf::from("/tmp").join(format!(
+            "tuic-stale-{}",
+            &uuid::Uuid::new_v4().to_string()[..8]
+        ));
         match std::fs::create_dir_all(&tmp_dir) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -3000,7 +3927,9 @@ mod tests {
         // Run cleanup logic inline (can't call cleanup_stale_sockets directly as it uses config_dir)
         for entry in std::fs::read_dir(&tmp_dir).unwrap().flatten() {
             let name = entry.file_name();
-            let Some(name_str) = name.to_str() else { continue };
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
             if let Some(rest) = name_str.strip_prefix("mcp-") {
                 if let Some(pid_str) = rest.strip_suffix(".sock") {
                     if let Ok(pid) = pid_str.parse::<u32>() {
@@ -3014,7 +3943,10 @@ mod tests {
         }
 
         // Dead PID socket should be removed
-        assert!(!stale.exists(), "stale socket for dead PID should be cleaned up");
+        assert!(
+            !stale.exists(),
+            "stale socket for dead PID should be cleaned up"
+        );
         // Our own PID socket should remain
         assert!(alive.exists(), "socket for live PID should not be removed");
 
@@ -3027,7 +3959,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_output_format_log_returns_lines() {
-        use crate::state::{VtLogBuffer, VT_LOG_BUFFER_CAPACITY};
+        use crate::state::{VT_LOG_BUFFER_CAPACITY, VtLogBuffer};
 
         let state = test_state();
         let sid = "test-log-session";
@@ -3058,23 +3990,29 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let lines = json["lines"].as_array().expect("lines should be an array");
-        let total = json["total_lines"].as_u64().expect("total_lines should be u64");
+        let total = json["total_lines"]
+            .as_u64()
+            .expect("total_lines should be u64");
         assert_eq!(total, expected_total as u64);
         assert_eq!(lines.len(), expected_total);
         // Lines are LogLine objects: {spans: [{text: "log-line-N", ...}]}
         let has_expected = lines.iter().any(|l| {
-            l["spans"].as_array()
+            l["spans"]
+                .as_array()
                 .and_then(|spans| spans.first())
                 .and_then(|s| s["text"].as_str())
                 .map(|t| t.starts_with("log-line-"))
                 .unwrap_or(false)
         });
-        assert!(has_expected, "should contain log-line-N entries, got: {json}");
+        assert!(
+            has_expected,
+            "should contain log-line-N entries, got: {json}"
+        );
     }
 
     #[tokio::test]
     async fn test_get_output_format_log_with_limit() {
-        use crate::state::{VtLogBuffer, VT_LOG_BUFFER_CAPACITY};
+        use crate::state::{VT_LOG_BUFFER_CAPACITY, VtLogBuffer};
 
         let state = test_state();
         let sid = "test-log-limit";
@@ -3119,8 +4057,15 @@ mod tests {
         // Root serves HTML (or redirect); if 200, should have no-cache
         let status = resp.status();
         if status == StatusCode::OK {
-            let cc = resp.headers().get("cache-control").map(|v| v.to_str().unwrap().to_string());
-            assert_eq!(cc.as_deref(), Some("no-cache"), "HTML responses must have no-cache");
+            let cc = resp
+                .headers()
+                .get("cache-control")
+                .map(|v| v.to_str().unwrap().to_string());
+            assert_eq!(
+                cc.as_deref(),
+                Some("no-cache"),
+                "HTML responses must have no-cache"
+            );
         }
         // 3xx redirect is also valid (mobile redirect)
     }
@@ -3151,20 +4096,38 @@ mod tests {
 
         // Register a peer — this auto-populates mcp_to_session
         let pty_session_id = "550e8400-e29b-41d4-a716-446655440c01";
-        call_mcp_tool_with_session(&state, "agent", serde_json::json!({
-            "action": "register",
-            "tuic_session": pty_session_id,
-            "name": "orchestrator"
-        }), &mcp_sid).await;
+        call_mcp_tool_with_session(
+            &state,
+            "agent",
+            serde_json::json!({
+                "action": "register",
+                "tuic_session": pty_session_id,
+                "name": "orchestrator"
+            }),
+            &mcp_sid,
+        )
+        .await;
 
         // Try to close own session — should be rejected
-        let result = call_mcp_tool_with_session(&state, "session", serde_json::json!({
-            "action": "close",
-            "session_id": pty_session_id
-        }), &mcp_sid).await;
-        assert!(result["error"].as_str().is_some(), "Self-close should return error");
-        assert!(result["error"].as_str().unwrap().contains("own session"),
-            "Error should mention 'own session', got: {}", result["error"]);
+        let result = call_mcp_tool_with_session(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "close",
+                "session_id": pty_session_id
+            }),
+            &mcp_sid,
+        )
+        .await;
+        assert!(
+            result["error"].as_str().is_some(),
+            "Self-close should return error"
+        );
+        assert!(
+            result["error"].as_str().unwrap().contains("own session"),
+            "Error should mention 'own session', got: {}",
+            result["error"]
+        );
     }
 
     #[tokio::test]
@@ -3174,17 +4137,29 @@ mod tests {
         let mcp_sid = mcp_initialize(&state).await;
 
         // Register caller — auto-populates mcp_to_session
-        call_mcp_tool_with_session(&state, "agent", serde_json::json!({
-            "action": "register",
-            "tuic_session": "550e8400-e29b-41d4-a716-446655440c02",
-            "name": "orchestrator"
-        }), &mcp_sid).await;
+        call_mcp_tool_with_session(
+            &state,
+            "agent",
+            serde_json::json!({
+                "action": "register",
+                "tuic_session": "550e8400-e29b-41d4-a716-446655440c02",
+                "name": "orchestrator"
+            }),
+            &mcp_sid,
+        )
+        .await;
 
         // Close a different session — should succeed
-        let result = call_mcp_tool_with_session(&state, "session", serde_json::json!({
-            "action": "close",
-            "session_id": "other-agent-session"
-        }), &mcp_sid).await;
+        let result = call_mcp_tool_with_session(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "close",
+                "session_id": "other-agent-session"
+            }),
+            &mcp_sid,
+        )
+        .await;
         assert_eq!(result["ok"], true, "Closing other session should succeed");
     }
 
@@ -3192,12 +4167,49 @@ mod tests {
     async fn test_session_status_returns_metadata() {
         // session(action=status) should return shell_state metadata for a known session
         let state = test_state();
-        let result = call_mcp_tool(&state, "session", serde_json::json!({
-            "action": "status",
-            "session_id": "nonexistent"
-        })).await;
+        let result = call_mcp_tool(
+            &state,
+            "session",
+            serde_json::json!({
+                "action": "status",
+                "session_id": "nonexistent"
+            }),
+        )
+        .await;
         // For now, status should exist as an action (not "Unknown action")
-        assert!(result["error"].is_null() || !result["error"].as_str().unwrap_or("").contains("Unknown action"),
-            "session(status) should be a valid action, got: {:?}", result);
+        assert!(
+            result["error"].is_null()
+                || !result["error"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("Unknown action"),
+            "session(status) should be a valid action, got: {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_tcp_health_smoke() {
+        let state = test_state();
+        let app = build_router(state, false, true)
+            .into_make_service_with_connect_info::<std::net::SocketAddr>();
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/health"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let json: serde_json::Value = resp.json().await.unwrap();
+        assert_eq!(json["ok"], true);
+
+        server.abort();
     }
 }
