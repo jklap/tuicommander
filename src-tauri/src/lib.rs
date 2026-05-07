@@ -1543,11 +1543,26 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
 
     agent_mcp::ensure_mcp_configs(&app_config.disabled_mcp_agents);
 
-    tracing::info!(source = "remote", port, "Starting tuicommander-remote");
+    let tls_config = match &app_config.services.tls {
+        config::TlsConfig::Manual { cert_path, key_path } => {
+            let cert_pem = std::fs::read(cert_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read TLS cert at {cert_path}: {e}"))?;
+            let key_pem = std::fs::read(key_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read TLS key at {key_path}: {e}"))?;
+            let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
+                .await
+                .map_err(|e| anyhow::anyhow!("Invalid TLS cert/key: {e}"))?;
+            tracing::info!(source = "remote", cert_path, key_path, "TLS loaded (manual mode)");
+            Some(tls)
+        }
+        config::TlsConfig::Off => None,
+    };
+
+    tracing::info!(source = "remote", port, tls = tls_config.is_some(), "Starting tuicommander-remote");
 
     // Run server until SIGINT/SIGTERM, then shut down gracefully.
     tokio::select! {
-        _ = mcp_http::start_server(state.clone(), true, true, None) => {}
+        _ = mcp_http::start_server(state.clone(), true, true, tls_config) => {}
         _ = tokio::signal::ctrl_c() => {
             tracing::info!(source = "remote", "Received shutdown signal");
             if let Some(tx) = state.server_shutdown.lock().take() {

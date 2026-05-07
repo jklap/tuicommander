@@ -318,8 +318,33 @@ impl Default for AuthConfig {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub(crate) struct TlsConfig {}
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub(crate) enum TlsConfig {
+    #[default]
+    Off,
+    Manual {
+        cert_path: String,
+        key_path: String,
+    },
+}
+
+impl<'de> serde::Deserialize<'de> for TlsConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let val = serde_json::Value::deserialize(deserializer)?;
+        match val.as_object() {
+            Some(obj) if obj.is_empty() || obj.get("mode").and_then(|v| v.as_str()) == Some("off") => {
+                Ok(TlsConfig::Off)
+            }
+            Some(obj) if obj.get("mode").and_then(|v| v.as_str()) == Some("manual") => {
+                let cert_path = obj.get("cert_path").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                let key_path = obj.get("key_path").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+                Ok(TlsConfig::Manual { cert_path, key_path })
+            }
+            _ => Ok(TlsConfig::Off),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct RelayConfig {
@@ -1127,7 +1152,7 @@ fn migrate_flat_services(val: &mut serde_json::Value) {
     obj.insert("services".to_string(), serde_json::json!({
         "server": server,
         "auth": auth,
-        "tls": {},
+        "tls": { "mode": "off" },
         "relay": relay,
         "push": push,
     }));
@@ -1668,6 +1693,37 @@ mod tests {
         assert_eq!(username, "user2");
         // flat field NOT consumed (migration skipped)
         assert!(val.get("remote_access_enabled").is_some());
+    }
+
+    #[test]
+    fn tls_config_serde_variants() {
+        // Off variant
+        let off: TlsConfig = serde_json::from_str(r#"{"mode":"off"}"#).unwrap();
+        assert!(matches!(off, TlsConfig::Off));
+
+        // Empty object → Off (backward compat)
+        let empty: TlsConfig = serde_json::from_str(r#"{}"#).unwrap();
+        assert!(matches!(empty, TlsConfig::Off));
+
+        // Manual variant
+        let manual: TlsConfig = serde_json::from_str(
+            r#"{"mode":"manual","cert_path":"/etc/cert.pem","key_path":"/etc/key.pem"}"#
+        ).unwrap();
+        match manual {
+            TlsConfig::Manual { cert_path, key_path } => {
+                assert_eq!(cert_path, "/etc/cert.pem");
+                assert_eq!(key_path, "/etc/key.pem");
+            }
+            _ => panic!("expected Manual variant"),
+        }
+
+        // Round-trip Manual
+        let json = serde_json::to_string(&TlsConfig::Manual {
+            cert_path: "/a.pem".into(),
+            key_path: "/b.pem".into(),
+        }).unwrap();
+        let rt: TlsConfig = serde_json::from_str(&json).unwrap();
+        assert!(matches!(rt, TlsConfig::Manual { .. }));
     }
 
     #[test]
