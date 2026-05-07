@@ -12,6 +12,8 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use crate::ai_agent::conversation_engine::{ACTIVE_CONVERSATIONS, Autonomy, ConversationConfig};
 use crate::ai_agent::knowledge::sanitize_snippet;
 use crate::state::{AppEvent, AppState};
+#[cfg(feature = "desktop")]
+use tauri::Emitter;
 
 const CONFIG_FILE: &str = "ai-watchers.json";
 
@@ -580,8 +582,8 @@ impl WatcherEngine {
                 if let Err(e) = save_config(&config) {
                     tracing::warn!(rule_id, "Failed to persist exhaustion state: {e}");
                 }
-                // DEFERRED (2026-05-07) — Tauri event for frontend watcher status updates.
-                // Step 5 (UI) will wire watcher-status events via app_handle.emit().
+                #[cfg(feature = "desktop")]
+                self.notify_status(&config.rules[idx]);
                 return;
             }
 
@@ -595,6 +597,8 @@ impl WatcherEngine {
                 if let Err(e) = save_config(&config) {
                     tracing::warn!(rule_id, "Failed to persist burst-pause state: {e}");
                 }
+                #[cfg(feature = "desktop")]
+                self.notify_status(&config.rules[idx]);
                 return;
             }
 
@@ -615,6 +619,8 @@ impl WatcherEngine {
             if let Err(e) = save_config(&config) {
                 tracing::warn!(rule_id, "Failed to persist fire_count: {e}");
             }
+            #[cfg(feature = "desktop")]
+            self.notify_status(&config.rules[idx]);
             (message, sid)
         };
 
@@ -639,13 +645,15 @@ impl WatcherEngine {
             }
             Err(e) => {
                 tracing::warn!(rule_id, "Watcher fire failed: {e}");
-                // Roll back fire_count on failure
                 let mut config = self.config.write();
-                if let Some(rule) = config.rules.iter_mut().find(|r| r.id == rule_id) {
-                    rule.fire_count = rule.fire_count.saturating_sub(1);
+                if let Some(idx) = config.rules.iter().position(|r| r.id == rule_id) {
+                    config.rules[idx].fire_count =
+                        config.rules[idx].fire_count.saturating_sub(1);
                     if let Err(e) = save_config(&config) {
                         tracing::warn!(rule_id, "Failed to persist fire_count rollback: {e}");
                     }
+                    #[cfg(feature = "desktop")]
+                    self.notify_status(&config.rules[idx]);
                 }
             }
         }
@@ -702,6 +710,21 @@ impl WatcherEngine {
         }
     }
 
+    #[cfg(feature = "desktop")]
+    fn notify_status(&self, rule: &WatcherRule) {
+        if let Some(app) = self.state.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "watcher-status",
+                serde_json::json!({
+                    "id": rule.id,
+                    "status": rule.status,
+                    "fire_count": rule.fire_count,
+                    "session_id": rule.session_id,
+                }),
+            );
+        }
+    }
+
     fn on_user_input(&self, session_id: &str) {
         let mut config = self.config.write();
         let mut changed = false;
@@ -709,6 +732,8 @@ impl WatcherEngine {
             if rule.session_id.as_deref() == Some(session_id) && rule.status == WatcherStatus::Active {
                 rule.status = WatcherStatus::Paused;
                 tracing::info!(rule_id = %rule.id, "Watcher paused by user input");
+                #[cfg(feature = "desktop")]
+                self.notify_status(rule);
                 changed = true;
             }
         }
