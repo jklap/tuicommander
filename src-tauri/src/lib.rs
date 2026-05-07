@@ -202,11 +202,11 @@ fn load_config(state: State<'_, Arc<AppState>>) -> config::AppConfig {
 #[tauri::command]
 fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Result<(), String> {
     let old = state.config.read().clone();
-    let server_changed = old.remote_access_enabled != config.remote_access_enabled
-        || old.remote_access_port != config.remote_access_port
-        || old.remote_access_username != config.remote_access_username
-        || old.remote_access_password_hash != config.remote_access_password_hash
-        || old.ipv6_enabled != config.ipv6_enabled;
+    let server_changed = old.services.server.enabled != config.services.server.enabled
+        || old.services.server.port != config.services.server.port
+        || old.services.auth.username != config.services.auth.username
+        || old.services.auth.password_hash != config.services.auth.password_hash
+        || old.services.server.ipv6_enabled != config.services.server.ipv6_enabled;
 
     let tools_changed = old.disabled_native_tools != config.disabled_native_tools
         || old.collapse_tools != config.collapse_tools;
@@ -269,7 +269,7 @@ struct LocalIpEntry {
 ///   "Network" — anything else non-loopback
 /// Implementation shared between Tauri command and HTTP handler.
 pub(crate) fn get_local_ips_impl(state: &AppState) -> Vec<LocalIpEntry> {
-    let ipv6_enabled = state.config.read().ipv6_enabled;
+    let ipv6_enabled = state.config.read().services.server.ipv6_enabled;
     get_local_ips_with_config(ipv6_enabled)
 }
 
@@ -589,7 +589,7 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
     let (remote_enabled, active_sessions, mcp_protocol_sessions) = {
         let cfg = state.config.read();
         (
-            cfg.remote_access_enabled,
+            cfg.services.server.enabled,
             state.sessions.len(),
             state.mcp_sessions.len(),
         )
@@ -604,9 +604,9 @@ async fn get_mcp_status(state: State<'_, Arc<AppState>>) -> Result<serde_json::V
     let running = false;
 
     // TCP reachability self-test for remote access
-    let remote_port = state.config.read().remote_access_port;
+    let remote_port = state.config.read().services.server.port;
     let reachable = if remote_enabled {
-        let preferred_ip = pick_preferred_ip(get_local_ips_with_config(state.config.read().ipv6_enabled));
+        let preferred_ip = pick_preferred_ip(get_local_ips_with_config(state.config.read().services.server.ipv6_enabled));
         if let Some(ip) = preferred_ip {
             let port = remote_port;
             let addr = if ip.contains(':') { format!("[{ip}]:{port}") } else { format!("{ip}:{port}") };
@@ -678,7 +678,7 @@ fn regenerate_session_token(state: State<'_, Arc<AppState>>) {
     *state.session_token.write() = new_token.clone();
     // Persist so the new token survives restarts
     let mut cfg = state.config.read().clone();
-    cfg.session_token = new_token;
+    cfg.services.auth.session_token = new_token;
     if let Err(e) = config::save_app_config(cfg) {
         tracing::error!(source = "auth", "Failed to persist regenerated session token: {e}");
     }
@@ -690,7 +690,7 @@ fn regenerate_session_token(state: State<'_, Arc<AppState>>) {
 #[cfg(feature = "desktop")]
 #[tauri::command]
 fn get_connect_url(state: State<'_, Arc<AppState>>, ip: String) -> String {
-    let port = state.config.read().remote_access_port;
+    let port = state.config.read().services.server.port;
     let token = state.session_token.read().clone();
 
     // If TLS is active and the IP is a Tailscale address, use https + FQDN
@@ -739,7 +739,7 @@ fn restart_server(state: &Arc<AppState>) {
     if let Some(tx) = state.server_shutdown.lock().take() {
         let _ = tx.send(());
     }
-    let remote_enabled = state.config.read().remote_access_enabled;
+    let remote_enabled = state.config.read().services.server.enabled;
     let state_arc = state.clone();
     std::thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new()
@@ -773,7 +773,7 @@ async fn recheck_tailscale_status(state: State<'_, Arc<AppState>>) -> Result<tai
     *state.tailscale_state.write() = new_state.clone();
 
     // Restart server if HTTPS availability changed (HTTP→HTTPS or HTTPS→HTTP)
-    if old_https != new_https && state.config.read().remote_access_enabled {
+    if old_https != new_https && state.config.read().services.server.enabled {
         tracing::info!(source = "tailscale", old_https, new_https, "HTTPS state changed, restarting server");
         restart_server(&state);
     }
@@ -788,10 +788,10 @@ fn get_relay_status(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     let cfg = state.config.read();
     let connected = state.relay.connected.load(std::sync::atomic::Ordering::Relaxed);
     serde_json::json!({
-        "enabled": cfg.relay_enabled,
+        "enabled": cfg.services.relay.enabled,
         "connected": connected,
-        "url": cfg.relay_url,
-        "session_id": cfg.relay_session_id,
+        "url": cfg.services.relay.url,
+        "session_id": cfg.services.relay.session_id,
     })
 }
 
@@ -820,12 +820,12 @@ pub fn run() {
 
     // Auto-generate VAPID keys and session token on first run
     let mut config_dirty = false;
-    if config.vapid_private_key.is_empty() {
+    if config.services.push.vapid_private_key.is_empty() {
         match push::generate_vapid_keys() {
             Ok((private, public)) => {
                 tracing::info!(source = "push", "Generated VAPID key pair");
-                config.vapid_private_key = private;
-                config.vapid_public_key = public;
+                config.services.push.vapid_private_key = private;
+                config.services.push.vapid_public_key = public;
                 config_dirty = true;
             }
             Err(e) => {
@@ -833,8 +833,8 @@ pub fn run() {
             }
         }
     }
-    if config.session_token.is_empty() {
-        config.session_token = uuid::Uuid::new_v4().to_string();
+    if config.services.auth.session_token.is_empty() {
+        config.services.auth.session_token = uuid::Uuid::new_v4().to_string();
         tracing::info!(source = "auth", "Generated persistent session token");
         config_dirty = true;
     }
@@ -861,7 +861,7 @@ pub fn run() {
     // Always start HTTP API server (Unix socket is always on; TCP only if remote access enabled)
     // Tailscale detection + TLS provisioning happens inside the server thread (non-blocking to Tauri setup)
     {
-        let remote_enabled = config.remote_access_enabled;
+        let remote_enabled = config.services.server.enabled;
         let server_state = state.clone();
         std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new()
@@ -899,7 +899,7 @@ pub fn run() {
     agent_mcp::ensure_mcp_configs(&config.disabled_mcp_agents);
 
     // Start relay client if configured
-    if config.relay_enabled {
+    if config.services.relay.enabled {
         let (relay_tx, relay_rx) = tokio::sync::oneshot::channel();
         *state.relay.shutdown.lock() = Some(relay_tx);
         let relay_state = state.clone();
@@ -1505,25 +1505,25 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
     app_logger::init_tracing(log_buffer.clone());
 
     let mut app_config = config::load_app_config();
-    app_config.remote_access_enabled = true;
-    if app_config.remote_access_port != port {
+    app_config.services.server.enabled = true;
+    if app_config.services.server.port != port {
         tracing::info!(
             source = "remote",
-            config_port = app_config.remote_access_port,
+            config_port = app_config.services.server.port,
             override_port = port,
             "Port overridden by TUIC_PORT / CLI argument"
         );
-        app_config.remote_access_port = port;
+        app_config.services.server.port = port;
     }
-    if app_config.lan_auth_bypass {
+    if app_config.services.auth.lan_auth_bypass {
         tracing::warn!(
             source = "remote",
             "lan_auth_bypass is not supported in headless mode — forcing off"
         );
-        app_config.lan_auth_bypass = false;
+        app_config.services.auth.lan_auth_bypass = false;
     }
-    if app_config.session_token.is_empty() {
-        app_config.session_token = uuid::Uuid::new_v4().to_string();
+    if app_config.services.auth.session_token.is_empty() {
+        app_config.services.auth.session_token = uuid::Uuid::new_v4().to_string();
     }
 
     let data_dir = config::config_dir();

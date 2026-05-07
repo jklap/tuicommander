@@ -122,19 +122,19 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 /// Returns when the shutdown signal is received.
 pub(crate) async fn run(state: Arc<AppState>, mut shutdown_rx: oneshot::Receiver<()>) {
     let config = state.config.read().clone();
-    if !config.relay_enabled || config.relay_url.is_empty() || config.relay_token.is_empty() {
+    if !config.services.relay.enabled || config.services.relay.url.is_empty() || config.services.relay.token.is_empty() {
         log_via_state(&state, "info", "relay", "disabled or not configured");
         return;
     }
 
-    let cipher = derive_cipher(&config.relay_token);
-    let ws_url = format!("{}/ws/{}", config.relay_url, config.relay_session_id);
+    let cipher = derive_cipher(&config.services.relay.token);
+    let ws_url = format!("{}/ws/{}", config.services.relay.url, config.services.relay.session_id);
     let mut backoff = INITIAL_BACKOFF;
 
     loop {
         log_via_state(&state, "info", "relay", &format!("connecting to {ws_url}"));
 
-        match connect_and_run(&state, &ws_url, &config.relay_token, &cipher, &mut shutdown_rx).await {
+        match connect_and_run(&state, &ws_url, &config.services.relay.token, &cipher, &mut shutdown_rx).await {
             Ok(ShutdownReason::Signal) => {
                 state.relay.connected.store(false, std::sync::atomic::Ordering::Relaxed);
                 log_via_state(&state, "info", "relay", "shutting down");

@@ -268,6 +268,142 @@ pub(crate) enum AutoDeleteOnPrClose {
     Auto,
 }
 
+// ---------------------------------------------------------------------------
+// ServicesConfig — nested config for remote access, auth, relay, push
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct ServerConfig {
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    #[serde(default = "default_remote_port")]
+    pub(crate) port: u16,
+    #[serde(default)]
+    pub(crate) ipv6_enabled: bool,
+}
+
+impl Default for ServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            port: default_remote_port(),
+            ipv6_enabled: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct AuthConfig {
+    #[serde(default)]
+    pub(crate) username: String,
+    #[serde(default)]
+    pub(crate) password_hash: String,
+    #[serde(default)]
+    pub(crate) session_token: String,
+    #[serde(default = "default_session_token_duration_secs")]
+    pub(crate) session_token_duration_secs: u64,
+    #[serde(default)]
+    pub(crate) lan_auth_bypass: bool,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            username: String::new(),
+            password_hash: String::new(),
+            session_token: String::new(),
+            session_token_duration_secs: default_session_token_duration_secs(),
+            lan_auth_bypass: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct TlsConfig {}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct RelayConfig {
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) url: String,
+    #[serde(default)]
+    pub(crate) token: String,
+    #[serde(default)]
+    pub(crate) session_id: String,
+}
+
+impl Default for RelayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            url: String::new(),
+            token: String::new(),
+            session_id: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct PushConfig {
+    #[serde(default)]
+    pub(crate) enabled: bool,
+    #[serde(default)]
+    pub(crate) vapid_private_key: String,
+    #[serde(default)]
+    pub(crate) vapid_public_key: String,
+    #[serde(default = "default_vapid_subject")]
+    pub(crate) vapid_subject: String,
+}
+
+impl Default for PushConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            vapid_private_key: String::new(),
+            vapid_public_key: String::new(),
+            vapid_subject: default_vapid_subject(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub(crate) struct ServicesConfig {
+    #[serde(default)]
+    pub(crate) server: ServerConfig,
+    #[serde(default)]
+    pub(crate) auth: AuthConfig,
+    #[serde(default)]
+    pub(crate) tls: TlsConfig,
+    #[serde(default)]
+    pub(crate) relay: RelayConfig,
+    #[serde(default)]
+    pub(crate) push: PushConfig,
+}
+
+impl ServicesConfig {
+    pub(crate) fn validate(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if self.server.enabled
+            && self.auth.password_hash.is_empty()
+            && !self.auth.lan_auth_bypass
+        {
+            warnings.push(
+                "Remote access enabled with no password and LAN bypass off — \
+                 all connections will require auth but no password is set"
+                    .to_string(),
+            );
+        }
+        if self.relay.enabled && self.relay.token.is_empty() {
+            warnings.push("Relay enabled but relay token is empty".to_string());
+        }
+        if self.push.enabled && self.push.vapid_private_key.is_empty() {
+            warnings.push("Push enabled but VAPID private key is empty".to_string());
+        }
+        warnings
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct AppConfig {
     pub(crate) shell: Option<String>,
@@ -292,18 +428,8 @@ pub(crate) struct AppConfig {
     /// Default font size for new terminals
     #[serde(default = "default_font_size")]
     pub(crate) default_font_size: u16,
-    /// Enable remote browser access (binds to 0.0.0.0 with auth)
     #[serde(default)]
-    pub(crate) remote_access_enabled: bool,
-    /// Port for remote access (0 = OS-assigned)
-    #[serde(default = "default_remote_port")]
-    pub(crate) remote_access_port: u16,
-    /// Username for Basic Auth on remote connections
-    #[serde(default)]
-    pub(crate) remote_access_username: String,
-    /// Bcrypt hash of the password for Basic Auth
-    #[serde(default)]
-    pub(crate) remote_access_password_hash: String,
+    pub(crate) services: ServicesConfig,
     /// Show confirmation dialog when quitting with active terminals
     #[serde(default = "default_true")]
     pub(crate) confirm_before_quit: bool,
@@ -334,19 +460,6 @@ pub(crate) struct AppConfig {
     /// Update channel: "stable" or "nightly"
     #[serde(default = "default_update_channel")]
     pub(crate) update_channel: String,
-    /// Persistent session token for remote access authentication.
-    /// Auto-generated on first run; survives restarts so mobile/PWA sessions stay valid.
-    #[serde(default)]
-    pub(crate) session_token: String,
-    /// Session token cookie duration in seconds (0 = session cookie, 31536000 = "never")
-    #[serde(default = "default_session_token_duration_secs")]
-    pub(crate) session_token_duration_secs: u64,
-    /// Enable IPv6 dual-stack binding when remote access is active
-    #[serde(default)]
-    pub(crate) ipv6_enabled: bool,
-    /// Skip authentication for private/LAN IP addresses (RFC1918 + IPv6 ULA)
-    #[serde(default)]
-    pub(crate) lan_auth_bypass: bool,
     /// Agent types disabled by the user (won't appear in sidebar "Add Agent" menu)
     #[serde(default)]
     pub(crate) disabled_agents: Vec<String>,
@@ -366,30 +479,6 @@ pub(crate) struct AppConfig {
     /// Show suggested follow-up actions from agents (from `suggest: A | B | C` tokens)
     #[serde(default = "default_true")]
     pub(crate) suggest_followups: bool,
-    /// Enable cloud relay for mobile access
-    #[serde(default)]
-    pub(crate) relay_enabled: bool,
-    /// WebSocket URL of the relay server
-    #[serde(default)]
-    pub(crate) relay_url: String,
-    /// Bearer token for relay authentication
-    #[serde(default)]
-    pub(crate) relay_token: String,
-    /// Session ID to join on the relay (shared with mobile client)
-    #[serde(default)]
-    pub(crate) relay_session_id: String,
-    /// Enable push notifications to mobile PWA clients
-    #[serde(default)]
-    pub(crate) push_enabled: bool,
-    /// VAPID private key (base64url-encoded ES256)
-    #[serde(default)]
-    pub(crate) vapid_private_key: String,
-    /// VAPID public key (base64url-encoded, derived from private)
-    #[serde(default)]
-    pub(crate) vapid_public_key: String,
-    /// VAPID subject (mailto: or https: URL identifying the app server)
-    #[serde(default = "default_vapid_subject")]
-    pub(crate) vapid_subject: String,
     /// Auto-copy terminal selection to clipboard
     #[serde(default = "default_true")]
     pub(crate) copy_on_select: bool,
@@ -495,10 +584,7 @@ impl Default for AppConfig {
             mcp_config_installed: false,
             ide: String::new(),
             default_font_size: 13,
-            remote_access_enabled: false,
-            remote_access_port: default_remote_port(),
-            remote_access_username: String::new(),
-            remote_access_password_hash: String::new(),
+            services: ServicesConfig::default(),
             confirm_before_quit: true,
             confirm_before_closing_tab: true,
             max_tab_name_length: default_max_tab_name_length(),
@@ -509,23 +595,11 @@ impl Default for AppConfig {
             language: default_language(),
             disabled_plugin_ids: Vec::new(),
             update_channel: default_update_channel(),
-            session_token: String::new(),
-            session_token_duration_secs: default_session_token_duration_secs(),
-            ipv6_enabled: false,
-            lan_auth_bypass: false,
             disabled_agents: Vec::new(),
             disabled_mcp_agents: Vec::new(),
             disabled_native_tools: vec!["config".to_string(), "debug".to_string()],
             intent_tab_title: true,
             suggest_followups: true,
-            relay_enabled: false,
-            relay_url: String::new(),
-            relay_token: String::new(),
-            relay_session_id: String::new(),
-            push_enabled: false,
-            vapid_private_key: String::new(),
-            vapid_public_key: String::new(),
-            vapid_subject: default_vapid_subject(),
             copy_on_select: true,
             bell_style: default_bell_style(),
             global_hotkey: None,
@@ -988,9 +1062,105 @@ const ACTIVITY_FILE: &str = "activity.json";
 const AI_PROMPTS_FILE: &str = "ai-prompts.json";
 
 // App config
+
+/// Migrate flat service fields from pre-ServicesConfig format into nested `services` object.
+fn migrate_flat_services(val: &mut serde_json::Value) {
+    let obj = match val.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+    if obj.contains_key("services") {
+        return;
+    }
+    // Only migrate if any flat field exists
+    let flat_keys = [
+        "remote_access_enabled",
+        "remote_access_port",
+        "remote_access_username",
+        "remote_access_password_hash",
+        "session_token",
+        "session_token_duration_secs",
+        "ipv6_enabled",
+        "lan_auth_bypass",
+        "relay_enabled",
+        "relay_url",
+        "relay_token",
+        "relay_session_id",
+        "push_enabled",
+        "vapid_private_key",
+        "vapid_public_key",
+        "vapid_subject",
+    ];
+    if !flat_keys.iter().any(|k| obj.contains_key(*k)) {
+        return;
+    }
+
+    let take = |obj: &mut serde_json::Map<String, serde_json::Value>, key: &str| {
+        obj.remove(key).unwrap_or(serde_json::Value::Null)
+    };
+
+    let server = serde_json::json!({
+        "enabled": take(obj, "remote_access_enabled"),
+        "port": take(obj, "remote_access_port"),
+        "ipv6_enabled": take(obj, "ipv6_enabled"),
+    });
+    let auth = serde_json::json!({
+        "username": take(obj, "remote_access_username"),
+        "password_hash": take(obj, "remote_access_password_hash"),
+        "session_token": take(obj, "session_token"),
+        "session_token_duration_secs": take(obj, "session_token_duration_secs"),
+        "lan_auth_bypass": take(obj, "lan_auth_bypass"),
+    });
+    let relay = serde_json::json!({
+        "enabled": take(obj, "relay_enabled"),
+        "url": take(obj, "relay_url"),
+        "token": take(obj, "relay_token"),
+        "session_id": take(obj, "relay_session_id"),
+    });
+    let push = serde_json::json!({
+        "enabled": take(obj, "push_enabled"),
+        "vapid_private_key": take(obj, "vapid_private_key"),
+        "vapid_public_key": take(obj, "vapid_public_key"),
+        "vapid_subject": take(obj, "vapid_subject"),
+    });
+
+    obj.insert("services".to_string(), serde_json::json!({
+        "server": server,
+        "auth": auth,
+        "tls": {},
+        "relay": relay,
+        "push": push,
+    }));
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_app_config() -> AppConfig {
-    load_json_config(APP_CONFIG_FILE)
+    let path = config_dir().join(APP_CONFIG_FILE);
+    if !path.exists() {
+        return AppConfig::default();
+    }
+    let content = match std::fs::read_to_string(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!(path = %path.display(), "Could not read config: {e}");
+            return AppConfig::default();
+        }
+    };
+    let mut val: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(path = %path.display(), "Corrupt config: {e}. Using defaults.");
+            return AppConfig::default();
+        }
+    };
+    migrate_flat_services(&mut val);
+    match serde_json::from_value(val) {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            tracing::error!(path = %path.display(), "Config deserialization failed after migration: {e}. Using defaults.");
+            AppConfig::default()
+        }
+    }
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -1321,10 +1491,26 @@ mod tests {
             mcp_config_installed: false,
             ide: "cursor".to_string(),
             default_font_size: 18,
-            remote_access_enabled: true,
-            remote_access_port: 8080,
-            remote_access_username: "admin".to_string(),
-            remote_access_password_hash: "$2b$12$hash".to_string(),
+            services: ServicesConfig {
+                server: ServerConfig {
+                    enabled: true,
+                    port: 8080,
+                    ipv6_enabled: true,
+                },
+                auth: AuthConfig {
+                    username: "admin".to_string(),
+                    password_hash: "$2b$12$hash".to_string(),
+                    session_token: "test-session-token".to_string(),
+                    session_token_duration_secs: 3600,
+                    lan_auth_bypass: true,
+                },
+                tls: TlsConfig::default(),
+                relay: RelayConfig::default(),
+                push: PushConfig {
+                    vapid_subject: "mailto:test@example.com".to_string(),
+                    ..PushConfig::default()
+                },
+            },
             confirm_before_quit: false,
             confirm_before_closing_tab: true,
             max_tab_name_length: 40,
@@ -1335,23 +1521,11 @@ mod tests {
             language: "it".to_string(),
             disabled_plugin_ids: vec!["test-disabled".to_string()],
             update_channel: "nightly".to_string(),
-            session_token: "test-session-token".to_string(),
-            session_token_duration_secs: 3600,
-            ipv6_enabled: true,
-            lan_auth_bypass: true,
             disabled_agents: vec!["codex".to_string()],
             disabled_mcp_agents: vec!["windsurf".to_string()],
             disabled_native_tools: vec!["plugin_dev_guide".to_string()],
             intent_tab_title: false,
             suggest_followups: false,
-            relay_enabled: false,
-            relay_url: String::new(),
-            relay_token: String::new(),
-            relay_session_id: String::new(),
-            push_enabled: false,
-            vapid_private_key: String::new(),
-            vapid_public_key: String::new(),
-            vapid_subject: "mailto:test@example.com".to_string(),
             global_hotkey: Some("CommandOrControl+Shift+T".to_string()),
             copy_on_select: true,
             bell_style: "visual".to_string(),
@@ -1371,10 +1545,10 @@ mod tests {
         assert_eq!(loaded.default_font_size, 18);
         assert!(loaded.mcp_server_enabled);
         assert_eq!(loaded.mcp_port, 4000);
-        assert!(loaded.remote_access_enabled);
-        assert_eq!(loaded.remote_access_port, 8080);
-        assert_eq!(loaded.remote_access_username, "admin");
-        assert_eq!(loaded.remote_access_password_hash, "$2b$12$hash");
+        assert!(loaded.services.server.enabled);
+        assert_eq!(loaded.services.server.port, 8080);
+        assert_eq!(loaded.services.auth.username, "admin");
+        assert_eq!(loaded.services.auth.password_hash, "$2b$12$hash");
         assert!(!loaded.confirm_before_quit);
         assert!(loaded.confirm_before_closing_tab);
         assert_eq!(loaded.max_tab_name_length, 40);
@@ -1384,9 +1558,9 @@ mod tests {
         assert_eq!(loaded.language, "it");
         assert_eq!(loaded.disabled_plugin_ids, vec!["test-disabled".to_string()]);
         assert_eq!(loaded.update_channel, "nightly");
-        assert_eq!(loaded.session_token_duration_secs, 3600);
-        assert!(loaded.ipv6_enabled);
-        assert!(loaded.lan_auth_bypass);
+        assert_eq!(loaded.services.auth.session_token_duration_secs, 3600);
+        assert!(loaded.services.server.ipv6_enabled);
+        assert!(loaded.services.auth.lan_auth_bypass);
         assert_eq!(loaded.disabled_native_tools, vec!["plugin_dev_guide".to_string()]);
         assert!(!loaded.intent_tab_title);
         assert!(!loaded.suggest_followups);
@@ -1404,10 +1578,10 @@ mod tests {
         assert_eq!(loaded.default_font_size, 13);
         assert!(!loaded.mcp_server_enabled);
         assert_eq!(loaded.mcp_port, 3845);
-        assert!(!loaded.remote_access_enabled);
-        assert_eq!(loaded.remote_access_port, 9876);
-        assert_eq!(loaded.remote_access_username, "");
-        assert_eq!(loaded.remote_access_password_hash, "");
+        assert!(!loaded.services.server.enabled);
+        assert_eq!(loaded.services.server.port, 9876);
+        assert_eq!(loaded.services.auth.username, "");
+        assert_eq!(loaded.services.auth.password_hash, "");
         assert!(loaded.confirm_before_quit);
         assert!(loaded.confirm_before_closing_tab);
         assert_eq!(loaded.max_tab_name_length, 25);
@@ -1416,12 +1590,84 @@ mod tests {
         assert!(loaded.auto_update_enabled);
         assert_eq!(loaded.language, "en");
         assert_eq!(loaded.update_channel, "stable");
-        assert_eq!(loaded.session_token_duration_secs, 86400);
-        assert!(!loaded.ipv6_enabled);
-        assert!(!loaded.lan_auth_bypass);
+        assert_eq!(loaded.services.auth.session_token_duration_secs, 86400);
+        assert!(!loaded.services.server.ipv6_enabled);
+        assert!(!loaded.services.auth.lan_auth_bypass);
         assert!(loaded.intent_tab_title); // defaults to true
         assert!(loaded.suggest_followups); // defaults to true
         assert!(!loaded.experimental_features_enabled);
+    }
+
+    #[test]
+    fn migrate_flat_services_fields() {
+        let old_json = r#"{
+            "shell": null,
+            "font_family": "JetBrains Mono",
+            "font_size": 14,
+            "theme": "vscode-dark",
+            "remote_access_enabled": true,
+            "remote_access_port": 8080,
+            "remote_access_username": "admin",
+            "remote_access_password_hash": "$2b$12$hash",
+            "session_token": "tok-123",
+            "session_token_duration_secs": 7200,
+            "ipv6_enabled": true,
+            "lan_auth_bypass": true,
+            "relay_enabled": true,
+            "relay_url": "wss://relay.example.com",
+            "relay_token": "secret",
+            "relay_session_id": "sess-1",
+            "push_enabled": true,
+            "vapid_private_key": "pk",
+            "vapid_public_key": "pub",
+            "vapid_subject": "mailto:test@example.com"
+        }"#;
+        let mut val: serde_json::Value = serde_json::from_str(old_json).unwrap();
+        migrate_flat_services(&mut val);
+        let cfg: AppConfig = serde_json::from_value(val).unwrap();
+        assert!(cfg.services.server.enabled);
+        assert_eq!(cfg.services.server.port, 8080);
+        assert!(cfg.services.server.ipv6_enabled);
+        assert_eq!(cfg.services.auth.username, "admin");
+        assert_eq!(cfg.services.auth.password_hash, "$2b$12$hash");
+        assert_eq!(cfg.services.auth.session_token, "tok-123");
+        assert_eq!(cfg.services.auth.session_token_duration_secs, 7200);
+        assert!(cfg.services.auth.lan_auth_bypass);
+        assert!(cfg.services.relay.enabled);
+        assert_eq!(cfg.services.relay.url, "wss://relay.example.com");
+        assert_eq!(cfg.services.relay.token, "secret");
+        assert_eq!(cfg.services.relay.session_id, "sess-1");
+        assert!(cfg.services.push.enabled);
+        assert_eq!(cfg.services.push.vapid_private_key, "pk");
+        assert_eq!(cfg.services.push.vapid_public_key, "pub");
+        assert_eq!(cfg.services.push.vapid_subject, "mailto:test@example.com");
+        // Flat fields should be removed after migration
+        assert_eq!(cfg.font_family, "JetBrains Mono");
+    }
+
+    #[test]
+    fn migrate_skips_when_services_present() {
+        let nested_json = r#"{
+            "services": {
+                "server": { "enabled": true, "port": 9999, "ipv6_enabled": false },
+                "auth": { "username": "user2" },
+                "tls": {},
+                "relay": {},
+                "push": {}
+            },
+            "remote_access_enabled": false
+        }"#;
+        let mut val: serde_json::Value = serde_json::from_str(nested_json).unwrap();
+        migrate_flat_services(&mut val);
+        // `services` already present → migration is a no-op, flat field kept as-is
+        let services = val.pointer("/services/server/enabled").unwrap();
+        assert_eq!(services, true);
+        let port = val.pointer("/services/server/port").unwrap();
+        assert_eq!(port, 9999);
+        let username = val.pointer("/services/auth/username").unwrap();
+        assert_eq!(username, "user2");
+        // flat field NOT consumed (migration skipped)
+        assert!(val.get("remote_access_enabled").is_some());
     }
 
     #[test]

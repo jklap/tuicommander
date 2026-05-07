@@ -186,12 +186,12 @@ pub async fn basic_auth_middleware(
     }
 
     // LAN bypass: skip auth for private/RFC1918 addresses when configured
-    if state.config.read().lan_auth_bypass && is_private_ip(&addr.ip()) {
+    if state.config.read().services.auth.lan_auth_bypass && is_private_ip(&addr.ip()) {
         return next.run(req).await;
     }
 
     let session_token = state.session_token.read().clone();
-    let token_duration_secs = state.config.read().session_token_duration_secs;
+    let token_duration_secs = state.config.read().services.auth.session_token_duration_secs;
 
     // Detect TLS for Secure cookie flag (dual-protocol injects Protocol extension)
     let is_tls = req
@@ -219,8 +219,8 @@ pub async fn basic_auth_middleware(
     let (username, hash) = {
         let config = state.config.read();
         (
-            config.remote_access_username.clone(),
-            config.remote_access_password_hash.clone(),
+            config.services.auth.username.clone(),
+            config.services.auth.password_hash.clone(),
         )
     };
     let auth_header = req

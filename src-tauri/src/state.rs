@@ -1058,7 +1058,7 @@ impl AppState {
         log_buffer: Arc<Mutex<crate::app_logger::LogRingBuffer>>,
     ) -> Self {
         let mcp_upstream_registry = Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new());
-        let session_token = config.session_token.clone();
+        let session_token = config.services.auth.session_token.clone();
         let push_store = crate::push::PushStore::load(&data_dir);
         Self {
             sessions: DashMap::new(),

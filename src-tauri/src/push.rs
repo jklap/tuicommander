@@ -175,14 +175,14 @@ pub(crate) async fn send_push_batch(
 
     let mut stale_endpoints: Vec<String> = Vec::new();
 
-    if !config.push_enabled || config.vapid_private_key.is_empty() || subs.is_empty() {
+    if !config.services.push.enabled || config.services.push.vapid_private_key.is_empty() || subs.is_empty() {
         return stale_endpoints;
     }
 
     let payload = serde_json::json!({ "title": title, "body": body, "url": url });
     let payload_bytes = payload.to_string().into_bytes();
 
-    let kp_bytes = match Base64UrlUnpadded::decode_vec(&config.vapid_private_key) {
+    let kp_bytes = match Base64UrlUnpadded::decode_vec(&config.services.push.vapid_private_key) {
         Ok(b) => b,
         Err(e) => {
             tracing::error!(source = "push", "Invalid VAPID private key encoding: {e}");
@@ -201,7 +201,7 @@ pub(crate) async fn send_push_batch(
     let futures: Vec<_> = subs
         .iter()
         .filter_map(|sub| {
-            build_push_request(sub, &vapid_kp, &config.vapid_subject, &payload_bytes)
+            build_push_request(sub, &vapid_kp, &config.services.push.vapid_subject, &payload_bytes)
         })
         .map(|(endpoint, request)| {
             let client = http_client.clone();

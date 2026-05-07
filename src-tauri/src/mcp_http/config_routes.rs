@@ -20,11 +20,19 @@ pub(super) async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoR
             ).into_response();
         }
     };
-    // Strip sensitive fields from HTTP responses
-    if let Some(obj) = json.as_object_mut() {
-        obj.remove("remote_access_password_hash");
-        obj.remove("session_token");
-        obj.remove("vapid_private_key");
+    // Strip sensitive fields from nested services config
+    if let Some(services) = json.pointer_mut("/services") {
+        if let Some(auth) = services.pointer_mut("/auth") {
+            if let Some(o) = auth.as_object_mut() {
+                o.remove("password_hash");
+                o.remove("session_token");
+            }
+        }
+        if let Some(push) = services.pointer_mut("/push") {
+            if let Some(o) = push.as_object_mut() {
+                o.remove("vapid_private_key");
+            }
+        }
     }
     Json(json).into_response()
 }
@@ -39,9 +47,9 @@ pub(super) async fn put_config(
     let mut config = config;
     {
         let current = state.config.read();
-        config.session_token = current.session_token.clone();
-        config.vapid_private_key = current.vapid_private_key.clone();
-        config.vapid_public_key = current.vapid_public_key.clone();
+        config.services.auth.session_token = current.services.auth.session_token.clone();
+        config.services.push.vapid_private_key = current.services.push.vapid_private_key.clone();
+        config.services.push.vapid_public_key = current.services.push.vapid_public_key.clone();
     }
     match crate::config::save_app_config(config.clone()) {
         Ok(()) => {

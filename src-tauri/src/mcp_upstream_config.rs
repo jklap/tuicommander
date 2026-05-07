@@ -226,7 +226,7 @@ pub(crate) async fn auto_connect_saved_upstreams(state: &crate::state::AppState)
         return;
     }
 
-    let self_port = state.config.read().remote_access_port;
+    let self_port = state.config.read().services.server.port;
     let errors = validate_upstream_config(&config, self_port);
     if !errors.is_empty() {
         for e in &errors {
@@ -265,7 +265,7 @@ pub(crate) async fn save_mcp_upstreams(
     config: UpstreamMcpConfig,
     state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
 ) -> Result<(), String> {
-    let self_port = state.config.read().remote_access_port;
+    let self_port = state.config.read().services.server.port;
     let errors = validate_upstream_config(&config, self_port);
     if !errors.is_empty() {
         let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
@@ -352,7 +352,7 @@ pub(crate) async fn reconnect_mcp_upstream(
     state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
 ) -> Result<(), String> {
     let config: UpstreamMcpConfig = load_json_config(UPSTREAMS_FILE);
-    let self_port = state.config.read().remote_access_port;
+    let self_port = state.config.read().services.server.port;
 
     // Validate before connecting
     let errors = validate_upstream_config(&config, self_port);

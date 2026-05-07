@@ -69,25 +69,41 @@ interface McpStatus {
   reachable?: boolean | null;
 }
 
+interface ServerConfig {
+  enabled: boolean;
+  port: number;
+  ipv6_enabled: boolean;
+}
+
+interface AuthConfig {
+  username: string;
+  password_hash: string;
+  session_token_duration_secs: number;
+  lan_auth_bypass: boolean;
+}
+
+interface RelayConfig {
+  enabled: boolean;
+  url: string;
+  token: string;
+  session_id: string;
+}
+
+interface ServicesConfig {
+  server: ServerConfig;
+  auth: AuthConfig;
+  relay: RelayConfig;
+}
+
 interface AppConfig {
   shell: string | null;
   font_family: string;
   font_size: number;
   theme: string;
   mcp_server_enabled: boolean;
-  remote_access_enabled: boolean;
-  remote_access_port: number;
-  remote_access_username: string;
-  remote_access_password_hash: string;
-  session_token_duration_secs: number;
-  ipv6_enabled: boolean;
-  lan_auth_bypass: boolean;
+  services: ServicesConfig;
   disabled_native_tools: string[];
   collapse_tools: boolean;
-  relay_enabled: boolean;
-  relay_url: string;
-  relay_token: string;
-  relay_session_id: string;
 }
 
 interface RelayStatus {
@@ -217,19 +233,19 @@ export const ServicesTab: Component = () => {
   const loadRemoteConfig = async () => {
     try {
       const config = await rpc<AppConfig>("load_config");
-      setRaEnabled(config.remote_access_enabled);
-      setRaPort(config.remote_access_port);
-      setRaUsername(config.remote_access_username);
-      setRaHasPassword(config.remote_access_password_hash.length > 0);
-      setTokenDuration(config.session_token_duration_secs ?? 86400);
-      setIpv6Enabled(config.ipv6_enabled ?? false);
-      setLanAuthBypass(config.lan_auth_bypass ?? false);
+      setRaEnabled(config.services.server.enabled);
+      setRaPort(config.services.server.port);
+      setRaUsername(config.services.auth.username);
+      setRaHasPassword(config.services.auth.password_hash.length > 0);
+      setTokenDuration(config.services.auth.session_token_duration_secs ?? 86400);
+      setIpv6Enabled(config.services.server.ipv6_enabled ?? false);
+      setLanAuthBypass(config.services.auth.lan_auth_bypass ?? false);
       setDisabledNativeTools(config.disabled_native_tools ?? []);
       setCollapseTools(config.collapse_tools ?? false);
-      setRelayEnabled(config.relay_enabled ?? false);
-      setRelayUrl(config.relay_url || "wss://relay.tuicommander.com");
-      setRelayToken(config.relay_token ?? "");
-      setRelaySessionId(config.relay_session_id ?? "");
+      setRelayEnabled(config.services.relay.enabled ?? false);
+      setRelayUrl(config.services.relay.url || "wss://relay.tuicommander.com");
+      setRelayToken(config.services.relay.token ?? "");
+      setRelaySessionId(config.services.relay.session_id ?? "");
     } catch (e) {
       appLogger.warn("config", "Failed to load remote access config, using defaults", e);
     }
@@ -264,7 +280,7 @@ export const ServicesTab: Component = () => {
     if (!password) return;
     try {
       const hash = await rpc<string>("hash_password", { password });
-      await saveConfigField((c) => { c.remote_access_password_hash = hash; });
+      await saveConfigField((c) => { c.services.auth.password_hash = hash; });
       setRaPassword("");
       setRaHasPassword(true);
     } catch (e) {
@@ -345,7 +361,7 @@ export const ServicesTab: Component = () => {
             onChange={(e) => {
               const val = e.currentTarget.checked;
               setRaEnabled(val);
-              saveConfigField((c) => { c.remote_access_enabled = val; });
+              saveConfigField((c) => { c.services.server.enabled = val; });
             }}
           />
           <span>{t("services.toggle.enableRemoteAccess", "Enable remote access")}</span>
@@ -367,7 +383,7 @@ export const ServicesTab: Component = () => {
                 min={1024}
                 max={65535}
                 onInput={(e) => setRaPort(parseInt(e.currentTarget.value) || 9876)}
-                onChange={() => saveConfigField((c) => { c.remote_access_port = raPort(); })}
+                onChange={() => saveConfigField((c) => { c.services.server.port = raPort(); })}
               />
               <p class={s.hint}>
                 {t("services.hint.port", "TCP port for the remote access web server")}
@@ -384,7 +400,7 @@ export const ServicesTab: Component = () => {
                   value={raUsername()}
                   placeholder={t("services.placeholder.username", "admin")}
                   onInput={(e) => setRaUsername(e.currentTarget.value)}
-                  onChange={() => saveConfigField((c) => { c.remote_access_username = raUsername(); })}
+                  onChange={() => saveConfigField((c) => { c.services.auth.username = raUsername(); })}
                 />
               </div>
               <div class={s.group} style={{ flex: "1", "min-width": 0 }}>
@@ -453,7 +469,7 @@ export const ServicesTab: Component = () => {
                 onChange={(e) => {
                   const val = parseInt(e.currentTarget.value);
                   setTokenDuration(val);
-                  saveConfigField((c) => { c.session_token_duration_secs = val; });
+                  saveConfigField((c) => { c.services.auth.session_token_duration_secs = val; });
                 }}
               >
                 <For each={TOKEN_DURATIONS}>
@@ -513,7 +529,7 @@ export const ServicesTab: Component = () => {
               onChange={(e) => {
                 const val = e.currentTarget.checked;
                 setIpv6Enabled(val);
-                saveConfigField((c) => { c.ipv6_enabled = val; });
+                saveConfigField((c) => { c.services.server.ipv6_enabled = val; });
               }}
             />
             <span>{t("services.toggle.enableIpv6", "Enable IPv6 (dual-stack)")}</span>
@@ -531,7 +547,7 @@ export const ServicesTab: Component = () => {
               onChange={(e) => {
                 const val = e.currentTarget.checked;
                 setLanAuthBypass(val);
-                saveConfigField((c) => { c.lan_auth_bypass = val; });
+                saveConfigField((c) => { c.services.auth.lan_auth_bypass = val; });
               }}
             />
             <span>{t("services.toggle.lanAuthBypass", "Allow LAN access without authentication")}</span>
@@ -603,9 +619,9 @@ export const ServicesTab: Component = () => {
               if (val && !relaySessionId()) {
                 const id = crypto.randomUUID();
                 setRelaySessionId(id);
-                saveConfigField((c) => { c.relay_enabled = val; c.relay_session_id = id; });
+                saveConfigField((c) => { c.services.relay.enabled = val; c.services.relay.session_id = id; });
               } else {
-                saveConfigField((c) => { c.relay_enabled = val; });
+                saveConfigField((c) => { c.services.relay.enabled = val; });
               }
             }}
           />
@@ -639,7 +655,7 @@ export const ServicesTab: Component = () => {
             value={relayUrl()}
             placeholder="wss://relay.tuicommander.com"
             onInput={(e) => setRelayUrl(e.currentTarget.value)}
-            onChange={() => saveConfigField((c) => { c.relay_url = relayUrl(); })}
+            onChange={() => saveConfigField((c) => { c.services.relay.url = relayUrl(); })}
           />
         </div>
 
@@ -651,7 +667,7 @@ export const ServicesTab: Component = () => {
             value={relayToken()}
             placeholder={t("services.placeholder.relayToken", "Paste token from relay server registration")}
             onInput={(e) => setRelayToken(e.currentTarget.value)}
-            onChange={() => saveConfigField((c) => { c.relay_token = relayToken(); })}
+            onChange={() => saveConfigField((c) => { c.services.relay.token = relayToken(); })}
           />
           <p class={s.hint}>
             {t("services.hint.relayToken", "Obtained from the relay server's /register endpoint. Used for both authentication and E2E encryption key derivation.")}
@@ -672,7 +688,7 @@ export const ServicesTab: Component = () => {
               onClick={() => {
                 const id = crypto.randomUUID();
                 setRelaySessionId(id);
-                saveConfigField((c) => { c.relay_session_id = id; });
+                saveConfigField((c) => { c.services.relay.session_id = id; });
               }}
               title={t("services.btn.regenerateSessionId", "Generate new session ID")}
             >

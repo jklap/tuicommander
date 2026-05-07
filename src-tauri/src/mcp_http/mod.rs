@@ -223,7 +223,7 @@ async fn save_mcp_upstreams_http(
     State(state): State<Arc<AppState>>,
     Json(config): Json<crate::mcp_upstream_config::UpstreamMcpConfig>,
 ) -> Response {
-    let self_port = state.config.read().remote_access_port;
+    let self_port = state.config.read().services.server.port;
     let errors = crate::mcp_upstream_config::validate_upstream_config(&config, self_port);
     if !errors.is_empty() {
         let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
@@ -249,7 +249,7 @@ async fn reconnect_mcp_upstream_http(
     };
     let config: crate::mcp_upstream_config::UpstreamMcpConfig =
         crate::config::load_json_config(crate::mcp_upstream_config::UPSTREAMS_FILE);
-    let self_port = state.config.read().remote_access_port;
+    let self_port = state.config.read().services.server.port;
     let server = match config.servers.into_iter().find(|s| s.name == name) {
         Some(s) => s,
         None => return (StatusCode::NOT_FOUND, format!("Upstream '{name}' not found")).into_response(),
@@ -322,10 +322,10 @@ async fn plugin_data_http(
 async fn push_vapid_key(State(state): State<Arc<AppState>>) -> Response {
     let public_key = {
         let config = state.config.read();
-        if config.vapid_public_key.is_empty() {
+        if config.services.push.vapid_public_key.is_empty() {
             return (StatusCode::NOT_FOUND, "VAPID keys not generated — restart the app").into_response();
         }
-        config.vapid_public_key.clone()
+        config.services.push.vapid_public_key.clone()
     };
     Json(serde_json::json!({ "publicKey": public_key })).into_response()
 }
@@ -344,8 +344,8 @@ async fn push_subscribe(
     // Auto-enable push on first subscription — mutate + drop lock before disk I/O
     let needs_save = {
         let mut config = state.config.write();
-        if !config.push_enabled {
-            config.push_enabled = true;
+        if !config.services.push.enabled {
+            config.services.push.enabled = true;
             true
         } else {
             false
@@ -800,8 +800,8 @@ pub async fn start_server(
     // --- TCP listener (only for remote access with auth) ---
     // Supports dual-protocol (HTTP+HTTPS on same port) when TLS cert is available.
     let tcp_handle = if remote_enabled {
-        let base_port = config.remote_access_port;
-        let host = if config.ipv6_enabled { "[::]" } else { "0.0.0.0" };
+        let base_port = config.services.server.port;
+        let host = if config.services.server.ipv6_enabled { "[::]" } else { "0.0.0.0" };
         const MAX_PORT_ATTEMPTS: u16 = 3;
 
         let mut listener_result: Option<std::net::TcpListener> = None;
@@ -1118,7 +1118,7 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::OK);
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert!(config.get("remote_access_password_hash").is_none(),
+        assert!(config.pointer("/services/auth/password_hash").is_none(),
             "Password hash should be stripped from HTTP response");
     }
 
@@ -2010,7 +2010,7 @@ mod tests {
         let state = test_state();
         let result = call_mcp_tool(&state, "config", serde_json::json!({"action": "get"})).await;
         assert!(result["font_family"].as_str().is_some());
-        assert!(result.get("remote_access_password_hash").is_none(),
+        assert!(result.pointer("/services/auth/password_hash").is_none(),
             "Password hash should be stripped from MCP tool response");
     }
 

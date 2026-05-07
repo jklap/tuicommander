@@ -29,7 +29,9 @@ interface RustAppConfig {
   auto_update_enabled: boolean;
   language: string;
   update_channel: string;
-  session_token_duration_secs: number;
+  services: {
+    auth: { session_token_duration_secs: number };
+  };
   disabled_agents: string[];
   intent_tab_title: boolean;
   suggest_followups: boolean;
@@ -341,7 +343,7 @@ function createSettingsStore() {
       scrollback_reflow: state.scrollbackReflow,
       cursor_style: state.cursorStyle,
       terminal_renderer: state.terminalRenderer,
-      session_token_duration_secs: baseConfig?.session_token_duration_secs ?? 86400,
+      services: baseConfig?.services ?? { auth: { session_token_duration_secs: 86400 } },
       mcp_server_enabled: baseConfig?.mcp_server_enabled ?? true,
     };
   }
