@@ -238,11 +238,11 @@ const ProviderCard: Component<{ provider: ProviderEntry }> = (props) => {
     () => isOllama() ? props.provider.id : null,
     async (providerId) => {
       try {
-        const result = await invoke<{ available: boolean; models: string[] }>(
+        const result = await invoke<{ available: boolean; models: { name: string; size: number }[] }>(
           "check_ollama_models",
           { providerId }
         );
-        return result.models ?? [];
+        return (result.models ?? []).map((m) => m.name);
       } catch (e) {
         appLogger.warn("settings", `Ollama model check failed: ${String(e)}`);
         return [];
