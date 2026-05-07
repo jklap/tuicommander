@@ -35,11 +35,72 @@ AI Chat speaks to four provider families plus a custom endpoint. Switch in `Sett
 
 | Use case | Local (Ollama) | API |
 |---|---|---|
+| Enrichment / triage | Qwen 2.5 Coder 3B (Q4_K_M) | Haiku, GPT-4o-mini |
 | Explain output, quick Q&A | Qwen 2.5 7B, Llama 3.3 8B | Haiku, GPT-4o-mini |
 | Generate commands, review diffs | Qwen3-Coder 14B | Sonnet, GPT-4o |
 | Agent loop (tool calling) | DeepSeek R1 32B, Qwen 27B | Sonnet, Opus |
 
 API keys are stored in the OS keyring under service `tuicommander-ai-chat` — never written to disk in plaintext.
+
+### Local MLX models (Apple Silicon)
+
+On Apple Silicon Macs, MLX models run natively via the MLX framework and are significantly faster than GGUF models for small inference tasks like enrichment and triage.
+
+**Option A: mlx_lm.server (recommended for enrichment)**
+
+Serves an MLX model with an OpenAI-compatible API. Configure as a Custom provider in TUIC.
+
+```bash
+# Install
+pipx install mlx-lm
+
+# Start server (port 8899, Qwen 2.5 Coder 3B 4-bit)
+mlx_lm.server --model mlx-community/Qwen2.5-Coder-3B-Instruct-4bit --port 8899
+```
+
+In `Settings > AI Chat > Providers`, add a **Custom** provider with base URL `http://127.0.0.1:8899/v1/` and model name `mlx-community/Qwen2.5-Coder-3B-Instruct-4bit`. Assign it to the **Triage** slot.
+
+Benchmark (M4): ~120 tok/s generation vs ~98 tok/s for the same model via Ollama GGUF.
+
+**Option B: Ollama with MLX tags**
+
+Some models have native MLX tags on the Ollama registry (e.g. `qwen3.5:4b-mlx-bf16`). These run on Ollama's built-in MLX runner automatically. Check available tags with `ollama pull <model>:<size>-mlx-<dtype>`.
+
+**Option C: MLX → GGUF conversion**
+
+For MLX models without Ollama MLX tags, convert to GGUF and import into Ollama:
+
+```bash
+# 1. Download MLX model
+pipx run --spec huggingface_hub hf download \
+  mlx-community/Qwen2.5-Coder-3B-Instruct-4bit \
+  --local-dir /tmp/model-mlx
+
+# 2. Dequantize MLX → HF safetensors
+mlx_lm.convert --hf-path /tmp/model-mlx --mlx-path /tmp/model-hf -d
+
+# 3. Convert HF → GGUF (requires llama.cpp + torch)
+git clone --depth 1 https://github.com/ggerganov/llama.cpp /tmp/llama.cpp
+cd /tmp/llama.cpp && cmake -B build -DGGML_METAL=ON && cmake --build build --target llama-quantize -j
+python3 convert_hf_to_gguf.py /tmp/model-hf --outtype f16 --outfile /tmp/model-f16.gguf
+./build/bin/llama-quantize /tmp/model-f16.gguf /tmp/model-q4.gguf Q4_K_M
+
+# 4. Import into Ollama
+cat > /tmp/Modelfile <<'EOF'
+FROM /tmp/model-q4.gguf
+TEMPLATE """{{ if .System }}<|im_start|>system
+{{ .System }}<|im_end|>
+{{ end }}{{ if .Prompt }}<|im_start|>user
+{{ .Prompt }}<|im_end|>
+{{ end }}<|im_start|>assistant
+"""
+PARAMETER stop "<|im_end|>"
+PARAMETER stop "<|endoftext|>"
+EOF
+ollama create my-model -f /tmp/Modelfile
+```
+
+Note: double quantization (MLX 4-bit → bf16 → GGUF Q4_K_M) introduces quality loss. Prefer Option A for MLX models or pull the native GGUF from Ollama when available (`ollama pull qwen2.5-coder:3b`).
 
 ## Context injection
 
