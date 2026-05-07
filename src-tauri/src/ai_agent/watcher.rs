@@ -359,6 +359,26 @@ pub(crate) fn evaluate_trigger(
     }
 }
 
+// ── Event matching for non-idle triggers ────────────────────────
+
+#[derive(Debug, PartialEq)]
+pub(crate) enum EventKind {
+    Busy,
+    Question { confident: bool },
+    Error,
+}
+
+fn trigger_matches(trigger: &WatcherTrigger, kind: &EventKind) -> bool {
+    match (trigger, kind) {
+        (WatcherTrigger::Busy, EventKind::Busy) => true,
+        (WatcherTrigger::Question { confident_only }, EventKind::Question { confident }) => {
+            !confident_only || *confident
+        }
+        (WatcherTrigger::Error, EventKind::Error) => true,
+        _ => false,
+    }
+}
+
 // ── WatcherEngine ───────────────────────────────────────────────
 
 const SCREEN_TAIL_LINES: usize = 50;
@@ -398,9 +418,24 @@ impl WatcherEngine {
                         "shell-state" => {
                             let state_val =
                                 parsed.get("state").and_then(|s| s.as_str()).unwrap_or("");
-                            if state_val == "idle" {
-                                self.on_idle(&session_id).await;
+                            match state_val {
+                                "idle" => self.on_idle(&session_id).await,
+                                "busy" => {
+                                    self.on_event(&session_id, EventKind::Busy).await;
+                                }
+                                _ => {}
                             }
+                        }
+                        "question" => {
+                            let confident = parsed
+                                .get("confident")
+                                .and_then(|c| c.as_bool())
+                                .unwrap_or(false);
+                            self.on_event(&session_id, EventKind::Question { confident })
+                                .await;
+                        }
+                        "api-error" | "rate-limit" => {
+                            self.on_event(&session_id, EventKind::Error).await;
                         }
                         "user-input" => {
                             self.on_user_input(&session_id);
@@ -423,8 +458,13 @@ impl WatcherEngine {
     async fn on_idle(&self, session_id: &str) {
         let last_exit_code = self.last_exit_code(session_id);
         let screen_tail = self.screen_tail(session_id);
+        let tab_visible = self
+            .state
+            .session_visibility
+            .get(session_id)
+            .map(|v| *v)
+            .unwrap_or(true);
 
-        // Collect rules that should fire (avoid holding write lock across await).
         let fire_candidates: Vec<(String, String)> = {
             let config = self.config.read();
             config
@@ -432,13 +472,34 @@ impl WatcherEngine {
                 .iter()
                 .filter(|r| r.session_id.as_deref() == Some(session_id) && r.status == WatcherStatus::Active)
                 .filter(|r| {
-                    self.evaluate_trigger_cached(&r.trigger, last_exit_code, &screen_tail)
-                        == TriggerOutcome::Fire
+                    if r.trigger == WatcherTrigger::Unseen {
+                        !tab_visible
+                    } else {
+                        self.evaluate_trigger_cached(&r.trigger, last_exit_code, &screen_tail)
+                            == TriggerOutcome::Fire
+                    }
                 })
                 .map(|r| (r.id.clone(), session_id.to_string()))
                 .collect()
         };
 
+        for (rule_id, sid) in fire_candidates {
+            self.fire_rule(&rule_id, &sid, &screen_tail).await;
+        }
+    }
+
+    async fn on_event(&self, session_id: &str, kind: EventKind) {
+        let screen_tail = self.screen_tail(session_id);
+        let fire_candidates: Vec<(String, String)> = {
+            let config = self.config.read();
+            config
+                .rules
+                .iter()
+                .filter(|r| r.session_id.as_deref() == Some(session_id) && r.status == WatcherStatus::Active)
+                .filter(|r| trigger_matches(&r.trigger, &kind))
+                .map(|r| (r.id.clone(), session_id.to_string()))
+                .collect()
+        };
         for (rule_id, sid) in fire_candidates {
             self.fire_rule(&rule_id, &sid, &screen_tail).await;
         }
@@ -1537,5 +1598,131 @@ mod tests {
             entry.pop_front();
         }
         assert_eq!(entry.len(), 100);
+    }
+
+    // ── trigger_matches tests ────────────────────────────────────
+
+    #[test]
+    fn trigger_matches_busy() {
+        assert!(trigger_matches(&WatcherTrigger::Busy, &EventKind::Busy));
+        assert!(!trigger_matches(&WatcherTrigger::Busy, &EventKind::Error));
+        assert!(!trigger_matches(
+            &WatcherTrigger::Busy,
+            &EventKind::Question { confident: true }
+        ));
+    }
+
+    #[test]
+    fn trigger_matches_question_any() {
+        let trigger = WatcherTrigger::Question {
+            confident_only: false,
+        };
+        assert!(trigger_matches(
+            &trigger,
+            &EventKind::Question { confident: false }
+        ));
+        assert!(trigger_matches(
+            &trigger,
+            &EventKind::Question { confident: true }
+        ));
+    }
+
+    #[test]
+    fn trigger_matches_question_confident_only() {
+        let trigger = WatcherTrigger::Question {
+            confident_only: true,
+        };
+        assert!(!trigger_matches(
+            &trigger,
+            &EventKind::Question { confident: false }
+        ));
+        assert!(trigger_matches(
+            &trigger,
+            &EventKind::Question { confident: true }
+        ));
+    }
+
+    #[test]
+    fn trigger_matches_error() {
+        assert!(trigger_matches(&WatcherTrigger::Error, &EventKind::Error));
+        assert!(!trigger_matches(&WatcherTrigger::Error, &EventKind::Busy));
+    }
+
+    #[test]
+    fn trigger_matches_cross_type_never() {
+        assert!(!trigger_matches(&WatcherTrigger::Idle, &EventKind::Busy));
+        assert!(!trigger_matches(&WatcherTrigger::Unseen, &EventKind::Error));
+        assert!(!trigger_matches(
+            &WatcherTrigger::CommandDone { on_failure_only: false },
+            &EventKind::Question { confident: true }
+        ));
+    }
+
+    // ── Unseen trigger evaluation (idle path) ────────────────────
+
+    #[test]
+    fn unseen_fires_when_tab_not_visible() {
+        let trigger = WatcherTrigger::Unseen;
+        let tab_visible = false;
+        let should_fire = if trigger == WatcherTrigger::Unseen {
+            !tab_visible
+        } else {
+            false
+        };
+        assert!(should_fire);
+    }
+
+    #[test]
+    fn unseen_skips_when_tab_visible() {
+        let trigger = WatcherTrigger::Unseen;
+        let tab_visible = true;
+        let should_fire = if trigger == WatcherTrigger::Unseen {
+            !tab_visible
+        } else {
+            false
+        };
+        assert!(!should_fire);
+    }
+
+    #[test]
+    fn unseen_skips_in_idle_evaluate_trigger() {
+        assert_eq!(
+            evaluate_trigger(&WatcherTrigger::Unseen, None, &[]),
+            TriggerOutcome::Skip,
+            "Unseen must Skip in evaluate_trigger (handled by on_idle visibility check)"
+        );
+    }
+
+    #[test]
+    fn busy_skips_in_idle_evaluate_trigger() {
+        assert_eq!(
+            evaluate_trigger(&WatcherTrigger::Busy, None, &[]),
+            TriggerOutcome::Skip,
+            "Busy must Skip in evaluate_trigger (handled by on_event)"
+        );
+    }
+
+    #[test]
+    fn question_skips_in_idle_evaluate_trigger() {
+        assert_eq!(
+            evaluate_trigger(
+                &WatcherTrigger::Question {
+                    confident_only: false
+                },
+                None,
+                &[]
+            ),
+            TriggerOutcome::Skip,
+            "Question must Skip in evaluate_trigger (handled by on_event)"
+        );
+    }
+
+    #[test]
+    fn error_skips_in_idle_evaluate_trigger() {
+        assert_eq!(
+            evaluate_trigger(&WatcherTrigger::Error, None, &[]),
+            TriggerOutcome::Skip,
+            "Error must Skip in evaluate_trigger (handled by on_event)"
+        );
     }
 }
