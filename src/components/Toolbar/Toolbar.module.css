@@ -150,7 +150,8 @@
   -webkit-app-region: no-drag;
 }
 
-.bell {
+.bell,
+.watcherBtn {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -167,7 +168,8 @@
   transition: background 0.15s, color 0.15s;
 }
 
-.bell:hover {
+.bell:hover,
+.watcherBtn:hover {
   background: var(--bg-highlight);
   color: var(--fg-primary);
 }
