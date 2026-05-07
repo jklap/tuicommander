@@ -457,6 +457,149 @@ enum JsonlParsed {
     Skip,
 }
 
+// ---------------------------------------------------------------------------
+// Diff content signal extraction — powers the fallback heuristic
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Default)]
+struct DiffSignals {
+    api_surface_added: u32,
+    api_surface_removed: u32,
+    test_signals: u32,
+    schema_signals: u32,
+    auth_signals: u32,
+    error_handling_signals: u32,
+    hunk_contexts: Vec<String>,
+    hunk_count: u32,
+}
+
+fn analyze_diff(diff: &str) -> DiffSignals {
+    let mut s = DiffSignals::default();
+    for line in diff.lines() {
+        if let Some(rest) = line.strip_prefix("@@ ") {
+            s.hunk_count += 1;
+            if let Some(ctx) = rest.split("@@ ").nth(1) {
+                let ctx = ctx.trim();
+                if !ctx.is_empty() {
+                    let name = ctx.split('(').next().unwrap_or(ctx).trim();
+                    let name = name.split_whitespace().last().unwrap_or(name);
+                    if !name.is_empty() {
+                        s.hunk_contexts.push(name.to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        let (added, content) = if let Some(rest) = line.strip_prefix('+') {
+            (true, rest)
+        } else if let Some(rest) = line.strip_prefix('-') {
+            (false, rest)
+        } else {
+            continue;
+        };
+        let trimmed = content.trim_start();
+        // API surface — Rust
+        if trimmed.starts_with("pub fn ")
+            || trimmed.starts_with("pub struct ")
+            || trimmed.starts_with("pub enum ")
+            || trimmed.starts_with("pub trait ")
+            || trimmed.starts_with("pub type ")
+            || trimmed.starts_with("pub mod ")
+            || trimmed.starts_with("pub const ")
+        {
+            if added { s.api_surface_added += 1; } else { s.api_surface_removed += 1; }
+        }
+        // API surface — TS/JS
+        if trimmed.starts_with("export ") {
+            if added { s.api_surface_added += 1; } else { s.api_surface_removed += 1; }
+        }
+        // API surface — Go (exported = uppercase first letter after "func ")
+        if let Some(rest) = trimmed.strip_prefix("func ") {
+            let first = rest.chars().next().unwrap_or('a');
+            if first.is_ascii_uppercase() {
+                if added { s.api_surface_added += 1; } else { s.api_surface_removed += 1; }
+            }
+        }
+        // API surface — Java
+        if trimmed.starts_with("public ") || trimmed.starts_with("protected ") {
+            if added { s.api_surface_added += 1; } else { s.api_surface_removed += 1; }
+        }
+        // Test signals
+        if trimmed.contains("#[test]")
+            || trimmed.contains("#[cfg(test)]")
+            || trimmed.contains("describe(")
+            || trimmed.contains("it(")
+            || trimmed.contains("test(")
+            || trimmed.contains("expect(")
+            || trimmed.contains("assert")
+        {
+            s.test_signals += 1;
+        }
+        // Schema/SQL signals
+        let upper = trimmed.to_ascii_uppercase();
+        if upper.starts_with("CREATE TABLE")
+            || upper.starts_with("ALTER TABLE")
+            || upper.starts_with("DROP ")
+            || upper.starts_with("INSERT ")
+            || upper.starts_with("UPDATE ")
+            || upper.starts_with("DELETE ")
+        {
+            s.schema_signals += 1;
+        }
+        // Auth/security signals
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.contains("password")
+            || lower.contains("secret")
+            || lower.contains("token")
+            || lower.contains("encrypt")
+            || lower.contains("decrypt")
+            || lower.contains("auth")
+        {
+            s.auth_signals += 1;
+        }
+        // Error handling signals
+        if trimmed.contains("unwrap()")
+            || trimmed.contains("expect(")
+            || trimmed.contains("panic!")
+            || trimmed.contains("try {")
+            || trimmed.contains("catch")
+            || trimmed.contains("throw")
+        {
+            s.error_handling_signals += 1;
+        }
+    }
+    s
+}
+
+fn build_fallback_summary(signals: &DiffSignals, additions: u32, deletions: u32) -> String {
+    let lines_str = format!("+{additions} -{deletions} lines");
+
+    if signals.api_surface_removed > 0 {
+        let ctx = signals.hunk_contexts.first()
+            .map(|c| format!(" in {c}"))
+            .unwrap_or_default();
+        return format!("Removed public API{ctx}; {lines_str}");
+    }
+    if signals.schema_signals > 0 {
+        return format!("Schema change; {lines_str}");
+    }
+    if signals.api_surface_added > 0 {
+        let n = signals.api_surface_added;
+        let ctx = signals.hunk_contexts.first()
+            .map(|c| format!(" in {c}"))
+            .unwrap_or_default();
+        return format!(
+            "{n} public symbol{}{ctx}; {lines_str}",
+            if n == 1 { " added" } else { "s added" }
+        );
+    }
+    if let Some(ctx) = signals.hunk_contexts.first() {
+        return format!("Changed {ctx}; {lines_str}");
+    }
+    let h = signals.hunk_count;
+    format!("{lines_str} in {h} hunk{}", if h == 1 { "" } else { "s" })
+}
+
 fn fallback_classification(path: &str) -> FileClassification {
     let filename = Path::new(path)
         .file_name()
@@ -1807,5 +1950,210 @@ mod tests {
         // Even on error, ToolResponse wraps the error message back to the LLM
         let response = ToolResponse::new(&tc.call_id, output.clone());
         assert_eq!(response.content, output);
+    }
+
+    // ── analyze_diff tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn analyze_diff_rust_pub_fn_added() {
+        let diff = "+pub fn handle_request() -> Result<()> {";
+        let s = analyze_diff(diff);
+        assert_eq!(s.api_surface_added, 1);
+        assert_eq!(s.api_surface_removed, 0);
+    }
+
+    #[test]
+    fn analyze_diff_rust_pub_fn_removed() {
+        let diff = "-pub fn old_handler() {}";
+        let s = analyze_diff(diff);
+        assert_eq!(s.api_surface_removed, 1);
+        assert_eq!(s.api_surface_added, 0);
+    }
+
+    #[test]
+    fn analyze_diff_rust_pub_variants() {
+        let diff = "+pub struct Foo {}\n+pub enum Bar {}\n+pub trait Baz {}";
+        let s = analyze_diff(diff);
+        assert_eq!(s.api_surface_added, 3);
+    }
+
+    #[test]
+    fn analyze_diff_ts_export_added() {
+        let diff = "+export function doSomething() {}\n+export const VALUE = 42;";
+        let s = analyze_diff(diff);
+        assert_eq!(s.api_surface_added, 2);
+    }
+
+    #[test]
+    fn analyze_diff_ts_export_default_added() {
+        let diff = "+export default class MyClass {}";
+        let s = analyze_diff(diff);
+        assert_eq!(s.api_surface_added, 1);
+    }
+
+    #[test]
+    fn analyze_diff_go_exported_func_added() {
+        let diff = "+func HandleRequest(w http.ResponseWriter) {}";
+        let s = analyze_diff(diff);
+        assert_eq!(s.api_surface_added, 1);
+    }
+
+    #[test]
+    fn analyze_diff_go_unexported_func_ignored() {
+        let diff = "+func handleRequest(w http.ResponseWriter) {}";
+        let s = analyze_diff(diff);
+        assert_eq!(s.api_surface_added, 0);
+    }
+
+    #[test]
+    fn analyze_diff_test_patterns() {
+        let diff = "+#[test]\n+fn it_does_stuff() {}\n+assert_eq!(a, b);";
+        let s = analyze_diff(diff);
+        assert!(s.test_signals >= 2);
+    }
+
+    #[test]
+    fn analyze_diff_test_js_patterns() {
+        let diff = "+describe('foo', () => {\n+  it('does thing', () => {\n+    expect(x).toBe(y);\n+  });\n+});";
+        let s = analyze_diff(diff);
+        assert!(s.test_signals >= 3);
+    }
+
+    #[test]
+    fn analyze_diff_sql_patterns() {
+        let diff = "+ALTER TABLE users ADD COLUMN role TEXT;";
+        let s = analyze_diff(diff);
+        assert!(s.schema_signals >= 1);
+    }
+
+    #[test]
+    fn analyze_diff_create_table() {
+        let diff = "+CREATE TABLE sessions (id UUID PRIMARY KEY);";
+        let s = analyze_diff(diff);
+        assert!(s.schema_signals >= 1);
+    }
+
+    #[test]
+    fn analyze_diff_auth_patterns() {
+        let diff = "+let password = req.body.password;\n+let secret = env::var(\"SECRET\");";
+        let s = analyze_diff(diff);
+        assert!(s.auth_signals >= 2);
+    }
+
+    #[test]
+    fn analyze_diff_hunk_header_extracts_context() {
+        let diff = "@@ -10,5 +10,7 @@ fn process_event(event: &Event) -> Result<()> {\n+    do_stuff();";
+        let s = analyze_diff(diff);
+        assert!(!s.hunk_contexts.is_empty());
+        assert!(s.hunk_contexts[0].contains("process_event"));
+    }
+
+    #[test]
+    fn analyze_diff_hunk_header_no_context() {
+        let diff = "@@ -10,5 +10,7 @@\n+    do_stuff();";
+        let s = analyze_diff(diff);
+        assert!(s.hunk_contexts.is_empty());
+    }
+
+    #[test]
+    fn analyze_diff_empty_returns_zeroes() {
+        let s = analyze_diff("");
+        assert_eq!(s.api_surface_added, 0);
+        assert_eq!(s.api_surface_removed, 0);
+        assert_eq!(s.test_signals, 0);
+        assert_eq!(s.schema_signals, 0);
+        assert_eq!(s.auth_signals, 0);
+        assert!(s.hunk_contexts.is_empty());
+    }
+
+    #[test]
+    fn analyze_diff_context_lines_not_counted() {
+        // lines starting with space (context) should not trigger any signals
+        let diff = " pub fn existing() {}\n pub struct OldType {}";
+        let s = analyze_diff(diff);
+        assert_eq!(s.api_surface_added, 0);
+        assert_eq!(s.api_surface_removed, 0);
+    }
+
+    // ── build_fallback_summary tests ─────────────────────────────────────────
+
+    #[test]
+    fn fallback_summary_api_removed_with_context() {
+        let signals = DiffSignals {
+            api_surface_added: 0, api_surface_removed: 1,
+            test_signals: 0, schema_signals: 0, auth_signals: 0,
+            error_handling_signals: 0,
+            hunk_contexts: vec!["handle_request".to_string()],
+            hunk_count: 1,
+        };
+        let s = build_fallback_summary(&signals, 2, 14);
+        assert!(s.contains("Removed") && s.contains("handle_request"), "got: {s}");
+        assert!(s.contains("+2") && s.contains("-14"), "got: {s}");
+    }
+
+    #[test]
+    fn fallback_summary_api_removed_no_context() {
+        let signals = DiffSignals {
+            api_surface_added: 0, api_surface_removed: 1,
+            test_signals: 0, schema_signals: 0, auth_signals: 0,
+            error_handling_signals: 0,
+            hunk_contexts: vec![],
+            hunk_count: 1,
+        };
+        let s = build_fallback_summary(&signals, 2, 14);
+        assert!(s.contains("Removed"), "got: {s}");
+    }
+
+    #[test]
+    fn fallback_summary_schema_change() {
+        let signals = DiffSignals {
+            api_surface_added: 0, api_surface_removed: 0,
+            test_signals: 0, schema_signals: 1, auth_signals: 0,
+            error_handling_signals: 0,
+            hunk_contexts: vec![],
+            hunk_count: 1,
+        };
+        let s = build_fallback_summary(&signals, 5, 2);
+        assert!(s.contains("Schema") || s.contains("schema"), "got: {s}");
+    }
+
+    #[test]
+    fn fallback_summary_api_added() {
+        let signals = DiffSignals {
+            api_surface_added: 2, api_surface_removed: 0,
+            test_signals: 0, schema_signals: 0, auth_signals: 0,
+            error_handling_signals: 0,
+            hunk_contexts: vec![],
+            hunk_count: 1,
+        };
+        let s = build_fallback_summary(&signals, 20, 0);
+        assert!(s.contains("2") && (s.contains("public") || s.contains("symbol") || s.contains("added")), "got: {s}");
+    }
+
+    #[test]
+    fn fallback_summary_context_only() {
+        let signals = DiffSignals {
+            api_surface_added: 0, api_surface_removed: 0,
+            test_signals: 0, schema_signals: 0, auth_signals: 0,
+            error_handling_signals: 0,
+            hunk_contexts: vec!["process_event".to_string()],
+            hunk_count: 1,
+        };
+        let s = build_fallback_summary(&signals, 9, 7);
+        assert!(s.contains("process_event"), "got: {s}");
+    }
+
+    #[test]
+    fn fallback_summary_stats_only() {
+        let signals = DiffSignals {
+            api_surface_added: 0, api_surface_removed: 0,
+            test_signals: 0, schema_signals: 0, auth_signals: 0,
+            error_handling_signals: 0,
+            hunk_contexts: vec![],
+            hunk_count: 2,
+        };
+        let s = build_fallback_summary(&signals, 3, 0);
+        assert!(s.contains("+3"), "got: {s}");
+        assert!(s.contains("hunk") || s.contains("2"), "got: {s}");
     }
 }
