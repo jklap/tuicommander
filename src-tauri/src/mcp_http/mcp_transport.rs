@@ -2981,6 +2981,7 @@ mod tests {
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(uuid::Uuid::new_v4().to_string()),
+            auth_rate_limits: dashmap::DashMap::new(),
             #[cfg(feature = "desktop")]
             app_handle: parking_lot::RwLock::new(None),
             plugin_watchers: dashmap::DashMap::new(),

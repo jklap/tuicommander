@@ -887,6 +887,7 @@ pub struct AppState {
     /// Browsers auto-send cookies in fetch(), unlike stored Basic Auth credentials.
     /// Behind RwLock so it can be regenerated at runtime (invalidating all sessions).
     pub(crate) session_token: parking_lot::RwLock<String>,
+    pub(crate) auth_rate_limits: DashMap<std::net::IpAddr, (u32, Instant)>,
     #[cfg(feature = "desktop")]
     pub(crate) app_handle: parking_lot::RwLock<Option<AppHandle>>,
     /// Plugin filesystem watchers: watch_id → (plugin_id, watcher)
@@ -1082,6 +1083,7 @@ impl AppState {
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(session_token),
+            auth_rate_limits: DashMap::new(),
             #[cfg(feature = "desktop")]
             app_handle: parking_lot::RwLock::new(None),
             plugin_watchers: DashMap::new(),
@@ -2872,6 +2874,7 @@ mod tests {
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(String::from("test-token")),
+            auth_rate_limits: dashmap::DashMap::new(),
             #[cfg(feature = "desktop")]
             app_handle: parking_lot::RwLock::new(None),
             plugin_watchers: dashmap::DashMap::new(),

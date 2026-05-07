@@ -304,7 +304,14 @@ pub(crate) struct AuthConfig {
     pub(crate) session_token_duration_secs: u64,
     #[serde(default)]
     pub(crate) lan_auth_bypass: bool,
+    #[serde(default = "default_auth_rate_limit_max")]
+    pub(crate) auth_rate_limit_max: u32,
+    #[serde(default = "default_auth_rate_limit_window_secs")]
+    pub(crate) auth_rate_limit_window_secs: u64,
 }
+
+fn default_auth_rate_limit_max() -> u32 { 5 }
+fn default_auth_rate_limit_window_secs() -> u64 { 300 }
 
 impl Default for AuthConfig {
     fn default() -> Self {
@@ -314,6 +321,8 @@ impl Default for AuthConfig {
             session_token: String::new(),
             session_token_duration_secs: default_session_token_duration_secs(),
             lan_auth_bypass: false,
+            auth_rate_limit_max: default_auth_rate_limit_max(),
+            auth_rate_limit_window_secs: default_auth_rate_limit_window_secs(),
         }
     }
 }
@@ -1528,6 +1537,7 @@ mod tests {
                     session_token: "test-session-token".to_string(),
                     session_token_duration_secs: 3600,
                     lan_auth_bypass: true,
+                    ..Default::default()
                 },
                 tls: TlsConfig::default(),
                 relay: RelayConfig::default(),

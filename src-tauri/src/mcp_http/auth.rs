@@ -215,6 +215,32 @@ pub async fn basic_auth_middleware(
         return response;
     }
 
+    // Rate limit check: reject early if this IP has too many recent failures
+    let (rate_max, rate_window_secs) = {
+        let config = state.config.read();
+        (
+            config.services.auth.auth_rate_limit_max,
+            config.services.auth.auth_rate_limit_window_secs,
+        )
+    };
+    let client_ip = addr.ip();
+    if rate_max > 0 {
+        if let Some(entry) = state.auth_rate_limits.get(&client_ip) {
+            let (count, window_start) = *entry;
+            let window = std::time::Duration::from_secs(rate_window_secs);
+            if window_start.elapsed() < window && count >= rate_max {
+                let retry_after = (window - window_start.elapsed()).as_secs() + 1;
+                tracing::warn!(source = "auth", ip = %client_ip, count, "Rate limited — too many failed auth attempts");
+                return (
+                    StatusCode::TOO_MANY_REQUESTS,
+                    [(header::RETRY_AFTER, retry_after.to_string())],
+                    "Too many failed authentication attempts",
+                )
+                    .into_response();
+            }
+        }
+    }
+
     // Fallback: Basic Auth (if username+password are configured)
     let (username, hash) = {
         let config = state.config.read();
@@ -239,7 +265,8 @@ pub async fn basic_auth_middleware(
 
     match result {
         AuthResult::Ok => {
-            // Set session cookie so subsequent JS fetch() calls are authenticated
+            // Successful auth clears rate limit counter for this IP
+            state.auth_rate_limits.remove(&client_ip);
             let mut response = next.run(req).await;
             if let Ok(val) = session_cookie_value(&session_token, token_duration_secs, is_tls).parse() {
                 response.headers_mut().insert(header::SET_COOKIE, val);
@@ -253,9 +280,32 @@ pub async fn basic_auth_middleware(
         )
             .into_response(),
         AuthResult::Invalid => {
+            tracing::warn!(source = "auth", ip = %client_ip, "Failed auth attempt");
+            record_auth_failure(&state.auth_rate_limits, client_ip, rate_window_secs);
             (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response()
         }
     }
+}
+
+/// Record a failed auth attempt for rate limiting.
+fn record_auth_failure(
+    rate_limits: &dashmap::DashMap<std::net::IpAddr, (u32, std::time::Instant)>,
+    ip: std::net::IpAddr,
+    window_secs: u64,
+) {
+    let window = std::time::Duration::from_secs(window_secs);
+    let now = std::time::Instant::now();
+    rate_limits
+        .entry(ip)
+        .and_modify(|(count, start)| {
+            if start.elapsed() >= window {
+                *count = 1;
+                *start = now;
+            } else {
+                *count += 1;
+            }
+        })
+        .or_insert((1, now));
 }
 
 #[cfg(test)]
@@ -458,5 +508,48 @@ mod tests {
             .body(axum::body::Body::empty())
             .unwrap();
         assert!(!has_valid_url_token(&req, "correct"));
+    }
+
+    // --- rate limiting tests ---
+
+    #[test]
+    fn rate_limit_records_failures() {
+        let map = dashmap::DashMap::new();
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        record_auth_failure(&map, ip, 300);
+        assert_eq!(map.get(&ip).unwrap().0, 1);
+        record_auth_failure(&map, ip, 300);
+        assert_eq!(map.get(&ip).unwrap().0, 2);
+    }
+
+    #[test]
+    fn rate_limit_resets_after_window() {
+        let map = dashmap::DashMap::new();
+        let ip: IpAddr = "10.0.0.2".parse().unwrap();
+        // Insert with a past timestamp
+        map.insert(ip, (5, std::time::Instant::now() - std::time::Duration::from_secs(301)));
+        record_auth_failure(&map, ip, 300);
+        assert_eq!(map.get(&ip).unwrap().0, 1);
+    }
+
+    #[test]
+    fn rate_limit_different_ips_independent() {
+        let map = dashmap::DashMap::new();
+        let ip1: IpAddr = "10.0.0.1".parse().unwrap();
+        let ip2: IpAddr = "10.0.0.2".parse().unwrap();
+        for _ in 0..3 { record_auth_failure(&map, ip1, 300); }
+        record_auth_failure(&map, ip2, 300);
+        assert_eq!(map.get(&ip1).unwrap().0, 3);
+        assert_eq!(map.get(&ip2).unwrap().0, 1);
+    }
+
+    #[test]
+    fn successful_auth_clears_rate_limit() {
+        let map = dashmap::DashMap::new();
+        let ip: IpAddr = "10.0.0.1".parse().unwrap();
+        for _ in 0..3 { record_auth_failure(&map, ip, 300); }
+        assert_eq!(map.get(&ip).unwrap().0, 3);
+        map.remove(&ip);
+        assert!(map.get(&ip).is_none());
     }
 }
