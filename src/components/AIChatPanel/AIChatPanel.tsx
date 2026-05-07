@@ -105,54 +105,12 @@ const IconPlay = () => (
 	</svg>
 );
 
-const IconEye = () => (
-	<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3">
-		<path d="M1 7s2.5-4 6-4 6 4 6 4-2.5 4-6 4-6-4-6-4z" />
-		<circle cx="7" cy="7" r="2" />
-	</svg>
-);
-
 const IconUnlock = () => (
 	<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3">
 		<rect x="2.5" y="6" width="9" height="6.5" rx="1" />
 		<path d="M5 6V4a2 2 0 014 0" stroke-linecap="round" />
 	</svg>
 );
-
-// ── Watcher types ───────────────────────────────────────────────
-type WatcherTrigger =
-	| { type: "idle" }
-	| { type: "busy" }
-	| { type: "command_done"; on_failure_only: boolean }
-	| { type: "question"; confident_only: boolean }
-	| { type: "error" }
-	| { type: "unseen" }
-	| { type: "pattern"; regex: string };
-
-type WatcherTriggerKey = "idle" | "busy" | "command_done" | "command_done_fail" | "question" | "error" | "unseen";
-
-const TRIGGER_MAP: Record<WatcherTriggerKey, WatcherTrigger> = {
-	idle: { type: "idle" },
-	busy: { type: "busy" },
-	command_done: { type: "command_done", on_failure_only: false },
-	command_done_fail: { type: "command_done", on_failure_only: true },
-	question: { type: "question", confident_only: true },
-	error: { type: "error" },
-	unseen: { type: "unseen" },
-};
-
-interface WatcherRule {
-	id: string;
-	name: string;
-	session_id: string | null;
-	template_id: string | null;
-	trigger: WatcherTrigger;
-	instructions: string;
-	max_fires: number;
-	fire_count: number;
-	cooldown_secs: number;
-	status: "active" | "paused" | "stopped" | "exhausted";
-}
 
 /** Fields stripped from the args display — internal plumbing the user doesn't need. */
 const TOOL_NOISE_FIELDS = new Set(["session_id", "timeout_ms"]);
@@ -255,73 +213,6 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 		const id = terminalsStore.state.activeId;
 		return id ? (terminalsStore.get(id)?.name ?? null) : null;
 	});
-
-	// ── Watcher state ──────────────────────────────────────────────
-	const [watchers, setWatchers] = createSignal<WatcherRule[]>([]);
-	const [showWatcherCreate, setShowWatcherCreate] = createSignal(false);
-	const [watcherTrigger, setWatcherTrigger] = createSignal<WatcherTriggerKey>("idle");
-	const [watcherInstructions, setWatcherInstructions] = createSignal("");
-	const [watcherMaxFires, setWatcherMaxFires] = createSignal(50);
-	const [watcherName, setWatcherName] = createSignal("");
-
-	const refreshWatchers = () => {
-		invoke<WatcherRule[]>("watcher_list")
-			.then(setWatchers)
-			.catch((e) => appLogger.warn("ai-chat", "Failed to refresh watchers", { error: String(e) }));
-	};
-
-	const sessionWatchers = createMemo(() => {
-		const sid = activeSessionId();
-		return sid ? watchers().filter((w) => w.session_id === sid) : [];
-	});
-
-	const activeWatcher = createMemo(() => (sessionWatchers() ?? []).find((w) => w.status === "active" || w.status === "paused"));
-
-	createEffect(() => {
-		activeSessionId(); // tracked: re-run when session changes
-		refreshWatchers();
-	});
-
-	const handleCreateWatcher = async () => {
-		const sid = activeSessionId();
-		if (!watcherInstructions().trim()) return;
-		try {
-			const trigger = TRIGGER_MAP[watcherTrigger()];
-			await invoke("watcher_create", {
-				name: watcherName() || "Watcher",
-				sessionId: sid || null,
-				trigger,
-				instructions: watcherInstructions(),
-				maxFires: watcherMaxFires(),
-			});
-			setShowWatcherCreate(false);
-			setWatcherInstructions("");
-			setWatcherName("");
-			refreshWatchers();
-		} catch (e) {
-			appLogger.warn("ai-chat", "Failed to create watcher", { error: String(e) });
-		}
-	};
-
-	const handleToggleWatcher = async (id: string, enabled: boolean) => {
-		try {
-			await invoke("watcher_toggle", { id, enabled });
-			refreshWatchers();
-		} catch (e) {
-			appLogger.warn("ai-chat", "Failed to toggle watcher", { error: String(e) });
-			refreshWatchers();
-		}
-	};
-
-	const handleDeleteWatcher = async (id: string) => {
-		try {
-			await invoke("watcher_delete", { id });
-			refreshWatchers();
-		} catch (e) {
-			appLogger.warn("ai-chat", "Failed to delete watcher", { error: String(e) });
-			refreshWatchers();
-		}
-	};
 
 	const openHistory = () => {
 		void conversationStore.listAllConversations().then(setHistoryList);
@@ -608,14 +499,6 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 							<IconUnlock />
 						</button>
 					</Show>
-					{/* Watcher toggle */}
-					<button
-						class={cx(s.headerBtn, activeWatcher() && s.headerBtnActive)}
-						onClick={() => (activeWatcher() ? undefined : setShowWatcherCreate(true))}
-						title={activeWatcher() ? `Watcher: ${activeWatcher()?.status}` : "Create watcher for this terminal"}
-					>
-						<IconEye />
-					</button>
 					<button
 						class={cx(s.headerBtn, showHistory() && s.headerBtnActive)}
 						onClick={() => (showHistory() ? setShowHistory(false) : openHistory())}
@@ -633,95 +516,6 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 					/>
 				</div>
 			</div>
-
-			{/* ── Active watcher bar ──────────────────────────────── */}
-			<Show when={activeWatcher()}>
-				{(watcher) => (
-					<div class={s.watcherBar}>
-						<span class={cx(s.watcherStatusDot, s[`watcherStatus_${watcher().status}`])} />
-						<span class={s.watcherName}>{watcher().name}</span>
-						<span class={s.watcherFires}>
-							{watcher().fire_count}/{watcher().max_fires}
-						</span>
-						<Show when={watcher().status === "paused"}>
-							<button class={s.watcherSmallBtn} onClick={() => handleToggleWatcher(watcher().id, true)} title="Resume">
-								<IconPlay />
-							</button>
-						</Show>
-						<Show when={watcher().status === "active"}>
-							<button class={s.watcherSmallBtn} onClick={() => handleToggleWatcher(watcher().id, false)} title="Pause">
-								<IconPause />
-							</button>
-						</Show>
-						<button class={s.watcherSmallBtn} onClick={() => handleDeleteWatcher(watcher().id)} title="Delete watcher">
-							<IconTrash />
-						</button>
-					</div>
-				)}
-			</Show>
-
-			{/* ── Watcher create dialog ──────────────────────────── */}
-			<Show when={showWatcherCreate()}>
-				<div class={s.watcherCreateDialog}>
-					<div class={s.watcherCreateTitle}>Create Watcher</div>
-					<label class={s.watcherLabel}>
-						Name
-						<input
-							type="text"
-							class={s.watcherInput}
-							value={watcherName()}
-							onInput={(e) => setWatcherName(e.currentTarget.value)}
-							placeholder="Watcher"
-						/>
-					</label>
-					<label class={s.watcherLabel}>
-						Trigger
-						<select
-							class={s.watcherSelect}
-							value={watcherTrigger()}
-							onChange={(e) => setWatcherTrigger(e.currentTarget.value as WatcherTriggerKey)}
-						>
-							<option value="idle">Idle</option>
-							<option value="busy">Busy</option>
-							<option value="command_done">Command Done</option>
-							<option value="command_done_fail">Command Failed</option>
-							<option value="question">Question</option>
-							<option value="error">Error</option>
-							<option value="unseen">Unseen</option>
-						</select>
-					</label>
-					<label class={s.watcherLabel}>
-						Instructions
-						<textarea
-							class={s.watcherTextarea}
-							value={watcherInstructions()}
-							onInput={(e) => setWatcherInstructions(e.currentTarget.value)}
-							placeholder="What should the AI do when triggered?"
-							rows={3}
-							maxLength={8192}
-						/>
-					</label>
-					<label class={s.watcherLabel}>
-						Max fires
-						<input
-							type="number"
-							class={s.watcherInput}
-							min={1}
-							max={999}
-							value={watcherMaxFires()}
-							onInput={(e) => setWatcherMaxFires(Math.max(1, Number(e.currentTarget.value)))}
-						/>
-					</label>
-					<div class={s.watcherCreateActions}>
-						<button class={s.watcherCancelBtn} onClick={() => setShowWatcherCreate(false)}>
-							Cancel
-						</button>
-						<button class={s.watcherConfirmBtn} onClick={handleCreateWatcher} disabled={!watcherInstructions().trim()}>
-							Create
-						</button>
-					</div>
-				</div>
-			</Show>
 
 			{/* ── Error banner ────────────────────────────────────── */}
 			<Show when={conversationStore.error()}>

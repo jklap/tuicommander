@@ -303,6 +303,7 @@
 
 .textarea::placeholder {
   color: var(--fg-muted);
+  opacity: 0.5;
 }
 
 .sendBtn {
@@ -739,3 +740,4 @@
   font-family: var(--font-mono);
   line-height: 1.4;
 }
+
