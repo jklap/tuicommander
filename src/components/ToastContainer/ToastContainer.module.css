@@ -66,6 +66,23 @@
   white-space: nowrap;
 }
 
+.action {
+  flex-shrink: 0;
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: var(--font-sm, 11px);
+  background: var(--accent, #61afef);
+  color: var(--bg-primary, #1e1e1e);
+  border: none;
+  border-radius: var(--radius-sm, 3px);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.action:hover {
+  opacity: 0.85;
+}
+
 @keyframes slideIn {
   from {
     opacity: 0;

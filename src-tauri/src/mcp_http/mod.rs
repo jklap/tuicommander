@@ -1008,6 +1008,8 @@ mod tests {
             server_start_time: std::time::Instant::now(),
             term_aliases: dashmap::DashMap::new(),
             term_alias_counters: dashmap::DashMap::new(),
+            trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
+            ai_suggestions_enabled: dashmap::DashMap::new(),
         });
         // Override default disabled_native_tools so all 8 tools are visible in tests
         state.config.write().disabled_native_tools = Vec::new();

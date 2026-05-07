@@ -11,6 +11,7 @@ import { editorTabsStore } from "../../stores/editorTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { repoSettingsStore } from "../../stores/repoSettings";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
+import { invoke } from "../../invoke";
 import { ContextMenu, createContextMenu, type ContextMenuItem } from "../ContextMenu/ContextMenu";
 import { getRepoColor } from "../../utils/repoColor";
 import { initMouseDrag } from "../../hooks/useMouseDrag";
@@ -230,6 +231,12 @@ const PaneGroupView: Component<{
         {
           label: isGlobal ? "Remove from Global Workspace" : "Promote to Global Workspace",
           action: () => globalWorkspaceStore.togglePromote(id),
+        },
+        {
+          label: "Toggle AI Suggestions",
+          action: () => {
+            invoke("toggle_ai_suggestions", { sessionId: id });
+          },
         },
       );
     }

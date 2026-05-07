@@ -3027,6 +3027,8 @@ mod tests {
             server_start_time: std::time::Instant::now(),
             term_aliases: dashmap::DashMap::new(),
             term_alias_counters: dashmap::DashMap::new(),
+            trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
+            ai_suggestions_enabled: dashmap::DashMap::new(),
         });
         // Tests start with all native tools enabled (override production default
         // which disables config, knowledge, debug).

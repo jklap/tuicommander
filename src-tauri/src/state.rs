@@ -1044,6 +1044,10 @@ pub struct AppState {
     pub(crate) term_aliases: DashMap<String, String>,
     /// Per-prefix counter for alias numbering (e.g. "tc" → 2 means next is tc-3).
     pub(crate) term_alias_counters: DashMap<String, u32>,
+    /// Evaluates CommandOutcome records and emits suggestions for AI investigation.
+    pub(crate) trigger_classifier: crate::ai_agent::triggers::TriggerClassifier,
+    /// Per-session opt-in for AI suggestions. Present + true = enabled.
+    pub(crate) ai_suggestions_enabled: DashMap<String, bool>,
 }
 
 impl AppState {
@@ -1132,6 +1136,8 @@ impl AppState {
             server_start_time: std::time::Instant::now(),
             term_aliases: DashMap::new(),
             term_alias_counters: DashMap::new(),
+            trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
+            ai_suggestions_enabled: DashMap::new(),
         }
     }
 
@@ -1212,12 +1218,39 @@ impl AppState {
         session_id: &str,
         outcome: crate::ai_agent::knowledge::CommandOutcome,
     ) -> u64 {
+        // Evaluate trigger before recording (needs the outcome by ref).
+        let suggestion = {
+            let enabled = self
+                .ai_suggestions_enabled
+                .get(session_id)
+                .map(|v| *v)
+                .unwrap_or_else(|| {
+                    self.session_states
+                        .get(session_id)
+                        .map(|s| s.agent_type.is_some())
+                        .unwrap_or(false)
+                });
+            if enabled {
+                self.trigger_classifier.evaluate(session_id, &outcome)
+            } else {
+                None
+            }
+        };
+
         let entry = self
             .session_knowledge
             .entry(session_id.to_string())
             .or_insert_with(|| Mutex::new(crate::ai_agent::knowledge::SessionKnowledge::new()));
         let id = entry.lock().record(outcome);
         self.knowledge_dirty.insert(session_id.to_string(), ());
+
+        if let Some(suggestion) = suggestion {
+            use tauri::Emitter as _;
+            if let Some(ref app) = *self.app_handle.read() {
+                let _ = app.emit("ai-suggestion", &suggestion);
+            }
+        }
+
         id
     }
 }
@@ -2896,6 +2929,8 @@ mod tests {
             server_start_time: std::time::Instant::now(),
             term_aliases: DashMap::new(),
             term_alias_counters: DashMap::new(),
+            trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
+            ai_suggestions_enabled: DashMap::new(),
         }
     }
 

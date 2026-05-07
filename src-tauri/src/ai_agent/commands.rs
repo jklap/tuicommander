@@ -463,6 +463,45 @@ pub(crate) async fn get_session_knowledge(
     Ok(summary)
 }
 
+#[tauri::command]
+pub(crate) fn toggle_ai_suggestions(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> bool {
+    let current = state
+        .ai_suggestions_enabled
+        .get(&session_id)
+        .map(|v| *v)
+        .unwrap_or_else(|| {
+            state
+                .session_states
+                .get(&session_id)
+                .map(|s| s.agent_type.is_some())
+                .unwrap_or(false)
+        });
+    let new_val = !current;
+    state.ai_suggestions_enabled.insert(session_id, new_val);
+    new_val
+}
+
+#[tauri::command]
+pub(crate) fn get_ai_suggestions_enabled(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> bool {
+    state
+        .ai_suggestions_enabled
+        .get(&session_id)
+        .map(|v| *v)
+        .unwrap_or_else(|| {
+            state
+                .session_states
+                .get(&session_id)
+                .map(|s| s.agent_type.is_some())
+                .unwrap_or(false)
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

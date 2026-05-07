@@ -108,6 +108,7 @@ import { useSmartPrompts } from "./hooks/useSmartPrompts";
 import { registerAiChatContextActions } from "./components/AIChatPanel/contextMenuActions";
 import { AIChatPanel } from "./components/AIChatPanel/AIChatPanel";
 import { conversationStore } from "./stores/conversationStore";
+import { toastsStore } from "./stores/toasts";
 import { renderPanelMode, registerPanel, panelRegistry, togglePanel, detachPanel } from "./panelRouter";
 import { createPanelSyncProvider, type PanelAction } from "./utils/panelSync";
 import { activityPanelAdapter } from "./panelAdapters/activity";
@@ -464,15 +465,6 @@ const App: Component = () => {
   // SolidJS can track it synchronously (onCleanup inside async onMount is unreliable).
   onCleanup(() => githubStore.stopPolling());
 
-  // Bridge agent-loop-event from Tauri to the reactive store.
-  {
-    let unlisten: (() => void) | undefined;
-    listen<{ type: string; [key: string]: unknown }>("agent-loop-event", (event) => {
-      conversationStore.processEvent(event.payload);
-    }).then((fn) => { unlisten = fn; });
-    onCleanup(() => unlisten?.());
-  }
-
   // Generic panel window lifecycle: clear detached state when any panel window closes.
   {
     let unlisten: (() => void) | undefined;
@@ -494,6 +486,24 @@ const App: Component = () => {
         panelRegistry[panelId]?.handleAction?.(action, data);
       }
     }).then((fn) => { unlisten = fn; });
+    onCleanup(() => unlisten?.());
+  }
+
+  // AI suggestion triggers: show toast with Investigate button.
+  {
+    let unlisten: (() => void) | undefined;
+    listen<{ session_id: string; trigger_reason: string; proposed_goal: string }>(
+      "ai-suggestion",
+      (event) => {
+        const { session_id, trigger_reason, proposed_goal } = event.payload;
+        toastsStore.add(trigger_reason, "", "warn", false, {
+          label: "Investigate",
+          onClick: () => {
+            conversationStore.startAgent(session_id, proposed_goal);
+          },
+        });
+      },
+    ).then((fn) => { unlisten = fn; });
     onCleanup(() => unlisten?.());
   }
 

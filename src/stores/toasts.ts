@@ -6,6 +6,7 @@ export interface Toast {
   message: string;
   level: "info" | "warn" | "error";
   createdAt: number;
+  action?: { label: string; onClick: () => void };
 }
 
 let nextId = 1;
@@ -77,9 +78,9 @@ function createToastsStore() {
   return {
     get toasts() { return state.toasts; },
 
-    add(title: string, message = "", level: "info" | "warn" | "error" = "info", sound = false) {
+    add(title: string, message = "", level: "info" | "warn" | "error" = "info", sound = false, action?: { label: string; onClick: () => void }) {
       const id = nextId++;
-      const toast: Toast = { id, title, message, level, createdAt: Date.now() };
+      const toast: Toast = { id, title, message, level, createdAt: Date.now(), action };
       setState("toasts", (prev) => [...prev, toast]);
       if (sound) playSound(level);
       // Auto-dismiss after 4s
