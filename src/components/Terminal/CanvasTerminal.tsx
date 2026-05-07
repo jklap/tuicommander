@@ -1527,8 +1527,31 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
       lastClickTime = now;
 
       if (clickCount === 2) {
-        selectionStart = absPos;
-        selectionEnd = absPos;
+        const vpRow = absRowToViewport(absRow);
+        const row = vpRow !== null ? rowMap.get(vpRow) : null;
+        if (row) {
+          const isWordChar = (col: number) => {
+            if (col < 0 || col >= row.count) return false;
+            const cp = row.codepoints[col];
+            if (cp === 0 || cp === 32) return false;
+            const ch = String.fromCodePoint(cp);
+            return !/[\s\t\x00-\x1f\x7f "'`(){}\[\]<>|;:,.!?@#$%^&*~=+\-\/\\]/.test(ch);
+          };
+          let left = pos.col;
+          let right = pos.col;
+          while (left > 0 && isWordChar(left - 1)) left--;
+          while (right < row.count - 1 && isWordChar(right + 1)) right++;
+          if (isWordChar(pos.col)) {
+            selectionStart = { col: left, row: absRow };
+            selectionEnd = { col: right, row: absRow };
+          } else {
+            selectionStart = absPos;
+            selectionEnd = absPos;
+          }
+        } else {
+          selectionStart = absPos;
+          selectionEnd = absPos;
+        }
       } else if (clickCount >= 3) {
         const m = metrics();
         const maxCol = m ? Math.floor((canvasRef.getBoundingClientRect().width) / m.cellWidth) - 1 : 79;
