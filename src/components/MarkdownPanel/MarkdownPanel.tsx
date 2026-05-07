@@ -228,6 +228,9 @@ export const MarkdownPanel: Component<MarkdownPanelProps> = (props) => {
           placeholder={t("markdownPanel.filter", "Filter... (*, ** wildcards)")}
           value={searchQuery()}
           onInput={(e) => setSearchQuery(e.currentTarget.value)}
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck={false}
         />
         <Show when={searchQuery()}>
           <button class={p.searchClear} onClick={() => setSearchQuery("")}>&times;</button>

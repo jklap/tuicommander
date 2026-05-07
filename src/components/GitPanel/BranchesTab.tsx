@@ -962,6 +962,9 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
           placeholder="Filter branches... (/ to focus)"
           value={search()}
           onInput={(e) => setSearch(e.currentTarget.value)}
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck={false}
           onKeyDown={(e) => {
             if (e.key === "Escape") {
               e.preventDefault();

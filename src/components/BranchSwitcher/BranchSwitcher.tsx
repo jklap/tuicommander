@@ -150,6 +150,9 @@ export const BranchSwitcher: Component<BranchSwitcherProps> = (props) => {
               placeholder="Switch to branch..."
               value={branchSwitcherStore.state.query}
               onInput={(e) => branchSwitcherStore.setQuery(e.currentTarget.value)}
+              autocomplete="off"
+              autocorrect="off"
+              spellcheck={false}
             />
           </div>
 

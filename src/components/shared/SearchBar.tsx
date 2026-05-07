@@ -143,6 +143,8 @@ export const SearchBar: Component<SearchBarProps> = (props) => {
           value={searchTerm()}
           onInput={(e) => handleInput(e.currentTarget.value)}
           onKeyDown={handleKeyDown}
+          autocomplete="off"
+          autocorrect="off"
           spellcheck={false}
         />
 

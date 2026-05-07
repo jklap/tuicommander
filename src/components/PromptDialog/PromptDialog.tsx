@@ -72,6 +72,9 @@ export const PromptDialog: Component<PromptDialogProps> = (props) => {
               onInput={(e) => setValue((e.target as HTMLInputElement).value)}
               placeholder={props.placeholder ?? ""}
               maxLength={props.maxLength}
+              autocomplete="off"
+              autocorrect="off"
+              spellcheck={false}
             />
           </div>
           <div class={d.actions}>

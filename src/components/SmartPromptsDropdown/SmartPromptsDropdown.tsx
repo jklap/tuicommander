@@ -180,6 +180,9 @@ export const SmartPromptsDropdown: Component<SmartPromptsDropdownProps> = (props
               placeholder="Search prompts..."
               value={search()}
               onInput={(e) => setSearch(e.currentTarget.value)}
+              autocomplete="off"
+              autocorrect="off"
+              spellcheck={false}
             />
           </div>
 

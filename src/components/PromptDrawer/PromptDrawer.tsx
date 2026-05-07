@@ -228,6 +228,9 @@ export const PromptDrawer: Component<PromptDrawerProps> = (props) => {
               placeholder={t("promptDrawer.searchPlaceholder", "Search prompts... (type to filter)")}
               value={promptLibraryStore.state.searchQuery}
               onInput={(e) => promptLibraryStore.setSearchQuery(e.currentTarget.value)}
+              autocomplete="off"
+              autocorrect="off"
+              spellcheck={false}
               autofocus
             />
           </div>

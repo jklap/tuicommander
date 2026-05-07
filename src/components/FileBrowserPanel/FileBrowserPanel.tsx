@@ -819,6 +819,9 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
             ? t("fileBrowser.search", "Search files\u2026 (*, ** wildcards)")
             : t("fileBrowser.searchContent", "Search in file contents\u2026")}
           value={searchQuery()}
+          autocomplete="off"
+          autocorrect="off"
+          spellcheck={false}
           onInput={(e) => {
             setSearchQuery(e.currentTarget.value);
             setSelectedIndex(0);

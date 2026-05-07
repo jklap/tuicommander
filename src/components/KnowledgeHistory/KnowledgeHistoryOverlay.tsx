@@ -181,6 +181,9 @@ export const KnowledgeHistoryOverlay: Component = () => {
                 placeholder="Search commands, output, errors…"
                 value={searchRaw()}
                 onInput={onSearchInput}
+                autocomplete="off"
+                autocorrect="off"
+                spellcheck={false}
                 autofocus
               />
               <label class={s.filterCheck}>

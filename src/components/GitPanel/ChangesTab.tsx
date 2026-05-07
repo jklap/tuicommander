@@ -783,6 +783,9 @@ export const ChangesTab: Component<ChangesTabProps> = (props) => {
             placeholder="Filter... (*, ** wildcards)"
             value={filterQuery()}
             onInput={(e) => setFilterQuery(e.currentTarget.value)}
+            autocomplete="off"
+            autocorrect="off"
+            spellcheck={false}
           />
           <Show when={filterQuery()}>
             <button class={s.filterClear} onClick={() => setFilterQuery("")}>&times;</button>

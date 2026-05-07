@@ -275,6 +275,9 @@ export const WorktreeManager: Component<{ actions?: WorktreeActions }> = (props)
               placeholder="Filter worktrees…"
               value={worktreeManagerStore.state.textFilter}
               onInput={(e) => worktreeManagerStore.setTextFilter(e.currentTarget.value)}
+              autocomplete="off"
+              autocorrect="off"
+              spellcheck={false}
             />
           </div>
 
