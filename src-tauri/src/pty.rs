@@ -1191,6 +1191,12 @@ fn spawn_silence_timer(
                         // non-zero badge and notifications stay suppressed.
                         emit_active_subtasks(&state, &session_id, 0, "");
                     }
+                    // Restore cursor visibility — Ink-based agents (Claude Code)
+                    // send DECTCEM hide (CSI ?25l) for spinners but may not
+                    // send CNORM (CSI ?25h) when returning to the prompt.
+                    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+                        vt.lock().process(b"\x1b[?25h");
+                    }
                     emit_shell_state(&state, &session_id, "idle");
                     record_inferred_outcome_if_no_osc133(&state, &session_id);
                 }
@@ -2777,7 +2783,9 @@ pub(crate) fn spawn_reader_thread(
     // Reader sets dirty flag; ticker serializes+sends at fixed interval.
     // Coalesces rapid writes (spinner erase+rewrite) into a single frame.
     let frame_dirty = Arc::new(AtomicBool::new(false));
-    state.grid_frame_dirty.insert(session_id.clone(), frame_dirty.clone());
+    state
+        .grid_frame_dirty
+        .insert(session_id.clone(), frame_dirty.clone());
     let ticker_running = running.clone();
     let ticker_dirty = frame_dirty.clone();
     let ticker_state = state.clone();
@@ -3420,6 +3428,15 @@ pub(crate) async fn write_pty(
     let state = Arc::clone(&state);
     let app = app.clone();
     tokio::task::spawn_blocking(move || {
+    // Restore cursor if hidden — Ink-based agents send DECTCEM hide for
+    // spinners but may not send CNORM when returning to the prompt.
+    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+        let mut vt = vt.lock();
+        if !vt.is_cursor_visible() {
+            vt.process(b"\x1b[?25h");
+        }
+    }
+
     if let Some(entry) = state.sessions.get(&session_id) {
         tracing::trace!(session_id = %session_id, data_len = data.len(), "write_pty");
         if data.contains("\x1b[?1049") || data.contains("\x1b[?1047") || data.contains("\x1b[?47l") || data.contains("\x1b[?25h") {

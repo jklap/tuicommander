@@ -1,15 +1,15 @@
 use alacritty_terminal::event::{Event, EventListener};
+use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::grid::{Dimensions, ReflowMode};
 use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::Flags;
-use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
-use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::color::{Colors, named_color_to_index};
+use alacritty_terminal::term::search::RegexSearch;
+use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Terminal event captured from alacritty for forwarding to PTY/frontend.
 #[derive(Debug, Clone)]
@@ -20,9 +20,16 @@ pub enum TermEvent {
     PtyWrite(String),
     MouseCursorDirty,
     CursorBlinkingChange,
-    Osc133 { command: char, params: String, line: usize },
+    Osc133 {
+        command: char,
+        params: String,
+        line: usize,
+    },
     Osc7(String),
-    Tuic { verb: String, payload: String },
+    Tuic {
+        verb: String,
+        payload: String,
+    },
 }
 
 #[derive(Clone)]
@@ -34,18 +41,62 @@ pub(crate) struct TermEventCollector {
 impl EventListener for TermEventCollector {
     fn send_event(&self, event: Event) {
         match event {
-            Event::Bell => { self.bell.store(true, Ordering::Relaxed); }
-            Event::Title(t) => { self.events.lock().unwrap().push(TermEvent::Title(t)); }
-            Event::ResetTitle => { self.events.lock().unwrap().push(TermEvent::ResetTitle); }
-            Event::ClipboardStore(_, text) => { self.events.lock().unwrap().push(TermEvent::ClipboardStore(text)); }
-            Event::PtyWrite(s) => { self.events.lock().unwrap().push(TermEvent::PtyWrite(s)); }
-            Event::MouseCursorDirty => { self.events.lock().unwrap().push(TermEvent::MouseCursorDirty); }
-            Event::CursorBlinkingChange => { self.events.lock().unwrap().push(TermEvent::CursorBlinkingChange); }
-            Event::Osc133 { command, params, line } => { self.events.lock().unwrap().push(TermEvent::Osc133 { command, params, line }); }
-            Event::Osc7(url) => { self.events.lock().unwrap().push(TermEvent::Osc7(url)); }
-            Event::Tuic { verb, payload } => { self.events.lock().unwrap().push(TermEvent::Tuic { verb, payload }); }
-            Event::ClipboardLoad(..) | Event::ColorRequest(..) | Event::TextAreaSizeRequest(..)
-            | Event::Wakeup | Event::Exit | Event::ChildExit(_) => {}
+            Event::Bell => {
+                self.bell.store(true, Ordering::Relaxed);
+            }
+            Event::Title(t) => {
+                self.events.lock().unwrap().push(TermEvent::Title(t));
+            }
+            Event::ResetTitle => {
+                self.events.lock().unwrap().push(TermEvent::ResetTitle);
+            }
+            Event::ClipboardStore(_, text) => {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(TermEvent::ClipboardStore(text));
+            }
+            Event::PtyWrite(s) => {
+                self.events.lock().unwrap().push(TermEvent::PtyWrite(s));
+            }
+            Event::MouseCursorDirty => {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(TermEvent::MouseCursorDirty);
+            }
+            Event::CursorBlinkingChange => {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(TermEvent::CursorBlinkingChange);
+            }
+            Event::Osc133 {
+                command,
+                params,
+                line,
+            } => {
+                self.events.lock().unwrap().push(TermEvent::Osc133 {
+                    command,
+                    params,
+                    line,
+                });
+            }
+            Event::Osc7(url) => {
+                self.events.lock().unwrap().push(TermEvent::Osc7(url));
+            }
+            Event::Tuic { verb, payload } => {
+                self.events
+                    .lock()
+                    .unwrap()
+                    .push(TermEvent::Tuic { verb, payload });
+            }
+            Event::ClipboardLoad(..)
+            | Event::ColorRequest(..)
+            | Event::TextAreaSizeRequest(..)
+            | Event::Wakeup
+            | Event::Exit
+            | Event::ChildExit(_) => {}
         }
     }
 }
@@ -58,9 +109,15 @@ struct GridSize {
 }
 
 impl Dimensions for GridSize {
-    fn columns(&self) -> usize { self.cols }
-    fn screen_lines(&self) -> usize { self.lines }
-    fn total_lines(&self) -> usize { self.lines }
+    fn columns(&self) -> usize {
+        self.cols
+    }
+    fn screen_lines(&self) -> usize {
+        self.lines
+    }
+    fn total_lines(&self) -> usize {
+        self.lines
+    }
 }
 
 use crate::state::{ChangedRow, LogColor, LogLine, LogSpan};
@@ -94,12 +151,12 @@ pub struct BufferSearchMatch {
 }
 
 // Attrs byte bit positions for binary cell encoding.
-const ATTR_BOLD: u8       = 0b0000_0001;
-const ATTR_ITALIC: u8     = 0b0000_0010;
-const ATTR_UNDERLINE: u8  = 0b0000_0100;
-const ATTR_STRIKEOUT: u8  = 0b0000_1000;
-const ATTR_DIM: u8        = 0b0001_0000;
-const ATTR_INVERSE: u8    = 0b0010_0000;
+const ATTR_BOLD: u8 = 0b0000_0001;
+const ATTR_ITALIC: u8 = 0b0000_0010;
+const ATTR_UNDERLINE: u8 = 0b0000_0100;
+const ATTR_STRIKEOUT: u8 = 0b0000_1000;
+const ATTR_DIM: u8 = 0b0001_0000;
+const ATTR_INVERSE: u8 = 0b0010_0000;
 const ATTR_DEFAULT_FG: u8 = 0b0100_0000;
 const ATTR_DEFAULT_BG: u8 = 0b1000_0000;
 
@@ -107,22 +164,86 @@ const ATTR_DEFAULT_BG: u8 = 0b1000_0000;
 fn xterm_color_rgb(index: u8) -> Rgb {
     match index {
         // 16 standard ANSI colors — match "commander" xterm.js theme
-        0  => Rgb { r: 0x1e, g: 0x1e, b: 0x1e },
-        1  => Rgb { r: 0xf1, g: 0x4c, b: 0x4c },
-        2  => Rgb { r: 0x23, g: 0xd1, b: 0x8b },
-        3  => Rgb { r: 0xe5, g: 0xe5, b: 0x10 },
-        4  => Rgb { r: 0x3b, g: 0x8e, b: 0xea },
-        5  => Rgb { r: 0xd6, g: 0x70, b: 0xd6 },
-        6  => Rgb { r: 0x29, g: 0xb8, b: 0xdb },
-        7  => Rgb { r: 0xd4, g: 0xd4, b: 0xd4 },
-        8  => Rgb { r: 0x66, g: 0x66, b: 0x66 },
-        9  => Rgb { r: 0xf1, g: 0x4c, b: 0x4c },
-        10 => Rgb { r: 0x23, g: 0xd1, b: 0x8b },
-        11 => Rgb { r: 0xf5, g: 0xf5, b: 0x43 },
-        12 => Rgb { r: 0x3b, g: 0x8e, b: 0xea },
-        13 => Rgb { r: 0xd6, g: 0x70, b: 0xd6 },
-        14 => Rgb { r: 0x29, g: 0xb8, b: 0xdb },
-        15 => Rgb { r: 0xff, g: 0xff, b: 0xff },
+        0 => Rgb {
+            r: 0x1e,
+            g: 0x1e,
+            b: 0x1e,
+        },
+        1 => Rgb {
+            r: 0xf1,
+            g: 0x4c,
+            b: 0x4c,
+        },
+        2 => Rgb {
+            r: 0x23,
+            g: 0xd1,
+            b: 0x8b,
+        },
+        3 => Rgb {
+            r: 0xe5,
+            g: 0xe5,
+            b: 0x10,
+        },
+        4 => Rgb {
+            r: 0x3b,
+            g: 0x8e,
+            b: 0xea,
+        },
+        5 => Rgb {
+            r: 0xd6,
+            g: 0x70,
+            b: 0xd6,
+        },
+        6 => Rgb {
+            r: 0x29,
+            g: 0xb8,
+            b: 0xdb,
+        },
+        7 => Rgb {
+            r: 0xd4,
+            g: 0xd4,
+            b: 0xd4,
+        },
+        8 => Rgb {
+            r: 0x66,
+            g: 0x66,
+            b: 0x66,
+        },
+        9 => Rgb {
+            r: 0xf1,
+            g: 0x4c,
+            b: 0x4c,
+        },
+        10 => Rgb {
+            r: 0x23,
+            g: 0xd1,
+            b: 0x8b,
+        },
+        11 => Rgb {
+            r: 0xf5,
+            g: 0xf5,
+            b: 0x43,
+        },
+        12 => Rgb {
+            r: 0x3b,
+            g: 0x8e,
+            b: 0xea,
+        },
+        13 => Rgb {
+            r: 0xd6,
+            g: 0x70,
+            b: 0xd6,
+        },
+        14 => Rgb {
+            r: 0x29,
+            g: 0xb8,
+            b: 0xdb,
+        },
+        15 => Rgb {
+            r: 0xff,
+            g: 0xff,
+            b: 0xff,
+        },
         // 216-color cube (indices 16-231)
         16..=231 => {
             let n = index - 16;
@@ -130,7 +251,11 @@ fn xterm_color_rgb(index: u8) -> Rgb {
             let g_idx = (n / 6) % 6;
             let r_idx = n / 36;
             let to_val = |i: u8| if i == 0 { 0 } else { 55 + 40 * i };
-            Rgb { r: to_val(r_idx), g: to_val(g_idx), b: to_val(b_idx) }
+            Rgb {
+                r: to_val(r_idx),
+                g: to_val(g_idx),
+                b: to_val(b_idx),
+            }
         }
         // 24-step grayscale ramp (indices 232-255)
         232..=255 => {
@@ -142,7 +267,11 @@ fn xterm_color_rgb(index: u8) -> Rgb {
 
 /// Reduce brightness to 2/3 for dim color variants.
 fn dim_rgb(c: Rgb) -> Rgb {
-    Rgb { r: (c.r as u16 * 2 / 3) as u8, g: (c.g as u16 * 2 / 3) as u8, b: (c.b as u16 * 2 / 3) as u8 }
+    Rgb {
+        r: (c.r as u16 * 2 / 3) as u8,
+        g: (c.g as u16 * 2 / 3) as u8,
+        b: (c.b as u16 * 2 / 3) as u8,
+    }
 }
 
 /// Resolve a `Color` to RGB, returning `None` for default fg/bg.
@@ -150,17 +279,21 @@ fn dim_rgb(c: Rgb) -> Rgb {
 fn resolve_color(c: Color, colors: &Colors) -> Option<Rgb> {
     match c {
         Color::Spec(rgb) => Some(rgb),
-        Color::Indexed(i) => {
-            colors[i as usize].or_else(|| Some(xterm_color_rgb(i)))
-        }
+        Color::Indexed(i) => colors[i as usize].or_else(|| Some(xterm_color_rgb(i))),
         Color::Named(n) => {
             if let Some(rgb) = colors[n] {
                 return Some(rgb);
             }
-            let is_dim = matches!(n,
-                NamedColor::DimBlack | NamedColor::DimRed | NamedColor::DimGreen
-                | NamedColor::DimYellow | NamedColor::DimBlue | NamedColor::DimMagenta
-                | NamedColor::DimCyan | NamedColor::DimWhite
+            let is_dim = matches!(
+                n,
+                NamedColor::DimBlack
+                    | NamedColor::DimRed
+                    | NamedColor::DimGreen
+                    | NamedColor::DimYellow
+                    | NamedColor::DimBlue
+                    | NamedColor::DimMagenta
+                    | NamedColor::DimCyan
+                    | NamedColor::DimWhite
             );
             match named_color_to_index(n) {
                 Some(i) => {
@@ -169,7 +302,7 @@ fn resolve_color(c: Color, colors: &Colors) -> Option<Rgb> {
                 }
                 None => None,
             }
-        },
+        }
     }
 }
 
@@ -198,13 +331,22 @@ impl TerminalGrid {
         let config = Config {
             scrolling_history: scrollback,
             kitty_keyboard: true,
-            default_cursor_style: CursorStyle { shape: CursorShape::Beam, blinking: true },
+            default_cursor_style: CursorStyle {
+                shape: CursorShape::Beam,
+                blinking: true,
+            },
             ..Config::default()
         };
-        let size = GridSize { cols: cols as usize, lines: rows as usize };
+        let size = GridSize {
+            cols: cols as usize,
+            lines: rows as usize,
+        };
         let bell_flag = Arc::new(AtomicBool::new(false));
         let events = Arc::new(Mutex::new(Vec::new()));
-        let listener = TermEventCollector { bell: bell_flag.clone(), events: events.clone() };
+        let listener = TermEventCollector {
+            bell: bell_flag.clone(),
+            events: events.clone(),
+        };
         let term = Term::new(config, &size, listener);
         Self {
             term,
@@ -275,6 +417,11 @@ impl TerminalGrid {
         self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
+    /// Whether the cursor is currently visible (DECTCEM / CSI ?25h).
+    pub fn is_cursor_visible(&self) -> bool {
+        self.term.mode().contains(TermMode::SHOW_CURSOR)
+    }
+
     /// Number of scrollback lines above the visible screen.
     pub fn scrollback_count(&self) -> usize {
         self.term.grid().history_size()
@@ -339,8 +486,15 @@ impl TerminalGrid {
     /// unwrapped) to match the new column width while the visible screen is left
     /// untouched — preserving cursor-addressed TUI positioning.
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        let size = GridSize { cols: cols as usize, lines: rows as usize };
-        let mode = if self.reflow_history { ReflowMode::HistoryOnly } else { ReflowMode::None };
+        let size = GridSize {
+            cols: cols as usize,
+            lines: rows as usize,
+        };
+        let mode = if self.reflow_history {
+            ReflowMode::HistoryOnly
+        } else {
+            ReflowMode::None
+        };
         self.term.resize_reflow(size, mode);
         self.prev_rows.clear();
         self.term.mark_fully_damaged();
@@ -373,11 +527,16 @@ impl TerminalGrid {
             let bg = LogColor::from_ansi_color(cell.bg);
             let bold = cell.flags.contains(Flags::BOLD);
             let italic = cell.flags.contains(Flags::ITALIC);
-            let underline = cell.flags.intersects(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE | Flags::UNDERCURL);
+            let underline = cell
+                .flags
+                .intersects(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE | Flags::UNDERCURL);
 
             if !cur_text.is_empty()
-                && (fg != cur_fg || bg != cur_bg || bold != cur_bold
-                    || italic != cur_italic || underline != cur_underline)
+                && (fg != cur_fg
+                    || bg != cur_bg
+                    || bold != cur_bold
+                    || italic != cur_italic
+                    || underline != cur_underline)
             {
                 spans.push(LogSpan {
                     text: std::mem::take(&mut cur_text),
@@ -415,7 +574,11 @@ impl TerminalGrid {
 
         // Trim trailing whitespace-only spans with default attrs
         while let Some(last) = spans.last() {
-            if last.fg.is_none() && last.bg.is_none() && !last.bold && !last.italic && !last.underline
+            if last.fg.is_none()
+                && last.bg.is_none()
+                && !last.bold
+                && !last.italic
+                && !last.underline
                 && last.text.trim_end().is_empty()
             {
                 spans.pop();
@@ -425,14 +588,23 @@ impl TerminalGrid {
         }
         if let Some(last) = spans.last_mut() {
             let trimmed = last.text.trim_end().to_string();
-            if trimmed.is_empty() && last.fg.is_none() && last.bg.is_none() && !last.bold && !last.italic && !last.underline {
+            if trimmed.is_empty()
+                && last.fg.is_none()
+                && last.bg.is_none()
+                && !last.bold
+                && !last.italic
+                && !last.underline
+            {
                 spans.pop();
             } else {
                 last.text = trimmed;
             }
         }
 
-        LogLine { spans, cols: num_cols as u16 }
+        LogLine {
+            spans,
+            cols: num_cols as u16,
+        }
     }
 
     /// Current visible screen rows as styled LogLines.
@@ -467,7 +639,9 @@ impl TerminalGrid {
             let is_continuation = if prev_scrollback_idx < history {
                 let prev_line = Line(-(prev_scrollback_idx as i32) - 1);
                 let last_col = grid.columns().saturating_sub(1);
-                grid[prev_line][Column(last_col)].flags.contains(Flags::WRAPLINE)
+                grid[prev_line][Column(last_col)]
+                    .flags
+                    .contains(Flags::WRAPLINE)
             } else {
                 false
             };
@@ -578,7 +752,9 @@ impl TerminalGrid {
         let display_offset = self.term.grid().display_offset();
         let line = Line(row as i32 - display_offset as i32);
         let grid = self.term.grid();
-        if col >= grid.columns() { return None; }
+        if col >= grid.columns() {
+            return None;
+        }
         let cell = &grid[line][Column(col)];
         cell.hyperlink().map(|h| h.uri().to_owned())
     }
@@ -754,14 +930,23 @@ impl TerminalGrid {
         let has_selection = self.term.selection.is_some();
         let mode = *self.term.mode();
         let mut keyboard_flags: u8 = 0;
-        if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) { keyboard_flags |= 0x01; }
-        if mode.contains(TermMode::REPORT_EVENT_TYPES) { keyboard_flags |= 0x02; }
-        if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) { keyboard_flags |= 0x04; }
-        if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) { keyboard_flags |= 0x08; }
-        if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) { keyboard_flags |= 0x10; }
+        if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
+            keyboard_flags |= 0x01;
+        }
+        if mode.contains(TermMode::REPORT_EVENT_TYPES) {
+            keyboard_flags |= 0x02;
+        }
+        if mode.contains(TermMode::REPORT_ALTERNATE_KEYS) {
+            keyboard_flags |= 0x04;
+        }
+        if mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC) {
+            keyboard_flags |= 0x08;
+        }
+        if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
+            keyboard_flags |= 0x10;
+        }
 
-        let viewport_changed =
-            self.last_frame_display_offset != Some(display_offset)
+        let viewport_changed = self.last_frame_display_offset != Some(display_offset)
             || self.last_frame_history_size != Some(history_size)
             || self.last_frame_screen_lines != Some(num_lines)
             || self.last_frame_columns != Some(num_cols);
@@ -773,10 +958,9 @@ impl TerminalGrid {
             let damage = self.term.damage();
             match damage {
                 TermDamage::Full => (0..num_lines).collect(),
-                TermDamage::Partial(iter) => iter
-                    .map(|b| b.line)
-                    .filter(|&l| l < num_lines)
-                    .collect(),
+                TermDamage::Partial(iter) => {
+                    iter.map(|b| b.line).filter(|&l| l < num_lines).collect()
+                }
             }
         };
 
@@ -797,7 +981,9 @@ impl TerminalGrid {
         let bell = self.drain_bell();
         let cursor_shape = self.term.cursor_style().shape;
         let mut frame_flags: u8 = 0;
-        if bell { frame_flags |= 0x01; }
+        if bell {
+            frame_flags |= 0x01;
+        }
         // bits 1-2: cursor shape (0=block, 1=underline, 2=beam)
         let shape_bits: u8 = match cursor_shape {
             CursorShape::Block => 0,
@@ -807,15 +993,24 @@ impl TerminalGrid {
         };
         frame_flags |= shape_bits << 1;
         // bits 3-4: mouse mode (0=none, 1=click, 2=drag, 3=motion)
-        let mouse_bits: u8 = if mode.contains(TermMode::MOUSE_MOTION) { 3 }
-            else if mode.contains(TermMode::MOUSE_DRAG) { 2 }
-            else if mode.contains(TermMode::MOUSE_REPORT_CLICK) { 1 }
-            else { 0 };
+        let mouse_bits: u8 = if mode.contains(TermMode::MOUSE_MOTION) {
+            3
+        } else if mode.contains(TermMode::MOUSE_DRAG) {
+            2
+        } else if mode.contains(TermMode::MOUSE_REPORT_CLICK) {
+            1
+        } else {
+            0
+        };
         frame_flags |= mouse_bits << 3;
         // bit 5: SGR mouse encoding
-        if mode.contains(TermMode::SGR_MOUSE) { frame_flags |= 0x20; }
+        if mode.contains(TermMode::SGR_MOUSE) {
+            frame_flags |= 0x20;
+        }
         // bit 6: focus reporting
-        if mode.contains(TermMode::FOCUS_IN_OUT) { frame_flags |= 0x40; }
+        if mode.contains(TermMode::FOCUS_IN_OUT) {
+            frame_flags |= 0x40;
+        }
 
         buf.extend_from_slice(&(row_count as u16).to_le_bytes());
         buf.extend_from_slice(&(cursor.line.0.max(0) as u16).to_le_bytes());
@@ -849,7 +1044,11 @@ impl TerminalGrid {
                     Some(rgb) => (rgb, false),
                     None => (Rgb { r: 0, g: 0, b: 0 }, true),
                 };
-                let fg_rgb = if cell.flags.contains(Flags::DIM) { dim_rgb(fg_rgb) } else { fg_rgb };
+                let fg_rgb = if cell.flags.contains(Flags::DIM) {
+                    dim_rgb(fg_rgb)
+                } else {
+                    fg_rgb
+                };
                 buf.push(fg_rgb.r);
                 buf.push(fg_rgb.g);
                 buf.push(fg_rgb.b);
@@ -864,14 +1063,30 @@ impl TerminalGrid {
 
                 let flags = cell.flags;
                 let mut attrs: u8 = 0;
-                if flags.contains(Flags::BOLD) { attrs |= ATTR_BOLD; }
-                if flags.contains(Flags::ITALIC) { attrs |= ATTR_ITALIC; }
-                if flags.intersects(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE | Flags::UNDERCURL) { attrs |= ATTR_UNDERLINE; }
-                if flags.contains(Flags::STRIKEOUT) { attrs |= ATTR_STRIKEOUT; }
-                if flags.contains(Flags::DIM) { attrs |= ATTR_DIM; }
-                if flags.contains(Flags::INVERSE) { attrs |= ATTR_INVERSE; }
-                if fg_default { attrs |= ATTR_DEFAULT_FG; }
-                if bg_default { attrs |= ATTR_DEFAULT_BG; }
+                if flags.contains(Flags::BOLD) {
+                    attrs |= ATTR_BOLD;
+                }
+                if flags.contains(Flags::ITALIC) {
+                    attrs |= ATTR_ITALIC;
+                }
+                if flags.intersects(Flags::UNDERLINE | Flags::DOUBLE_UNDERLINE | Flags::UNDERCURL) {
+                    attrs |= ATTR_UNDERLINE;
+                }
+                if flags.contains(Flags::STRIKEOUT) {
+                    attrs |= ATTR_STRIKEOUT;
+                }
+                if flags.contains(Flags::DIM) {
+                    attrs |= ATTR_DIM;
+                }
+                if flags.contains(Flags::INVERSE) {
+                    attrs |= ATTR_INVERSE;
+                }
+                if fg_default {
+                    attrs |= ATTR_DEFAULT_FG;
+                }
+                if bg_default {
+                    attrs |= ATTR_DEFAULT_BG;
+                }
                 buf.push(attrs);
             }
         }
@@ -1099,10 +1314,23 @@ mod tests {
     /// Helper: decode one cell (11 bytes) from a buffer at a given offset.
     /// Returns (char, fg_r, fg_g, fg_b, bg_r, bg_g, bg_b, attrs).
     fn decode_cell(buf: &[u8], offset: usize) -> (char, u8, u8, u8, u8, u8, u8, u8) {
-        let ch = u32::from_le_bytes([buf[offset], buf[offset+1], buf[offset+2], buf[offset+3]]);
+        let ch = u32::from_le_bytes([
+            buf[offset],
+            buf[offset + 1],
+            buf[offset + 2],
+            buf[offset + 3],
+        ]);
         let ch = char::from_u32(ch).unwrap_or('\0');
-        (ch, buf[offset+4], buf[offset+5], buf[offset+6],
-             buf[offset+7], buf[offset+8], buf[offset+9], buf[offset+10])
+        (
+            ch,
+            buf[offset + 4],
+            buf[offset + 5],
+            buf[offset + 6],
+            buf[offset + 7],
+            buf[offset + 8],
+            buf[offset + 9],
+            buf[offset + 10],
+        )
     }
 
     #[test]
@@ -1120,8 +1348,8 @@ mod tests {
 
         // First dirty row header starts after header
         let h = TEST_HEADER_SIZE;
-        let row_idx = u16::from_le_bytes([buf[h], buf[h+1]]);
-        let col_count = u16::from_le_bytes([buf[h+2], buf[h+3]]);
+        let row_idx = u16::from_le_bytes([buf[h], buf[h + 1]]);
+        let col_count = u16::from_le_bytes([buf[h + 2], buf[h + 3]]);
         assert_eq!(row_idx, 0);
         assert_eq!(col_count, 10);
 
@@ -1187,7 +1415,10 @@ mod tests {
         let (ch_d, fg_r_d, fg_g_d, fg_b_d, _, _, _, attrs_d) = decode_cell(&buf, cell0 + 11);
         assert_eq!(ch_n, 'N');
         assert_eq!(ch_d, 'D');
-        assert!(fg_r_d < fg_r_n, "dim red R channel ({fg_r_d}) must be darker than normal ({fg_r_n})");
+        assert!(
+            fg_r_d < fg_r_n,
+            "dim red R channel ({fg_r_d}) must be darker than normal ({fg_r_n})"
+        );
         assert!(fg_g_d <= fg_g_n, "dim red G channel not brighter");
         assert!(fg_b_d <= fg_b_n, "dim red B channel not brighter");
         assert_ne!(attrs_d & super::ATTR_DIM, 0, "dim flag set");
@@ -1223,7 +1454,10 @@ mod tests {
         let buf = grid.serialize_dirty_rows();
         let (num_rows, _, _, _) = decode_header(&buf);
 
-        assert_eq!(num_rows, 3, "scrollback growth shifts viewport rows, so frame must be full");
+        assert_eq!(
+            num_rows, 3,
+            "scrollback growth shifts viewport rows, so frame must be full"
+        );
     }
 
     #[test]
@@ -1238,7 +1472,8 @@ mod tests {
         assert_eq!(ch0, '日');
         // Cell 1 = wide char spacer → encoded as 0
         let cell1 = cell0 + 11;
-        let ch1_raw = u32::from_le_bytes([buf[cell1], buf[cell1+1], buf[cell1+2], buf[cell1+3]]);
+        let ch1_raw =
+            u32::from_le_bytes([buf[cell1], buf[cell1 + 1], buf[cell1 + 2], buf[cell1 + 3]]);
         assert_eq!(ch1_raw, 0, "wide char spacer encoded as 0");
     }
 
@@ -1449,7 +1684,10 @@ mod tests {
         assert!(count >= 2, "expected scrollback >= 2, got {count}");
         let lines = grid.read_scrollback_lines(0, 10);
         assert!(!lines.is_empty(), "scrollback should have content");
-        assert!(lines[0].contains("line"), "first scrollback line should contain text");
+        assert!(
+            lines[0].contains("line"),
+            "first scrollback line should contain text"
+        );
     }
 
     #[test]
@@ -1506,7 +1744,9 @@ mod tests {
         let events = grid.drain_events();
         assert_eq!(events.len(), 1);
         match &events[0] {
-            TermEvent::Osc133 { command, params, .. } => {
+            TermEvent::Osc133 {
+                command, params, ..
+            } => {
                 assert_eq!(*command, 'D');
                 assert_eq!(params, "42");
             }
@@ -1520,10 +1760,13 @@ mod tests {
         grid.process(b"\x1b]133;A\x07prompt$ \x1b]133;B\x07ls\x1b]133;C\x07");
         let events = grid.drain_events();
         assert_eq!(events.len(), 3);
-        let commands: Vec<char> = events.iter().map(|e| match e {
-            TermEvent::Osc133 { command, .. } => *command,
-            _ => panic!("unexpected event"),
-        }).collect();
+        let commands: Vec<char> = events
+            .iter()
+            .map(|e| match e {
+                TermEvent::Osc133 { command, .. } => *command,
+                _ => panic!("unexpected event"),
+            })
+            .collect();
         assert_eq!(commands, vec!['A', 'B', 'C']);
     }
 
@@ -1534,7 +1777,9 @@ mod tests {
         let events = grid.drain_events();
         assert_eq!(events.len(), 1);
         match &events[0] {
-            TermEvent::Osc133 { command, params, .. } => {
+            TermEvent::Osc133 {
+                command, params, ..
+            } => {
                 assert_eq!(*command, 'D');
                 assert_eq!(params, "0");
             }
@@ -1561,12 +1806,14 @@ mod tests {
         let term = grid.term();
         let grid_ref = term.grid();
         // Row 0 should start with Prompt cells (from A marker), then Input cells (from B)
-        let cell_0_0 = &grid_ref[alacritty_terminal::index::Line(0)][alacritty_terminal::index::Column(0)];
+        let cell_0_0 =
+            &grid_ref[alacritty_terminal::index::Line(0)][alacritty_terminal::index::Column(0)];
         assert_eq!(cell_0_0.cell_type, Osc133CellType::Prompt);
 
         // After "B" marker, cells should be Input
         // "$ " is 2 chars (Prompt), then "ls -la" is 6 chars (Input)
-        let cell_0_2 = &grid_ref[alacritty_terminal::index::Line(0)][alacritty_terminal::index::Column(2)];
+        let cell_0_2 =
+            &grid_ref[alacritty_terminal::index::Line(0)][alacritty_terminal::index::Column(2)];
         assert_eq!(cell_0_2.cell_type, Osc133CellType::Input);
     }
 
@@ -1575,7 +1822,10 @@ mod tests {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         grid.process(b"hello world");
         let events = grid.drain_events();
-        let osc_events: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Osc133 { .. })).collect();
+        let osc_events: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::Osc133 { .. }))
+            .collect();
         assert!(osc_events.is_empty());
     }
 
@@ -1585,7 +1835,10 @@ mod tests {
         // OSC 7770 ; state=idle BEL
         grid.process(b"\x1b]7770;state=idle\x07");
         let events = grid.drain_events();
-        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        let tuic: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::Tuic { .. }))
+            .collect();
         assert_eq!(tuic.len(), 1);
         match &tuic[0] {
             TermEvent::Tuic { verb, payload } => {
@@ -1602,7 +1855,10 @@ mod tests {
         // OSC 7770 ; suggest=Fix the bug|Run tests|Deploy BEL
         grid.process(b"\x1b]7770;suggest=Fix the bug|Run tests|Deploy\x07");
         let events = grid.drain_events();
-        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        let tuic: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::Tuic { .. }))
+            .collect();
         assert_eq!(tuic.len(), 1);
         match &tuic[0] {
             TermEvent::Tuic { verb, payload } => {
@@ -1618,7 +1874,10 @@ mod tests {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         grid.process(b"\x1b]7770;intent=Refactoring auth module (Auth Refactor)\x07");
         let events = grid.drain_events();
-        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        let tuic: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::Tuic { .. }))
+            .collect();
         assert_eq!(tuic.len(), 1);
         match &tuic[0] {
             TermEvent::Tuic { verb, payload } => {
@@ -1646,7 +1905,10 @@ mod tests {
         // ST terminator: ESC backslash
         grid.process(b"\x1b]7770;state=busy\x1b\\");
         let events = grid.drain_events();
-        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        let tuic: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::Tuic { .. }))
+            .collect();
         assert_eq!(tuic.len(), 1);
         match &tuic[0] {
             TermEvent::Tuic { verb, payload } => {
@@ -1666,11 +1928,16 @@ mod tests {
         assert_eq!(cursor_row, 0, "cursor should be on the partial row");
         let row_text = grid.get_row_text(0);
         let trimmed = row_text.trim_start();
-        assert!(trimmed.starts_with("suggest:"),
-            "row should start with suggest: but got: {row_text}");
+        assert!(
+            trimmed.starts_with("suggest:"),
+            "row should start with suggest: but got: {row_text}"
+        );
         // Verify the guard predicate: row at cursor starts with "suggest:" → should be excluded
         let should_exclude = trimmed.starts_with("suggest:") || trimmed.starts_with("intent:");
-        assert!(should_exclude, "guard predicate should match this row for exclusion");
+        assert!(
+            should_exclude,
+            "guard predicate should match this row for exclusion"
+        );
     }
 
     #[test]
@@ -1692,7 +1959,10 @@ mod tests {
         let (cursor_row, _) = grid.cursor_point();
         assert_eq!(cursor_row, 0);
         let trimmed = grid.get_row_text(0).trim_start().to_string();
-        assert!(trimmed.starts_with("intent:"), "guard should also match intent: prefix");
+        assert!(
+            trimmed.starts_with("intent:"),
+            "guard should also match intent: prefix"
+        );
     }
 
     #[test]
@@ -1701,23 +1971,43 @@ mod tests {
         // Shell displays prompt (OSC 133 A)
         grid.process(b"\x1b]133;A\x07$ ");
         let events = grid.drain_events();
-        assert!(events.iter().any(|e| matches!(e, TermEvent::Osc133 { command: 'A', .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::Osc133 { command: 'A', .. }))
+        );
 
         // User types and presses enter (OSC 133 C)
         grid.process(b"ls\r\n\x1b]133;C\x07");
         let events = grid.drain_events();
-        assert!(events.iter().any(|e| matches!(e, TermEvent::Osc133 { command: 'C', .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::Osc133 { command: 'C', .. }))
+        );
 
         // Command output + done (OSC 133 D)
         grid.process(b"file1.txt\r\n\x1b]133;D;0\x07");
         let events = grid.drain_events();
-        assert!(events.iter().any(|e| matches!(e, TermEvent::Osc133 { command: 'D', .. })));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::Osc133 { command: 'D', .. }))
+        );
 
         // Prompt returns (OSC 133 A) + agent suggests via OSC 7770
         grid.process(b"\x1b]133;A\x07$ \x1b]7770;suggest=Show details|Delete file|Open\x07");
         let events = grid.drain_events();
-        assert!(events.iter().any(|e| matches!(e, TermEvent::Osc133 { command: 'A', .. })));
-        assert!(events.iter().any(|e| matches!(e, TermEvent::Tuic { verb, .. } if verb == "suggest")));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::Osc133 { command: 'A', .. }))
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, TermEvent::Tuic { verb, .. } if verb == "suggest"))
+        );
     }
 
     #[test]
@@ -1725,7 +2015,10 @@ mod tests {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         grid.process(b"\x1b]7770;garbage\x07");
         let events = grid.drain_events();
-        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        let tuic: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::Tuic { .. }))
+            .collect();
         assert!(tuic.is_empty(), "malformed OSC 7770 should be ignored");
     }
 
@@ -1734,7 +2027,10 @@ mod tests {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         grid.process(b"\x1b]7770;state=\x07");
         let events = grid.drain_events();
-        let tuic: Vec<_> = events.iter().filter(|e| matches!(e, TermEvent::Tuic { .. })).collect();
+        let tuic: Vec<_> = events
+            .iter()
+            .filter(|e| matches!(e, TermEvent::Tuic { .. }))
+            .collect();
         assert_eq!(tuic.len(), 1);
         match &tuic[0] {
             TermEvent::Tuic { verb, payload } => {
@@ -1757,7 +2053,10 @@ mod tests {
         let _ = grid.process(b"EEEEEEEEEEFFFFFFFFFF\r\n");
         let _ = grid.process(b"line4\r\nline5\r\nline6");
         let history_before = grid.scrollback_count();
-        assert!(history_before >= 3, "expected at least 3 history lines, got {history_before}");
+        assert!(
+            history_before >= 3,
+            "expected at least 3 history lines, got {history_before}"
+        );
 
         // Shrink cols from 20 to 10 — history rows should reflow (wrap),
         // screen rows should truncate.

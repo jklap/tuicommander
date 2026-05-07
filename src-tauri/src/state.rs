@@ -2237,6 +2237,10 @@ impl VtLogBuffer {
         self.grid.is_alternate_screen()
     }
 
+    pub(crate) fn is_cursor_visible(&self) -> bool {
+        self.grid.is_cursor_visible()
+    }
+
     pub(crate) fn grid_force_full_damage(&mut self) {
         self.grid.force_full_damage();
     }
