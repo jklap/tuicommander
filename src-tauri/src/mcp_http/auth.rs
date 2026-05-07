@@ -224,20 +224,20 @@ pub async fn basic_auth_middleware(
         )
     };
     let client_ip = addr.ip();
-    if rate_max > 0 {
-        if let Some(entry) = state.auth_rate_limits.get(&client_ip) {
-            let (count, window_start) = *entry;
-            let window = std::time::Duration::from_secs(rate_window_secs);
-            if window_start.elapsed() < window && count >= rate_max {
-                let retry_after = (window - window_start.elapsed()).as_secs() + 1;
-                tracing::warn!(source = "auth", ip = %client_ip, count, "Rate limited — too many failed auth attempts");
-                return (
-                    StatusCode::TOO_MANY_REQUESTS,
-                    [(header::RETRY_AFTER, retry_after.to_string())],
-                    "Too many failed authentication attempts",
-                )
-                    .into_response();
-            }
+    if rate_max > 0
+        && let Some(entry) = state.auth_rate_limits.get(&client_ip)
+    {
+        let (count, window_start) = *entry;
+        let window = std::time::Duration::from_secs(rate_window_secs);
+        if window_start.elapsed() < window && count >= rate_max {
+            let retry_after = (window - window_start.elapsed()).as_secs() + 1;
+            tracing::warn!(source = "auth", ip = %client_ip, count, "Rate limited — too many failed auth attempts");
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, retry_after.to_string())],
+                "Too many failed authentication attempts",
+            )
+                .into_response();
         }
     }
 

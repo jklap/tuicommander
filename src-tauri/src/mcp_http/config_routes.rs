@@ -22,16 +22,16 @@ pub(super) async fn get_config(State(state): State<Arc<AppState>>) -> impl IntoR
     };
     // Strip sensitive fields from nested services config
     if let Some(services) = json.pointer_mut("/services") {
-        if let Some(auth) = services.pointer_mut("/auth") {
-            if let Some(o) = auth.as_object_mut() {
-                o.remove("password_hash");
-                o.remove("session_token");
-            }
+        if let Some(auth) = services.pointer_mut("/auth")
+            && let Some(o) = auth.as_object_mut()
+        {
+            o.remove("password_hash");
+            o.remove("session_token");
         }
-        if let Some(push) = services.pointer_mut("/push") {
-            if let Some(o) = push.as_object_mut() {
-                o.remove("vapid_private_key");
-            }
+        if let Some(push) = services.pointer_mut("/push")
+            && let Some(o) = push.as_object_mut()
+        {
+            o.remove("vapid_private_key");
         }
     }
     Json(json).into_response()

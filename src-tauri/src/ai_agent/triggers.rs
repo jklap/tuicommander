@@ -41,10 +41,10 @@ impl TriggerClassifier {
         }
 
         let mut guard = self.last_suggestion.lock();
-        if let Some(last) = guard.get(session_id) {
-            if last.elapsed() < DEBOUNCE {
-                return None;
-            }
+        if let Some(last) = guard.get(session_id)
+            && last.elapsed() < DEBOUNCE
+        {
+            return None;
         }
         guard.insert(session_id.to_string(), Instant::now());
         drop(guard);
