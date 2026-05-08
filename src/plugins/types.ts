@@ -12,7 +12,7 @@
 
 /** Returned by every PluginHost.register*() call. Call dispose() in onunload(). */
 export interface Disposable {
-  dispose(): void;
+	dispose(): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -24,18 +24,18 @@ export interface Disposable {
  * Each plugin registers one section and contributes items into it.
  */
 export interface ActivitySection {
-  /** Unique section identifier (e.g. "plan", "stories") */
-  id: string;
-  /** Display label shown as section header (e.g. "ACTIVE PLAN", "STORIES") */
-  label: string;
-  /** Lower number = higher position in dropdown */
-  priority: number;
-  /** Whether the section shows a "Dismiss All" button */
-  canDismissAll: boolean;
-  /** When true, section is only shown in its dedicated panel, not in the toolbar activity popover */
-  panelOnly?: boolean;
-  /** Plugin that owns this section (set automatically by the registry) */
-  pluginId?: string;
+	/** Unique section identifier (e.g. "plan", "stories") */
+	id: string;
+	/** Display label shown as section header (e.g. "ACTIVE PLAN", "STORIES") */
+	label: string;
+	/** Lower number = higher position in dropdown */
+	priority: number;
+	/** Whether the section shows a "Dismiss All" button */
+	canDismissAll: boolean;
+	/** When true, section is only shown in its dedicated panel, not in the toolbar activity popover */
+	panelOnly?: boolean;
+	/** Plugin that owns this section (set automatically by the registry) */
+	pluginId?: string;
 }
 
 /**
@@ -43,48 +43,48 @@ export interface ActivitySection {
  * Contributed by plugins via PluginHost.addItem().
  */
 export interface ActivityItem {
-  /** Unique item identifier */
-  id: string;
-  /** ID of the plugin that owns this item */
-  pluginId: string;
-  /** Section this item belongs to */
-  sectionId: string;
-  /** Primary display text (larger, prominent) */
-  title: string;
-  /** Secondary display text (smaller, muted) */
-  subtitle?: string;
-  /**
-   * Inline SVG string rendered via innerHTML.
-   * SECURITY: MUST be a compile-time constant from trusted first-party code.
-   * NEVER pass user-generated, PTY-derived, or externally-sourced strings here.
-   */
-  icon: string;
-  /** CSS color for the icon (e.g. "var(--fg-muted)", "#3fb950") */
-  iconColor?: string;
-  /** Absolute path of the repository this item belongs to (for repo-scoped filtering) */
-  repoPath?: string;
-  /** Whether the user can dismiss this item individually */
-  dismissible: boolean;
-  /** Whether this item has been dismissed by the user */
-  dismissed?: boolean;
-  /** Unix timestamp when this item was created (set by store) */
-  createdAt: number;
-  /**
-   * Arbitrary key-value metadata for plugin-specific display.
-   * Serializable (persisted with the item). Plugins populate and panels render.
-   */
-  metadata?: Record<string, string>;
-  /**
-   * URI resolved by markdownProviderRegistry when user clicks the item.
-   * Format: "scheme:path?key=value" — e.g. "plan:file?path=/foo/bar.md"
-   * Mutually exclusive with onClick.
-   */
-  contentUri?: string;
-  /**
-   * Direct click handler (alternative to contentUri for simple actions).
-   * Mutually exclusive with contentUri.
-   */
-  onClick?: () => void;
+	/** Unique item identifier */
+	id: string;
+	/** ID of the plugin that owns this item */
+	pluginId: string;
+	/** Section this item belongs to */
+	sectionId: string;
+	/** Primary display text (larger, prominent) */
+	title: string;
+	/** Secondary display text (smaller, muted) */
+	subtitle?: string;
+	/**
+	 * Inline SVG string rendered via innerHTML.
+	 * SECURITY: MUST be a compile-time constant from trusted first-party code.
+	 * NEVER pass user-generated, PTY-derived, or externally-sourced strings here.
+	 */
+	icon: string;
+	/** CSS color for the icon (e.g. "var(--fg-muted)", "#3fb950") */
+	iconColor?: string;
+	/** Absolute path of the repository this item belongs to (for repo-scoped filtering) */
+	repoPath?: string;
+	/** Whether the user can dismiss this item individually */
+	dismissible: boolean;
+	/** Whether this item has been dismissed by the user */
+	dismissed?: boolean;
+	/** Unix timestamp when this item was created (set by store) */
+	createdAt: number;
+	/**
+	 * Arbitrary key-value metadata for plugin-specific display.
+	 * Serializable (persisted with the item). Plugins populate and panels render.
+	 */
+	metadata?: Record<string, string>;
+	/**
+	 * URI resolved by markdownProviderRegistry when user clicks the item.
+	 * Format: "scheme:path?key=value" — e.g. "plan:file?path=/foo/bar.md"
+	 * Mutually exclusive with onClick.
+	 */
+	contentUri?: string;
+	/**
+	 * Direct click handler (alternative to contentUri for simple actions).
+	 * Mutually exclusive with contentUri.
+	 */
+	onClick?: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -99,14 +99,14 @@ export interface ActivityItem {
  * Schedule any async work (file reads, API calls) separately.
  */
 export interface OutputWatcher {
-  /** Pattern to test against each clean (ANSI-stripped) PTY line */
-  pattern: RegExp;
-  /**
-   * Called synchronously when pattern matches.
-   * @param match - The RegExpExecArray from pattern.exec(line)
-   * @param sessionId - The PTY session that produced the line
-   */
-  onMatch: (match: RegExpExecArray, sessionId: string) => void;
+	/** Pattern to test against each clean (ANSI-stripped) PTY line */
+	pattern: RegExp;
+	/**
+	 * Called synchronously when pattern matches.
+	 * @param match - The RegExpExecArray from pattern.exec(line)
+	 * @param sessionId - The PTY session that produced the line
+	 */
+	onMatch: (match: RegExpExecArray, sessionId: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -121,11 +121,11 @@ export interface OutputWatcher {
  * Example: for "plan:file?path=/foo/bar.md", scheme = "plan".
  */
 export interface MarkdownProvider {
-  /**
-   * Generate and return markdown content for the given URI.
-   * Return null to indicate the content is unavailable.
-   */
-  provideContent(uri: URL): string | null | Promise<string | null>;
+	/**
+	 * Generate and return markdown content for the given URI.
+	 * Return null to indicate the content is unavailable.
+	 */
+	provideContent(uri: URL): string | null | Promise<string | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -140,13 +140,13 @@ export interface MarkdownProvider {
  * and tab bar. Return an inline SVG string or null for default icon.
  */
 export interface FileIconProvider {
-  /**
-   * Resolve an inline SVG string for a file or folder entry.
-   * @param name - The entry's filename (e.g. "index.ts", ".gitignore", "src")
-   * @param isDir - Whether the entry is a directory
-   * @returns Inline SVG string, or null to use the default icon
-   */
-  resolveFileIcon(name: string, isDir: boolean): string | null;
+	/**
+	 * Resolve an inline SVG string for a file or folder entry.
+	 * @param name - The entry's filename (e.g. "index.ts", ".gitignore", "src")
+	 * @param isDir - Whether the entry is a directory
+	 * @returns Inline SVG string, or null to use the default icon
+	 */
+	resolveFileIcon(name: string, isDir: boolean): string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -155,59 +155,59 @@ export interface FileIconProvider {
 
 /** Read-only snapshot of the active repository */
 export interface RepoSnapshot {
-  path: string;
-  displayName: string;
-  activeBranch: string | null;
-  worktreePath: string | null;
+	path: string;
+	displayName: string;
+	activeBranch: string | null;
+	worktreePath: string | null;
 }
 
 /** Read-only snapshot of a registered repository */
 export interface RepoListEntry {
-  path: string;
-  displayName: string;
+	path: string;
+	displayName: string;
 }
 
 /** Read-only snapshot of a PR notification */
 export interface PrNotificationSnapshot {
-  id: string;
-  repoPath: string;
-  branch: string;
-  prNumber: number;
-  title: string;
-  type: string;
+	id: string;
+	repoPath: string;
+	branch: string;
+	prNumber: number;
+	title: string;
+	type: string;
 }
 
 /** Read-only snapshot of effective repo settings */
 export interface RepoSettingsSnapshot {
-  path: string;
-  displayName: string;
-  baseBranch: string;
-  color: string;
+	path: string;
+	displayName: string;
+	baseBranch: string;
+	color: string;
 }
 
 /** Read-only snapshot of a terminal's state for plugins */
 export interface TerminalStateSnapshot {
-  sessionId: string | null;
-  shellState: "busy" | "idle" | "exited" | null;
-  agentType: string | null;
-  agentActive: boolean;
-  awaitingInput: "question" | "error" | null;
-  repoPath: string | null;
+	sessionId: string | null;
+	shellState: "busy" | "idle" | "exited" | null;
+	agentType: string | null;
+	agentActive: boolean;
+	awaitingInput: "question" | "error" | null;
+	repoPath: string | null;
 }
 
 /** Event payload for terminal/branch state changes */
 export interface StateChangeEvent {
-  type:
-    | "agent-started"
-    | "agent-stopped"
-    | "branch-changed"
-    | "repo-changed"
-    | "shell-state-changed"
-    | "awaiting-input-changed";
-  sessionId: string | null;
-  terminalId: string;
-  /** For branch-changed: the new branch name. For repo-changed: the new repo path (or null). */
-  detail?: string;
+	type:
+		| "agent-started"
+		| "agent-stopped"
+		| "branch-changed"
+		| "repo-changed"
+		| "shell-state-changed"
+		| "awaiting-input-changed";
+	sessionId: string | null;
+	terminalId: string;
+	/** For branch-changed: the new branch name. For repo-changed: the new repo path (or null). */
+	detail?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -215,7 +215,7 @@ export interface StateChangeEvent {
 // ---------------------------------------------------------------------------
 
 /** Re-export from store for convenience */
-export type { ContextMenuTarget, ContextMenuAction, ContextMenuContext } from "../stores/contextMenuActionsStore";
+export type { ContextMenuAction, ContextMenuContext, ContextMenuTarget } from "../stores/contextMenuActionsStore";
 
 // ---------------------------------------------------------------------------
 // Sidebar plugin panel items
@@ -223,30 +223,30 @@ export type { ContextMenuTarget, ContextMenuAction, ContextMenuContext } from ".
 
 /** An item displayed in a plugin's sidebar panel section. */
 export interface SidebarItem {
-  /** Unique item identifier (scoped to the panel) */
-  id: string;
-  /** Primary display text */
-  label: string;
-  /** Secondary display text (smaller, muted) */
-  subtitle?: string;
-  /** Inline SVG icon (fill="currentColor") */
-  icon?: string;
-  /** CSS color for the icon */
-  iconColor?: string;
-  /** Click handler */
-  onClick?: () => void;
-  /** Right-click context menu actions */
-  contextMenu?: SidebarItemAction[];
+	/** Unique item identifier (scoped to the panel) */
+	id: string;
+	/** Primary display text */
+	label: string;
+	/** Secondary display text (smaller, muted) */
+	subtitle?: string;
+	/** Inline SVG icon (fill="currentColor") */
+	icon?: string;
+	/** CSS color for the icon */
+	iconColor?: string;
+	/** Click handler */
+	onClick?: () => void;
+	/** Right-click context menu actions */
+	contextMenu?: SidebarItemAction[];
 }
 
 /** An action in a sidebar item's right-click context menu. */
 export interface SidebarItemAction {
-  /** Display label */
-  label: string;
-  /** Handler invoked when the user clicks the action */
-  action: () => void;
-  /** Whether the action is disabled */
-  disabled?: boolean;
+	/** Display label */
+	label: string;
+	/** Handler invoked when the user clicks the action */
+	action: () => void;
+	/** Whether the action is disabled */
+	disabled?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -255,22 +255,22 @@ export interface SidebarItemAction {
 
 /** Snapshot of terminal state passed to action handlers at right-click time. */
 export interface TerminalActionContext {
-  /** Session ID of the terminal that was right-clicked, or null if none active */
-  sessionId: string | null;
-  /** Repository path that owns the terminal, or null if not in a repo */
-  repoPath: string | null;
+	/** Session ID of the terminal that was right-clicked, or null if none active */
+	sessionId: string | null;
+	/** Repository path that owns the terminal, or null if not in a repo */
+	repoPath: string | null;
 }
 
 /** A plugin-registered action shown in the terminal context menu "Actions" submenu. */
 export interface TerminalAction {
-  /** Unique action identifier (scoped to the plugin) */
-  id: string;
-  /** Display label in the context menu */
-  label: string;
-  /** Handler invoked when the user clicks the action */
-  action: (ctx: TerminalActionContext) => void;
-  /** Optional callback evaluated at menu-open time to disable the action */
-  disabled?: (ctx: TerminalActionContext) => boolean;
+	/** Unique action identifier (scoped to the plugin) */
+	id: string;
+	/** Display label in the context menu */
+	label: string;
+	/** Handler invoked when the user clicks the action */
+	action: (ctx: TerminalActionContext) => void;
+	/** Optional callback evaluated at menu-open time to disable the action */
+	disabled?: (ctx: TerminalActionContext) => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,8 +279,8 @@ export interface TerminalAction {
 
 /** A filesystem change event emitted by the watcher. */
 export interface FsChangeEvent {
-  type: "create" | "modify" | "delete";
-  path: string;
+	type: "create" | "modify" | "delete";
+	path: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,37 +289,37 @@ export interface FsChangeEvent {
 
 /** Known capability strings for external plugins */
 export type PluginCapability =
-  | "pty:write"
-  | "pty:read"
-  | "ui:markdown"
-  | "ui:sound"
-  | "invoke:read_file"
-  | "invoke:list_markdown_files"
-  | "fs:read"
-  | "fs:list"
-  | "fs:watch"
-  | "fs:write"
-  | "fs:rename"
-  | "net:http"
-  | "credentials:read"
-  | "ui:panel"
-  | "ui:ticker"
-  | "exec:cli"
-  | "git:read"
-  | "ui:context-menu"
-  | "ui:sidebar"
-  | "ui:file-icons";
+	| "pty:write"
+	| "pty:read"
+	| "ui:markdown"
+	| "ui:sound"
+	| "invoke:read_file"
+	| "invoke:list_markdown_files"
+	| "fs:read"
+	| "fs:list"
+	| "fs:watch"
+	| "fs:write"
+	| "fs:rename"
+	| "net:http"
+	| "credentials:read"
+	| "ui:panel"
+	| "ui:ticker"
+	| "exec:cli"
+	| "git:read"
+	| "ui:context-menu"
+	| "ui:sidebar"
+	| "ui:file-icons";
 
 /** Valid sound names for playNotificationSound — single source of truth */
 export const NOTIFICATION_SOUNDS = ["question", "error", "completion", "warning", "info"] as const;
-export type NotificationSound = typeof NOTIFICATION_SOUNDS[number];
+export type NotificationSound = (typeof NOTIFICATION_SOUNDS)[number];
 
 /** Error thrown when a plugin calls a method without the required capability */
 export class PluginCapabilityError extends Error {
-  constructor(pluginId: string, capability: PluginCapability) {
-    super(`Plugin "${pluginId}" requires capability "${capability}" but did not declare it`);
-    this.name = "PluginCapabilityError";
-  }
+	constructor(pluginId: string, capability: PluginCapability) {
+		super(`Plugin "${pluginId}" requires capability "${capability}" but did not declare it`);
+		this.name = "PluginCapabilityError";
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -332,22 +332,22 @@ export class PluginCapabilityError extends Error {
 
 /** Response from an HTTP fetch request via the plugin host. */
 export interface HttpResponse {
-  /** HTTP status code (e.g. 200, 401, 404) */
-  status: number;
-  /** Response headers */
-  headers: Record<string, string>;
-  /** Response body as text */
-  body: string;
+	/** HTTP status code (e.g. 200, 401, 404) */
+	status: number;
+	/** Response headers */
+	headers: Record<string, string>;
+	/** Response body as text */
+	body: string;
 }
 
 /** Options for an HTTP fetch request. */
 export interface HttpFetchOptions {
-  /** HTTP method (default: "GET") */
-  method?: string;
-  /** Request headers */
-  headers?: Record<string, string>;
-  /** Request body */
-  body?: string;
+	/** HTTP method (default: "GET") */
+	method?: string;
+	/** Request headers */
+	headers?: Record<string, string>;
+	/** Request body */
+	body?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -356,48 +356,48 @@ export interface HttpFetchOptions {
 
 /** Options for opening a plugin panel */
 export interface OpenPanelOptions {
-  /** Unique panel identifier (scoped to the plugin) */
-  id: string;
-  /** Tab title shown in the tab bar */
-  title: string;
-  /** HTML content rendered inside the sandboxed iframe */
-  html: string;
-  /** Callback for messages received from the iframe via postMessage */
-  onMessage?: (data: unknown) => void;
+	/** Unique panel identifier (scoped to the plugin) */
+	id: string;
+	/** Tab title shown in the tab bar */
+	title: string;
+	/** HTML content rendered inside the sandboxed iframe */
+	html: string;
+	/** Callback for messages received from the iframe via postMessage */
+	onMessage?: (data: unknown) => void;
 }
 
 /** Options for host.registerDashboard() */
 export interface DashboardOptions {
-  /** Button label (default: "Dashboard"). Keep short — shown inline in the plugin row. */
-  label?: string;
-  /** Optional inline SVG icon rendered before the label. */
-  icon?: string;
-  /** Called when the user clicks the dashboard button in Settings → Plugins. */
-  open: () => void | Promise<void>;
+	/** Button label (default: "Dashboard"). Keep short — shown inline in the plugin row. */
+	label?: string;
+	/** Optional inline SVG icon rendered before the label. */
+	icon?: string;
+	/** Called when the user clicks the dashboard button in Settings → Plugins. */
+	open: () => void | Promise<void>;
 }
 
 /** Options for host.registerCommand() */
 export interface CommandOptions {
-  /** Unique per plugin — combined with pluginId to form the action `plugin:<pluginId>:<id>`. */
-  id: string;
-  /** Human-readable label shown in Settings → Keyboard Shortcuts. */
-  title: string;
-  /** Optional default key combo (e.g. "Cmd+Shift+K"). Omit to leave unbound by default. */
-  defaultShortcut?: string;
-  /** Called when the user presses the bound key combo. */
-  run: () => void | Promise<void>;
+	/** Unique per plugin — combined with pluginId to form the action `plugin:<pluginId>:<id>`. */
+	id: string;
+	/** Human-readable label shown in Settings → Keyboard Shortcuts. */
+	title: string;
+	/** Optional default key combo (e.g. "Cmd+Shift+K"). Omit to leave unbound by default. */
+	defaultShortcut?: string;
+	/** Called when the user presses the bound key combo. */
+	run: () => void | Promise<void>;
 }
 
 /** Handle returned by openPanel() for updating or closing the panel */
 export interface PanelHandle {
-  /** The tab ID in the mdTabs store */
-  tabId: string;
-  /** Update the iframe HTML content */
-  update(html: string): void;
-  /** Close the panel tab */
-  close(): void;
-  /** Send a message to the iframe via postMessage */
-  send(data: unknown): void;
+	/** The tab ID in the mdTabs store */
+	tabId: string;
+	/** Update the iframe HTML content */
+	update(html: string): void;
+	/** Close the panel tab */
+	close(): void;
+	/** Send a message to the iframe via postMessage */
+	send(data: unknown): void;
 }
 
 // ---------------------------------------------------------------------------
@@ -406,12 +406,12 @@ export interface PanelHandle {
 
 /** Commands allowed via host.invoke() (Tier 4) */
 export const INVOKE_WHITELIST: readonly string[] = [
-  "read_file",
-  "list_markdown_files",
-  "read_plugin_data",
-  "write_plugin_data",
-  "delete_plugin_data",
-  "get_input_buffer_content",
+	"read_file",
+	"list_markdown_files",
+	"read_plugin_data",
+	"write_plugin_data",
+	"delete_plugin_data",
+	"get_input_buffer_content",
 ];
 
 /**
@@ -426,298 +426,296 @@ export const INVOKE_WHITELIST: readonly string[] = [
  * - Tier 4: Scoped Tauri invoke (whitelisted commands only)
  */
 export interface PluginHost {
-  // -- Tier 0: Logging (always available) --
+	// -- Tier 0: Logging (always available) --
 
-  /** Write a message to this plugin's log (visible in Settings > Plugins). */
-  log(level: "debug" | "info" | "warn" | "error", message: string, data?: unknown): void;
+	/** Write a message to this plugin's log (visible in Settings > Plugins). */
+	log(level: "debug" | "info" | "warn" | "error", message: string, data?: unknown): void;
 
-  // -- Tier 1: Activity Center + watchers + providers (always available) --
+	// -- Tier 1: Activity Center + watchers + providers (always available) --
 
-  /** Register a section in the Activity Center dropdown */
-  registerSection(section: ActivitySection): Disposable;
+	/** Register a section in the Activity Center dropdown */
+	registerSection(section: ActivitySection): Disposable;
 
-  /** Register a PTY output line watcher */
-  registerOutputWatcher(watcher: OutputWatcher): Disposable;
+	/** Register a PTY output line watcher */
+	registerOutputWatcher(watcher: OutputWatcher): Disposable;
 
-  /**
-   * Register a handler for structured events from the Rust OutputParser.
-   * The type corresponds to ParsedEvent.type (e.g. "plan-file", "rate-limit").
-   */
-  registerStructuredEventHandler(
-    type: string,
-    handler: (payload: unknown, sessionId: string) => void,
-  ): Disposable;
+	/**
+	 * Register a handler for structured events from the Rust OutputParser.
+	 * The type corresponds to ParsedEvent.type (e.g. "plan-file", "rate-limit").
+	 */
+	registerStructuredEventHandler(type: string, handler: (payload: unknown, sessionId: string) => void): Disposable;
 
-  /** Register a markdown content provider for a URI scheme */
-  registerMarkdownProvider(scheme: string, provider: MarkdownProvider): Disposable;
+	/** Register a markdown content provider for a URI scheme */
+	registerMarkdownProvider(scheme: string, provider: MarkdownProvider): Disposable;
 
-  /** Register a file icon provider. Requires "ui:file-icons" capability. Last registered provider wins. */
-  registerFileIconProvider(provider: FileIconProvider): Disposable;
+	/** Register a file icon provider. Requires "ui:file-icons" capability. Last registered provider wins. */
+	registerFileIconProvider(provider: FileIconProvider): Disposable;
 
-  /** Add an activity item to the store */
-  addItem(item: Omit<ActivityItem, "createdAt">): void;
+	/** Add an activity item to the store */
+	addItem(item: Omit<ActivityItem, "createdAt">): void;
 
-  /** Remove an activity item by ID */
-  removeItem(id: string): void;
+	/** Remove an activity item by ID */
+	removeItem(id: string): void;
 
-  /** Update fields on an existing activity item */
-  updateItem(id: string, updates: Partial<Omit<ActivityItem, "id" | "pluginId" | "createdAt">>): void;
+	/** Update fields on an existing activity item */
+	updateItem(id: string, updates: Partial<Omit<ActivityItem, "id" | "pluginId" | "createdAt">>): void;
 
-  // -- Tier 2: Read-only app state (always available) --
+	// -- Tier 2: Read-only app state (always available) --
 
-  /** Get the active repository snapshot, or null if none active */
-  getActiveRepo(): RepoSnapshot | null;
+	/** Get the active repository snapshot, or null if none active */
+	getActiveRepo(): RepoSnapshot | null;
 
-  /** Get all registered repositories */
-  getRepos(): RepoListEntry[];
+	/** Get all registered repositories */
+	getRepos(): RepoListEntry[];
 
-  /** Get the active terminal's session ID, or null if none active */
-  getActiveTerminalSessionId(): string | null;
+	/** Get the active terminal's session ID, or null if none active */
+	getActiveTerminalSessionId(): string | null;
 
-  /** Get the repository path that owns a terminal session, or null if not found */
-  getRepoPathForSession(sessionId: string): string | null;
+	/** Get the repository path that owns a terminal session, or null if not found */
+	getRepoPathForSession(sessionId: string): string | null;
 
-  /** Get the CWD for a terminal session, or null if not found or cwd is unset */
-  getSessionCwd(sessionId: string): string | null;
+	/** Get the CWD for a terminal session, or null if not found or cwd is unset */
+	getSessionCwd(sessionId: string): string | null;
 
-  /** Resolve a repo path to its Claude Code project directory (absolute path).
-   *  Uses the canonical slug encoding from the Rust side — single source of truth.
-   *  Requires "fs:read" capability. */
-  getClaudeProjectDir(repoPath: string): Promise<string | null>;
+	/** Resolve a repo path to its Claude Code project directory (absolute path).
+	 *  Uses the canonical slug encoding from the Rust side — single source of truth.
+	 *  Requires "fs:read" capability. */
+	getClaudeProjectDir(repoPath: string): Promise<string | null>;
 
-  /** Get the active repository path, or null if none active */
-  getActiveRepoPath(): string | null;
+	/** Get the active repository path, or null if none active */
+	getActiveRepoPath(): string | null;
 
-  /** Get active (non-dismissed) PR notifications */
-  getPrNotifications(): PrNotificationSnapshot[];
+	/** Get active (non-dismissed) PR notifications */
+	getPrNotifications(): PrNotificationSnapshot[];
 
-  /** Get effective settings for a repository */
-  getSettings(repoPath: string): RepoSettingsSnapshot | null;
+	/** Get effective settings for a repository */
+	getSettings(repoPath: string): RepoSettingsSnapshot | null;
 
-  /** Get the active terminal's state snapshot, or null if no terminal is active */
-  getTerminalState(): TerminalStateSnapshot | null;
+	/** Get the active terminal's state snapshot, or null if no terminal is active */
+	getTerminalState(): TerminalStateSnapshot | null;
 
-  /**
-   * Register a callback for terminal/branch state changes.
-   * Fires on agent start/stop, branch change, shell state change, and awaiting-input change.
-   * Returns a Disposable to unsubscribe.
-   */
-  onStateChange(callback: (event: StateChangeEvent) => void): Disposable;
+	/**
+	 * Register a callback for terminal/branch state changes.
+	 * Fires on agent start/stop, branch change, shell state change, and awaiting-input change.
+	 * Returns a Disposable to unsubscribe.
+	 */
+	onStateChange(callback: (event: StateChangeEvent) => void): Disposable;
 
-  // -- Tier 2b: Git read (capability-gated) --
+	// -- Tier 2b: Git read (capability-gated) --
 
-  /**
-   * Get branches for a repository. Requires "git:read" capability.
-   * @param repoPath - Absolute path to the repository
-   */
-  getGitBranches(repoPath: string): Promise<Array<{ name: string; isCurrent: boolean }>>;
+	/**
+	 * Get branches for a repository. Requires "git:read" capability.
+	 * @param repoPath - Absolute path to the repository
+	 */
+	getGitBranches(repoPath: string): Promise<Array<{ name: string; isCurrent: boolean }>>;
 
-  /**
-   * Get recent commits for a repository. Requires "git:read" capability.
-   * @param repoPath - Absolute path to the repository
-   * @param count - Number of commits to return (default 20)
-   */
-  getRecentCommits(repoPath: string, count?: number): Promise<Array<{ hash: string; message: string; author: string; date: string }>>;
+	/**
+	 * Get recent commits for a repository. Requires "git:read" capability.
+	 * @param repoPath - Absolute path to the repository
+	 * @param count - Number of commits to return (default 20)
+	 */
+	getRecentCommits(
+		repoPath: string,
+		count?: number,
+	): Promise<Array<{ hash: string; message: string; author: string; date: string }>>;
 
-  /**
-   * Get git diff for a repository. Requires "git:read" capability.
-   * @param repoPath - Absolute path to the repository
-   * @param scope - Optional: "staged", "unstaged", or omit for combined
-   */
-  getGitDiff(repoPath: string, scope?: "staged" | "unstaged"): Promise<string>;
+	/**
+	 * Get git diff for a repository. Requires "git:read" capability.
+	 * @param repoPath - Absolute path to the repository
+	 * @param scope - Optional: "staged", "unstaged", or omit for combined
+	 */
+	getGitDiff(repoPath: string, scope?: "staged" | "unstaged"): Promise<string>;
 
-  // -- Tier 3: Write actions (capability-gated) --
+	// -- Tier 3: Write actions (capability-gated) --
 
-  /**
-   * Register an action in the terminal right-click "Actions" submenu.
-   * Requires "ui:context-menu" capability.
-   * The action handler receives a snapshot of the terminal context (sessionId, repoPath)
-   * captured at right-click time.
-   */
-  registerTerminalAction(action: TerminalAction): Disposable;
+	/**
+	 * Register an action in the terminal right-click "Actions" submenu.
+	 * Requires "ui:context-menu" capability.
+	 * The action handler receives a snapshot of the terminal context (sessionId, repoPath)
+	 * captured at right-click time.
+	 */
+	registerTerminalAction(action: TerminalAction): Disposable;
 
-  /**
-   * Register an action in context menus for a specific target type.
-   * Requires "ui:context-menu" capability.
-   * Target types: "terminal", "branch", "repo", "tab".
-   */
-  registerContextMenuAction(action: import("../stores/contextMenuActionsStore").ContextMenuAction): Disposable;
+	/**
+	 * Register an action in context menus for a specific target type.
+	 * Requires "ui:context-menu" capability.
+	 * Target types: "terminal", "branch", "repo", "tab".
+	 */
+	registerContextMenuAction(action: import("../stores/contextMenuActionsStore").ContextMenuAction): Disposable;
 
-  /**
-   * Register a collapsible panel section in the sidebar (below branch list).
-   * Requires "ui:sidebar" capability.
-   * Returns a handle to set items, badge, and dispose the panel.
-   */
-  registerSidebarPanel(options: import("../stores/sidebarPluginStore").SidebarPanelOptions): import("../stores/sidebarPluginStore").SidebarPanelHandle;
+	/**
+	 * Register a collapsible panel section in the sidebar (below branch list).
+	 * Requires "ui:sidebar" capability.
+	 * Returns a handle to set items, badge, and dispose the panel.
+	 */
+	registerSidebarPanel(
+		options: import("../stores/sidebarPluginStore").SidebarPanelOptions,
+	): import("../stores/sidebarPluginStore").SidebarPanelHandle;
 
-  /** Send raw bytes to a terminal session. Requires "pty:write" capability. */
-  writePty(sessionId: string, data: string): Promise<void>;
+	/** Send raw bytes to a terminal session. Requires "pty:write" capability. */
+	writePty(sessionId: string, data: string): Promise<void>;
 
-  /**
-   * Send user input to an agent session with correct Enter handling.
-   * Uses Ctrl-U + text, then \r in a separate write for Ink-based agents
-   * (Claude Code, Codex, etc.) that swallow \r when bundled with text.
-   * Falls back to a single write for shell sessions.
-   * Requires "pty:write" capability.
-   */
-  sendAgentInput(sessionId: string, text: string): Promise<void>;
+	/**
+	 * Send user input to an agent session with correct Enter handling.
+	 * Uses Ctrl-U + text, then \r in a separate write for Ink-based agents
+	 * (Claude Code, Codex, etc.) that swallow \r when bundled with text.
+	 * Falls back to a single write for shell sessions.
+	 * Requires "pty:write" capability.
+	 */
+	sendAgentInput(sessionId: string, text: string): Promise<void>;
 
-  /**
-   * Read the VT100-decoded contents of a PTY session: the last N scrollback
-   * lines concatenated with the current visible screen rows, joined by
-   * newlines. For alternate-screen agents (Claude Code, Codex), scrollback
-   * is empty and only the screen is returned.
-   * Requires "pty:read" capability.
-   * @param maxLines - max lines of scrollback to prepend (default 200, max 2000)
-   */
-  readSessionOutput(sessionId: string, maxLines?: number): Promise<string>;
+	/**
+	 * Read the VT100-decoded contents of a PTY session: the last N scrollback
+	 * lines concatenated with the current visible screen rows, joined by
+	 * newlines. For alternate-screen agents (Claude Code, Codex), scrollback
+	 * is empty and only the screen is returned.
+	 * Requires "pty:read" capability.
+	 * @param maxLines - max lines of scrollback to prepend (default 200, max 2000)
+	 */
+	readSessionOutput(sessionId: string, maxLines?: number): Promise<string>;
 
-  /**
-   * Register a dashboard entry point for this plugin.
-   * Adds a "Dashboard" button to the plugin row in Settings → Plugins.
-   * Clicking it invokes `open()` — typically the plugin opens its main markdown
-   * tab or HTML panel inside the callback.
-   *
-   * Only one dashboard per plugin — a second call replaces the previous entry.
-   * The returned Disposable is auto-cleaned on plugin unload.
-   *
-   * No capability required — any plugin may advertise a dashboard entry point.
-   */
-  registerDashboard(options: DashboardOptions): Disposable;
+	/**
+	 * Register a dashboard entry point for this plugin.
+	 * Adds a "Dashboard" button to the plugin row in Settings → Plugins.
+	 * Clicking it invokes `open()` — typically the plugin opens its main markdown
+	 * tab or HTML panel inside the callback.
+	 *
+	 * Only one dashboard per plugin — a second call replaces the previous entry.
+	 * The returned Disposable is auto-cleaned on plugin unload.
+	 *
+	 * No capability required — any plugin may advertise a dashboard entry point.
+	 */
+	registerDashboard(options: DashboardOptions): Disposable;
 
-  /**
-   * Register a named command that can be bound to a keyboard shortcut.
-   * The command appears in Settings → Keyboard Shortcuts under "Plugin Commands",
-   * where users can view and remap its key binding.
-   *
-   * Action name is automatically namespaced as `plugin:<pluginId>:<id>`.
-   * No capability required — commands are user-invoked and cannot trigger
-   * privileged operations beyond what the plugin's capabilities already allow.
-   */
-  registerCommand(options: CommandOptions): Disposable;
+	/**
+	 * Register a named command that can be bound to a keyboard shortcut.
+	 * The command appears in Settings → Keyboard Shortcuts under "Plugin Commands",
+	 * where users can view and remap its key binding.
+	 *
+	 * Action name is automatically namespaced as `plugin:<pluginId>:<id>`.
+	 * No capability required — commands are user-invoked and cannot trigger
+	 * privileged operations beyond what the plugin's capabilities already allow.
+	 */
+	registerCommand(options: CommandOptions): Disposable;
 
-  /** Open a virtual markdown tab and show the panel. Requires "ui:markdown" capability. */
-  openMarkdownPanel(title: string, contentUri: string): void;
+	/** Open a virtual markdown tab and show the panel. Requires "ui:markdown" capability. */
+	openMarkdownPanel(title: string, contentUri: string): void;
 
-  /** Open a local markdown file in the markdown panel. Requires "ui:markdown" capability. Path must be absolute. */
-  openMarkdownFile(absolutePath: string): void;
+	/** Open a local markdown file in the markdown panel. Requires "ui:markdown" capability. Path must be absolute. */
+	openMarkdownFile(absolutePath: string): void;
 
-  /**
-   * Play a notification sound. Requires "ui:sound" capability.
-   * @param sound - One of NOTIFICATION_SOUNDS ("question" | "error" | "completion" | "warning" | "info"). Defaults to "info".
-   */
-  playNotificationSound(sound?: NotificationSound): Promise<void>;
+	/**
+	 * Play a notification sound. Requires "ui:sound" capability.
+	 * @param sound - One of NOTIFICATION_SOUNDS ("question" | "error" | "completion" | "warning" | "info"). Defaults to "info".
+	 */
+	playNotificationSound(sound?: NotificationSound): Promise<void>;
 
-  // -- Tier 3b: Filesystem operations (capability-gated) --
+	// -- Tier 3b: Filesystem operations (capability-gated) --
 
-  /** Read a file as UTF-8 text. Path must be absolute and within $HOME. Requires "fs:read". */
-  readFile(absolutePath: string): Promise<string>;
+	/** Read a file as UTF-8 text. Path must be absolute and within $HOME. Requires "fs:read". */
+	readFile(absolutePath: string): Promise<string>;
 
-  /**
-   * Read the last N bytes of a file, skipping partial first line.
-   * Useful for large JSONL files. Requires "fs:read".
-   * If file is smaller than maxBytes, reads the entire file.
-   */
-  readFileTail(absolutePath: string, maxBytes: number): Promise<string>;
+	/**
+	 * Read the last N bytes of a file, skipping partial first line.
+	 * Useful for large JSONL files. Requires "fs:read".
+	 * If file is smaller than maxBytes, reads the entire file.
+	 */
+	readFileTail(absolutePath: string, maxBytes: number): Promise<string>;
 
-  /**
-   * List filenames in a directory, optionally filtered by glob. Requires "fs:list".
-   * @param options.sortBy "name" (default, alphabetical) or "mtime" (newest first).
-   *        Use "mtime" when you need to find the most recently modified file efficiently
-   *        — e.g. picking the active session JSONL out of many historical ones.
-   */
-  listDirectory(
-    path: string,
-    pattern?: string,
-    options?: { sortBy?: "name" | "mtime" },
-  ): Promise<string[]>;
+	/**
+	 * List filenames in a directory, optionally filtered by glob. Requires "fs:list".
+	 * @param options.sortBy "name" (default, alphabetical) or "mtime" (newest first).
+	 *        Use "mtime" when you need to find the most recently modified file efficiently
+	 *        — e.g. picking the active session JSONL out of many historical ones.
+	 */
+	listDirectory(path: string, pattern?: string, options?: { sortBy?: "name" | "mtime" }): Promise<string[]>;
 
-  /** Write content to a file. Path must be absolute and within $HOME. Requires "fs:write". */
-  writeFile(absolutePath: string, content: string): Promise<void>;
+	/** Write content to a file. Path must be absolute and within $HOME. Requires "fs:write". */
+	writeFile(absolutePath: string, content: string): Promise<void>;
 
-  /**
-   * Rename/move a file. Both paths must be absolute and within $HOME. Requires "fs:rename".
-   * @param from - Absolute source path
-   * @param to - Absolute destination path
-   */
-  renamePath(from: string, to: string): Promise<void>;
+	/**
+	 * Rename/move a file. Both paths must be absolute and within $HOME. Requires "fs:rename".
+	 * @param from - Absolute source path
+	 * @param to - Absolute destination path
+	 */
+	renamePath(from: string, to: string): Promise<void>;
 
-  /**
-   * Watch a path for filesystem changes. Requires "fs:watch".
-   * @param path - Absolute path within $HOME
-   * @param callback - Called with batched change events
-   * @param options - recursive (default false), debounceMs (default 300)
-   * @returns Disposable to stop watching
-   */
-  watchPath(
-    path: string,
-    callback: (events: FsChangeEvent[]) => void,
-    options?: { recursive?: boolean; debounceMs?: number },
-  ): Promise<Disposable>;
+	/**
+	 * Watch a path for filesystem changes. Requires "fs:watch".
+	 * @param path - Absolute path within $HOME
+	 * @param callback - Called with batched change events
+	 * @param options - recursive (default false), debounceMs (default 300)
+	 * @returns Disposable to stop watching
+	 */
+	watchPath(
+		path: string,
+		callback: (events: FsChangeEvent[]) => void,
+		options?: { recursive?: boolean; debounceMs?: number },
+	): Promise<Disposable>;
 
-  // -- Tier 3c: Status bar ticker (capability-gated) --
+	// -- Tier 3c: Status bar ticker (capability-gated) --
 
-  /**
-   * Set a ticker message in the shared status bar ticker. Requires "ui:ticker".
-   * If a message with the same id already exists from this plugin, it is replaced.
-   */
-  setTicker(options: {
-    id: string;
-    text: string;
-    label?: string;
-    icon?: string;
-    priority?: number;
-    ttlMs?: number;
-    onClick?: () => void;
-  }): void;
+	/**
+	 * Set a ticker message in the shared status bar ticker. Requires "ui:ticker".
+	 * If a message with the same id already exists from this plugin, it is replaced.
+	 */
+	setTicker(options: {
+		id: string;
+		text: string;
+		label?: string;
+		icon?: string;
+		priority?: number;
+		ttlMs?: number;
+		onClick?: () => void;
+	}): void;
 
-  /** Remove a ticker message by id. Requires "ui:ticker". */
-  clearTicker(id: string): void;
+	/** Remove a ticker message by id. Requires "ui:ticker". */
+	clearTicker(id: string): void;
 
-  // -- Tier 3d: Panel UI (capability-gated) --
+	// -- Tier 3d: Panel UI (capability-gated) --
 
-  /**
-   * Open an HTML panel in a sandboxed iframe tab. Requires "ui:panel" capability.
-   * Returns a PanelHandle for updating content or closing the panel.
-   * If a panel with the same id is already open, it will be activated and updated.
-   */
-  openPanel(options: OpenPanelOptions): PanelHandle;
+	/**
+	 * Open an HTML panel in a sandboxed iframe tab. Requires "ui:panel" capability.
+	 * Returns a PanelHandle for updating content or closing the panel.
+	 * If a panel with the same id is already open, it will be activated and updated.
+	 */
+	openPanel(options: OpenPanelOptions): PanelHandle;
 
-  // -- Tier 3d: Credential access (capability-gated) --
+	// -- Tier 3d: Credential access (capability-gated) --
 
-  /**
-   * Read credentials from the system credential store by service name.
-   * Requires "credentials:read" capability.
-   * First call from a plugin shows a user consent dialog.
-   * Returns the raw credential JSON string, or null if not found.
-   */
-  readCredential(serviceName: string): Promise<string | null>;
+	/**
+	 * Read credentials from the system credential store by service name.
+	 * Requires "credentials:read" capability.
+	 * First call from a plugin shows a user consent dialog.
+	 * Returns the raw credential JSON string, or null if not found.
+	 */
+	readCredential(serviceName: string): Promise<string | null>;
 
-  // -- Tier 3d: HTTP requests (capability-gated) --
+	// -- Tier 3d: HTTP requests (capability-gated) --
 
-  /**
-   * Make an HTTP request. Requires "net:http" capability.
-   * External plugins can only fetch URLs matching their manifest's allowedUrls patterns.
-   * Non-2xx status codes are returned normally (not thrown as errors).
-   */
-  httpFetch(url: string, options?: HttpFetchOptions): Promise<HttpResponse>;
+	/**
+	 * Make an HTTP request. Requires "net:http" capability.
+	 * External plugins can only fetch URLs matching their manifest's allowedUrls patterns.
+	 * Non-2xx status codes are returned normally (not thrown as errors).
+	 */
+	httpFetch(url: string, options?: HttpFetchOptions): Promise<HttpResponse>;
 
-  // -- Tier 3g: CLI execution (capability-gated) --
+	// -- Tier 3g: CLI execution (capability-gated) --
 
-  /**
-   * Execute a whitelisted CLI binary and return its stdout.
-   * Requires "exec:cli" capability.
-   * Only binaries in the server-side allowlist (e.g. "mdkb") can be executed.
-   * @param binary - Binary name (e.g. "mdkb")
-   * @param args - Command arguments (e.g. ["--format", "json", "status"])
-   * @param cwd - Optional working directory (must be absolute, within $HOME)
-   */
-  execCli(binary: string, args: string[], cwd?: string): Promise<string>;
+	/**
+	 * Execute a whitelisted CLI binary and return its stdout.
+	 * Requires "exec:cli" capability.
+	 * Only binaries in the server-side allowlist (e.g. "mdkb") can be executed.
+	 * @param binary - Binary name (e.g. "mdkb")
+	 * @param args - Command arguments (e.g. ["--format", "json", "status"])
+	 * @param cwd - Optional working directory (must be absolute, within $HOME)
+	 */
+	execCli(binary: string, args: string[], cwd?: string): Promise<string>;
 
-  // -- Tier 4: Scoped Tauri invoke (whitelisted commands only) --
+	// -- Tier 4: Scoped Tauri invoke (whitelisted commands only) --
 
-  /** Invoke a whitelisted Tauri command. See INVOKE_WHITELIST for allowed commands. */
-  invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
+	/** Invoke a whitelisted Tauri command. See INVOKE_WHITELIST for allowed commands. */
+	invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T>;
 }
 
 // ---------------------------------------------------------------------------
@@ -732,16 +730,16 @@ export interface PluginHost {
  *   onunload — dispose all registrations
  */
 export interface TuiPlugin {
-  /** Unique plugin identifier (e.g. "plan") */
-  id: string;
-  /**
-   * Called once when the plugin is registered.
-   * Register sections, watchers, providers here.
-   */
-  onload(host: PluginHost): void;
-  /**
-   * Called when the plugin is unregistered.
-   * Must dispose all Disposables obtained in onload().
-   */
-  onunload(): void;
+	/** Unique plugin identifier (e.g. "plan") */
+	id: string;
+	/**
+	 * Called once when the plugin is registered.
+	 * Register sections, watchers, providers here.
+	 */
+	onload(host: PluginHost): void;
+	/**
+	 * Called when the plugin is unregistered.
+	 * Must dispose all Disposables obtained in onload().
+	 */
+	onunload(): void;
 }

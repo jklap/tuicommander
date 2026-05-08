@@ -3,35 +3,50 @@ export type FileOpenTarget = "markdown" | "preview" | "editor";
 
 const MD_EXTS = new Set(["md", "mdx"]);
 const PREVIEW_EXTS = new Set([
-  // Documents
-  "pdf", "html", "htm",
-  // Images
-  "png", "jpg", "jpeg", "gif", "webp", "svg", "avif", "ico", "bmp",
-  // Video
-  "mp4", "webm", "mov", "ogg",
-  // Audio
-  "mp3", "wav", "flac", "aac", "m4a",
+	// Documents
+	"pdf",
+	"html",
+	"htm",
+	// Images
+	"png",
+	"jpg",
+	"jpeg",
+	"gif",
+	"webp",
+	"svg",
+	"avif",
+	"ico",
+	"bmp",
+	// Video
+	"mp4",
+	"webm",
+	"mov",
+	"ogg",
+	// Audio
+	"mp3",
+	"wav",
+	"flac",
+	"aac",
+	"m4a",
 ]);
 
-const IMAGE_EXTS = new Set([
-  "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "tiff", "tif",
-]);
+const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "tiff", "tif"]);
 
 /** Whether a file path has an image extension suitable for OSC 1337 inline display. */
 export function isImageFile(filePath: string): boolean {
-  return IMAGE_EXTS.has(extOf(filePath));
+	return IMAGE_EXTS.has(extOf(filePath));
 }
 
 /** Extract lowercase extension from a file path (without the dot). */
 function extOf(filePath: string): string {
-  const dot = filePath.lastIndexOf(".");
-  return dot === -1 ? "" : filePath.slice(dot + 1).toLowerCase();
+	const dot = filePath.lastIndexOf(".");
+	return dot === -1 ? "" : filePath.slice(dot + 1).toLowerCase();
 }
 
 /** Classify how a file should be opened based on its extension. */
 export function classifyFile(filePath: string): FileOpenTarget {
-  const ext = extOf(filePath);
-  if (MD_EXTS.has(ext)) return "markdown";
-  if (PREVIEW_EXTS.has(ext)) return "preview";
-  return "editor";
+	const ext = extOf(filePath);
+	if (MD_EXTS.has(ext)) return "markdown";
+	if (PREVIEW_EXTS.has(ext)) return "preview";
+	return "editor";
 }

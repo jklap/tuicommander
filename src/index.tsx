@@ -1,9 +1,9 @@
 /* @refresh reload */
 import { lazy } from "solid-js";
-import { render, ErrorBoundary } from "solid-js/web";
+import { ErrorBoundary, render } from "solid-js/web";
 import App from "./App";
-import { appLogger } from "./stores/appLogger";
 import { initDebugGlobals } from "./debugGlobals";
+import { appLogger } from "./stores/appLogger";
 import "./global.css";
 import "./styles.css";
 
@@ -12,17 +12,17 @@ initDebugGlobals();
 
 // Global error handlers — capture uncaught errors and unhandled promise rejections
 window.addEventListener("error", (event) => {
-  appLogger.error("app", `Uncaught: ${event.message}`, {
-    filename: event.filename,
-    lineno: event.lineno,
-    colno: event.colno,
-  });
+	appLogger.error("app", `Uncaught: ${event.message}`, {
+		filename: event.filename,
+		lineno: event.lineno,
+		colno: event.colno,
+	});
 });
 
 window.addEventListener("unhandledrejection", (event) => {
-  const reason = event.reason instanceof Error ? event.reason.message : String(event.reason);
-  const stack = event.reason instanceof Error ? event.reason.stack : undefined;
-  appLogger.error("app", `Unhandled rejection: ${reason}`, stack ? { stack } : undefined);
+	const reason = event.reason instanceof Error ? event.reason.message : String(event.reason);
+	const stack = event.reason instanceof Error ? event.reason.stack : undefined;
+	appLogger.error("app", `Unhandled rejection: ${reason}`, stack ? { stack } : undefined);
 });
 
 const FloatingTerminal = lazy(() => import("./FloatingTerminal").then((m) => ({ default: m.FloatingTerminal })));
@@ -30,51 +30,53 @@ const FloatingTerminal = lazy(() => import("./FloatingTerminal").then((m) => ({ 
 const root = document.getElementById("app");
 
 if (!root) {
-  throw new Error("Root element #app not found");
+	throw new Error("Root element #app not found");
 }
 
 /** Crash screen shown when a render error kills the app */
 function CrashScreen(props: { error: Error }) {
-  return (
-    <div style={{
-      padding: "24px",
-      "font-family": "monospace",
-      color: "#f44",
-      background: "#1e1e1e",
-      height: "100vh",
-      overflow: "auto",
-    }}>
-      <h2 style={{ margin: "0 0 12px" }}>TUICommander crashed</h2>
-      <pre style={{ "white-space": "pre-wrap", color: "#ccc" }}>{props.error.message}</pre>
-      <pre style={{ "white-space": "pre-wrap", color: "#888", "font-size": "12px" }}>{props.error.stack}</pre>
-      <button
-        style={{
-          "margin-top": "16px",
-          padding: "8px 16px",
-          background: "#333",
-          color: "#fff",
-          border: "1px solid #555",
-          "border-radius": "4px",
-          cursor: "pointer",
-        }}
-        onClick={() => location.reload()}
-      >
-        Reload
-      </button>
-    </div>
-  );
+	return (
+		<div
+			style={{
+				padding: "24px",
+				"font-family": "monospace",
+				color: "#f44",
+				background: "#1e1e1e",
+				height: "100vh",
+				overflow: "auto",
+			}}
+		>
+			<h2 style={{ margin: "0 0 12px" }}>TUICommander crashed</h2>
+			<pre style={{ "white-space": "pre-wrap", color: "#ccc" }}>{props.error.message}</pre>
+			<pre style={{ "white-space": "pre-wrap", color: "#888", "font-size": "12px" }}>{props.error.stack}</pre>
+			<button
+				style={{
+					"margin-top": "16px",
+					padding: "8px 16px",
+					background: "#333",
+					color: "#fff",
+					border: "1px solid #555",
+					"border-radius": "4px",
+					cursor: "pointer",
+				}}
+				onClick={() => location.reload()}
+			>
+				Reload
+			</button>
+		</div>
+	);
 }
 
 /** Route based on URL hash: #/floating renders the detached terminal window */
 const isFloatingWindow = window.location.hash.startsWith("#/floating");
 
 render(
-  () => (
-    <ErrorBoundary fallback={(err) => <CrashScreen error={err} />}>
-      {isFloatingWindow ? <FloatingTerminal /> : <App />}
-    </ErrorBoundary>
-  ),
-  root,
+	() => (
+		<ErrorBoundary fallback={(err) => <CrashScreen error={err} />}>
+			{isFloatingWindow ? <FloatingTerminal /> : <App />}
+		</ErrorBoundary>
+	),
+	root,
 );
 
 // Splash screen is removed inside initApp() after store hydration completes.
@@ -84,9 +86,9 @@ render(
 // Suppress the native webview context menu (macOS "Reload" button) in production.
 // In dev mode, keep it available for debugging convenience.
 if (!import.meta.env.DEV) {
-  document.addEventListener("contextmenu", (e) => {
-    e.preventDefault();
-  });
+	document.addEventListener("contextmenu", (e) => {
+		e.preventDefault();
+	});
 }
 
 // Prevent the webview from navigating to dropped files (causes white screen
@@ -94,10 +96,10 @@ if (!import.meta.env.DEV) {
 // OS-level handler emits via `onDragDropEvent` — webview drag events still
 // fire here though, so suppression is still needed to block default navigation.
 document.addEventListener("dragover", (e) => {
-  e.preventDefault();
+	e.preventDefault();
 });
 document.addEventListener("drop", (e) => {
-  e.preventDefault();
+	e.preventDefault();
 });
 
 // Register Tauri drag-drop listener + modifier key tracking (fire-and-forget).
@@ -107,17 +109,17 @@ import("./stores/dragDrop").then(({ initDragDrop }) => initDragDrop());
 // Without this, Tauri shows a scary "WARNING: This link could potentially be
 // dangerous" navigation confirmation dialog.
 document.addEventListener("click", (e) => {
-  const anchor = (e.target as HTMLElement).closest("a[href]") as HTMLAnchorElement | null;
-  if (!anchor) return;
-  const href = anchor.href;
-  if (!href) return;
-  // Only intercept http/https links (not internal anchors, javascript:, etc.)
-  if (href.startsWith("http://") || href.startsWith("https://")) {
-    e.preventDefault();
-    import("./utils/openUrl").then(({ handleOpenUrl }) => handleOpenUrl(href));
-  }
+	const anchor = (e.target as HTMLElement).closest("a[href]") as HTMLAnchorElement | null;
+	if (!anchor) return;
+	const href = anchor.href;
+	if (!href) return;
+	// Only intercept http/https links (not internal anchors, javascript:, etc.)
+	if (href.startsWith("http://") || href.startsWith("https://")) {
+		e.preventDefault();
+		import("./utils/openUrl").then(({ handleOpenUrl }) => handleOpenUrl(href));
+	}
 });
 
 if (import.meta.env.DEV) {
-  import("./dev/simulator");
+	import("./dev/simulator");
 }

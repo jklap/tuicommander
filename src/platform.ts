@@ -9,40 +9,40 @@ export type Platform = "macos" | "windows" | "linux" | "unknown";
  * Uses navigator.platform as it's synchronous and works in Tauri webview
  */
 export function detectPlatform(): Platform {
-  const platform = navigator.platform.toLowerCase();
+	const platform = navigator.platform.toLowerCase();
 
-  if (platform.includes("mac")) {
-    return "macos";
-  }
-  if (platform.includes("win")) {
-    return "windows";
-  }
-  if (platform.includes("linux") || platform.includes("x11")) {
-    return "linux";
-  }
+	if (platform.includes("mac")) {
+		return "macos";
+	}
+	if (platform.includes("win")) {
+		return "windows";
+	}
+	if (platform.includes("linux") || platform.includes("x11")) {
+		return "linux";
+	}
 
-  return "unknown";
+	return "unknown";
 }
 
 /**
  * Check if running on macOS
  */
 export function isMacOS(): boolean {
-  return detectPlatform() === "macos";
+	return detectPlatform() === "macos";
 }
 
 /**
  * Check if running on Windows
  */
 export function isWindows(): boolean {
-  return detectPlatform() === "windows";
+	return detectPlatform() === "windows";
 }
 
 /**
  * Check if running on Linux
  */
 export function isLinux(): boolean {
-  return detectPlatform() === "linux";
+	return detectPlatform() === "linux";
 }
 
 /**
@@ -50,7 +50,7 @@ export function isLinux(): boolean {
  * macOS: ⌘ (Command), Windows/Linux: Ctrl
  */
 export function getModifierSymbol(): string {
-  return isMacOS() ? "\u2318" : "Ctrl+";
+	return isMacOS() ? "\u2318" : "Ctrl+";
 }
 
 /**
@@ -58,10 +58,10 @@ export function getModifierSymbol(): string {
  * macOS: Cmd+Ctrl, Windows/Linux: Ctrl+Alt
  */
 export function isQuickSwitcherActive(e: KeyboardEvent): boolean {
-  if (isMacOS()) {
-    return e.metaKey && e.ctrlKey;
-  }
-  return e.ctrlKey && e.altKey;
+	if (isMacOS()) {
+		return e.metaKey && e.ctrlKey;
+	}
+	return e.ctrlKey && e.altKey;
 }
 
 /**
@@ -69,10 +69,10 @@ export function isQuickSwitcherActive(e: KeyboardEvent): boolean {
  * macOS: Meta or Control released, Windows/Linux: Control or Alt released
  */
 export function isQuickSwitcherRelease(e: KeyboardEvent): boolean {
-  if (isMacOS()) {
-    return e.key === "Meta" || e.key === "Control";
-  }
-  return e.key === "Control" || e.key === "Alt";
+	if (isMacOS()) {
+		return e.key === "Meta" || e.key === "Control";
+	}
+	return e.key === "Control" || e.key === "Alt";
 }
 
 /**
@@ -81,13 +81,13 @@ export function isQuickSwitcherRelease(e: KeyboardEvent): boolean {
  * On Windows: paths are returned unchanged (~ is not a shell convention)
  */
 export function shortenHomePath(path: string): string {
-  if (isWindows()) return path;
-  // Match /Users/<name>/ (macOS) or /home/<name>/ (Linux)
-  const match = path.match(/^(\/(?:Users|home)\/[^/]+)(\/.*)?$/);
-  if (match) {
-    return "~" + (match[2] ?? "");
-  }
-  return path;
+	if (isWindows()) return path;
+	// Match /Users/<name>/ (macOS) or /home/<name>/ (Linux)
+	const match = path.match(/^(\/(?:Users|home)\/[^/]+)(\/.*)?$/);
+	if (match) {
+		return "~" + (match[2] ?? "");
+	}
+	return path;
 }
 
 /**
@@ -95,7 +95,7 @@ export function shortenHomePath(path: string): string {
  * Call this on app initialization
  */
 export function applyPlatformClass(): Platform {
-  const platform = detectPlatform();
-  document.documentElement.classList.add(`platform-${platform}`);
-  return platform;
+	const platform = detectPlatform();
+	document.documentElement.classList.add(`platform-${platform}`);
+	return platform;
 }

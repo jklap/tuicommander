@@ -4,404 +4,412 @@
  */
 import type { AgentType } from "../agents";
 import type { NotificationSound } from "../notifications";
-import type { RateLimitInfo } from "../rate-limit";
-import type { AwaitingInputType } from "../stores/terminals";
-import { githubStore } from "../stores/github";
-import { rateLimitStore } from "../stores/ratelimit";
-import { repositoriesStore } from "../stores/repositories";
-import { terminalsStore } from "../stores/terminals";
-import { notificationsStore } from "../stores/notifications";
-import { prNotificationsStore, type PrNotificationType } from "../stores/prNotifications";
-import { uiStore } from "../stores/ui";
 import { pluginRegistry } from "../plugins/pluginRegistry";
-import { repoDefaultsStore, type RepoDefaults } from "../stores/repoDefaults";
-import { repoSettingsStore, type RepoSettings } from "../stores/repoSettings";
+import type { RateLimitInfo } from "../rate-limit";
 import { activityStore } from "../stores/activityStore";
-import { updaterStore } from "../stores/updater";
+import { githubStore } from "../stores/github";
+import { notificationsStore } from "../stores/notifications";
+import { type PrNotificationType, prNotificationsStore } from "../stores/prNotifications";
+import { rateLimitStore } from "../stores/ratelimit";
+import { type RepoDefaults, repoDefaultsStore } from "../stores/repoDefaults";
+import { type RepoSettings, repoSettingsStore } from "../stores/repoSettings";
+import { repositoriesStore } from "../stores/repositories";
 import { statusBarTicker } from "../stores/statusBarTicker";
-import { PRESETS, buildPrStatus, type PrOverride } from "./presets";
+import type { AwaitingInputType } from "../stores/terminals";
+import { terminalsStore } from "../stores/terminals";
+import { uiStore } from "../stores/ui";
+import { updaterStore } from "../stores/updater";
+import { buildPrStatus, PRESETS, type PrOverride } from "./presets";
 
 const SIM_REPO_PATH = "/sim/repo";
 let pollingWasStopped = false;
 
 /** Ensure a repo + branch exist so PR data can be injected */
 function ensureRepo(): { repoPath: string; branch: string } {
-  const active = repositoriesStore.getActive();
-  if (active?.activeBranch) {
-    return { repoPath: active.path, branch: active.activeBranch };
-  }
+	const active = repositoriesStore.getActive();
+	if (active?.activeBranch) {
+		return { repoPath: active.path, branch: active.activeBranch };
+	}
 
-  // Create a temporary simulated repo
-  if (!repositoriesStore.get(SIM_REPO_PATH)) {
-    repositoriesStore.add({ path: SIM_REPO_PATH, displayName: "Sim Repo", initials: "SR" });
-    repositoriesStore.setBranch(SIM_REPO_PATH, "feature/sim", {
-      name: "feature/sim",
-      isMain: false,
-      worktreePath: null,
-      terminals: [],
-      additions: 0,
-      deletions: 0,
-    });
-    repositoriesStore.setActiveBranch(SIM_REPO_PATH, "feature/sim");
-    repositoriesStore.setActive(SIM_REPO_PATH);
-  }
+	// Create a temporary simulated repo
+	if (!repositoriesStore.get(SIM_REPO_PATH)) {
+		repositoriesStore.add({ path: SIM_REPO_PATH, displayName: "Sim Repo", initials: "SR" });
+		repositoriesStore.setBranch(SIM_REPO_PATH, "feature/sim", {
+			name: "feature/sim",
+			isMain: false,
+			worktreePath: null,
+			terminals: [],
+			additions: 0,
+			deletions: 0,
+		});
+		repositoriesStore.setActiveBranch(SIM_REPO_PATH, "feature/sim");
+		repositoriesStore.setActive(SIM_REPO_PATH);
+	}
 
-  return { repoPath: SIM_REPO_PATH, branch: "feature/sim" };
+	return { repoPath: SIM_REPO_PATH, branch: "feature/sim" };
 }
 
 /** Stop polling so mock data isn't overwritten */
 function suppressPolling(): void {
-  if (!pollingWasStopped) {
-    githubStore.stopPolling();
-    pollingWasStopped = true;
-  }
+	if (!pollingWasStopped) {
+		githubStore.stopPolling();
+		pollingWasStopped = true;
+	}
 }
 
 /** Simulator API bound to window.__tuic */
 const simulator = {
-  /** Inject PR state for active branch */
-  pr(override?: PrOverride): void {
-    suppressPolling();
-    const { repoPath, branch } = ensureRepo();
-    const status = buildPrStatus(branch, override);
-    githubStore.updateRepoData(repoPath, [status]);
-    console.log(`[tuic] PR injected for ${repoPath} @ ${branch}`);
-  },
+	/** Inject PR state for active branch */
+	pr(override?: PrOverride): void {
+		suppressPolling();
+		const { repoPath, branch } = ensureRepo();
+		const status = buildPrStatus(branch, override);
+		githubStore.updateRepoData(repoPath, [status]);
+		console.log(`[tuic] PR injected for ${repoPath} @ ${branch}`);
+	},
 
-  /** Override git branch/status */
-  git(options: { branch?: string; additions?: number; deletions?: number }): void {
-    const { repoPath } = ensureRepo();
-    if (options.branch) {
-      repositoriesStore.setBranch(repoPath, options.branch);
-      repositoriesStore.setActiveBranch(repoPath, options.branch);
-    }
-    const branch = repositoriesStore.get(repoPath)?.activeBranch;
-    if (branch) {
-      repositoriesStore.updateBranchStats(
-        repoPath,
-        branch,
-        options.additions ?? 0,
-        options.deletions ?? 0,
-      );
-    }
-    console.log(`[tuic] Git state updated for ${repoPath}`);
-  },
+	/** Override git branch/status */
+	git(options: { branch?: string; additions?: number; deletions?: number }): void {
+		const { repoPath } = ensureRepo();
+		if (options.branch) {
+			repositoriesStore.setBranch(repoPath, options.branch);
+			repositoriesStore.setActiveBranch(repoPath, options.branch);
+		}
+		const branch = repositoriesStore.get(repoPath)?.activeBranch;
+		if (branch) {
+			repositoriesStore.updateBranchStats(repoPath, branch, options.additions ?? 0, options.deletions ?? 0);
+		}
+		console.log(`[tuic] Git state updated for ${repoPath}`);
+	},
 
-  /** Simulate rate limit for an agent */
-  rateLimit(options: { agent: AgentType; minutes?: number; message?: string }): void {
-    const info: RateLimitInfo = {
-      agentType: options.agent,
-      sessionId: `sim-${options.agent}-${Date.now()}`,
-      retryAfterMs: (options.minutes ?? 15) * 60 * 1000,
-      message: options.message ?? `Simulated rate limit for ${options.agent}`,
-      detectedAt: Date.now(),
-    };
-    rateLimitStore.addRateLimit(info);
-    console.log(`[tuic] Rate limit applied: ${options.agent} for ${options.minutes ?? 15}m`);
-  },
+	/** Simulate rate limit for an agent */
+	rateLimit(options: { agent: AgentType; minutes?: number; message?: string }): void {
+		const info: RateLimitInfo = {
+			agentType: options.agent,
+			sessionId: `sim-${options.agent}-${Date.now()}`,
+			retryAfterMs: (options.minutes ?? 15) * 60 * 1000,
+			message: options.message ?? `Simulated rate limit for ${options.agent}`,
+			detectedAt: Date.now(),
+		};
+		rateLimitStore.addRateLimit(info);
+		console.log(`[tuic] Rate limit applied: ${options.agent} for ${options.minutes ?? 15}m`);
+	},
 
-/** Simulate a terminal awaiting input (shows ? icon on branch) */
-  question(options?: { type?: AwaitingInputType; clear?: boolean }): void {
-    const { branch } = ensureRepo();
-    const active = repositoriesStore.getActive();
-    if (!active) return;
+	/** Simulate a terminal awaiting input (shows ? icon on branch) */
+	question(options?: { type?: AwaitingInputType; clear?: boolean }): void {
+		const { branch } = ensureRepo();
+		const active = repositoriesStore.getActive();
+		if (!active) return;
 
-    const branchState = active.branches[branch];
-    if (!branchState?.terminals.length) {
-      console.error("[tuic] No terminals on active branch. Open a terminal first.");
-      return;
-    }
+		const branchState = active.branches[branch];
+		if (!branchState?.terminals.length) {
+			console.error("[tuic] No terminals on active branch. Open a terminal first.");
+			return;
+		}
 
-    const termId = branchState.terminals[0];
-    if (options?.clear) {
-      terminalsStore.clearAwaitingInput(termId);
-      console.log(`[tuic] Cleared awaitingInput on terminal ${termId}`);
-    } else {
-      const type = options?.type ?? "question";
-      terminalsStore.setAwaitingInput(termId, type);
-      console.log(`[tuic] Set awaitingInput="${type}" on terminal ${termId} (branch: ${branch})`);
-    }
-  },
+		const termId = branchState.terminals[0];
+		if (options?.clear) {
+			terminalsStore.clearAwaitingInput(termId);
+			console.log(`[tuic] Cleared awaitingInput on terminal ${termId}`);
+		} else {
+			const type = options?.type ?? "question";
+			terminalsStore.setAwaitingInput(termId, type);
+			console.log(`[tuic] Set awaitingInput="${type}" on terminal ${termId} (branch: ${branch})`);
+		}
+	},
 
-  /** Trigger notification sound */
-  notification(options: { sound: NotificationSound }): void {
-    notificationsStore.testSound(options.sound);
-    console.log(`[tuic] Notification triggered: ${options.sound}`);
-  },
+	/** Trigger notification sound */
+	notification(options: { sound: NotificationSound }): void {
+		notificationsStore.testSound(options.sound);
+		console.log(`[tuic] Notification triggered: ${options.sound}`);
+	},
 
-  /** Simulate PR state notification (toolbar bell) */
-  prNotif(options?: { type?: PrNotificationType; branch?: string; pr?: number; title?: string }): void {
-    const { repoPath } = ensureRepo();
-    const type = options?.type ?? "merged";
-    const branch = options?.branch ?? "feature/sim";
-    const prNumber = options?.pr ?? 42;
-    const title = options?.title ?? `Simulated ${type} notification`;
-    prNotificationsStore.add({ repoPath, branch, prNumber, title, type });
-    console.log(`[tuic] PR notification: ${type} for #${prNumber} on ${branch}`);
-  },
+	/** Simulate PR state notification (toolbar bell) */
+	prNotif(options?: { type?: PrNotificationType; branch?: string; pr?: number; title?: string }): void {
+		const { repoPath } = ensureRepo();
+		const type = options?.type ?? "merged";
+		const branch = options?.branch ?? "feature/sim";
+		const prNumber = options?.pr ?? 42;
+		const title = options?.title ?? `Simulated ${type} notification`;
+		prNotificationsStore.add({ repoPath, branch, prNumber, title, type });
+		console.log(`[tuic] PR notification: ${type} for #${prNumber} on ${branch}`);
+	},
 
-  /** Simulate multiple PR notifications at once */
-  prNotifMulti(): void {
-    const { repoPath } = ensureRepo();
-    const scenarios: Array<{ type: PrNotificationType; branch: string; prNumber: number; title: string }> = [
-      { type: "merged", branch: "feature/auth", prNumber: 99, title: "feat: add OAuth2 flow" },
-      { type: "ci_failed", branch: "fix/payments", prNumber: 101, title: "fix: payment webhook" },
-      { type: "ready", branch: "feature/dashboard", prNumber: 103, title: "feat: new dashboard" },
-      { type: "changes_requested", branch: "refactor/api", prNumber: 105, title: "refactor: API layer" },
-      { type: "blocked", branch: "feature/export", prNumber: 107, title: "feat: CSV export" },
-    ];
-    for (const s of scenarios) {
-      prNotificationsStore.add({ repoPath, ...s });
-    }
-    console.log(`[tuic] Injected ${scenarios.length} PR notifications`);
-  },
+	/** Simulate multiple PR notifications at once */
+	prNotifMulti(): void {
+		const { repoPath } = ensureRepo();
+		const scenarios: Array<{ type: PrNotificationType; branch: string; prNumber: number; title: string }> = [
+			{ type: "merged", branch: "feature/auth", prNumber: 99, title: "feat: add OAuth2 flow" },
+			{ type: "ci_failed", branch: "fix/payments", prNumber: 101, title: "fix: payment webhook" },
+			{ type: "ready", branch: "feature/dashboard", prNumber: 103, title: "feat: new dashboard" },
+			{ type: "changes_requested", branch: "refactor/api", prNumber: 105, title: "refactor: API layer" },
+			{ type: "blocked", branch: "feature/export", prNumber: 107, title: "feat: CSV export" },
+		];
+		for (const s of scenarios) {
+			prNotificationsStore.add({ repoPath, ...s });
+		}
+		console.log(`[tuic] Injected ${scenarios.length} PR notifications`);
+	},
 
-  /** Clear all PR notifications */
-  prNotifClear(): void {
-    prNotificationsStore.clearAll();
-    console.log("[tuic] Cleared all PR notifications");
-  },
+	/** Clear all PR notifications */
+	prNotifClear(): void {
+		prNotificationsStore.clearAll();
+		console.log("[tuic] Cleared all PR notifications");
+	},
 
-  /** Apply a named preset scenario */
-  scenario(name: string): void {
-    const preset = PRESETS[name];
-    if (!preset) {
-      console.error(`[tuic] Unknown preset: "${name}". Use __tuic.presets() to list.`);
-      return;
-    }
+	/** Apply a named preset scenario */
+	scenario(name: string): void {
+		const preset = PRESETS[name];
+		if (!preset) {
+			console.error(`[tuic] Unknown preset: "${name}". Use __tuic.presets() to list.`);
+			return;
+		}
 
-    suppressPolling();
-    console.log(`[tuic] Applying preset: ${name} — ${preset.description}`);
+		suppressPolling();
+		console.log(`[tuic] Applying preset: ${name} — ${preset.description}`);
 
-    if (preset.pr) {
-      simulator.pr(preset.pr);
-    }
-    if (preset.rateLimit) {
-      for (const rl of preset.rateLimit) {
-        rateLimitStore.addRateLimit(rl);
-      }
-    }
-  },
+		if (preset.pr) {
+			simulator.pr(preset.pr);
+		}
+		if (preset.rateLimit) {
+			for (const rl of preset.rateLimit) {
+				rateLimitStore.addRateLimit(rl);
+			}
+		}
+	},
 
-  /** List available presets */
-  presets(): void {
-    console.log("[tuic] Available presets:");
-    for (const [key, preset] of Object.entries(PRESETS)) {
-      console.log(`  ${key.padEnd(16)} ${preset.description}`);
-    }
-  },
+	/** List available presets */
+	presets(): void {
+		console.log("[tuic] Available presets:");
+		for (const [key, preset] of Object.entries(PRESETS)) {
+			console.log(`  ${key.padEnd(16)} ${preset.description}`);
+		}
+	},
 
-  /** Simulate a plan file detection */
-  plan(path?: string): void {
-    const planPath = path ?? "plans/example-feature.md";
-    pluginRegistry.dispatchStructuredEvent("plan-file", { path: planPath }, "simulator");
-    console.log(`[tuic] Plan file detected: ${planPath}`);
-  },
+	/** Simulate a plan file detection */
+	plan(path?: string): void {
+		const planPath = path ?? "plans/example-feature.md";
+		pluginRegistry.dispatchStructuredEvent("plan-file", { path: planPath }, "simulator");
+		console.log(`[tuic] Plan file detected: ${planPath}`);
+	},
 
-  /** Toggle a panel for testing */
-  panel(name: "diff" | "markdown" | "files" | "notes"): void {
-    switch (name) {
-      case "diff":
-        uiStore.toggleGitPanel();
-        break;
-      case "markdown":
-        uiStore.toggleMarkdownPanel();
-        break;
-      case "files":
-        uiStore.toggleFileBrowserPanel();
-        break;
-      case "notes":
-        uiStore.toggleNotesPanel();
-        break;
-      default:
-        console.error(`[tuic] Unknown panel: "${name}". Options: diff, markdown, files, notes`);
-        return;
-    }
-    console.log(`[tuic] Toggled panel: ${name}`);
-  },
+	/** Toggle a panel for testing */
+	panel(name: "diff" | "markdown" | "files" | "notes"): void {
+		switch (name) {
+			case "diff":
+				uiStore.toggleGitPanel();
+				break;
+			case "markdown":
+				uiStore.toggleMarkdownPanel();
+				break;
+			case "files":
+				uiStore.toggleFileBrowserPanel();
+				break;
+			case "notes":
+				uiStore.toggleNotesPanel();
+				break;
+			default:
+				console.error(`[tuic] Unknown panel: "${name}". Options: diff, markdown, files, notes`);
+				return;
+		}
+		console.log(`[tuic] Toggled panel: ${name}`);
+	},
 
-  /** Inject a plugin activity item into the bell dropdown (section created if needed) */
-  activity(options?: {
-    title?: string;
-    subtitle?: string;
-    sectionId?: string;
-    sectionLabel?: string;
-    contentUri?: string;
-    dismissible?: boolean;
-    iconColor?: string;
-  }): void {
-    const sectionId = options?.sectionId ?? "sim-activity";
-    const sectionLabel = options?.sectionLabel ?? "SIMULATED ACTIVITY";
-    // Register section if not already present
-    activityStore.registerSection({
-      id: sectionId,
-      label: sectionLabel,
-      priority: 50,
-      canDismissAll: true,
-    });
-    const id = `sim-activity-${Date.now()}`;
-    activityStore.addItem({
-      id,
-      pluginId: "simulator",
-      sectionId,
-      title: options?.title ?? "Simulated activity item",
-      subtitle: options?.subtitle,
-      icon: `<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="6"/></svg>`,
-      iconColor: options?.iconColor ?? "var(--fg-accent)",
-      dismissible: options?.dismissible ?? true,
-      contentUri: options?.contentUri,
-    });
-    console.log(`[tuic] Activity item injected: "${options?.title ?? "Simulated activity item"}" in section "${sectionLabel}"`);
-  },
+	/** Inject a plugin activity item into the bell dropdown (section created if needed) */
+	activity(options?: {
+		title?: string;
+		subtitle?: string;
+		sectionId?: string;
+		sectionLabel?: string;
+		contentUri?: string;
+		dismissible?: boolean;
+		iconColor?: string;
+	}): void {
+		const sectionId = options?.sectionId ?? "sim-activity";
+		const sectionLabel = options?.sectionLabel ?? "SIMULATED ACTIVITY";
+		// Register section if not already present
+		activityStore.registerSection({
+			id: sectionId,
+			label: sectionLabel,
+			priority: 50,
+			canDismissAll: true,
+		});
+		const id = `sim-activity-${Date.now()}`;
+		activityStore.addItem({
+			id,
+			pluginId: "simulator",
+			sectionId,
+			title: options?.title ?? "Simulated activity item",
+			subtitle: options?.subtitle,
+			icon: `<svg viewBox="0 0 16 16" fill="currentColor"><circle cx="8" cy="8" r="6"/></svg>`,
+			iconColor: options?.iconColor ?? "var(--fg-accent)",
+			dismissible: options?.dismissible ?? true,
+			contentUri: options?.contentUri,
+		});
+		console.log(
+			`[tuic] Activity item injected: "${options?.title ?? "Simulated activity item"}" in section "${sectionLabel}"`,
+		);
+	},
 
-  /** Clear all activity store items and sections */
-  activityClear(): void {
-    activityStore.clearAll();
-    console.log("[tuic] Activity store cleared");
-  },
+	/** Clear all activity store items and sections */
+	activityClear(): void {
+		activityStore.clearAll();
+		console.log("[tuic] Activity store cleared");
+	},
 
-  /** Set global repo defaults (the baseline inherited by all repos unless overridden) */
-  defaults(options: Partial<RepoDefaults>): void {
-    if (options.baseBranch !== undefined) repoDefaultsStore.setBaseBranch(options.baseBranch);
-    if (options.copyIgnoredFiles !== undefined) repoDefaultsStore.setCopyIgnoredFiles(options.copyIgnoredFiles);
-    if (options.copyUntrackedFiles !== undefined) repoDefaultsStore.setCopyUntrackedFiles(options.copyUntrackedFiles);
-    if (options.setupScript !== undefined) repoDefaultsStore.setSetupScript(options.setupScript);
-    if (options.runScript !== undefined) repoDefaultsStore.setRunScript(options.runScript);
-    console.log("[tuic] Global repo defaults updated:", repoDefaultsStore.state);
-  },
+	/** Set global repo defaults (the baseline inherited by all repos unless overridden) */
+	defaults(options: Partial<RepoDefaults>): void {
+		if (options.baseBranch !== undefined) repoDefaultsStore.setBaseBranch(options.baseBranch);
+		if (options.copyIgnoredFiles !== undefined) repoDefaultsStore.setCopyIgnoredFiles(options.copyIgnoredFiles);
+		if (options.copyUntrackedFiles !== undefined) repoDefaultsStore.setCopyUntrackedFiles(options.copyUntrackedFiles);
+		if (options.setupScript !== undefined) repoDefaultsStore.setSetupScript(options.setupScript);
+		if (options.runScript !== undefined) repoDefaultsStore.setRunScript(options.runScript);
+		console.log("[tuic] Global repo defaults updated:", repoDefaultsStore.state);
+	},
 
-  /** Set per-repo setting overrides (null = inherit from global defaults) */
-  repoSettings(repoPath: string, overrides: Partial<Pick<RepoSettings,
-    "baseBranch" | "copyIgnoredFiles" | "copyUntrackedFiles" | "setupScript" | "runScript" | "color"
-  >>): void {
-    repoSettingsStore.getOrCreate(repoPath, repoPath.split("/").pop() ?? repoPath);
-    for (const [key, value] of Object.entries(overrides) as [keyof typeof overrides, unknown][]) {
-      repoSettingsStore.update(repoPath, { [key]: value } as Partial<RepoSettings>);
-    }
-    console.log("[tuic] Repo settings updated for", repoPath, ":", repoSettingsStore.get(repoPath));
-  },
+	/** Set per-repo setting overrides (null = inherit from global defaults) */
+	repoSettings(
+		repoPath: string,
+		overrides: Partial<
+			Pick<
+				RepoSettings,
+				"baseBranch" | "copyIgnoredFiles" | "copyUntrackedFiles" | "setupScript" | "runScript" | "color"
+			>
+		>,
+	): void {
+		repoSettingsStore.getOrCreate(repoPath, repoPath.split("/").pop() ?? repoPath);
+		for (const [key, value] of Object.entries(overrides) as [keyof typeof overrides, unknown][]) {
+			repoSettingsStore.update(repoPath, { [key]: value } as Partial<RepoSettings>);
+		}
+		console.log("[tuic] Repo settings updated for", repoPath, ":", repoSettingsStore.get(repoPath));
+	},
 
-  /** Print effective (merged) settings for a repo */
-  effectiveSettings(repoPath: string): void {
-    const effective = repoSettingsStore.getEffective(repoPath);
-    console.log("[tuic] Effective settings for", repoPath, ":", effective);
-  },
+	/** Print effective (merged) settings for a repo */
+	effectiveSettings(repoPath: string): void {
+		const effective = repoSettingsStore.getEffective(repoPath);
+		console.log("[tuic] Effective settings for", repoPath, ":", effective);
+	},
 
-  /** Set status bar notification text (tests pendulum ticker) */
-  statusInfo(text: string): void {
-    const setter = (window as any).__tuic_setStatusInfo;
-    if (!setter) {
-      console.error("[tuic] statusInfo setter not available — App not mounted yet?");
-      return;
-    }
-    setter(text);
-    console.log(`[tuic] statusInfo set to: "${text}"`);
-  },
+	/** Set status bar notification text (tests pendulum ticker) */
+	statusInfo(text: string): void {
+		const setter = (window as any).__tuic_setStatusInfo;
+		if (!setter) {
+			console.error("[tuic] statusInfo setter not available — App not mounted yet?");
+			return;
+		}
+		setter(text);
+		console.log(`[tuic] statusInfo set to: "${text}"`);
+	},
 
-  /** Simulate an app update available (shows in lastItem + bell) */
-  update(version?: string): void {
-    const ver = version ?? "0.99.0";
-    updaterStore.simulateAvailable(ver);
-    console.log(`[tuic] App update simulated: v${ver} — check toolbar bell & lastItem`);
-  },
+	/** Simulate an app update available (shows in lastItem + bell) */
+	update(version?: string): void {
+		const ver = version ?? "0.99.0";
+		updaterStore.simulateAvailable(ver);
+		console.log(`[tuic] App update simulated: v${ver} — check toolbar bell & lastItem`);
+	},
 
-  /** Dismiss simulated update */
-  updateClear(): void {
-    updaterStore.dismiss();
-    console.log("[tuic] Update dismissed");
-  },
+	/** Dismiss simulated update */
+	updateClear(): void {
+		updaterStore.dismiss();
+		console.log("[tuic] Update dismissed");
+	},
 
-  /** Simulate a status bar ticker message (like Claude usage plugin) */
-  ticker(options?: { text?: string; icon?: boolean; warning?: boolean; clickable?: boolean; ttlMs?: number }): void {
-    const text = options?.text ?? "Claude: 5h: 42% · 7d: 71%";
-    const chartIcon = options?.icon !== false
-      ? `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M1 15V1h2v12h12v2H1zm3-4V6h2v5H4zm3 0V3h2v8H7zm3 0V7h2v4h-2zm3 0V1h2v10h-2z"/></svg>`
-      : undefined;
-    statusBarTicker.addMessage({
-      id: "sim-ticker",
-      pluginId: "simulator",
-      text,
-      icon: chartIcon,
-      priority: options?.warning ? 80 : 0,
-      ttlMs: options?.ttlMs ?? 60_000,
-      onClick: options?.clickable ? () => console.log("[tuic] Ticker clicked!") : undefined,
-    });
-    console.log(`[tuic] Ticker message set: "${text}"`);
-  },
+	/** Simulate a status bar ticker message (like Claude usage plugin) */
+	ticker(options?: { text?: string; icon?: boolean; warning?: boolean; clickable?: boolean; ttlMs?: number }): void {
+		const text = options?.text ?? "Claude: 5h: 42% · 7d: 71%";
+		const chartIcon =
+			options?.icon !== false
+				? `<svg viewBox="0 0 16 16" fill="currentColor"><path d="M1 15V1h2v12h12v2H1zm3-4V6h2v5H4zm3 0V3h2v8H7zm3 0V7h2v4h-2zm3 0V1h2v10h-2z"/></svg>`
+				: undefined;
+		statusBarTicker.addMessage({
+			id: "sim-ticker",
+			pluginId: "simulator",
+			text,
+			icon: chartIcon,
+			priority: options?.warning ? 80 : 0,
+			ttlMs: options?.ttlMs ?? 60_000,
+			onClick: options?.clickable ? () => console.log("[tuic] Ticker clicked!") : undefined,
+		});
+		console.log(`[tuic] Ticker message set: "${text}"`);
+	},
 
-  /** Clear simulated ticker message */
-  tickerClear(): void {
-    statusBarTicker.removeMessage("sim-ticker", "simulator");
-    console.log("[tuic] Ticker message cleared");
-  },
+	/** Clear simulated ticker message */
+	tickerClear(): void {
+		statusBarTicker.removeMessage("sim-ticker", "simulator");
+		console.log("[tuic] Ticker message cleared");
+	},
 
-  /** Inject remote-only PRs (branches that exist on GitHub but not locally) */
-  remote(options?: { count?: number; branches?: Array<{ branch: string; state?: string; number?: number }> }): void {
-    suppressPolling();
-    const { repoPath } = ensureRepo();
-    const branches: Array<{ branch: string; state?: string; number?: number }> = options?.branches ?? Array.from({ length: options?.count ?? 2 }, (_, i) => ({
-      branch: `remote/feature-${i + 1}`,
-      number: 200 + i,
-    }));
+	/** Inject remote-only PRs (branches that exist on GitHub but not locally) */
+	remote(options?: { count?: number; branches?: Array<{ branch: string; state?: string; number?: number }> }): void {
+		suppressPolling();
+		const { repoPath } = ensureRepo();
+		const branches: Array<{ branch: string; state?: string; number?: number }> =
+			options?.branches ??
+			Array.from({ length: options?.count ?? 2 }, (_, i) => ({
+				branch: `remote/feature-${i + 1}`,
+				number: 200 + i,
+			}));
 
-    const prStatuses: import("../types").BranchPrStatus[] = branches.map((b) =>
-      buildPrStatus(b.branch, {
-        number: b.number ?? 200,
-        state: b.state ?? "OPEN",
-      }),
-    );
+		const prStatuses: import("../types").BranchPrStatus[] = branches.map((b) =>
+			buildPrStatus(b.branch, {
+				number: b.number ?? 200,
+				state: b.state ?? "OPEN",
+			}),
+		);
 
-    // Get existing PR data and merge with new remote-only PRs
-    const active = repositoriesStore.getActive();
-    const existingPrs: import("../types").BranchPrStatus[] = [];
-    if (active) {
-      for (const branchName of Object.keys(active.branches)) {
-        const pr = githubStore.getPrStatus(repoPath, branchName);
-        if (pr) existingPrs.push(pr);
-      }
-    }
+		// Get existing PR data and merge with new remote-only PRs
+		const active = repositoriesStore.getActive();
+		const existingPrs: import("../types").BranchPrStatus[] = [];
+		if (active) {
+			for (const branchName of Object.keys(active.branches)) {
+				const pr = githubStore.getPrStatus(repoPath, branchName);
+				if (pr) existingPrs.push(pr);
+			}
+		}
 
-    githubStore.updateRepoData(repoPath, [...existingPrs, ...prStatuses]);
-    console.log(`[tuic] Injected ${prStatuses.length} remote-only PRs for ${repoPath}: ${prStatuses.map((p) => p.branch).join(", ")}`);
-  },
+		githubStore.updateRepoData(repoPath, [...existingPrs, ...prStatuses]);
+		console.log(
+			`[tuic] Injected ${prStatuses.length} remote-only PRs for ${repoPath}: ${prStatuses.map((p) => p.branch).join(", ")}`,
+		);
+	},
 
-  /** Simulate ahead/behind counts on the active branch (shown in toolbar) */
-  aheadBehind(options?: { ahead?: number; behind?: number }): void {
-    suppressPolling();
-    const { repoPath, branch } = ensureRepo();
-    githubStore.setRemoteStatus(repoPath, {
-      has_remote: true,
-      current_branch: branch,
-      ahead: options?.ahead ?? 12,
-      behind: options?.behind ?? 3,
-    });
-    console.log(`[tuic] Ahead/behind set: ↑${options?.ahead ?? 12} ↓${options?.behind ?? 3}`);
-  },
+	/** Simulate ahead/behind counts on the active branch (shown in toolbar) */
+	aheadBehind(options?: { ahead?: number; behind?: number }): void {
+		suppressPolling();
+		const { repoPath, branch } = ensureRepo();
+		githubStore.setRemoteStatus(repoPath, {
+			has_remote: true,
+			current_branch: branch,
+			ahead: options?.ahead ?? 12,
+			behind: options?.behind ?? 3,
+		});
+		console.log(`[tuic] Ahead/behind set: ↑${options?.ahead ?? 12} ↓${options?.behind ?? 3}`);
+	},
 
-  /** Clear all mocks and resume polling */
-  reset(): void {
-    rateLimitStore.clearAll();
-    prNotificationsStore.clearAll();
-    activityStore.clearAll();
-    updaterStore.dismiss();
-    statusBarTicker.removeMessage("sim-ticker", "simulator");
+	/** Clear all mocks and resume polling */
+	reset(): void {
+		rateLimitStore.clearAll();
+		prNotificationsStore.clearAll();
+		activityStore.clearAll();
+		updaterStore.dismiss();
+		statusBarTicker.removeMessage("sim-ticker", "simulator");
 
-    // Clean up sim repo if it was created
-    if (repositoriesStore.get(SIM_REPO_PATH)) {
-      repositoriesStore.remove(SIM_REPO_PATH);
-    }
+		// Clean up sim repo if it was created
+		if (repositoriesStore.get(SIM_REPO_PATH)) {
+			repositoriesStore.remove(SIM_REPO_PATH);
+		}
 
-    if (pollingWasStopped) {
-      githubStore.startPolling();
-      pollingWasStopped = false;
-    }
+		if (pollingWasStopped) {
+			githubStore.startPolling();
+			pollingWasStopped = false;
+		}
 
-    console.log("[tuic] All mocks cleared, polling resumed.");
-  },
+		console.log("[tuic] All mocks cleared, polling resumed.");
+	},
 
-  /** Print usage */
-  help(): void {
-    console.log(`
+	/** Print usage */
+	help(): void {
+		console.log(`
 [tuic] Dev Simulator — inject mock states for UI testing
 
 ── PR States ──────────────────────────────────────────────────
@@ -520,14 +528,14 @@ const simulator = {
   __tuic.reset()                   Clear all mocks, resume polling
   __tuic.help()                    This help
 `);
-  },
+	},
 };
 
 // Bind to window
 declare global {
-  interface Window {
-    __tuic: typeof simulator;
-  }
+	interface Window {
+		__tuic: typeof simulator;
+	}
 }
 
 window.__tuic = simulator;

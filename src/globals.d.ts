@@ -6,6 +6,6 @@ declare const __BUILD_GIT_HASH__: string;
 
 /** CSS Modules — import styles from "./Foo.module.css" */
 declare module "*.module.css" {
-  const classes: Record<string, string>;
-  export default classes;
+	const classes: Record<string, string>;
+	export default classes;
 }

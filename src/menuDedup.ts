@@ -9,5 +9,5 @@
 export let lastMenuActionTime = 0;
 
 export function setLastMenuActionTime(time: number): void {
-  lastMenuActionTime = time;
+	lastMenuActionTime = time;
 }

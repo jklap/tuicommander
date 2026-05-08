@@ -1,8 +1,8 @@
-import { pluginRegistry } from "./pluginRegistry";
+import { destroyClaudeUsage, initClaudeUsage } from "../features/claudeUsage";
 import { pluginStore } from "../stores/pluginStore";
-import { loadUserPlugins, isPluginDisabled, syncDisabledList, registerBuiltInPlugin } from "./pluginLoader";
 import { planPlugin } from "./planPlugin";
-import { initClaudeUsage, destroyClaudeUsage } from "../features/claudeUsage";
+import { isPluginDisabled, loadUserPlugins, registerBuiltInPlugin, syncDisabledList } from "./pluginLoader";
+import { pluginRegistry } from "./pluginRegistry";
 import type { TuiPlugin } from "./types";
 
 /**
@@ -18,24 +18,24 @@ const BUILTIN_PLUGINS: TuiPlugin[] = [planPlugin];
  * Call once at app startup.
  */
 export async function initPlugins(): Promise<void> {
-  // Sync disabled list before checking built-in plugin state
-  await syncDisabledList();
+	// Sync disabled list before checking built-in plugin state
+	await syncDisabledList();
 
-  for (const plugin of BUILTIN_PLUGINS) {
-    registerBuiltInPlugin(plugin);
-    const enabled = !isPluginDisabled(plugin.id);
-    pluginStore.registerPlugin(plugin.id, { builtIn: true, enabled });
-    if (enabled) {
-      await pluginRegistry.register(plugin);
-    }
-  }
+	for (const plugin of BUILTIN_PLUGINS) {
+		registerBuiltInPlugin(plugin);
+		const enabled = !isPluginDisabled(plugin.id);
+		pluginStore.registerPlugin(plugin.id, { builtIn: true, enabled });
+		if (enabled) {
+			await pluginRegistry.register(plugin);
+		}
+	}
 
-  // Native Claude Usage feature — uses same disabled_plugin_ids toggle
-  if (!isPluginDisabled("claude-usage")) {
-    initClaudeUsage();
-  }
+	// Native Claude Usage feature — uses same disabled_plugin_ids toggle
+	if (!isPluginDisabled("claude-usage")) {
+		initClaudeUsage();
+	}
 
-  await loadUserPlugins();
+	await loadUserPlugins();
 }
 
 /**
@@ -43,9 +43,9 @@ export async function initPlugins(): Promise<void> {
  * Called from AgentsTab when user flips the dashboard toggle.
  */
 export function setClaudeUsageEnabled(enabled: boolean): void {
-  if (enabled) {
-    initClaudeUsage();
-  } else {
-    destroyClaudeUsage();
-  }
+	if (enabled) {
+		initClaudeUsage();
+	} else {
+		destroyClaudeUsage();
+	}
 }

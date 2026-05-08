@@ -1,1 +1,1 @@
-export { t, locale, setLocale } from "./t";
+export { locale, setLocale, t } from "./t";

@@ -7,10 +7,10 @@
  */
 
 import { invoke, listen } from "../invoke";
+import { appLogger } from "../stores/appLogger";
+import { pluginStore } from "../stores/pluginStore";
 import { isTauri } from "../transport";
 import { pluginRegistry } from "./pluginRegistry";
-import { pluginStore } from "../stores/pluginStore";
-import { appLogger } from "../stores/appLogger";
 import type { TuiPlugin } from "./types";
 
 // ---------------------------------------------------------------------------
@@ -28,7 +28,7 @@ const builtInPluginMap = new Map<string, TuiPlugin>();
 
 /** Register a built-in plugin so it can be toggled on/off */
 export function registerBuiltInPlugin(plugin: TuiPlugin): void {
-  builtInPluginMap.set(plugin.id, plugin);
+	builtInPluginMap.set(plugin.id, plugin);
 }
 
 // ---------------------------------------------------------------------------
@@ -36,19 +36,19 @@ export function registerBuiltInPlugin(plugin: TuiPlugin): void {
 // ---------------------------------------------------------------------------
 
 export interface PluginManifest {
-  id: string;
-  name: string;
-  version: string;
-  minAppVersion: string;
-  main: string;
-  description?: string;
-  author?: string;
-  capabilities: string[];
-  allowedUrls?: string[];
-  /** Agent types this plugin targets (e.g. ["claude"]). Empty/omitted = universal. */
-  agentTypes?: string[];
-  /** CLI binaries this plugin may execute via exec:cli (e.g. ["rtk", "mdkb"]). */
-  binaries?: string[];
+	id: string;
+	name: string;
+	version: string;
+	minAppVersion: string;
+	main: string;
+	description?: string;
+	author?: string;
+	capabilities: string[];
+	allowedUrls?: string[];
+	/** Agent types this plugin targets (e.g. ["claude"]). Empty/omitted = universal. */
+	agentTypes?: string[];
+	/** CLI binaries this plugin may execute via exec:cli (e.g. ["rtk", "mdkb"]). */
+	binaries?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -57,56 +57,56 @@ export interface PluginManifest {
 
 /** Simple semver comparison: returns -1, 0, or 1 */
 function compareSemver(a: string, b: string): number {
-  const pa = a.split(".").map(Number);
-  const pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) {
-    const va = pa[i] ?? 0;
-    const vb = pb[i] ?? 0;
-    if (va < vb) return -1;
-    if (va > vb) return 1;
-  }
-  return 0;
+	const pa = a.split(".").map(Number);
+	const pb = b.split(".").map(Number);
+	for (let i = 0; i < 3; i++) {
+		const va = pa[i] ?? 0;
+		const vb = pb[i] ?? 0;
+		if (va < vb) return -1;
+		if (va > vb) return 1;
+	}
+	return 0;
 }
 
 /**
  * Validate a plugin manifest. Returns null if valid, error string if invalid.
  */
 export function validateManifest(manifest: PluginManifest): string | null {
-  if (!manifest.id) return "manifest: id is required";
-  if (!manifest.name) return "manifest: name is required";
-  if (!manifest.version) return "manifest: version is required";
-  if (!manifest.main) return "manifest: main is required";
+	if (!manifest.id) return "manifest: id is required";
+	if (!manifest.name) return "manifest: name is required";
+	if (!manifest.version) return "manifest: version is required";
+	if (!manifest.main) return "manifest: main is required";
 
-  if (!manifest.minAppVersion) return "manifest: minAppVersion is required";
-  if (compareSemver(manifest.minAppVersion, APP_VERSION) > 0) {
-    return `plugin "${manifest.id}" requires app version ${manifest.minAppVersion}, current is ${APP_VERSION}`;
-  }
+	if (!manifest.minAppVersion) return "manifest: minAppVersion is required";
+	if (compareSemver(manifest.minAppVersion, APP_VERSION) > 0) {
+		return `plugin "${manifest.id}" requires app version ${manifest.minAppVersion}, current is ${APP_VERSION}`;
+	}
 
-  return null;
+	return null;
 }
 
 /**
  * Validate a dynamically imported module. Returns null if valid, error string if invalid.
  */
 export function validateModule(mod: unknown, expectedId: string): string | null {
-  if (!mod || typeof mod !== "object") return "module has no default export";
-  const defaultExport = (mod as Record<string, unknown>).default;
-  if (!defaultExport || typeof defaultExport !== "object") {
-    return "module has no default export or default is not an object";
-  }
+	if (!mod || typeof mod !== "object") return "module has no default export";
+	const defaultExport = (mod as Record<string, unknown>).default;
+	if (!defaultExport || typeof defaultExport !== "object") {
+		return "module has no default export or default is not an object";
+	}
 
-  const plugin = defaultExport as Record<string, unknown>;
-  if (typeof plugin.onload !== "function") {
-    return "module default export is missing onload function";
-  }
-  if (typeof plugin.onunload !== "function") {
-    return "module default export is missing onunload function";
-  }
-  if (plugin.id !== expectedId) {
-    return `module id mismatch: expected "${expectedId}", got "${String(plugin.id)}"`;
-  }
+	const plugin = defaultExport as Record<string, unknown>;
+	if (typeof plugin.onload !== "function") {
+		return "module default export is missing onload function";
+	}
+	if (typeof plugin.onunload !== "function") {
+		return "module default export is missing onunload function";
+	}
+	if (plugin.id !== expectedId) {
+		return `module id mismatch: expected "${expectedId}", got "${String(plugin.id)}"`;
+	}
 
-  return null;
+	return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -118,74 +118,74 @@ let disabledPluginIds = new Set<string>();
 
 /** Fetch the disabled plugin list from Rust config */
 export async function syncDisabledList(): Promise<void> {
-  try {
-    const config = await invoke<{ disabled_plugin_ids?: string[] }>("load_config");
-    disabledPluginIds = new Set(config.disabled_plugin_ids ?? []);
-  } catch {
-    // Config not available (e.g. in tests) — treat all as enabled
-    disabledPluginIds = new Set();
-  }
+	try {
+		const config = await invoke<{ disabled_plugin_ids?: string[] }>("load_config");
+		disabledPluginIds = new Set(config.disabled_plugin_ids ?? []);
+	} catch (e) {
+		appLogger.warn("plugin", "Failed to load plugin config — treating all as enabled", { error: String(e) });
+		disabledPluginIds = new Set();
+	}
 }
 
 /** Check if a plugin ID is disabled in config */
 export function isPluginDisabled(id: string): boolean {
-  return disabledPluginIds.has(id);
+	return disabledPluginIds.has(id);
 }
 
 /**
  * Enable or disable a plugin. Updates config and loads/unloads immediately.
  */
 export async function setPluginEnabled(id: string, enabled: boolean): Promise<void> {
-  // Update Rust config
-  const config = await invoke<Record<string, unknown>>("load_config");
-  const list = new Set<string>((config.disabled_plugin_ids as string[]) ?? []);
+	// Update Rust config
+	const config = await invoke<Record<string, unknown>>("load_config");
+	const list = new Set<string>((config.disabled_plugin_ids as string[]) ?? []);
 
-  if (enabled) {
-    list.delete(id);
-  } else {
-    list.add(id);
-  }
+	if (enabled) {
+		list.delete(id);
+	} else {
+		list.add(id);
+	}
 
-  await invoke("save_config", {
-    config: { ...config, disabled_plugin_ids: [...list] },
-  });
+	await invoke("save_config", {
+		config: { ...config, disabled_plugin_ids: [...list] },
+	});
 
-  disabledPluginIds = list;
-  pluginStore.updatePlugin(id, { enabled });
+	disabledPluginIds = list;
+	pluginStore.updatePlugin(id, { enabled });
 
-  // Check if this is a built-in plugin
-  const builtIn = builtInPluginMap.get(id);
+	// Check if this is a built-in plugin
+	const builtIn = builtInPluginMap.get(id);
 
-  if (enabled) {
-    if (builtIn) {
-      // Re-register built-in plugin
-      pluginRegistry.register(builtIn);
-      pluginStore.updatePlugin(id, { loaded: true, error: null });
-    } else {
-      // Load external plugin from disk
-      const manifests = await invoke<PluginManifest[]>("list_user_plugins");
-      const manifest = manifests.find((m) => m.id === id);
-      if (manifest) {
-        const error = validateManifest(manifest);
-        if (error) {
-          pluginStore.getLogger(id).error(error);
-          pluginStore.updatePlugin(id, { error, loaded: false });
-        } else {
-          await loadPlugin(manifest);
-        }
-      }
-    }
-  } else {
-    // Unload the plugin
-    if (builtIn) {
-      pluginRegistry.unregister(id);
-      pluginStore.updatePlugin(id, { loaded: false });
-    } else if (loadedPluginIds.has(id)) {
-      pluginRegistry.unregister(id);
-      loadedPluginIds.delete(id);
-      invoke("unregister_loaded_plugin", { pluginId: id }).catch(() => {});
-    }
-  }
+	if (enabled) {
+		if (builtIn) {
+			// Re-register built-in plugin
+			pluginRegistry.register(builtIn);
+			pluginStore.updatePlugin(id, { loaded: true, error: null });
+		} else {
+			// Load external plugin from disk
+			const manifests = await invoke<PluginManifest[]>("list_user_plugins");
+			const manifest = manifests.find((m) => m.id === id);
+			if (manifest) {
+				const error = validateManifest(manifest);
+				if (error) {
+					pluginStore.getLogger(id).error(error);
+					pluginStore.updatePlugin(id, { error, loaded: false });
+				} else {
+					await loadPlugin(manifest);
+				}
+			}
+		}
+	} else {
+		// Unload the plugin
+		if (builtIn) {
+			pluginRegistry.unregister(id);
+			pluginStore.updatePlugin(id, { loaded: false });
+		} else if (loadedPluginIds.has(id)) {
+			pluginRegistry.unregister(id);
+			loadedPluginIds.delete(id);
+			invoke("unregister_loaded_plugin", { pluginId: id }).catch(() => {});
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -196,45 +196,45 @@ export async function setPluginEnabled(id: string, enabled: boolean): Promise<vo
 const loadedPluginIds = new Set<string>();
 
 async function loadPlugin(manifest: PluginManifest): Promise<void> {
-  const logger = pluginStore.getLogger(manifest.id);
+	const logger = pluginStore.getLogger(manifest.id);
 
-  // Register in pluginStore so UI can see it even before load completes
-  pluginStore.registerPlugin(manifest.id, {
-    manifest,
-    builtIn: false,
-    enabled: true,
-    loaded: false,
-  });
+	// Register in pluginStore so UI can see it even before load completes
+	pluginStore.registerPlugin(manifest.id, {
+		manifest,
+		builtIn: false,
+		enabled: true,
+		loaded: false,
+	});
 
-  // Cache-bust for hot reload
-  const url = `plugin://${manifest.id}/${manifest.main}?t=${Date.now()}`;
-  let mod: unknown;
-  try {
-    mod = await import(/* @vite-ignore */ url);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    appLogger.error("plugin", `Failed to import plugin "${manifest.id}"`, err);
-    logger.error(`Import failed: ${msg}`, err);
-    pluginStore.updatePlugin(manifest.id, { error: msg });
-    return;
-  }
+	// Cache-bust for hot reload
+	const url = `plugin://${manifest.id}/${manifest.main}?t=${Date.now()}`;
+	let mod: unknown;
+	try {
+		mod = await import(/* @vite-ignore */ url);
+	} catch (err) {
+		const msg = err instanceof Error ? err.message : String(err);
+		appLogger.error("plugin", `Failed to import plugin "${manifest.id}"`, err);
+		logger.error(`Import failed: ${msg}`, err);
+		pluginStore.updatePlugin(manifest.id, { error: msg });
+		return;
+	}
 
-  const moduleError = validateModule(mod, manifest.id);
-  if (moduleError) {
-    appLogger.error("plugin", `Invalid module for plugin "${manifest.id}": ${moduleError}`);
-    logger.error(`Module validation failed: ${moduleError}`);
-    pluginStore.updatePlugin(manifest.id, { error: moduleError });
-    return;
-  }
+	const moduleError = validateModule(mod, manifest.id);
+	if (moduleError) {
+		appLogger.error("plugin", `Invalid module for plugin "${manifest.id}": ${moduleError}`);
+		logger.error(`Module validation failed: ${moduleError}`);
+		pluginStore.updatePlugin(manifest.id, { error: moduleError });
+		return;
+	}
 
-  const plugin = (mod as { default: TuiPlugin }).default;
-  pluginRegistry.register(plugin, manifest.capabilities, manifest.allowedUrls, manifest.agentTypes);
-  loadedPluginIds.add(manifest.id);
+	const plugin = (mod as { default: TuiPlugin }).default;
+	pluginRegistry.register(plugin, manifest.capabilities, manifest.allowedUrls, manifest.agentTypes);
+	loadedPluginIds.add(manifest.id);
 
-  // Rust-side registration is already handled by pluginRegistry.register()
+	// Rust-side registration is already handled by pluginRegistry.register()
 
-  logger.info(`Loaded v${manifest.version}`);
-  appLogger.info("plugin", `Loaded plugin "${manifest.id}" v${manifest.version}`);
+	logger.info(`Loaded v${manifest.version}`);
+	appLogger.info("plugin", `Loaded plugin "${manifest.id}" v${manifest.version}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -246,56 +246,56 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
  * Rust emits payload as string[] (array of changed plugin IDs).
  */
 async function handlePluginChanged(event: { payload: string[] }): Promise<void> {
-  const changedIds = event.payload;
-  if (!Array.isArray(changedIds) || changedIds.length === 0) return;
+	const changedIds = event.payload;
+	if (!Array.isArray(changedIds) || changedIds.length === 0) return;
 
-  for (const pluginId of changedIds) {
-    appLogger.info("plugin", `Plugin "${pluginId}" changed, reloading...`);
+	for (const pluginId of changedIds) {
+		appLogger.info("plugin", `Plugin "${pluginId}" changed, reloading...`);
 
-    // Unregister if previously loaded
-    if (loadedPluginIds.has(pluginId)) {
-      pluginRegistry.unregister(pluginId);
-      loadedPluginIds.delete(pluginId);
-      invoke("unregister_loaded_plugin", { pluginId }).catch(() => {});
-    }
+		// Unregister if previously loaded
+		if (loadedPluginIds.has(pluginId)) {
+			pluginRegistry.unregister(pluginId);
+			loadedPluginIds.delete(pluginId);
+			invoke("unregister_loaded_plugin", { pluginId }).catch(() => {});
+		}
 
-    // Re-discover this specific plugin's manifest
-    let manifests: PluginManifest[];
-    try {
-      manifests = await invoke<PluginManifest[]>("list_user_plugins");
-    } catch (err) {
-      appLogger.error("plugin", "Failed to list plugins for reload", err);
-      return;
-    }
+		// Re-discover this specific plugin's manifest
+		let manifests: PluginManifest[];
+		try {
+			manifests = await invoke<PluginManifest[]>("list_user_plugins");
+		} catch (err) {
+			appLogger.error("plugin", "Failed to list plugins for reload", err);
+			return;
+		}
 
-    const manifest = manifests.find((m) => m.id === pluginId);
-    if (!manifest) {
-      appLogger.warn("plugin", `Plugin "${pluginId}" not found after change event`);
-      pluginStore.removePlugin(pluginId);
-      continue;
-    }
+		const manifest = manifests.find((m) => m.id === pluginId);
+		if (!manifest) {
+			appLogger.warn("plugin", `Plugin "${pluginId}" not found after change event`);
+			pluginStore.removePlugin(pluginId);
+			continue;
+		}
 
-    const manifestError = validateManifest(manifest);
-    if (manifestError) {
-      appLogger.error("plugin", manifestError);
-      pluginStore.getLogger(pluginId).error(manifestError);
-      pluginStore.updatePlugin(pluginId, { error: manifestError, loaded: false });
-      continue;
-    }
+		const manifestError = validateManifest(manifest);
+		if (manifestError) {
+			appLogger.error("plugin", manifestError);
+			pluginStore.getLogger(pluginId).error(manifestError);
+			pluginStore.updatePlugin(pluginId, { error: manifestError, loaded: false });
+			continue;
+		}
 
-    // Don't reload disabled plugins
-    if (disabledPluginIds.has(pluginId)) {
-      pluginStore.registerPlugin(pluginId, {
-        manifest,
-        builtIn: false,
-        enabled: false,
-        loaded: false,
-      });
-      continue;
-    }
+		// Don't reload disabled plugins
+		if (disabledPluginIds.has(pluginId)) {
+			pluginStore.registerPlugin(pluginId, {
+				manifest,
+				builtIn: false,
+				enabled: false,
+				loaded: false,
+			});
+			continue;
+		}
 
-    await loadPlugin(manifest);
-  }
+		await loadPlugin(manifest);
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -307,49 +307,49 @@ async function handlePluginChanged(event: { payload: string[] }): Promise<void> 
  * Call once at app startup after built-in plugins are registered.
  */
 export async function loadUserPlugins(): Promise<void> {
-  if (!isTauri()) {
-    appLogger.debug("plugin", "User plugin loading skipped in browser mode");
-    return;
-  }
+	if (!isTauri()) {
+		appLogger.debug("plugin", "User plugin loading skipped in browser mode");
+		return;
+	}
 
-  // Sync disabled list from config
-  await syncDisabledList();
+	// Sync disabled list from config
+	await syncDisabledList();
 
-  // Set up hot reload listener
-  try {
-    await listen("plugin-changed", handlePluginChanged);
-  } catch (err) {
-    appLogger.warn("plugin", "Failed to listen for plugin-changed events", err);
-  }
+	// Set up hot reload listener
+	try {
+		await listen("plugin-changed", handlePluginChanged);
+	} catch (err) {
+		appLogger.warn("plugin", "Failed to listen for plugin-changed events", err);
+	}
 
-  // Discover plugins
-  let manifests: PluginManifest[];
-  try {
-    manifests = await invoke<PluginManifest[]>("list_user_plugins");
-  } catch (err) {
-    appLogger.error("plugin", "Failed to discover user plugins", err);
-    return;
-  }
+	// Discover plugins
+	let manifests: PluginManifest[];
+	try {
+		manifests = await invoke<PluginManifest[]>("list_user_plugins");
+	} catch (err) {
+		appLogger.error("plugin", "Failed to discover user plugins", err);
+		return;
+	}
 
-  // Load each valid plugin (register disabled ones in store but don't load)
-  for (const manifest of manifests) {
-    const error = validateManifest(manifest);
-    if (error) {
-      appLogger.error("plugin", `Skipping plugin: ${error}`);
-      continue;
-    }
+	// Load each valid plugin (register disabled ones in store but don't load)
+	for (const manifest of manifests) {
+		const error = validateManifest(manifest);
+		if (error) {
+			appLogger.error("plugin", `Skipping plugin: ${error}`);
+			continue;
+		}
 
-    if (disabledPluginIds.has(manifest.id)) {
-      pluginStore.registerPlugin(manifest.id, {
-        manifest,
-        builtIn: false,
-        enabled: false,
-        loaded: false,
-      });
-      appLogger.info("plugin", `Plugin "${manifest.id}" is disabled, skipping`);
-      continue;
-    }
+		if (disabledPluginIds.has(manifest.id)) {
+			pluginStore.registerPlugin(manifest.id, {
+				manifest,
+				builtIn: false,
+				enabled: false,
+				loaded: false,
+			});
+			appLogger.info("plugin", `Plugin "${manifest.id}" is disabled, skipping`);
+			continue;
+		}
 
-    await loadPlugin(manifest);
-  }
+		await loadPlugin(manifest);
+	}
 }

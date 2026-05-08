@@ -1,14 +1,14 @@
 /** A single arc segment for the CI status ring SVG */
 export interface CiRingSegment {
-  color: string;
-  dashArray: string;
-  dashOffset: number;
+	color: string;
+	dashArray: string;
+	dashOffset: number;
 }
 
 interface CiRingColors {
-  failed: string;
-  pending: string;
-  passed: string;
+	failed: string;
+	pending: string;
+	passed: string;
 }
 
 /**
@@ -17,35 +17,35 @@ interface CiRingColors {
  * Each segment's dashOffset positions it after the previous segments.
  */
 export function computeCiRingSegments(
-  failed: number,
-  pending: number,
-  passed: number,
-  circumference: number,
-  colors: CiRingColors,
+	failed: number,
+	pending: number,
+	passed: number,
+	circumference: number,
+	colors: CiRingColors,
 ): CiRingSegment[] {
-  const total = failed + pending + passed;
-  if (total === 0) return [];
+	const total = failed + pending + passed;
+	if (total === 0) return [];
 
-  const result: CiRingSegment[] = [];
-  let offset = 0;
+	const result: CiRingSegment[] = [];
+	let offset = 0;
 
-  const entries: Array<{ count: number; color: string }> = [
-    { count: failed, color: colors.failed },
-    { count: pending, color: colors.pending },
-    { count: passed, color: colors.passed },
-  ];
+	const entries: Array<{ count: number; color: string }> = [
+		{ count: failed, color: colors.failed },
+		{ count: pending, color: colors.pending },
+		{ count: passed, color: colors.passed },
+	];
 
-  for (const entry of entries) {
-    if (entry.count > 0) {
-      const len = (entry.count / total) * circumference;
-      result.push({
-        color: entry.color,
-        dashArray: `${len} ${circumference - len}`,
-        dashOffset: offset === 0 ? 0 : -offset,
-      });
-      offset += len;
-    }
-  }
+	for (const entry of entries) {
+		if (entry.count > 0) {
+			const len = (entry.count / total) * circumference;
+			result.push({
+				color: entry.color,
+				dashArray: `${len} ${circumference - len}`,
+				dashOffset: offset === 0 ? 0 : -offset,
+			});
+			offset += len;
+		}
+	}
 
-  return result;
+	return result;
 }

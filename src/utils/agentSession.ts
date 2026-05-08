@@ -1,6 +1,6 @@
 import { AGENTS, type AgentType } from "../agents";
-import { rpc } from "../transport";
 import { agentConfigsStore } from "../stores/agentConfigs";
+import { rpc } from "../transport";
 import { pathBasename } from "./pathUtils";
 
 /**
@@ -19,13 +19,13 @@ import { pathBasename } from "./pathUtils";
  * fallback behaviour; used by tests that don't set up the store).
  */
 function applyDefaultRunConfig(agentType: AgentType, command: string): string {
-  const runConfig = agentConfigsStore.getDefaultConfig(agentType);
-  if (!runConfig) return command;
+	const runConfig = agentConfigsStore.getDefaultConfig(agentType);
+	if (!runConfig) return command;
 
-  const parts = command.split(" ");
-  const resumeFlags = parts.slice(1); // drop the hardcoded binary
-  const out = [runConfig.command, ...resumeFlags, ...runConfig.args];
-  return out.join(" ");
+	const parts = command.split(" ");
+	const resumeFlags = parts.slice(1); // drop the hardcoded binary
+	const out = [runConfig.command, ...resumeFlags, ...runConfig.args];
+	return out.join(" ");
 }
 
 /**
@@ -38,19 +38,23 @@ function applyDefaultRunConfig(agentType: AgentType, command: string): string {
  * This is important for custom commands (aliases, wrappers) like "C2" that don't
  * contain "claude" in the name but still need --session-id injection.
  */
-export function buildAgentLaunchCommand(command: string, agentSessionId?: string | null, agentType?: AgentType | null): string {
-  if (!agentSessionId) return command;
+export function buildAgentLaunchCommand(
+	command: string,
+	agentSessionId?: string | null,
+	agentType?: AgentType | null,
+): string {
+	if (!agentSessionId) return command;
 
-  const parts = command.split(" ");
-  const binary = parts[0];
-  const binaryName = pathBasename(binary) ?? "";
+	const parts = command.split(" ");
+	const binary = parts[0];
+	const binaryName = pathBasename(binary) ?? "";
 
-  const isClaude = agentType === "claude" || binaryName.startsWith("claude");
-  if (!isClaude) return command;
+	const isClaude = agentType === "claude" || binaryName.startsWith("claude");
+	if (!isClaude) return command;
 
-  // Insert --session-id right after the binary
-  const rest = parts.slice(1);
-  return [binary, "--session-id", agentSessionId, ...rest].join(" ");
+	// Insert --session-id right after the binary
+	const rest = parts.slice(1);
+	return [binary, "--session-id", agentSessionId, ...rest].join(" ");
 }
 
 /**
@@ -60,14 +64,14 @@ export function buildAgentLaunchCommand(command: string, agentSessionId?: string
  * For all other cases, falls back to the static resumeCommand from AGENTS config.
  */
 export function buildResumeCommand(agentType: AgentType, agentSessionId?: string | null): string | null {
-  let base: string | null = null;
-  if (agentSessionId) {
-    const disc = AGENTS[agentType].sessionDiscovery;
-    if (disc) base = disc.resumeWithId(agentSessionId);
-  }
-  if (base === null) base = AGENTS[agentType].resumeCommand;
-  if (base === null) return null;
-  return applyDefaultRunConfig(agentType, base);
+	let base: string | null = null;
+	if (agentSessionId) {
+		const disc = AGENTS[agentType].sessionDiscovery;
+		if (disc) base = disc.resumeWithId(agentSessionId);
+	}
+	if (base === null) base = AGENTS[agentType].resumeCommand;
+	if (base === null) return null;
+	return applyDefaultRunConfig(agentType, base);
 }
 
 /**
@@ -82,31 +86,31 @@ export function buildResumeCommand(agentType: AgentType, agentSessionId?: string
  * an older, unrelated session discovered at agent-detection time.
  */
 export async function verifyAndBuildResumeCommand(
-  agentType: AgentType,
-  cwd: string | null,
-  tuicSession?: string | null,
-  agentSessionId?: string | null,
+	agentType: AgentType,
+	cwd: string | null,
+	tuicSession?: string | null,
+	agentSessionId?: string | null,
 ): Promise<string | null> {
-  // Try tuicSession first — it's the stable tab UUID injected as env var
-  if (tuicSession && cwd && AGENTS[agentType].sessionDiscovery) {
-    try {
-      const exists = await rpc<boolean>("verify_agent_session", {
-        agentType,
-        sessionId: tuicSession,
-        cwd,
-      });
-      if (exists) {
-        const cmd = AGENTS[agentType].sessionDiscovery!.resumeWithId(tuicSession);
-        return applyDefaultRunConfig(agentType, cmd);
-      }
-      // Verification ran but session file not found — session is gone.
-      // Don't fall back to agentSessionId which may be stale.
-      return null;
-    } catch {
-      // verify_agent_session unavailable (browser mode) — fall through
-    }
-  }
+	// Try tuicSession first — it's the stable tab UUID injected as env var
+	if (tuicSession && cwd && AGENTS[agentType].sessionDiscovery) {
+		try {
+			const exists = await rpc<boolean>("verify_agent_session", {
+				agentType,
+				sessionId: tuicSession,
+				cwd,
+			});
+			if (exists) {
+				const cmd = AGENTS[agentType].sessionDiscovery!.resumeWithId(tuicSession);
+				return applyDefaultRunConfig(agentType, cmd);
+			}
+			// Verification ran but session file not found — session is gone.
+			// Don't fall back to agentSessionId which may be stale.
+			return null;
+		} catch {
+			// verify_agent_session unavailable (browser mode) — fall through
+		}
+	}
 
-  // No tuicSession or browser mode — fall back to agentSessionId or static resumeCommand
-  return buildResumeCommand(agentType, agentSessionId);
+	// No tuicSession or browser mode — fall back to agentSessionId or static resumeCommand
+	return buildResumeCommand(agentType, agentSessionId);
 }

@@ -11,8 +11,8 @@
  */
 
 export interface SortableBranch {
-  name: string;
-  isMain: boolean;
+	name: string;
+	isMain: boolean;
 }
 
 /**
@@ -20,20 +20,20 @@ export interface SortableBranch {
  * Main branches first, then merged/closed PRs to bottom, then alphabetical.
  */
 export function compareBranches(
-  a: SortableBranch,
-  b: SortableBranch,
-  aPr: { state?: string } | null | undefined,
-  bPr: { state?: string } | null | undefined,
+	a: SortableBranch,
+	b: SortableBranch,
+	aPr: { state?: string } | null | undefined,
+	bPr: { state?: string } | null | undefined,
 ): number {
-  // Main branches first
-  if (a.isMain && !b.isMain) return -1;
-  if (!a.isMain && b.isMain) return 1;
+	// Main branches first
+	if (a.isMain && !b.isMain) return -1;
+	if (!a.isMain && b.isMain) return 1;
 
-  // Merged/closed PRs sort to bottom
-  const aMerged = aPr?.state === "MERGED" || aPr?.state === "CLOSED";
-  const bMerged = bPr?.state === "MERGED" || bPr?.state === "CLOSED";
-  if (aMerged && !bMerged) return 1;
-  if (!aMerged && bMerged) return -1;
+	// Merged/closed PRs sort to bottom
+	const aMerged = aPr?.state === "MERGED" || aPr?.state === "CLOSED";
+	const bMerged = bPr?.state === "MERGED" || bPr?.state === "CLOSED";
+	if (aMerged && !bMerged) return 1;
+	if (!aMerged && bMerged) return -1;
 
-  return a.name.localeCompare(b.name);
+	return a.name.localeCompare(b.name);
 }
