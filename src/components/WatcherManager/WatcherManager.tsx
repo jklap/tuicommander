@@ -1,7 +1,7 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { invoke, listen } from "../../invoke";
-import { terminalsStore } from "../../stores/terminals";
 import { appLogger } from "../../stores/appLogger";
+import { terminalsStore } from "../../stores/terminals";
 import s from "./WatcherManager.module.css";
 
 type WatcherTrigger =
@@ -56,10 +56,14 @@ function triggerLabel(trigger: WatcherTrigger): string {
 
 function statusClass(status: string): string {
 	switch (status) {
-		case "active": return s.statusActive;
-		case "paused": return s.statusPaused;
-		case "exhausted": return s.statusExhausted;
-		default: return s.statusStopped;
+		case "active":
+			return s.statusActive;
+		case "paused":
+			return s.statusPaused;
+		case "exhausted":
+			return s.statusExhausted;
+		default:
+			return s.statusStopped;
 	}
 }
 
@@ -77,13 +81,17 @@ export const WatcherManager: Component = () => {
 	const instances = () => rules().filter((r) => r.session_id);
 
 	const refresh = () => {
-		invoke<WatcherRule[]>("watcher_list").then(setRules).catch(() => {});
+		invoke<WatcherRule[]>("watcher_list")
+			.then(setRules)
+			.catch(() => {});
 	};
 
 	onMount(refresh);
 
 	const unlisten = listen("watcher-status", () => refresh());
-	onCleanup(() => { unlisten.then((fn) => fn()); });
+	onCleanup(() => {
+		unlisten.then((fn) => fn());
+	});
 
 	const handleCreate = async () => {
 		const name = formName().trim() || `Watcher (${formTrigger()})`;
@@ -197,17 +205,15 @@ export const WatcherManager: Component = () => {
 							min="1"
 							max="1000"
 							value={formMaxFires()}
-							onInput={(e) => setFormMaxFires(Number.parseInt(e.currentTarget.value) || 50)}
+							onInput={(e) => setFormMaxFires(Number.parseInt(e.currentTarget.value, 10) || 50)}
 							style={{ width: "60px", flex: "none" }}
 						/>
 					</div>
 					<div class={s.formActions}>
-						<button class={s.cancelBtn} onClick={() => setShowCreate(false)}>Cancel</button>
-						<button
-							class={s.submitBtn}
-							disabled={!formInstructions().trim()}
-							onClick={handleCreate}
-						>
+						<button class={s.cancelBtn} onClick={() => setShowCreate(false)}>
+							Cancel
+						</button>
+						<button class={s.submitBtn} disabled={!formInstructions().trim()} onClick={handleCreate}>
 							Create Template
 						</button>
 					</div>
@@ -223,7 +229,9 @@ export const WatcherManager: Component = () => {
 								<div class={s.ruleItem}>
 									<span class={`${s.statusDot} ${statusClass(rule.status)}`} />
 									<span class={s.triggerBadge}>{triggerLabel(rule.trigger)}</span>
-									<span class={s.ruleName} title={rule.name}>{rule.name}</span>
+									<span class={s.ruleName} title={rule.name}>
+										{rule.name}
+									</span>
 									<button
 										class={s.actionBtn}
 										onClick={() => setAttachingId(attachingId() === rule.id ? null : rule.id)}
@@ -241,10 +249,7 @@ export const WatcherManager: Component = () => {
 									<div class={s.sessionPicker}>
 										<For each={terminalList()}>
 											{(term) => (
-												<button
-													class={s.sessionOption}
-													onClick={() => handleAttach(rule.id, term.id)}
-												>
+												<button class={s.sessionOption} onClick={() => handleAttach(rule.id, term.id)}>
 													<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
 														<path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v10.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25Zm1.75-.25a.25.25 0 0 0-.25.25v10.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25V2.75a.25.25 0 0 0-.25-.25ZM7 4.5a.75.75 0 0 1 .75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5A.75.75 0 0 1 7 4.5ZM3.25 7h.5a.75.75 0 0 1 0 1.5h-.5a.75.75 0 0 1 0-1.5Z" />
 													</svg>
@@ -271,22 +276,18 @@ export const WatcherManager: Component = () => {
 							<div class={s.ruleItem}>
 								<span class={`${s.statusDot} ${statusClass(rule.status)}`} />
 								<span class={s.triggerBadge}>{triggerLabel(rule.trigger)}</span>
-								<span class={s.ruleName} title={rule.name}>{rule.name}</span>
-								<span class={s.fireCount}>{rule.fire_count}/{rule.max_fires}</span>
+								<span class={s.ruleName} title={rule.name}>
+									{rule.name}
+								</span>
+								<span class={s.fireCount}>
+									{rule.fire_count}/{rule.max_fires}
+								</span>
 								<Show when={rule.status === "paused"}>
-									<button
-										class={s.actionBtn}
-										onClick={() => handleToggle(rule.id, true)}
-										title="Resume"
-									>
+									<button class={s.actionBtn} onClick={() => handleToggle(rule.id, true)} title="Resume">
 										Resume
 									</button>
 								</Show>
-								<button
-									class={s.actionBtn}
-									onClick={() => handleDetach(rule.id)}
-									title="Detach from terminal"
-								>
+								<button class={s.actionBtn} onClick={() => handleDetach(rule.id)} title="Detach from terminal">
 									Detach
 								</button>
 							</div>

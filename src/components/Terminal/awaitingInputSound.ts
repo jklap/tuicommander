@@ -10,12 +10,9 @@ type SoundType = "error" | "question";
  * the same state return null (prevents resize/reflow notification spam).
  * Clearing state (→ null) also returns null (no sound on dismiss).
  */
-export function getAwaitingInputSound(
-  prev: AwaitingInputType,
-  current: AwaitingInputType,
-): SoundType | null {
-  if (current === prev) return null;
-  if (current === "error") return "error";
-  if (current === "question") return "question";
-  return null;
+export function getAwaitingInputSound(prev: AwaitingInputType, current: AwaitingInputType): SoundType | null {
+	if (current === prev) return null;
+	if (current === "error") return "error";
+	if (current === "question") return "question";
+	return null;
 }

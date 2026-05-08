@@ -41,6 +41,7 @@
 
 .searchInput::placeholder {
   color: var(--fg-muted);
+  opacity: 0.5;
 }
 
 /* Collapsible section headers (Local, Remote) */

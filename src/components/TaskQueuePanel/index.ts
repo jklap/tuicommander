@@ -1,2 +1,2 @@
-export { TaskQueuePanel } from "./TaskQueuePanel";
 export type { TaskQueuePanelProps } from "./TaskQueuePanel";
+export { TaskQueuePanel } from "./TaskQueuePanel";

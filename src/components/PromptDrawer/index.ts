@@ -1,2 +1,2 @@
-export { PromptDrawer } from "./PromptDrawer";
 export type { PromptDrawerProps } from "./PromptDrawer";
+export { PromptDrawer } from "./PromptDrawer";

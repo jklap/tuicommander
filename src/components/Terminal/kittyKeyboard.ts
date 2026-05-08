@@ -22,36 +22,45 @@ const KEY_ESCAPE = 27;
  * should be handled by xterm.js legacy encoding.
  */
 export function kittySequenceForKey(
-  key: string,
-  shiftKey: boolean,
-  altKey: boolean,
-  ctrlKey: boolean,
-  metaKey: boolean,
+	key: string,
+	shiftKey: boolean,
+	altKey: boolean,
+	ctrlKey: boolean,
+	metaKey: boolean,
 ): string | null {
-  // Meta (Cmd on macOS) is never intercepted — pass through to OS
-  if (metaKey) return null;
+	// Meta (Cmd on macOS) is never intercepted — pass through to OS
+	if (metaKey) return null;
 
-  // Map key name to codepoint
-  let codepoint: number;
-  switch (key) {
-    case "Enter":     codepoint = KEY_ENTER; break;
-    case "Tab":       codepoint = KEY_TAB; break;
-    case "Backspace": codepoint = KEY_BACKSPACE; break;
-    case "Escape":    codepoint = KEY_ESCAPE; break;
-    default: return null; // Not a key we handle
-  }
+	// Map key name to codepoint
+	let codepoint: number;
+	switch (key) {
+		case "Enter":
+			codepoint = KEY_ENTER;
+			break;
+		case "Tab":
+			codepoint = KEY_TAB;
+			break;
+		case "Backspace":
+			codepoint = KEY_BACKSPACE;
+			break;
+		case "Escape":
+			codepoint = KEY_ESCAPE;
+			break;
+		default:
+			return null; // Not a key we handle
+	}
 
-  // Per kitty spec: Enter/Tab/Backspace without modifiers use legacy encoding
-  if (codepoint !== KEY_ESCAPE && !shiftKey && !altKey && !ctrlKey) {
-    return null;
-  }
+	// Per kitty spec: Enter/Tab/Backspace without modifiers use legacy encoding
+	if (codepoint !== KEY_ESCAPE && !shiftKey && !altKey && !ctrlKey) {
+		return null;
+	}
 
-  // Modifier encoding per kitty spec: 1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0)
-  const mod = 1 + (shiftKey ? 1 : 0) + (altKey ? 2 : 0) + (ctrlKey ? 4 : 0);
+	// Modifier encoding per kitty spec: 1 + (shift?1:0) + (alt?2:0) + (ctrl?4:0)
+	const mod = 1 + (shiftKey ? 1 : 0) + (altKey ? 2 : 0) + (ctrlKey ? 4 : 0);
 
-  // CSI keycode ; modifier u  (omit modifier parameter when mod === 1, i.e. no modifiers)
-  if (mod === 1) {
-    return `\x1b[${codepoint}u`;
-  }
-  return `\x1b[${codepoint};${mod}u`;
+	// CSI keycode ; modifier u  (omit modifier parameter when mod === 1, i.e. no modifiers)
+	if (mod === 1) {
+		return `\x1b[${codepoint}u`;
+	}
+	return `\x1b[${codepoint};${mod}u`;
 }

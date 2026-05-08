@@ -1,2 +1,2 @@
-export { RunCommandDialog } from "./RunCommandDialog";
 export type { RunCommandDialogProps } from "./RunCommandDialog";
+export { RunCommandDialog } from "./RunCommandDialog";

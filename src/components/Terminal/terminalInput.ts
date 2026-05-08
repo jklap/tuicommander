@@ -2,43 +2,52 @@
 // Pure function: KeyboardEvent → string (to send to PTY) or null (don't handle).
 
 const ARROW_SUFFIX: Record<string, string> = {
-  ArrowUp: "A",
-  ArrowDown: "B",
-  ArrowRight: "C",
-  ArrowLeft: "D",
+	ArrowUp: "A",
+	ArrowDown: "B",
+	ArrowRight: "C",
+	ArrowLeft: "D",
 };
 
 const F_KEYS: Record<string, string> = {
-  F1: "\x1bOP",
-  F2: "\x1bOQ",
-  F3: "\x1bOR",
-  F4: "\x1bOS",
-  F5: "\x1b[15~",
-  F6: "\x1b[17~",
-  F7: "\x1b[18~",
-  F8: "\x1b[19~",
-  F9: "\x1b[20~",
-  F10: "\x1b[21~",
-  F11: "\x1b[23~",
-  F12: "\x1b[24~",
+	F1: "\x1bOP",
+	F2: "\x1bOQ",
+	F3: "\x1bOR",
+	F4: "\x1bOS",
+	F5: "\x1b[15~",
+	F6: "\x1b[17~",
+	F7: "\x1b[18~",
+	F8: "\x1b[19~",
+	F9: "\x1b[20~",
+	F10: "\x1b[21~",
+	F11: "\x1b[23~",
+	F12: "\x1b[24~",
 };
 
 const NAV_KEYS: Record<string, string> = {
-  Home: "\x1b[H",
-  End: "\x1b[F",
-  Insert: "\x1b[2~",
-  Delete: "\x1b[3~",
-  PageUp: "\x1b[5~",
-  PageDown: "\x1b[6~",
+	Home: "\x1b[H",
+	End: "\x1b[F",
+	Insert: "\x1b[2~",
+	Delete: "\x1b[3~",
+	PageUp: "\x1b[5~",
+	PageDown: "\x1b[6~",
 };
 
 const IGNORED_KEYS = new Set([
-  "Shift", "Control", "Alt", "Meta", "CapsLock", "NumLock", "ScrollLock",
-  "Hyper", "Super", "ContextMenu", "OS",
+	"Shift",
+	"Control",
+	"Alt",
+	"Meta",
+	"CapsLock",
+	"NumLock",
+	"ScrollLock",
+	"Hyper",
+	"Super",
+	"ContextMenu",
+	"OS",
 ]);
 
 function modifierParam(e: KeyboardEvent): number {
-  return 1 + (e.shiftKey ? 1 : 0) + (e.altKey ? 2 : 0) + (e.ctrlKey ? 4 : 0);
+	return 1 + (e.shiftKey ? 1 : 0) + (e.altKey ? 2 : 0) + (e.ctrlKey ? 4 : 0);
 }
 
 /**
@@ -46,60 +55,69 @@ function modifierParam(e: KeyboardEvent): number {
  * Returns null if the key should not be handled (modifier-only, Meta/Cmd).
  */
 export function keyToSequence(e: KeyboardEvent): string | null {
-  if (e.metaKey) return null;
-  if (IGNORED_KEYS.has(e.key)) return null;
+	if (e.metaKey) return null;
+	if (IGNORED_KEYS.has(e.key)) return null;
 
-  // Arrow keys
-  const arrowSuffix = ARROW_SUFFIX[e.key];
-  if (arrowSuffix) {
-    const mod = modifierParam(e);
-    return mod > 1 ? `\x1b[1;${mod}${arrowSuffix}` : `\x1b[${arrowSuffix}`;
-  }
+	// Arrow keys
+	const arrowSuffix = ARROW_SUFFIX[e.key];
+	if (arrowSuffix) {
+		const mod = modifierParam(e);
+		return mod > 1 ? `\x1b[1;${mod}${arrowSuffix}` : `\x1b[${arrowSuffix}`;
+	}
 
-  // Function keys
-  const fKey = F_KEYS[e.key];
-  if (fKey) return fKey;
+	// Function keys
+	const fKey = F_KEYS[e.key];
+	if (fKey) return fKey;
 
-  // Navigation keys
-  const navKey = NAV_KEYS[e.key];
-  if (navKey) return navKey;
+	// Navigation keys
+	const navKey = NAV_KEYS[e.key];
+	if (navKey) return navKey;
 
-  // Simple named keys
-  switch (e.key) {
-    case "Enter": return "\r";
-    case "Tab": return e.shiftKey ? "\x1b[Z" : "\t";
-    case "Backspace": return "\x7f";
-    case "Escape": return "\x1b";
-  }
+	// Simple named keys
+	switch (e.key) {
+		case "Enter":
+			return "\r";
+		case "Tab":
+			return e.shiftKey ? "\x1b[Z" : "\t";
+		case "Backspace":
+			return "\x7f";
+		case "Escape":
+			return "\x1b";
+	}
 
-  // Ctrl+key → control characters
-  if (e.ctrlKey && !e.altKey && e.key.length === 1) {
-    const lower = e.key.toLowerCase();
-    const code = lower.charCodeAt(0);
-    if (code >= 0x61 && code <= 0x7a) {
-      return String.fromCharCode(code - 0x60);
-    }
-    const ctrlPunct: Record<string, number> = {
-      "@": 0x00, "[": 0x1b, "\\": 0x1c, "]": 0x1d, "^": 0x1e, "_": 0x1f,
-    };
-    if (e.key in ctrlPunct) {
-      return String.fromCharCode(ctrlPunct[e.key]);
-    }
-  }
+	// Ctrl+key → control characters
+	if (e.ctrlKey && !e.altKey && e.key.length === 1) {
+		const lower = e.key.toLowerCase();
+		const code = lower.charCodeAt(0);
+		if (code >= 0x61 && code <= 0x7a) {
+			return String.fromCharCode(code - 0x60);
+		}
+		const ctrlPunct: Record<string, number> = {
+			"@": 0x00,
+			"[": 0x1b,
+			"\\": 0x1c,
+			"]": 0x1d,
+			"^": 0x1e,
+			_: 0x1f,
+		};
+		if (e.key in ctrlPunct) {
+			return String.fromCharCode(ctrlPunct[e.key]);
+		}
+	}
 
-  // Alt+letter → ESC + char (use e.code to avoid macOS dead-key characters)
-  if (e.altKey && !e.ctrlKey) {
-    const seq = altSequenceFromCode(e);
-    if (seq) return seq;
-    if (e.key.length === 1) return `\x1b${e.key}`;
-  }
+	// Alt+letter → ESC + char (use e.code to avoid macOS dead-key characters)
+	if (e.altKey && !e.ctrlKey) {
+		const seq = altSequenceFromCode(e);
+		if (seq) return seq;
+		if (e.key.length === 1) return `\x1b${e.key}`;
+	}
 
-  // Printable single character
-  if (e.key.length === 1) {
-    return e.key;
-  }
+	// Printable single character
+	if (e.key.length === 1) {
+		return e.key;
+	}
 
-  return null;
+	return null;
 }
 
 /**
@@ -109,36 +127,53 @@ export function keyToSequence(e: KeyboardEvent): string | null {
  * Also handles Alt+punctuation for shell keybindings (Alt+., Alt+/, etc.).
  */
 export function altSequenceFromCode(e: KeyboardEvent): string | null {
-  const code = e.code;
-  if (!code) return null;
+	const code = e.code;
+	if (!code) return null;
 
-  if (code.startsWith("Key")) {
-    const ch = code.slice(3).toLowerCase();
-    return "\x1b" + (e.shiftKey ? ch.toUpperCase() : ch);
-  }
-  if (code.startsWith("Digit")) {
-    return "\x1b" + code.slice(5);
-  }
+	if (code.startsWith("Key")) {
+		const ch = code.slice(3).toLowerCase();
+		return "\x1b" + (e.shiftKey ? ch.toUpperCase() : ch);
+	}
+	if (code.startsWith("Digit")) {
+		return "\x1b" + code.slice(5);
+	}
 
-  switch (code) {
-    case "Backspace":    return "\x1b\x7f"; // Alt+Backspace = backward-kill-word
-    case "Space":        return "\x1b ";
-    case "Period":       return "\x1b.";    // Alt+. = insert-last-argument
-    case "Comma":        return "\x1b,";
-    case "Slash":        return "\x1b/";
-    case "Minus":        return "\x1b-";
-    case "Equal":        return "\x1b=";
-    case "Semicolon":    return "\x1b;";
-    case "Quote":        return "\x1b'";
-    case "BracketLeft":  return "\x1b[";
-    case "BracketRight": return "\x1b]";
-    case "Backslash":    return "\x1b\\";
-    case "Backquote":    return "\x1b`";
-    case "ArrowLeft":    return "\x1b[1;3D"; // word backward
-    case "ArrowRight":   return "\x1b[1;3C"; // word forward
-    case "ArrowUp":      return "\x1b[1;3A";
-    case "ArrowDown":    return "\x1b[1;3B";
-  }
+	switch (code) {
+		case "Backspace":
+			return "\x1b\x7f"; // Alt+Backspace = backward-kill-word
+		case "Space":
+			return "\x1b ";
+		case "Period":
+			return "\x1b."; // Alt+. = insert-last-argument
+		case "Comma":
+			return "\x1b,";
+		case "Slash":
+			return "\x1b/";
+		case "Minus":
+			return "\x1b-";
+		case "Equal":
+			return "\x1b=";
+		case "Semicolon":
+			return "\x1b;";
+		case "Quote":
+			return "\x1b'";
+		case "BracketLeft":
+			return "\x1b[";
+		case "BracketRight":
+			return "\x1b]";
+		case "Backslash":
+			return "\x1b\\";
+		case "Backquote":
+			return "\x1b`";
+		case "ArrowLeft":
+			return "\x1b[1;3D"; // word backward
+		case "ArrowRight":
+			return "\x1b[1;3C"; // word forward
+		case "ArrowUp":
+			return "\x1b[1;3A";
+		case "ArrowDown":
+			return "\x1b[1;3B";
+	}
 
-  return null;
+	return null;
 }

@@ -1,7 +1,7 @@
 /** A snapshot of an xterm buffer row — just the parts the overlay cares about. */
 export interface RowSnapshot {
-  text: string;
-  isWrapped: boolean;
+	text: string;
+	isWrapped: boolean;
 }
 
 /** Re-declared here instead of imported: keeps the helper self-contained and
@@ -35,52 +35,52 @@ const TERMINATOR_RE = /^[\t ]*[*$#❯>›●⏺]/;
  * rows that happen to contain pipes (story 1276-a3c2).
  */
 export function continuationRowsAfterSuggest(
-  anchorIndex: number,
-  totalRows: number,
-  getRow: (i: number) => RowSnapshot | null,
+	anchorIndex: number,
+	totalRows: number,
+	getRow: (i: number) => RowSnapshot | null,
 ): number[] {
-  const hidden: number[] = [];
-  let pipeTailStarted = false;
-  let hadWrapped = false;
-  // Count pipes across anchor + hidden rows to decide whether a pipeless tail
-  // is safe to consume (mirrors Rust tail-join logic in parse_suggest).
-  const anchor = getRow(anchorIndex);
-  let pipeCount = anchor ? (anchor.text.match(/\|/g) || []).length : 0;
-  for (let i = anchorIndex + 1; i < totalRows; i++) {
-    const row = getRow(i);
-    if (!row) break;
-    if (SUGGEST_STOP_RE.test(row.text) || INTENT_RE.test(row.text)) break;
-    if (row.isWrapped) {
-      hidden.push(i);
-      hadWrapped = true;
-      pipeCount += (row.text.match(/\|/g) || []).length;
-      continue;
-    }
-    // Empty row terminates the block (matches Rust parser).
-    if (row.text.trim() === "") break;
-    // Strong terminators that appear right after the wrap chain.
-    if (TERMINATOR_RE.test(row.text)) break;
-    if (row.text.includes("|")) {
-      // Pipe rows are valid continuations when they're adjacent to the
-      // anchor or to previously hidden rows. A pipeless gap between pipe
-      // rows signals unrelated content (Makefile/table — story 1276-a3c2).
-      if (pipeTailStarted) break;
-      hidden.push(i);
-      pipeTailStarted = true;
-      pipeCount += (row.text.match(/\|/g) || []).length;
-      continue;
-    }
-    // Pipeless tail rows: hide them when the suggest is clearly complete
-    // (wrapped + 2+ pipes already counted). Multiple consecutive pipeless
-    // rows are accepted — long final items can wrap across several lines.
-    if (hadWrapped && pipeCount >= 2) {
-      hidden.push(i);
-      pipeTailStarted = true;
-      continue;
-    }
-    break;
-  }
-  return hidden;
+	const hidden: number[] = [];
+	let pipeTailStarted = false;
+	let hadWrapped = false;
+	// Count pipes across anchor + hidden rows to decide whether a pipeless tail
+	// is safe to consume (mirrors Rust tail-join logic in parse_suggest).
+	const anchor = getRow(anchorIndex);
+	let pipeCount = anchor ? (anchor.text.match(/\|/g) || []).length : 0;
+	for (let i = anchorIndex + 1; i < totalRows; i++) {
+		const row = getRow(i);
+		if (!row) break;
+		if (SUGGEST_STOP_RE.test(row.text) || INTENT_RE.test(row.text)) break;
+		if (row.isWrapped) {
+			hidden.push(i);
+			hadWrapped = true;
+			pipeCount += (row.text.match(/\|/g) || []).length;
+			continue;
+		}
+		// Empty row terminates the block (matches Rust parser).
+		if (row.text.trim() === "") break;
+		// Strong terminators that appear right after the wrap chain.
+		if (TERMINATOR_RE.test(row.text)) break;
+		if (row.text.includes("|")) {
+			// Pipe rows are valid continuations when they're adjacent to the
+			// anchor or to previously hidden rows. A pipeless gap between pipe
+			// rows signals unrelated content (Makefile/table — story 1276-a3c2).
+			if (pipeTailStarted) break;
+			hidden.push(i);
+			pipeTailStarted = true;
+			pipeCount += (row.text.match(/\|/g) || []).length;
+			continue;
+		}
+		// Pipeless tail rows: hide them when the suggest is clearly complete
+		// (wrapped + 2+ pipes already counted). Multiple consecutive pipeless
+		// rows are accepted — long final items can wrap across several lines.
+		if (hadWrapped && pipeCount >= 2) {
+			hidden.push(i);
+			pipeTailStarted = true;
+			continue;
+		}
+		break;
+	}
+	return hidden;
 }
 
 /**
@@ -93,25 +93,25 @@ export function continuationRowsAfterSuggest(
  * anchor contains `suggest:` but no pipe.
  */
 export function isSuggestBlock(
-  anchorIndex: number,
-  totalRows: number,
-  getRow: (i: number) => RowSnapshot | null,
+	anchorIndex: number,
+	totalRows: number,
+	getRow: (i: number) => RowSnapshot | null,
 ): boolean {
-  const row = getRow(anchorIndex);
-  if (!row) return false;
+	const row = getRow(anchorIndex);
+	if (!row) return false;
 
-  // Must at least look like a suggest anchor at column 0
-  if (!SUGGEST_ANCHOR_RE.test(row.text)) return false;
+	// Must at least look like a suggest anchor at column 0
+	if (!SUGGEST_ANCHOR_RE.test(row.text)) return false;
 
-  // Fast path: pipe on same line — classic case
-  if (row.text.includes("|")) return true;
+	// Fast path: pipe on same line — classic case
+	if (row.text.includes("|")) return true;
 
-  // Check wrapped continuation rows for a pipe separator
-  for (let i = anchorIndex + 1; i < totalRows; i++) {
-    const next = getRow(i);
-    if (!next || !next.isWrapped) break;
-    if (next.text.includes("|")) return true;
-  }
+	// Check wrapped continuation rows for a pipe separator
+	for (let i = anchorIndex + 1; i < totalRows; i++) {
+		const next = getRow(i);
+		if (!next?.isWrapped) break;
+		if (next.text.includes("|")) return true;
+	}
 
-  return false;
+	return false;
 }

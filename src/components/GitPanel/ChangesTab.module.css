@@ -201,6 +201,7 @@
 
 .filterInput::placeholder {
   color: var(--fg-muted);
+  opacity: 0.5;
 }
 
 .filterClear {

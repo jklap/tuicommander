@@ -540,7 +540,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 					</div>
 					<div class={s.approvalActions}>
 						<button
-							class={cx(s.approvalBtn, s.denyBtn)}
+							class={cx(s.approvalBtn, s.approveBtn)}
 							onClick={() => {
 								conversationStore.setUnrestricted(true);
 								setShowUnrestrictedConfirm(false);
@@ -548,7 +548,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 						>
 							Enable
 						</button>
-						<button class={cx(s.approvalBtn, s.approveBtn)} onClick={() => setShowUnrestrictedConfirm(false)}>
+						<button class={cx(s.approvalBtn, s.denyBtn)} onClick={() => setShowUnrestrictedConfirm(false)}>
 							Cancel
 						</button>
 					</div>

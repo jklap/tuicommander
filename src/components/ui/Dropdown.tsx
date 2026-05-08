@@ -1,93 +1,87 @@
-import { Component, For, Show, createEffect, onCleanup } from "solid-js";
 import type { JSX } from "solid-js";
+import { type Component, createEffect, For, onCleanup, Show } from "solid-js";
 
 export interface DropdownItem {
-  id: string;
-  label: string;
-  icon?: JSX.Element;
-  divider?: boolean;
-  disabled?: boolean;
+	id: string;
+	label: string;
+	icon?: JSX.Element;
+	divider?: boolean;
+	disabled?: boolean;
 }
 
 export interface DropdownProps {
-  items: DropdownItem[];
-  selected?: string;
-  visible: boolean;
-  onSelect: (id: string) => void;
-  onClose: () => void;
-  position?: "top" | "bottom";
-  class?: string;
+	items: DropdownItem[];
+	selected?: string;
+	visible: boolean;
+	onSelect: (id: string) => void;
+	onClose: () => void;
+	position?: "top" | "bottom";
+	class?: string;
 }
 
 export const Dropdown: Component<DropdownProps> = (props) => {
-  let dropdownRef: HTMLDivElement | undefined;
+	let dropdownRef: HTMLDivElement | undefined;
 
-  // Close on click outside
-  createEffect(() => {
-    if (!props.visible) return;
+	// Close on click outside
+	createEffect(() => {
+		if (!props.visible) return;
 
-    const handleClickOutside = (e: MouseEvent) => {
-      if (dropdownRef && !dropdownRef.contains(e.target as Node)) {
-        props.onClose();
-      }
-    };
+		const handleClickOutside = (e: MouseEvent) => {
+			if (dropdownRef && !dropdownRef.contains(e.target as Node)) {
+				props.onClose();
+			}
+		};
 
-    // Delay to avoid immediate close — use rAF instead of setTimeout
-    // so cleanup can cancel the frame if the component unmounts before it fires
-    let attached = false;
-    const rafId = requestAnimationFrame(() => {
-      document.addEventListener("click", handleClickOutside);
-      attached = true;
-    });
+		// Delay to avoid immediate close — use rAF instead of setTimeout
+		// so cleanup can cancel the frame if the component unmounts before it fires
+		let attached = false;
+		const rafId = requestAnimationFrame(() => {
+			document.addEventListener("click", handleClickOutside);
+			attached = true;
+		});
 
-    onCleanup(() => {
-      cancelAnimationFrame(rafId);
-      if (attached) document.removeEventListener("click", handleClickOutside);
-    });
-  });
+		onCleanup(() => {
+			cancelAnimationFrame(rafId);
+			if (attached) document.removeEventListener("click", handleClickOutside);
+		});
+	});
 
-  // Close on Escape
-  createEffect(() => {
-    if (!props.visible) return;
+	// Close on Escape
+	createEffect(() => {
+		if (!props.visible) return;
 
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        props.onClose();
-      }
-    };
+		const handleEscape = (e: KeyboardEvent) => {
+			if (e.key === "Escape") {
+				props.onClose();
+			}
+		};
 
-    document.addEventListener("keydown", handleEscape);
+		document.addEventListener("keydown", handleEscape);
 
-    onCleanup(() => {
-      document.removeEventListener("keydown", handleEscape);
-    });
-  });
+		onCleanup(() => {
+			document.removeEventListener("keydown", handleEscape);
+		});
+	});
 
-  return (
-    <Show when={props.visible}>
-      <div
-        ref={dropdownRef}
-        class={`dropdown ${props.position === "top" ? "dropdown-top" : ""} ${props.class || ""}`}
-      >
-        <For each={props.items}>
-          {(item) => (
-            <Show
-              when={!item.divider}
-              fallback={<div class="dropdown-divider" />}
-            >
-              <div
-                class={`dropdown-item ${item.id === props.selected ? "selected" : ""} ${item.disabled ? "disabled" : ""}`}
-                onClick={() => !item.disabled && props.onSelect(item.id)}
-              >
-                <Show when={item.icon}>
-                  <span class="dropdown-item-icon">{item.icon}</span>
-                </Show>
-                <span class="dropdown-item-label">{item.label}</span>
-              </div>
-            </Show>
-          )}
-        </For>
-      </div>
-    </Show>
-  );
+	return (
+		<Show when={props.visible}>
+			<div ref={dropdownRef} class={`dropdown ${props.position === "top" ? "dropdown-top" : ""} ${props.class || ""}`}>
+				<For each={props.items}>
+					{(item) => (
+						<Show when={!item.divider} fallback={<div class="dropdown-divider" />}>
+							<div
+								class={`dropdown-item ${item.id === props.selected ? "selected" : ""} ${item.disabled ? "disabled" : ""}`}
+								onClick={() => !item.disabled && props.onSelect(item.id)}
+							>
+								<Show when={item.icon}>
+									<span class="dropdown-item-icon">{item.icon}</span>
+								</Show>
+								<span class="dropdown-item-label">{item.label}</span>
+							</div>
+						</Show>
+					)}
+				</For>
+			</div>
+		</Show>
+	);
 };

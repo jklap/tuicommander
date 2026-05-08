@@ -1,210 +1,202 @@
-import { Component, Show, createEffect, createSignal } from "solid-js";
-import { repoSettingsStore, type RepoSettings } from "../../stores/repoSettings";
-import { repoDefaultsStore } from "../../stores/repoDefaults";
-import { repositoriesStore } from "../../stores/repositories";
-import { getRepoColor } from "../../utils/repoColor";
-import { uiStore } from "../../stores/ui";
+import { type Component, createEffect, createSignal, Show } from "solid-js";
+import { t } from "../../i18n";
 import { shortenHomePath } from "../../platform";
+import { repoDefaultsStore } from "../../stores/repoDefaults";
+import { type RepoSettings, repoSettingsStore } from "../../stores/repoSettings";
+import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
+import { uiStore } from "../../stores/ui";
+import { isTauri } from "../../transport";
 import { pathBasename } from "../../utils/pathUtils";
-import { SettingsShell } from "./SettingsShell";
-import type { SettingsShellTab } from "./SettingsShell";
+import { getRepoColor } from "../../utils/repoColor";
 import { DictationSettings } from "./DictationSettings";
+import s from "./Settings.module.css";
+import type { SettingsShellTab } from "./SettingsShell";
+import { SettingsShell } from "./SettingsShell";
 import {
-  GeneralTab,
-  NotificationsTab,
-  ServicesTab,
-  AppearanceTab,
-  PluginsTab,
-  AgentsTab,
-  AiChatTab,
-  GitHubTab,
-  RepoWorktreeTab,
-  RepoScriptsTab,
+	AgentsTab,
+	AiChatTab,
+	AppearanceTab,
+	GeneralTab,
+	GitHubTab,
+	NotificationsTab,
+	PluginsTab,
+	RepoScriptsTab,
+	RepoWorktreeTab,
+	ServicesTab,
 } from "./tabs";
 import { ProvidersTab } from "./tabs/ProvidersTab";
-import { t } from "../../i18n";
-import { settingsStore } from "../../stores/settings";
-import { isTauri } from "../../transport";
-import s from "./Settings.module.css";
 
 /** Context for initial selection when opening the panel */
-export type SettingsContext =
-  | { kind: "global" }
-  | { kind: "repo"; repoPath: string };
+export type SettingsContext = { kind: "global" } | { kind: "repo"; repoPath: string };
 
 export interface SettingsPanelProps {
-  visible: boolean;
-  onClose: () => void;
-  initialTab?: string;
-  context?: SettingsContext;
+	visible: boolean;
+	onClose: () => void;
+	initialTab?: string;
+	context?: SettingsContext;
 }
 
 const BASE_GLOBAL_TABS: SettingsShellTab[] = [
-  { key: "general", label: t("settings.general", "General") },
-  { key: "appearance", label: t("settings.appearance", "Appearance") },
-  { key: "notifications", label: t("settings.notifications", "Notifications") },
-  { key: "dictation", label: t("settings.dictation", "Dictation") },
-  { key: "github", label: "Git & GitHub" },
-  { key: "services", label: t("settings.services", "Services") },
-  { key: "plugins", label: t("settings.plugins", "Plugins") },
-  { key: "providers", label: "Providers" },
-  { key: "agents", label: t("settings.agents", "Agents") },
+	{ key: "general", label: t("settings.general", "General") },
+	{ key: "appearance", label: t("settings.appearance", "Appearance") },
+	{ key: "notifications", label: t("settings.notifications", "Notifications") },
+	{ key: "dictation", label: t("settings.dictation", "Dictation") },
+	{ key: "github", label: "Git & GitHub" },
+	{ key: "services", label: t("settings.services", "Services") },
+	{ key: "plugins", label: t("settings.plugins", "Plugins") },
+	{ key: "providers", label: "Providers" },
+	{ key: "agents", label: t("settings.agents", "Agents") },
 ];
 
 function getGlobalTabs(): SettingsShellTab[] {
-  const tabs = isTauri()
-    ? BASE_GLOBAL_TABS
-    : BASE_GLOBAL_TABS.filter((tab) => tab.key !== "dictation");
-  if (settingsStore.isAiChatEnabled()) {
-    return [...tabs, { key: "ai-chat", label: "AI Chat" }];
-  }
-  return tabs;
+	const tabs = isTauri() ? BASE_GLOBAL_TABS : BASE_GLOBAL_TABS.filter((tab) => tab.key !== "dictation");
+	if (settingsStore.isAiChatEnabled()) {
+		return [...tabs, { key: "ai-chat", label: "AI Chat" }];
+	}
+	return tabs;
 }
 
 function defaultTab(ctx: SettingsContext): string {
-  if (ctx.kind === "repo") return `repo:${ctx.repoPath}`;
-  return "general";
+	if (ctx.kind === "repo") return `repo:${ctx.repoPath}`;
+	return "general";
 }
 
 /** Build the full nav from global sections + configured repos */
 function buildNavItems(): SettingsShellTab[] {
-  const repos = repositoriesStore.state.repoOrder
-    .map((path) => repositoriesStore.state.repositories[path])
-    .filter(Boolean);
+	const repos = repositoriesStore.state.repoOrder
+		.map((path) => repositoriesStore.state.repositories[path])
+		.filter(Boolean);
 
-  const items: SettingsShellTab[] = [...getGlobalTabs()];
+	const items: SettingsShellTab[] = [...getGlobalTabs()];
 
-  if (repos.length > 0) {
-    items.push({ key: "__sep__", label: "─" });
-    items.push({ key: "__label__:Repositories", label: t("settings.repositories", "REPOSITORIES") });
-    for (const repo of repos) {
-      const label = repo.displayName || pathBasename(repo.path) || repo.path;
-      const color = getRepoColor(repo.path);
-      items.push({ key: `repo:${repo.path}`, label, color });
-    }
-  }
+	if (repos.length > 0) {
+		items.push({ key: "__sep__", label: "─" });
+		items.push({ key: "__label__:Repositories", label: t("settings.repositories", "REPOSITORIES") });
+		for (const repo of repos) {
+			const label = repo.displayName || pathBasename(repo.path) || repo.path;
+			const color = getRepoColor(repo.path);
+			items.push({ key: `repo:${repo.path}`, label, color });
+		}
+	}
 
-  return items;
+	return items;
 }
 
 export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
-  const ctx = () => props.context ?? { kind: "global" as const };
-  const [activeTab, setActiveTab] = createSignal(props.initialTab ?? defaultTab(ctx()));
+	const ctx = () => props.context ?? { kind: "global" as const };
+	const [activeTab, setActiveTab] = createSignal(props.initialTab ?? defaultTab(ctx()));
 
-  // Reset active tab when context changes or panel opens
-  createEffect(() => {
-    if (props.visible) {
-      setActiveTab(props.initialTab ?? defaultTab(ctx()));
-    }
-  });
+	// Reset active tab when context changes or panel opens
+	createEffect(() => {
+		if (props.visible) {
+			setActiveTab(props.initialTab ?? defaultTab(ctx()));
+		}
+	});
 
-  // Auto-reset to general when the current tab vanishes (e.g. AI Chat flag
-  // toggled off while AI Chat tab is active). Without this, the body would
-  // also disappear (per the Show guard above) but the nav would have no
-  // highlight. (#1376-7333)
-  createEffect(() => {
-    if (activeTab() === "ai-chat" && !settingsStore.isAiChatEnabled()) {
-      setActiveTab("general");
-    }
-  });
+	// Auto-reset to general when the current tab vanishes (e.g. AI Chat flag
+	// toggled off while AI Chat tab is active). Without this, the body would
+	// also disappear (per the Show guard above) but the nav would have no
+	// highlight. (#1376-7333)
+	createEffect(() => {
+		if (activeTab() === "ai-chat" && !settingsStore.isAiChatEnabled()) {
+			setActiveTab("general");
+		}
+	});
 
-  /** Repo path if a repo nav item is currently active, null otherwise */
-  const activeRepoPath = (): string | null => {
-    const tab = activeTab();
-    return tab.startsWith("repo:") ? tab.slice(5) : null;
-  };
+	/** Repo path if a repo nav item is currently active, null otherwise */
+	const activeRepoPath = (): string | null => {
+		const tab = activeTab();
+		return tab.startsWith("repo:") ? tab.slice(5) : null;
+	};
 
-  const repoSettings = (path: string) =>
-    repoSettingsStore.getOrCreate(path, shortenHomePath(path));
+	const repoSettings = (path: string) => repoSettingsStore.getOrCreate(path, shortenHomePath(path));
 
-  const updateRepoSetting =
-    (repoPath: string) =>
-    <K extends keyof RepoSettings>(key: K, value: RepoSettings[K]) => {
-      repoSettingsStore.update(repoPath, { [key]: value });
-      if (key === "displayName") {
-        repositoriesStore.setDisplayName(repoPath, value as string);
-      }
-    };
+	const updateRepoSetting =
+		(repoPath: string) =>
+		<K extends keyof RepoSettings>(key: K, value: RepoSettings[K]) => {
+			repoSettingsStore.update(repoPath, { [key]: value });
+			if (key === "displayName") {
+				repositoriesStore.setDisplayName(repoPath, value as string);
+			}
+		};
 
-  const footer = () => {
-    const path = activeRepoPath();
-    return (
-      <div class={s.footer}>
-        <Show when={path} fallback={<span />}>
-          {(p) => (
-            <button
-              class={s.footerReset}
-              onClick={() => repoSettingsStore.reset(p())}
-            >
-              {t("settings.resetToDefaults", "Reset to Defaults")}
-            </button>
-          )}
-        </Show>
-        <button class={s.footerDone} onClick={props.onClose}>
-          {t("settings.done", "Done")}
-        </button>
-      </div>
-    );
-  };
+	const footer = () => {
+		const path = activeRepoPath();
+		return (
+			<div class={s.footer}>
+				<Show when={path} fallback={<span />}>
+					{(p) => (
+						<button class={s.footerReset} onClick={() => repoSettingsStore.reset(p())}>
+							{t("settings.resetToDefaults", "Reset to Defaults")}
+						</button>
+					)}
+				</Show>
+				<button class={s.footerDone} onClick={props.onClose}>
+					{t("settings.done", "Done")}
+				</button>
+			</div>
+		);
+	};
 
-  return (
-    <SettingsShell
-      visible={props.visible}
-      onClose={props.onClose}
-      title={t("settings.title", "Settings")}
-      tabs={buildNavItems()}
-      activeTab={activeTab()}
-      onTabChange={setActiveTab}
-      navWidth={uiStore.state.settingsNavWidth}
-      onNavWidthChange={uiStore.setSettingsNavWidth}
-      onNavWidthPersist={uiStore.persistUIPrefs}
-      footer={footer()}
-    >
-      {/* Repo settings (shown when a repo nav item is active) */}
-      <Show when={activeRepoPath()} keyed>
-        {(path) => {
-          const settings = repoSettings(path);
-          const onUpdate = updateRepoSetting(path);
-          return (
-            <>
-              <RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
-              <RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
-            </>
-          );
-        }}
-      </Show>
+	return (
+		<SettingsShell
+			visible={props.visible}
+			onClose={props.onClose}
+			title={t("settings.title", "Settings")}
+			tabs={buildNavItems()}
+			activeTab={activeTab()}
+			onTabChange={setActiveTab}
+			navWidth={uiStore.state.settingsNavWidth}
+			onNavWidthChange={uiStore.setSettingsNavWidth}
+			onNavWidthPersist={uiStore.persistUIPrefs}
+			footer={footer()}
+		>
+			{/* Repo settings (shown when a repo nav item is active) */}
+			<Show when={activeRepoPath()} keyed>
+				{(path) => {
+					const settings = repoSettings(path);
+					const onUpdate = updateRepoSetting(path);
+					return (
+						<>
+							<RepoWorktreeTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+							<RepoScriptsTab settings={settings} defaults={repoDefaultsStore.state} onUpdate={onUpdate} />
+						</>
+					);
+				}}
+			</Show>
 
-      {/* Global sections */}
-      <Show when={activeTab() === "general"}>
-        <GeneralTab />
-      </Show>
-      <Show when={activeTab() === "appearance"}>
-        <AppearanceTab />
-      </Show>
-      <Show when={activeTab() === "notifications"}>
-        <NotificationsTab />
-      </Show>
-      <Show when={activeTab() === "dictation"}>
-        <DictationSettings />
-      </Show>
-      <Show when={activeTab() === "github"}>
-        <GitHubTab />
-      </Show>
-      <Show when={activeTab() === "services"}>
-        <ServicesTab />
-      </Show>
-      <Show when={activeTab() === "plugins"}>
-        <PluginsTab onClose={props.onClose} />
-      </Show>
-      <Show when={activeTab() === "providers"}>
-        <ProvidersTab />
-      </Show>
-      <Show when={activeTab() === "agents"}>
-        <AgentsTab />
-      </Show>
-      <Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
-        <AiChatTab />
-      </Show>
-    </SettingsShell>
-  );
+			{/* Global sections */}
+			<Show when={activeTab() === "general"}>
+				<GeneralTab />
+			</Show>
+			<Show when={activeTab() === "appearance"}>
+				<AppearanceTab />
+			</Show>
+			<Show when={activeTab() === "notifications"}>
+				<NotificationsTab />
+			</Show>
+			<Show when={activeTab() === "dictation"}>
+				<DictationSettings />
+			</Show>
+			<Show when={activeTab() === "github"}>
+				<GitHubTab />
+			</Show>
+			<Show when={activeTab() === "services"}>
+				<ServicesTab />
+			</Show>
+			<Show when={activeTab() === "plugins"}>
+				<PluginsTab onClose={props.onClose} />
+			</Show>
+			<Show when={activeTab() === "providers"}>
+				<ProvidersTab />
+			</Show>
+			<Show when={activeTab() === "agents"}>
+				<AgentsTab />
+			</Show>
+			<Show when={activeTab() === "ai-chat" && settingsStore.isAiChatEnabled()}>
+				<AiChatTab />
+			</Show>
+		</SettingsShell>
+	);
 };

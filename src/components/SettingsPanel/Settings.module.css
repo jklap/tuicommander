@@ -991,8 +991,10 @@
 
 .schedulerAdd {
   display: flex;
+  align-items: center;
   gap: 8px;
   margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .schedulerInfo {
@@ -1026,17 +1028,30 @@
   white-space: nowrap;
 }
 
-.schedulerAddLabel {
-  font-size: var(--font-sm);
-  color: var(--fg-secondary);
-  white-space: nowrap;
+.schedulerUnitSelect {
+  width: 64px;
+  height: 36px;
   flex-shrink: 0;
+  padding: 0 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--fg-primary);
+  font-size: var(--font-base);
+  font-family: var(--font-ui);
+  box-sizing: border-box;
+}
+
+.schedulerUnitSelect:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .schedulerOneShotLabel {
   display: flex;
   align-items: center;
   gap: 4px;
+  height: 36px;
   font-size: var(--font-sm);
   color: var(--fg-secondary);
   white-space: nowrap;
@@ -1044,13 +1059,50 @@
   cursor: pointer;
 }
 
+.schedulerAdd .testBtn {
+  height: 36px;
+}
+
 .schedulerCronInput {
-  width: 70px;
+  width: 64px;
+  height: 36px;
   flex-shrink: 0;
+  padding: 0 8px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--fg-primary);
+  font-size: var(--font-base);
+  font-family: var(--font-ui);
+  box-sizing: border-box;
+}
+
+.schedulerCronInput:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .schedulerGoalInput {
   flex: 1;
+  height: 36px;
+  padding: 0 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  color: var(--fg-primary);
+  font-size: var(--font-base);
+  font-family: var(--font-ui);
+  box-sizing: border-box;
+}
+
+.schedulerGoalInput::placeholder {
+  color: var(--fg-muted);
+  opacity: 0.5;
+}
+
+.schedulerGoalInput:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 /* Manual MCP configuration disclosure */
