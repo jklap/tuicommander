@@ -2907,12 +2907,16 @@ pub(crate) fn spawn_reader_thread(
                 // EOF bypass: should_transition_idle was not called, so force-clear
                 // active_sub_tasks to avoid leaving the frontend notification gate
                 // in an inconsistent state after process crash/exit.
-                if let Some(mut entry) = state.session_states.get_mut(&session_id) {
-                    if entry.active_sub_tasks > 0 {
-                        entry.active_sub_tasks = 0;
-                        drop(entry);
-                        emit_active_subtasks(&state, &session_id, 0, "");
-                    }
+                let needs_clear = state
+                    .session_states
+                    .get_mut(&session_id)
+                    .filter(|e| e.active_sub_tasks > 0)
+                    .map(|mut e| {
+                        e.active_sub_tasks = 0;
+                    })
+                    .is_some();
+                if needs_clear {
+                    emit_active_subtasks(&state, &session_id, 0, "");
                 }
             }
 
