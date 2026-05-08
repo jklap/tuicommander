@@ -7,29 +7,27 @@ import { vi } from "vitest";
 export const mockInvoke = vi.fn().mockResolvedValue(undefined);
 
 vi.mock("@tauri-apps/api/core", () => ({
-  invoke: mockInvoke,
+	invoke: mockInvoke,
 }));
 
 vi.mock("@tauri-apps/api/event", () => ({
-  listen: vi.fn().mockResolvedValue(vi.fn()),
-  emit: vi.fn().mockResolvedValue(undefined),
+	listen: vi.fn().mockResolvedValue(vi.fn()),
+	emit: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/api/window", () => ({
-  getCurrentWindow: vi.fn(() => ({
-    listen: vi.fn().mockResolvedValue(vi.fn()),
-    setTitle: vi.fn().mockResolvedValue(undefined),
-  })),
+	getCurrentWindow: vi.fn(() => ({
+		listen: vi.fn().mockResolvedValue(vi.fn()),
+		setTitle: vi.fn().mockResolvedValue(undefined),
+	})),
 }));
 
 vi.mock("@tauri-apps/plugin-dialog", () => ({
-  open: vi.fn().mockResolvedValue(null),
-  ask: vi.fn().mockResolvedValue(false),
-  message: vi.fn().mockResolvedValue(undefined),
+	open: vi.fn().mockResolvedValue(null),
+	ask: vi.fn().mockResolvedValue(false),
+	message: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
-  openUrl: vi.fn().mockResolvedValue(undefined),
+	openUrl: vi.fn().mockResolvedValue(undefined),
 }));
-
-

@@ -1,116 +1,116 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
-import { repositoriesStore } from "../../stores/repositories";
 import { useQuickSwitcher } from "../../hooks/useQuickSwitcher";
+import { repositoriesStore } from "../../stores/repositories";
 
 function resetStores() {
-  for (const path of repositoriesStore.getPaths()) {
-    repositoriesStore.remove(path);
-  }
+	for (const path of repositoriesStore.getPaths()) {
+		repositoriesStore.remove(path);
+	}
 }
 
 describe("useQuickSwitcher", () => {
-  const mockHandleBranchSelect = vi.fn().mockResolvedValue(undefined);
+	const mockHandleBranchSelect = vi.fn().mockResolvedValue(undefined);
 
-  let switcher: ReturnType<typeof useQuickSwitcher>;
+	let switcher: ReturnType<typeof useQuickSwitcher>;
 
-  beforeEach(() => {
-    resetStores();
-    vi.clearAllMocks();
+	beforeEach(() => {
+		resetStores();
+		vi.clearAllMocks();
 
-    switcher = useQuickSwitcher({
-      handleBranchSelect: mockHandleBranchSelect,
-    });
-  });
+		switcher = useQuickSwitcher({
+			handleBranchSelect: mockHandleBranchSelect,
+		});
+	});
 
-  describe("switchToBranchByIndex", () => {
-    it("selects the branch at the given index", () => {
-      repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-      repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
-      repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+	describe("switchToBranchByIndex", () => {
+		it("selects the branch at the given index", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
 
-      switcher.switchToBranchByIndex(1);
+			switcher.switchToBranchByIndex(1);
 
-      expect(mockHandleBranchSelect).toHaveBeenCalledTimes(1);
-      // First branch should be called (sorted: feature < main alphabetically, unless isMain)
-      const [repoPath, branchName] = mockHandleBranchSelect.mock.calls[0];
-      expect(repoPath).toBe("/repo");
-      expect(branchName).toBeDefined();
-    });
+			expect(mockHandleBranchSelect).toHaveBeenCalledTimes(1);
+			// First branch should be called (sorted: feature < main alphabetically, unless isMain)
+			const [repoPath, branchName] = mockHandleBranchSelect.mock.calls[0];
+			expect(repoPath).toBe("/repo");
+			expect(branchName).toBeDefined();
+		});
 
-    it("does nothing for index beyond available branches", () => {
-      repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-      repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		it("does nothing for index beyond available branches", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 
-      switcher.switchToBranchByIndex(5);
+			switcher.switchToBranchByIndex(5);
 
-      expect(mockHandleBranchSelect).not.toHaveBeenCalled();
-    });
+			expect(mockHandleBranchSelect).not.toHaveBeenCalled();
+		});
 
-    it("works across multiple repos", () => {
-      repositoriesStore.add({ path: "/repo1", displayName: "Repo1" });
-      repositoriesStore.setBranch("/repo1", "main", { worktreePath: "/repo1" });
-      repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
-      repositoriesStore.setBranch("/repo2", "develop", { worktreePath: "/repo2" });
+		it("works across multiple repos", () => {
+			repositoriesStore.add({ path: "/repo1", displayName: "Repo1" });
+			repositoriesStore.setBranch("/repo1", "main", { worktreePath: "/repo1" });
+			repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
+			repositoriesStore.setBranch("/repo2", "develop", { worktreePath: "/repo2" });
 
-      // Index 2 should hit the second repo's branch
-      switcher.switchToBranchByIndex(2);
+			// Index 2 should hit the second repo's branch
+			switcher.switchToBranchByIndex(2);
 
-      expect(mockHandleBranchSelect).toHaveBeenCalledTimes(1);
-    });
+			expect(mockHandleBranchSelect).toHaveBeenCalledTimes(1);
+		});
 
-    it("sorts main branch first", () => {
-      repositoriesStore.add({ path: "/repo", displayName: "Repo" });
-      repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
-      repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		it("sorts main branch first", () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 
-      switcher.switchToBranchByIndex(1);
+			switcher.switchToBranchByIndex(1);
 
-      expect(mockHandleBranchSelect).toHaveBeenCalledWith("/repo", "main");
-    });
+			expect(mockHandleBranchSelect).toHaveBeenCalledWith("/repo", "main");
+		});
 
-    it("skips collapsed repos", () => {
-      repositoriesStore.add({ path: "/repo1", displayName: "Repo1" });
-      repositoriesStore.setBranch("/repo1", "main", { worktreePath: "/repo1" });
-      repositoriesStore.toggleCollapsed("/repo1");
+		it("skips collapsed repos", () => {
+			repositoriesStore.add({ path: "/repo1", displayName: "Repo1" });
+			repositoriesStore.setBranch("/repo1", "main", { worktreePath: "/repo1" });
+			repositoriesStore.toggleCollapsed("/repo1");
 
-      repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
-      repositoriesStore.setBranch("/repo2", "develop", { worktreePath: "/repo2" });
+			repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
+			repositoriesStore.setBranch("/repo2", "develop", { worktreePath: "/repo2" });
 
-      // Index 1 should skip collapsed repo1 and hit repo2
-      switcher.switchToBranchByIndex(1);
+			// Index 1 should skip collapsed repo1 and hit repo2
+			switcher.switchToBranchByIndex(1);
 
-      expect(mockHandleBranchSelect).toHaveBeenCalledWith("/repo2", "develop");
-    });
+			expect(mockHandleBranchSelect).toHaveBeenCalledWith("/repo2", "develop");
+		});
 
-    it("skips non-expanded repos", () => {
-      repositoriesStore.add({ path: "/repo1", displayName: "Repo1" });
-      repositoriesStore.setBranch("/repo1", "main", { worktreePath: "/repo1" });
-      repositoriesStore.toggleExpanded("/repo1"); // expanded: false
+		it("skips non-expanded repos", () => {
+			repositoriesStore.add({ path: "/repo1", displayName: "Repo1" });
+			repositoriesStore.setBranch("/repo1", "main", { worktreePath: "/repo1" });
+			repositoriesStore.toggleExpanded("/repo1"); // expanded: false
 
-      repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
-      repositoriesStore.setBranch("/repo2", "develop", { worktreePath: "/repo2" });
+			repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
+			repositoriesStore.setBranch("/repo2", "develop", { worktreePath: "/repo2" });
 
-      // Index 1 should skip non-expanded repo1 and hit repo2
-      switcher.switchToBranchByIndex(1);
+			// Index 1 should skip non-expanded repo1 and hit repo2
+			switcher.switchToBranchByIndex(1);
 
-      expect(mockHandleBranchSelect).toHaveBeenCalledWith("/repo2", "develop");
-    });
+			expect(mockHandleBranchSelect).toHaveBeenCalledWith("/repo2", "develop");
+		});
 
-    it("skips repos in collapsed groups", () => {
-      repositoriesStore.add({ path: "/repo1", displayName: "Repo1" });
-      repositoriesStore.setBranch("/repo1", "main", { worktreePath: "/repo1" });
-      const groupId = repositoriesStore.createGroup("MyGroup")!;
-      repositoriesStore.addRepoToGroup("/repo1", groupId);
-      repositoriesStore.toggleGroupCollapsed(groupId);
+		it("skips repos in collapsed groups", () => {
+			repositoriesStore.add({ path: "/repo1", displayName: "Repo1" });
+			repositoriesStore.setBranch("/repo1", "main", { worktreePath: "/repo1" });
+			const groupId = repositoriesStore.createGroup("MyGroup")!;
+			repositoriesStore.addRepoToGroup("/repo1", groupId);
+			repositoriesStore.toggleGroupCollapsed(groupId);
 
-      repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
-      repositoriesStore.setBranch("/repo2", "develop", { worktreePath: "/repo2" });
+			repositoriesStore.add({ path: "/repo2", displayName: "Repo2" });
+			repositoriesStore.setBranch("/repo2", "develop", { worktreePath: "/repo2" });
 
-      // Index 1 should skip repo1 in collapsed group
-      switcher.switchToBranchByIndex(1);
+			// Index 1 should skip repo1 in collapsed group
+			switcher.switchToBranchByIndex(1);
 
-      expect(mockHandleBranchSelect).toHaveBeenCalledWith("/repo2", "develop");
-    });
-  });
+			expect(mockHandleBranchSelect).toHaveBeenCalledWith("/repo2", "develop");
+		});
+	});
 });
