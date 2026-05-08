@@ -1,41 +1,41 @@
 import { createStore } from "solid-js/store";
 
 interface BranchSwitcherState {
-  isOpen: boolean;
-  query: string;
+	isOpen: boolean;
+	query: string;
 }
 
 function createBranchSwitcherStore() {
-  const [state, setState] = createStore<BranchSwitcherState>({
-    isOpen: false,
-    query: "",
-  });
+	const [state, setState] = createStore<BranchSwitcherState>({
+		isOpen: false,
+		query: "",
+	});
 
-  return {
-    state,
+	return {
+		state,
 
-    open(): void {
-      setState("query", "");
-      setState("isOpen", true);
-    },
+		open(): void {
+			setState("query", "");
+			setState("isOpen", true);
+		},
 
-    close(): void {
-      setState("isOpen", false);
-      setState("query", "");
-    },
+		close(): void {
+			setState("isOpen", false);
+			setState("query", "");
+		},
 
-    toggle(): void {
-      if (state.isOpen) {
-        this.close();
-      } else {
-        this.open();
-      }
-    },
+		toggle(): void {
+			if (state.isOpen) {
+				this.close();
+			} else {
+				this.open();
+			}
+		},
 
-    setQuery(query: string): void {
-      setState("query", query);
-    },
-  };
+		setQuery(query: string): void {
+			setState("query", query);
+		},
+	};
 }
 
 export const branchSwitcherStore = createBranchSwitcherStore();

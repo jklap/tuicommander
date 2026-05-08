@@ -7,12 +7,12 @@ import { appLogger } from "./appLogger";
 // ---------------------------------------------------------------------------
 
 interface AiPromptsConfig {
-  diff_triage_system_prompt: string | null;
+	diff_triage_system_prompt: string | null;
 }
 
 interface AiPromptsState {
-  config: AiPromptsConfig;
-  loaded: boolean;
+	config: AiPromptsConfig;
+	loaded: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -43,66 +43,68 @@ Relate files to each other. ONLY output the JSON line.`;
 // ---------------------------------------------------------------------------
 
 function createAiPromptsStore() {
-  const [state, setState] = createStore<AiPromptsState>({
-    config: { diff_triage_system_prompt: null },
-    loaded: false,
-  });
+	const [state, setState] = createStore<AiPromptsState>({
+		config: { diff_triage_system_prompt: null },
+		loaded: false,
+	});
 
-  async function hydrate(): Promise<void> {
-    if (state.loaded) return;
-    try {
-      const config = await invoke<AiPromptsConfig>("load_ai_prompts");
-      setState({ config, loaded: true });
-    } catch (e) {
-      appLogger.warn("config", `Failed to load AI prompts: ${e}`);
-      setState("loaded", true);
-    }
-  }
+	async function hydrate(): Promise<void> {
+		if (state.loaded) return;
+		try {
+			const config = await invoke<AiPromptsConfig>("load_ai_prompts");
+			setState({ config, loaded: true });
+		} catch (e) {
+			appLogger.warn("config", `Failed to load AI prompts: ${e}`);
+			setState("loaded", true);
+		}
+	}
 
-  async function save(): Promise<void> {
-    try {
-      await invoke("save_ai_prompts", { config: state.config });
-    } catch (e) {
-      appLogger.error("config", `Failed to save AI prompts: ${e}`);
-    }
-  }
+	async function save(): Promise<void> {
+		try {
+			await invoke("save_ai_prompts", { config: state.config });
+		} catch (e) {
+			appLogger.error("config", `Failed to save AI prompts: ${e}`);
+		}
+	}
 
-  function setDiffTriagePrompt(text: string | null): void {
-    const value = text?.trim() ? text : null;
-    setState("config", "diff_triage_system_prompt", value);
-    void save();
-  }
+	function setDiffTriagePrompt(text: string | null): void {
+		const value = text?.trim() ? text : null;
+		setState("config", "diff_triage_system_prompt", value);
+		void save();
+	}
 
-  type AiService = "diff_triage";
+	type AiService = "diff_triage";
 
-  function getEffectivePrompt(service: AiService): string {
-    if (service === "diff_triage") {
-      return state.config.diff_triage_system_prompt ?? DEFAULT_DIFF_TRIAGE_PROMPT;
-    }
-    return "";
-  }
+	function getEffectivePrompt(service: AiService): string {
+		if (service === "diff_triage") {
+			return state.config.diff_triage_system_prompt ?? DEFAULT_DIFF_TRIAGE_PROMPT;
+		}
+		return "";
+	}
 
-  function isCustom(service: AiService): boolean {
-    if (service === "diff_triage") {
-      return state.config.diff_triage_system_prompt != null;
-    }
-    return false;
-  }
+	function isCustom(service: AiService): boolean {
+		if (service === "diff_triage") {
+			return state.config.diff_triage_system_prompt != null;
+		}
+		return false;
+	}
 
-  function resetToDefault(service: AiService): void {
-    if (service === "diff_triage") {
-      setDiffTriagePrompt(null);
-    }
-  }
+	function resetToDefault(service: AiService): void {
+		if (service === "diff_triage") {
+			setDiffTriagePrompt(null);
+		}
+	}
 
-  return {
-    get state() { return state; },
-    hydrate,
-    getEffectivePrompt,
-    isCustom,
-    setDiffTriagePrompt,
-    resetToDefault,
-  };
+	return {
+		get state() {
+			return state;
+		},
+		hydrate,
+		getEffectivePrompt,
+		isCustom,
+		setDiffTriagePrompt,
+		resetToDefault,
+	};
 }
 
 export const aiPromptsStore = createAiPromptsStore();

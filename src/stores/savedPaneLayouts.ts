@@ -5,5 +5,5 @@ export const savedPaneLayouts = new Map<string, PaneLayoutState>();
 
 /** Build a cache key for a repo+branch pair */
 export function paneLayoutKey(repoPath: string, branchName: string): string {
-  return `${repoPath}\0${branchName}`;
+	return `${repoPath}\0${branchName}`;
 }

@@ -9,16 +9,16 @@ const registry = new Map<string, () => unknown>();
 
 /** Register a named snapshot function. Called at store init time. */
 export function registerDebugSnapshot(name: string, fn: () => unknown): void {
-  registry.set(name, fn);
+	registry.set(name, fn);
 }
 
 /** Get a snapshot by name, or null if not registered. */
 export function getDebugSnapshot(name: string): unknown {
-  const fn = registry.get(name);
-  return fn ? fn() : null;
+	const fn = registry.get(name);
+	return fn ? fn() : null;
 }
 
 /** List all registered snapshot names. */
 export function listDebugSnapshots(): string[] {
-  return [...registry.keys()].sort();
+	return [...registry.keys()].sort();
 }

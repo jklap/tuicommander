@@ -1,32 +1,20 @@
 // Re-export all stores for convenient imports
 
-export { terminalsStore } from "./terminals";
-export type { TerminalData, TerminalRef, TerminalState } from "./terminals";
-
-export { repositoriesStore } from "./repositories";
-
-export { uiStore } from "./ui";
-
-export { promptStore } from "./prompt";
-
-export { settingsStore, IDE_NAMES, FONT_FAMILIES } from "./settings";
-export type { IdeType, FontType } from "./settings";
-
-export { rateLimitStore } from "./ratelimit";
-
-export { promptLibraryStore } from "./promptLibrary";
-export type { SavedPrompt, PromptVariable } from "./promptLibrary";
-
-
-export { tasksStore } from "./tasks";
-export type { TaskData, TaskStatus, TaskCompletionCallback } from "./tasks";
-
-
-export { notificationsStore } from "./notifications";
-
-export { repoSettingsStore } from "./repoSettings";
-export type { RepoSettings, EffectiveRepoSettings } from "./repoSettings";
-export { repoDefaultsStore } from "./repoDefaults";
-export type { RepoDefaults, WorktreeStorage, OrphanCleanup, MergeStrategy, WorktreeAfterMerge } from "./repoDefaults";
-
 export { githubStore } from "./github";
+export { notificationsStore } from "./notifications";
+export { promptStore } from "./prompt";
+export type { PromptVariable, SavedPrompt } from "./promptLibrary";
+export { promptLibraryStore } from "./promptLibrary";
+export { rateLimitStore } from "./ratelimit";
+export type { MergeStrategy, OrphanCleanup, RepoDefaults, WorktreeAfterMerge, WorktreeStorage } from "./repoDefaults";
+export { repoDefaultsStore } from "./repoDefaults";
+export type { EffectiveRepoSettings, RepoSettings } from "./repoSettings";
+export { repoSettingsStore } from "./repoSettings";
+export { repositoriesStore } from "./repositories";
+export type { FontType, IdeType } from "./settings";
+export { FONT_FAMILIES, IDE_NAMES, settingsStore } from "./settings";
+export type { TaskCompletionCallback, TaskData, TaskStatus } from "./tasks";
+export { tasksStore } from "./tasks";
+export type { TerminalData, TerminalRef, TerminalState } from "./terminals";
+export { terminalsStore } from "./terminals";
+export { uiStore } from "./ui";

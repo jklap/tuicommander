@@ -1,29 +1,29 @@
 import { createStore } from "solid-js/store";
 
 interface ErrorLogState {
-  isOpen: boolean;
+	isOpen: boolean;
 }
 
 function createErrorLogStore() {
-  const [state, setState] = createStore<ErrorLogState>({
-    isOpen: false,
-  });
+	const [state, setState] = createStore<ErrorLogState>({
+		isOpen: false,
+	});
 
-  return {
-    state,
+	return {
+		state,
 
-    open(): void {
-      setState("isOpen", true);
-    },
+		open(): void {
+			setState("isOpen", true);
+		},
 
-    close(): void {
-      setState("isOpen", false);
-    },
+		close(): void {
+			setState("isOpen", false);
+		},
 
-    toggle(): void {
-      setState("isOpen", (v) => !v);
-    },
-  };
+		toggle(): void {
+			setState("isOpen", (v) => !v);
+		},
+	};
 }
 
 export const errorLogStore = createErrorLogStore();

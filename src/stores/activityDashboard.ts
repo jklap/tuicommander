@@ -1,29 +1,29 @@
 import { createStore } from "solid-js/store";
 
 interface ActivityDashboardState {
-  isOpen: boolean;
+	isOpen: boolean;
 }
 
 function createActivityDashboardStore() {
-  const [state, setState] = createStore<ActivityDashboardState>({
-    isOpen: false,
-  });
+	const [state, setState] = createStore<ActivityDashboardState>({
+		isOpen: false,
+	});
 
-  return {
-    state,
+	return {
+		state,
 
-    open(): void {
-      setState("isOpen", true);
-    },
+		open(): void {
+			setState("isOpen", true);
+		},
 
-    close(): void {
-      setState("isOpen", false);
-    },
+		close(): void {
+			setState("isOpen", false);
+		},
 
-    toggle(): void {
-      setState("isOpen", (v) => !v);
-    },
-  };
+		toggle(): void {
+			setState("isOpen", (v) => !v);
+		},
+	};
 }
 
 export const activityDashboardStore = createActivityDashboardStore();

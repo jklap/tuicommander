@@ -1,29 +1,29 @@
 import { createStore } from "solid-js/store";
 
 interface SmartPromptsDropdownState {
-  isOpen: boolean;
+	isOpen: boolean;
 }
 
 function createSmartPromptsDropdownStore() {
-  const [state, setState] = createStore<SmartPromptsDropdownState>({
-    isOpen: false,
-  });
+	const [state, setState] = createStore<SmartPromptsDropdownState>({
+		isOpen: false,
+	});
 
-  return {
-    state,
+	return {
+		state,
 
-    open(): void {
-      setState("isOpen", true);
-    },
+		open(): void {
+			setState("isOpen", true);
+		},
 
-    close(): void {
-      setState("isOpen", false);
-    },
+		close(): void {
+			setState("isOpen", false);
+		},
 
-    toggle(): void {
-      setState("isOpen", !state.isOpen);
-    },
-  };
+		toggle(): void {
+			setState("isOpen", !state.isOpen);
+		},
+	};
 }
 
 export const smartPromptsDropdownStore = createSmartPromptsDropdownStore();

@@ -8,20 +8,20 @@ import type { Disposable, TerminalAction } from "../plugins/types";
 export type ContextMenuTarget = "terminal" | "branch" | "repo" | "tab";
 
 export interface ContextMenuAction {
-  id: string;
-  label: string;
-  icon?: string;
-  target: ContextMenuTarget;
-  action: (ctx: ContextMenuContext) => void;
-  disabled?: (ctx: ContextMenuContext) => boolean;
+	id: string;
+	label: string;
+	icon?: string;
+	target: ContextMenuTarget;
+	action: (ctx: ContextMenuContext) => void;
+	disabled?: (ctx: ContextMenuContext) => boolean;
 }
 
 export interface ContextMenuContext {
-  target: ContextMenuTarget;
-  sessionId?: string;
-  repoPath?: string;
-  branchName?: string;
-  tabId?: string;
+	target: ContextMenuTarget;
+	sessionId?: string;
+	repoPath?: string;
+	branchName?: string;
+	tabId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -29,82 +29,78 @@ export interface ContextMenuContext {
 // ---------------------------------------------------------------------------
 
 interface ActionEntry {
-  pluginId: string;
-  action: TerminalAction;
+	pluginId: string;
+	action: TerminalAction;
 }
 
 interface ContextMenuEntry {
-  pluginId: string;
-  action: ContextMenuAction;
+	pluginId: string;
+	action: ContextMenuAction;
 }
 
 function createContextMenuActionsStore() {
-  // Legacy: terminal-only actions (backward compat)
-  const [entries, setEntries] = createSignal<ActionEntry[]>([]);
-  // New: multi-target actions
-  const [contextEntries, setContextEntries] = createSignal<ContextMenuEntry[]>([]);
+	// Legacy: terminal-only actions (backward compat)
+	const [entries, setEntries] = createSignal<ActionEntry[]>([]);
+	// New: multi-target actions
+	const [contextEntries, setContextEntries] = createSignal<ContextMenuEntry[]>([]);
 
-  // --- Legacy terminal actions (backward compat) ---
+	// --- Legacy terminal actions (backward compat) ---
 
-  function registerAction(pluginId: string, action: TerminalAction): Disposable {
-    setEntries((prev) => [
-      ...prev.filter((e) => !(e.pluginId === pluginId && e.action.id === action.id)),
-      { pluginId, action },
-    ]);
-    return {
-      dispose() {
-        setEntries((prev) =>
-          prev.filter((e) => !(e.pluginId === pluginId && e.action.id === action.id)),
-        );
-      },
-    };
-  }
+	function registerAction(pluginId: string, action: TerminalAction): Disposable {
+		setEntries((prev) => [
+			...prev.filter((e) => !(e.pluginId === pluginId && e.action.id === action.id)),
+			{ pluginId, action },
+		]);
+		return {
+			dispose() {
+				setEntries((prev) => prev.filter((e) => !(e.pluginId === pluginId && e.action.id === action.id)));
+			},
+		};
+	}
 
-  function getActions(): TerminalAction[] {
-    return entries().map((e) => e.action);
-  }
+	function getActions(): TerminalAction[] {
+		return entries().map((e) => e.action);
+	}
 
-  // --- New multi-target context menu actions ---
+	// --- New multi-target context menu actions ---
 
-  function registerContextAction(pluginId: string, action: ContextMenuAction): Disposable {
-    const key = `${pluginId}:${action.id}`;
-    setContextEntries((prev) => [
-      ...prev.filter((e) => `${e.pluginId}:${e.action.id}` !== key),
-      { pluginId, action },
-    ]);
-    return {
-      dispose() {
-        setContextEntries((prev) =>
-          prev.filter((e) => `${e.pluginId}:${e.action.id}` !== key),
-        );
-      },
-    };
-  }
+	function registerContextAction(pluginId: string, action: ContextMenuAction): Disposable {
+		const key = `${pluginId}:${action.id}`;
+		setContextEntries((prev) => [...prev.filter((e) => `${e.pluginId}:${e.action.id}` !== key), { pluginId, action }]);
+		return {
+			dispose() {
+				setContextEntries((prev) => prev.filter((e) => `${e.pluginId}:${e.action.id}` !== key));
+			},
+		};
+	}
 
-  function getContextActions(target: ContextMenuTarget, sourceFilter?: { pluginId?: string; excludePluginId?: string }): ContextMenuAction[] {
-    return contextEntries()
-      .filter((e) => {
-        if (e.action.target !== target) return false;
-        if (sourceFilter?.pluginId && e.pluginId !== sourceFilter.pluginId) return false;
-        if (sourceFilter?.excludePluginId && e.pluginId === sourceFilter.excludePluginId) return false;
-        return true;
-      })
-      .map((e) => e.action);
-  }
+	function getContextActions(
+		target: ContextMenuTarget,
+		sourceFilter?: { pluginId?: string; excludePluginId?: string },
+	): ContextMenuAction[] {
+		return contextEntries()
+			.filter((e) => {
+				if (e.action.target !== target) return false;
+				if (sourceFilter?.pluginId && e.pluginId !== sourceFilter.pluginId) return false;
+				if (sourceFilter?.excludePluginId && e.pluginId === sourceFilter.excludePluginId) return false;
+				return true;
+			})
+			.map((e) => e.action);
+	}
 
-  // --- Shared ---
+	// --- Shared ---
 
-  function clearPlugin(pluginId: string): void {
-    setEntries((prev) => prev.filter((e) => e.pluginId !== pluginId));
-    setContextEntries((prev) => prev.filter((e) => e.pluginId !== pluginId));
-  }
+	function clearPlugin(pluginId: string): void {
+		setEntries((prev) => prev.filter((e) => e.pluginId !== pluginId));
+		setContextEntries((prev) => prev.filter((e) => e.pluginId !== pluginId));
+	}
 
-  function clear(): void {
-    setEntries([]);
-    setContextEntries([]);
-  }
+	function clear(): void {
+		setEntries([]);
+		setContextEntries([]);
+	}
 
-  return { registerAction, getActions, registerContextAction, getContextActions, clearPlugin, clear };
+	return { registerAction, getActions, registerContextAction, getContextActions, clearPlugin, clear };
 }
 
 export const contextMenuActionsStore = createContextMenuActionsStore();

@@ -1,191 +1,206 @@
 import { createStore } from "solid-js/store";
-import { invoke } from "../invoke";
 import { setLocale } from "../i18n";
-import { appLogger } from "./appLogger";
+import { invoke } from "../invoke";
 import type { IssueFilterMode } from "../types";
+import { appLogger } from "./appLogger";
 
 // Legacy storage keys for one-time migration
 const LEGACY_KEYS = {
-  IDE: "tui-commander-default-ide",
-  SESSION: "tui-commander-session",
+	IDE: "tui-commander-default-ide",
+	SESSION: "tui-commander-session",
 } as const;
 
 /** Rust AppConfig shape (subset needed for font/ide read/write) */
 interface RustAppConfig {
-  shell: string | null;
-  font_family: string;
-  font_size: number;
-  font_weight: number;
-  theme: string;
-  mcp_server_enabled: boolean;
-  ide: string;
-  default_font_size: number;
-  confirm_before_quit: boolean;
-  confirm_before_closing_tab: boolean;
-  max_tab_name_length: number;
-  split_tab_mode: string;
-  auto_show_pr_popover: boolean;
-  prevent_sleep_when_busy: boolean;
-  auto_update_enabled: boolean;
-  language: string;
-  update_channel: string;
-  services: {
-    auth: { session_token_duration_secs: number };
-  };
-  disabled_agents: string[];
-  intent_tab_title: boolean;
-  suggest_followups: boolean;
-  copy_on_select: boolean;
-  bell_style: string;
-  global_hotkey: string | null;
-  issue_filter?: string;
-  experimental_features_enabled?: boolean;
-  ai_chat_enabled?: boolean;
-  scrollback_reflow?: boolean;
-  cursor_style?: string;
-  terminal_renderer?: string;
+	shell: string | null;
+	font_family: string;
+	font_size: number;
+	font_weight: number;
+	theme: string;
+	mcp_server_enabled: boolean;
+	ide: string;
+	default_font_size: number;
+	confirm_before_quit: boolean;
+	confirm_before_closing_tab: boolean;
+	max_tab_name_length: number;
+	split_tab_mode: string;
+	auto_show_pr_popover: boolean;
+	prevent_sleep_when_busy: boolean;
+	auto_update_enabled: boolean;
+	language: string;
+	update_channel: string;
+	services: {
+		auth: { session_token_duration_secs: number };
+	};
+	disabled_agents: string[];
+	intent_tab_title: boolean;
+	suggest_followups: boolean;
+	copy_on_select: boolean;
+	bell_style: string;
+	global_hotkey: string | null;
+	issue_filter?: string;
+	experimental_features_enabled?: boolean;
+	ai_chat_enabled?: boolean;
+	scrollback_reflow?: boolean;
+	cursor_style?: string;
+	terminal_renderer?: string;
 }
 
 // Default values
 const DEFAULTS = {
-  ide: "vscode" as const,
-  font: "JetBrains Mono" as const,
-  fontSize: 13,
-  fontWeight: 400,
+	ide: "vscode" as const,
+	font: "JetBrains Mono" as const,
+	fontSize: 13,
+	fontWeight: 400,
 };
 
 /** IDE options */
 export type IdeType =
-  | "vscode" | "cursor" | "zed" | "windsurf" | "neovim" | "xcode"
-  | "ghostty" | "wezterm" | "alacritty" | "kitty" | "warp"
-  | "sourcetree" | "github-desktop" | "fork" | "gitkraken" | "smerge"
-  | "terminal" | "finder" | "editor";
+	| "vscode"
+	| "cursor"
+	| "zed"
+	| "windsurf"
+	| "neovim"
+	| "xcode"
+	| "ghostty"
+	| "wezterm"
+	| "alacritty"
+	| "kitty"
+	| "warp"
+	| "sourcetree"
+	| "github-desktop"
+	| "fork"
+	| "gitkraken"
+	| "smerge"
+	| "terminal"
+	| "finder"
+	| "editor";
 
 /** Font family options (all bundled as woff2) */
 export type FontType =
-  | "JetBrains Mono"
-  | "Fira Code"
-  | "Hack"
-  | "Cascadia Code"
-  | "Iosevka"
-  | "Source Code Pro"
-  | "Inconsolata"
-  | "IBM Plex Mono"
-  | "Monaspace Neon"
-  | "Commit Mono"
-  | "Geist Mono";
+	| "JetBrains Mono"
+	| "Fira Code"
+	| "Hack"
+	| "Cascadia Code"
+	| "Iosevka"
+	| "Source Code Pro"
+	| "Inconsolata"
+	| "IBM Plex Mono"
+	| "Monaspace Neon"
+	| "Commit Mono"
+	| "Geist Mono";
 
 /** IDE display names */
 export const IDE_NAMES: Record<IdeType, string> = {
-  vscode: "VS Code",
-  cursor: "Cursor",
-  zed: "Zed",
-  windsurf: "Windsurf",
-  neovim: "Neovim",
-  xcode: "Xcode",
-  ghostty: "Ghostty",
-  wezterm: "WezTerm",
-  alacritty: "Alacritty",
-  kitty: "Kitty",
-  warp: "Warp",
-  sourcetree: "Sourcetree",
-  "github-desktop": "GitHub Desktop",
-  fork: "Fork",
-  gitkraken: "GitKraken",
-  smerge: "Sublime Merge",
-  terminal: "Terminal",
-  finder: "Finder",
-  editor: "$EDITOR",
+	vscode: "VS Code",
+	cursor: "Cursor",
+	zed: "Zed",
+	windsurf: "Windsurf",
+	neovim: "Neovim",
+	xcode: "Xcode",
+	ghostty: "Ghostty",
+	wezterm: "WezTerm",
+	alacritty: "Alacritty",
+	kitty: "Kitty",
+	warp: "Warp",
+	sourcetree: "Sourcetree",
+	"github-desktop": "GitHub Desktop",
+	fork: "Fork",
+	gitkraken: "GitKraken",
+	smerge: "Sublime Merge",
+	terminal: "Terminal",
+	finder: "Finder",
+	editor: "$EDITOR",
 };
 
+import alacritySvg from "../assets/icons/alacritty.svg";
+import cursorSvg from "../assets/icons/cursor.svg";
+import editorSvg from "../assets/icons/editor.svg";
+import finderSvg from "../assets/icons/finder.svg";
+import forkSvg from "../assets/icons/fork.svg";
+import ghosttySvg from "../assets/icons/ghostty.svg";
+import githubDesktopSvg from "../assets/icons/github-desktop.svg";
+import gitkrakenSvg from "../assets/icons/gitkraken.svg";
+import kittySvg from "../assets/icons/kitty.svg";
+import neovimSvg from "../assets/icons/neovim.svg";
+import smergeSvg from "../assets/icons/smerge.svg";
+import sourcetreeSvg from "../assets/icons/sourcetree.svg";
+import terminalSvg from "../assets/icons/terminal.svg";
 /** IDE icon SVG imports */
 import vscodeSvg from "../assets/icons/vscode.svg";
-import cursorSvg from "../assets/icons/cursor.svg";
-import zedSvg from "../assets/icons/zed.svg";
-import windsurfSvg from "../assets/icons/windsurf.svg";
-import neovimSvg from "../assets/icons/neovim.svg";
-import xcodeSvg from "../assets/icons/xcode.svg";
-import ghosttySvg from "../assets/icons/ghostty.svg";
-import weztermSvg from "../assets/icons/wezterm.svg";
-import alacritySvg from "../assets/icons/alacritty.svg";
-import kittySvg from "../assets/icons/kitty.svg";
 import warpSvg from "../assets/icons/warp.svg";
-import sourcetreeSvg from "../assets/icons/sourcetree.svg";
-import githubDesktopSvg from "../assets/icons/github-desktop.svg";
-import forkSvg from "../assets/icons/fork.svg";
-import gitkrakenSvg from "../assets/icons/gitkraken.svg";
-import smergeSvg from "../assets/icons/smerge.svg";
-import terminalSvg from "../assets/icons/terminal.svg";
-import finderSvg from "../assets/icons/finder.svg";
-import editorSvg from "../assets/icons/editor.svg";
+import weztermSvg from "../assets/icons/wezterm.svg";
+import windsurfSvg from "../assets/icons/windsurf.svg";
+import xcodeSvg from "../assets/icons/xcode.svg";
+import zedSvg from "../assets/icons/zed.svg";
 
 /** IDE icon paths (SVG) */
 export const IDE_ICON_PATHS: Record<IdeType, string> = {
-  vscode: vscodeSvg,
-  cursor: cursorSvg,
-  zed: zedSvg,
-  windsurf: windsurfSvg,
-  neovim: neovimSvg,
-  xcode: xcodeSvg,
-  ghostty: ghosttySvg,
-  wezterm: weztermSvg,
-  alacritty: alacritySvg,
-  kitty: kittySvg,
-  warp: warpSvg,
-  sourcetree: sourcetreeSvg,
-  "github-desktop": githubDesktopSvg,
-  fork: forkSvg,
-  gitkraken: gitkrakenSvg,
-  smerge: smergeSvg,
-  terminal: terminalSvg,
-  finder: finderSvg,
-  editor: editorSvg,
+	vscode: vscodeSvg,
+	cursor: cursorSvg,
+	zed: zedSvg,
+	windsurf: windsurfSvg,
+	neovim: neovimSvg,
+	xcode: xcodeSvg,
+	ghostty: ghosttySvg,
+	wezterm: weztermSvg,
+	alacritty: alacritySvg,
+	kitty: kittySvg,
+	warp: warpSvg,
+	sourcetree: sourcetreeSvg,
+	"github-desktop": githubDesktopSvg,
+	fork: forkSvg,
+	gitkraken: gitkrakenSvg,
+	smerge: smergeSvg,
+	terminal: terminalSvg,
+	finder: finderSvg,
+	editor: editorSvg,
 };
 
 /** IDE icons (emoji fallbacks for text-only contexts) */
 export const IDE_ICONS: Record<IdeType, string> = {
-  vscode: "🔵",
-  cursor: "🟣",
-  zed: "⚡",
-  windsurf: "🌊",
-  neovim: "🟢",
-  xcode: "🔨",
-  ghostty: "👻",
-  wezterm: "🟪",
-  alacritty: "🔳",
-  kitty: "🐱",
-  warp: "🔷",
-  sourcetree: "🌳",
-  "github-desktop": "🐙",
-  fork: "🔱",
-  gitkraken: "🦑",
-  smerge: "🔀",
-  terminal: ">_",
-  finder: "📁",
-  editor: "$_",
+	vscode: "🔵",
+	cursor: "🟣",
+	zed: "⚡",
+	windsurf: "🌊",
+	neovim: "🟢",
+	xcode: "🔨",
+	ghostty: "👻",
+	wezterm: "🟪",
+	alacritty: "🔳",
+	kitty: "🐱",
+	warp: "🔷",
+	sourcetree: "🌳",
+	"github-desktop": "🐙",
+	fork: "🔱",
+	gitkraken: "🦑",
+	smerge: "🔀",
+	terminal: ">_",
+	finder: "📁",
+	editor: "$_",
 };
 
 /** IDE categories */
 export const IDE_CATEGORIES: Record<string, IdeType[]> = {
-  editors: ["vscode", "cursor", "zed", "windsurf", "neovim", "xcode", "editor"],
-  terminals: ["ghostty", "wezterm", "alacritty", "kitty", "warp"],
-  git: ["sourcetree", "github-desktop", "fork", "gitkraken", "smerge"],
-  utilities: ["terminal", "finder"],
+	editors: ["vscode", "cursor", "zed", "windsurf", "neovim", "xcode", "editor"],
+	terminals: ["ghostty", "wezterm", "alacritty", "kitty", "warp"],
+	git: ["sourcetree", "github-desktop", "fork", "gitkraken", "smerge"],
+	utilities: ["terminal", "finder"],
 };
 
 /** Font family CSS values — system Nerd Font (if installed) → bundled font → bundled symbols → monospace */
 export const FONT_FAMILIES: Record<FontType, string> = {
-  "JetBrains Mono": '"JetBrainsMono Nerd Font", "JetBrains Mono", "Symbols Nerd Font Mono", monospace',
-  "Fira Code": '"FiraCode Nerd Font", "Fira Code", "Symbols Nerd Font Mono", monospace',
-  "Hack": '"Hack Nerd Font", "Hack", "Symbols Nerd Font Mono", monospace',
-  "Cascadia Code": '"CaskaydiaCove Nerd Font", "Cascadia Code", "Symbols Nerd Font Mono", monospace',
-  "Iosevka": '"Iosevka Nerd Font", "Iosevka", "Symbols Nerd Font Mono", monospace',
-  "Source Code Pro": '"SauceCodePro Nerd Font", "Source Code Pro", "Symbols Nerd Font Mono", monospace',
-  "Inconsolata": '"Inconsolata Nerd Font", "Inconsolata", "Symbols Nerd Font Mono", monospace',
-  "IBM Plex Mono": '"BlexMono Nerd Font", "IBM Plex Mono", "Symbols Nerd Font Mono", monospace',
-  "Monaspace Neon": '"Monaspace Neon", "Symbols Nerd Font Mono", monospace',
-  "Commit Mono": '"CommitMono Nerd Font", "Commit Mono", "Symbols Nerd Font Mono", monospace',
-  "Geist Mono": '"GeistMono Nerd Font", "Geist Mono", "Symbols Nerd Font Mono", monospace',
+	"JetBrains Mono": '"JetBrainsMono Nerd Font", "JetBrains Mono", "Symbols Nerd Font Mono", monospace',
+	"Fira Code": '"FiraCode Nerd Font", "Fira Code", "Symbols Nerd Font Mono", monospace',
+	Hack: '"Hack Nerd Font", "Hack", "Symbols Nerd Font Mono", monospace',
+	"Cascadia Code": '"CaskaydiaCove Nerd Font", "Cascadia Code", "Symbols Nerd Font Mono", monospace',
+	Iosevka: '"Iosevka Nerd Font", "Iosevka", "Symbols Nerd Font Mono", monospace',
+	"Source Code Pro": '"SauceCodePro Nerd Font", "Source Code Pro", "Symbols Nerd Font Mono", monospace',
+	Inconsolata: '"Inconsolata Nerd Font", "Inconsolata", "Symbols Nerd Font Mono", monospace',
+	"IBM Plex Mono": '"BlexMono Nerd Font", "IBM Plex Mono", "Symbols Nerd Font Mono", monospace',
+	"Monaspace Neon": '"Monaspace Neon", "Symbols Nerd Font Mono", monospace',
+	"Commit Mono": '"CommitMono Nerd Font", "Commit Mono", "Symbols Nerd Font Mono", monospace',
+	"Geist Mono": '"GeistMono Nerd Font", "Geist Mono", "Symbols Nerd Font Mono", monospace',
 };
 
 /** Valid IDE values */
@@ -193,27 +208,27 @@ const VALID_IDES: readonly string[] = Object.keys(IDE_NAMES);
 
 /** Valid font values */
 const VALID_FONTS: readonly FontType[] = [
-  "JetBrains Mono",
-  "Fira Code",
-  "Hack",
-  "Cascadia Code",
-  "Iosevka",
-  "Source Code Pro",
-  "Inconsolata",
-  "IBM Plex Mono",
-  "Monaspace Neon",
-  "Commit Mono",
-  "Geist Mono",
+	"JetBrains Mono",
+	"Fira Code",
+	"Hack",
+	"Cascadia Code",
+	"Iosevka",
+	"Source Code Pro",
+	"Inconsolata",
+	"IBM Plex Mono",
+	"Monaspace Neon",
+	"Commit Mono",
+	"Geist Mono",
 ];
 
 /** Validate and return IDE type or default */
 function validateIde(value: string | null): IdeType {
-  return value && VALID_IDES.includes(value) ? (value as IdeType) : DEFAULTS.ide;
+	return value && VALID_IDES.includes(value) ? (value as IdeType) : DEFAULTS.ide;
 }
 
 /** Validate and return font type or default */
 function validateFont(value: string | null): FontType {
-  return value && VALID_FONTS.includes(value as FontType) ? (value as FontType) : DEFAULTS.font;
+	return value && VALID_FONTS.includes(value as FontType) ? (value as FontType) : DEFAULTS.font;
 }
 
 /** Valid issue filter values */
@@ -221,16 +236,15 @@ const VALID_ISSUE_FILTERS: readonly IssueFilterMode[] = ["assigned", "created", 
 
 /** Validate and return issue filter or default */
 function validateIssueFilter(value: string | null): IssueFilterMode {
-  return value && (VALID_ISSUE_FILTERS as readonly string[]).includes(value) ? (value as IssueFilterMode) : "assigned";
+	return value && (VALID_ISSUE_FILTERS as readonly string[]).includes(value) ? (value as IssueFilterMode) : "assigned";
 }
 
 /** Valid terminal renderer values */
 const VALID_RENDERERS: readonly TerminalRenderer[] = ["webgl", "canvas", "native"];
 
 function validateTerminalRenderer(value: string | null): TerminalRenderer {
-  return value && (VALID_RENDERERS as readonly string[]).includes(value) ? (value as TerminalRenderer) : "webgl";
+	return value && (VALID_RENDERERS as readonly string[]).includes(value) ? (value as TerminalRenderer) : "webgl";
 }
-
 
 /** Split tab mode */
 export type SplitTabMode = "separate" | "unified";
@@ -243,398 +257,401 @@ export type UpdateChannel = "stable" | "nightly";
 
 /** Settings store state */
 interface SettingsStoreState {
-  ide: IdeType;
-  font: FontType;
-  fontWeight: number;
-  defaultFontSize: number;
-  shell: string | null;
-  theme: string;
-  confirmBeforeQuit: boolean;
-  confirmBeforeClosingTab: boolean;
-  maxTabNameLength: number;
-  splitTabMode: SplitTabMode;
-  autoShowPrPopover: boolean;
-  preventSleepWhenBusy: boolean;
-  autoUpdateEnabled: boolean;
-  language: string;
-  updateChannel: UpdateChannel;
-  disabledAgents: string[];
-  intentTabTitle: boolean;
-  suggestFollowups: boolean;
-  copyOnSelect: boolean;
-  bellStyle: "none" | "visual" | "sound" | "both";
-  globalHotkey: string | null;
-  issueFilter: IssueFilterMode;
-  experimentalFeaturesEnabled: boolean;
-  aiChatEnabled: boolean;
-  scrollbackReflow: boolean;
-  cursorStyle: "bar" | "block" | "underline";
-  terminalRenderer: TerminalRenderer;
+	ide: IdeType;
+	font: FontType;
+	fontWeight: number;
+	defaultFontSize: number;
+	shell: string | null;
+	theme: string;
+	confirmBeforeQuit: boolean;
+	confirmBeforeClosingTab: boolean;
+	maxTabNameLength: number;
+	splitTabMode: SplitTabMode;
+	autoShowPrPopover: boolean;
+	preventSleepWhenBusy: boolean;
+	autoUpdateEnabled: boolean;
+	language: string;
+	updateChannel: UpdateChannel;
+	disabledAgents: string[];
+	intentTabTitle: boolean;
+	suggestFollowups: boolean;
+	copyOnSelect: boolean;
+	bellStyle: "none" | "visual" | "sound" | "both";
+	globalHotkey: string | null;
+	issueFilter: IssueFilterMode;
+	experimentalFeaturesEnabled: boolean;
+	aiChatEnabled: boolean;
+	scrollbackReflow: boolean;
+	cursorStyle: "bar" | "block" | "underline";
+	terminalRenderer: TerminalRenderer;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
 
 /** Create the settings store */
 function createSettingsStore() {
-  const [state, setState] = createStore<SettingsStoreState>({
-    ide: DEFAULTS.ide,
-    font: DEFAULTS.font,
-    fontWeight: DEFAULTS.fontWeight,
-    defaultFontSize: DEFAULTS.fontSize,
-    shell: null,
-    theme: "commander",
-    confirmBeforeQuit: true,
-    confirmBeforeClosingTab: true,
-    maxTabNameLength: 25,
-    splitTabMode: "separate",
-    autoShowPrPopover: true,
-    preventSleepWhenBusy: false,
-    autoUpdateEnabled: true,
-    language: "en",
-    updateChannel: "stable" as UpdateChannel,
-    disabledAgents: [],
-    intentTabTitle: true,
-    suggestFollowups: true,
-    copyOnSelect: true,
-    bellStyle: "visual",
-    globalHotkey: null,
-    issueFilter: "assigned",
-    experimentalFeaturesEnabled: false,
-    aiChatEnabled: false,
-    scrollbackReflow: false,
-    cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
-    terminalRenderer: "webgl",
-  });
+	const [state, setState] = createStore<SettingsStoreState>({
+		ide: DEFAULTS.ide,
+		font: DEFAULTS.font,
+		fontWeight: DEFAULTS.fontWeight,
+		defaultFontSize: DEFAULTS.fontSize,
+		shell: null,
+		theme: "commander",
+		confirmBeforeQuit: true,
+		confirmBeforeClosingTab: true,
+		maxTabNameLength: 25,
+		splitTabMode: "separate",
+		autoShowPrPopover: true,
+		preventSleepWhenBusy: false,
+		autoUpdateEnabled: true,
+		language: "en",
+		updateChannel: "stable" as UpdateChannel,
+		disabledAgents: [],
+		intentTabTitle: true,
+		suggestFollowups: true,
+		copyOnSelect: true,
+		bellStyle: "visual",
+		globalHotkey: null,
+		issueFilter: "assigned",
+		experimentalFeaturesEnabled: false,
+		aiChatEnabled: false,
+		scrollbackReflow: false,
+		cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
+		terminalRenderer: "webgl",
+	});
 
-  // Shadow copy of the last loaded config — preserves fields not tracked in SolidJS store
-  // (e.g. session_token_duration_secs, mcp_server_enabled). Updated on hydrate.
-  let baseConfig: RustAppConfig | null = null;
-  let saveTimer: ReturnType<typeof setTimeout> | null = null;
+	// Shadow copy of the last loaded config — preserves fields not tracked in SolidJS store
+	// (e.g. session_token_duration_secs, mcp_server_enabled). Updated on hydrate.
+	let baseConfig: RustAppConfig | null = null;
+	let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  /** Build a full RustAppConfig from current store state + base config fields */
-  function buildConfig(): RustAppConfig {
-    return {
-      ...(baseConfig ?? {} as RustAppConfig),
-      shell: state.shell,
-      font_family: state.font,
-      font_size: state.defaultFontSize,
-      font_weight: state.fontWeight,
-      theme: state.theme,
-      ide: state.ide,
-      default_font_size: state.defaultFontSize,
-      confirm_before_quit: state.confirmBeforeQuit,
-      confirm_before_closing_tab: state.confirmBeforeClosingTab,
-      max_tab_name_length: state.maxTabNameLength,
-      split_tab_mode: state.splitTabMode,
-      auto_show_pr_popover: state.autoShowPrPopover,
-      prevent_sleep_when_busy: state.preventSleepWhenBusy,
-      auto_update_enabled: state.autoUpdateEnabled,
-      language: state.language,
-      update_channel: state.updateChannel,
-      disabled_agents: [...state.disabledAgents],
-      intent_tab_title: state.intentTabTitle,
-      suggest_followups: state.suggestFollowups,
-      copy_on_select: state.copyOnSelect,
-      bell_style: state.bellStyle,
-      global_hotkey: state.globalHotkey,
-      issue_filter: state.issueFilter,
-      experimental_features_enabled: state.experimentalFeaturesEnabled,
-      ai_chat_enabled: state.aiChatEnabled,
-      scrollback_reflow: state.scrollbackReflow,
-      cursor_style: state.cursorStyle,
-      terminal_renderer: state.terminalRenderer,
-      services: baseConfig?.services ?? { auth: { session_token_duration_secs: 86400 } },
-      mcp_server_enabled: baseConfig?.mcp_server_enabled ?? true,
-    };
-  }
+	/** Build a full RustAppConfig from current store state + base config fields */
+	function buildConfig(): RustAppConfig {
+		return {
+			...(baseConfig ?? ({} as RustAppConfig)),
+			shell: state.shell,
+			font_family: state.font,
+			font_size: state.defaultFontSize,
+			font_weight: state.fontWeight,
+			theme: state.theme,
+			ide: state.ide,
+			default_font_size: state.defaultFontSize,
+			confirm_before_quit: state.confirmBeforeQuit,
+			confirm_before_closing_tab: state.confirmBeforeClosingTab,
+			max_tab_name_length: state.maxTabNameLength,
+			split_tab_mode: state.splitTabMode,
+			auto_show_pr_popover: state.autoShowPrPopover,
+			prevent_sleep_when_busy: state.preventSleepWhenBusy,
+			auto_update_enabled: state.autoUpdateEnabled,
+			language: state.language,
+			update_channel: state.updateChannel,
+			disabled_agents: [...state.disabledAgents],
+			intent_tab_title: state.intentTabTitle,
+			suggest_followups: state.suggestFollowups,
+			copy_on_select: state.copyOnSelect,
+			bell_style: state.bellStyle,
+			global_hotkey: state.globalHotkey,
+			issue_filter: state.issueFilter,
+			experimental_features_enabled: state.experimentalFeaturesEnabled,
+			ai_chat_enabled: state.aiChatEnabled,
+			scrollback_reflow: state.scrollbackReflow,
+			cursor_style: state.cursorStyle,
+			terminal_renderer: state.terminalRenderer,
+			services: baseConfig?.services ?? { auth: { session_token_duration_secs: 86400 } },
+			mcp_server_enabled: baseConfig?.mcp_server_enabled ?? true,
+		};
+	}
 
-  /** Debounced save — coalesces rapid setting changes into a single IPC call */
-  function save(): void {
-    if (saveTimer) clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => {
-      saveTimer = null;
-      invoke("save_config", { config: buildConfig() }).catch((err: unknown) =>
-        appLogger.error("config", "Failed to save config", err),
-      );
-    }, SAVE_DEBOUNCE_MS);
-  }
+	/** Debounced save — coalesces rapid setting changes into a single IPC call */
+	function save(): void {
+		if (saveTimer) clearTimeout(saveTimer);
+		saveTimer = setTimeout(() => {
+			saveTimer = null;
+			invoke("save_config", { config: buildConfig() }).catch((err: unknown) =>
+				appLogger.error("config", "Failed to save config", err),
+			);
+		}, SAVE_DEBOUNCE_MS);
+	}
 
-  const actions = {
-    /** Load settings from Rust config; migrate from localStorage on first run */
-    async hydrate(): Promise<void> {
-      try {
-        // One-time migration from localStorage
-        const legacyIde = localStorage.getItem(LEGACY_KEYS.IDE);
-        if (legacyIde) {
-          try {
-            const config = await invoke<RustAppConfig>("load_config");
-            config.ide = legacyIde;
-            await invoke("save_config", { config });
-          } catch { /* ignore migration failure */ }
-          localStorage.removeItem(LEGACY_KEYS.IDE);
-        }
-        // Clean up legacy session key
-        localStorage.removeItem(LEGACY_KEYS.SESSION);
+	const actions = {
+		/** Load settings from Rust config; migrate from localStorage on first run */
+		async hydrate(): Promise<void> {
+			try {
+				// One-time migration from localStorage
+				const legacyIde = localStorage.getItem(LEGACY_KEYS.IDE);
+				if (legacyIde) {
+					try {
+						const config = await invoke<RustAppConfig>("load_config");
+						config.ide = legacyIde;
+						await invoke("save_config", { config });
+					} catch {
+						/* ignore migration failure */
+					}
+					localStorage.removeItem(LEGACY_KEYS.IDE);
+				}
+				// Clean up legacy session key
+				localStorage.removeItem(LEGACY_KEYS.SESSION);
 
-        const config = await invoke<RustAppConfig>("load_config");
-        baseConfig = config;
-        setState("font", validateFont(config.font_family));
-        setState("fontWeight", config.font_weight || DEFAULTS.fontWeight);
-        setState("ide", validateIde(config.ide));
-        setState("defaultFontSize", config.default_font_size || DEFAULTS.fontSize);
-        setState("shell", config.shell || null);
-        setState("theme", config.theme || "vscode-dark");
-        setState("confirmBeforeQuit", config.confirm_before_quit ?? true);
-        setState("confirmBeforeClosingTab", config.confirm_before_closing_tab ?? true);
-        setState("maxTabNameLength", config.max_tab_name_length || 25);
-        setState("splitTabMode", config.split_tab_mode === "unified" ? "unified" : "separate");
-        setState("autoShowPrPopover", config.auto_show_pr_popover ?? true);
-        setState("preventSleepWhenBusy", config.prevent_sleep_when_busy ?? false);
-        setState("autoUpdateEnabled", config.auto_update_enabled ?? true);
-        setState("language", config.language || "en");
-        setLocale(config.language || "en");
-        const channel = config.update_channel;
-        setState("updateChannel", channel === "nightly" ? channel : "stable");
-        setState("disabledAgents", config.disabled_agents ?? []);
-        setState("intentTabTitle", config.intent_tab_title ?? true);
-        setState("copyOnSelect", config.copy_on_select ?? true);
-        setState("bellStyle", (config.bell_style || "visual") as SettingsStoreState["bellStyle"]);
-        setState("suggestFollowups", config.suggest_followups ?? true);
-        setState("globalHotkey", config.global_hotkey ?? null);
-        setState("issueFilter", validateIssueFilter(config.issue_filter || null));
-        setState("experimentalFeaturesEnabled", config.experimental_features_enabled ?? false);
-        setState("aiChatEnabled", config.ai_chat_enabled ?? false);
-        setState("scrollbackReflow", config.scrollback_reflow ?? false);
-        const cs = config.cursor_style;
-        setState("cursorStyle", (cs === "block" || cs === "underline") ? cs : "bar");
-        setState("terminalRenderer", validateTerminalRenderer(config.terminal_renderer || null));
-      } catch (err) {
-        appLogger.error("config", "Failed to hydrate settings", err);
-      }
-    },
+				const config = await invoke<RustAppConfig>("load_config");
+				baseConfig = config;
+				setState("font", validateFont(config.font_family));
+				setState("fontWeight", config.font_weight || DEFAULTS.fontWeight);
+				setState("ide", validateIde(config.ide));
+				setState("defaultFontSize", config.default_font_size || DEFAULTS.fontSize);
+				setState("shell", config.shell || null);
+				setState("theme", config.theme || "vscode-dark");
+				setState("confirmBeforeQuit", config.confirm_before_quit ?? true);
+				setState("confirmBeforeClosingTab", config.confirm_before_closing_tab ?? true);
+				setState("maxTabNameLength", config.max_tab_name_length || 25);
+				setState("splitTabMode", config.split_tab_mode === "unified" ? "unified" : "separate");
+				setState("autoShowPrPopover", config.auto_show_pr_popover ?? true);
+				setState("preventSleepWhenBusy", config.prevent_sleep_when_busy ?? false);
+				setState("autoUpdateEnabled", config.auto_update_enabled ?? true);
+				setState("language", config.language || "en");
+				setLocale(config.language || "en");
+				const channel = config.update_channel;
+				setState("updateChannel", channel === "nightly" ? channel : "stable");
+				setState("disabledAgents", config.disabled_agents ?? []);
+				setState("intentTabTitle", config.intent_tab_title ?? true);
+				setState("copyOnSelect", config.copy_on_select ?? true);
+				setState("bellStyle", (config.bell_style || "visual") as SettingsStoreState["bellStyle"]);
+				setState("suggestFollowups", config.suggest_followups ?? true);
+				setState("globalHotkey", config.global_hotkey ?? null);
+				setState("issueFilter", validateIssueFilter(config.issue_filter || null));
+				setState("experimentalFeaturesEnabled", config.experimental_features_enabled ?? false);
+				setState("aiChatEnabled", config.ai_chat_enabled ?? false);
+				setState("scrollbackReflow", config.scrollback_reflow ?? false);
+				const cs = config.cursor_style;
+				setState("cursorStyle", cs === "block" || cs === "underline" ? cs : "bar");
+				setState("terminalRenderer", validateTerminalRenderer(config.terminal_renderer || null));
+			} catch (err) {
+				appLogger.error("config", "Failed to hydrate settings", err);
+			}
+		},
 
-    /** Set IDE preference */
-    setIde(ide: IdeType): void {
-      setState("ide", ide);
-      save();
-    },
+		/** Set IDE preference */
+		setIde(ide: IdeType): void {
+			setState("ide", ide);
+			save();
+		},
 
-    /** Set font preference */
-    setFont(font: FontType): void {
-      setState("font", font);
-      save();
-    },
+		/** Set font preference */
+		setFont(font: FontType): void {
+			setState("font", font);
+			save();
+		},
 
-    /** Set terminal font weight */
-    setFontWeight(weight: number): void {
-      setState("fontWeight", Math.max(100, Math.min(900, Math.round(weight / 100) * 100)));
-      save();
-    },
+		/** Set terminal font weight */
+		setFontWeight(weight: number): void {
+			setState("fontWeight", Math.max(100, Math.min(900, Math.round(weight / 100) * 100)));
+			save();
+		},
 
-    /** Set default font size */
-    setDefaultFontSize(size: number): void {
-      setState("defaultFontSize", Math.max(8, Math.min(32, size)));
-      save();
-    },
+		/** Set default font size */
+		setDefaultFontSize(size: number): void {
+			setState("defaultFontSize", Math.max(8, Math.min(32, size)));
+			save();
+		},
 
-    /** Set custom shell override (null = use system default) */
-    setShell(shell: string | null): void {
-      setState("shell", shell?.trim() || null);
-      save();
-    },
+		/** Set custom shell override (null = use system default) */
+		setShell(shell: string | null): void {
+			setState("shell", shell?.trim() || null);
+			save();
+		},
 
-    /** Set terminal theme */
-    setTheme(theme: string): void {
-      setState("theme", theme);
-      save();
-    },
+		/** Set terminal theme */
+		setTheme(theme: string): void {
+			setState("theme", theme);
+			save();
+		},
 
-    /** Set confirm-before-quit preference */
-    setConfirmBeforeQuit(enabled: boolean): void {
-      setState("confirmBeforeQuit", enabled);
-      save();
-    },
+		/** Set confirm-before-quit preference */
+		setConfirmBeforeQuit(enabled: boolean): void {
+			setState("confirmBeforeQuit", enabled);
+			save();
+		},
 
-    /** Set confirm-before-closing-tab preference */
-    setConfirmBeforeClosingTab(enabled: boolean): void {
-      setState("confirmBeforeClosingTab", enabled);
-      save();
-    },
+		/** Set confirm-before-closing-tab preference */
+		setConfirmBeforeClosingTab(enabled: boolean): void {
+			setState("confirmBeforeClosingTab", enabled);
+			save();
+		},
 
-    /** Set split tab mode preference */
-    setSplitTabMode(mode: SplitTabMode): void {
-      setState("splitTabMode", mode);
-      save();
-    },
+		/** Set split tab mode preference */
+		setSplitTabMode(mode: SplitTabMode): void {
+			setState("splitTabMode", mode);
+			save();
+		},
 
-    /** Set auto-show PR popover preference */
-    setAutoShowPrPopover(enabled: boolean): void {
-      setState("autoShowPrPopover", enabled);
-      save();
-    },
+		/** Set auto-show PR popover preference */
+		setAutoShowPrPopover(enabled: boolean): void {
+			setState("autoShowPrPopover", enabled);
+			save();
+		},
 
-    /** Set prevent-sleep-when-busy preference */
-    setPreventSleepWhenBusy(enabled: boolean): void {
-      setState("preventSleepWhenBusy", enabled);
-      save();
-    },
+		/** Set prevent-sleep-when-busy preference */
+		setPreventSleepWhenBusy(enabled: boolean): void {
+			setState("preventSleepWhenBusy", enabled);
+			save();
+		},
 
-    /** Set auto-update-enabled preference */
-    setAutoUpdateEnabled(enabled: boolean): void {
-      setState("autoUpdateEnabled", enabled);
-      save();
-    },
+		/** Set auto-update-enabled preference */
+		setAutoUpdateEnabled(enabled: boolean): void {
+			setState("autoUpdateEnabled", enabled);
+			save();
+		},
 
-    /** Set update channel preference */
-    setUpdateChannel(channel: UpdateChannel): void {
-      setState("updateChannel", channel);
-      save();
-    },
+		/** Set update channel preference */
+		setUpdateChannel(channel: UpdateChannel): void {
+			setState("updateChannel", channel);
+			save();
+		},
 
-    /** Set UI language */
-    setLanguage(language: string): void {
-      setState("language", language);
-      setLocale(language);
-      save();
-    },
+		/** Set UI language */
+		setLanguage(language: string): void {
+			setState("language", language);
+			setLocale(language);
+			save();
+		},
 
-    /** Set max tab name length */
-    setMaxTabNameLength(length: number): void {
-      setState("maxTabNameLength", Math.max(10, Math.min(60, length)));
-      save();
-    },
+		/** Set max tab name length */
+		setMaxTabNameLength(length: number): void {
+			setState("maxTabNameLength", Math.max(10, Math.min(60, length)));
+			save();
+		},
 
-    /** Toggle an agent's enabled/disabled state */
-    toggleAgent(agentType: string): void {
-      const isDisabled = state.disabledAgents.includes(agentType);
-      setState("disabledAgents", isDisabled
-        ? state.disabledAgents.filter((a) => a !== agentType)
-        : [...state.disabledAgents, agentType]);
-      save();
-    },
+		/** Toggle an agent's enabled/disabled state */
+		toggleAgent(agentType: string): void {
+			const isDisabled = state.disabledAgents.includes(agentType);
+			setState(
+				"disabledAgents",
+				isDisabled ? state.disabledAgents.filter((a) => a !== agentType) : [...state.disabledAgents, agentType],
+			);
+			save();
+		},
 
-    /** Check if an agent type is enabled */
-    isAgentEnabled(agentType: string): boolean {
-      return !state.disabledAgents.includes(agentType);
-    },
+		/** Check if an agent type is enabled */
+		isAgentEnabled(agentType: string): boolean {
+			return !state.disabledAgents.includes(agentType);
+		},
 
-    /** Set intent-as-tab-title preference */
-    setIntentTabTitle(enabled: boolean): void {
-      setState("intentTabTitle", enabled);
-      save();
-    },
+		/** Set intent-as-tab-title preference */
+		setIntentTabTitle(enabled: boolean): void {
+			setState("intentTabTitle", enabled);
+			save();
+		},
 
-    /** Set suggest-followups preference */
-    setSuggestFollowups(enabled: boolean): void {
-      setState("suggestFollowups", enabled);
-      save();
-    },
+		/** Set suggest-followups preference */
+		setSuggestFollowups(enabled: boolean): void {
+			setState("suggestFollowups", enabled);
+			save();
+		},
 
-    /** Set copy-on-select preference */
-    setCopyOnSelect(enabled: boolean): void {
-      setState("copyOnSelect", enabled);
-      save();
-    },
+		/** Set copy-on-select preference */
+		setCopyOnSelect(enabled: boolean): void {
+			setState("copyOnSelect", enabled);
+			save();
+		},
 
-    /** Set issue filter mode */
-    setIssueFilter(filter: IssueFilterMode): void {
-      setState("issueFilter", filter);
-      save();
-    },
+		/** Set issue filter mode */
+		setIssueFilter(filter: IssueFilterMode): void {
+			setState("issueFilter", filter);
+			save();
+		},
 
-    /** Set terminal bell style */
-    setBellStyle(style: SettingsStoreState["bellStyle"]): void {
-      setState("bellStyle", style);
-      save();
-    },
+		/** Set terminal bell style */
+		setBellStyle(style: SettingsStoreState["bellStyle"]): void {
+			setState("bellStyle", style);
+			save();
+		},
 
-    setExperimentalFeaturesEnabled(enabled: boolean): void {
-      setState("experimentalFeaturesEnabled", enabled);
-      save();
-    },
+		setExperimentalFeaturesEnabled(enabled: boolean): void {
+			setState("experimentalFeaturesEnabled", enabled);
+			save();
+		},
 
-    setAiChatEnabled(enabled: boolean): void {
-      setState("aiChatEnabled", enabled);
-      save();
-    },
+		setAiChatEnabled(enabled: boolean): void {
+			setState("aiChatEnabled", enabled);
+			save();
+		},
 
-    setScrollbackReflow(enabled: boolean): void {
-      setState("scrollbackReflow", enabled);
-      save();
-    },
+		setScrollbackReflow(enabled: boolean): void {
+			setState("scrollbackReflow", enabled);
+			save();
+		},
 
-    setCursorStyle(style: SettingsStoreState["cursorStyle"]): void {
-      setState("cursorStyle", style);
-      save();
-    },
+		setCursorStyle(style: SettingsStoreState["cursorStyle"]): void {
+			setState("cursorStyle", style);
+			save();
+		},
 
-    setTerminalRenderer(renderer: TerminalRenderer): void {
-      setState("terminalRenderer", renderer);
-      save();
-    },
+		setTerminalRenderer(renderer: TerminalRenderer): void {
+			setState("terminalRenderer", renderer);
+			save();
+		},
 
-    /** Re-apply font from the last loaded config (no IPC — uses hydrate cache) */
-    loadFontFromConfig(): void {
-      if (baseConfig) {
-        setState("font", validateFont(baseConfig.font_family));
-      }
-    },
+		/** Re-apply font from the last loaded config (no IPC — uses hydrate cache) */
+		loadFontFromConfig(): void {
+			if (baseConfig) {
+				setState("font", validateFont(baseConfig.font_family));
+			}
+		},
 
-    /** Set global OS-level hotkey (or clear with null) */
-    async setGlobalHotkey(combo: string | null): Promise<void> {
-      const prevValue = state.globalHotkey;
-      setState("globalHotkey", combo);
-      try {
-        await invoke("set_global_hotkey", { combo });
-      } catch (err) {
-        appLogger.error("config", "Failed to set global hotkey", err);
-        setState("globalHotkey", prevValue);
-        throw err;
-      }
-    },
+		/** Set global OS-level hotkey (or clear with null) */
+		async setGlobalHotkey(combo: string | null): Promise<void> {
+			const prevValue = state.globalHotkey;
+			setState("globalHotkey", combo);
+			try {
+				await invoke("set_global_hotkey", { combo });
+			} catch (err) {
+				appLogger.error("config", "Failed to set global hotkey", err);
+				setState("globalHotkey", prevValue);
+				throw err;
+			}
+		},
 
-    /** Get CSS font family string */
-    getFontFamily(): string {
-      return FONT_FAMILIES[state.font] || FONT_FAMILIES[DEFAULTS.font];
-    },
+		/** Get CSS font family string */
+		getFontFamily(): string {
+			return FONT_FAMILIES[state.font] || FONT_FAMILIES[DEFAULTS.font];
+		},
 
-    /** Get IDE display name */
-    getIdeName(): string {
-      return IDE_NAMES[state.ide] || IDE_NAMES[DEFAULTS.ide];
-    },
+		/** Get IDE display name */
+		getIdeName(): string {
+			return IDE_NAMES[state.ide] || IDE_NAMES[DEFAULTS.ide];
+		},
 
-    isAiChatEnabled(): boolean {
-      return state.experimentalFeaturesEnabled && state.aiChatEnabled;
-    },
+		isAiChatEnabled(): boolean {
+			return state.experimentalFeaturesEnabled && state.aiChatEnabled;
+		},
+	};
 
-  };
-
-  return { state, ...actions };
+	return { state, ...actions };
 }
 
 export const settingsStore = createSettingsStore();
 
 // Debug registry — expose app settings for MCP introspection
 import { registerDebugSnapshot } from "./debugRegistry";
+
 registerDebugSnapshot("settings", () => {
-  const s = settingsStore.state;
-  return {
-    ide: s.ide,
-    font: s.font,
-    fontWeight: s.fontWeight,
-    defaultFontSize: s.defaultFontSize,
-    shell: s.shell,
-    theme: s.theme,
-    language: s.language,
-    splitTabMode: s.splitTabMode,
-    bellStyle: s.bellStyle,
-    updateChannel: s.updateChannel,
-    intentTabTitle: s.intentTabTitle,
-    suggestFollowups: s.suggestFollowups,
-    copyOnSelect: s.copyOnSelect,
-    autoUpdateEnabled: s.autoUpdateEnabled,
-    preventSleepWhenBusy: s.preventSleepWhenBusy,
-    issueFilter: s.issueFilter,
-    terminalRenderer: s.terminalRenderer,
-  };
+	const s = settingsStore.state;
+	return {
+		ide: s.ide,
+		font: s.font,
+		fontWeight: s.fontWeight,
+		defaultFontSize: s.defaultFontSize,
+		shell: s.shell,
+		theme: s.theme,
+		language: s.language,
+		splitTabMode: s.splitTabMode,
+		bellStyle: s.bellStyle,
+		updateChannel: s.updateChannel,
+		intentTabTitle: s.intentTabTitle,
+		suggestFollowups: s.suggestFollowups,
+		copyOnSelect: s.copyOnSelect,
+		autoUpdateEnabled: s.autoUpdateEnabled,
+		preventSleepWhenBusy: s.preventSleepWhenBusy,
+		issueFilter: s.issueFilter,
+		terminalRenderer: s.terminalRenderer,
+	};
 });
