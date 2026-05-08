@@ -148,8 +148,107 @@ jobs:
           security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
           rm -f "$APPLE_API_KEY_PATH" 2>/dev/null || true
 
+  remote-daemon:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            label: linux-x64
+            ext: ''
+          - platform: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            label: linux-arm64
+            ext: ''
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: windows-x64
+            ext: '.exe'
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            label: macos-arm64
+            ext: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Linux dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev
+
+      - name: Install cross-compilation tools (aarch64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+          echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Build tuic-remote
+        working-directory: src-tauri
+        env:
+          CARGO_PROFILE_RELEASE_STRIP: 'true'
+        run: cargo build --release --no-default-features --bin tuic-remote --target ${{ matrix.target }}
+
+      - name: Smoke test (Linux x64)
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        working-directory: src-tauri
+        run: |
+          ./target/${{ matrix.target }}/release/tuic-remote &
+          PID=$!
+          sleep 2
+          curl -sf http://127.0.0.1:9877/health | grep -q '"ok":true'
+          kill $PID
+
+      - name: Smoke test (macOS)
+        if: startsWith(matrix.platform, 'macos-')
+        working-directory: src-tauri
+        run: |
+          ./target/${{ matrix.target }}/release/tuic-remote &
+          PID=$!
+          sleep 2
+          curl -sf http://127.0.0.1:9877/health | grep -q '"ok":true'
+          kill $PID
+
+      - name: Smoke test (Windows)
+        if: matrix.platform == 'windows-latest'
+        working-directory: src-tauri
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "target/${{ matrix.target }}/release/tuic-remote.exe" -PassThru -NoNewWindow
+          Start-Sleep -Seconds 3
+          $resp = Invoke-WebRequest -Uri "http://127.0.0.1:9877/health" -UseBasicParsing
+          if ($resp.Content -notmatch '"ok":true') { throw "Health check failed: $($resp.Content)" }
+          Stop-Process -Id $proc.Id -Force
+
+      - name: Upload to release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          VERSION=$(jq -r '.version' src-tauri/tauri.conf.json)
+          TAG="v${VERSION}"
+          ASSET="tuic-remote-${{ matrix.target }}${{ matrix.ext }}"
+          cp "src-tauri/target/${{ matrix.target }}/release/tuic-remote${{ matrix.ext }}" "$ASSET"
+          gh release upload "${TAG}" "$ASSET" --clobber
+
   finalize-release:
-    needs: build
+    needs: [build, remote-daemon]
     runs-on: ubuntu-latest
     permissions:
       contents: write

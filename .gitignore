@@ -64,3 +64,14 @@ docs/book
 # Local embedding cache (mdkb/fastembed model files)
 .fastembed_cache/
 .vscode/
+
+# Ralph task runner state
+.ralph/
+ralph-tasks.json
+
+# Reference screenshots
+terminal_reference.png
+
+# Font source files (keep in public/fonts/ but not attribution)
+public/fonts/LICENSE
+public/fonts/README.md

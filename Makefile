@@ -21,7 +21,7 @@ export MACOSX_DEPLOYMENT_TARGET ?= 10.15
 # Distribution output
 DIST_DIR=dist-release
 
-.PHONY: all clean dev test build build-dmg check sign verify-sign notarize release dist \
+.PHONY: all clean dev test build build-dmg check fmt sign verify-sign notarize release dist \
        nightly github-release preview bump
 
 all: build sign
@@ -49,10 +49,17 @@ build-dmg:
 	@echo "Building TUICommander $(VERSION) with DMG..."
 	npm run tauri build -- --bundles app,dmg
 
-# Type-check, lint, and test (no Tauri build)
+# Auto-format frontend + Rust
+fmt:
+	@npx biome check --fix src/
+	@cd src-tauri && cargo fmt
+
+# Type-check, lint, format, and test (no Tauri build)
 check:
 	@echo "Running checks..."
 	@rtk npx tsc --noEmit && echo "  tsc ✓"
+	@rtk npx biome check src/ && echo "  biome ✓"
+	@cd src-tauri && rtk cargo fmt --check && echo "  rustfmt ✓"
 	@cd src-tauri && rtk cargo clippy --release -- -D warnings && echo "  clippy ✓"
 	@cd src-tauri && ulimit -n 10240 && rtk cargo test -q && echo "  cargo test ✓"
 	@rtk npx vitest run --reporter=dot 2>&1 | tail -3

@@ -88,7 +88,7 @@ export default defineConfig(async () => ({
       output: {
         manualChunks: {
           codemirror: ["@codemirror/state", "@codemirror/view", "@codemirror/language", "@codemirror/language-data", "@codemirror/commands", "@codemirror/search", "@lezer/common", "@lezer/highlight"],
-          "diff-view": ["@git-diff-view/core", "@git-diff-view/solid"],
+          "diff-view": ["@git-diff-view/core"],
           markdown: ["marked", "dompurify"],
         },
       },

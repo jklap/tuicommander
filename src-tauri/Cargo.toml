@@ -12,13 +12,77 @@ default-run = "tuicommander"
 [profile.release]
 incremental = true
 
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+too_many_lines = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_lossless = "allow"
+struct_excessive_bools = "allow"
+fn_params_excessive_bools = "allow"
+similar_names = "allow"
+single_match_else = "allow"
+needless_pass_by_value = "allow"
+unnecessary_wraps = "allow"
+if_not_else = "allow"
+match_wildcard_for_single_variants = "allow"
+redundant_closure_for_method_calls = "allow"
+items_after_statements = "allow"
+wildcard_imports = "allow"
+unreadable_literal = "allow"
+unnested_or_patterns = "allow"
+uninlined_format_args = "allow"
+doc_markdown = "allow"
+doc_link_with_quotes = "allow"
+default_trait_access = "allow"
+implicit_clone = "allow"
+ignored_unit_patterns = "allow"
+manual_let_else = "allow"
+match_same_arms = "allow"
+map_unwrap_or = "allow"
+semicolon_if_nothing_returned = "allow"
+trivially_copy_pass_by_ref = "allow"
+unused_self = "allow"
+used_underscore_binding = "allow"
+struct_field_names = "allow"
+ref_option = "allow"
+needless_raw_string_hashes = "allow"
+single_char_pattern = "allow"
+explicit_iter_loop = "allow"
+manual_is_variant_and = "allow"
+large_stack_arrays = "allow"
+return_self_not_must_use = "allow"
+option_if_let_else = "allow"
+duration_suboptimal_units = "allow"
+format_push_string = "allow"
+non_std_lazy_statics = "allow"
+needless_continue = "allow"
+redundant_else = "allow"
+bool_to_int_with_if = "allow"
+cast_possible_wrap = "allow"
+cast_ptr_alignment = "allow"
+borrow_as_ptr = "allow"
+case_sensitive_file_extension_comparisons = "allow"
+assigning_clones = "allow"
+unused_async = "allow"
+unnecessary_debug_formatting = "allow"
+unchecked_time_subtraction = "allow"
+
+[lints]
+workspace = true
+
 [lib]
 name = "tuicommander_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [[bin]]
-name = "tuicommander-remote"
-path = "src/bin/tuicommander_remote.rs"
+name = "tuic-remote"
+path = "src/bin/tuic_remote.rs"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [], optional = true }
