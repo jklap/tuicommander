@@ -2095,4 +2095,184 @@ mod tests {
             "history count should not change without reflow"
         );
     }
+
+    /// Regression: HistoryOnly reflow must not leak history content into screen rows.
+    ///
+    /// A WRAPLINE history row at the boundary could theoretically be merged with the
+    /// top screen row during grow_columns. Verify that after shrink→grow, screen rows
+    /// contain only screen content (possibly truncated), not history content.
+    #[test]
+    fn reflow_history_does_not_corrupt_screen_at_boundary() {
+        // 4-row terminal, 10 cols.
+        let mut grid = TerminalGrid::new(4, 10, 100);
+        grid.reflow_history = true;
+
+        // Write a line longer than 10 cols so it wraps → creates WRAPLINE flag.
+        // "123456789ABCDEFGH" = 18 chars → 2 history rows after scrolling off.
+        let _ = grid.process(b"123456789ABCDEFGH\r\n");
+
+        // Fill screen with identifiable content (prefix "S" makes it distinct from history).
+        let _ = grid.process(b"Srow1\r\n");
+        let _ = grid.process(b"Srow2\r\n");
+        let _ = grid.process(b"Srow3\r\n");
+        let _ = grid.process(b"Srow4");
+
+        let history_before = grid.scrollback_count();
+        assert!(history_before >= 2, "expected wrapped rows in history, got {history_before}");
+
+        // Shrink to 6 cols — history reflowed (wraps further), screen truncated.
+        grid.resize(4, 6);
+        // Grow back to 10 cols — history unwraps, screen padded.
+        grid.resize(4, 10);
+
+        let screen_after = grid.read_screen_text();
+
+        // No screen row may contain history content ("123456789A" or "BCDEFGH").
+        for row in &screen_after {
+            assert!(
+                !row.contains("123456789A") && !row.contains("BCDEFGH"),
+                "history content leaked into screen row: {row:?}"
+            );
+        }
+
+        // All non-empty screen rows must start with "S" (screen content marker),
+        // confirming history hasn't overwritten them.
+        for row in &screen_after {
+            let trimmed = row.trim_end();
+            if !trimmed.is_empty() {
+                assert!(
+                    trimmed.starts_with('S'),
+                    "screen row overwritten by non-screen content: {row:?}"
+                );
+            }
+        }
+    }
+
+    /// Bug regression: grow_columns must not absorb the top screen row into a
+    /// WRAPLINE history row at the boundary.
+    ///
+    /// Trigger: write a line wider than cols (wraps → WRAPLINE in history), write
+    /// nothing else so the wrap continuation stays as top screen row, then grow.
+    /// Before fix: top screen row disappeared into history. After fix: intact.
+    #[test]
+    fn reflow_history_grow_does_not_absorb_top_screen_row() {
+        // 3-row terminal, 6 cols.
+        let mut grid = TerminalGrid::new(3, 6, 100);
+        grid.reflow_history = true;
+
+        // A 9-char line wraps at 6 → row 0: "ABCDEF" (WRAPLINE), row 1: "GHI"
+        // Then 2 more lines push "ABCDEF" into history (newest history = "ABCDEF" w/ WRAPLINE).
+        let _ = grid.process(b"ABCDEFGHI\r\n");
+        let _ = grid.process(b"SC1\r\n");
+        let _ = grid.process(b"SC2");
+        // Screen now: "GHI", "SC1", "SC2" — history: "ABCDEF" (WRAPLINE)
+
+        let _ = grid.process(b""); // flush
+        let screen_before: Vec<String> = grid.read_screen_text()
+            .iter()
+            .map(|r| r.trim_end().to_string())
+            .collect();
+
+        // Grow to 9 cols — without fix, "GHI" (top screen row) would merge into "ABCDEF".
+        grid.resize(3, 9);
+
+        let screen_after: Vec<String> = grid.read_screen_text()
+            .iter()
+            .map(|r| r.trim_end().to_string())
+            .collect();
+
+        // Every non-empty screen row must start with a screen marker, not "A" (history).
+        for row in &screen_after {
+            let t = row.trim_end();
+            if !t.is_empty() {
+                assert!(
+                    !t.starts_with('A'),
+                    "history content 'ABCDEF' appeared in screen row after grow: {t:?}\nscreen before: {screen_before:?}\nscreen after: {screen_after:?}"
+                );
+            }
+        }
+        // The screen should still have 3 rows (no rows lost to history absorption).
+        assert_eq!(screen_after.len(), 3, "screen should have 3 rows, got: {screen_after:?}");
+    }
+
+    /// Bug regression: shrink_columns must not prepend history overflow into the
+    /// top screen row when the newest history row wraps at the boundary.
+    ///
+    /// Trigger: write a line that exactly fills the newest history slot and wraps
+    /// on shrink, then assert no history content appears in screen rows.
+    #[test]
+    fn reflow_history_shrink_does_not_spill_into_top_screen_row() {
+        // 3-row terminal, 10 cols.
+        let mut grid = TerminalGrid::new(3, 10, 100);
+        grid.reflow_history = true;
+
+        // Write a 10-char line followed by screen content.
+        // "1234567890" exactly fills 10 cols → goes to history as a full row (no wrap).
+        // It will wrap when shrunk to 6 cols — producing buffered overflow.
+        let _ = grid.process(b"1234567890\r\n");
+        let _ = grid.process(b"Srow1\r\n");
+        let _ = grid.process(b"Srow2\r\n");
+        let _ = grid.process(b"Srow3");
+        // History: "1234567890" (newest, at boundary). Screen: Srow1, Srow2, Srow3.
+
+        // Shrink to 6: "1234567890" wraps → "123456" (WRAPLINE) + "7890" buffered.
+        // Without fix, "7890" would be prepended to "Srow1" (top screen row).
+        grid.resize(3, 6);
+
+        let screen_after = grid.read_screen_text();
+
+        for row in &screen_after {
+            let t = row.trim_end();
+            if !t.is_empty() {
+                assert!(
+                    !t.contains("7890") && !t.contains("123456"),
+                    "history content spilled into screen row during shrink: {t:?}\nfull screen: {screen_after:?}"
+                );
+            }
+        }
+    }
+
+    /// Verify that HistoryOnly reflow is a strict improvement over None:
+    /// history count is preserved across shrink-grow, screen is not worse.
+    #[test]
+    fn reflow_history_strictly_better_than_none_for_history() {
+        // With reflow enabled.
+        let mut grid_reflow = TerminalGrid::new(3, 20, 100);
+        grid_reflow.reflow_history = true;
+
+        // With reflow disabled.
+        let mut grid_none = TerminalGrid::new(3, 20, 100);
+        grid_none.reflow_history = false;
+
+        for grid in [&mut grid_reflow, &mut grid_none] {
+            let _ = grid.process(b"AAAAAAAAAABBBBBBBBBB\r\n");
+            let _ = grid.process(b"CCCCCCCCCCDDDDDDDDDD\r\n");
+            let _ = grid.process(b"EEEEEEEEEEFFFFFFFFFF\r\n");
+            let _ = grid.process(b"line4\r\nline5\r\nline6");
+        }
+
+        let history_before_reflow = grid_reflow.scrollback_count();
+        let history_before_none = grid_none.scrollback_count();
+        assert_eq!(history_before_reflow, history_before_none);
+
+        for grid in [&mut grid_reflow, &mut grid_none] {
+            grid.resize(3, 10);
+            grid.resize(3, 20);
+        }
+
+        let history_after_reflow = grid_reflow.scrollback_count();
+        let history_after_none = grid_none.scrollback_count();
+
+        // Reflow restores history; None leaves truncated rows.
+        assert_eq!(
+            history_after_reflow, history_before_reflow,
+            "reflow should restore history count after shrink-grow"
+        );
+        // None truncates: after shrink the rows stay same count but content lost,
+        // after grow count stays same. Both should equal history_before_none.
+        assert_eq!(
+            history_after_none, history_before_none,
+            "without reflow, history count should be unchanged (but content truncated)"
+        );
+    }
 }

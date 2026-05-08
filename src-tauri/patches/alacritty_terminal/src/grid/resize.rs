@@ -155,9 +155,11 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
 
         for (i, mut row) in rows.drain(..).enumerate().rev() {
             // Check if reflowing should be performed on the last pushed row.
+            // Also require the current row to be a history row — screen rows must
+            // never be absorbed into a history row (HistoryOnly boundary guard).
             let last_buf_idx = reversed_idx.last().copied().unwrap_or(0);
             let last_row = match reversed.last_mut() {
-                Some(last_row) if should_reflow(last_row, last_buf_idx) => last_row,
+                Some(last_row) if should_reflow(last_row, last_buf_idx) && reflow_for(i) => last_row,
                 _ => {
                     reversed.push(row);
                     reversed_idx.push(i);
@@ -309,15 +311,21 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
             let reflow_this = reflow_for(i);
 
             // Append lines left over from the previous row.
+            // Only prepend if this row is also a history row — screen rows must never
+            // receive history overflow (HistoryOnly boundary guard). The history row
+            // that produced the overflow was already pushed with WRAPLINE set, so
+            // discarding buffered here leaves history consistent.
             if let Some(buffered) = buffered.take() {
-                // Add a column for every cell added before the cursor, if it goes beyond the new
-                // width it is then later reflown.
-                let cursor_buffer_line = self.lines - self.cursor.point.line.0 as usize - 1;
-                if i == cursor_buffer_line {
-                    self.cursor.point.column += buffered.len();
-                }
+                if reflow_this {
+                    // Add a column for every cell added before the cursor, if it goes beyond the
+                    // new width it is then later reflown.
+                    let cursor_buffer_line = self.lines - self.cursor.point.line.0 as usize - 1;
+                    if i == cursor_buffer_line {
+                        self.cursor.point.column += buffered.len();
+                    }
 
-                row.append_front(buffered);
+                    row.append_front(buffered);
+                }
             }
 
             loop {
