@@ -25,6 +25,11 @@ const TRIGGER_MAP: Record<WatcherTriggerKey, WatcherTrigger> = {
 	unseen: { type: "unseen" },
 };
 
+function triggerToKey(trigger: WatcherTrigger): WatcherTriggerKey {
+	if (trigger.type === "command_done") return trigger.on_failure_only ? "command_done_fail" : "command_done";
+	return trigger.type as WatcherTriggerKey;
+}
+
 const TRIGGER_LABELS: Record<string, string> = {
 	idle: "Idle",
 	busy: "Busy",
@@ -69,7 +74,8 @@ function statusClass(status: string): string {
 
 export const WatcherManager: Component = () => {
 	const [rules, setRules] = createSignal<WatcherRule[]>([]);
-	const [showCreate, setShowCreate] = createSignal(false);
+	const [showForm, setShowForm] = createSignal(false);
+	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const [attachingId, setAttachingId] = createSignal<string | null>(null);
 
 	const [formName, setFormName] = createSignal("");
@@ -93,22 +99,60 @@ export const WatcherManager: Component = () => {
 		unlisten.then((fn) => fn());
 	});
 
-	const handleCreate = async () => {
-		const name = formName().trim() || `Watcher (${formTrigger()})`;
-		try {
-			await invoke("watcher_create", {
-				name,
-				sessionId: null,
-				trigger: TRIGGER_MAP[formTrigger()],
-				instructions: formInstructions(),
-				maxFires: formMaxFires(),
-			});
-			setShowCreate(false);
-			setFormName("");
-			setFormInstructions("");
-			refresh();
-		} catch (e) {
-			appLogger.error("ai-agent", `Create failed: ${e}`);
+	const resetForm = () => {
+		setFormName("");
+		setFormTrigger("idle");
+		setFormInstructions("");
+		setFormMaxFires(50);
+		setEditingId(null);
+		setShowForm(false);
+	};
+
+	const openCreate = () => {
+		resetForm();
+		setShowForm(true);
+	};
+
+	const openEdit = (rule: WatcherRule) => {
+		setFormName(rule.name);
+		setFormTrigger(triggerToKey(rule.trigger));
+		setFormInstructions(rule.instructions);
+		setFormMaxFires(rule.max_fires);
+		setEditingId(rule.id);
+		setShowForm(true);
+	};
+
+	const handleSubmit = async () => {
+		const id = editingId();
+		if (id) {
+			try {
+				await invoke("watcher_update", {
+					id,
+					name: formName().trim() || null,
+					trigger: TRIGGER_MAP[formTrigger()],
+					instructions: formInstructions(),
+					maxFires: formMaxFires(),
+				});
+				resetForm();
+				refresh();
+			} catch (e) {
+				appLogger.error("ai-agent", `Update failed: ${e}`);
+			}
+		} else {
+			const name = formName().trim() || `Watcher (${formTrigger()})`;
+			try {
+				await invoke("watcher_create", {
+					name,
+					sessionId: null,
+					trigger: TRIGGER_MAP[formTrigger()],
+					instructions: formInstructions(),
+					maxFires: formMaxFires(),
+				});
+				resetForm();
+				refresh();
+			} catch (e) {
+				appLogger.error("ai-agent", `Create failed: ${e}`);
+			}
 		}
 	};
 
@@ -161,12 +205,12 @@ export const WatcherManager: Component = () => {
 		<div class={s.popover} onClick={(e) => e.stopPropagation()}>
 			<div class={s.header}>
 				<span>Watchers</span>
-				<button class={s.addBtn} onClick={() => setShowCreate(!showCreate())}>
-					{showCreate() ? "Cancel" : "+ New"}
+				<button class={s.addBtn} onClick={() => (showForm() ? resetForm() : openCreate())}>
+					{showForm() ? "Cancel" : "+ New"}
 				</button>
 			</div>
 
-			<Show when={showCreate()}>
+			<Show when={showForm()}>
 				<div class={s.createForm}>
 					<div class={s.formRow}>
 						<input
@@ -210,11 +254,11 @@ export const WatcherManager: Component = () => {
 						/>
 					</div>
 					<div class={s.formActions}>
-						<button class={s.cancelBtn} onClick={() => setShowCreate(false)}>
+						<button class={s.cancelBtn} onClick={resetForm}>
 							Cancel
 						</button>
-						<button class={s.submitBtn} disabled={!formInstructions().trim()} onClick={handleCreate}>
-							Create Template
+						<button class={s.submitBtn} disabled={!formInstructions().trim()} onClick={handleSubmit}>
+							{editingId() ? "Save" : "Create Template"}
 						</button>
 					</div>
 				</div>
@@ -232,6 +276,11 @@ export const WatcherManager: Component = () => {
 									<span class={s.ruleName} title={rule.name}>
 										{rule.name}
 									</span>
+									<button class={s.actionBtn} onClick={() => openEdit(rule)} title="Edit">
+										<svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor">
+											<path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.758l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z" />
+										</svg>
+									</button>
 									<button
 										class={s.actionBtn}
 										onClick={() => setAttachingId(attachingId() === rule.id ? null : rule.id)}
