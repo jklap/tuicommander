@@ -12,37 +12,33 @@ import { terminalsStore } from "../stores/terminals";
  * (dialog closed), not when the user clicks empty space or tabs away.
  */
 export function useFocusRestore(): void {
-  let prevFocused: EventTarget | null = null;
+	let prevFocused: EventTarget | null = null;
 
-  const onFocusOut = (e: FocusEvent) => {
-    prevFocused = e.target;
-  };
+	const onFocusOut = (e: FocusEvent) => {
+		prevFocused = e.target;
+	};
 
-  const onFocusIn = (e: FocusEvent) => {
-    if (
-      e.target !== document.body
-      || !prevFocused
-      || !(prevFocused instanceof Node)
-    ) {
-      return;
-    }
+	const onFocusIn = (e: FocusEvent) => {
+		if (e.target !== document.body || !prevFocused || !(prevFocused instanceof Node)) {
+			return;
+		}
 
-    // The previously focused element was removed from the DOM — a dialog closed.
-    if (!document.contains(prevFocused)) {
-      requestAnimationFrame(() => {
-        // Double-check: still on body (no other handler claimed focus)
-        if (document.activeElement === document.body || document.activeElement === null) {
-          terminalsStore.getActive()?.ref?.focus();
-        }
-      });
-    }
-  };
+		// The previously focused element was removed from the DOM — a dialog closed.
+		if (!document.contains(prevFocused)) {
+			requestAnimationFrame(() => {
+				// Double-check: still on body (no other handler claimed focus)
+				if (document.activeElement === document.body || document.activeElement === null) {
+					terminalsStore.getActive()?.ref?.focus();
+				}
+			});
+		}
+	};
 
-  document.addEventListener("focusout", onFocusOut);
-  document.addEventListener("focusin", onFocusIn);
+	document.addEventListener("focusout", onFocusOut);
+	document.addEventListener("focusin", onFocusIn);
 
-  onCleanup(() => {
-    document.removeEventListener("focusout", onFocusOut);
-    document.removeEventListener("focusin", onFocusIn);
-  });
+	onCleanup(() => {
+		document.removeEventListener("focusout", onFocusOut);
+		document.removeEventListener("focusin", onFocusIn);
+	});
 }

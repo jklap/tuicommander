@@ -1,9 +1,9 @@
 import { createEffect, onCleanup } from "solid-js";
+import { AGENT_TYPES, AGENTS, type AgentType } from "../agents";
 import { invoke } from "../invoke";
-import { terminalsStore } from "../stores/terminals";
-import { appLogger } from "../stores/appLogger";
-import { type AgentType, AGENT_TYPES, AGENTS } from "../agents";
 import { pluginRegistry } from "../plugins/pluginRegistry";
+import { appLogger } from "../stores/appLogger";
+import { terminalsStore } from "../stores/terminals";
 
 /** Fallback polling interval — only catches cold starts and edge cases (ms) */
 const POLL_INTERVAL_MS = 30_000;
@@ -26,8 +26,8 @@ export type DetectionSource = "idle" | "busy" | "poll";
 
 /** Validate a string from the backend is a known AgentType */
 function toAgentType(value: string | null): AgentType | null {
-  if (value === null) return null;
-  return (AGENT_TYPES as readonly string[]).includes(value) ? (value as AgentType) : null;
+	if (value === null) return null;
+	return (AGENT_TYPES as readonly string[]).includes(value) ? (value as AgentType) : null;
 }
 
 // Module-level state shared between pollAll and event-driven detection
@@ -43,112 +43,117 @@ const nullStreak = new Map<string, number>();
  *   foreground-process sampling is inherently flaky during subprocess transitions.
  */
 export async function detectAgentForTerminal(termId: string, source: DetectionSource = "poll"): Promise<void> {
-  const current = terminalsStore.get(termId);
-  if (!current) {
-    // Terminal removed — clean up module-level tracking state
-    discoveryAttempted.delete(termId);
-    nullStreak.delete(termId);
-    return;
-  }
-  if (!current.sessionId) return;
+	const current = terminalsStore.get(termId);
+	if (!current) {
+		// Terminal removed — clean up module-level tracking state
+		discoveryAttempted.delete(termId);
+		nullStreak.delete(termId);
+		return;
+	}
+	if (!current.sessionId) return;
 
-  let agentType: AgentType | null;
-  try {
-    const result = await invoke<string | null>("get_session_foreground_process", {
-      sessionId: current.sessionId,
-    });
-    agentType = toAgentType(result);
-  } catch (err) {
-    appLogger.debug("app", `[AgentDetect] ${termId} invoke failed`, err);
-    return;
-  }
+	let agentType: AgentType | null;
+	try {
+		const result = await invoke<string | null>("get_session_foreground_process", {
+			sessionId: current.sessionId,
+		});
+		agentType = toAgentType(result);
+	} catch (err) {
+		appLogger.debug("app", `[AgentDetect] ${termId} invoke failed`, err);
+		return;
+	}
 
-  const prevAgentType = current.agentType;
+	const prevAgentType = current.agentType;
 
-  // Agent→null transition: only allowed from "idle" source (shell prompt returned).
-  // Poll and busy sources can only discover agents, never clear them — foreground
-  // process sampling is too flaky during subprocess transitions (git, node, etc.).
-  if (prevAgentType !== null && agentType === null) {
-    if (source !== "idle") return; // Not a reliable clearing signal — skip
-    const streak = (nullStreak.get(termId) ?? 0) + 1;
-    nullStreak.set(termId, streak);
-    if (streak < NULL_THRESHOLD) return;
-  }
+	// Agent→null transition: only allowed from "idle" source (shell prompt returned).
+	// Poll and busy sources can only discover agents, never clear them — foreground
+	// process sampling is too flaky during subprocess transitions (git, node, etc.).
+	if (prevAgentType !== null && agentType === null) {
+		if (source !== "idle") return; // Not a reliable clearing signal — skip
+		const streak = (nullStreak.get(termId) ?? 0) + 1;
+		nullStreak.set(termId, streak);
+		if (streak < NULL_THRESHOLD) return;
+	}
 
-  if (agentType !== null) {
-    nullStreak.delete(termId);
-  }
+	if (agentType !== null) {
+		nullStreak.delete(termId);
+	}
 
-  if (prevAgentType !== agentType) {
-    appLogger.debug("app", `[AgentDetect] ${termId} agentType "${prevAgentType}" → "${agentType}"`);
+	if (prevAgentType !== agentType) {
+		appLogger.debug("app", `[AgentDetect] ${termId} agentType "${prevAgentType}" → "${agentType}"`);
 
-    const sessId = current.sessionId;
+		const sessId = current.sessionId;
 
-    // Notify stop of previous agent BEFORE updating the store. Plugin dispatch
-    // filters read the current store.agentType, so agent-stopped must fire
-    // while the previous type is still current or filtered plugins miss it
-    // (their internal per-session tracking then leaks across agent changes —
-    // e.g. cache-keepalive kept writing to a session that switched claude→codex).
-    if (prevAgentType !== null && sessId) {
-      pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId: sessId, terminalId: termId });
-    }
+		// Notify stop of previous agent BEFORE updating the store. Plugin dispatch
+		// filters read the current store.agentType, so agent-stopped must fire
+		// while the previous type is still current or filtered plugins miss it
+		// (their internal per-session tracking then leaks across agent changes —
+		// e.g. cache-keepalive kept writing to a session that switched claude→codex).
+		if (prevAgentType !== null && sessId) {
+			pluginRegistry.notifyStateChange({ type: "agent-stopped", sessionId: sessId, terminalId: termId });
+		}
 
-    terminalsStore.update(termId, { agentType });
+		terminalsStore.update(termId, { agentType });
 
-    // Reset agent-specific state carried over from the previous agent.
-    if (prevAgentType !== null) {
-      terminalsStore.update(termId, { agentSessionId: null });
-      discoveryAttempted.delete(termId);
-      if (agentType === null) {
-        nullStreak.delete(termId);
-      }
-    }
+		// Reset agent-specific state carried over from the previous agent.
+		if (prevAgentType !== null) {
+			terminalsStore.update(termId, { agentSessionId: null });
+			discoveryAttempted.delete(termId);
+			if (agentType === null) {
+				nullStreak.delete(termId);
+			}
+		}
 
-    // Notify start of new agent AFTER updating the store so filtered plugins
-    // for the new type see the event and receive the synthetic shell-state replay.
-    if (agentType !== null && sessId) {
-      pluginRegistry.notifyStateChange({ type: "agent-started", sessionId: sessId, terminalId: termId });
-      // Replay current shell state to plugins filtered by agentType — they missed
-      // events dispatched before detection completed (agentType was still stale).
-      const freshShellState = terminalsStore.get(termId)?.shellState;
-      if (freshShellState) {
-        pluginRegistry.dispatchStructuredEvent("shell-state", { state: freshShellState }, sessId);
-      }
-    }
-  }
+		// Notify start of new agent AFTER updating the store so filtered plugins
+		// for the new type see the event and receive the synthetic shell-state replay.
+		if (agentType !== null && sessId) {
+			pluginRegistry.notifyStateChange({ type: "agent-started", sessionId: sessId, terminalId: termId });
+			// Replay current shell state to plugins filtered by agentType — they missed
+			// events dispatched before detection completed (agentType was still stale).
+			const freshShellState = terminalsStore.get(termId)?.shellState;
+			if (freshShellState) {
+				pluginRegistry.dispatchStructuredEvent("shell-state", { state: freshShellState }, sessId);
+			}
+		}
+	}
 
-  // null→agent: attempt session discovery if supported and not yet tried.
-  // Skip discovery when tuicSession is set — it IS the session ID
-  // (shell integration injects --session-id $TUIC_SESSION into claude calls).
-  // Discovery is only needed for terminals without tuicSession (legacy, manual launches).
-  if (agentType !== null && current.agentSessionId === null && !discoveryAttempted.has(termId) && !current.tuicSession) {
-    const disc = AGENTS[agentType].sessionDiscovery;
-    if (disc) {
-      discoveryAttempted.add(termId);
-      const cwd = current.cwd ?? null;
+	// null→agent: attempt session discovery if supported and not yet tried.
+	// Skip discovery when tuicSession is set — it IS the session ID
+	// (shell integration injects --session-id $TUIC_SESSION into claude calls).
+	// Discovery is only needed for terminals without tuicSession (legacy, manual launches).
+	if (
+		agentType !== null &&
+		current.agentSessionId === null &&
+		!discoveryAttempted.has(termId) &&
+		!current.tuicSession
+	) {
+		const disc = AGENTS[agentType].sessionDiscovery;
+		if (disc) {
+			discoveryAttempted.add(termId);
+			const cwd = current.cwd ?? null;
 
-      // Collect UUIDs already claimed by other terminals
-      const claimedIds: string[] = [];
-      for (const id of terminalsStore.getIds()) {
-        const sid = terminalsStore.get(id)?.agentSessionId;
-        if (sid) claimedIds.push(sid);
-      }
+			// Collect UUIDs already claimed by other terminals
+			const claimedIds: string[] = [];
+			for (const id of terminalsStore.getIds()) {
+				const sid = terminalsStore.get(id)?.agentSessionId;
+				if (sid) claimedIds.push(sid);
+			}
 
-      try {
-        const found = await invoke<string | null>("discover_agent_session", {
-          agentType,
-          cwd,
-          claimedIds,
-        });
-        if (found) {
-          appLogger.debug("app", `[AgentDetect] ${termId} discovered agentSessionId "${found}"`);
-          terminalsStore.update(termId, { agentSessionId: found });
-        }
-      } catch (err) {
-        appLogger.debug("app", `[AgentDetect] ${termId} discover_agent_session failed`, err);
-      }
-    }
-  }
+			try {
+				const found = await invoke<string | null>("discover_agent_session", {
+					agentType,
+					cwd,
+					claimedIds,
+				});
+				if (found) {
+					appLogger.debug("app", `[AgentDetect] ${termId} discovered agentSessionId "${found}"`);
+					terminalsStore.update(termId, { agentSessionId: found });
+				}
+			} catch (err) {
+				appLogger.debug("app", `[AgentDetect] ${termId} discover_agent_session failed`, err);
+			}
+		}
+	}
 }
 
 /**
@@ -157,20 +162,20 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
  * This 30s fallback catches cold starts and edge cases.
  */
 export function useAgentPolling(): void {
-  createEffect(() => {
-    const allIds = terminalsStore.getIds();
-    if (allIds.length === 0) return;
+	createEffect(() => {
+		const allIds = terminalsStore.getIds();
+		if (allIds.length === 0) return;
 
-    const pollAll = async () => {
-      for (const id of allIds) {
-        await detectAgentForTerminal(id);
-      }
-    };
+		const pollAll = async () => {
+			for (const id of allIds) {
+				await detectAgentForTerminal(id);
+			}
+		};
 
-    const timer = setInterval(() => {
-      pollAll().catch((err) => appLogger.debug("app", "[AgentPoll] poll failed", err));
-    }, POLL_INTERVAL_MS);
+		const timer = setInterval(() => {
+			pollAll().catch((err) => appLogger.debug("app", "[AgentPoll] poll failed", err));
+		}, POLL_INTERVAL_MS);
 
-    onCleanup(() => clearInterval(timer));
-  });
+		onCleanup(() => clearInterval(timer));
+	});
 }
