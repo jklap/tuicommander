@@ -484,6 +484,14 @@
 }
 
 /* Git merged badge — branch fully merged into main */
+.remoteBadge {
+  font-size: 9px;
+  color: var(--fg-muted);
+  margin-left: 4px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .mergedBadge {
   display: inline-flex;
   align-items: center;

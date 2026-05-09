@@ -37,6 +37,8 @@ export interface RepositoryState {
 	parked: boolean; // Whether repo is hidden from sidebar (recallable via popover)
 	branches: Record<string, BranchState>;
 	activeBranch: string | null;
+	/** Which remote connection this repo belongs to (undefined = local) */
+	connectionId?: string;
 }
 
 /** A named, colored group of repositories */
@@ -234,7 +236,7 @@ function createRepositoriesStore() {
 		},
 
 		/** Add a repository */
-		add(repo: { path: string; displayName: string; initials?: string; isGitRepo?: boolean }): void {
+		add(repo: { path: string; displayName: string; initials?: string; isGitRepo?: boolean; connectionId?: string }): void {
 			setState("repositories", repo.path, {
 				path: repo.path,
 				displayName: repo.displayName,
@@ -245,6 +247,7 @@ function createRepositoriesStore() {
 				parked: false,
 				branches: {},
 				activeBranch: null,
+				connectionId: repo.connectionId,
 			});
 			if (!state.repoOrder.includes(repo.path)) {
 				setState("repoOrder", [...state.repoOrder, repo.path]);
@@ -516,6 +519,11 @@ function createRepositoriesStore() {
 				}),
 			);
 			save();
+		},
+
+		/** Get the connectionId for a repo (undefined = local) */
+		getConnectionId(path: string): string | undefined {
+			return state.repositories[path]?.connectionId;
 		},
 
 		/** Get repository by path */

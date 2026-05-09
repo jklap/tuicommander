@@ -154,6 +154,8 @@ tracing-appender = "0.2"
 console-subscriber = { version = "0.4", optional = true }
 cron = "0.16"
 toml = "0.8"
+rusqlite = { version = "0.34", features = ["bundled"] }
+ssh2-config = "0.7"
 
 [features]
 default = ["desktop"]

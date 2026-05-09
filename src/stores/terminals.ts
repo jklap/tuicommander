@@ -181,13 +181,6 @@ function createTerminalsStore() {
 
 	/** Handle shellState transition for debounced busy tracking */
 	function handleShellStateChange(id: string, prev: ShellState, next: ShellState): void {
-		const now = Date.now();
-		const dbBusy = state.debouncedBusy[id] ?? false;
-		const hasCooldown = cooldownTimers.has(id);
-		appLogger.debug(
-			"terminal",
-			`[ShellDebounce] ${id} ${prev}→${next} debouncedBusy=${dbBusy} cooldown=${hasCooldown} t=${now % 100000}`,
-		);
 
 		if (next === "busy" && prev !== "busy") {
 			// Entering busy: clear any cooldown, mark busy, record start time.
@@ -198,7 +191,7 @@ function createTerminalsStore() {
 			if (hadCooldown) {
 				clearTimeout(existingCooldown);
 				cooldownTimers.delete(id);
-				appLogger.debug("terminal", `[ShellDebounce] ${id} cooldown CANCELLED (re-entered busy)`);
+				appLogger.debug("terminal", `[ShellDebounce] ${id} cooldown cancelled (re-entered busy)`);
 			}
 			setState("debouncedBusy", id, true);
 			if (!hadCooldown) {
@@ -230,15 +223,12 @@ function createTerminalsStore() {
 			const since = busySinceMap.get(id);
 			const duration = since != null ? Date.now() - since : 0;
 			busyDurationMap.set(id, duration);
-			appLogger.debug(
-				"terminal",
-				`[ShellDebounce] ${id} busy→idle, starting ${BUSY_HOLD_MS}ms cooldown (busyDuration=${duration}ms)`,
-			);
+			appLogger.debug("terminal", `[ShellDebounce] ${id} busy→idle cooldown=${BUSY_HOLD_MS}ms dur=${duration}ms`);
 
 			const timer = setTimeout(() => {
 				cooldownTimers.delete(id);
 				setState("debouncedBusy", id, false);
-				appLogger.debug("terminal", `[ShellDebounce] ${id} cooldown EXPIRED → debouncedBusy=false`);
+				appLogger.debug("terminal", `[ShellDebounce] ${id} cooldown expired`);
 				for (const cb of busyToIdleCallbacks) cb(id, duration);
 			}, BUSY_HOLD_MS);
 			cooldownTimers.set(id, timer);
@@ -387,7 +377,6 @@ function createTerminalsStore() {
 					appLogger.warn("terminal", `setActive(${id}) — terminal not in store, ignoring`);
 					return;
 				}
-				appLogger.debug("terminal", `setActive(${id})`, { shellState: state.terminals[id]?.shellState });
 			}
 			const prevId = state.activeId;
 			batch(() => {
@@ -542,8 +531,6 @@ function createTerminalsStore() {
 		/** Set terminal awaiting input state */
 		setAwaitingInput(id: string, type: AwaitingInputType, confident = false): void {
 			if (!has(id)) return;
-			const prev = state.terminals[id]?.awaitingInput;
-			appLogger.debug("terminal", `setAwaitingInput(${id}) "${prev}" → "${type}" confident=${confident}`);
 			batch(() => {
 				setState("terminals", id, "awaitingInput", type);
 				setState("terminals", id, "awaitingInputConfident", confident);
@@ -553,8 +540,6 @@ function createTerminalsStore() {
 		/** Clear terminal awaiting input state */
 		clearAwaitingInput(id: string): void {
 			if (!has(id)) return;
-			const prev = state.terminals[id]?.awaitingInput;
-			if (prev) appLogger.debug("terminal", `clearAwaitingInput(${id}) was "${prev}" → null`);
 			batch(() => {
 				setState("terminals", id, "awaitingInput", null);
 				setState("terminals", id, "awaitingInputConfident", false);

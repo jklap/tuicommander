@@ -7,7 +7,8 @@ export interface TerminalTransport {
 	onEvent(type: string, handler: (payload: unknown) => void): Promise<void>;
 }
 
-export function createTransport(sessionId: string): TerminalTransport {
+export function createTransport(sessionId: string, baseUrl?: string): TerminalTransport {
+	if (baseUrl) return new WsTransport(sessionId, baseUrl);
 	return isTauri() ? new TauriTransport(sessionId) : new WsTransport(sessionId);
 }
 
@@ -67,6 +68,7 @@ const INITIAL_RECONNECT_MS = 1000;
 
 export class WsTransport implements TerminalTransport {
 	private sessionId: string;
+	private baseUrl: string | undefined;
 	private ws: WebSocket | null = null;
 	private onFrameHandler: ((data: ArrayBuffer) => void) | null = null;
 	private eventHandlers = new Map<string, (payload: unknown) => void>();
@@ -74,8 +76,9 @@ export class WsTransport implements TerminalTransport {
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 	private reconnectAttempts = 0;
 
-	constructor(sessionId: string) {
+	constructor(sessionId: string, baseUrl?: string) {
 		this.sessionId = sessionId;
+		this.baseUrl = baseUrl;
 	}
 
 	async subscribe(onFrame: (data: ArrayBuffer) => void): Promise<void> {
@@ -86,8 +89,16 @@ export class WsTransport implements TerminalTransport {
 	}
 
 	private async connect(): Promise<void> {
-		const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
-		const url = `${proto}//${window.location.host}/sessions/${encodeURIComponent(this.sessionId)}/stream?format=grid`;
+		let url: string;
+		if (this.baseUrl) {
+			// Remote: convert http(s) baseUrl to ws(s)
+			const wsBase = this.baseUrl.replace(/^http/, "ws");
+			url = `${wsBase}/sessions/${encodeURIComponent(this.sessionId)}/stream?format=grid`;
+		} else {
+			// Local: use current page origin
+			const proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+			url = `${proto}//${window.location.host}/sessions/${encodeURIComponent(this.sessionId)}/stream?format=grid`;
+		}
 		this.ws = new WebSocket(url);
 		this.ws.binaryType = "arraybuffer";
 		this.ws.onmessage = (e) => {

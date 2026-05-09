@@ -1,5 +1,6 @@
 import { invoke, listen } from "../invoke";
 import { activityStore } from "../stores/activityStore";
+import { agentConfigsStore } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { contextMenuActionsStore } from "../stores/contextMenuActionsStore";
 import { keybindingsStore } from "../stores/keybindings";
@@ -263,7 +264,8 @@ function createPluginRegistry() {
 
 			async getClaudeProjectDir(repoPath: string): Promise<string | null> {
 				requireCapability(pluginId, capabilities, "fs:read");
-				return invoke<string | null>("claude_project_dir", { cwd: repoPath });
+				const claudeConfigDir = agentConfigsStore.getDefaultConfig("claude")?.env?.CLAUDE_CONFIG_DIR ?? null;
+				return invoke<string | null>("claude_project_dir", { cwd: repoPath, claudeConfigDir });
 			},
 
 			getActiveRepoPath(): string | null {

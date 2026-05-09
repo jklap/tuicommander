@@ -3419,6 +3419,21 @@ mod tests {
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: dashmap::DashMap::new(),
             grid_frame_dirty: dashmap::DashMap::new(),
+            tunnel_manager: {
+                let audit = std::sync::Arc::new(parking_lot::Mutex::new(
+                    crate::tunnels::audit::AuditLog::open(
+                        &std::env::temp_dir().join("test-tunnel-audit.db"),
+                    )
+                    .unwrap(),
+                ));
+                std::sync::Arc::new(crate::tunnels::manager::TunnelManager::new(audit))
+            },
+            tunnel_audit: std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::tunnels::audit::AuditLog::open(
+                    &std::env::temp_dir().join("test-tunnel-audit2.db"),
+                )
+                .unwrap(),
+            )),
         });
         // Tests start with all native tools enabled (override production default
         // which disables config, knowledge, debug).

@@ -58,6 +58,7 @@ pub(crate) mod pty;
 pub(crate) mod push;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
+pub(crate) mod remote_connection;
 pub(crate) mod repo_watcher;
 mod shell_integration;
 #[cfg(feature = "desktop")]
@@ -70,6 +71,7 @@ pub(crate) mod tailscale;
 pub(crate) mod terminal_grid;
 pub(crate) mod text_rank;
 pub(crate) mod tool_search;
+pub(crate) mod tunnels;
 #[cfg(feature = "desktop")]
 mod tuic_cli;
 #[cfg(feature = "desktop")]
@@ -1724,6 +1726,116 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
             if let Some(tx) = state.server_shutdown.lock().take() {
                 let _ = tx.send(());
             }
+        }
+    }
+
+    Ok(())
+}
+
+/// Run the tuic-remote server — a slim variant of `run_headless()`.
+///
+/// Differences from `run_headless()`:
+/// - Uses `build_remote_router()` (no config, MCP, plugins, push, static files).
+/// - Spawns only the two essential background tasks: session state accumulator
+///   and tombstone sweeper.
+/// - Logs "Starting tuic-remote" with the `protocol_version` field.
+/// - Binds TCP directly without spawning an IPC socket.
+#[cfg(not(feature = "desktop"))]
+pub async fn run_remote(port: u16) -> anyhow::Result<()> {
+    let log_buffer = Arc::new(parking_lot::Mutex::new(app_logger::LogRingBuffer::new(
+        app_logger::LOG_RING_CAPACITY,
+    )));
+    app_logger::init_tracing(log_buffer.clone());
+
+    let mut app_config = config::load_app_config();
+    app_config.services.server.enabled = true;
+    if app_config.services.server.port != port {
+        tracing::info!(
+            source = "remote",
+            config_port = app_config.services.server.port,
+            override_port = port,
+            "Port overridden by TUIC_PORT / CLI argument"
+        );
+        app_config.services.server.port = port;
+    }
+    if app_config.services.auth.lan_auth_bypass {
+        tracing::warn!(
+            source = "remote",
+            "lan_auth_bypass is not supported in headless mode — forcing off"
+        );
+        app_config.services.auth.lan_auth_bypass = false;
+    }
+    if app_config.services.auth.session_token.is_empty() {
+        app_config.services.auth.session_token = uuid::Uuid::new_v4().to_string();
+    }
+
+    let data_dir = config::config_dir();
+    let worktrees_dir = data_dir.join("worktrees");
+    std::fs::create_dir_all(&worktrees_dir)?;
+
+    let (github_token, github_token_source) = crate::github_auth::resolve_token_without_keychain();
+
+    let mut app_state = AppState::new(data_dir, worktrees_dir, app_config.clone(), log_buffer);
+    *app_state.github_token.get_mut() = github_token;
+    *app_state.github_token_source.get_mut() = github_token_source;
+
+    let state = Arc::new(app_state);
+    state.wire_event_bus();
+
+    // Only the two tasks required for session management — no scheduler,
+    // watcher engine, content index, knowledge persist, or tool search index.
+    AppState::spawn_session_state_accumulator(state.clone());
+    pty::spawn_tombstone_sweeper(state.clone());
+
+    let tls_config = match &app_config.services.tls {
+        config::TlsConfig::Manual {
+            cert_path,
+            key_path,
+        } => {
+            let cert_pem = std::fs::read(cert_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read TLS cert at {cert_path}: {e}"))?;
+            let key_pem = std::fs::read(key_path)
+                .map_err(|e| anyhow::anyhow!("Failed to read TLS key at {key_path}: {e}"))?;
+            let tls = axum_server::tls_rustls::RustlsConfig::from_pem(cert_pem, key_pem)
+                .await
+                .map_err(|e| anyhow::anyhow!("Invalid TLS cert/key: {e}"))?;
+            tracing::info!(
+                source = "remote",
+                cert_path,
+                key_path,
+                "TLS loaded (manual mode)"
+            );
+            Some(tls)
+        }
+        config::TlsConfig::Off => None,
+    };
+
+    const PROTOCOL_VERSION: u32 = 1;
+    tracing::info!(
+        source = "remote",
+        port,
+        tls = tls_config.is_some(),
+        protocol_version = PROTOCOL_VERSION,
+        "Starting tuic-remote"
+    );
+
+    let bind_addr = format!("0.0.0.0:{port}");
+    let listener = std::net::TcpListener::bind(&bind_addr)
+        .map_err(|e| anyhow::anyhow!("Fatal: failed to bind TCP on port {port}: {e}"))?;
+    listener.set_nonblocking(true)?;
+    let listener = tokio::net::TcpListener::from_std(listener)?;
+
+    let router = mcp_http::build_remote_router(state.clone());
+    let svc = router.into_make_service_with_connect_info::<std::net::SocketAddr>();
+
+    tokio::select! {
+        result = axum::serve(listener, svc) => {
+            if let Err(e) = result {
+                anyhow::bail!("TCP server error: {e}");
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!(source = "remote", "Received shutdown signal");
         }
     }
 

@@ -2,6 +2,7 @@ import { createEffect, onCleanup } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../agents";
 import { invoke } from "../invoke";
 import { pluginRegistry } from "../plugins/pluginRegistry";
+import { agentConfigsStore } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { terminalsStore } from "../stores/terminals";
 
@@ -139,11 +140,16 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 				if (sid) claimedIds.push(sid);
 			}
 
+			const claudeConfigDir = agentType === "claude"
+				? agentConfigsStore.getDefaultConfig("claude")?.env?.CLAUDE_CONFIG_DIR ?? null
+				: null;
+
 			try {
 				const found = await invoke<string | null>("discover_agent_session", {
 					agentType,
 					cwd,
 					claimedIds,
+					claudeConfigDir,
 				});
 				if (found) {
 					appLogger.debug("app", `[AgentDetect] ${termId} discovered agentSessionId "${found}"`);

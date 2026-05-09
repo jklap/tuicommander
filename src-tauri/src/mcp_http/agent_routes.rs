@@ -201,8 +201,12 @@ pub(super) async fn verify_agent_session_http(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let claude_config_dir = body
+        .get("claudeConfigDir")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     Json(crate::agent_session::verify_agent_session(
-        agent_type, session_id, cwd,
+        agent_type, session_id, cwd, claude_config_dir,
     ))
 }
 

@@ -182,16 +182,54 @@ When modifying the watcher engine, trigger evaluation, or watcher UI:
 | `docs/backend/ai-watchers.md` | Architecture doc: data model, trigger paths, safety guards |
 | Config: `ai-watchers.json` | Persisted watcher rules (app config dir) |
 
-### Headless Daemon (`tuic-remote`)
-When modifying the headless binary, `run_headless`, or standalone server behavior:
+### Remote Daemon (`tuic-remote`)
+When modifying the remote daemon binary, `run_headless`, or standalone server behavior:
 
 | File | What to update |
 |------|----------------|
 | `src-tauri/src/bin/tuic_remote.rs` | Binary entry point |
 | `src-tauri/src/lib.rs` | `run_headless()` function |
 | `docs/user-guide/remote-access.md` | `tuic-remote (Beta)` section |
-| `docs/FEATURES.md` | Section 22 (Headless Daemon) |
+| `docs/FEATURES.md` | Section 22 (Remote Daemon) |
 | `.github/workflows/release.yml` | Release artifact build job |
+
+### SSH Tunnel Management
+When modifying tunnel profiles, supervisor, audit logging, backoff, or tunnel UI:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/tunnels/profile.rs` | TunnelProfile, ForwardSpec, ProfileOptions structs |
+| `src-tauri/src/tunnels/command.rs` | SSH command-line argument building |
+| `src-tauri/src/tunnels/classifier.rs` | ExitReason enum and stderr classification |
+| `src-tauri/src/tunnels/agent.rs` | SSH agent socket discovery |
+| `src-tauri/src/tunnels/port.rs` | Local port availability check |
+| `src-tauri/src/tunnels/backoff.rs` | BackoffCalculator (delays, jitter, max retries) |
+| `src-tauri/src/tunnels/audit.rs` | AuditLog SQLite schema, insert/query/rotate |
+| `src-tauri/src/tunnels/supervisor.rs` | TunnelSupervisor lifecycle and reconnect loop |
+| `src-tauri/src/tunnels/storage.rs` | ProfileStore: TOML load/save (global + per-repo) |
+| `src-tauri/src/tunnels/manager.rs` | TunnelManager: orchestrates supervisors |
+| `src-tauri/src/tunnels/commands.rs` | Tauri commands for tunnel CRUD and control |
+| `src/stores/tunnels.ts` | Frontend tunnel state (profiles, statuses) |
+| `src/stores/tunnelPanel.ts` | Tunnel panel UI state |
+| `src/components/TunnelsPanel/TunnelsPanel.tsx` | Tunnel list with start/stop controls |
+| `src/components/TunnelsPanel/TunnelEditorModal.tsx` | Profile create/edit form |
+| `src/components/TunnelsPanel/TunnelStatusBadge.tsx` | Color-coded status indicator |
+| `docs/features/ssh-tunnels.md` | Feature architecture doc |
+| `docs/FEATURES.md` | Section 23 (SSH Tunnel Manager) |
+| `docs/user-guide/remote-access.md` | SSH Tunnel Management section |
+
+### Remote Connection Manager
+When modifying remote connection config, storage, or transport routing:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/remote_connection.rs` | RemoteConnection, RemoteTransport, RemoteConnectionStore |
+| `src/stores/remoteConnections.ts` | Frontend remote connections store |
+| `src/utils/remoteEventBridge.ts` | SSE event bridge for remote daemons |
+| `src/utils/transport.ts` | connectionId-based routing in COMMAND_TABLE |
+| `src/utils/canvasTerminalTransport.ts` | baseUrl support for remote WebSocket |
+| `docs/FEATURES.md` | Section 24 (Remote Connection Manager) |
+| `docs/user-guide/remote-access.md` | Remote Connection Manager section |
 
 ### Git & Worktree Integration
 When modifying git operations, worktree logic, or GitHub API:
@@ -287,6 +325,7 @@ When adding or changing `tuic://` schemes:
 | `docs/frontend/stores.md` | SolidJS stores |
 | `docs/frontend/transport.md` | Tauri/HTTP dual-mode transport |
 | `docs/frontend/utilities.md` | Utility function reference |
+| `docs/features/ssh-tunnels.md` | SSH tunnel architecture and module map |
 | `docs/user-guide/*.md` | User-facing guides (14 files) |
 | **Code-embedded docs** | |
 | `src-tauri/src/mcp_http/plugin_docs.rs` | AI-optimized plugin reference (`PLUGIN_DOCS` const) |

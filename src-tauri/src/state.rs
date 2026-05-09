@@ -1045,6 +1045,13 @@ pub struct AppState {
     pub(crate) trigger_classifier: crate::ai_agent::triggers::TriggerClassifier,
     /// Per-session opt-in for AI suggestions. Present + true = enabled.
     pub(crate) ai_suggestions_enabled: DashMap<String, bool>,
+    /// SSH tunnel manager — owns running tunnel supervisors.
+    /// No outer Mutex needed: `TunnelManager` uses `DashMap` for interior mutability
+    /// and all its methods take `&self`. Wrapping in `Mutex` would prevent holding
+    /// a reference across the `start()` `.await` point.
+    pub(crate) tunnel_manager: Arc<crate::tunnels::manager::TunnelManager>,
+    /// SSH tunnel audit log — persisted event history for all tunnels.
+    pub(crate) tunnel_audit: Arc<parking_lot::Mutex<crate::tunnels::audit::AuditLog>>,
 }
 
 impl AppState {
@@ -1057,6 +1064,14 @@ impl AppState {
         let mcp_upstream_registry = Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new());
         let session_token = config.services.auth.session_token.clone();
         let push_store = crate::push::PushStore::load(&data_dir);
+        let audit_path = data_dir.join("tunnel_audit.db");
+        let tunnel_audit = Arc::new(parking_lot::Mutex::new(
+            crate::tunnels::audit::AuditLog::open(&audit_path)
+                .expect("Failed to open tunnel audit DB"),
+        ));
+        let tunnel_manager = Arc::new(
+            crate::tunnels::manager::TunnelManager::new(tunnel_audit.clone()),
+        );
         Self {
             sessions: DashMap::new(),
             data_dir,
@@ -1143,6 +1158,8 @@ impl AppState {
             watcher_engine: std::sync::OnceLock::new(),
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: DashMap::new(),
+            tunnel_manager,
+            tunnel_audit,
         }
     }
 
@@ -3040,6 +3057,21 @@ mod tests {
             watcher_engine: std::sync::OnceLock::new(),
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: DashMap::new(),
+            tunnel_manager: {
+                let audit = Arc::new(parking_lot::Mutex::new(
+                    crate::tunnels::audit::AuditLog::open(
+                        &std::env::temp_dir().join("test-tunnel-audit.db"),
+                    )
+                    .unwrap(),
+                ));
+                Arc::new(crate::tunnels::manager::TunnelManager::new(audit))
+            },
+            tunnel_audit: Arc::new(parking_lot::Mutex::new(
+                crate::tunnels::audit::AuditLog::open(
+                    &std::env::temp_dir().join("test-tunnel-audit2.db"),
+                )
+                .unwrap(),
+            )),
         }
     }
 

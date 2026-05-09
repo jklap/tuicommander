@@ -2,6 +2,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { batch, createSignal } from "solid-js";
 import type { WorktreeCreateOptions } from "../components/CreateWorktreeDialog";
 import { invoke } from "../invoke";
+import { agentConfigsStore } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
@@ -10,7 +11,8 @@ import { repoSettingsStore } from "../stores/repoSettings";
 import { type RepositoryState, repositoriesStore } from "../stores/repositories";
 import { paneLayoutKey, savedPaneLayouts } from "../stores/savedPaneLayouts";
 import { terminalsStore } from "../stores/terminals";
-import { isTauri } from "../transport";
+import { isTauri, rpc } from "../transport";
+import type { RepoInfo } from "../types";
 import { verifyAndBuildResumeCommand } from "../utils/agentSession";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { pathStartsWith } from "../utils/pathUtils";
@@ -549,33 +551,18 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			const prevRepo = repositoriesStore.getActive();
 			const prevBranchName = prevRepo?.activeBranch;
 			const prevBranch = prevBranchName ? prevRepo?.branches[prevBranchName] : null;
-			appLogger.debug("terminal", `BranchSelect LEAVING ${prevRepo?.path ?? "(none)"}/${prevBranchName ?? "(none)"}`, {
-				prevTerminals: prevBranch?.terminals ?? [],
-				prevHadTerminals: prevBranch?.hadTerminals,
-				activeTerminalId: terminalsStore.state.activeId,
-				allStoreIds: terminalsStore.getIds(),
-			});
+			appLogger.debug("terminal", `BranchSelect ${prevBranchName ?? "(none)"} → ${branchName} terms=${(prevBranch?.terminals ?? []).length}→?`);
 
 			// Save state for the branch we're leaving
 			if (prevRepo?.activeBranch) {
 				const currentActiveId = terminalsStore.state.activeId;
 				if (currentActiveId && prevBranch?.terminals.includes(currentActiveId)) {
 					repositoriesStore.setBranch(prevRepo.path, prevRepo.activeBranch, { lastActiveTerminal: currentActiveId });
-					appLogger.debug(
-						"terminal",
-						`BranchSelect SAVE lastActiveTerminal=${currentActiveId} for ${prevRepo.activeBranch}`,
-					);
-				} else {
-					appLogger.debug(
-						"terminal",
-						`BranchSelect SKIP save lastActiveTerminal — activeId=${currentActiveId} not in branch terminals ${JSON.stringify(prevBranch?.terminals)}`,
-					);
 				}
 				// Save pane layout for the branch we're leaving
 				if (paneLayoutStore.isSplit()) {
 					const key = paneLayoutKey(prevRepo.path, prevRepo.activeBranch);
 					savedPaneLayouts.set(key, paneLayoutStore.serialize());
-					appLogger.debug("terminal", `BranchSelect SAVE paneLayout for ${prevRepo.activeBranch}`);
 				} else {
 					// Clear any stale layout if user unsplit while on this branch
 					savedPaneLayouts.delete(paneLayoutKey(prevRepo.path, prevRepo.activeBranch));
@@ -620,10 +607,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 					if (claimedIds.has(id)) continue;
 					const term = terminalsStore.get(id);
 					if (term?.cwd === branch.worktreePath) {
-						appLogger.debug(
-							"terminal",
-							`BranchSelect: adopting orphan ${id} into ${branchName} (cwd matches worktreePath)`,
-						);
 						repositoriesStore.addTerminalToBranch(repoPath, branchName, id);
 					}
 				}
@@ -633,13 +616,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			const validTerminals = filterValidTerminals(branch?.terminals, terminalsStore.getIds()).filter(
 				(id) => !terminalsStore.isDetached(id),
 			);
-			appLogger.debug("terminal", `BranchSelect → ${branchName}`, {
-				branchTerminals: branch?.terminals,
-				storeIds: terminalsStore.getIds(),
-				valid: validTerminals,
-				hadTerminals: branch?.hadTerminals,
-				savedTerminals: branch?.savedTerminals?.length ?? 0,
-			});
+			appLogger.debug("terminal", `BranchSelect → ${branchName} valid=${validTerminals.length} saved=${branch?.savedTerminals?.length ?? 0}`);
 			if (validTerminals.length === 0 && (branch?.terminals?.length ?? 0) > 0) {
 				appLogger.warn(
 					"terminal",
@@ -659,12 +636,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 					const allValid = layoutTerminals.length > 0 && layoutTerminals.every((id) => validSet.has(id));
 					if (allValid) {
 						paneLayoutStore.restore(savedLayout);
-						appLogger.debug("terminal", `BranchSelect RESTORE paneLayout for ${branchName}`);
 					} else {
-						appLogger.debug(
-							"terminal",
-							`BranchSelect DISCARD stale paneLayout for ${branchName} — terminal IDs changed`,
-						);
 						savedPaneLayouts.delete(layoutKey);
 						paneLayoutStore.reset();
 					}
@@ -675,13 +647,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 					const layoutTerminals = Object.values(currentLayout.groups).flatMap((g) =>
 						g.tabs.filter((t) => t.type === "terminal").map((t) => t.id),
 					);
-					if (layoutTerminals.length > 0 && layoutTerminals.every((id) => validSet.has(id))) {
-						appLogger.debug("terminal", `BranchSelect KEEP disk-restored paneLayout for ${branchName}`);
-					} else {
-						appLogger.debug(
-							"terminal",
-							`BranchSelect DISCARD disk-restored paneLayout for ${branchName} — terminal IDs changed`,
-						);
+					if (!(layoutTerminals.length > 0 && layoutTerminals.every((id) => validSet.has(id)))) {
 						paneLayoutStore.reset();
 					}
 				} else {
@@ -690,18 +656,12 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				// Prefer a terminal that is awaiting input (question/error), then lastActive, then first
 				const awaitingId = validTerminals.find((id) => terminalsStore.get(id)?.awaitingInput);
 				if (awaitingId) {
-					appLogger.debug("terminal", `BranchSelect FOCUS awaitingInput terminal=${awaitingId} for ${branchName}`);
 					terminalsStore.setActive(awaitingId);
 				} else {
 					const remembered = branch?.lastActiveTerminal;
 					if (remembered && validTerminals.includes(remembered)) {
-						appLogger.debug("terminal", `BranchSelect RESTORE lastActiveTerminal=${remembered} for ${branchName}`);
 						terminalsStore.setActive(remembered);
 					} else {
-						appLogger.debug(
-							"terminal",
-							`BranchSelect FALLBACK to first terminal=${validTerminals[0]} for ${branchName} (remembered=${remembered}, valid=${JSON.stringify(validTerminals)})`,
-						);
 						terminalsStore.setActive(validTerminals[0]);
 					}
 				}
@@ -764,9 +724,13 @@ export function useGitOperations(deps: GitOperationsDeps) {
 									agentSessionId: terminal.agentSessionId ?? null,
 								});
 							} else if (terminal.tuicSession && terminal.cwd) {
+								const claudeConfigDir = terminal.agentType === "claude"
+									? agentConfigsStore.getDefaultConfig("claude")?.env?.CLAUDE_CONFIG_DIR ?? null
+									: null;
 								invoke("preflight_session_inject", {
 									tuicSession: terminal.tuicSession,
 									cwd: terminal.cwd,
+									claudeConfigDir,
 								}).catch(() => {});
 							}
 						}),
@@ -978,6 +942,46 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		} catch (err) {
 			appLogger.error("git", "Failed to add repository", err);
 			deps.setStatusInfo(`Failed to add repo: ${err}`);
+		}
+	};
+
+	const handleAddRemoteRepo = async (connectionId: string) => {
+		// Prompt for remote path
+		const input = await deps.dialogs.promptRepoPath?.();
+		if (!input?.trim()) return;
+		const remotePath = input.trim();
+
+		try {
+			// Validate by fetching repo info from remote
+			const info = await rpc<RepoInfo>("get_repo_info", { path: remotePath }, connectionId);
+
+			repositoriesStore.add({
+				path: info.path,
+				displayName: info.name,
+				initials: info.initials,
+				isGitRepo: info.is_git_repo,
+				connectionId,
+			});
+
+			if (info.branch) {
+				repositoriesStore.setBranch(info.path, info.branch, { worktreePath: info.path });
+				repositoriesStore.setActiveBranch(info.path, info.branch);
+				await handleAddTerminalToBranch(info.path, info.branch);
+			} else if (!info.is_git_repo) {
+				const shellBranch = "shell";
+				repositoriesStore.setBranch(info.path, shellBranch, {
+					worktreePath: info.path,
+					isMain: true,
+					isShell: true,
+				});
+				repositoriesStore.setActiveBranch(info.path, shellBranch);
+				await handleAddTerminalToBranch(info.path, shellBranch);
+			}
+
+			repositoriesStore.setActive(info.path);
+		} catch (err) {
+			appLogger.error("git", `Failed to add remote repo from ${connectionId}`, err);
+			deps.setStatusInfo(`Failed to add remote repo: ${err}`);
 		}
 	};
 
@@ -1637,6 +1641,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		activeWorktreePath,
 		activeRunCommand,
 		handleAddRepo,
+		handleAddRemoteRepo,
 		handleAddWorktree,
 		confirmCreateWorktree,
 		handleCreateWorktreeFromBranch,

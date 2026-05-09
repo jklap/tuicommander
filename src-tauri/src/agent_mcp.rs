@@ -274,7 +274,7 @@ fn ensure_agent_mcp_entry(
 
     match write_json_file(config_path, &root) {
         Ok(()) => {
-            tracing::info!(source = "mcp", agent = %agent_label, path = %config_path.display(), "Config written");
+            tracing::debug!(source = "mcp", agent = %agent_label, path = %config_path.display(), "Config written");
             true
         }
         Err(e) => {
@@ -376,7 +376,7 @@ fn ensure_codex_mcp_entry(config_path: &std::path::Path, bridge_path: &str) -> b
 
     match write_toml_file(config_path, &root) {
         Ok(()) => {
-            tracing::info!(source = "mcp", agent = "codex", path = %config_path.display(), "Config written");
+            tracing::debug!(source = "mcp", agent = "codex", path = %config_path.display(), "Config written");
             true
         }
         Err(e) => {

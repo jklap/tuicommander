@@ -13,10 +13,10 @@ interface LegendEntry {
 }
 
 const TERMINAL_DOT_LEGEND: LegendEntry[] = [
-	{ color: "var(--fg-muted)", label: "Idle", description: "No session or never ran" },
+	{ color: "var(--fg-muted)", label: "No session", description: "Terminal never ran or was reset" },
 	{ color: "var(--accent)", label: "Busy", description: "Producing output", pulsing: true },
-	{ color: "var(--success)", label: "Done", description: "Command completed" },
-	{ color: "var(--unseen)", label: "Unseen", description: "Completed while not viewed" },
+	{ color: "var(--success)", label: "Idle", description: "Agent waiting, no recent output" },
+	{ color: "var(--unseen)", label: "Unseen", description: "Went idle while not viewed" },
 	{ color: "var(--attention)", label: "Question", description: "Agent needs input", pulsing: true },
 	{ color: "var(--error)", label: "Error", description: "API error or agent stuck", pulsing: true },
 ];

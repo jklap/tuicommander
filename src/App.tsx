@@ -51,6 +51,10 @@ const ActivityDashboard = lazy(() =>
 	import("./components/ActivityDashboard").then((m) => ({ default: m.ActivityDashboard })),
 );
 
+const TunnelsPanel = lazy(() =>
+	import("./components/TunnelsPanel").then((m) => ({ default: m.TunnelsPanel })),
+);
+
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { getActionEntries } from "./actions/actionRegistry";
@@ -886,7 +890,6 @@ const App: Component = () => {
 		if (!t?.agentType) return;
 		const repoPath = repositoriesStore.getRepoPathForTerminal(id);
 		if (!repoPath) return;
-		appLogger.debug("ai-agent", `Auto-triage for ${id} (agent=${t.agentType}, busy ${Math.round(durationMs / 1000)}s)`);
 		aiTriageStore.runTriage(repoPath);
 	});
 	onCleanup(unsubTriageOnIdle);
@@ -2340,6 +2343,11 @@ const App: Component = () => {
 			{/* Activity dashboard */}
 			<Suspense>
 				<ActivityDashboard onSelect={terminalLifecycle.handleTerminalSelect} />
+			</Suspense>
+
+			{/* SSH Tunnels panel */}
+			<Suspense>
+				<TunnelsPanel />
 			</Suspense>
 
 			{/* Worktree manager */}

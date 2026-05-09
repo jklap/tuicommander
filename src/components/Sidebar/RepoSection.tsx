@@ -615,6 +615,9 @@ export const RepoSection: Component<{
 					<span class={s.repoName} style={props.nameColor ? { color: props.nameColor } : undefined}>
 						{props.repo.displayName}
 					</span>
+					<Show when={props.repo.connectionId}>
+						<span class={s.remoteBadge}>remote</span>
+					</Show>
 					<div class={s.repoActions}>
 						<Show when={ghBadgeCount() > 0}>
 							<button

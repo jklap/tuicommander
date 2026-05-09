@@ -1711,7 +1711,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Paths: `/usr/local/bin/tuic` (macOS/Linux), `%LOCALAPPDATA%\Microsoft\WindowsApps\tuic.exe` (Windows)
 - `tuic install-cli` / `tuic alias` for self-service
 
-## 22. Headless Daemon (`tuic-remote`) — Beta
+## 22. Remote Daemon (`tuic-remote`) — Beta
 
 ### 22.1 Overview
 - Standalone headless binary for running TUICommander on servers without a desktop environment
@@ -1733,3 +1733,70 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Graceful shutdown on SIGINT/SIGTERM
 - Binds TCP, starts background tasks (MCP session reaper, upstream health checks)
 - Fails fast if port is already in use
+
+## 23. SSH Tunnel Manager
+
+### 23.1 Supervised Tunnels
+- Managed SSH processes with automatic lifecycle supervision
+- Tunnel states: Starting, Connected, Reconnecting, Stopped, Error
+- Health check: process must survive 500ms after spawn to be considered connected
+- Graceful shutdown: SIGTERM with 5s grace period, then SIGKILL escalation
+- SSH agent forwarding: auto-discovers `SSH_AUTH_SOCK` for key-based auth
+
+### 23.2 Reconnection with Exponential Backoff
+- Automatic retry on retryable failures (network down, connection refused, timeout)
+- Exponential backoff: 1s base, doubling per attempt, capped at 30s
+- Jitter: +/-25% per delay to prevent thundering herd
+- Maximum 10 retries before stopping; counter resets on successful connection
+- Non-retryable failures (auth denied, host key mismatch, port in use) stop immediately
+
+### 23.3 Exit Classification
+- Stderr-based pattern matching classifies SSH exit reasons (AuthFailed, HostKeyMismatch, PortInUse, ConnectionRefused, NetworkDown, Timeout, UserKilled)
+- Exit code used as fallback when stderr is empty
+- Classification drives retry decisions — only network-related failures are retried
+
+### 23.4 Audit Logging
+- SQLite database with WAL mode for concurrent-safe, high-performance event logging
+- Event types: Started, Connected, Disconnected, Error, Retry, Stopped
+- Query by tunnel ID (most recent N events) or by time range
+- Automatic rotation: configurable retention period deletes old events
+- Indexed on `tunnel_id` and `timestamp` for fast lookups
+
+### 23.5 Profile Configuration
+- TOML-based profiles with name, host, port, user, identity file, and port forwards
+- Global scope: `<config_dir>/tunnels/*.toml` — available across all repos
+- Per-repo scope: `<repo>/.tuic/tunnels/*.toml` — overrides global profiles with same ID
+- Forward types: Local (`-L`) and Remote (`-R`) port forwarding
+- Options: ServerAliveInterval (default 15s), ServerAliveCountMax (default 3), StrictHostKeyChecking (Yes/AcceptNew)
+- Validation: duplicate bind ports, empty fields, port range (1-65535)
+- Pre-spawn port availability check for local forwards
+
+### 23.6 UI
+- **TunnelsPanel** — List of tunnel profiles with status badges and start/stop controls
+- **TunnelEditorModal** — Create and edit tunnel profiles with form validation
+- **TunnelStatusBadge** — Color-coded status indicator (green=connected, blue=starting, orange=reconnecting, red=error, grey=stopped)
+
+## 24. Remote Connection Manager
+
+### 24.1 Connection Types
+- **SSH** — Connects via SSH tunnel to a remote `tuic-remote` daemon; auto-creates port forwarding
+  - Fields: host, SSH port (default 22), SSH user, optional identity file, remote daemon port (default 9877)
+- **Direct** — Connects to a `tuic-remote` daemon URL directly (for Tailscale, LAN, or VPN scenarios)
+  - Fields: URL, auth username
+
+### 24.2 Storage
+- Connections persisted in `<config_dir>/connections.json`
+- Atomic writes via temp file + rename
+- Each connection has UUID, name, transport, auth username, and enabled flag
+
+### 24.3 Remote Repositories and Terminals
+- Repos can be assigned to a remote connection; sidebar shows remote badge
+- Terminals on remote repos route WebSocket I/O through the connection's base URL
+- `transport.ts` routes `invoke()` calls based on the active connection's `connectionId`
+- `canvasTerminalTransport.ts` supports configurable `baseUrl` for remote WebSocket connections
+- Health polling for direct connections; SSH connections rely on tunnel supervisor status
+
+### 24.4 SSE Event Bridge
+- `remoteEventBridge.ts` subscribes to server-sent events from remote daemons
+- Bridges remote events (repo changes, PTY output, agent status) into local stores
+- Automatic reconnection on connection loss

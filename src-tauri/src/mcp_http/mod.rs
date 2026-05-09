@@ -465,6 +465,24 @@ async fn inject_localhost_connect_info(
 /// Build the router (exposed for testing).
 /// When `remote_auth` is true, applies Basic Auth middleware (requires ConnectInfo).
 /// When `mcp_enabled` is false, excludes MCP Streamable HTTP route (/mcp).
+/// Sub-router for SSH tunnel management routes.
+fn tunnel_routes() -> Router<Arc<AppState>> {
+    use crate::tunnels::commands;
+    Router::new()
+        .route(
+            "/profiles",
+            get(commands::list_tunnel_profiles).post(commands::save_tunnel_profile),
+        )
+        .route("/profiles/{id}", delete(commands::delete_tunnel_profile))
+        .route("/start/{id}", post(commands::start_tunnel))
+        .route("/stop/{id}", post(commands::stop_tunnel))
+        .route("/active", get(commands::list_active_tunnels))
+        .route("/status/{id}", get(commands::get_tunnel_status))
+        .route("/audit/{id}", get(commands::get_tunnel_audit))
+        .route("/ssh-hosts", get(commands::list_ssh_config_hosts))
+        .route("/agent-keys", get(commands::list_agent_keys))
+}
+
 pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) -> Router {
     // When remote access is enabled, allow any origin (Basic Auth secures the endpoint).
     // Otherwise, restrict to localhost and Tauri webview origins.
@@ -885,7 +903,9 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/api/push/subscribe",
             post(push_subscribe).delete(push_unsubscribe),
         )
-        .route("/api/push/test", post(push_test));
+        .route("/api/push/test", post(push_test))
+        // SSH tunnel management
+        .nest("/tunnels", tunnel_routes());
 
     // MCP Streamable HTTP transport — only when MCP is enabled
     if mcp_enabled {
@@ -897,10 +917,13 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         );
     }
 
-    // Static files — SPA frontend
+    // Static files — SPA frontend (desktop only; not embedded in the remote binary)
+    #[cfg(feature = "desktop")]
     let routes = routes
         .route("/", get(static_files::serve_index))
-        .route("/{*path}", get(static_files::serve_static))
+        .route("/{*path}", get(static_files::serve_static));
+
+    let routes = routes
         .with_state(state.clone())
         .layer(cors)
         // DefaultPredicate auto-excludes SSE (text/event-stream) and WebSocket upgrades.
@@ -917,6 +940,258 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     } else {
         routes
     }
+}
+
+/// Build a minimal router for the `tuic-remote` binary.
+///
+/// Includes all per-repo routes needed for remote terminal management:
+/// sessions (CRUD + stream), terminal grid, git, worktrees, file system,
+/// agents, watchers, events (SSE), and repo info.
+///
+/// Excludes desktop-only routes: config management, MCP bridge, plugins,
+/// push notifications, prompt processing, AI chat, GitHub poller, and
+/// static file serving (no frontend embedded in the remote binary).
+///
+/// Auth and compression layers are applied identically to `build_router()`.
+pub fn build_remote_router(state: Arc<AppState>) -> Router {
+    let cors = CorsLayer::new()
+        .allow_origin(tower_http::cors::Any)
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_headers([AUTHORIZATION, CONTENT_TYPE]);
+
+    let routes = Router::new()
+        // Health & version
+        .route("/health", get(session::health))
+        .route("/api/version", get(session::app_version))
+        // Session lifecycle
+        .route(
+            "/sessions",
+            get(session::list_sessions).post(session::create_session),
+        )
+        .route("/sessions/{id}/write", post(session::write_to_session))
+        .route("/sessions/{id}/name", put(session::set_session_name))
+        .route("/sessions/{id}/resize", post(session::resize_session))
+        .route("/sessions/{id}/output", get(session::get_output))
+        .route("/sessions/{id}/pause", post(session::pause_session))
+        .route("/sessions/{id}/resume", post(session::resume_session))
+        .route("/sessions/{id}/kitty-flags", get(session::get_kitty_flags))
+        .route(
+            "/sessions/{id}/foreground",
+            get(session::get_foreground_process),
+        )
+        .route("/sessions/{id}", delete(session::close_session))
+        // WebSocket streaming
+        .route("/sessions/{id}/stream", get(session::ws_stream))
+        // Terminal grid commands
+        .route(
+            "/sessions/{id}/terminal/scroll",
+            post(session::terminal_scroll),
+        )
+        .route(
+            "/sessions/{id}/terminal/scroll-to",
+            post(session::terminal_scroll_to),
+        )
+        .route(
+            "/sessions/{id}/terminal/scroll-info",
+            get(session::terminal_scroll_info),
+        )
+        .route(
+            "/sessions/{id}/terminal/search",
+            post(session::terminal_search),
+        )
+        .route(
+            "/sessions/{id}/terminal/search-buffer",
+            post(session::terminal_search_buffer),
+        )
+        .route(
+            "/sessions/{id}/terminal/row-text",
+            get(session::terminal_get_row_text),
+        )
+        .route(
+            "/sessions/{id}/terminal/lines",
+            get(session::terminal_get_lines),
+        )
+        .route(
+            "/sessions/{id}/terminal/cursor-line",
+            get(session::terminal_get_cursor_line),
+        )
+        .route(
+            "/sessions/{id}/terminal/hyperlink",
+            get(session::terminal_hyperlink_at),
+        )
+        .route(
+            "/sessions/{id}/terminal/request-frame",
+            post(session::terminal_request_frame),
+        )
+        // Agent sessions
+        .route("/sessions/agent", post(agent_routes::spawn_agent_session))
+        .route(
+            "/sessions/worktree",
+            post(session::create_session_with_worktree),
+        )
+        // Orchestrator stats
+        .route("/stats", get(session::get_stats))
+        .route("/metrics", get(session::get_metrics))
+        // Git operations
+        .route("/repo/info", get(git_routes::repo_info))
+        .route("/repo/remote-url", get(git_routes::remote_url))
+        .route("/repo/diff", get(git_routes::repo_diff))
+        .route("/repo/diff-stats", get(git_routes::repo_diff_stats))
+        .route("/repo/files", get(git_routes::repo_changed_files))
+        .route("/repo/branches", get(git_routes::repo_branches))
+        .route(
+            "/repo/branches/merged",
+            get(git_routes::repo_merged_branches),
+        )
+        .route("/repo/summary", get(git_routes::repo_summary))
+        .route("/repo/structure", get(git_routes::repo_structure))
+        .route(
+            "/repo/diff-stats/batch",
+            get(git_routes::repo_diff_stats_batch),
+        )
+        // Watchers
+        .route(
+            "/watchers/repo",
+            post(watcher_routes::start_repo_watcher_http)
+                .delete(watcher_routes::stop_repo_watcher_http),
+        )
+        .route(
+            "/watchers/dir",
+            post(watcher_routes::start_dir_watcher_http)
+                .delete(watcher_routes::stop_dir_watcher_http),
+        )
+        // Logs
+        .route(
+            "/logs",
+            get(log_routes::get_logs)
+                .post(log_routes::push_log)
+                .delete(log_routes::clear_logs),
+        )
+        // Worktrees
+        .route(
+            "/worktrees",
+            get(worktree_routes::list_worktrees_http).post(worktree_routes::create_worktree_http),
+        )
+        .route(
+            "/worktrees/dir",
+            get(worktree_routes::get_worktrees_dir_http),
+        )
+        .route(
+            "/worktrees/paths",
+            get(worktree_routes::get_worktree_paths_http),
+        )
+        .route(
+            "/worktrees/generate-name",
+            post(worktree_routes::generate_worktree_name_http),
+        )
+        .route(
+            "/worktrees/finalize",
+            post(worktree_routes::finalize_merged_worktree_http),
+        )
+        .route(
+            "/worktrees/{branch}",
+            delete(worktree_routes::remove_worktree_http),
+        )
+        // File operations
+        .route("/repo/file", get(git_routes::read_file_http))
+        .route("/repo/file-diff", get(git_routes::get_file_diff_http))
+        .route(
+            "/repo/markdown-files",
+            get(git_routes::list_markdown_files_http),
+        )
+        // Branch operations
+        .route(
+            "/repo/local-branches",
+            get(worktree_routes::list_local_branches_http),
+        )
+        .route(
+            "/repo/checkout-remote",
+            post(worktree_routes::checkout_remote_branch_http),
+        )
+        .route(
+            "/repo/orphan-worktrees",
+            get(worktree_routes::detect_orphan_worktrees_http),
+        )
+        .route(
+            "/repo/remove-orphan",
+            post(worktree_routes::remove_orphan_worktree_http),
+        )
+        .route("/repo/branch/rename", post(git_routes::rename_branch_http))
+        .route("/repo/initials", get(git_routes::get_initials_http))
+        .route(
+            "/repo/is-main-branch",
+            get(git_routes::check_is_main_branch_http),
+        )
+        // Agents
+        .route(
+            "/agents/verify-session",
+            post(agent_routes::verify_agent_session_http),
+        )
+        .route("/agents", get(agent_routes::detect_agents))
+        .route(
+            "/agents/detect",
+            get(agent_routes::detect_agent_binary_http),
+        )
+        .route(
+            "/agents/ides",
+            get(agent_routes::detect_installed_ides_http),
+        )
+        // File system
+        .route("/fs/list", get(fs_routes::list_directory_http))
+        .route("/fs/search", get(fs_routes::search_files_http))
+        .route("/fs/search-content", get(fs_routes::search_content_http))
+        .route("/fs/read", get(fs_routes::fs_read_file_http))
+        .route("/fs/read-external", get(fs_routes::read_external_file_http))
+        .route("/fs/write", post(fs_routes::write_file_http))
+        .route("/fs/mkdir", post(fs_routes::create_directory_http))
+        .route("/fs/delete", post(fs_routes::delete_path_http))
+        .route("/fs/rename", post(fs_routes::rename_path_http))
+        .route("/fs/copy", post(fs_routes::copy_path_http))
+        .route("/fs/gitignore", post(fs_routes::add_to_gitignore_http))
+        // Recent commits / git panel
+        .route(
+            "/repo/recent-commits",
+            get(git_routes::get_recent_commits_http),
+        )
+        .route("/repo/panel-context", get(git_routes::git_panel_context))
+        .route("/repo/run-git", post(git_routes::run_git_command_http))
+        .route(
+            "/repo/working-tree-status",
+            get(git_routes::working_tree_status),
+        )
+        .route("/repo/stage", post(git_routes::stage_files_http))
+        .route("/repo/unstage", post(git_routes::unstage_files_http))
+        .route("/repo/discard", post(git_routes::discard_files_http))
+        .route(
+            "/repo/apply-reverse-patch",
+            post(git_routes::apply_reverse_patch_http),
+        )
+        .route("/repo/commit", post(git_routes::git_commit_http))
+        .route("/repo/commit-log", get(git_routes::commit_log_http))
+        .route("/repo/stash", get(git_routes::stash_list_http))
+        .route("/repo/stash/apply", post(git_routes::stash_apply_http))
+        .route("/repo/stash/pop", post(git_routes::stash_pop_http))
+        .route("/repo/stash/drop", post(git_routes::stash_drop_http))
+        .route("/repo/stash/show", get(git_routes::stash_show_http))
+        .route("/repo/file-history", get(git_routes::file_history_http))
+        .route("/repo/file-blame", get(git_routes::file_blame_http))
+        // System info
+        .route("/system/local-ips", get(git_routes::get_local_ips_http))
+        .route("/system/local-ip", get(git_routes::get_local_ip_http))
+        // Server-Sent Events
+        .route("/events", get(sse_routes::sse_events))
+        // SSH tunnel management
+        .nest("/tunnels", tunnel_routes())
+        .with_state(state.clone())
+        .layer(cors)
+        .layer(
+            CompressionLayer::new().compress_when(DefaultPredicate::new().and(SizeAbove::new(860))),
+        );
+
+    routes.layer(axum::middleware::from_fn_with_state(
+        state,
+        auth::basic_auth_middleware,
+    ))
 }
 
 /// Start the HTTP API server.
@@ -1372,6 +1647,21 @@ mod tests {
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: dashmap::DashMap::new(),
             grid_frame_dirty: dashmap::DashMap::new(),
+            tunnel_manager: {
+                let audit = std::sync::Arc::new(parking_lot::Mutex::new(
+                    crate::tunnels::audit::AuditLog::open(
+                        &std::env::temp_dir().join("test-tunnel-audit.db"),
+                    )
+                    .unwrap(),
+                ));
+                std::sync::Arc::new(crate::tunnels::manager::TunnelManager::new(audit))
+            },
+            tunnel_audit: std::sync::Arc::new(parking_lot::Mutex::new(
+                crate::tunnels::audit::AuditLog::open(
+                    &std::env::temp_dir().join("test-tunnel-audit2.db"),
+                )
+                .unwrap(),
+            )),
         });
         // Override default disabled_native_tools so all 8 tools are visible in tests
         state.config.write().disabled_native_tools = Vec::new();

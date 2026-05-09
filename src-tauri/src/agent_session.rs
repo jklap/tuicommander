@@ -28,9 +28,10 @@ pub(crate) fn discover_agent_session(
     agent_type: String,
     cwd: String,
     claimed_ids: Vec<String>,
+    claude_config_dir: Option<String>,
 ) -> Option<String> {
     match agent_type.as_str() {
-        "claude" => discover_claude_session(&cwd, &claimed_ids),
+        "claude" => discover_claude_session(&cwd, &claimed_ids, claude_config_dir.as_deref()),
         "gemini" => discover_gemini_session(&cwd, &claimed_ids),
         "codex" => discover_codex_session(&claimed_ids),
         // Goose stores sessions in SQLite — no filesystem discovery.
@@ -43,9 +44,9 @@ pub(crate) fn discover_agent_session(
 /// Return the absolute path to Claude Code's project directory for a given CWD.
 /// E.g. `/Users/foo/bar` → `~/.claude/projects/-Users-foo-bar`.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn claude_project_dir(cwd: String) -> Result<String, String> {
+pub(crate) fn claude_project_dir(cwd: String, claude_config_dir: Option<String>) -> Result<String, String> {
     let base =
-        claude_projects_dir().ok_or_else(|| "Could not determine home directory".to_string())?;
+        claude_projects_dir(claude_config_dir.as_deref()).ok_or_else(|| "Could not determine home directory".to_string())?;
     let path = base.join(path_to_claude_slug(&cwd));
     path.to_str()
         .map(|s| s.to_string())
@@ -54,9 +55,16 @@ pub(crate) fn claude_project_dir(cwd: String) -> Result<String, String> {
 
 // ─── Claude ──────────────────────────────────────────────────────────────────
 
-/// Base directory for Claude Code session transcripts: `~/.claude/projects/`.
-fn claude_projects_dir() -> Option<PathBuf> {
-    dirs::home_dir().map(|h| h.join(".claude").join("projects"))
+/// Base directory for Claude Code session transcripts.
+///
+/// When `config_dir_override` is set (from `CLAUDE_CONFIG_DIR` in the agent's
+/// run config), uses `<override>/projects/`. Otherwise defaults to `~/.claude/projects/`.
+fn claude_projects_dir(config_dir_override: Option<&str>) -> Option<PathBuf> {
+    if let Some(dir) = config_dir_override {
+        Some(PathBuf::from(dir).join("projects"))
+    } else {
+        dirs::home_dir().map(|h| h.join(".claude").join("projects"))
+    }
 }
 
 /// Encode a filesystem path to the slug Claude Code uses as a directory name.
@@ -76,9 +84,9 @@ fn path_to_claude_slug(path: &str) -> String {
 
 /// Find the most recently created, unclaimed `.jsonl` session file under
 /// `~/.claude/projects/<cwd-slug>/`.
-fn discover_claude_session(cwd: &str, claimed_ids: &[String]) -> Option<String> {
+fn discover_claude_session(cwd: &str, claimed_ids: &[String], config_dir: Option<&str>) -> Option<String> {
     let slug = path_to_claude_slug(cwd);
-    let project_dir = claude_projects_dir()?.join(&slug);
+    let project_dir = claude_projects_dir(config_dir)?.join(&slug);
 
     newest_unclaimed_file(
         &project_dir,
@@ -89,6 +97,7 @@ fn discover_claude_session(cwd: &str, claimed_ids: &[String]) -> Option<String> 
                 .map(|stem| stem.to_string())
         },
         claimed_ids,
+        Some(std::time::Duration::from_secs(60)),
     )
 }
 
@@ -235,9 +244,9 @@ fn extract_codex_uuid(name: &str) -> Option<String> {
 /// Used at restore time to decide if `--resume <uuid>` is safe: if the session
 /// file doesn't exist, the resume command would fail.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn verify_agent_session(agent_type: String, session_id: String, cwd: String) -> bool {
+pub(crate) fn verify_agent_session(agent_type: String, session_id: String, cwd: String, claude_config_dir: Option<String>) -> bool {
     match agent_type.as_str() {
-        "claude" => verify_claude_session(&session_id, &cwd),
+        "claude" => verify_claude_session(&session_id, &cwd, claude_config_dir.as_deref()),
         "gemini" => verify_gemini_session(&session_id, &cwd),
         "codex" => verify_codex_session(&session_id),
         "goose" => verify_goose_session(),
@@ -251,7 +260,7 @@ pub(crate) fn verify_agent_session(agent_type: String, session_id: String, cwd: 
 /// would cause Claude to exit immediately and leak VT probe responses (DA1,
 /// DECRPM) as visible garbage in the shell.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn preflight_session_inject(tuic_session: String, cwd: String) {
+pub(crate) fn preflight_session_inject(tuic_session: String, cwd: String, claude_config_dir: Option<String>) {
     if !tuic_session
         .chars()
         .all(|c| c.is_ascii_hexdigit() || c == '-')
@@ -259,7 +268,7 @@ pub(crate) fn preflight_session_inject(tuic_session: String, cwd: String) {
     {
         return;
     }
-    if verify_claude_session(&tuic_session, &cwd) {
+    if verify_claude_session(&tuic_session, &cwd, claude_config_dir.as_deref()) {
         return;
     }
     let flag = crate::config::config_dir().join(format!("no-session-inject.{tuic_session}"));
@@ -280,11 +289,11 @@ pub(crate) fn preflight_session_inject(tuic_session: String, cwd: String) {
 }
 
 /// Check if `~/.claude/projects/<slug>/<uuid>.jsonl` exists.
-fn verify_claude_session(session_id: &str, cwd: &str) -> bool {
+fn verify_claude_session(session_id: &str, cwd: &str, config_dir: Option<&str>) -> bool {
     if !is_uuid(session_id) {
         return false;
     }
-    let Some(project_dir) = claude_projects_dir().map(|d| d.join(path_to_claude_slug(cwd))) else {
+    let Some(project_dir) = claude_projects_dir(config_dir).map(|d| d.join(path_to_claude_slug(cwd))) else {
         return false;
     };
     project_dir.join(format!("{session_id}.jsonl")).exists()
@@ -398,13 +407,24 @@ fn is_uuid(s: &str) -> bool {
 }
 
 /// Scan `dir` for files matching `extract_id`, returning the newest unclaimed ID.
-fn newest_unclaimed_file<F>(dir: &PathBuf, extract_id: F, claimed_ids: &[String]) -> Option<String>
+///
+/// When `max_age` is set, files older than this duration are ignored. This
+/// prevents discovering stale session files when an agent restarts in the same
+/// terminal before the new session file is created.
+fn newest_unclaimed_file<F>(
+    dir: &PathBuf,
+    extract_id: F,
+    claimed_ids: &[String],
+    max_age: Option<std::time::Duration>,
+) -> Option<String>
 where
     F: Fn(&str) -> Option<String>,
 {
     if !dir.exists() {
         return None;
     }
+
+    let now = SystemTime::now();
 
     let mut candidates: Vec<(SystemTime, String)> = std::fs::read_dir(dir)
         .ok()?
@@ -414,6 +434,11 @@ where
             let id = extract_id(&name)?;
             let meta = e.metadata().ok()?;
             let mtime = meta.modified().ok()?;
+            if let Some(max) = max_age {
+                if now.duration_since(mtime).unwrap_or_default() > max {
+                    return None;
+                }
+            }
             Some((mtime, id))
         })
         .collect();
@@ -505,7 +530,7 @@ mod tests {
 
     #[test]
     fn test_claude_project_dir_returns_path_with_slug() {
-        if let Ok(result) = claude_project_dir("/Users/foo/bar".to_string()) {
+        if let Ok(result) = claude_project_dir("/Users/foo/bar".to_string(), None) {
             assert!(
                 result.ends_with("/.claude/projects/-Users-foo-bar"),
                 "unexpected path: {result}"
@@ -516,12 +541,104 @@ mod tests {
 
     #[test]
     fn test_claude_project_dir_dots_in_username() {
-        if let Ok(result) = claude_project_dir("/Users/foo.bar/proj".to_string()) {
+        if let Ok(result) = claude_project_dir("/Users/foo.bar/proj".to_string(), None) {
             assert!(
                 result.ends_with("-Users-foo-bar-proj"),
                 "unexpected path: {result}"
             );
         }
+    }
+
+    #[test]
+    fn test_claude_project_dir_with_config_dir_override() {
+        let dir = TempDir::new().unwrap();
+        let override_path = dir.path().to_str().unwrap().to_string();
+        let result = claude_project_dir("/Users/foo/bar".to_string(), Some(override_path.clone()));
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(
+            path.starts_with(&override_path),
+            "expected path to start with override dir, got: {path}"
+        );
+        assert!(
+            path.ends_with("-Users-foo-bar"),
+            "expected slug suffix, got: {path}"
+        );
+    }
+
+    #[test]
+    fn test_discover_claude_session_with_config_dir() {
+        let dir = TempDir::new().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let slug = path_to_claude_slug("/fake/project");
+        let session_dir = projects_dir.join(&slug);
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let uuid = "af467730-5e79-49d9-8a17-ebd94c99f262";
+        make_file(&session_dir, &format!("{uuid}.jsonl"));
+
+        let result = discover_claude_session(
+            "/fake/project",
+            &[],
+            Some(dir.path().to_str().unwrap()),
+        );
+        assert_eq!(result, Some(uuid.to_string()));
+    }
+
+    #[test]
+    fn test_verify_claude_session_with_config_dir() {
+        let dir = TempDir::new().unwrap();
+        let projects_dir = dir.path().join("projects");
+        let slug = path_to_claude_slug("/fake/project");
+        let session_dir = projects_dir.join(&slug);
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let uuid = "af467730-5e79-49d9-8a17-ebd94c99f262";
+        make_file(&session_dir, &format!("{uuid}.jsonl"));
+
+        assert!(verify_claude_session(uuid, "/fake/project", Some(dir.path().to_str().unwrap())));
+        assert!(!verify_claude_session(uuid, "/fake/project", None));
+    }
+
+    #[test]
+    fn test_newest_unclaimed_file_max_age_filter() {
+        let dir = TempDir::new().unwrap();
+        let uuid = "af467730-5e79-49d9-8a17-ebd94c99f262";
+        let path = make_file(dir.path(), &format!("{uuid}.jsonl"));
+
+        // Backdate the file mtime by 2 minutes
+        let two_min_ago = std::time::SystemTime::now() - Duration::from_secs(120);
+        let file = fs::File::options().write(true).open(&path).unwrap();
+        file.set_times(
+            fs::FileTimes::new().set_modified(two_min_ago),
+        )
+        .unwrap();
+
+        // With 60s max age, the stale file should be filtered out
+        let result = newest_unclaimed_file(
+            &dir.path().to_path_buf(),
+            |name| {
+                name.strip_suffix(".jsonl")
+                    .filter(|s| is_uuid(s))
+                    .map(|s| s.to_string())
+            },
+            &[],
+            Some(Duration::from_secs(60)),
+        );
+        assert!(result.is_none(), "stale file should be filtered by max_age");
+
+        // Without max age, should still find it
+        let result = newest_unclaimed_file(
+            &dir.path().to_path_buf(),
+            |name| {
+                name.strip_suffix(".jsonl")
+                    .filter(|s| is_uuid(s))
+                    .map(|s| s.to_string())
+            },
+            &[],
+            None,
+        );
+        assert_eq!(result, Some(uuid.to_string()));
     }
 
     // ── newest_unclaimed_file ──
@@ -537,13 +654,14 @@ mod tests {
                     .map(|s| s.to_string())
             },
             &[],
+            None,
         );
         assert!(result.is_none());
     }
 
     #[test]
     fn test_missing_dir_returns_none() {
-        let result = newest_unclaimed_file(&PathBuf::from("/nonexistent/path/xyz"), |_| None, &[]);
+        let result = newest_unclaimed_file(&PathBuf::from("/nonexistent/path/xyz"), |_| None, &[], None);
         assert!(result.is_none());
     }
 
@@ -561,6 +679,7 @@ mod tests {
                     .map(|s| s.to_string())
             },
             &[],
+            None,
         );
         assert_eq!(result, Some(uuid.to_string()));
     }
@@ -579,6 +698,7 @@ mod tests {
                     .map(|s| s.to_string())
             },
             &[uuid.to_string()],
+            None,
         );
         assert!(result.is_none());
     }
@@ -602,6 +722,7 @@ mod tests {
                     .map(|s| s.to_string())
             },
             &[],
+            None,
         );
         assert_eq!(result, Some(uuid2.to_string()));
     }
@@ -620,6 +741,7 @@ mod tests {
                     .map(|s| s.to_string())
             },
             &[],
+            None,
         );
         assert!(result.is_none());
     }
@@ -701,7 +823,7 @@ mod tests {
     #[test]
     fn test_verify_agent_session_invalid_uuid() {
         // Invalid UUIDs should always return false
-        assert!(!verify_claude_session("not-a-uuid", "/tmp"));
+        assert!(!verify_claude_session("not-a-uuid", "/tmp", None));
     }
 
     #[test]
@@ -710,6 +832,7 @@ mod tests {
             "unknown-agent".to_string(),
             "af467730-5e79-49d9-8a17-ebd94c99f262".to_string(),
             "/tmp".to_string(),
+            None,
         ));
     }
 }

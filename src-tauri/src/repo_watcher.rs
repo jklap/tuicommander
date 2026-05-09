@@ -189,10 +189,10 @@ pub(crate) struct WatchHandle(#[allow(dead_code)] pub(crate) Mutex<RecommendedWa
 /// Unlike the previous `notify-debouncer-full` approach, this does NOT perform
 /// a synchronous walkdir+stat scan at registration time.
 pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(), String> {
-    // Don't double-watch
     if state.repo_watchers.contains_key(repo_path) {
         return Ok(());
     }
+    tracing::info!(source = "repo_watcher", path = %repo_path, "Starting watcher");
 
     let repo = PathBuf::from(repo_path);
     let git_dir = crate::git::resolve_git_dir(&repo)
@@ -262,6 +262,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 #[cfg(feature = "desktop")]
                 let h = handle.clone();
                 emitter.trigger(&EventCategory::Head, move || {
+                    tracing::info!(source = "repo_watcher", path = %repo_path, "Emit head-changed");
                     if let Some(branch) = crate::git::read_branch_from_head(&repo) {
                         let _ = bus.send(AppEvent::HeadChanged {
                             repo_path: repo_path.clone(),
@@ -285,6 +286,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 let h = handle.clone();
                 let st = Arc::clone(&state_cb);
                 emitter.trigger(&EventCategory::GitState, move || {
+                    tracing::info!(source = "repo_watcher", path = %repo_path, "Emit repo-changed (git-state)");
                     st.invalidate_repo_caches(&repo_path);
                     let _ = bus.send(AppEvent::RepoChanged {
                         repo_path: repo_path.clone(),
@@ -306,6 +308,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 let h = handle.clone();
                 let st = Arc::clone(&state_cb);
                 emitter.trigger(&EventCategory::WorkingTree, move || {
+                    tracing::info!(source = "repo_watcher", path = %repo_path, "Emit repo-changed (working-tree)");
                     st.invalidate_repo_caches(&repo_path);
                     let _ = bus.send(AppEvent::RepoChanged {
                         repo_path: repo_path.clone(),
@@ -338,7 +341,9 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
 
 /// Stop watching a repository.
 pub(crate) fn stop_watching(repo_path: &str, state: &Arc<AppState>) {
-    // Dropping the WatchHandle stops the watcher automatically
+    if state.repo_watchers.contains_key(repo_path) {
+        tracing::info!(source = "repo_watcher", path = %repo_path, "Stopping watcher");
+    }
     state.repo_watchers.remove(repo_path);
 }
 

@@ -13,7 +13,7 @@ async fn main() -> anyhow::Result<()> {
         Err(_) => 9877,
     };
 
-    tuicommander_lib::run_headless(port).await
+    tuicommander_lib::run_remote(port).await
 }
 
 #[cfg(feature = "desktop")]

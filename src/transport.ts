@@ -7,6 +7,7 @@
 
 import type { LogLine } from "./mobile/utils/logLine";
 import { appLogger } from "./stores/appLogger";
+import { remoteConnectionsStore } from "./stores/remoteConnections";
 
 // ---------------------------------------------------------------------------
 // MCP upstream config types (mirrors Rust structs in mcp_upstream_config.rs)
@@ -864,6 +865,23 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	// --- Plugins ---
 	list_user_plugins: { map: () => ({ method: "GET", path: "/plugins/list" }) },
 
+	// --- Remote Connections ---
+	list_remote_connections: { map: () => ({ method: "GET", path: "/config/remote-connections" }) },
+	save_remote_connection: { map: (args) => ({ method: "PUT", path: "/config/remote-connections", body: args.connection }) },
+	delete_remote_connection: { map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}` }) },
+
+	// --- Tunnels ---
+	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },
+	save_tunnel_profile: { map: (args) => ({ method: "POST", path: "/tunnels/profiles", body: args.profile }) },
+	delete_tunnel_profile: { map: (args) => ({ method: "DELETE", path: `/tunnels/profiles/${args.id}` }) },
+	start_tunnel: { map: (args) => ({ method: "POST", path: `/tunnels/start/${args.id}` }) },
+	stop_tunnel: { map: (args) => ({ method: "POST", path: `/tunnels/stop/${args.id}` }) },
+	list_active_tunnels: { map: () => ({ method: "GET", path: "/tunnels/active" }) },
+	get_tunnel_status: { map: (args) => ({ method: "GET", path: `/tunnels/status/${args.id}` }) },
+	get_tunnel_audit: { map: (args) => ({ method: "GET", path: `/tunnels/audit/${args.id}?limit=${args.limit || 20}` }) },
+	list_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts" }) },
+	list_agent_keys: { map: () => ({ method: "GET", path: "/tunnels/agent-keys" }) },
+
 	// --- App Logger ---
 	push_log: {
 		map: (args) => ({
@@ -888,8 +906,9 @@ export function mapCommandToHttp(command: string, args: Record<string, unknown>)
 	return entry.map(args, p);
 }
 
-/** Build a full URL for HTTP transport using current window origin */
-export function buildHttpUrl(path: string): string {
+/** Build a full URL for HTTP transport using current window origin or a remote baseUrl */
+export function buildHttpUrl(path: string, baseUrl?: string): string {
+	if (baseUrl) return `${baseUrl}${path}`;
 	if (typeof window !== "undefined" && window.location?.origin) {
 		return `${window.location.origin}${path}`;
 	}
@@ -935,27 +954,28 @@ function queuedWrite<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
  * write_pty calls are serialized per-session in browser mode to prevent reordering.
  * Usage: `const result = await rpc<string>("create_pty", { config });`
  */
-export function rpc<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
+export function rpc<T>(command: string, args: Record<string, unknown> = {}, connectionId?: string): Promise<T> {
 	// Serialize write_pty per session in browser mode to prevent letter reordering
-	if (command === "write_pty" && !isTauri()) {
+	if (command === "write_pty" && (!isTauri() || connectionId)) {
 		const sessionId = (args.sessionId ?? args.id) as string;
 		if (sessionId) {
-			return queuedWrite(sessionId, () => rpcImpl<T>(command, args));
+			return queuedWrite(sessionId, () => rpcImpl<T>(command, args, connectionId));
 		}
 	}
 	if (isIdempotentRpc(command, args)) {
-		const key = `${command}:${JSON.stringify(args)}`;
+		const key = connectionId ? `${connectionId}:${command}:${JSON.stringify(args)}` : `${command}:${JSON.stringify(args)}`;
 		const existing = _inflight.get(key) as Promise<T> | undefined;
 		if (existing) return existing;
-		const promise = rpcImpl<T>(command, args).finally(() => _inflight.delete(key));
+		const promise = rpcImpl<T>(command, args, connectionId).finally(() => _inflight.delete(key));
 		_inflight.set(key, promise as Promise<unknown>);
 		return promise;
 	}
-	return rpcImpl<T>(command, args);
+	return rpcImpl<T>(command, args, connectionId);
 }
 
-async function rpcImpl<T>(command: string, args: Record<string, unknown>): Promise<T> {
-	if (isTauri()) {
+async function rpcImpl<T>(command: string, args: Record<string, unknown>, connectionId?: string): Promise<T> {
+	// When connectionId is provided, always use HTTP fetch (remote daemon is accessed via HTTP)
+	if (!connectionId && isTauri()) {
 		const { invoke } = await import("@tauri-apps/api/core");
 		// Only pass args if non-empty (matches Tauri invoke signature)
 		if (Object.keys(args).length > 0) {
@@ -965,7 +985,11 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>): Promi
 	}
 
 	const mapping = mapCommandToHttp(command, args);
-	const url = buildHttpUrl(mapping.path);
+	const baseUrl = connectionId ? remoteConnectionsStore.getBaseUrl(connectionId) : undefined;
+	if (connectionId && !baseUrl) {
+		throw new Error(`Remote connection ${connectionId} not connected`);
+	}
+	const url = buildHttpUrl(mapping.path, baseUrl);
 
 	const controller = new AbortController();
 	const timeoutId = setTimeout(() => controller.abort(), 30_000);
@@ -1274,8 +1298,8 @@ export async function subscribePty(
  * @param handlers - Map of event type → callback
  * @returns Promise resolving to an unsubscribe function
  */
-export async function subscribeEvents(handlers: Record<string, (payload: unknown) => void>): Promise<Unsubscribe> {
-	if (isTauri()) {
+export async function subscribeEvents(handlers: Record<string, (payload: unknown) => void>, baseUrl?: string): Promise<Unsubscribe> {
+	if (!baseUrl && isTauri()) {
 		const { listen } = await import("@tauri-apps/api/event");
 		const unsubscribers: Array<() => void> = [];
 		for (const [eventType, handler] of Object.entries(handlers)) {
@@ -1285,9 +1309,9 @@ export async function subscribeEvents(handlers: Record<string, (payload: unknown
 		return () => unsubscribers.forEach((fn) => fn());
 	}
 
-	// Browser mode: SSE via EventSource
+	// Browser/remote mode: SSE via EventSource
 	const types = Object.keys(handlers).join(",");
-	const url = buildHttpUrl(`/events?types=${encodeURIComponent(types)}`);
+	const url = buildHttpUrl(`/events?types=${encodeURIComponent(types)}`, baseUrl);
 	const es = new EventSource(url);
 
 	for (const [eventType, handler] of Object.entries(handlers)) {

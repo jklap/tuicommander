@@ -3,6 +3,12 @@ import { agentConfigsStore } from "../stores/agentConfigs";
 import { rpc } from "../transport";
 import { pathBasename } from "./pathUtils";
 
+function getClaudeConfigDir(agentType: AgentType): string | null {
+	if (agentType !== "claude") return null;
+	const runConfig = agentConfigsStore.getDefaultConfig(agentType);
+	return runConfig?.env?.CLAUDE_CONFIG_DIR ?? null;
+}
+
 /**
  * Apply the agent's default run config to a resume command.
  *
@@ -91,6 +97,8 @@ export async function verifyAndBuildResumeCommand(
 	tuicSession?: string | null,
 	agentSessionId?: string | null,
 ): Promise<string | null> {
+	const claudeConfigDir = getClaudeConfigDir(agentType);
+
 	// Try tuicSession first — it's the stable tab UUID injected as env var
 	if (tuicSession && cwd && AGENTS[agentType].sessionDiscovery) {
 		try {
@@ -98,6 +106,7 @@ export async function verifyAndBuildResumeCommand(
 				agentType,
 				sessionId: tuicSession,
 				cwd,
+				claudeConfigDir,
 			});
 			if (exists) {
 				const cmd = AGENTS[agentType].sessionDiscovery!.resumeWithId(tuicSession);

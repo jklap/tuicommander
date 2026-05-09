@@ -1,17 +1,24 @@
+#[cfg(feature = "desktop")]
 use axum::http::{HeaderMap, StatusCode, header};
+#[cfg(feature = "desktop")]
 use axum::response::{IntoResponse, Redirect, Response};
+
+#[cfg(feature = "desktop")]
 use include_dir::{Dir, include_dir};
 
 /// Frontend dist/ embedded at compile time for single-binary distribution.
+/// Only compiled in desktop builds — the remote binary omits the ~5MB frontend.
+#[cfg(feature = "desktop")]
 pub(super) static FRONTEND_DIST: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../dist");
 
 /// In debug builds, the dist/ directory on disk at compile-time location is checked first.
 /// This lets `pnpm build` (or `vite build --watch`) update the remote UI without a Rust recompile.
-#[cfg(debug_assertions)]
+#[cfg(all(feature = "desktop", debug_assertions))]
 const DEV_DIST_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../dist");
 
 /// Serve embedded static files from dist/ with correct MIME types.
 /// Unknown paths fall back to index.html for SPA client-side routing.
+#[cfg(feature = "desktop")]
 pub(super) async fn serve_static(
     axum::extract::Path(path): axum::extract::Path<String>,
 ) -> Response {
@@ -19,6 +26,7 @@ pub(super) async fn serve_static(
 }
 
 /// Serve the root: redirect mobile browsers to /mobile, otherwise index.html.
+#[cfg(feature = "desktop")]
 pub(super) async fn serve_index(headers: HeaderMap) -> Response {
     if is_mobile_user_agent(&headers) {
         return Redirect::to("/mobile").into_response();
@@ -27,6 +35,7 @@ pub(super) async fn serve_index(headers: HeaderMap) -> Response {
 }
 
 /// Check if the User-Agent indicates a mobile device.
+#[cfg(feature = "desktop")]
 fn is_mobile_user_agent(headers: &HeaderMap) -> bool {
     let ua = match headers
         .get(header::USER_AGENT)
@@ -43,6 +52,7 @@ fn is_mobile_user_agent(headers: &HeaderMap) -> bool {
 
 /// Determine which SPA shell to serve as fallback for client-side routing.
 /// Paths starting with "mobile" use mobile.html; everything else uses index.html.
+#[cfg(feature = "desktop")]
 fn spa_fallback_file(path: &str) -> &str {
     if path == "mobile" || path.starts_with("mobile/") {
         "mobile.html"
@@ -54,6 +64,7 @@ fn spa_fallback_file(path: &str) -> &str {
 /// Look up a file and return it with the correct content-type.
 /// In debug builds: reads from disk so pnpm build is reflected immediately.
 /// In release builds: uses embedded bytes (no filesystem dependency).
+#[cfg(feature = "desktop")]
 fn serve_file(path: &str) -> Response {
     #[cfg(debug_assertions)]
     {
@@ -98,6 +109,7 @@ fn serve_file(path: &str) -> Response {
 }
 
 /// Return the appropriate `Cache-Control` value for a given static file path.
+#[cfg(feature = "desktop")]
 pub(super) fn cache_control_for(path: &str) -> &'static str {
     // HTML shells: always revalidate so the browser picks up new versions
     if path.ends_with(".html") || path == "index" || path == "mobile" {
@@ -119,6 +131,7 @@ pub(super) fn cache_control_for(path: &str) -> &'static str {
     "public, max-age=86400"
 }
 
+#[cfg(feature = "desktop")]
 fn serve_embedded_file(path: &str) -> Response {
     if let Some(file) = FRONTEND_DIST.get_file(path) {
         let mime = mime_guess::from_path(path)
@@ -150,7 +163,7 @@ fn serve_embedded_file(path: &str) -> Response {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "desktop"))]
 mod tests {
     use super::*;
 

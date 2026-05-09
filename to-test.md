@@ -753,6 +753,28 @@ Features to test when TUICommander is more usable.
 - [ ] Codex numbered-choice dialog (if/when encountered) captured by parser — add fixture if not
 - [ ] Aider confirmation dialog — add fixture if layout differs
 
+## SSH Tunnel Manager
+- [ ] Create SSH tunnel profile via UI → verify TOML file saved in `<config_dir>/tunnels/`
+- [ ] Start tunnel → status badge transitions Starting → Connected
+- [ ] Kill ssh process externally (`kill <pid>`) → verify auto-reconnect with Reconnecting status and increasing attempt count
+- [ ] Stop tunnel via UI → verify ssh process terminated (SIGTERM), status shows Stopped
+- [ ] Start tunnel with local port already in use → Error status shown before ssh spawn
+- [ ] Auth failure (wrong key/user) → Stopped immediately, no reconnect attempts
+- [ ] Host key mismatch → Stopped immediately with HostKeyMismatch reason
+- [ ] Network failure → Reconnecting with exponential backoff (check audit log for retry events)
+- [ ] Audit log: query events for a tunnel → shows Started, Connected, Disconnected, etc.
+- [ ] Edit tunnel profile → save → verify TOML updated, tunnel restarts with new config
+
+## Remote Connection Manager
+- [ ] Add SSH remote connection → verify tunnel profile auto-created for daemon port forwarding
+- [ ] Add Direct remote connection → verify health polling starts (check for periodic HTTP requests)
+- [ ] Disable remote connection → verify tunnel/polling stops
+- [ ] Add remote repo (select connection) → repo appears in sidebar with remote badge
+- [ ] Open terminal on remote repo → WebSocket connects via remote base URL, I/O works
+- [ ] Kill remote daemon → health check detects disconnection, warning badge shown
+- [ ] Restart remote daemon → connection recovers automatically
+- [ ] SSE event bridge: remote repo file change → local store updated via event bridge
+
 ## AgentSessionConflict auto-reset
 - [ ] In a zsh PTY tab, `claude --session-id <known-stale-uuid>` to force "Session ID already in use" — confirm warn toast fires and `TUIC_SESSION` is reset (check via `echo $TUIC_SESSION`)
 - [ ] Repeat with `claude --resume <missing-uuid>` to trigger "No conversation found with session ID" path (kind="not-found")
