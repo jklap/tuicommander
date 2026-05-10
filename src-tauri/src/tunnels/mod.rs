@@ -9,4 +9,5 @@ pub(crate) mod port;
 pub(crate) mod profile;
 pub(crate) mod storage;
 pub(crate) mod supervisor;
+#[cfg(feature = "desktop")]
 pub(crate) mod tauri_commands;
