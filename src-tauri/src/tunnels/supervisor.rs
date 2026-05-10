@@ -12,7 +12,9 @@ use super::agent::discover_agent_socket;
 use super::backoff::BackoffCalculator;
 use super::classifier::{ExitReason, classify_exit};
 use super::command::{build_ssh_args, build_ssh_env};
-use super::port::{check_local_port, kill_ssh_on_port};
+use super::port::check_local_port;
+#[cfg(unix)]
+use super::port::kill_ssh_on_port;
 use super::profile::{ForwardSpec, TunnelProfile};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,8 +73,11 @@ impl TunnelSupervisor {
             if let ForwardSpec::Local { bind_port, .. } = forward
                 && check_local_port(*bind_port).await.is_err()
             {
-                kill_ssh_on_port(*bind_port).await;
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                #[cfg(unix)]
+                {
+                    kill_ssh_on_port(*bind_port).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
                 if let Err(msg) = check_local_port(*bind_port).await {
                     let error_status = TunnelStatus::Error { message: msg };
                     *status.lock() = error_status.clone();

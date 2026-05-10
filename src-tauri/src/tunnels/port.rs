@@ -19,6 +19,7 @@ pub async fn check_local_port(port: u16) -> Result<(), String> {
 
 /// Kill orphaned SSH processes holding a local port.
 /// Uses `lsof` to find PIDs, then verifies each is an `ssh` process before sending SIGTERM.
+#[cfg(unix)]
 pub async fn kill_ssh_on_port(port: u16) {
     let output = tokio::process::Command::new("lsof")
         .args(["-ti", &format!("tcp:{port}"), "-sTCP:LISTEN"])
