@@ -26,10 +26,8 @@ pub fn discover_agent_socket() -> Option<PathBuf> {
     }
 
     // 2. 1Password socket.
-    if let Some(p) = one_password_socket() {
-        if p.exists() {
-            return Some(p);
-        }
+    if let Some(p) = one_password_socket().filter(|p| p.exists()) {
+        return Some(p);
     }
 
     // 3 & 4. Platform-specific candidates.

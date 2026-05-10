@@ -236,7 +236,13 @@ function createRepositoriesStore() {
 		},
 
 		/** Add a repository */
-		add(repo: { path: string; displayName: string; initials?: string; isGitRepo?: boolean; connectionId?: string }): void {
+		add(repo: {
+			path: string;
+			displayName: string;
+			initials?: string;
+			isGitRepo?: boolean;
+			connectionId?: string;
+		}): void {
 			setState("repositories", repo.path, {
 				path: repo.path,
 				displayName: repo.displayName,

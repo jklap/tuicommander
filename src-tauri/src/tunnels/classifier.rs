@@ -14,7 +14,10 @@ pub enum ExitReason {
 impl ExitReason {
     /// Whether automatic retry is safe for this exit reason.
     pub fn is_retryable(&self) -> bool {
-        matches!(self, Self::NetworkDown | Self::Timeout | Self::ConnectionRefused)
+        matches!(
+            self,
+            Self::NetworkDown | Self::Timeout | Self::ConnectionRefused
+        )
     }
 }
 
@@ -50,10 +53,8 @@ pub fn classify_exit(stderr: &str, exit_code: Option<i32>) -> ExitReason {
 
     // Exit codes >= 128 on Unix indicate termination by signal (128 + signal number).
     // If stderr is blank, this is a clean external kill (e.g. SIGKILL=137, SIGTERM=143).
-    if let Some(code) = exit_code {
-        if code >= 128 && stderr.trim().is_empty() {
-            return ExitReason::UserKilled;
-        }
+    if exit_code.is_some_and(|code| code >= 128 && stderr.trim().is_empty()) {
+        return ExitReason::UserKilled;
     }
 
     // Fall through to Unknown — include a short stderr snippet or the exit code.
@@ -82,7 +83,10 @@ mod tests {
             @@@@@@@@@@@@@@@@@@@@@\n\
             IT IS POSSIBLE THAT SOMEONE IS DOING SOMETHING NASTY!\n\
             Host key verification failed.";
-        assert_eq!(classify_exit(stderr, Some(255)), ExitReason::HostKeyMismatch);
+        assert_eq!(
+            classify_exit(stderr, Some(255)),
+            ExitReason::HostKeyMismatch
+        );
     }
 
     #[test]
@@ -95,7 +99,10 @@ mod tests {
     #[test]
     fn connection_refused() {
         let stderr = "ssh: connect to host example.com port 22: Connection refused";
-        assert_eq!(classify_exit(stderr, Some(255)), ExitReason::ConnectionRefused);
+        assert_eq!(
+            classify_exit(stderr, Some(255)),
+            ExitReason::ConnectionRefused
+        );
     }
 
     #[test]

@@ -2528,7 +2528,10 @@ fn handle_ui(
                 })
                 .or_else(|| {
                     mcp_session_id.and_then(|sid| {
-                        state.mcp_sessions.get(sid).and_then(|m| m.repo_path.clone())
+                        state
+                            .mcp_sessions
+                            .get(sid)
+                            .and_then(|m| m.repo_path.clone())
                     })
                 });
             let mut payload = serde_json::json!({

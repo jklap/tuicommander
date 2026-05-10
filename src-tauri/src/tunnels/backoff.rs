@@ -101,7 +101,10 @@ mod tests {
                 "should return Some for attempt {i}"
             );
         }
-        assert!(calc.next_delay().is_none(), "should return None after 10 retries");
+        assert!(
+            calc.next_delay().is_none(),
+            "should return None after 10 retries"
+        );
     }
 
     #[test]
@@ -131,8 +134,7 @@ mod tests {
             values.push(delay.as_millis() as f64);
         }
         let mean = values.iter().sum::<f64>() / values.len() as f64;
-        let variance =
-            values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
+        let variance = values.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / values.len() as f64;
         let std_dev = variance.sqrt();
         assert!(
             std_dev > 0.0,

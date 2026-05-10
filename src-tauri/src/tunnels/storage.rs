@@ -32,9 +32,9 @@ impl ProfileStore {
         if let Some(repo) = repo_dir {
             let repo_tunnel_dir = repo.join(".tuic").join("tunnels");
             if repo_tunnel_dir.exists() {
-                for entry in std::fs::read_dir(&repo_tunnel_dir).with_context(|| {
-                    format!("reading repo tunnels dir {:?}", repo_tunnel_dir)
-                })? {
+                for entry in std::fs::read_dir(&repo_tunnel_dir)
+                    .with_context(|| format!("reading repo tunnels dir {:?}", repo_tunnel_dir))?
+                {
                     let entry = entry?;
                     let path = entry.path();
                     if path.extension().and_then(|e| e.to_str()) == Some("toml") {
@@ -65,7 +65,10 @@ impl ProfileStore {
     pub fn delete(app_data_dir: &Path, repo_dir: Option<&Path>, id: &str) -> Result<bool> {
         // Check repo scope first.
         if let Some(repo) = repo_dir {
-            let path = repo.join(".tuic").join("tunnels").join(format!("{id}.toml"));
+            let path = repo
+                .join(".tuic")
+                .join("tunnels")
+                .join(format!("{id}.toml"));
             if path.exists() {
                 std::fs::remove_file(&path)
                     .with_context(|| format!("deleting repo profile {:?}", path))?;
@@ -85,8 +88,8 @@ impl ProfileStore {
     }
 
     fn read_profile(path: &Path) -> Result<TunnelProfile> {
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("reading profile {:?}", path))?;
+        let content =
+            std::fs::read_to_string(path).with_context(|| format!("reading profile {:?}", path))?;
         toml::from_str(&content).with_context(|| format!("parsing profile {:?}", path))
     }
 
@@ -95,8 +98,7 @@ impl ProfileStore {
         std::fs::create_dir_all(dir)
             .with_context(|| format!("creating tunnels directory {:?}", dir))?;
 
-        let content =
-            toml::to_string(profile).with_context(|| "serializing profile to TOML")?;
+        let content = toml::to_string(profile).with_context(|| "serializing profile to TOML")?;
 
         // Write to a temp file in the same directory so rename is atomic (same filesystem).
         let tmp_path = dir.join(format!(".{}.tmp", profile.id));

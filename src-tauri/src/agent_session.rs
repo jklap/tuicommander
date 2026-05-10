@@ -44,9 +44,12 @@ pub(crate) fn discover_agent_session(
 /// Return the absolute path to Claude Code's project directory for a given CWD.
 /// E.g. `/Users/foo/bar` → `~/.claude/projects/-Users-foo-bar`.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn claude_project_dir(cwd: String, claude_config_dir: Option<String>) -> Result<String, String> {
-    let base =
-        claude_projects_dir(claude_config_dir.as_deref()).ok_or_else(|| "Could not determine home directory".to_string())?;
+pub(crate) fn claude_project_dir(
+    cwd: String,
+    claude_config_dir: Option<String>,
+) -> Result<String, String> {
+    let base = claude_projects_dir(claude_config_dir.as_deref())
+        .ok_or_else(|| "Could not determine home directory".to_string())?;
     let path = base.join(path_to_claude_slug(&cwd));
     path.to_str()
         .map(|s| s.to_string())
@@ -84,7 +87,11 @@ fn path_to_claude_slug(path: &str) -> String {
 
 /// Find the most recently created, unclaimed `.jsonl` session file under
 /// `~/.claude/projects/<cwd-slug>/`.
-fn discover_claude_session(cwd: &str, claimed_ids: &[String], config_dir: Option<&str>) -> Option<String> {
+fn discover_claude_session(
+    cwd: &str,
+    claimed_ids: &[String],
+    config_dir: Option<&str>,
+) -> Option<String> {
     let slug = path_to_claude_slug(cwd);
     let project_dir = claude_projects_dir(config_dir)?.join(&slug);
 
@@ -236,7 +243,12 @@ fn extract_codex_uuid(name: &str) -> Option<String> {
 /// Used at restore time to decide if `--resume <uuid>` is safe: if the session
 /// file doesn't exist, the resume command would fail.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn verify_agent_session(agent_type: String, session_id: String, cwd: String, claude_config_dir: Option<String>) -> bool {
+pub(crate) fn verify_agent_session(
+    agent_type: String,
+    session_id: String,
+    cwd: String,
+    claude_config_dir: Option<String>,
+) -> bool {
     match agent_type.as_str() {
         "claude" => verify_claude_session(&session_id, &cwd, claude_config_dir.as_deref()),
         "gemini" => verify_gemini_session(&session_id, &cwd),
@@ -252,7 +264,11 @@ pub(crate) fn verify_agent_session(agent_type: String, session_id: String, cwd: 
 /// would cause Claude to exit immediately and leak VT probe responses (DA1,
 /// DECRPM) as visible garbage in the shell.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn preflight_session_inject(tuic_session: String, cwd: String, claude_config_dir: Option<String>) {
+pub(crate) fn preflight_session_inject(
+    tuic_session: String,
+    cwd: String,
+    claude_config_dir: Option<String>,
+) {
     if !tuic_session
         .chars()
         .all(|c| c.is_ascii_hexdigit() || c == '-')
@@ -285,7 +301,9 @@ fn verify_claude_session(session_id: &str, cwd: &str, config_dir: Option<&str>) 
     if !is_uuid(session_id) {
         return false;
     }
-    let Some(project_dir) = claude_projects_dir(config_dir).map(|d| d.join(path_to_claude_slug(cwd))) else {
+    let Some(project_dir) =
+        claude_projects_dir(config_dir).map(|d| d.join(path_to_claude_slug(cwd)))
+    else {
         return false;
     };
     project_dir.join(format!("{session_id}.jsonl")).exists()
@@ -426,10 +444,8 @@ where
             let id = extract_id(&name)?;
             let meta = e.metadata().ok()?;
             let mtime = meta.modified().ok()?;
-            if let Some(max) = max_age {
-                if now.duration_since(mtime).unwrap_or_default() > max {
-                    return None;
-                }
+            if max_age.is_some_and(|max| now.duration_since(mtime).unwrap_or_default() > max) {
+                return None;
             }
             Some((mtime, id))
         })
@@ -569,11 +585,8 @@ mod tests {
         let uuid = "af467730-5e79-49d9-8a17-ebd94c99f262";
         make_file(&session_dir, &format!("{uuid}.jsonl"));
 
-        let result = discover_claude_session(
-            "/fake/project",
-            &[],
-            Some(dir.path().to_str().unwrap()),
-        );
+        let result =
+            discover_claude_session("/fake/project", &[], Some(dir.path().to_str().unwrap()));
         assert_eq!(result, Some(uuid.to_string()));
     }
 
@@ -588,7 +601,11 @@ mod tests {
         let uuid = "af467730-5e79-49d9-8a17-ebd94c99f262";
         make_file(&session_dir, &format!("{uuid}.jsonl"));
 
-        assert!(verify_claude_session(uuid, "/fake/project", Some(dir.path().to_str().unwrap())));
+        assert!(verify_claude_session(
+            uuid,
+            "/fake/project",
+            Some(dir.path().to_str().unwrap())
+        ));
         assert!(!verify_claude_session(uuid, "/fake/project", None));
     }
 
@@ -601,10 +618,8 @@ mod tests {
         // Backdate the file mtime by 2 minutes
         let two_min_ago = std::time::SystemTime::now() - Duration::from_secs(120);
         let file = fs::File::options().write(true).open(&path).unwrap();
-        file.set_times(
-            fs::FileTimes::new().set_modified(two_min_ago),
-        )
-        .unwrap();
+        file.set_times(fs::FileTimes::new().set_modified(two_min_ago))
+            .unwrap();
 
         // With 60s max age, the stale file should be filtered out
         let result = newest_unclaimed_file(
@@ -653,7 +668,8 @@ mod tests {
 
     #[test]
     fn test_missing_dir_returns_none() {
-        let result = newest_unclaimed_file(&PathBuf::from("/nonexistent/path/xyz"), |_| None, &[], None);
+        let result =
+            newest_unclaimed_file(&PathBuf::from("/nonexistent/path/xyz"), |_| None, &[], None);
         assert!(result.is_none());
     }
 

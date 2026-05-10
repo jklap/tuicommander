@@ -1,15 +1,15 @@
 use std::io::BufReader;
 use std::sync::Arc;
 
+use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::Deserialize;
 
-use crate::AppState;
 use super::profile::TunnelProfile;
 use super::storage::ProfileStore;
+use crate::AppState;
 
 /// JSON error helper.
 fn err_json(status: StatusCode, msg: &str) -> Response {
@@ -19,9 +19,7 @@ fn err_json(status: StatusCode, msg: &str) -> Response {
 // ── Profile CRUD ────────────────────────────────────────────
 
 /// GET /tunnels/profiles — list all saved profiles.
-pub(crate) async fn list_tunnel_profiles(
-    State(state): State<Arc<AppState>>,
-) -> Response {
+pub(crate) async fn list_tunnel_profiles(State(state): State<Arc<AppState>>) -> Response {
     match ProfileStore::load_all(&state.data_dir, None) {
         Ok(profiles) => (StatusCode::OK, Json(serde_json::json!(profiles))).into_response(),
         Err(e) => err_json(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
@@ -97,9 +95,7 @@ pub(crate) async fn stop_tunnel(
 // ── Status queries ──────────────────────────────────────────
 
 /// GET /tunnels/active — list all running tunnels with status.
-pub(crate) async fn list_active_tunnels(
-    State(state): State<Arc<AppState>>,
-) -> Response {
+pub(crate) async fn list_active_tunnels(State(state): State<Arc<AppState>>) -> Response {
     let list = state.tunnel_manager.list();
     let entries: Vec<serde_json::Value> = list
         .into_iter()
@@ -114,9 +110,11 @@ pub(crate) async fn get_tunnel_status(
     Path(id): Path<String>,
 ) -> Response {
     match state.tunnel_manager.get_status(&id) {
-        Some(status) => {
-            (StatusCode::OK, Json(serde_json::json!({"id": id, "status": status}))).into_response()
-        }
+        Some(status) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"id": id, "status": status})),
+        )
+            .into_response(),
         None => err_json(StatusCode::NOT_FOUND, "tunnel not found"),
     }
 }

@@ -551,7 +551,10 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			const prevRepo = repositoriesStore.getActive();
 			const prevBranchName = prevRepo?.activeBranch;
 			const prevBranch = prevBranchName ? prevRepo?.branches[prevBranchName] : null;
-			appLogger.debug("terminal", `BranchSelect ${prevBranchName ?? "(none)"} → ${branchName} terms=${(prevBranch?.terminals ?? []).length}→?`);
+			appLogger.debug(
+				"terminal",
+				`BranchSelect ${prevBranchName ?? "(none)"} → ${branchName} terms=${(prevBranch?.terminals ?? []).length}→?`,
+			);
 
 			// Save state for the branch we're leaving
 			if (prevRepo?.activeBranch) {
@@ -616,7 +619,10 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			const validTerminals = filterValidTerminals(branch?.terminals, terminalsStore.getIds()).filter(
 				(id) => !terminalsStore.isDetached(id),
 			);
-			appLogger.debug("terminal", `BranchSelect → ${branchName} valid=${validTerminals.length} saved=${branch?.savedTerminals?.length ?? 0}`);
+			appLogger.debug(
+				"terminal",
+				`BranchSelect → ${branchName} valid=${validTerminals.length} saved=${branch?.savedTerminals?.length ?? 0}`,
+			);
 			if (validTerminals.length === 0 && (branch?.terminals?.length ?? 0) > 0) {
 				appLogger.warn(
 					"terminal",
@@ -724,9 +730,10 @@ export function useGitOperations(deps: GitOperationsDeps) {
 									agentSessionId: terminal.agentSessionId ?? null,
 								});
 							} else if (terminal.tuicSession && terminal.cwd) {
-								const claudeConfigDir = terminal.agentType === "claude"
-									? agentConfigsStore.getDefaultConfig("claude")?.env?.CLAUDE_CONFIG_DIR ?? null
-									: null;
+								const claudeConfigDir =
+									terminal.agentType === "claude"
+										? (agentConfigsStore.getDefaultConfig("claude")?.env?.CLAUDE_CONFIG_DIR ?? null)
+										: null;
 								invoke("preflight_session_inject", {
 									tuicSession: terminal.tuicSession,
 									cwd: terminal.cwd,

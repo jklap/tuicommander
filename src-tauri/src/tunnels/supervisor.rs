@@ -10,7 +10,7 @@ use tokio::process::Command;
 
 use super::agent::discover_agent_socket;
 use super::backoff::BackoffCalculator;
-use super::classifier::{classify_exit, ExitReason};
+use super::classifier::{ExitReason, classify_exit};
 use super::command::{build_ssh_args, build_ssh_env};
 use super::port::is_local_port_free;
 use super::profile::{ForwardSpec, TunnelProfile};
@@ -67,19 +67,19 @@ impl TunnelSupervisor {
 
         // Check port availability for all Local forwards.
         for forward in &profile.forwards {
-            if let ForwardSpec::Local { bind_port, .. } = forward {
-                if !is_local_port_free(*bind_port).await {
-                    let msg = format!("local port {bind_port} is already in use");
-                    let error_status = TunnelStatus::Error { message: msg };
-                    *status.lock() = error_status.clone();
-                    status_callback(error_status);
-                    return Self {
-                        profile,
-                        status,
-                        shutdown_tx: None,
-                        ssh_binary,
-                    };
-                }
+            if let ForwardSpec::Local { bind_port, .. } = forward
+                && !is_local_port_free(*bind_port).await
+            {
+                let msg = format!("local port {bind_port} is already in use");
+                let error_status = TunnelStatus::Error { message: msg };
+                *status.lock() = error_status.clone();
+                status_callback(error_status);
+                return Self {
+                    profile,
+                    status,
+                    shutdown_tx: None,
+                    ssh_binary,
+                };
             }
         }
 
@@ -122,11 +122,7 @@ impl TunnelSupervisor {
     }
 }
 
-fn set_status(
-    status: &Mutex<TunnelStatus>,
-    new: TunnelStatus,
-    callback: &impl Fn(TunnelStatus),
-) {
+fn set_status(status: &Mutex<TunnelStatus>, new: TunnelStatus, callback: &impl Fn(TunnelStatus)) {
     *status.lock() = new.clone();
     callback(new);
 }
@@ -283,9 +279,7 @@ fn handle_exit(
         let reason_str = format!("{reason:?}");
         set_status(
             status,
-            TunnelStatus::Stopped {
-                reason: reason_str,
-            },
+            TunnelStatus::Stopped { reason: reason_str },
             callback,
         );
         false
@@ -329,7 +323,11 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
                     }
                 }
                 Err(_) => {
-                    tracing::warn!(source = "tunnel_supervisor", raw_pid = id, "PID overflows i32, escalating to SIGKILL");
+                    tracing::warn!(
+                        source = "tunnel_supervisor",
+                        raw_pid = id,
+                        "PID overflows i32, escalating to SIGKILL"
+                    );
                     let _ = child.kill().await;
                     return;
                 }
@@ -386,7 +384,10 @@ mod tests {
     }
 
     /// Collect statuses via a shared vec behind Arc<Mutex<_>>.
-    fn status_collector() -> (impl Fn(TunnelStatus) + Send + 'static, Arc<Mutex<Vec<TunnelStatus>>>) {
+    fn status_collector() -> (
+        impl Fn(TunnelStatus) + Send + 'static,
+        Arc<Mutex<Vec<TunnelStatus>>>,
+    ) {
         let statuses: Arc<Mutex<Vec<TunnelStatus>>> = Arc::new(Mutex::new(Vec::new()));
         let s = Arc::clone(&statuses);
         let cb = move |st: TunnelStatus| {
@@ -400,12 +401,9 @@ mod tests {
         let script = fake_ssh_script("sleep 0.2; exit 0");
         let (cb, statuses) = status_collector();
 
-        let mut sup = TunnelSupervisor::start_with_binary(
-            test_profile(),
-            script.path().to_path_buf(),
-            cb,
-        )
-        .await;
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.path().to_path_buf(), cb)
+                .await;
 
         // Wait for the process to exit and supervisor to settle.
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -428,17 +426,12 @@ mod tests {
 
     #[tokio::test]
     async fn auth_failure_no_retry() {
-        let script = fake_ssh_script(
-            r#"echo "Permission denied (publickey)." >&2; exit 255"#,
-        );
+        let script = fake_ssh_script(r#"echo "Permission denied (publickey)." >&2; exit 255"#);
         let (cb, statuses) = status_collector();
 
-        let mut sup = TunnelSupervisor::start_with_binary(
-            test_profile(),
-            script.path().to_path_buf(),
-            cb,
-        )
-        .await;
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.path().to_path_buf(), cb)
+                .await;
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
@@ -479,12 +472,9 @@ mod tests {
         );
         let (cb, statuses) = status_collector();
 
-        let mut sup = TunnelSupervisor::start_with_binary(
-            test_profile(),
-            script.path().to_path_buf(),
-            cb,
-        )
-        .await;
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.path().to_path_buf(), cb)
+                .await;
 
         // Wait long enough for at least 2 retry attempts (first backoff ~1s, second ~2s).
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -529,12 +519,9 @@ mod tests {
         let script = fake_ssh_script("sleep 3600");
         let (cb, statuses) = status_collector();
 
-        let mut sup = TunnelSupervisor::start_with_binary(
-            test_profile(),
-            script.path().to_path_buf(),
-            cb,
-        )
-        .await;
+        let mut sup =
+            TunnelSupervisor::start_with_binary(test_profile(), script.path().to_path_buf(), cb)
+                .await;
 
         // Wait for health check to pass.
         tokio::time::sleep(Duration::from_millis(800)).await;
@@ -577,12 +564,8 @@ mod tests {
         let script = fake_ssh_script("exit 0");
         let (cb, _statuses) = status_collector();
 
-        let sup = TunnelSupervisor::start_with_binary(
-            profile,
-            script.path().to_path_buf(),
-            cb,
-        )
-        .await;
+        let sup =
+            TunnelSupervisor::start_with_binary(profile, script.path().to_path_buf(), cb).await;
 
         // Should immediately be in Error state — no spawn.
         let status = sup.status();

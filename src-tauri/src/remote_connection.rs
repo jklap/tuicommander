@@ -42,7 +42,11 @@ pub(crate) enum RemoteTransport {
 
 impl RemoteConnection {
     /// Create a new SSH connection with default port (22) and daemon port (9877).
-    pub(crate) fn new_ssh(name: impl Into<String>, host: impl Into<String>, user: impl Into<String>) -> Self {
+    pub(crate) fn new_ssh(
+        name: impl Into<String>,
+        host: impl Into<String>,
+        user: impl Into<String>,
+    ) -> Self {
         let ssh_user = user.into();
         Self {
             id: uuid::Uuid::new_v4().to_string(),
@@ -70,7 +74,12 @@ impl RemoteConnection {
             return Err("auth_username must not be empty".to_string());
         }
         match &self.transport {
-            RemoteTransport::Ssh { ssh_host, ssh_user, ssh_port, .. } => {
+            RemoteTransport::Ssh {
+                ssh_host,
+                ssh_user,
+                ssh_port,
+                ..
+            } => {
                 if ssh_host.trim().is_empty() {
                     return Err("ssh_host must not be empty".to_string());
                 }
@@ -267,7 +276,10 @@ mod tests {
         let mut conn = RemoteConnection::new_ssh("server", "host", "alice");
         conn.id = "../../malicious".to_string();
         let err = conn.validate().unwrap_err();
-        assert!(err.contains("valid UUID"), "expected UUID error, got: {err}");
+        assert!(
+            err.contains("valid UUID"),
+            "expected UUID error, got: {err}"
+        );
     }
 
     #[test]

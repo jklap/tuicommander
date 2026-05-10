@@ -197,7 +197,12 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 					<div style={rowStyle}>
 						<label style={{ ...labelStyle, flex: "1" }}>
 							Host
-							<input style={inputStyle} value={host()} onInput={(e) => setHost(e.currentTarget.value)} list="ssh-hosts-list" />
+							<input
+								style={inputStyle}
+								value={host()}
+								onInput={(e) => setHost(e.currentTarget.value)}
+								list="ssh-hosts-list"
+							/>
 							<datalist id="ssh-hosts-list">
 								<For each={sshHosts()}>{(h) => <option value={h} />}</For>
 							</datalist>
@@ -244,9 +249,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 									<select
 										style={{ ...inputStyle, width: "80px" }}
 										value={fw.type}
-										onChange={(e) =>
-											updateForward(idx(), { type: e.currentTarget.value as "Local" | "Remote" })
-										}
+										onChange={(e) => updateForward(idx(), { type: e.currentTarget.value as "Local" | "Remote" })}
 									>
 										<option value="Local">Local</option>
 										<option value="Remote">Remote</option>

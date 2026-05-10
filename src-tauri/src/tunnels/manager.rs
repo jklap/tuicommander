@@ -52,7 +52,9 @@ impl TunnelManager {
         let supervisor = TunnelSupervisor::start(profile.clone(), status_callback).await;
 
         // Log Started event.
-        let _ = audit.lock().insert(&id, EventKind::Started, serde_json::json!({}));
+        let _ = audit
+            .lock()
+            .insert(&id, EventKind::Started, serde_json::json!({}));
 
         let handle = Arc::new(Mutex::new(TunnelHandle {
             profile,
@@ -73,10 +75,11 @@ impl TunnelManager {
             .ok_or_else(|| format!("tunnel '{id}' not found"))?;
 
         handle.lock().supervisor.stop();
-        let _ = self
-            .audit
-            .lock()
-            .insert(id, EventKind::Stopped, serde_json::json!({"reason": "stop requested"}));
+        let _ = self.audit.lock().insert(
+            id,
+            EventKind::Stopped,
+            serde_json::json!({"reason": "stop requested"}),
+        );
         Ok(())
     }
 
@@ -84,10 +87,11 @@ impl TunnelManager {
     pub fn stop_if_running(&self, id: &str) {
         if let Some((_, handle)) = self.tunnels.remove(id) {
             handle.lock().supervisor.stop();
-            let _ = self
-                .audit
-                .lock()
-                .insert(id, EventKind::Stopped, serde_json::json!({"reason": "stop requested"}));
+            let _ = self.audit.lock().insert(
+                id,
+                EventKind::Stopped,
+                serde_json::json!({"reason": "stop requested"}),
+            );
         }
     }
 
@@ -184,7 +188,9 @@ mod tests {
         let supervisor =
             TunnelSupervisor::start_with_binary(profile.clone(), ssh_path, status_callback).await;
 
-        let _ = audit.lock().insert(&id, EventKind::Started, serde_json::json!({}));
+        let _ = audit
+            .lock()
+            .insert(&id, EventKind::Started, serde_json::json!({}));
 
         let handle = Arc::new(Mutex::new(TunnelHandle {
             profile,
@@ -240,7 +246,10 @@ mod tests {
             .unwrap();
 
         let status = manager.get_status(&id);
-        assert!(status.is_some(), "status should be Some for a running tunnel");
+        assert!(
+            status.is_some(),
+            "status should be Some for a running tunnel"
+        );
         match status.unwrap() {
             TunnelStatus::Starting | TunnelStatus::Connected => {} // either is valid right after start
             other => panic!("unexpected status: {other:?}"),
@@ -289,13 +298,9 @@ mod tests {
                 let manager = Arc::clone(&manager);
                 let path = ssh_path.clone();
                 tokio::spawn(async move {
-                    start_with_fake_ssh(
-                        &manager,
-                        test_profile(&format!("concurrent-{i}")),
-                        path,
-                    )
-                    .await
-                    .unwrap()
+                    start_with_fake_ssh(&manager, test_profile(&format!("concurrent-{i}")), path)
+                        .await
+                        .unwrap()
                 })
             })
             .collect();

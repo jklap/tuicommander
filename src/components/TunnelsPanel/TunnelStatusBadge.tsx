@@ -10,7 +10,7 @@ const STATUS_COLORS: Record<string, string> = {
 };
 
 export const TunnelStatusBadge: Component<{ status?: TunnelStatus }> = (props) => {
-	const color = () => (props.status ? STATUS_COLORS[props.status.type] ?? "var(--fg-muted)" : "var(--fg-muted)");
+	const color = () => (props.status ? (STATUS_COLORS[props.status.type] ?? "var(--fg-muted)") : "var(--fg-muted)");
 	const label = () => {
 		if (!props.status) return "stopped";
 		if (props.status.type === "reconnecting") return `reconnecting (#${props.status.attempt})`;

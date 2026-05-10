@@ -461,19 +461,24 @@ pub(super) async fn put_remote_connection(
         return resp.into_response();
     }
     if let Err(e) = connection.validate() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e}))).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response();
     }
     let _guard = state.connections_lock.lock().await;
-    let mut connections = match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
-    };
+    let mut connections =
+        match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+                    .into_response();
+            }
+        };
     if let Some(pos) = connections.iter().position(|c| c.id == connection.id) {
         connections[pos] = connection;
     } else {
@@ -499,16 +504,17 @@ pub(super) async fn delete_remote_connection(
     }
     state.tunnel_manager.stop_if_running(&id);
     let _guard = state.connections_lock.lock().await;
-    let mut connections = match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-                .into_response();
-        }
-    };
+    let mut connections =
+        match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
+            Ok(c) => c,
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+                    .into_response();
+            }
+        };
     let before = connections.len();
     connections.retain(|c| c.id != id);
     if connections.len() == before {

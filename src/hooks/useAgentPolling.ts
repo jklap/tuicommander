@@ -140,9 +140,8 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 				if (sid) claimedIds.push(sid);
 			}
 
-			const claudeConfigDir = agentType === "claude"
-				? agentConfigsStore.getDefaultConfig("claude")?.env?.CLAUDE_CONFIG_DIR ?? null
-				: null;
+			const claudeConfigDir =
+				agentType === "claude" ? (agentConfigsStore.getDefaultConfig("claude")?.env?.CLAUDE_CONFIG_DIR ?? null) : null;
 
 			try {
 				const found = await invoke<string | null>("discover_agent_session", {

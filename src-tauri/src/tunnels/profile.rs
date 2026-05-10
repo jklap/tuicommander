@@ -85,14 +85,10 @@ impl TunnelProfile {
                     ..
                 } => {
                     if *bind_port == 0 {
-                        return Err(
-                            "forward bind_port must be in range 1-65535".to_string()
-                        );
+                        return Err("forward bind_port must be in range 1-65535".to_string());
                     }
                     if *remote_port == 0 {
-                        return Err(
-                            "forward remote_port must be in range 1-65535".to_string()
-                        );
+                        return Err("forward remote_port must be in range 1-65535".to_string());
                     }
                 }
                 ForwardSpec::Remote {
@@ -101,14 +97,10 @@ impl TunnelProfile {
                     ..
                 } => {
                     if *bind_port == 0 {
-                        return Err(
-                            "forward bind_port must be in range 1-65535".to_string()
-                        );
+                        return Err("forward bind_port must be in range 1-65535".to_string());
                     }
                     if *local_port == 0 {
-                        return Err(
-                            "forward local_port must be in range 1-65535".to_string()
-                        );
+                        return Err("forward local_port must be in range 1-65535".to_string());
                     }
                 }
             }
@@ -265,7 +257,10 @@ mod tests {
         let opts = ProfileOptions::default();
         assert_eq!(opts.server_alive_interval, 15);
         assert_eq!(opts.server_alive_count_max, 3);
-        assert!(matches!(opts.strict_host_key_checking, StrictHostKeyChecking::Yes));
+        assert!(matches!(
+            opts.strict_host_key_checking,
+            StrictHostKeyChecking::Yes
+        ));
     }
 
     #[test]
@@ -306,7 +301,10 @@ mod tests {
         let mut profile = make_profile();
         profile.id = "../../malicious".to_string();
         let err = profile.validate().unwrap_err();
-        assert!(err.contains("valid UUID"), "expected UUID error, got: {err}");
+        assert!(
+            err.contains("valid UUID"),
+            "expected UUID error, got: {err}"
+        );
     }
 
     #[test]

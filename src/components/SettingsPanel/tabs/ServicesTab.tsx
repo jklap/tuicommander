@@ -1914,7 +1914,9 @@ const RemoteMachinesPanel: Component = () => {
 				<select
 					class={s.input}
 					value={props.formData.transportType}
-					onChange={(e) => props.setFormData((f) => ({ ...f, transportType: e.currentTarget.value as "Ssh" | "Direct" }))}
+					onChange={(e) =>
+						props.setFormData((f) => ({ ...f, transportType: e.currentTarget.value as "Ssh" | "Direct" }))
+					}
 				>
 					<option value="Ssh">SSH</option>
 					<option value="Direct">Direct</option>
@@ -1936,7 +1938,9 @@ const RemoteMachinesPanel: Component = () => {
 								value={props.formData.sshPort}
 								min={1}
 								max={65535}
-								onInput={(e) => props.setFormData((f) => ({ ...f, sshPort: parseInt(e.currentTarget.value, 10) || 22 }))}
+								onInput={(e) =>
+									props.setFormData((f) => ({ ...f, sshPort: parseInt(e.currentTarget.value, 10) || 22 }))
+								}
 							/>
 						</div>
 						<div style={{ flex: 2 }}>

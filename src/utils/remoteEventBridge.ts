@@ -5,8 +5,8 @@
  * from a remote TUIC daemon and routes them into local stores.
  */
 
-import { repositoriesStore } from "../stores/repositories";
 import { appLogger } from "../stores/appLogger";
+import { repositoriesStore } from "../stores/repositories";
 
 /**
  * Start an SSE bridge to a remote daemon's /events endpoint.

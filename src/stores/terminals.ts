@@ -181,7 +181,6 @@ function createTerminalsStore() {
 
 	/** Handle shellState transition for debounced busy tracking */
 	function handleShellStateChange(id: string, prev: ShellState, next: ShellState): void {
-
 		if (next === "busy" && prev !== "busy") {
 			// Entering busy: clear any cooldown, mark busy, record start time.
 			// If a cooldown was active, this is a continuation of the same busy period

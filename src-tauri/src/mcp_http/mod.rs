@@ -963,6 +963,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
 /// static file serving (no frontend embedded in the remote binary).
 ///
 /// Auth and compression layers are applied identically to `build_router()`.
+#[allow(dead_code)] // Used by tuic-remote binary (not(desktop) build)
 pub fn build_remote_router(state: Arc<AppState>) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(tower_http::cors::Any)

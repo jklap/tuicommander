@@ -144,7 +144,10 @@ mod tests {
         let args = build_ssh_args(&profile);
 
         // Verify the -L flag and its value appear consecutively
-        let l_pos = args.iter().position(|a| a == "-L").expect("-L must be present");
+        let l_pos = args
+            .iter()
+            .position(|a| a == "-L")
+            .expect("-L must be present");
         assert_eq!(args[l_pos + 1], "8080:internal.example.com:80");
         // No -R flag
         assert_flag_absent(&args, "-R");
@@ -163,7 +166,10 @@ mod tests {
 
         let args = build_ssh_args(&profile);
 
-        let r_pos = args.iter().position(|a| a == "-R").expect("-R must be present");
+        let r_pos = args
+            .iter()
+            .position(|a| a == "-R")
+            .expect("-R must be present");
         assert_eq!(args[r_pos + 1], "9090:127.0.0.1:3000");
         assert_flag_absent(&args, "-L");
         assert_eq!(args.last().unwrap(), "alice@example.com");
@@ -204,7 +210,10 @@ mod tests {
 
         let args = build_ssh_args(&profile);
 
-        let i_pos = args.iter().position(|a| a == "-i").expect("-i must be present");
+        let i_pos = args
+            .iter()
+            .position(|a| a == "-i")
+            .expect("-i must be present");
         assert_eq!(args[i_pos + 1], "/home/alice/.ssh/id_ed25519");
     }
 

@@ -58,6 +58,7 @@ pub(crate) mod pty;
 pub(crate) mod push;
 pub(crate) mod registry;
 pub(crate) mod relay_client;
+#[allow(dead_code)] // Constructors used by remote binary and future tests
 pub(crate) mod remote_connection;
 pub(crate) mod repo_watcher;
 mod shell_integration;
@@ -71,9 +72,10 @@ pub(crate) mod tailscale;
 pub(crate) mod terminal_grid;
 pub(crate) mod text_rank;
 pub(crate) mod tool_search;
-pub(crate) mod tunnels;
 #[cfg(feature = "desktop")]
 mod tuic_cli;
+#[allow(dead_code)] // Many items used only by the remote binary (not(desktop) build)
+pub(crate) mod tunnels;
 #[cfg(feature = "desktop")]
 mod updater;
 pub(crate) mod worktree;

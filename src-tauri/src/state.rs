@@ -1071,9 +1071,9 @@ impl AppState {
             crate::tunnels::audit::AuditLog::open(&audit_path)
                 .expect("Failed to open tunnel audit DB"),
         ));
-        let tunnel_manager = Arc::new(
-            crate::tunnels::manager::TunnelManager::new(tunnel_audit.clone()),
-        );
+        let tunnel_manager = Arc::new(crate::tunnels::manager::TunnelManager::new(
+            tunnel_audit.clone(),
+        ));
         Self {
             sessions: DashMap::new(),
             data_dir,

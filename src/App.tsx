@@ -51,9 +51,7 @@ const ActivityDashboard = lazy(() =>
 	import("./components/ActivityDashboard").then((m) => ({ default: m.ActivityDashboard })),
 );
 
-const TunnelsPanel = lazy(() =>
-	import("./components/TunnelsPanel").then((m) => ({ default: m.TunnelsPanel })),
-);
+const TunnelsPanel = lazy(() => import("./components/TunnelsPanel").then((m) => ({ default: m.TunnelsPanel })));
 
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";

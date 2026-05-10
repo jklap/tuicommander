@@ -867,8 +867,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 
 	// --- Remote Connections ---
 	list_remote_connections: { map: () => ({ method: "GET", path: "/config/remote-connections" }) },
-	save_remote_connection: { map: (args) => ({ method: "PUT", path: "/config/remote-connections", body: args.connection }) },
-	delete_remote_connection: { map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}` }) },
+	save_remote_connection: {
+		map: (args) => ({ method: "PUT", path: "/config/remote-connections", body: args.connection }),
+	},
+	delete_remote_connection: {
+		map: (_args, p) => ({ method: "DELETE", path: `/config/remote-connections/${p("id")}` }),
+	},
 
 	// --- Tunnels ---
 	list_tunnel_profiles: { map: () => ({ method: "GET", path: "/tunnels/profiles" }) },
@@ -943,8 +947,12 @@ function queuedWrite<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
 	_writeQueues.set(sessionId, next);
 	// Clean up when queue drains
 	next.then(
-		() => { if (_writeQueues.get(sessionId) === next) _writeQueues.delete(sessionId); },
-		() => { if (_writeQueues.get(sessionId) === next) _writeQueues.delete(sessionId); },
+		() => {
+			if (_writeQueues.get(sessionId) === next) _writeQueues.delete(sessionId);
+		},
+		() => {
+			if (_writeQueues.get(sessionId) === next) _writeQueues.delete(sessionId);
+		},
 	);
 	return next;
 }
@@ -964,7 +972,9 @@ export function rpc<T>(command: string, args: Record<string, unknown> = {}, conn
 		}
 	}
 	if (isIdempotentRpc(command, args)) {
-		const key = connectionId ? `${connectionId}:${command}:${JSON.stringify(args)}` : `${command}:${JSON.stringify(args)}`;
+		const key = connectionId
+			? `${connectionId}:${command}:${JSON.stringify(args)}`
+			: `${command}:${JSON.stringify(args)}`;
 		const existing = _inflight.get(key) as Promise<T> | undefined;
 		if (existing) return existing;
 		const promise = rpcImpl<T>(command, args, connectionId).finally(() => _inflight.delete(key));
@@ -1299,7 +1309,10 @@ export async function subscribePty(
  * @param handlers - Map of event type → callback
  * @returns Promise resolving to an unsubscribe function
  */
-export async function subscribeEvents(handlers: Record<string, (payload: unknown) => void>, baseUrl?: string): Promise<Unsubscribe> {
+export async function subscribeEvents(
+	handlers: Record<string, (payload: unknown) => void>,
+	baseUrl?: string,
+): Promise<Unsubscribe> {
 	if (!baseUrl && isTauri()) {
 		const { listen } = await import("@tauri-apps/api/event");
 		const unsubscribers: Array<() => void> = [];

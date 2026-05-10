@@ -11,6 +11,7 @@ interface AuditEntry {
 	kind: string;
 	message: string | null;
 }
+
 import { TunnelEditorModal } from "./TunnelEditorModal";
 import { TunnelStatusBadge } from "./TunnelStatusBadge";
 import s from "./TunnelsPanel.module.css";
@@ -122,62 +123,53 @@ export const TunnelsPanel: Component = () => {
 							<For each={tunnelsStore.getProfiles()}>
 								{(profile) => (
 									<>
-									<div class={s.row}>
-										<div class={s.rowInfo}>
-											<span class={s.rowName}>{profile.name}</span>
-											<span class={s.rowMeta}>
-												{profile.user}@{profile.host}:{profile.port}
-											</span>
-											<TunnelStatusBadge status={tunnelsStore.getTunnelStatus(profile.id)} />
+										<div class={s.row}>
+											<div class={s.rowInfo}>
+												<span class={s.rowName}>{profile.name}</span>
+												<span class={s.rowMeta}>
+													{profile.user}@{profile.host}:{profile.port}
+												</span>
+												<TunnelStatusBadge status={tunnelsStore.getTunnelStatus(profile.id)} />
+											</div>
+											<div class={s.rowActions}>
+												<button
+													class={s.actionBtn}
+													onClick={() => handleToggleTunnel(profile.id)}
+													title={isRunning(profile.id) ? "Stop" : "Start"}
+												>
+													{isRunning(profile.id) ? "Stop" : "Start"}
+												</button>
+												<button class={s.actionBtn} onClick={() => openEditor(profile)} title="Edit">
+													Edit
+												</button>
+												<button class={s.actionBtn} onClick={() => toggleExpand(profile.id)} title="Audit log">
+													{expandedId() === profile.id ? "Hide" : "Log"}
+												</button>
+												<button class={s.actionBtn} onClick={() => handleDelete(profile.id)} title="Delete">
+													Del
+												</button>
+											</div>
 										</div>
-										<div class={s.rowActions}>
-											<button
-												class={s.actionBtn}
-												onClick={() => handleToggleTunnel(profile.id)}
-												title={isRunning(profile.id) ? "Stop" : "Start"}
-											>
-												{isRunning(profile.id) ? "Stop" : "Start"}
-											</button>
-											<button
-												class={s.actionBtn}
-												onClick={() => openEditor(profile)}
-												title="Edit"
-											>
-												Edit
-											</button>
-											<button
-												class={s.actionBtn}
-												onClick={() => toggleExpand(profile.id)}
-												title="Audit log"
-											>
-												{expandedId() === profile.id ? "Hide" : "Log"}
-											</button>
-											<button
-												class={s.actionBtn}
-												onClick={() => handleDelete(profile.id)}
-												title="Delete"
-											>
-												Del
-											</button>
-										</div>
-									</div>
-									<Show when={expandedId() === profile.id}>
-										<div class={s.auditTimeline}>
-											<Show when={auditEntries().length > 0} fallback={<span class={s.auditEmpty}>No audit entries</span>}>
-												<For each={auditEntries()}>
-													{(entry) => (
-														<div class={s.auditEntry}>
-															<span class={s.auditTime}>{new Date(entry.timestamp).toLocaleTimeString()}</span>
-															<span class={s.auditKind}>{entry.kind}</span>
-															<Show when={entry.message}>
-																<span class={s.auditMsg}>{entry.message}</span>
-															</Show>
-														</div>
-													)}
-												</For>
-											</Show>
-										</div>
-									</Show>
+										<Show when={expandedId() === profile.id}>
+											<div class={s.auditTimeline}>
+												<Show
+													when={auditEntries().length > 0}
+													fallback={<span class={s.auditEmpty}>No audit entries</span>}
+												>
+													<For each={auditEntries()}>
+														{(entry) => (
+															<div class={s.auditEntry}>
+																<span class={s.auditTime}>{new Date(entry.timestamp).toLocaleTimeString()}</span>
+																<span class={s.auditKind}>{entry.kind}</span>
+																<Show when={entry.message}>
+																	<span class={s.auditMsg}>{entry.message}</span>
+																</Show>
+															</div>
+														)}
+													</For>
+												</Show>
+											</div>
+										</Show>
 									</>
 								)}
 							</For>
@@ -188,10 +180,7 @@ export const TunnelsPanel: Component = () => {
 
 			{/* Editor modal */}
 			<Show when={editorVisible()}>
-				<TunnelEditorModal
-					profile={editorProfile()}
-					onClose={() => setEditorVisible(false)}
-				/>
+				<TunnelEditorModal profile={editorProfile()} onClose={() => setEditorVisible(false)} />
 			</Show>
 		</Show>
 	);

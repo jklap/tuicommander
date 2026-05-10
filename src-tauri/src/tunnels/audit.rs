@@ -72,11 +72,7 @@ impl AuditLog {
     }
 
     /// Return the most recent `limit` events for `tunnel_id`, newest first.
-    pub fn query_by_tunnel(
-        &self,
-        tunnel_id: &str,
-        limit: usize,
-    ) -> Result<Vec<TunnelEvent>> {
+    pub fn query_by_tunnel(&self, tunnel_id: &str, limit: usize) -> Result<Vec<TunnelEvent>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, timestamp, tunnel_id, kind, detail
              FROM tunnel_events
@@ -204,7 +200,10 @@ mod tests {
         let to = now + Duration::minutes(1);
 
         let events = log.query_by_time_range(from, to).expect("query");
-        assert!(!events.is_empty(), "should find the recently inserted event");
+        assert!(
+            !events.is_empty(),
+            "should find the recently inserted event"
+        );
 
         // Range entirely in the past should return nothing.
         let old_from = now - Duration::days(10);

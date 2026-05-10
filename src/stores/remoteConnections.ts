@@ -1,9 +1,9 @@
 import { batch } from "solid-js";
 import { createStore, produce } from "solid-js/store";
 import { invoke } from "../invoke";
+import { startRemoteEventBridge } from "../utils/remoteEventBridge";
 import { appLogger } from "./appLogger";
 import { tunnelsStore } from "./tunnels";
-import { startRemoteEventBridge } from "../utils/remoteEventBridge";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,7 +18,14 @@ export interface RemoteConnection {
 }
 
 export type RemoteTransport =
-	| { type: "Ssh"; ssh_host: string; ssh_port: number; ssh_user: string; identity_file: string | null; remote_daemon_port: number }
+	| {
+			type: "Ssh";
+			ssh_host: string;
+			ssh_port: number;
+			ssh_user: string;
+			identity_file: string | null;
+			remote_daemon_port: number;
+	  }
 	| { type: "Direct"; url: string };
 
 export type ConnectionStatus = "disconnected" | "connecting" | "connected" | "error";
