@@ -3,11 +3,9 @@ import { FileBrowserPanel } from "../components/FileBrowserPanel";
 import { initPanelWindow } from "../hooks/initPanelWindow";
 import { invoke } from "../invoke";
 import type { PanelAdapter } from "../panelRouter";
-import { editorTabsStore } from "../stores/editorTabs";
-import { mdTabsStore } from "../stores/mdTabs";
 import { repositoriesStore } from "../stores/repositories";
 import { uiStore } from "../stores/ui";
-import { classifyFile } from "../utils/filePreview";
+import { openFileAction } from "../utils/filePreview";
 import { createPanelSyncReceiver } from "../utils/panelSync";
 
 const DetachedFileBrowser: Component<{ params: URLSearchParams }> = (props) => {
@@ -60,15 +58,8 @@ export const fileBrowserPanelAdapter: PanelAdapter = {
 			const fsRoot = d.repoPath as string;
 			const filePath = d.filePath as string;
 			const line = d.line as number | undefined;
-			const target = classifyFile(filePath);
 			const repoPath = repositoriesStore.state.activeRepoPath || fsRoot;
-			if (target === "markdown" && line === undefined) {
-				mdTabsStore.add(repoPath, filePath, fsRoot || undefined);
-			} else if (target === "preview" && line === undefined) {
-				mdTabsStore.addHtmlPreview(repoPath, filePath, fsRoot || undefined);
-			} else {
-				editorTabsStore.add(fsRoot, filePath, line);
-			}
+			openFileAction(filePath, repoPath, fsRoot || undefined, line);
 			void invoke("focus_main_window");
 		}
 	},

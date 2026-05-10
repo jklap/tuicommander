@@ -137,7 +137,7 @@ import { worktreeManagerStore } from "./stores/worktreeManager";
 import { applyAppTheme, applyFontFamily } from "./themes";
 import { isTauri } from "./transport";
 import { buildAgentLaunchCommand } from "./utils/agentSession";
-import { classifyFile } from "./utils/filePreview";
+import { openFileAction } from "./utils/filePreview";
 import { keyFor } from "./utils/hotkey";
 import { createPanelSyncProvider, type PanelAction } from "./utils/panelSync";
 import { initPaneTabAssignment } from "./utils/paneTabAssign";
@@ -1235,15 +1235,9 @@ const App: Component = () => {
 		// Convert to relative path when inside the effective root (worktree or repo), keep absolute otherwise
 		const filePath = pathStartsWith(absolutePath, fsRoot) ? pathStripPrefix(absolutePath, fsRoot)! : absolutePath;
 
-		const target = classifyFile(filePath);
-		if (target === "markdown") {
-			mdTabsStore.add(repoPath, filePath, fsRoot);
-		} else if (target === "preview") {
-			mdTabsStore.addHtmlPreview(repoPath, filePath, fsRoot);
-		} else {
-			const tabId = editorTabsStore.add(repoPath, filePath, undefined, { fsRoot });
+		openFileAction(filePath, repoPath, fsRoot, undefined, (tabId) => {
 			terminalLifecycle.handleTerminalSelect(tabId);
-		}
+		});
 	};
 
 	// Listen for file-open events from macOS file associations
@@ -1258,14 +1252,7 @@ const App: Component = () => {
 				const effectiveRepo = filePath === absolutePath ? "" : repoPath;
 				const effectiveRoot = filePath === absolutePath ? "" : fsRoot;
 
-				const target = classifyFile(filePath);
-				if (target === "markdown") {
-					mdTabsStore.add(effectiveRepo, filePath, effectiveRoot || undefined);
-				} else if (target === "preview") {
-					mdTabsStore.addHtmlPreview(effectiveRepo, filePath, effectiveRoot || undefined);
-				} else {
-					editorTabsStore.add(effectiveRepo, filePath, undefined, { fsRoot: effectiveRoot || effectiveRepo });
-				}
+				openFileAction(filePath, effectiveRepo, effectiveRoot || undefined);
 			}
 		})
 			.then((fn) => {
@@ -2254,16 +2241,10 @@ const App: Component = () => {
 							repoPath={gitOps.currentRepoPath() || null}
 							fsRoot={gitOps.activeWorktreePath() || null}
 							onFileOpen={(fsRoot, filePath, line) => {
-								const target = classifyFile(filePath);
 								const repoPath = gitOps.currentRepoPath() || fsRoot;
-								if (target === "markdown" && line === undefined) {
-									mdTabsStore.add(repoPath, filePath, fsRoot || undefined);
-								} else if (target === "preview" && line === undefined) {
-									mdTabsStore.addHtmlPreview(repoPath, filePath, fsRoot || undefined);
-								} else {
-									const tabId = editorTabsStore.add(repoPath, filePath, line, { fsRoot });
+								openFileAction(filePath, repoPath, fsRoot || undefined, line, (tabId) => {
 									terminalLifecycle.handleTerminalSelect(tabId);
-								}
+								});
 							}}
 						/>
 					</TerminalArea>

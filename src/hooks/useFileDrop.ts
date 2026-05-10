@@ -8,13 +8,11 @@ import {
 	markInternalDragEnd,
 	markInternalDragStart,
 } from "../stores/dragDrop";
-import { editorTabsStore } from "../stores/editorTabs";
-import { mdTabsStore } from "../stores/mdTabs";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
 import { isTauri, rpc } from "../transport";
-import { classifyFile } from "../utils/filePreview";
+import { classifyFile, openFileAction } from "../utils/filePreview";
 import { pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 
 // Re-export for existing callsites that import from useFileDrop
@@ -65,14 +63,7 @@ function writePathsToTerminal(paths: string[]): boolean {
 export function openPathsAsTabs(paths: string[]): void {
 	for (const filePath of paths) {
 		const [repoPath, relPath] = resolveRepoPaths(filePath);
-		const target = classifyFile(filePath);
-		if (target === "markdown") {
-			mdTabsStore.add(repoPath, relPath);
-		} else if (target === "preview") {
-			mdTabsStore.addHtmlPreview(repoPath, relPath);
-		} else {
-			editorTabsStore.add(repoPath, relPath);
-		}
+		openFileAction(relPath, repoPath);
 	}
 	appLogger.info("app", `Opened ${paths.length} file(s) via drag & drop`);
 }

@@ -1,12 +1,10 @@
 import { type Component, createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { useRepository } from "../../hooks/useRepository";
 import { t } from "../../i18n";
-import { editorTabsStore } from "../../stores/editorTabs";
-import { mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { type DiffViewMode, uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
-import { classifyFile } from "../../utils/filePreview";
+import { openFileAction } from "../../utils/filePreview";
 import s from "../PrDiffTab/PrDiffTab.module.css";
 import { type DiffFileSection, DiffViewer, parseDiffFiles } from "../ui/DiffViewer";
 
@@ -19,14 +17,7 @@ const FileSection: Component<{ file: DiffFileSection; baseMode: DiffViewMode; re
 	const [collapsed, setCollapsed] = createSignal(false);
 
 	const openFile = () => {
-		const target = classifyFile(props.file.path);
-		if (target === "markdown") {
-			mdTabsStore.add(props.repoPath, props.file.path);
-		} else if (target === "preview") {
-			mdTabsStore.addHtmlPreview(props.repoPath, props.file.path);
-		} else {
-			editorTabsStore.add(props.repoPath, props.file.path);
-		}
+		openFileAction(props.file.path, props.repoPath);
 	};
 
 	return (

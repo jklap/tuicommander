@@ -9,7 +9,7 @@ import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { type FileTab, type MdTabData, mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
-import { classifyFile } from "../../utils/filePreview";
+import { openFileAction } from "../../utils/filePreview";
 import { isAbsolutePath, joinPath, pathDirname } from "../../utils/pathUtils";
 import {
 	insertTweakComment,
@@ -235,14 +235,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		const ft = tab as FileTab;
 		const currentDir = ft.filePath.includes("/") ? ft.filePath.slice(0, ft.filePath.lastIndexOf("/")) : "";
 		const resolved = currentDir ? `${currentDir}/${href}` : href;
-		const target = classifyFile(resolved);
-		if (target === "markdown") {
-			mdTabsStore.add(ft.repoPath, resolved, ft.fsRoot);
-		} else if (target === "preview") {
-			mdTabsStore.addHtmlPreview(ft.repoPath, resolved, ft.fsRoot);
-		} else {
-			editorTabsStore.add(ft.fsRoot || ft.repoPath, resolved);
-		}
+		openFileAction(resolved, ft.repoPath, ft.fsRoot);
 	};
 
 	/** Write the updated markdown source back to disk and refresh displayed content. */

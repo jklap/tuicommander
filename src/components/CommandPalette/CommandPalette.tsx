@@ -1,15 +1,13 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import type { ActionEntry } from "../../actions/actionRegistry";
 import { commandPaletteStore } from "../../stores/commandPalette";
-import { editorTabsStore } from "../../stores/editorTabs";
-import { mdTabsStore } from "../../stores/mdTabs";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import type { TerminalMatch } from "../../types";
 import type { ContentMatch, DirEntry } from "../../types/fs";
 import { buildIndex } from "../../utils/bm25";
-import { classifyFile } from "../../utils/filePreview";
+import { openFileAction } from "../../utils/filePreview";
 import { FileIcon } from "../FileBrowserPanel/FileIcon";
 import shared from "../shared/dialog.module.css";
 import s from "./CommandPalette.module.css";
@@ -114,14 +112,7 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 
 	/** Open file in the appropriate tab based on extension */
 	const openFile = (repoPath: string, filePath: string, line?: number) => {
-		const target = classifyFile(filePath);
-		if (target === "markdown") {
-			mdTabsStore.add(repoPath, filePath);
-		} else if (target === "preview" && line === undefined) {
-			mdTabsStore.addHtmlPreview(repoPath, filePath);
-		} else {
-			editorTabsStore.add(repoPath, filePath, line);
-		}
+		openFileAction(filePath, repoPath, undefined, line);
 	};
 
 	const openFileEntry = (entry: DirEntry) => {
