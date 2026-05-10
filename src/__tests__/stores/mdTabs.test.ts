@@ -515,14 +515,14 @@ describe("mdTabsStore", () => {
 			});
 		});
 
-		it("falls back to active repo for unpinned tabs when origin cannot be resolved", () => {
+		it("leaves unpinned tabs unscoped when origin cannot be resolved", () => {
 			testInScope(() => {
 				repositoriesStore.add({ path: "/Gits/beta", displayName: "beta" });
 				repositoriesStore.setActive("/Gits/beta");
 
 				const id = store.openUiTab("wiz-unknown", "X", "<p/>", false, undefined, true, "/not/a/registered/repo");
 				const tab = store.get(id);
-				expect(tab?.repoPath).toBe("/Gits/beta");
+				expect(tab?.repoPath).toBeUndefined();
 			});
 		});
 

@@ -134,6 +134,7 @@ describe("verifyAndBuildResumeCommand", () => {
 			agentType: "claude",
 			sessionId: "tuic-uuid-1",
 			cwd: "/tmp/repo",
+			claudeConfigDir: null,
 		});
 		expect(result).toBe("claude --resume tuic-uuid-1");
 	});
@@ -186,6 +187,7 @@ describe("verifyAndBuildResumeCommand", () => {
 			agentType: "gemini",
 			sessionId: "tuic-uuid-1",
 			cwd: "/tmp/repo",
+			claudeConfigDir: null,
 		});
 		expect(result).toBe("gemini --resume tuic-uuid-1");
 	});

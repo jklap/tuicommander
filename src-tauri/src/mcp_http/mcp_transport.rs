@@ -2517,13 +2517,20 @@ fn handle_ui(
             // repo happens to have focus in the frontend.
             let caller_tuic = mcp_session_id
                 .and_then(|mcp_sid| state.mcp_to_session.get(mcp_sid).map(|s| s.value().clone()));
-            let origin_repo_path: Option<String> = caller_tuic.as_ref().and_then(|tuic| {
-                state
-                    .peer_agents
-                    .get(tuic)
-                    .and_then(|p| p.project.clone())
-                    .or_else(|| state.sessions.get(tuic).and_then(|s| s.lock().cwd.clone()))
-            });
+            let origin_repo_path: Option<String> = caller_tuic
+                .as_ref()
+                .and_then(|tuic| {
+                    state
+                        .peer_agents
+                        .get(tuic)
+                        .and_then(|p| p.project.clone())
+                        .or_else(|| state.sessions.get(tuic).and_then(|s| s.lock().cwd.clone()))
+                })
+                .or_else(|| {
+                    mcp_session_id.and_then(|sid| {
+                        state.mcp_sessions.get(sid).and_then(|m| m.repo_path.clone())
+                    })
+                });
             let mut payload = serde_json::json!({
                 "id": id,
                 "title": title,
@@ -3434,6 +3441,7 @@ mod tests {
                 )
                 .unwrap(),
             )),
+            connections_lock: tokio::sync::Mutex::new(()),
         });
         // Tests start with all native tools enabled (override production default
         // which disables config, knowledge, debug).
@@ -5024,6 +5032,48 @@ mod tests {
                 origin_repo_path, ..
             } => {
                 assert_eq!(origin_repo_path.as_deref(), Some("/Gits/personal/beta"));
+            }
+            other => panic!("Expected UiTab, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn ui_tab_falls_back_to_mcp_session_repo_path() {
+        let state = test_state();
+        let mcp_sid = "mcp-no-peer-no-pty".to_string();
+        state.mcp_sessions.insert(
+            mcp_sid.clone(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                has_sse_stream: false,
+                repo_path: Some("/Gits/personal/gamma".to_string()),
+            },
+        );
+
+        let mut rx = state.event_bus.subscribe();
+        let result = handle_ui(
+            &state,
+            &serde_json::json!({
+                "action": "tab",
+                "id": "gamma-tab",
+                "title": "Gamma",
+                "html": "<p/>"
+            }),
+            Some(&mcp_sid),
+        );
+        assert_eq!(result["ok"], true);
+
+        let event = rx.try_recv().expect("Expected UiTab event");
+        match event {
+            crate::state::AppEvent::UiTab {
+                origin_repo_path, ..
+            } => {
+                assert_eq!(
+                    origin_repo_path.as_deref(),
+                    Some("/Gits/personal/gamma"),
+                    "should fall back to mcp_sessions repo_path when no peer agent or PTY session"
+                );
             }
             other => panic!("Expected UiTab, got {:?}", other),
         }

@@ -244,9 +244,8 @@ function createMdTabsStore() {
 		 * focus=true (default): switch to this tab. focus=false: update content silently.
 		 *
 		 * originRepoPath: repo/cwd of the MCP caller. When resolvable to a
-		 * registered repo, the tab is scoped there — never to whichever repo
-		 * currently has focus. Falls back to activeRepoPath only when the caller
-		 * cannot be resolved (non-MCP entry points, unknown repo).
+		 * registered repo, the tab is scoped there. When unresolvable, the tab
+		 * is left unscoped (visible in all repos) rather than guessing from focus.
 		 */
 		openUiTab(
 			pluginId: string,
@@ -271,9 +270,7 @@ function createMdTabsStore() {
 
 			const id = base._nextId("md");
 			const tab: PluginPanelTab = { type: "plugin-panel", id, title, pluginId, html, pinned };
-			const resolvedRepo =
-				resolveRepoForCwd(originRepoPath) ??
-				(pinned ? undefined : (repositoriesStore.state.activeRepoPath ?? undefined));
+			const resolvedRepo = resolveRepoForCwd(originRepoPath) ?? undefined;
 			if (resolvedRepo) tab.repoPath = resolvedRepo;
 			if (url) tab.url = url;
 			if (focus) {
