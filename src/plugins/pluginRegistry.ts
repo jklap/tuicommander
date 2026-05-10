@@ -17,8 +17,10 @@ import { LineBuffer } from "../utils/lineBuffer";
 import { sanitizeSvgIcon } from "../utils/sanitizeSvg";
 import { getShellFamily, sendCommand } from "../utils/sendCommand";
 import { stripAnsi } from "../utils/stripAnsi";
+import { editorTabsStore } from "../stores/editorTabs";
 import { dashboardRegistry } from "./dashboardRegistry";
 import { fileIconRegistry } from "./fileIconRegistry";
+import { filePreviewRegistry } from "./filePreviewRegistry";
 import { markdownProviderRegistry } from "./markdownProviderRegistry";
 import type {
 	Disposable,
@@ -205,6 +207,11 @@ function createPluginRegistry() {
 			registerFileIconProvider(provider: FileIconProvider): Disposable {
 				requireCapability(pluginId, capabilities, "ui:file-icons");
 				return track(fileIconRegistry.register(provider));
+			},
+
+			registerFilePreview(options) {
+				requireCapability(pluginId, capabilities, "ui:file-preview");
+				return track(filePreviewRegistry.register(pluginId, options.extensions, options.onOpen));
 			},
 
 			addItem(item) {
@@ -572,6 +579,11 @@ function createPluginRegistry() {
 						if (sender) sender(data);
 					},
 				};
+			},
+
+			openEditorTab(filePath, repoPath, opts) {
+				requireCapability(pluginId, capabilities, "ui:panel");
+				editorTabsStore.add(repoPath, filePath, opts?.line, { fsRoot: opts?.fsRoot ?? repoPath });
 			},
 
 			// -- Tier 3e: Credential access --

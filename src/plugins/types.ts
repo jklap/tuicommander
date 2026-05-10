@@ -452,6 +452,12 @@ export interface PluginHost {
 	/** Register a file icon provider. Requires "ui:file-icons" capability. Last registered provider wins. */
 	registerFileIconProvider(provider: FileIconProvider): Disposable;
 
+	/** Register a file preview handler for specific extensions. Requires "ui:file-preview" capability. */
+	registerFilePreview(options: {
+		extensions: string[];
+		onOpen: (ctx: import("./filePreviewRegistry").FilePreviewContext) => void;
+	}): Disposable;
+
 	/** Add an activity item to the store */
 	addItem(item: Omit<ActivityItem, "createdAt">): void;
 
@@ -681,6 +687,9 @@ export interface PluginHost {
 	 * If a panel with the same id is already open, it will be activated and updated.
 	 */
 	openPanel(options: OpenPanelOptions): PanelHandle;
+
+	/** Open a file in the CodeMirror editor tab. Requires "ui:panel" capability. */
+	openEditorTab(filePath: string, repoPath: string, opts?: { fsRoot?: string; line?: number }): void;
 
 	// -- Tier 3d: Credential access (capability-gated) --
 
