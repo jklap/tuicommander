@@ -203,6 +203,55 @@ jobs:
           security delete-keychain "$KEYCHAIN_PATH" 2>/dev/null || true
           rm -f "$APPLE_API_KEY_PATH" 2>/dev/null || true
 
+  update-notes:
+    needs: build
+    if: always() && needs.build.result != 'cancelled'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Generate changelog and update release notes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          LAST_STABLE=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          echo "Last stable tag: $LAST_STABLE"
+
+          NOTES=$(mktemp)
+          {
+            echo '**Rolling build from `main` — always the latest code.**'
+            echo ''
+            echo 'Updated on every push to main. May contain experimental features.'
+            echo 'For stable releases, see the [latest versioned release](https://github.com/sstraus/tuicommander/releases/latest).'
+            echo ''
+            echo '---'
+            echo ''
+            echo "## Changes since $LAST_STABLE"
+            echo ''
+          } > "$NOTES"
+
+          FEATS=$(git log "$LAST_STABLE"..HEAD --oneline --no-merges --grep='^feat' | sed 's/^[a-f0-9]* /- /')
+          FIXES=$(git log "$LAST_STABLE"..HEAD --oneline --no-merges --grep='^fix' | sed 's/^[a-f0-9]* /- /')
+          OTHER=$(git log "$LAST_STABLE"..HEAD --oneline --no-merges --invert-grep --grep='^feat' --grep='^fix' | sed 's/^[a-f0-9]* /- /')
+
+          if [ -n "$FEATS" ]; then
+            printf '### Features\n%s\n\n' "$FEATS" >> "$NOTES"
+          fi
+          if [ -n "$FIXES" ]; then
+            printf '### Fixes\n%s\n\n' "$FIXES" >> "$NOTES"
+          fi
+          if [ -n "$OTHER" ]; then
+            printf '### Other\n%s\n\n' "$OTHER" >> "$NOTES"
+          fi
+
+          gh release edit nightly --repo "$GITHUB_REPOSITORY" --notes-file "$NOTES"
+          rm -f "$NOTES"
+
   retry-failed:
     needs: build
     if: failure()
