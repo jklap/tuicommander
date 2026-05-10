@@ -308,7 +308,8 @@ export type PluginCapability =
 	| "git:read"
 	| "ui:context-menu"
 	| "ui:sidebar"
-	| "ui:file-icons";
+	| "ui:file-icons"
+	| "ui:file-preview";
 
 /** Valid sound names for playNotificationSound — single source of truth */
 export const NOTIFICATION_SOUNDS = ["question", "error", "completion", "warning", "info"] as const;
