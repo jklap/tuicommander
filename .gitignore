@@ -76,3 +76,4 @@ terminal_reference.png
 # Font source files (keep in public/fonts/ but not attribution)
 public/fonts/LICENSE
 public/fonts/README.md
+test-data.csv
