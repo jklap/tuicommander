@@ -173,7 +173,8 @@ export function useAgentPolling(): void {
 		if (allIds.length === 0) return;
 
 		const pollAll = async () => {
-			for (const id of allIds) {
+			const currentIds = terminalsStore.getIds();
+			for (const id of currentIds) {
 				await detectAgentForTerminal(id);
 			}
 		};

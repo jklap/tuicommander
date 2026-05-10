@@ -111,13 +111,11 @@ impl AuditLog {
 
     /// Delete events older than `max_age_days` days and return the number deleted.
     pub fn rotate(&self, max_age_days: u32) -> Result<usize> {
-        let cutoff = format!(
-            "datetime('now', '-{max_age_days} days')"
-        );
-        let sql = format!(
-            "DELETE FROM tunnel_events WHERE timestamp < {cutoff}"
-        );
-        let count = self.conn.execute(&sql, [])?;
+        let age_spec = format!("-{max_age_days} days");
+        let count = self.conn.execute(
+            "DELETE FROM tunnel_events WHERE timestamp < datetime('now', ?1)",
+            params![age_spec],
+        )?;
         Ok(count)
     }
 }
@@ -132,14 +130,22 @@ fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<TunnelEvent> {
 
     let timestamp = DateTime::parse_from_rfc3339(&timestamp_str)
         .map(|dt| dt.with_timezone(&Utc))
-        .unwrap_or_else(|_| Utc::now());
+        .unwrap_or_else(|e| {
+            tracing::warn!(source = "audit", row_id = id, raw = %timestamp_str, error = %e, "Corrupt audit timestamp, substituting now()");
+            Utc::now()
+        });
 
-    // Re-quote the kind string so serde_json can deserialise it as a JSON string.
     let kind: EventKind =
-        serde_json::from_str(&format!("\"{kind_str}\"")).unwrap_or(EventKind::Error);
+        serde_json::from_value(serde_json::Value::String(kind_str.clone())).unwrap_or_else(|e| {
+            tracing::warn!(source = "audit", row_id = id, raw = %kind_str, error = %e, "Unknown audit event kind, substituting Error");
+            EventKind::Error
+        });
 
     let detail: serde_json::Value =
-        serde_json::from_str(&detail_str).unwrap_or(serde_json::Value::Null);
+        serde_json::from_str(&detail_str).unwrap_or_else(|e| {
+            tracing::warn!(source = "audit", row_id = id, raw = %detail_str, error = %e, "Corrupt audit detail JSON, substituting null");
+            serde_json::Value::Null
+        });
 
     Ok(TunnelEvent {
         id,

@@ -942,9 +942,10 @@ function queuedWrite<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
 	const next = prev.then(fn, fn); // Always chain, even on prior failure
 	_writeQueues.set(sessionId, next);
 	// Clean up when queue drains
-	next.then(() => {
-		if (_writeQueues.get(sessionId) === next) _writeQueues.delete(sessionId);
-	});
+	next.then(
+		() => { if (_writeQueues.get(sessionId) === next) _writeQueues.delete(sessionId); },
+		() => { if (_writeQueues.get(sessionId) === next) _writeQueues.delete(sessionId); },
+	);
 	return next;
 }
 

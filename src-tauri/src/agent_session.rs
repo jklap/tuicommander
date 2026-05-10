@@ -158,21 +158,13 @@ fn collect_gemini_session_files(chats_dir: &PathBuf, out: &mut Vec<(SystemTime, 
     }
 }
 
-/// Extract a top-level string field from JSON without a full parser.
-/// Looks for `"field": "value"` pattern.
+/// Extract a top-level string field from JSON.
 fn extract_json_string_field(json: &str, field: &str) -> Option<String> {
-    let pattern = format!("\"{}\"", field);
-    let field_pos = json.find(&pattern)?;
-    let after_key = &json[field_pos + pattern.len()..];
-    // Skip whitespace and colon
-    let colon_pos = after_key.find(':')?;
-    let after_colon = after_key[colon_pos + 1..].trim_start();
-    if !after_colon.starts_with('"') {
-        return None;
-    }
-    let inner = &after_colon[1..];
-    let end = inner.find('"')?;
-    Some(inner[..end].to_string())
+    serde_json::from_str::<serde_json::Value>(json)
+        .ok()?
+        .get(field)?
+        .as_str()
+        .map(str::to_string)
 }
 
 // ─── Codex ───────────────────────────────────────────────────────────────────

@@ -216,12 +216,11 @@ function createRemoteConnectionsStore() {
 
 					const baseUrl = `http://127.0.0.1:${localPort}`;
 					setState("connections", id, {
-						status: "connecting",
 						baseUrl,
 						tunnelProfileId: profile.id,
 					});
 
-					// Initial health check, then start polling
+					// Initial health check sets status to "connected" or "error"
 					await pollHealth(id);
 					startHealthPolling(id);
 					eventBridges.get(id)?.();

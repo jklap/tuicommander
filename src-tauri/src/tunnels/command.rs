@@ -3,10 +3,7 @@ use std::path::Path;
 use super::profile::{ForwardSpec, StrictHostKeyChecking, TunnelProfile};
 
 /// Build the ssh argument vector for a tunnel profile.
-/// `agent_socket` overrides SSH_AUTH_SOCK if provided.
-pub fn build_ssh_args(profile: &TunnelProfile, agent_socket: Option<&Path>) -> Vec<String> {
-    let _ = agent_socket; // used only in build_ssh_env; accepted here for API symmetry
-
+pub fn build_ssh_args(profile: &TunnelProfile) -> Vec<String> {
     let mut args = Vec::new();
 
     // argv[0]
@@ -109,7 +106,7 @@ mod tests {
 
     fn base_profile() -> TunnelProfile {
         TunnelProfile {
-            id: "test-id".to_string(),
+            id: uuid::Uuid::new_v4().to_string(),
             name: "test".to_string(),
             host: "example.com".to_string(),
             port: 22,
@@ -144,7 +141,7 @@ mod tests {
             remote_port: 80,
         }];
 
-        let args = build_ssh_args(&profile, None);
+        let args = build_ssh_args(&profile);
 
         // Verify the -L flag and its value appear consecutively
         let l_pos = args.iter().position(|a| a == "-L").expect("-L must be present");
@@ -164,7 +161,7 @@ mod tests {
             local_port: 3000,
         }];
 
-        let args = build_ssh_args(&profile, None);
+        let args = build_ssh_args(&profile);
 
         let r_pos = args.iter().position(|a| a == "-R").expect("-R must be present");
         assert_eq!(args[r_pos + 1], "9090:127.0.0.1:3000");
@@ -188,7 +185,7 @@ mod tests {
             },
         ];
 
-        let args = build_ssh_args(&profile, None);
+        let args = build_ssh_args(&profile);
 
         assert!(args.iter().any(|a| a == "-L"), "-L must be present");
         assert!(args.iter().any(|a| a == "-R"), "-R must be present");
@@ -205,7 +202,7 @@ mod tests {
         let mut profile = base_profile();
         profile.identity_file = Some(PathBuf::from("/home/alice/.ssh/id_ed25519"));
 
-        let args = build_ssh_args(&profile, None);
+        let args = build_ssh_args(&profile);
 
         let i_pos = args.iter().position(|a| a == "-i").expect("-i must be present");
         assert_eq!(args[i_pos + 1], "/home/alice/.ssh/id_ed25519");
@@ -214,7 +211,7 @@ mod tests {
     #[test]
     fn without_identity_file() {
         let profile = base_profile();
-        let args = build_ssh_args(&profile, None);
+        let args = build_ssh_args(&profile);
         assert_flag_absent(&args, "-i");
     }
 
@@ -237,7 +234,7 @@ mod tests {
     #[test]
     fn forward_agent_no_always_present() {
         let profile = base_profile();
-        let args = build_ssh_args(&profile, None);
+        let args = build_ssh_args(&profile);
 
         let found = find_option(&args, "ForwardAgent=");
         assert_eq!(found, Some("ForwardAgent=no"), "ForwardAgent must be 'no'");
@@ -248,7 +245,7 @@ mod tests {
         let mut profile = base_profile();
         profile.options.strict_host_key_checking = StrictHostKeyChecking::AcceptNew;
 
-        let args = build_ssh_args(&profile, None);
+        let args = build_ssh_args(&profile);
 
         let found = find_option(&args, "StrictHostKeyChecking=");
         assert_eq!(
@@ -267,7 +264,7 @@ mod tests {
             remote_host: "host".to_string(),
             remote_port: 80,
         }];
-        let args = build_ssh_args(&profile, None);
+        let args = build_ssh_args(&profile);
         assert_flag_absent(&args, "-A");
     }
 }

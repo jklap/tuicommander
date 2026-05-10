@@ -31,7 +31,7 @@ pub(crate) async fn list_tunnel_profiles(
 /// POST /tunnels/profiles — create or update a profile.
 pub(crate) async fn save_tunnel_profile(
     State(state): State<Arc<AppState>>,
-    Json(profile): Json<TunnelProfile>,
+    Json(mut profile): Json<TunnelProfile>,
 ) -> Response {
     if let Err(e) = profile.validate() {
         return err_json(StatusCode::BAD_REQUEST, &e);
@@ -47,8 +47,7 @@ pub(crate) async fn delete_tunnel_profile(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Response {
-    // Stop tunnel if running.
-    let _ = state.tunnel_manager.stop(&id);
+    state.tunnel_manager.stop_if_running(&id);
 
     match ProfileStore::delete(&state.data_dir, None, &id) {
         Ok(true) => (StatusCode::OK, Json(serde_json::json!({"deleted": true}))).into_response(),

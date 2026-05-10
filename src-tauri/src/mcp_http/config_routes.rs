@@ -1,6 +1,6 @@
 use crate::{AppState, MAX_CONCURRENT_SESSIONS};
 use axum::Json;
-use axum::extract::{ConnectInfo, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use std::net::SocketAddr;
@@ -422,4 +422,108 @@ pub(super) async fn get_mcp_status_http(State(state): State<Arc<AppState>>) -> i
         "mcp_clients": state.mcp_sessions.len(),
         "max_sessions": MAX_CONCURRENT_SESSIONS,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Remote connections
+// ---------------------------------------------------------------------------
+
+pub(super) async fn get_remote_connections(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    if let Err(resp) = localhost_only(&addr) {
+        return resp.into_response();
+    }
+    match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
+        Ok(connections) => match serde_json::to_value(connections) {
+            Ok(v) => Json(v).into_response(),
+            Err(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to serialize connections: {e}")})),
+            )
+                .into_response(),
+        },
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+pub(super) async fn put_remote_connection(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<AppState>>,
+    Json(connection): Json<crate::remote_connection::RemoteConnection>,
+) -> impl IntoResponse {
+    if let Err(resp) = localhost_only(&addr) {
+        return resp.into_response();
+    }
+    if let Err(e) = connection.validate() {
+        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": e}))).into_response();
+    }
+    let _guard = state.connections_lock.lock().await;
+    let mut connections = match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    if let Some(pos) = connections.iter().position(|c| c.id == connection.id) {
+        connections[pos] = connection;
+    } else {
+        connections.push(connection);
+    }
+    match crate::remote_connection::RemoteConnectionStore::save(&state.data_dir, &connections) {
+        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
+}
+
+pub(super) async fn delete_remote_connection(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(resp) = localhost_only(&addr) {
+        return resp.into_response();
+    }
+    state.tunnel_manager.stop_if_running(&id);
+    let _guard = state.connections_lock.lock().await;
+    let mut connections = match crate::remote_connection::RemoteConnectionStore::load(&state.data_dir) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+                .into_response();
+        }
+    };
+    let before = connections.len();
+    connections.retain(|c| c.id != id);
+    if connections.len() == before {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": format!("connection '{id}' not found")})),
+        )
+            .into_response();
+    }
+    match crate::remote_connection::RemoteConnectionStore::save(&state.data_dir, &connections) {
+        Ok(()) => Json(serde_json::json!({"ok": true})).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+            .into_response(),
+    }
 }

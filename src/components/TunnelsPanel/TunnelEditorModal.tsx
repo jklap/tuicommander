@@ -11,9 +11,9 @@ interface TunnelEditorModalProps {
 
 function defaultOptions(): ProfileOptions {
 	return {
-		server_alive_interval: 60,
+		server_alive_interval: 15,
 		server_alive_count_max: 3,
-		strict_host_key_checking: "AcceptNew",
+		strict_host_key_checking: "Yes",
 	};
 }
 
@@ -302,7 +302,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 									onInput={(e) =>
 										setOptions((o) => ({
 											...o,
-											server_alive_interval: Number.parseInt(e.currentTarget.value, 10) || 60,
+											server_alive_interval: Number.parseInt(e.currentTarget.value, 10) || 15,
 										}))
 									}
 								/>

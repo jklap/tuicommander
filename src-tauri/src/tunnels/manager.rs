@@ -80,6 +80,17 @@ impl TunnelManager {
         Ok(())
     }
 
+    /// Stop the tunnel if it exists, ignoring "not found".
+    pub fn stop_if_running(&self, id: &str) {
+        if let Some((_, handle)) = self.tunnels.remove(id) {
+            handle.lock().supervisor.stop();
+            let _ = self
+                .audit
+                .lock()
+                .insert(id, EventKind::Stopped, serde_json::json!({"reason": "stop requested"}));
+        }
+    }
+
     /// Return all tunnel ids with their current status.
     pub fn list(&self) -> Vec<(String, TunnelStatus)> {
         self.tunnels

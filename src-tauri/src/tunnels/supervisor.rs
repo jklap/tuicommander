@@ -1,6 +1,8 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
+
+use parking_lot::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
@@ -44,7 +46,7 @@ impl TunnelSupervisor {
 
     /// Like `start`, but allows overriding the ssh binary path (for tests).
     pub(crate) async fn start_with_binary(
-        profile: TunnelProfile,
+        mut profile: TunnelProfile,
         ssh_binary: PathBuf,
         status_callback: impl Fn(TunnelStatus) + Send + 'static,
     ) -> Self {
@@ -53,7 +55,7 @@ impl TunnelSupervisor {
         // Validate profile.
         if let Err(e) = profile.validate() {
             let error_status = TunnelStatus::Error { message: e };
-            *status.lock().expect("status lock") = error_status.clone();
+            *status.lock() = error_status.clone();
             status_callback(error_status);
             return Self {
                 profile,
@@ -69,7 +71,7 @@ impl TunnelSupervisor {
                 if !is_local_port_free(*bind_port).await {
                     let msg = format!("local port {bind_port} is already in use");
                     let error_status = TunnelStatus::Error { message: msg };
-                    *status.lock().expect("status lock") = error_status.clone();
+                    *status.lock() = error_status.clone();
                     status_callback(error_status);
                     return Self {
                         profile,
@@ -116,7 +118,7 @@ impl TunnelSupervisor {
 
     /// Return the current tunnel status.
     pub fn status(&self) -> TunnelStatus {
-        self.status.lock().expect("status lock").clone()
+        self.status.lock().clone()
     }
 }
 
@@ -125,7 +127,7 @@ fn set_status(
     new: TunnelStatus,
     callback: &impl Fn(TunnelStatus),
 ) {
-    *status.lock().expect("status lock") = new.clone();
+    *status.lock() = new.clone();
     callback(new);
 }
 
@@ -140,7 +142,7 @@ async fn supervision_loop(
     let mut backoff = BackoffCalculator::new();
 
     loop {
-        let args = build_ssh_args(&profile, agent_socket.as_deref());
+        let args = build_ssh_args(&profile);
         let env = build_ssh_env(agent_socket.as_deref());
 
         // Build command — skip argv[0] ("ssh") from args since we set the binary separately.
@@ -305,7 +307,9 @@ async fn read_stderr(child: &mut tokio::process::Child) -> String {
     let mut raw = vec![0u8; 8192];
     match stderr.read(&mut raw).await {
         Ok(n) => buf.push_str(&String::from_utf8_lossy(&raw[..n])),
-        Err(_) => {}
+        Err(e) => {
+            tracing::warn!(source = "tunnel_supervisor", error = %e, "Failed to read ssh stderr");
+        }
     }
     buf
 }
@@ -315,9 +319,20 @@ async fn graceful_kill(child: &mut tokio::process::Child) {
     if let Some(id) = child.id() {
         #[cfg(unix)]
         {
-            // SAFETY: sending a signal to a known child process.
-            unsafe {
-                libc::kill(id as i32, libc::SIGTERM);
+            match i32::try_from(id) {
+                Ok(pid) => {
+                    // SAFETY: `pid` is from `child.id()` which returns the OS PID of
+                    // a child process we spawned and have not yet waited on.
+                    // SIGTERM has no preconditions beyond a valid PID.
+                    unsafe {
+                        libc::kill(pid, libc::SIGTERM);
+                    }
+                }
+                Err(_) => {
+                    tracing::warn!(source = "tunnel_supervisor", raw_pid = id, "PID overflows i32, escalating to SIGKILL");
+                    let _ = child.kill().await;
+                    return;
+                }
             }
         }
         #[cfg(not(unix))]
@@ -359,7 +374,7 @@ mod tests {
 
     fn test_profile() -> TunnelProfile {
         TunnelProfile {
-            id: "test-id".to_string(),
+            id: uuid::Uuid::new_v4().to_string(),
             name: "test-tunnel".to_string(),
             host: "example.com".to_string(),
             port: 22,
@@ -375,7 +390,7 @@ mod tests {
         let statuses: Arc<Mutex<Vec<TunnelStatus>>> = Arc::new(Mutex::new(Vec::new()));
         let s = Arc::clone(&statuses);
         let cb = move |st: TunnelStatus| {
-            s.lock().expect("lock").push(st);
+            s.lock().push(st);
         };
         (cb, statuses)
     }
@@ -395,7 +410,7 @@ mod tests {
         // Wait for the process to exit and supervisor to settle.
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        let history = statuses.lock().unwrap().clone();
+        let history = statuses.lock().clone();
         // Should see Starting, then either Connected or Stopped (process exits
         // quickly — if it exits before 500ms health check, it goes straight to
         // Stopped; if after, Connected then Stopped).
@@ -427,7 +442,7 @@ mod tests {
 
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        let history = statuses.lock().unwrap().clone();
+        let history = statuses.lock().clone();
 
         // Must NOT contain Reconnecting — auth failures are not retryable.
         let has_reconnecting = history
@@ -474,7 +489,7 @@ mod tests {
         // Wait long enough for at least 2 retry attempts (first backoff ~1s, second ~2s).
         tokio::time::sleep(Duration::from_secs(5)).await;
 
-        let history = statuses.lock().unwrap().clone();
+        let history = statuses.lock().clone();
 
         // Should contain at least one Reconnecting status.
         let reconnect_count = history

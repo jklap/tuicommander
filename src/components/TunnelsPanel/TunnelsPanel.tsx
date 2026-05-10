@@ -31,8 +31,10 @@ export const TunnelsPanel: Component = () => {
 		setExpandedId(id);
 		try {
 			const entries = await invoke<AuditEntry[]>("get_tunnel_audit", { id, limit: 20 });
+			if (expandedId() !== id) return;
 			setAuditEntries(entries ?? []);
 		} catch {
+			if (expandedId() !== id) return;
 			setAuditEntries([]);
 		}
 	};

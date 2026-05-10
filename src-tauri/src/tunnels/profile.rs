@@ -58,13 +58,19 @@ impl TunnelProfile {
         }
     }
 
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&mut self) -> Result<(), String> {
+        if uuid::Uuid::parse_str(&self.id).is_err() {
+            return Err("id must be a valid UUID".to_string());
+        }
+        self.name = self.name.trim().to_string();
         if self.name.is_empty() {
             return Err("name must not be empty".to_string());
         }
+        self.host = self.host.trim().to_string();
         if self.host.is_empty() {
             return Err("host must not be empty".to_string());
         }
+        self.user = self.user.trim().to_string();
         if self.user.is_empty() {
             return Err("user must not be empty".to_string());
         }
@@ -250,7 +256,7 @@ mod tests {
 
     #[test]
     fn validate_valid_profile_ok() {
-        let profile = make_profile();
+        let mut profile = make_profile();
         assert!(profile.validate().is_ok());
     }
 
@@ -293,5 +299,34 @@ mod tests {
     #[test]
     fn schema_version_is_one() {
         assert_eq!(SCHEMA_VERSION, 1);
+    }
+
+    #[test]
+    fn validate_invalid_uuid_rejected() {
+        let mut profile = make_profile();
+        profile.id = "../../malicious".to_string();
+        let err = profile.validate().unwrap_err();
+        assert!(err.contains("valid UUID"), "expected UUID error, got: {err}");
+    }
+
+    #[test]
+    fn validate_whitespace_only_name_rejected() {
+        let mut profile = make_profile();
+        profile.name = "   ".to_string();
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn validate_whitespace_only_host_rejected() {
+        let mut profile = make_profile();
+        profile.host = "   ".to_string();
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn validate_whitespace_only_user_rejected() {
+        let mut profile = make_profile();
+        profile.user = "   ".to_string();
+        assert!(profile.validate().is_err());
     }
 }

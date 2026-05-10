@@ -194,8 +194,17 @@ function createTunnelsStore() {
 								resolve();
 							}
 						} catch (err) {
-							appLogger.warn("store", `Failed to poll tunnel status for ${id}`, err);
+							appLogger.error("store", `Failed to poll tunnel status for ${id}`, err);
 							clearInterval(interval);
+							setState(
+								produce((s) => {
+									s.activeTunnels[id] = {
+										id,
+										status: { type: "error", message: String(err) },
+										started_at: s.activeTunnels[id]?.started_at ?? new Date().toISOString(),
+									};
+								}),
+							);
 							resolve();
 						}
 					}, POLL_INTERVAL_MS);

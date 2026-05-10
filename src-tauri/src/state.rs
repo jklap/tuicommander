@@ -1052,6 +1052,8 @@ pub struct AppState {
     pub(crate) tunnel_manager: Arc<crate::tunnels::manager::TunnelManager>,
     /// SSH tunnel audit log — persisted event history for all tunnels.
     pub(crate) tunnel_audit: Arc<parking_lot::Mutex<crate::tunnels::audit::AuditLog>>,
+    /// Serializes load-modify-save on `connections.json` to prevent TOCTOU races.
+    pub(crate) connections_lock: tokio::sync::Mutex<()>,
 }
 
 impl AppState {
@@ -1160,6 +1162,7 @@ impl AppState {
             ai_suggestions_enabled: DashMap::new(),
             tunnel_manager,
             tunnel_audit,
+            connections_lock: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -2376,11 +2379,13 @@ pub(crate) mod tests_support {
     use super::*;
 
     pub fn make_test_app_state() -> AppState {
+        let data_dir = std::env::temp_dir().join("test-tuic-data");
+        let _ = std::fs::create_dir_all(&data_dir);
         let log_buffer = Arc::new(parking_lot::Mutex::new(
             crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
         ));
         let mut state = AppState::new(
-            std::env::temp_dir().join("test-tuic-data"),
+            data_dir,
             std::env::temp_dir().join("test-worktrees"),
             crate::config::AppConfig::default(),
             log_buffer,
@@ -3072,6 +3077,7 @@ mod tests {
                 )
                 .unwrap(),
             )),
+            connections_lock: tokio::sync::Mutex::new(()),
         }
     }
 

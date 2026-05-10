@@ -290,7 +290,9 @@ async fn reconnect_mcp_upstream_http(
     };
     let registry = &state.mcp_upstream_registry;
     registry.emit_status_change(&name, "connecting");
-    let _ = registry.disconnect_upstream(&name);
+    if let Err(e) = registry.disconnect_upstream(&name) {
+        tracing::warn!(source = "mcp_http", upstream = %name, error = %e, "Failed to disconnect upstream before reconnect");
+    }
     match registry.connect_upstream(server, Some(self_port)).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(e) => err_500(&e),
@@ -716,6 +718,14 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/config/provider-registry",
             get(config_routes::get_provider_registry).put(config_routes::put_provider_registry),
+        )
+        .route(
+            "/config/remote-connections",
+            get(config_routes::get_remote_connections).put(config_routes::put_remote_connection),
+        )
+        .route(
+            "/config/remote-connections/{id}",
+            delete(config_routes::delete_remote_connection),
         )
         // Logs
         .route(
@@ -1662,6 +1672,7 @@ mod tests {
                 )
                 .unwrap(),
             )),
+            connections_lock: tokio::sync::Mutex::new(()),
         });
         // Override default disabled_native_tools so all 8 tools are visible in tests
         state.config.write().disabled_native_tools = Vec::new();

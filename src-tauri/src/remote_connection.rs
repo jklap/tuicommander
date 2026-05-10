@@ -59,6 +59,37 @@ impl RemoteConnection {
         }
     }
 
+    pub(crate) fn validate(&self) -> Result<(), String> {
+        if uuid::Uuid::parse_str(&self.id).is_err() {
+            return Err("id must be a valid UUID".to_string());
+        }
+        if self.name.trim().is_empty() {
+            return Err("name must not be empty".to_string());
+        }
+        if self.auth_username.trim().is_empty() {
+            return Err("auth_username must not be empty".to_string());
+        }
+        match &self.transport {
+            RemoteTransport::Ssh { ssh_host, ssh_user, ssh_port, .. } => {
+                if ssh_host.trim().is_empty() {
+                    return Err("ssh_host must not be empty".to_string());
+                }
+                if ssh_user.trim().is_empty() {
+                    return Err("ssh_user must not be empty".to_string());
+                }
+                if *ssh_port == 0 {
+                    return Err("ssh_port must be in range 1-65535".to_string());
+                }
+            }
+            RemoteTransport::Direct { url } => {
+                if url.trim().is_empty() {
+                    return Err("url must not be empty".to_string());
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Create a new Direct connection.
     pub(crate) fn new_direct(
         name: impl Into<String>,
@@ -223,5 +254,37 @@ mod tests {
     fn new_direct_enabled() {
         let conn = RemoteConnection::new_direct("d", "http://x", "u");
         assert!(conn.enabled);
+    }
+
+    #[test]
+    fn validate_valid_ssh_connection() {
+        let conn = RemoteConnection::new_ssh("server", "host.example.com", "alice");
+        assert!(conn.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_invalid_uuid_rejected() {
+        let mut conn = RemoteConnection::new_ssh("server", "host", "alice");
+        conn.id = "../../malicious".to_string();
+        let err = conn.validate().unwrap_err();
+        assert!(err.contains("valid UUID"), "expected UUID error, got: {err}");
+    }
+
+    #[test]
+    fn validate_whitespace_name_rejected() {
+        let conn = RemoteConnection::new_ssh("  ", "host", "alice");
+        assert!(conn.validate().is_err());
+    }
+
+    #[test]
+    fn validate_empty_ssh_host_rejected() {
+        let conn = RemoteConnection::new_ssh("s", "", "alice");
+        assert!(conn.validate().is_err());
+    }
+
+    #[test]
+    fn validate_empty_url_rejected() {
+        let conn = RemoteConnection::new_direct("d", "  ", "u");
+        assert!(conn.validate().is_err());
     }
 }
