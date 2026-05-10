@@ -2345,10 +2345,12 @@ const App: Component = () => {
 				<ActivityDashboard onSelect={terminalLifecycle.handleTerminalSelect} />
 			</Suspense>
 
-			{/* SSH Tunnels panel */}
-			<Suspense>
-				<TunnelsPanel />
-			</Suspense>
+			{/* SSH Tunnels panel (experimental) */}
+			<Show when={settingsStore.state.experimentalFeaturesEnabled}>
+				<Suspense>
+					<TunnelsPanel />
+				</Suspense>
+			</Show>
 
 			{/* Worktree manager */}
 			<WorktreeManager actions={worktreeActions} />
