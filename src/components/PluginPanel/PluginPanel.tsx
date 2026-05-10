@@ -139,7 +139,7 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 	 */
 	const reloadIframe = () => {
 		if (!iframeRef) return;
-		if (props.tab.url) {
+		if (props.tab.url && !props.tab.url.startsWith("file://")) {
 			const cur = iframeRef.src;
 			iframeRef.src = cur;
 		} else {
@@ -372,12 +372,23 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 	const [srcdoc, setSrcdoc] = createSignal<string>("");
 	/** Bumped on reload — drives keyed <Show> to remount the iframe element. */
 	const [reloadKey, setReloadKey] = createSignal<number>(1);
-
 	// Inline HTML mode: inject theme vars, base styles, and SDK into srcdoc.
 	// URL mode: load directly via src= so the page keeps its own CSP
 	// (srcdoc inherits the parent's Tauri CSP, which blocks external resources).
+	// file:// URLs: read via IPC and convert to srcdoc (sandbox blocks file://).
 	createEffect(() => {
-		if (!props.tab.url) {
+		const url = props.tab.url;
+		if (url?.startsWith("file://")) {
+			const filePath = decodeURIComponent(url.replace(/^file:\/\//, ""));
+			invoke<string>("read_external_file", { path: filePath })
+				.then((content) => {
+					setSrcdoc(injectThemeVars(content));
+				})
+				.catch((err) => {
+					appLogger.error("plugin", `Failed to read file:// tab content: ${filePath}`, err);
+					setSrcdoc(`<body style="color:#e55;padding:24px">Failed to load ${filePath}: ${err}</body>`);
+				});
+		} else if (!url) {
 			setSrcdoc(injectThemeVars(props.tab.html));
 		}
 	});
@@ -408,7 +419,7 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 				openReloadMenu(e.clientX, e.clientY);
 			}}
 		>
-			{props.tab.url ? (
+			{props.tab.url && !props.tab.url.startsWith("file://") ? (
 				<iframe
 					ref={iframeRef}
 					src={props.tab.url}
