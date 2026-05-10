@@ -31,7 +31,7 @@ const AGENT_TAB_AUTOCLOSE_MS = 10_000;
 /** Dependencies injected into initApp */
 export interface AppInitDeps {
 	pty: {
-		listActiveSessions: () => Promise<Array<{ session_id: string; cwd: string | null }>>;
+		listActiveSessions: () => Promise<Array<{ session_id: string; cwd: string | null; display_name?: string | null }>>;
 		close: (sessionId: string) => Promise<void>;
 	};
 	setQuitDialogVisible: (visible: boolean) => void;
@@ -488,7 +488,7 @@ export async function initApp(deps: AppInitDeps) {
 			const id = terminalsStore.add({
 				sessionId: session.session_id,
 				fontSize: deps.getDefaultFontSize(),
-				name: `Terminal ${terminalsStore.getCount() + 1}`,
+				name: session.display_name || `Terminal ${terminalsStore.getCount() + 1}`,
 				cwd: session.cwd,
 				awaitingInput: null,
 			});

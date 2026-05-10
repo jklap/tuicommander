@@ -146,6 +146,7 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "ui:context-menu",
     "ui:sidebar",
     "ui:file-icons",
+    "ui:file-preview",
 ];
 
 /// Validate a parsed manifest for required fields and sanity.

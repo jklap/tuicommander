@@ -629,6 +629,50 @@ panel.close();
 
 **Dashboard layout classes.** For analytics/status dashboards, the base stylesheet also ships a `.dashboard`/`.dash-*` class family that mirrors the built-in Claude Usage dashboard. Use them instead of inventing layout CSS — see [`docs/plugins-style.md`](./plugins-style.md) for the full guide, checklist, and class reference.
 
+#### host.openEditorTab(filePath, repoPath, opts?)
+
+Open a file in the CodeMirror editor tab. **Requires `"ui:panel"` capability.**
+
+```typescript
+host.openEditorTab("src/main.ts", "/Users/me/project", { line: 42 });
+```
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `filePath` | `string` | Relative or absolute file path |
+| `repoPath` | `string` | Repository root path |
+| `opts.fsRoot` | `string?` | Filesystem root (defaults to `repoPath`) |
+| `opts.line` | `number?` | Line number to scroll to |
+
+#### host.registerFilePreview(options) -> Disposable
+
+Register a custom file preview handler for specific extensions. When the user opens a file matching one of the claimed extensions, the `onOpen` callback is invoked instead of the default editor. **Requires `"ui:file-preview"` capability.**
+
+```typescript
+host.registerFilePreview({
+  extensions: ["csv", "tsv"],
+  async onOpen(ctx) {
+    const raw = await host.readFile(`${ctx.fsRoot}/${ctx.filePath}`);
+    host.openPanel({ id: `csv-${ctx.filePath}`, title: "CSV", html: buildTable(raw) });
+  },
+});
+```
+
+| Param | Type | Description |
+|-------|------|-------------|
+| `options.extensions` | `string[]` | File extensions to claim (without dot, case-insensitive) |
+| `options.onOpen` | `(ctx: FilePreviewContext) => void` | Handler called when the user opens a matching file |
+
+**FilePreviewContext:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `filePath` | `string` | Relative path within the repo |
+| `repoPath` | `string` | Repository root path |
+| `fsRoot` | `string` | Filesystem root for resolving absolute paths |
+
+On plugin unload, claimed extensions are released and files revert to the default open behavior.
+
 #### host.registerDashboard(options) -> Disposable
 
 Register a one-click entry point for the plugin's dashboard. When registered, *Settings → Plugins* shows a **Dashboard** button in the plugin row that calls `options.open()` and automatically closes the Settings panel so the dashboard becomes visible.
@@ -1049,6 +1093,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `ui:context-menu` | `host.registerTerminalAction()` | Can add actions to the terminal right-click "Actions" submenu |
 | `ui:sidebar` | `host.registerSidebarPanel()` | Can register collapsible panel sections in the sidebar |
 | `ui:file-icons` | `host.registerFileIconProvider()` | Can provide file/folder icons for the file browser (e.g. VS Code icon themes) |
+| `ui:file-preview` | `host.registerFilePreview()` | Can claim file extensions and provide custom preview UIs |
 
 Tier 1, Tier 2, and plugin data commands are always available without capabilities.
 
@@ -1446,6 +1491,7 @@ Available from the [plugin registry](https://github.com/sstraus/tuicommander-plu
 |--------|------|-------------|-------------|
 | `mdkb-dashboard` | 2+3 | `exec:cli`, `fs:read`, `ui:panel`, `ui:ticker` | mdkb knowledge base dashboard |
 | `rtk-dashboard` | 3 | `exec:cli`, `ui:panel`, `ui:context-menu` | RTK token savings dashboard (`binaries: ["rtk"]`) |
+| `csv-preview` | 3 | `ui:file-preview`, `ui:panel`, `fs:read` | Preview CSV/TSV files as sortable HTML tables |
 
 ## Troubleshooting
 

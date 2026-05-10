@@ -4254,6 +4254,7 @@ pub(crate) struct ActiveSessionInfo {
     cwd: Option<String>,
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
+    display_name: Option<String>,
 }
 
 /// Update the working directory of a running PTY session.
@@ -4315,6 +4316,7 @@ pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<Activ
                     .as_ref()
                     .map(|w| w.path.to_string_lossy().to_string()),
                 worktree_branch: session.worktree.as_ref().and_then(|w| w.branch.clone()),
+                display_name: session.display_name.clone(),
             }
         })
         .collect()

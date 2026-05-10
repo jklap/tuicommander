@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **CSV/TSV/PSV/SSV file preview plugin** — Opening tabular data files (.csv, .tsv, .psv, .ssv) in the file browser shows a sortable HTML table with sticky headers, rainbow column tinting, and an "Edit" button to open in CodeMirror. Plugin API: `host.registerFilePreview()` and `host.openEditorTab()` with new `"ui:file-preview"` capability.
+
 ## [1.2.0] - 2026-05-08
 
 ### Added
@@ -20,6 +23,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Watcher session ID mismatch** — Watcher attach was passing frontend tab IDs instead of PTY session UUIDs, causing watchers to never trigger. Now correctly uses the PTY session UUID.
 - **Watcher update validation** — `update_rule` now delegates to `validate_rule` after applying partial updates, eliminating duplicated inline checks and inconsistent error messages.
 - **Search input autocorrect** — Disabled `autocomplete`, `autocorrect`, and `spellcheck` on all search/filter inputs (11 components). macOS WebKit was autocorrecting search queries.
+- **Dead-key composition on macOS** — Fixed dead-key input (accents, quotes) not working in macOS WKWebView terminals. ([#31](https://github.com/sstraus/tuicommander/pull/31) by [@paulovitin](https://github.com/paulovitin))
+
+### Community
+- [@paulovitin](https://github.com/paulovitin) — dead-key composition fix (#31)
 
 ## [1.1.3] - 2026-05-06
 

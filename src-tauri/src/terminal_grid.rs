@@ -749,10 +749,10 @@ impl TerminalGrid {
 
     /// Get the OSC 8 hyperlink URI at a given viewport position, if any.
     pub fn hyperlink_at(&self, row: usize, col: usize) -> Option<String> {
-        let display_offset = self.term.grid().display_offset();
-        let line = Line(row as i32 - display_offset as i32);
         let grid = self.term.grid();
-        if col >= grid.columns() {
+        let display_offset = grid.display_offset();
+        let line = Line(row as i32 - display_offset as i32);
+        if col >= grid.columns() || line < grid.topmost_line() || line > grid.bottommost_line() {
             return None;
         }
         let cell = &grid[line][Column(col)];

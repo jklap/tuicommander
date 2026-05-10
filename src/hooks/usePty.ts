@@ -34,6 +34,7 @@ export interface ActiveSessionInfo {
 	cwd: string | null;
 	worktree_path: string | null;
 	worktree_branch: string | null;
+	display_name?: string | null;
 }
 
 /** PTY hook for managing terminal sessions */
