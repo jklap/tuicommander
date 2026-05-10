@@ -7,7 +7,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **SSH tunnel manager + remote connections** — Full remote access layer: SSH tunnel supervision with auto-reconnect, slim `tuicommander-remote` headless binary for remote machines, and desktop connection manager UI. Includes protocol versioning, health checks, token rotation, TLS configuration, and rate-limited auth. Gated behind experimental features flag.
 - **CSV/TSV/PSV/SSV file preview plugin** — Opening tabular data files (.csv, .tsv, .psv, .ssv) in the file browser shows a sortable HTML table with sticky headers, rainbow column tinting, and an "Edit" button to open in CodeMirror. Plugin API: `host.registerFilePreview()` and `host.openEditorTab()` with new `"ui:file-preview"` capability.
+- **"What's New" dialog** — AI-generated release notes shown once after stable version updates, with community contributor attribution. `make bump` now auto-generates notes via Claude CLI with interactive approval.
+- **Nightly rolling changelog** — CI generates changelog from git log since last stable tag for nightly releases.
+
+### Fixed
+- **GitHub badge always visible** — Sidebar GitHub badge now hidden correctly without `:has()` CSS support.
+- **Tab URL resolution** — Plugin tabs with `file://` URLs resolved via IPC instead of direct iframe src. MCP session root used for repo-scoped tab URLs.
 
 ## [1.2.0] - 2026-05-08
 
