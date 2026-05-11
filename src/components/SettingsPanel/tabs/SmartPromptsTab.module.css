@@ -78,7 +78,7 @@
 
 .promptName {
   font-weight: 600;
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-primary);
 }
 
@@ -160,7 +160,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   color: var(--fg-primary);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   box-sizing: border-box;
 }
 

@@ -38,7 +38,7 @@
 
 .header h2 {
   margin: 0;
-  font-size: var(--font-xl);
+  font-size: var(--font-lg);
   font-weight: 600;
 }
 
@@ -79,11 +79,11 @@
   display: block;
   width: 100%;
   text-align: left;
-  padding: 3px 16px 9px;
+  padding: 3px 16px 5px;
   background: transparent;
   border: none;
   color: var(--fg-secondary);
-  font-size: var(--font-lg);
+  font-size: var(--font-md);
   font-family: var(--font-ui);
   cursor: pointer;
   white-space: nowrap;
@@ -167,7 +167,7 @@
 
 .titleRepo h2 {
   margin: 0;
-  font-size: var(--font-xl);
+  font-size: var(--font-lg);
   font-weight: 600;
   color: var(--fg-primary);
 }
@@ -189,12 +189,12 @@
 }
 
 .footerReset {
-  padding: 8px 16px;
+  padding: 6px 14px;
   background: var(--bg-highlight);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   color: var(--fg-secondary);
-  font-size: var(--font-md);
+  font-size: var(--font-sm);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
@@ -205,12 +205,12 @@
 }
 
 .footerDone {
-  padding: 8px 20px;
+  padding: 6px 16px;
   background: var(--accent);
   border: none;
   border-radius: var(--radius-lg);
   color: var(--text-on-accent);
-  font-size: var(--font-md);
+  font-size: var(--font-sm);
   font-weight: 500;
   cursor: pointer;
   transition: background 0.15s;
@@ -226,8 +226,8 @@
 }
 
 .section h3 {
-  margin: 0 0 16px;
-  font-size: var(--font-lg);
+  margin: 0 0 14px;
+  font-size: var(--font-md);
   font-weight: 600;
   color: var(--fg-primary);
 }
@@ -237,14 +237,14 @@
 }
 
 .group {
-  margin-bottom: 20px;
+  margin-bottom: 18px;
 }
 
 .group label {
   display: block;
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-secondary);
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .group select,
@@ -257,14 +257,14 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   color: var(--fg-primary);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   box-sizing: border-box;
 }
 
 .group select,
 .group input[type="text"],
 .group input[type="password"] {
-  height: 36px;
+  height: 32px;
 }
 
 .group textarea {
@@ -282,28 +282,29 @@
 
 .hint {
   margin-top: 4px;
-  font-size: var(--font-sm);
+  font-size: var(--font-xs);
   color: var(--fg-muted);
 }
 
 .hintInline {
-  font-size: var(--font-sm);
+  font-size: var(--font-xs);
   color: var(--fg-muted);
 }
 
 .info {
   color: var(--fg-muted);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   margin-bottom: 16px;
   line-height: 1.4;
 }
 
 .warning {
   color: var(--warning);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   padding: 12px;
   background: rgba(224, 175, 104, 0.1);
   border-radius: var(--radius-lg);
+  margin-bottom: 8px;
 }
 
 .slider {
@@ -322,8 +323,8 @@
 
 .slider input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   background: var(--accent);
   border-radius: var(--radius-full);
   cursor: pointer;
@@ -332,7 +333,7 @@
 .slider span {
   min-width: 40px;
   text-align: right;
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-secondary);
   font-family: var(--font-ui);
 }
@@ -340,20 +341,20 @@
 .toggle {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .toggle + .toggle {
-  margin-top: 12px;
+  margin-top: 10px;
 }
 
 .toggle input[type="checkbox"] {
   -webkit-appearance: none;
   appearance: none;
-  width: 36px;
-  height: 20px;
-  min-height: 20px;
-  max-height: 20px;
+  width: 30px;
+  height: 16px;
+  min-height: 16px;
+  max-height: 16px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: 9999px;
@@ -369,8 +370,8 @@
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 14px;
-  height: 14px;
+  width: 10px;
+  height: 10px;
   aspect-ratio: 1;
   background: var(--fg-muted);
   border-radius: 9999px;
@@ -383,12 +384,12 @@
 }
 
 .toggle input[type="checkbox"]:checked::after {
-  transform: translateX(16px);
+  transform: translateX(14px);
   background: white;
 }
 
 .toggle span {
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-secondary);
 }
 
@@ -450,12 +451,12 @@
 }
 
 .actions button {
-  padding: 8px 16px;
+  padding: 6px 12px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   color: var(--fg-secondary);
-  font-size: var(--font-md);
+  font-size: var(--font-sm);
   cursor: pointer;
   transition: background 0.15s, color 0.15s, border-color 0.15s;
 }
@@ -501,7 +502,7 @@
 
 .groupName {
   flex: 1;
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-primary);
   cursor: default;
 }
@@ -513,7 +514,7 @@
   border: 1px solid var(--accent);
   border-radius: var(--radius-md);
   color: var(--fg-primary);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   outline: none;
 }
 
@@ -640,7 +641,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   color: var(--fg-primary);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
 }
 
 .input:focus {
@@ -659,8 +660,8 @@
 }
 
 .toggleBtn {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   display: flex;
   align-items: center;
@@ -696,12 +697,12 @@
 }
 
 .saveBtn {
-  padding: 8px 16px;
+  padding: 6px 12px;
   background: var(--accent);
   border: 1px solid var(--accent);
   border-radius: var(--radius-lg);
   color: var(--text-on-accent);
-  font-size: var(--font-md);
+  font-size: var(--font-sm);
   font-weight: 600;
   cursor: pointer;
   transition: opacity 0.15s;
@@ -722,7 +723,7 @@
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-secondary);
   font-family: var(--font-mono);
 }
@@ -770,7 +771,7 @@
 
 .urlRow label {
   display: block;
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-secondary);
   margin-bottom: 6px;
 }
@@ -789,7 +790,7 @@
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-primary);
   font-family: var(--font-mono);
   word-break: break-all;
@@ -797,8 +798,8 @@
 }
 
 .copyBtn {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   display: flex;
   align-items: center;
@@ -841,7 +842,7 @@
 }
 
 .mcpStatusText {
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-secondary);
 }
 
@@ -896,7 +897,7 @@
   flex-shrink: 0;
   background: rgba(255, 255, 255, 0.08);
   color: var(--fg-muted, #888);
-  font-size: 11px;
+  font-size: var(--font-xs);
   font-weight: 600;
   cursor: help;
 }
@@ -934,7 +935,7 @@
   border: none;
   border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   align-self: flex-start;
   transition: opacity 0.15s;
 }
@@ -1030,14 +1031,14 @@
 
 .schedulerUnitSelect {
   width: 64px;
-  height: 36px;
+  height: 32px;
   flex-shrink: 0;
   padding: 0 8px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   color: var(--fg-primary);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   font-family: var(--font-ui);
   box-sizing: border-box;
 }
@@ -1048,31 +1049,72 @@
 }
 
 .schedulerOneShotLabel {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 4px;
-  height: 36px;
+  gap: 5px;
+  height: 32px;
   font-size: var(--font-sm);
   color: var(--fg-secondary);
   white-space: nowrap;
   flex-shrink: 0;
   cursor: pointer;
+  margin: 0;
+  padding: 0;
+}
+
+.schedulerOneShotLabel input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  max-height: 14px;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+  vertical-align: middle;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.schedulerOneShotLabel input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.schedulerOneShotLabel input[type="checkbox"]:checked::after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 3px;
+  height: 7px;
+  border: solid white;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
 }
 
 .schedulerAdd .testBtn {
-  height: 36px;
+  height: 32px;
 }
 
 .schedulerCronInput {
   width: 64px;
-  height: 36px;
+  height: 32px;
   flex-shrink: 0;
   padding: 0 8px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   color: var(--fg-primary);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   font-family: var(--font-ui);
   box-sizing: border-box;
 }
@@ -1084,13 +1126,13 @@
 
 .schedulerGoalInput {
   flex: 1;
-  height: 36px;
+  height: 32px;
   padding: 0 12px;
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   color: var(--fg-primary);
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   font-family: var(--font-ui);
   box-sizing: border-box;
 }
@@ -1157,5 +1199,71 @@
 .mcpCode {
   font-size: var(--font-xs);
   word-break: break-all;
+}
+
+/* ── Terminal Settings Split Layout ── */
+.terminalSplit {
+  display: flex;
+  gap: 20px;
+  align-items: flex-start;
+}
+
+.terminalControls {
+  flex: 0 0 260px;
+  min-width: 0;
+}
+
+.terminalPreview {
+  flex: 1;
+  min-width: 0;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  position: sticky;
+  top: 20px;
+}
+
+.terminalPreviewTitlebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+}
+
+.terminalPreviewDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.terminalPreviewDotClose {
+  background: #ff5f57;
+}
+
+.terminalPreviewDotMin {
+  background: #febc2e;
+}
+
+.terminalPreviewDotMax {
+  background: #28c840;
+}
+
+.terminalPreviewTitleText {
+  flex: 1;
+  text-align: center;
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  font-family: var(--font-ui);
+}
+
+.terminalPreviewCanvas {
+  background: var(--bg-primary);
+  overflow: hidden;
+}
+
+.terminalPreviewCanvas canvas {
+  display: block;
 }
 

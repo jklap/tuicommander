@@ -56,7 +56,7 @@
 
 .agentName {
   font-weight: 600;
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-primary);
 }
 
@@ -157,7 +157,7 @@
 
 .configName {
   font-weight: 500;
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-primary);
 }
 

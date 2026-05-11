@@ -1,15 +1,229 @@
-import { type Component, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { t } from "../../../i18n";
 import type { RepoGroup } from "../../../stores/repositories";
 import { repositoriesStore } from "../../../stores/repositories";
 import type { FontType } from "../../../stores/settings";
 import { FONT_FAMILIES, settingsStore } from "../../../stores/settings";
 import { uiStore } from "../../../stores/ui";
-import { getThemeNames } from "../../../themes";
+import { getTerminalTheme, getThemeNames } from "../../../themes";
 import { UiLegend } from "../../HelpPanel/UiLegend";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { SettingSelect, SettingSlider } from "../SettingFields";
 import s from "../Settings.module.css";
+
+interface PreviewSpan {
+	text: string;
+	color?: string;
+	bg?: string;
+	bold?: boolean;
+}
+
+type PreviewLine = PreviewSpan[];
+
+const PREVIEW_LINES: PreviewLine[] = [
+	[{ text: " projectX ", bg: "blue", color: "white", bold: true }, { text: "", color: "blue", bg: "green" }, { text: "  main ", bg: "green", color: "black", bold: true }, { text: "", color: "green" }, { text: " cat server.ts" }],
+	[
+		{ text: "import", color: "dim" },
+		{ text: " { serve } " },
+		{ text: "from", color: "dim" },
+		{ text: ' "http"', color: "green" },
+		{ text: ";" },
+	],
+	[{ text: "const", color: "dim" }, { text: " port = " }, { text: "8080", color: "yellow" }, { text: ";" }],
+	[{ text: "" }],
+	[{ text: " projectX ", bg: "blue", color: "white", bold: true }, { text: "", color: "blue", bg: "green" }, { text: "  main ", bg: "green", color: "black", bold: true }, { text: "", color: "green" }, { text: " git diff" }],
+	[{ text: "@@ -2,3 +2,5 @@", color: "cyan" }],
+	[{ text: "-const port = 8080;", color: "red" }],
+	[{ text: "+const port = 3000;", color: "green" }],
+	[{ text: "+serve({ port });", color: "green" }],
+	[{ text: "" }],
+	[{ text: " projectX ", bg: "blue", color: "white", bold: true }, { text: "", color: "blue", bg: "green" }, { text: "  main ", bg: "green", color: "black", bold: true }, { text: "", color: "green" }, { text: " npm test" }],
+	[{ text: "✓", color: "green" }, { text: " server " }, { text: "(4ms)", color: "dim" }],
+	[{ text: "✓", color: "green" }, { text: " routes " }, { text: "(2ms)", color: "dim" }],
+	[{ text: "✓", color: "green" }, { text: " logger " }, { text: "(1ms)", color: "dim" }],
+	[{ text: "" }],
+	[{ text: " projectX ", bg: "blue", color: "white", bold: true }, { text: "", color: "blue", bg: "green" }, { text: "  main ", bg: "green", color: "black", bold: true }, { text: "", color: "green" }, { text: " " }],
+];
+
+function getThemeColor(name: string): string {
+	const theme = getTerminalTheme(settingsStore.state.theme);
+	const map: Record<string, string | undefined> = {
+		fg: theme.foreground,
+		bg: theme.background,
+		cursor: theme.cursor,
+		dim: theme.brightBlack,
+		red: theme.red,
+		green: theme.green,
+		yellow: theme.yellow,
+		blue: theme.blue,
+		magenta: theme.magenta,
+		cyan: theme.cyan,
+		white: theme.white,
+		black: theme.black,
+		brightRed: theme.brightRed,
+		brightGreen: theme.brightGreen,
+		brightYellow: theme.brightYellow,
+		brightBlue: theme.brightBlue,
+	};
+	return map[name] ?? theme.foreground ?? "#c0c0c0";
+}
+
+const TerminalPreview: Component = () => {
+	const fontFamily = createMemo(() => FONT_FAMILIES[settingsStore.state.font] ?? "monospace");
+	const fontSize = () => settingsStore.state.defaultFontSize;
+	const fontWeight = () => settingsStore.state.fontWeight;
+	const cursorStyle = () => settingsStore.state.cursorStyle;
+	let canvasRef!: HTMLCanvasElement;
+	const [cursorVisible, setCursorVisible] = createSignal(true);
+
+	const paint = (showCursor: boolean) => {
+		const canvas = canvasRef;
+		if (!canvas) return;
+		const ctx = canvas.getContext("2d");
+		if (!ctx) return;
+
+		const dpr = window.devicePixelRatio || 1;
+		const font = fontFamily();
+		const size = fontSize();
+		const weight = fontWeight();
+		const cursor = cursorStyle();
+
+		ctx.font = `${weight} ${size}px ${font}`;
+		const mW = ctx.measureText("W");
+		const cellW = Math.round(mW.width);
+		const ascent = mW.fontBoundingBoxAscent ?? mW.actualBoundingBoxAscent ?? size * 0.8;
+		const descent = mW.fontBoundingBoxDescent ?? mW.actualBoundingBoxDescent ?? size * 0.2;
+		const charH = ascent + descent;
+		const cellH = Math.floor(Math.ceil(charH * dpr) * 1.2) / dpr;
+		const baseline = Math.ceil(ascent);
+
+		const rows = PREVIEW_LINES.length;
+		const maxCols = 40;
+		const w = maxCols * cellW + 12;
+		const h = rows * cellH + 8;
+
+		canvas.width = Math.round(w * dpr);
+		canvas.height = Math.round(h * dpr);
+		canvas.style.width = `${w}px`;
+		canvas.style.height = `${h}px`;
+		ctx.scale(dpr, dpr);
+
+		const bgColor = getThemeColor("bg");
+		ctx.fillStyle = bgColor;
+		ctx.fillRect(0, 0, w, h);
+
+		const fgDefault = getThemeColor("fg");
+		const padLeft = 6;
+
+		for (let row = 0; row < rows; row++) {
+			const line = PREVIEW_LINES[row];
+			const y = row * cellH + 4;
+			let col = 0;
+
+			for (const span of line) {
+				const text = span.text;
+				if (!text) continue;
+
+				if (span.bg) {
+					ctx.fillStyle = getThemeColor(span.bg);
+					ctx.fillRect(padLeft + col * cellW, y, text.length * cellW, cellH);
+				}
+
+				ctx.fillStyle = span.color ? getThemeColor(span.color) : fgDefault;
+				const fontStr = span.bold
+					? `700 ${size}px ${font}`
+					: `${weight} ${size}px ${font}`;
+				ctx.font = fontStr;
+
+				for (let i = 0; i < text.length; i++) {
+					const cp = text.codePointAt(i) ?? 0;
+					const gx = padLeft + (col + i) * cellW;
+					if (cp === 0xe0b0) {
+						ctx.beginPath();
+						ctx.moveTo(gx, y);
+						ctx.lineTo(gx + cellW, y + cellH / 2);
+						ctx.lineTo(gx, y + cellH);
+						ctx.closePath();
+						ctx.fill();
+					} else {
+						ctx.fillText(text[i], gx, y + baseline);
+					}
+				}
+				col += text.length;
+			}
+		}
+
+		if (showCursor) {
+			const lastLine = PREVIEW_LINES[rows - 1];
+			let cursorCol = 0;
+			for (const span of lastLine) cursorCol += span.text.length;
+			const cx = padLeft + cursorCol * cellW;
+			const cy = (rows - 1) * cellH + 4;
+			ctx.fillStyle = getThemeColor("cursor");
+			if (cursor === "bar") {
+				ctx.fillRect(cx, cy, 2, cellH);
+			} else if (cursor === "block") {
+				ctx.fillRect(cx, cy, cellW, cellH);
+			} else {
+				ctx.fillRect(cx, cy + cellH - 2, cellW, 2);
+			}
+		}
+	};
+
+	createEffect(() => {
+		fontFamily();
+		fontSize();
+		fontWeight();
+		cursorStyle();
+		settingsStore.state.theme;
+		const show = cursorVisible();
+		queueMicrotask(() => paint(show));
+	});
+
+	let blinkTimer: ReturnType<typeof setInterval> | undefined;
+	const startBlink = () => {
+		if (blinkTimer) return;
+		setCursorVisible(true);
+		blinkTimer = setInterval(() => setCursorVisible((v) => !v), 530);
+	};
+	const stopBlink = () => {
+		if (blinkTimer) {
+			clearInterval(blinkTimer);
+			blinkTimer = undefined;
+		}
+	};
+
+	createEffect(() => {
+		const canvas = canvasRef;
+		if (!canvas) return;
+		const observer = new IntersectionObserver(
+			([entry]) => {
+				if (entry.isIntersecting) startBlink();
+				else stopBlink();
+			},
+			{ threshold: 0.1 },
+		);
+		observer.observe(canvas);
+		onCleanup(() => {
+			observer.disconnect();
+			stopBlink();
+		});
+	});
+
+	return (
+		<div class={s.terminalPreview}>
+			<div class={s.terminalPreviewTitlebar}>
+				<div class={`${s.terminalPreviewDot} ${s.terminalPreviewDotClose}`} />
+				<div class={`${s.terminalPreviewDot} ${s.terminalPreviewDotMin}`} />
+				<div class={`${s.terminalPreviewDot} ${s.terminalPreviewDotMax}`} />
+				<div class={s.terminalPreviewTitleText}>zsh</div>
+			</div>
+			<div class={s.terminalPreviewCanvas}>
+				<canvas ref={canvasRef} />
+			</div>
+		</div>
+	);
+};
 
 /** Preset colors for groups and sidebar */
 export const PRESET_COLORS = [
@@ -117,45 +331,54 @@ export const AppearanceTab: Component = () => {
 
 			<h3>{t("appearance.heading.terminal", "Terminal")}</h3>
 
-			<SettingSelect
-				label={t("appearance.label.terminalFont", "Terminal Font")}
-				value={settingsStore.state.font}
-				onChange={(v) => settingsStore.setFont(v as FontType)}
-				options={fontOptions}
-				hint={t("appearance.hint.terminalFont", "Monospace font for terminals")}
-			/>
+			<div class={s.terminalSplit}>
+				<div class={s.terminalControls}>
+					<SettingSelect
+						label={t("appearance.label.terminalFont", "Terminal Font")}
+						value={settingsStore.state.font}
+						onChange={(v) => settingsStore.setFont(v as FontType)}
+						options={fontOptions}
+						hint={t("appearance.hint.terminalFont", "Monospace font for terminals")}
+					/>
 
-			<SettingSlider
-				label={t("appearance.label.defaultFontSize", "Default Font Size")}
-				value={settingsStore.state.defaultFontSize}
-				onChange={(v) => settingsStore.setDefaultFontSize(v)}
-				min={8}
-				max={32}
-				suffix="px"
-				hint={t("appearance.hint.defaultFontSize", "Default font size for new terminals")}
-			/>
+					<SettingSlider
+						label={t("appearance.label.defaultFontSize", "Default Font Size")}
+						value={settingsStore.state.defaultFontSize}
+						onChange={(v) => settingsStore.setDefaultFontSize(v)}
+						min={8}
+						max={32}
+						suffix="px"
+						hint={t("appearance.hint.defaultFontSize", "Default font size for new terminals")}
+					/>
 
-			<SettingSlider
-				label={t("appearance.label.fontWeight", "Font Weight")}
-				value={settingsStore.state.fontWeight}
-				onChange={(v) => settingsStore.setFontWeight(v)}
-				min={100}
-				max={900}
-				step={100}
-				hint={t("appearance.hint.fontWeight", "Terminal font weight (200 = ExtraLight, 400 = Regular, 700 = Bold)")}
-			/>
+					<SettingSlider
+						label={t("appearance.label.fontWeight", "Font Weight")}
+						value={settingsStore.state.fontWeight}
+						onChange={(v) => settingsStore.setFontWeight(v)}
+						min={100}
+						max={900}
+						step={100}
+						hint={t("appearance.hint.fontWeight", "Terminal font weight (200 = ExtraLight, 400 = Regular, 700 = Bold)")}
+					/>
 
-			<SettingSelect
-				label={t("appearance.label.cursorStyle", "Cursor Style")}
-				value={settingsStore.state.cursorStyle}
-				onChange={(v) => settingsStore.setCursorStyle(v as "bar" | "block" | "underline")}
-				options={[
-					{ value: "bar", label: t("appearance.cursorStyle.bar", "Bar") },
-					{ value: "block", label: t("appearance.cursorStyle.block", "Block") },
-					{ value: "underline", label: t("appearance.cursorStyle.underline", "Underline") },
-				]}
-				hint={t("appearance.hint.cursorStyle", "Shape of the terminal cursor. Applies immediately to all terminals.")}
-			/>
+					<SettingSelect
+						label={t("appearance.label.cursorStyle", "Cursor Style")}
+						value={settingsStore.state.cursorStyle}
+						onChange={(v) => settingsStore.setCursorStyle(v as "bar" | "block" | "underline")}
+						options={[
+							{ value: "bar", label: t("appearance.cursorStyle.bar", "Bar") },
+							{ value: "block", label: t("appearance.cursorStyle.block", "Block") },
+							{ value: "underline", label: t("appearance.cursorStyle.underline", "Underline") },
+						]}
+						hint={t(
+							"appearance.hint.cursorStyle",
+							"Shape of the terminal cursor. Applies immediately to all terminals.",
+						)}
+					/>
+				</div>
+
+				<TerminalPreview />
+			</div>
 
 			<h3>{t("appearance.heading.tabs", "Tabs")}</h3>
 

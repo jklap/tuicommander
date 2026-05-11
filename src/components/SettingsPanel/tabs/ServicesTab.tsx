@@ -1683,11 +1683,11 @@ const UpstreamMcpPanel: Component<{ upstreamStatus: UpstreamStatusEntry[] }> = (
 											</div>
 										</Show>
 										<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
-											<button class={s.copyBtn} onClick={() => saveEdit(server)} disabled={saving()}>
+											<button class={s.saveBtn} onClick={() => saveEdit(server)} disabled={saving()}>
 												{saving() ? "Saving…" : "Save"}
 											</button>
 											<button
-												class={s.copyBtn}
+												class={s.testBtn}
 												onClick={() => {
 													setEditingId(null);
 													setError("");

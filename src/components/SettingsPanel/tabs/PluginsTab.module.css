@@ -170,7 +170,7 @@
 
 .pluginName {
   font-weight: 600;
-  font-size: var(--font-base);
+  font-size: var(--font-sm);
   color: var(--fg-primary);
 }
 
@@ -398,4 +398,7 @@
 
 .installRow {
   margin-top: 16px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }

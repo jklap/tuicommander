@@ -64,22 +64,6 @@ export const GeneralTab: Component = () => {
 		<div class={s.section}>
 			<h3>{t("general.heading.general", "General")}</h3>
 
-			<SettingSelect
-				label={t("general.label.language", "Language")}
-				value={settingsStore.state.language}
-				onChange={(v) => settingsStore.setLanguage(v)}
-				options={[{ value: "en", label: t("general.language.english", "English") }]}
-				hint={t("general.hint.language", "Interface language")}
-			/>
-
-			<SettingSelect
-				label={t("general.label.defaultIde", "Default IDE")}
-				value={settingsStore.state.ide}
-				onChange={(v) => settingsStore.setIde(v as IdeType)}
-				options={ideOptions}
-				hint={t("general.hint.defaultIde", "IDE used to open repositories")}
-			/>
-
 			<SettingInput
 				label={t("general.label.shell", "Shell")}
 				value={settingsStore.state.shell ?? ""}
@@ -231,10 +215,18 @@ export const GeneralTab: Component = () => {
 				</Show>
 			</div>
 
+			<SettingSelect
+				label={t("general.label.defaultIde", "Default IDE")}
+				value={settingsStore.state.ide}
+				onChange={(v) => settingsStore.setIde(v as IdeType)}
+				options={ideOptions}
+				hint={t("general.hint.defaultIde", "IDE used to open repositories")}
+			/>
+
 			<h3>{t("general.heading.experimental", "Experimental Features")}</h3>
 
 			<div class={s.group}>
-				<p class={s.hint} style={{ color: "var(--warning, #e5c07b)" }}>
+				<p class={s.warning}>
 					{t("general.hint.experimentalWarning", "These features are under active development and may be unstable.")}
 				</p>
 				<div class={s.toggle}>
