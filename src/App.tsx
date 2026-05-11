@@ -1570,6 +1570,7 @@ const App: Component = () => {
 		toggleHelpPanel: () => setHelpPanelVisible((v) => !v),
 		toggleNotesPanel: uiStore.toggleNotesPanel,
 		toggleFileBrowserPanel: uiStore.toggleFileBrowserPanel,
+		toggleOutlinePanel: uiStore.toggleOutlinePanel,
 		findInTerminal: () => {
 			// Context-aware: open search in whichever tab type is active
 			const diffActiveId = diffTabsStore.state.activeId;
