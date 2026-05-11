@@ -95,7 +95,7 @@ fn trusted_dirs() -> Vec<std::path::PathBuf> {
 /// only. Does NOT use `which`/`where` to avoid PATH-based symlink attacks.
 /// After finding a candidate, canonicalizes (resolves symlinks) and verifies
 /// the canonical path is still within a trusted directory.
-fn resolve_binary(name: &str) -> Option<String> {
+pub(crate) fn resolve_binary(name: &str) -> Option<String> {
     let ext = if cfg!(windows) { ".exe" } else { "" };
 
     for dir in &trusted_dirs() {
