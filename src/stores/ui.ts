@@ -42,6 +42,7 @@ interface UIStoreState {
 	gitPanelVisible: boolean;
 
 	outlinePanelVisible: boolean;
+	referencesPanelVisible: boolean;
 	aiChatPanelVisible: boolean;
 	aiTriagePanelVisible: boolean;
 	detachedPanels: Record<string, string>;
@@ -93,6 +94,7 @@ function createUIStore() {
 		fileBrowserPanelVisible: false,
 		gitPanelVisible: false,
 		outlinePanelVisible: false,
+		referencesPanelVisible: false,
 		aiChatPanelVisible: false,
 		aiTriagePanelVisible: false,
 		detachedPanels: {} as Record<string, string>,
@@ -140,6 +142,7 @@ function createUIStore() {
 		| "fileBrowserPanelVisible"
 		| "gitPanelVisible"
 		| "outlinePanelVisible"
+		| "referencesPanelVisible"
 		| "aiChatPanelVisible"
 		| "aiTriagePanelVisible"
 		| "notesPanelVisible";
@@ -148,6 +151,7 @@ function createUIStore() {
 		"fileBrowserPanelVisible",
 		"gitPanelVisible",
 		"outlinePanelVisible",
+		"referencesPanelVisible",
 		"aiChatPanelVisible",
 		"aiTriagePanelVisible",
 		"notesPanelVisible",
@@ -333,6 +337,14 @@ function createUIStore() {
 
 		setOutlinePanelVisible(visible: boolean): void {
 			setExclusivePanel("outlinePanelVisible", visible);
+		},
+
+		toggleReferencesPanel(): void {
+			setExclusivePanel("referencesPanelVisible", !state.referencesPanelVisible);
+		},
+
+		setReferencesPanelVisible(visible: boolean): void {
+			setExclusivePanel("referencesPanelVisible", visible);
 		},
 
 		toggleAiChatPanel(): void {

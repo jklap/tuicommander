@@ -11,6 +11,7 @@ import { GitPanel } from "./GitPanel/GitPanel";
 import { MarkdownPanel } from "./MarkdownPanel";
 import { NotesPanel } from "./NotesPanel";
 import { OutlinePanel } from "./OutlinePanel";
+import { ReferencesPanel } from "./ReferencesPanel";
 
 export interface PanelOrchestratorProps {
 	repoPath: string | null;
@@ -59,6 +60,11 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 			<OutlinePanel
 				visible={uiStore.state.outlinePanelVisible}
 				onClose={() => uiStore.toggleOutlinePanel()}
+			/>
+
+			<ReferencesPanel
+				visible={uiStore.state.referencesPanelVisible}
+				onClose={() => uiStore.toggleReferencesPanel()}
 			/>
 
 			<Show when={!uiStore.isDetached("git")}>

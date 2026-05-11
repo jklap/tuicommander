@@ -28,7 +28,9 @@ import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
 import { repositoriesStore } from "../../stores/repositories";
+import { uiStore } from "../../stores/ui";
 import { openFileAction } from "../../utils/filePreview";
+import { findReferences } from "../ReferencesPanel";
 import { isAbsolutePath } from "../../utils/pathUtils";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import e from "../shared/editor-header.module.css";
@@ -45,6 +47,20 @@ export interface CodeEditorTabProps {
 	initialLine?: number; // Line to scroll to on first mount (1-based)
 	externalEditable?: boolean; // External files start unlocked when true, locked (but unlockable) when false
 	onClose?: () => void;
+}
+
+function wordAtCursor(view: EditorView): string | null {
+	const pos = view.state.selection.main.head;
+	const line = view.state.doc.lineAt(pos);
+	const text = line.text;
+	const col = pos - line.from;
+	const wordChars = /[\w$]/;
+	let start = col;
+	let end = col;
+	while (start > 0 && wordChars.test(text[start - 1])) start--;
+	while (end < text.length && wordChars.test(text[end])) end++;
+	const word = text.slice(start, end);
+	return word || null;
 }
 
 /** Large file threshold — skip syntax highlighting above this size */
@@ -259,6 +275,22 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		}),
 	);
 
+	// Shift+F12 → find references for word under cursor
+	createExtension(
+		keymap.of([
+			{
+				key: "Shift-F12",
+				run(view: EditorView) {
+					const word = wordAtCursor(view);
+					if (!word) return false;
+					void findReferences(props.repoPath, fsRoot(), word);
+					uiStore.setReferencesPanelVisible(true);
+					return true;
+				},
+			},
+		]),
+	);
+
 	// Reactive language extension
 	createExtension((): Extension => langSupport() ?? []);
 
@@ -442,6 +474,17 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 							navigator.clipboard
 								.writeText(shortenHomePath(fullPath))
 								.catch((err) => appLogger.error("app", "Failed to copy path", err));
+						},
+					},
+					{
+						label: "Find References (Shift+F12)",
+						action: () => {
+							const view = editorView();
+							if (!view) return;
+							const word = wordAtCursor(view);
+							if (!word) return;
+							void findReferences(props.repoPath, fsRoot(), word);
+							uiStore.setReferencesPanelVisible(true);
 						},
 					},
 				]}
