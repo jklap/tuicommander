@@ -48,7 +48,7 @@ vi.mock("../../../stores/ui", () => ({
 }));
 
 vi.mock("../../../themes", () => ({
-	THEME_NAMES: { "vscode-dark": "VS Code Dark" },
+	getThemeNames: () => ({ "vscode-dark": "VS Code Dark" }),
 }));
 
 import { AppearanceTab } from "../../../components/SettingsPanel/tabs/AppearanceTab";

@@ -16,7 +16,7 @@ vi.mock("../../../stores/repositories", () => ({
 }));
 
 vi.mock("../../../themes", () => ({
-	THEME_NAMES: {},
+	getThemeNames: () => ({}),
 }));
 
 import { PRESET_COLORS } from "../../../components/SettingsPanel/tabs/AppearanceTab";

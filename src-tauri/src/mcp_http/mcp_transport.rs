@@ -3351,6 +3351,7 @@ mod tests {
             git_cache: crate::state::GitCacheState::new(),
             repo_watchers: dashmap::DashMap::new(),
             dir_watchers: dashmap::DashMap::new(),
+            theme_watcher: parking_lot::Mutex::new(None),
             http_client: reqwest::Client::new(),
             github_token: parking_lot::RwLock::new(None),
             github_token_source: parking_lot::RwLock::new(Default::default()),

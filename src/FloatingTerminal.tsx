@@ -6,7 +6,7 @@ import { isMacOS } from "./platform";
 import { appLogger } from "./stores/appLogger";
 import { settingsStore } from "./stores/settings";
 import { terminalsStore } from "./stores/terminals";
-import { applyAppTheme, applyFontFamily } from "./themes";
+import { applyAppTheme, applyFontFamily, listenForThemeChanges, loadThemes } from "./themes";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 32;
@@ -59,10 +59,12 @@ export const FloatingTerminal: Component = () => {
 		// that is normally removed by useAppInit in the main window).
 		document.getElementById("splash")?.remove();
 
-		// Bootstrap settings so theme and fonts are available
+		// Bootstrap settings and themes so theme and fonts are available
 		await settingsStore
 			.hydrate()
 			.catch((e) => appLogger.warn("settings", "Failed to hydrate floating terminal settings", { error: String(e) }));
+		await loadThemes();
+		listenForThemeChanges();
 
 		// Set window title
 		try {

@@ -59,7 +59,7 @@ vi.mock("../../../stores/updater", () => ({
 }));
 
 vi.mock("../../../themes", () => ({
-	THEME_NAMES: { dark: "Dark" },
+	getThemeNames: () => ({ dark: "Dark" }),
 }));
 
 vi.mock("../../../stores/repoDefaults", () => ({

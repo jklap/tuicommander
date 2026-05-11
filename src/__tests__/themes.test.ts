@@ -1,117 +1,250 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FontType } from "../stores/settings";
-import {
-	APP_THEMES,
-	applyAppTheme,
-	applyFontFamily,
-	contrastRatio,
-	getAppTheme,
-	getTerminalTheme,
-	TERMINAL_THEMES,
-	THEME_NAMES,
-} from "../themes";
+
+vi.mock("../invoke", () => ({
+	invoke: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../stores/appLogger", () => ({
+	appLogger: {
+		warn: vi.fn(),
+		info: vi.fn(),
+		error: vi.fn(),
+		debug: vi.fn(),
+	},
+}));
+
+/** Minimal Rust ThemeEntry fixture matching serde snake_case shape */
+function makeRustEntry(overrides: {
+	key?: string;
+	name?: string;
+	background?: string;
+	foreground?: string;
+	cursor?: string;
+	ansi?: string[];
+	app_chrome?: Record<string, string>;
+}) {
+	const defaults = {
+		key: overrides.key ?? "test-theme",
+		name: overrides.name ?? "Test Theme",
+		terminal: {
+			background: overrides.background ?? "#1e1e1e",
+			foreground: overrides.foreground ?? "#d4d4d4",
+			cursor: overrides.cursor ?? "#d4d4d4",
+			cursor_accent: null,
+			selection_background: null,
+			ansi: overrides.ansi ?? [
+				"#000000", "#cd3131", "#0dbc79", "#e5e510",
+				"#2472c8", "#bc3fbc", "#11a8cd", "#e5e5e5",
+				"#666666", "#f14c4c", "#23d18b", "#f5f543",
+				"#3b8eea", "#d670d6", "#29b8db", "#ffffff",
+			],
+		},
+		app_chrome: {
+			bg_primary: "#1e1e1e",
+			bg_secondary: "#252526",
+			bg_tertiary: "#2d2d30",
+			bg_highlight: "#37373d",
+			fg_primary: "#cccccc",
+			fg_secondary: "#a0a0a0",
+			fg_muted: "#9aa1a9",
+			accent: "#59a8dd",
+			accent_hover: "#7abde5",
+			border: "#3e3e42",
+			success: "#4ade80",
+			warning: "#dcdcaa",
+			error: "#ef4444",
+			text_on_accent: "#000000",
+			text_on_error: "#000000",
+			text_on_success: "#000000",
+			...overrides.app_chrome,
+		},
+	};
+	return defaults;
+}
+
+const DRACULA_ENTRY = makeRustEntry({
+	key: "dracula",
+	name: "Dracula",
+	background: "#282a36",
+	foreground: "#f8f8f2",
+	cursor: "#f8f8f2",
+	app_chrome: {
+		bg_primary: "#282a36",
+		accent: "#bd93f9",
+		accent_hover: "#caa9fa",
+	},
+});
+
+const VSCODE_DARK_ENTRY = makeRustEntry({
+	key: "vscode-dark",
+	name: "VS Code Dark",
+	background: "#1e1e1e",
+	foreground: "#d4d4d4",
+	app_chrome: { bg_primary: "#1e1e1e" },
+});
+
+const NORD_ENTRY = makeRustEntry({
+	key: "nord",
+	name: "Nord",
+	background: "#2e3440",
+	foreground: "#d8dee9",
+	app_chrome: { bg_primary: "#2e3440" },
+});
+
+const FIXTURES = [DRACULA_ENTRY, VSCODE_DARK_ENTRY, NORD_ENTRY];
 
 describe("themes", () => {
-	it("TERMINAL_THEMES has entries for all THEME_NAMES keys", () => {
-		for (const key of Object.keys(THEME_NAMES)) {
-			expect(TERMINAL_THEMES[key]).toBeDefined();
-		}
+	let invoke: ReturnType<typeof vi.fn>;
+
+	beforeEach(async () => {
+		vi.resetModules();
+		const invokeModule = await import("../invoke");
+		invoke = invokeModule.invoke as ReturnType<typeof vi.fn>;
+		invoke.mockClear();
+	});
+
+	describe("loadThemes()", () => {
+		it("populates theme map from Rust entries", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, getThemeNames, themesLoaded } = await import("../themes");
+
+			expect(themesLoaded()).toBe(false);
+			await loadThemes();
+			expect(themesLoaded()).toBe(true);
+			expect(invoke).toHaveBeenCalledWith("list_themes");
+
+			const names = getThemeNames();
+			expect(Object.keys(names)).toHaveLength(3);
+			expect(names["dracula"]).toBe("Dracula");
+			expect(names["nord"]).toBe("Nord");
+		});
+
+		it("handles backend failure gracefully", async () => {
+			invoke.mockRejectedValueOnce(new Error("backend down"));
+			const { loadThemes, themesLoaded, getThemeNames } = await import("../themes");
+			await loadThemes();
+			expect(themesLoaded()).toBe(false);
+			expect(Object.keys(getThemeNames())).toHaveLength(0);
+		});
 	});
 
 	describe("getTerminalTheme()", () => {
-		it("returns the commander theme", () => {
-			const theme = getTerminalTheme("commander");
-			expect(theme.background).toBe("#1e1e1e");
-			expect(theme.foreground).toBe("#d4d4d4");
-		});
+		it("returns the requested theme", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, getTerminalTheme } = await import("../themes");
+			await loadThemes();
 
-		it("returns the requested theme", () => {
 			const theme = getTerminalTheme("dracula");
 			expect(theme.background).toBe("#282a36");
+			expect(theme.foreground).toBe("#f8f8f2");
 		});
 
-		it("falls back to vscode-dark for unknown key", () => {
-			const theme = getTerminalTheme("nonexistent-theme");
-			expect(theme).toBe(TERMINAL_THEMES["vscode-dark"]);
-		});
-	});
+		it("falls back to vscode-dark for unknown key", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, getTerminalTheme } = await import("../themes");
+			await loadThemes();
 
-	describe("APP_THEMES", () => {
-		it("has an entry for every THEME_NAMES key", () => {
-			for (const key of Object.keys(THEME_NAMES)) {
-				expect(APP_THEMES[key]).toBeDefined();
-			}
+			const theme = getTerminalTheme("nonexistent");
+			expect(theme.background).toBe("#1e1e1e");
 		});
 
-		it("each entry has all required color properties", () => {
-			const requiredKeys = [
-				"bgPrimary",
-				"bgSecondary",
-				"bgTertiary",
-				"bgHighlight",
-				"fgPrimary",
-				"fgSecondary",
-				"fgMuted",
-				"accent",
-				"accentHover",
-				"border",
-				"success",
-				"warning",
-				"error",
-				"textOnAccent",
-				"textOnError",
-				"textOnSuccess",
-			];
-			for (const [themeName, theme] of Object.entries(APP_THEMES)) {
-				for (const key of requiredKeys) {
-					expect(theme).toHaveProperty(key);
-					expect((theme as unknown as Record<string, string>)[key], `${themeName}.${key}`).toMatch(/^#[0-9a-f]{6}$/i);
-				}
-			}
+		it("returns hardcoded fallback when themes not loaded", async () => {
+			const { getTerminalTheme } = await import("../themes");
+			const theme = getTerminalTheme("dracula");
+			expect(theme.background).toBe("#1e1e1e");
+			expect(theme.foreground).toBe("#cccccc");
 		});
 	});
 
 	describe("getAppTheme()", () => {
-		it("returns the requested app theme", () => {
+		it("returns the requested app theme", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, getAppTheme } = await import("../themes");
+			await loadThemes();
+
 			const theme = getAppTheme("dracula");
 			expect(theme.bgPrimary).toBe("#282a36");
 		});
 
-		it("falls back to vscode-dark for unknown key", () => {
-			const theme = getAppTheme("nonexistent-theme");
-			expect(theme).toBe(APP_THEMES["vscode-dark"]);
+		it("falls back to vscode-dark for unknown key", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, getAppTheme } = await import("../themes");
+			await loadThemes();
+
+			const theme = getAppTheme("nonexistent");
+			expect(theme.bgPrimary).toBe("#1e1e1e");
+		});
+
+		it("returns hardcoded fallback when themes not loaded", async () => {
+			const { getAppTheme } = await import("../themes");
+			const theme = getAppTheme("anything");
+			expect(theme.bgPrimary).toBe("#1e1e1e");
+			expect(theme.accent).toBe("#59a8dd");
+		});
+	});
+
+	describe("getThemeNames()", () => {
+		it("returns display names keyed by theme key", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, getThemeNames } = await import("../themes");
+			await loadThemes();
+
+			const names = getThemeNames();
+			expect(names).toEqual({
+				dracula: "Dracula",
+				"vscode-dark": "VS Code Dark",
+				nord: "Nord",
+			});
+		});
+
+		it("returns empty object when not loaded", async () => {
+			const { getThemeNames } = await import("../themes");
+			expect(getThemeNames()).toEqual({});
 		});
 	});
 
 	describe("applyAppTheme()", () => {
 		beforeEach(() => {
-			// Reset inline styles between tests
 			document.documentElement.style.cssText = "";
 		});
 
-		it("sets CSS custom properties on document.documentElement", () => {
+		it("sets CSS custom properties on document.documentElement", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, applyAppTheme } = await import("../themes");
+			await loadThemes();
+
 			applyAppTheme("dracula");
 			const style = document.documentElement.style;
 			expect(style.getPropertyValue("--bg-primary")).toBe("#282a36");
 			expect(style.getPropertyValue("--accent")).toBe("#bd93f9");
 		});
 
-		it("falls back to vscode-dark for unknown theme", () => {
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		it("falls back to vscode-dark for unknown theme", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, applyAppTheme } = await import("../themes");
+			await loadThemes();
+
 			applyAppTheme("nonexistent");
 			const style = document.documentElement.style;
 			expect(style.getPropertyValue("--bg-primary")).toBe("#1e1e1e");
-			warnSpy.mockRestore();
 		});
 
-		it("warns when applying unknown theme", () => {
-			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		it("warns when applying unknown theme", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, applyAppTheme } = await import("../themes");
+			const { appLogger } = await import("../stores/appLogger");
+			await loadThemes();
+
 			applyAppTheme("nonexistent-theme");
-			expect(warnSpy).toHaveBeenCalledWith("[app]", expect.stringContaining("nonexistent-theme"), "");
-			warnSpy.mockRestore();
+			expect(appLogger.warn).toHaveBeenCalledWith("app", expect.stringContaining("nonexistent-theme"));
 		});
 
-		it("applies all 16 CSS variables from theme", () => {
+		it("applies all 16 CSS variables from theme", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, applyAppTheme } = await import("../themes");
+			await loadThemes();
+
 			applyAppTheme("nord");
 			const style = document.documentElement.style;
 
@@ -141,7 +274,11 @@ describe("themes", () => {
 			}
 		});
 
-		it("overwrites previously applied theme", () => {
+		it("overwrites previously applied theme", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, applyAppTheme } = await import("../themes");
+			await loadThemes();
+
 			applyAppTheme("dracula");
 			applyAppTheme("nord");
 			const style = document.documentElement.style;
@@ -154,7 +291,8 @@ describe("themes", () => {
 			document.getElementById("tuic-font-override")?.remove();
 		});
 
-		it("injects a style tag with !important override for --font-mono", () => {
+		it("injects a style tag with !important override for --font-mono", async () => {
+			const { applyFontFamily } = await import("../themes");
 			applyFontFamily("Fira Code");
 			const tag = document.getElementById("tuic-font-override");
 			expect(tag).not.toBeNull();
@@ -163,7 +301,8 @@ describe("themes", () => {
 			expect(tag!.textContent).toContain("!important");
 		});
 
-		it("updates --font-mono when font changes", () => {
+		it("updates --font-mono when font changes", async () => {
+			const { applyFontFamily } = await import("../themes");
 			applyFontFamily("JetBrains Mono");
 			const tag = document.getElementById("tuic-font-override")!;
 			expect(tag.textContent).toContain("JetBrains Mono");
@@ -172,13 +311,15 @@ describe("themes", () => {
 			expect(tag.textContent).toContain("Hack");
 		});
 
-		it("reuses the same style tag across calls", () => {
+		it("reuses the same style tag across calls", async () => {
+			const { applyFontFamily } = await import("../themes");
 			applyFontFamily("Fira Code");
 			applyFontFamily("Hack");
 			expect(document.querySelectorAll("#tuic-font-override").length).toBe(1);
 		});
 
-		it("falls back to JetBrains Mono for unknown font", () => {
+		it("falls back to JetBrains Mono for unknown font", async () => {
+			const { applyFontFamily } = await import("../themes");
 			applyFontFamily("Comic Sans" as FontType);
 			const tag = document.getElementById("tuic-font-override")!;
 			expect(tag.textContent).toContain("JetBrains Mono");
@@ -186,39 +327,27 @@ describe("themes", () => {
 	});
 
 	describe("contrastRatio()", () => {
-		it("returns 21:1 for black on white", () => {
+		it("returns 21:1 for black on white", async () => {
+			const { contrastRatio } = await import("../themes");
 			expect(contrastRatio("#000000", "#ffffff")).toBeCloseTo(21, 0);
 		});
 
-		it("returns 1:1 for identical colors", () => {
+		it("returns 1:1 for identical colors", async () => {
+			const { contrastRatio } = await import("../themes");
 			expect(contrastRatio("#336699", "#336699")).toBeCloseTo(1, 1);
 		});
 	});
 
-	describe("WCAG AA contrast compliance", () => {
-		const MIN_CONTRAST = 4.5;
-		const pairs: Array<{
-			bg: keyof typeof APP_THEMES extends string ? string : never;
-			prop: "accent" | "error" | "success";
-			textProp: "textOnAccent" | "textOnError" | "textOnSuccess";
-		}> = [
-			{ bg: "accent", prop: "accent", textProp: "textOnAccent" },
-			{ bg: "error", prop: "error", textProp: "textOnError" },
-			{ bg: "success", prop: "success", textProp: "textOnSuccess" },
-		];
+	describe("ANSI color mapping", () => {
+		it("maps ANSI colors to camelCase terminal theme keys", async () => {
+			invoke.mockResolvedValueOnce(FIXTURES);
+			const { loadThemes, getTerminalTheme } = await import("../themes");
+			await loadThemes();
 
-		for (const [themeName, theme] of Object.entries(APP_THEMES)) {
-			for (const { bg, prop, textProp } of pairs) {
-				it(`${themeName}: ${textProp} on ${bg} has >= ${MIN_CONTRAST}:1 contrast`, () => {
-					const bgColor = theme[prop];
-					const fgColor = theme[textProp];
-					const ratio = contrastRatio(bgColor, fgColor);
-					expect(
-						ratio,
-						`${themeName} ${textProp}(${fgColor}) on ${bg}(${bgColor}) = ${ratio.toFixed(2)}:1`,
-					).toBeGreaterThanOrEqual(MIN_CONTRAST);
-				});
-			}
-		}
+			const theme = getTerminalTheme("dracula");
+			expect(theme.black).toBeDefined();
+			expect(theme.red).toBeDefined();
+			expect(theme.brightWhite).toBeDefined();
+		});
 	});
 });

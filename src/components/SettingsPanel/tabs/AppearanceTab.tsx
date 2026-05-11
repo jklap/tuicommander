@@ -5,7 +5,7 @@ import { repositoriesStore } from "../../../stores/repositories";
 import type { FontType } from "../../../stores/settings";
 import { FONT_FAMILIES, settingsStore } from "../../../stores/settings";
 import { uiStore } from "../../../stores/ui";
-import { THEME_NAMES } from "../../../themes";
+import { getThemeNames } from "../../../themes";
 import { UiLegend } from "../../HelpPanel/UiLegend";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
 import { SettingSelect, SettingSlider } from "../SettingFields";
@@ -96,7 +96,7 @@ const GroupSettingsItem: Component<{
 	);
 };
 
-const themeOptions = Object.entries(THEME_NAMES).map(([value, label]) => ({ value, label }));
+const themeOptions = () => Object.entries(getThemeNames()).map(([value, label]) => ({ value, label }));
 const fontOptions = Object.keys(FONT_FAMILIES).map((value) => ({ value, label: value }));
 
 export const AppearanceTab: Component = () => {
@@ -111,7 +111,7 @@ export const AppearanceTab: Component = () => {
 				label={t("appearance.label.terminalTheme", "Terminal Theme")}
 				value={settingsStore.state.theme}
 				onChange={(v) => settingsStore.setTheme(v)}
-				options={themeOptions}
+				options={themeOptions()}
 				hint={t("appearance.hint.terminalTheme", "Color theme for terminal output and app chrome")}
 			/>
 

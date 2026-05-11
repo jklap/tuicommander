@@ -1,6 +1,7 @@
 import { invoke, listen } from "../invoke";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
+import { listenForThemeChanges, loadThemes } from "../themes";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { mdTabsStore } from "../stores/mdTabs";
@@ -152,6 +153,10 @@ export async function initApp(deps: AppInitDeps) {
 		appLogger.error("app", "Store hydration failed", err);
 		deps.setStatusInfo("Warning: store(s) failed to load");
 	}
+
+	// Load themes from Rust backend (must complete before applyAppTheme fires)
+	await loadThemes();
+	listenForThemeChanges();
 
 	// Load .tuic.json local configs for all repos (fire-and-forget, non-blocking)
 	for (const repoPath of repositoriesStore.getPaths()) {

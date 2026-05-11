@@ -33,6 +33,8 @@ mod global_hotkey;
 mod input_line_buffer;
 pub(crate) mod llm_api;
 pub(crate) mod mcp_http;
+pub(crate) mod mdkb_client;
+pub(crate) mod mdkb_daemon;
 #[allow(dead_code)] // Incremental build: wired in story 1196+ (OAuth flow/token/registry)
 pub(crate) mod mcp_oauth;
 pub(crate) mod mcp_proxy;
@@ -71,6 +73,7 @@ mod tab_shortcut;
 pub(crate) mod tailscale;
 pub(crate) mod terminal_grid;
 pub(crate) mod text_rank;
+pub(crate) mod themes;
 pub(crate) mod tool_search;
 #[cfg(feature = "desktop")]
 mod tuic_cli;
@@ -1127,6 +1130,13 @@ pub fn run() {
                 tab_shortcut::install(app.handle().clone());
             }
 
+            // Seed built-in themes on first run, then start hot-reload watcher
+            let themes_dir = config::config_dir().join("themes");
+            if let Err(e) = themes::seed_builtin_themes(&themes_dir) {
+                tracing::warn!("Failed to seed built-in themes: {e}");
+            }
+            themes::start_theme_watcher(themes_dir, app_state);
+
             // Start plugin directory watcher for hot-reload
             plugins::start_plugin_watcher(app.handle());
 
@@ -1237,6 +1247,7 @@ pub fn run() {
             pty::debug_agent_detection,
             load_config,
             save_config,
+            themes::list_themes,
             hash_password,
             agent::open_in_app,
             agent::detect_claude_binary,
