@@ -97,6 +97,7 @@ import { fileBrowserPanelAdapter } from "./panelAdapters/fileBrowser";
 import { gitPanelAdapter } from "./panelAdapters/git";
 import { markdownPanelAdapter } from "./panelAdapters/markdown";
 import { notesPanelAdapter } from "./panelAdapters/notes";
+import { outlinePanelAdapter } from "./panelAdapters/outline";
 import { detachPanel, panelRegistry, registerPanel, renderPanelMode, togglePanel } from "./panelRouter";
 import { applyPlatformClass, getModifierSymbol, isQuickSwitcherActive, isQuickSwitcherRelease } from "./platform";
 import { initPlugins } from "./plugins";
@@ -171,6 +172,7 @@ registerPanel(gitPanelAdapter);
 registerPanel(fileBrowserPanelAdapter);
 registerPanel(markdownPanelAdapter);
 registerPanel(notesPanelAdapter);
+registerPanel(outlinePanelAdapter);
 
 const App: Component = () => {
 	// Detached panel mode: full-viewport single panel.
@@ -1959,6 +1961,9 @@ const App: Component = () => {
 					break;
 				case "file-browser":
 					uiStore.toggleFileBrowserPanel();
+					break;
+				case "outline-panel":
+					uiStore.toggleOutlinePanel();
 					break;
 
 				// Go
