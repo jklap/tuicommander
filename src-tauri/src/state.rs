@@ -843,6 +843,8 @@ pub struct AppState {
     pub(crate) dir_watchers: DashMap<String, crate::repo_watcher::WatchHandle>,
     /// File watcher for the themes/ directory — kept alive for the app lifetime.
     pub(crate) theme_watcher: parking_lot::Mutex<Option<notify::RecommendedWatcher>>,
+    /// Shared mdkb daemon client for AST navigation (outline, goto-def, references).
+    pub(crate) mdkb_daemon: crate::mdkb_daemon::SharedMdkbDaemon,
     /// Shared async HTTP client for GitHub API requests.
     pub(crate) http_client: reqwest::Client,
     /// GitHub API token — updated on fallback when a 401 triggers candidate rotation
@@ -1092,6 +1094,7 @@ impl AppState {
             repo_watchers: DashMap::new(),
             dir_watchers: DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
+            mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
             http_client: reqwest::Client::new(),
             github_token: parking_lot::RwLock::new(None),
             github_token_source: parking_lot::RwLock::new(Default::default()),
@@ -2995,6 +2998,7 @@ mod tests {
             repo_watchers: dashmap::DashMap::new(),
             dir_watchers: dashmap::DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
+            mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
             http_client: reqwest::Client::new(),
             github_token: parking_lot::RwLock::new(None),
             github_token_source: parking_lot::RwLock::new(Default::default()),

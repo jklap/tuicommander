@@ -3352,6 +3352,7 @@ mod tests {
             repo_watchers: dashmap::DashMap::new(),
             dir_watchers: dashmap::DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
+            mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
             http_client: reqwest::Client::new(),
             github_token: parking_lot::RwLock::new(None),
             github_token_source: parking_lot::RwLock::new(Default::default()),

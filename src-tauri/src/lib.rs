@@ -34,6 +34,7 @@ mod input_line_buffer;
 pub(crate) mod llm_api;
 pub(crate) mod mcp_http;
 pub(crate) mod mdkb_client;
+pub(crate) mod mdkb_commands;
 pub(crate) mod mdkb_daemon;
 #[allow(dead_code)] // Incremental build: wired in story 1196+ (OAuth flow/token/registry)
 pub(crate) mod mcp_oauth;
@@ -1248,6 +1249,10 @@ pub fn run() {
             load_config,
             save_config,
             themes::list_themes,
+            mdkb_commands::mdkb_outline,
+            mdkb_commands::mdkb_goto_definition,
+            mdkb_commands::mdkb_references,
+            mdkb_commands::mdkb_status,
             hash_password,
             agent::open_in_app,
             agent::detect_claude_binary,
