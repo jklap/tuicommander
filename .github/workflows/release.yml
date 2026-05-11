@@ -211,9 +211,17 @@ jobs:
         run: |
           ./target/${{ matrix.target }}/release/tuic-remote &
           PID=$!
-          sleep 2
-          curl -sf http://127.0.0.1:9877/health | grep -q '"ok":true'
-          kill $PID
+          for i in $(seq 1 15); do
+            if curl -sf http://127.0.0.1:9877/health | grep -q '"ok":true'; then
+              echo "Health check passed after ${i}s"
+              kill $PID
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Health check failed after 15s"
+          kill $PID 2>/dev/null
+          exit 1
 
       - name: Smoke test (macOS)
         if: startsWith(matrix.platform, 'macos-')
@@ -221,9 +229,17 @@ jobs:
         run: |
           ./target/${{ matrix.target }}/release/tuic-remote &
           PID=$!
-          sleep 2
-          curl -sf http://127.0.0.1:9877/health | grep -q '"ok":true'
-          kill $PID
+          for i in $(seq 1 15); do
+            if curl -sf http://127.0.0.1:9877/health | grep -q '"ok":true'; then
+              echo "Health check passed after ${i}s"
+              kill $PID
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Health check failed after 15s"
+          kill $PID 2>/dev/null
+          exit 1
 
       - name: Smoke test (Windows)
         if: matrix.platform == 'windows-latest'
@@ -231,10 +247,20 @@ jobs:
         shell: pwsh
         run: |
           $proc = Start-Process -FilePath "target/${{ matrix.target }}/release/tuic-remote.exe" -PassThru -NoNewWindow
-          Start-Sleep -Seconds 3
-          $resp = Invoke-WebRequest -Uri "http://127.0.0.1:9877/health" -UseBasicParsing
-          if ($resp.Content -notmatch '"ok":true') { throw "Health check failed: $($resp.Content)" }
-          Stop-Process -Id $proc.Id -Force
+          for ($i = 1; $i -le 15; $i++) {
+            try {
+              $resp = Invoke-WebRequest -Uri "http://127.0.0.1:9877/health" -UseBasicParsing -ErrorAction Stop
+              if ($resp.Content -match '"ok":true') {
+                Write-Host "Health check passed after ${i}s"
+                Stop-Process -Id $proc.Id -Force
+                exit 0
+              }
+            } catch {}
+            Start-Sleep -Seconds 1
+          }
+          Write-Host "Health check failed after 15s"
+          Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+          exit 1
 
       - name: Upload to release
         env:
