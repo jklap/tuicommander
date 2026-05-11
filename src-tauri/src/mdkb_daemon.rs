@@ -56,7 +56,9 @@ impl MdkbDaemon {
     }
 
     async fn spawn_daemon(&self) -> Result<()> {
-        let bin = self.binary_path.as_ref()
+        let bin = self
+            .binary_path
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("mdkb binary not found in trusted directories"))?;
 
         Command::new(bin)
@@ -68,17 +70,19 @@ impl MdkbDaemon {
         let deadline = tokio::time::Instant::now() + DAEMON_SPAWN_TIMEOUT;
 
         while tokio::time::Instant::now() < deadline {
-            if let Ok(mut c) = MdkbClient::connect().await {
-                if c.ping().await.is_ok() {
-                    return Ok(());
-                }
+            if let Ok(mut c) = MdkbClient::connect().await
+                && c.ping().await.is_ok()
+            {
+                return Ok(());
             }
             tokio::time::sleep(POLL_INTERVAL).await;
         }
 
-        bail!("mdkb daemon did not start within {}s", DAEMON_SPAWN_TIMEOUT.as_secs());
+        bail!(
+            "mdkb daemon did not start within {}s",
+            DAEMON_SPAWN_TIMEOUT.as_secs()
+        );
     }
-
 }
 
 pub type SharedMdkbDaemon = Mutex<MdkbDaemon>;

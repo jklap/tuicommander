@@ -1595,70 +1595,179 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		};
 		switch (cp) {
 			// Lower-left family
-			case 0x1fb3c: poly([0,2/3],[0,1],[1/2,1]); return true;
-			case 0x1fb3d: poly([0,2/3],[0,1],[1,1]); return true;
-			case 0x1fb3e: poly([0,1/3],[0,1],[1/2,1]); return true;
-			case 0x1fb3f: poly([0,1/3],[0,1],[1,1]); return true;
-			case 0x1fb40: poly([0,0],[0,1],[1/2,1]); return true;
+			case 0x1fb3c:
+				poly([0, 2 / 3], [0, 1], [1 / 2, 1]);
+				return true;
+			case 0x1fb3d:
+				poly([0, 2 / 3], [0, 1], [1, 1]);
+				return true;
+			case 0x1fb3e:
+				poly([0, 1 / 3], [0, 1], [1 / 2, 1]);
+				return true;
+			case 0x1fb3f:
+				poly([0, 1 / 3], [0, 1], [1, 1]);
+				return true;
+			case 0x1fb40:
+				poly([0, 0], [0, 1], [1 / 2, 1]);
+				return true;
 			// Lower-right/large family
-			case 0x1fb41: poly([1/2,0],[1,0],[1,1],[0,1],[0,1/3]); return true;
-			case 0x1fb42: poly([1,0],[1,1],[0,1],[0,1/3]); return true;
-			case 0x1fb43: poly([1/2,0],[1,0],[1,1],[0,1],[0,2/3]); return true;
-			case 0x1fb44: poly([1,0],[1,1],[0,1],[0,2/3]); return true;
-			case 0x1fb45: poly([1/2,0],[1,0],[1,1],[0,1]); return true;
-			case 0x1fb46: poly([0,2/3],[1,1/3],[1,1],[0,1]); return true;
-			case 0x1fb47: poly([1/2,1],[1,2/3],[1,1]); return true;
-			case 0x1fb48: poly([0,1],[1,2/3],[1,1]); return true;
-			case 0x1fb49: poly([1/2,1],[1,1/3],[1,1]); return true;
-			case 0x1fb4a: poly([0,1],[1,1/3],[1,1]); return true;
-			case 0x1fb4b: poly([1/2,1],[1,0],[1,1]); return true;
+			case 0x1fb41:
+				poly([1 / 2, 0], [1, 0], [1, 1], [0, 1], [0, 1 / 3]);
+				return true;
+			case 0x1fb42:
+				poly([1, 0], [1, 1], [0, 1], [0, 1 / 3]);
+				return true;
+			case 0x1fb43:
+				poly([1 / 2, 0], [1, 0], [1, 1], [0, 1], [0, 2 / 3]);
+				return true;
+			case 0x1fb44:
+				poly([1, 0], [1, 1], [0, 1], [0, 2 / 3]);
+				return true;
+			case 0x1fb45:
+				poly([1 / 2, 0], [1, 0], [1, 1], [0, 1]);
+				return true;
+			case 0x1fb46:
+				poly([0, 2 / 3], [1, 1 / 3], [1, 1], [0, 1]);
+				return true;
+			case 0x1fb47:
+				poly([1 / 2, 1], [1, 2 / 3], [1, 1]);
+				return true;
+			case 0x1fb48:
+				poly([0, 1], [1, 2 / 3], [1, 1]);
+				return true;
+			case 0x1fb49:
+				poly([1 / 2, 1], [1, 1 / 3], [1, 1]);
+				return true;
+			case 0x1fb4a:
+				poly([0, 1], [1, 1 / 3], [1, 1]);
+				return true;
+			case 0x1fb4b:
+				poly([1 / 2, 1], [1, 0], [1, 1]);
+				return true;
 			// Lower-left mirror family
-			case 0x1fb4c: poly([0,0],[1/2,0],[1,1/3],[1,1],[0,1]); return true;
-			case 0x1fb4d: poly([0,0],[1,1/3],[1,1],[0,1]); return true;
-			case 0x1fb4e: poly([0,0],[1/2,0],[1,2/3],[1,1],[0,1]); return true;
-			case 0x1fb4f: poly([0,0],[1,2/3],[1,1],[0,1]); return true;
-			case 0x1fb50: poly([0,0],[1/2,0],[1,1],[0,1]); return true;
-			case 0x1fb51: poly([0,1/3],[1,2/3],[1,1],[0,1]); return true;
+			case 0x1fb4c:
+				poly([0, 0], [1 / 2, 0], [1, 1 / 3], [1, 1], [0, 1]);
+				return true;
+			case 0x1fb4d:
+				poly([0, 0], [1, 1 / 3], [1, 1], [0, 1]);
+				return true;
+			case 0x1fb4e:
+				poly([0, 0], [1 / 2, 0], [1, 2 / 3], [1, 1], [0, 1]);
+				return true;
+			case 0x1fb4f:
+				poly([0, 0], [1, 2 / 3], [1, 1], [0, 1]);
+				return true;
+			case 0x1fb50:
+				poly([0, 0], [1 / 2, 0], [1, 1], [0, 1]);
+				return true;
+			case 0x1fb51:
+				poly([0, 1 / 3], [1, 2 / 3], [1, 1], [0, 1]);
+				return true;
 			// Upper-right diagonal family
-			case 0x1fb52: poly([0,0],[1,0],[1,1],[1/2,1],[0,2/3]); return true;
-			case 0x1fb53: poly([0,0],[1,0],[1,1],[0,2/3]); return true;
-			case 0x1fb54: poly([0,0],[1,0],[1,1],[1/2,1],[0,1/3]); return true;
-			case 0x1fb55: poly([0,0],[1,0],[1,1],[0,1/3]); return true;
-			case 0x1fb56: poly([0,0],[1,0],[1,1],[1/2,1]); return true;
+			case 0x1fb52:
+				poly([0, 0], [1, 0], [1, 1], [1 / 2, 1], [0, 2 / 3]);
+				return true;
+			case 0x1fb53:
+				poly([0, 0], [1, 0], [1, 1], [0, 2 / 3]);
+				return true;
+			case 0x1fb54:
+				poly([0, 0], [1, 0], [1, 1], [1 / 2, 1], [0, 1 / 3]);
+				return true;
+			case 0x1fb55:
+				poly([0, 0], [1, 0], [1, 1], [0, 1 / 3]);
+				return true;
+			case 0x1fb56:
+				poly([0, 0], [1, 0], [1, 1], [1 / 2, 1]);
+				return true;
 			// Upper-left family
-			case 0x1fb57: poly([0,0],[1/2,0],[0,1/3]); return true;
-			case 0x1fb58: poly([0,0],[1,0],[0,1/3]); return true;
-			case 0x1fb59: poly([0,0],[1/2,0],[0,2/3]); return true;
-			case 0x1fb5a: poly([0,0],[1,0],[0,2/3]); return true;
-			case 0x1fb5b: poly([0,0],[1/2,0],[0,1]); return true;
-			case 0x1fb5c: poly([0,0],[1,0],[1,1/3],[0,2/3]); return true;
-			case 0x1fb5d: poly([0,0],[1,0],[1,2/3],[1/2,1],[0,1]); return true;
-			case 0x1fb5e: poly([0,0],[1,0],[1,2/3],[0,1]); return true;
-			case 0x1fb5f: poly([0,0],[1,0],[1,1/3],[1/2,1],[0,1]); return true;
-			case 0x1fb60: poly([0,0],[1,0],[1,1/3],[0,1]); return true;
-			case 0x1fb61: poly([0,0],[1,0],[1/2,1],[0,1]); return true;
+			case 0x1fb57:
+				poly([0, 0], [1 / 2, 0], [0, 1 / 3]);
+				return true;
+			case 0x1fb58:
+				poly([0, 0], [1, 0], [0, 1 / 3]);
+				return true;
+			case 0x1fb59:
+				poly([0, 0], [1 / 2, 0], [0, 2 / 3]);
+				return true;
+			case 0x1fb5a:
+				poly([0, 0], [1, 0], [0, 2 / 3]);
+				return true;
+			case 0x1fb5b:
+				poly([0, 0], [1 / 2, 0], [0, 1]);
+				return true;
+			case 0x1fb5c:
+				poly([0, 0], [1, 0], [1, 1 / 3], [0, 2 / 3]);
+				return true;
+			case 0x1fb5d:
+				poly([0, 0], [1, 0], [1, 2 / 3], [1 / 2, 1], [0, 1]);
+				return true;
+			case 0x1fb5e:
+				poly([0, 0], [1, 0], [1, 2 / 3], [0, 1]);
+				return true;
+			case 0x1fb5f:
+				poly([0, 0], [1, 0], [1, 1 / 3], [1 / 2, 1], [0, 1]);
+				return true;
+			case 0x1fb60:
+				poly([0, 0], [1, 0], [1, 1 / 3], [0, 1]);
+				return true;
+			case 0x1fb61:
+				poly([0, 0], [1, 0], [1 / 2, 1], [0, 1]);
+				return true;
 			// Upper-right corner family
-			case 0x1fb62: poly([1/2,0],[1,0],[1,1/3]); return true;
-			case 0x1fb63: poly([0,0],[1,0],[1,1/3]); return true;
-			case 0x1fb64: poly([1/2,0],[1,0],[1,2/3]); return true;
-			case 0x1fb65: poly([0,0],[1,0],[1,2/3]); return true;
-			case 0x1fb66: poly([1/2,0],[1,0],[1,1]); return true;
-			case 0x1fb67: poly([0,0],[1,0],[1,2/3],[0,1/3]); return true;
+			case 0x1fb62:
+				poly([1 / 2, 0], [1, 0], [1, 1 / 3]);
+				return true;
+			case 0x1fb63:
+				poly([0, 0], [1, 0], [1, 1 / 3]);
+				return true;
+			case 0x1fb64:
+				poly([1 / 2, 0], [1, 0], [1, 2 / 3]);
+				return true;
+			case 0x1fb65:
+				poly([0, 0], [1, 0], [1, 2 / 3]);
+				return true;
+			case 0x1fb66:
+				poly([1 / 2, 0], [1, 0], [1, 1]);
+				return true;
+			case 0x1fb67:
+				poly([0, 0], [1, 0], [1, 2 / 3], [0, 1 / 3]);
+				return true;
 			// Three-quarter blocks (center at 1/2, 1/2 → 4 triangles, fill 3)
 			case 0x1fb68: // missing left
-				poly([0,0],[1,0],[1/2,1/2]); poly([1,0],[1,1],[1/2,1/2]); poly([0,1],[1,1],[1/2,1/2]); return true;
+				poly([0, 0], [1, 0], [1 / 2, 1 / 2]);
+				poly([1, 0], [1, 1], [1 / 2, 1 / 2]);
+				poly([0, 1], [1, 1], [1 / 2, 1 / 2]);
+				return true;
 			case 0x1fb69: // missing upper
-				poly([0,0],[0,1],[1/2,1/2]); poly([0,1],[1,1],[1/2,1/2]); poly([1,0],[1,1],[1/2,1/2]); return true;
+				poly([0, 0], [0, 1], [1 / 2, 1 / 2]);
+				poly([0, 1], [1, 1], [1 / 2, 1 / 2]);
+				poly([1, 0], [1, 1], [1 / 2, 1 / 2]);
+				return true;
 			case 0x1fb6a: // missing right
-				poly([0,0],[1,0],[1/2,1/2]); poly([0,0],[0,1],[1/2,1/2]); poly([0,1],[1,1],[1/2,1/2]); return true;
+				poly([0, 0], [1, 0], [1 / 2, 1 / 2]);
+				poly([0, 0], [0, 1], [1 / 2, 1 / 2]);
+				poly([0, 1], [1, 1], [1 / 2, 1 / 2]);
+				return true;
 			case 0x1fb6b: // missing lower
-				poly([0,0],[1,0],[1/2,1/2]); poly([0,0],[0,1],[1/2,1/2]); poly([1,0],[1,1],[1/2,1/2]); return true;
+				poly([0, 0], [1, 0], [1 / 2, 1 / 2]);
+				poly([0, 0], [0, 1], [1 / 2, 1 / 2]);
+				poly([1, 0], [1, 1], [1 / 2, 1 / 2]);
+				return true;
 			// One-quarter triangles
-			case 0x1fb6c: poly([1/2,1/2],[0,0],[0,1]); return true;
-			case 0x1fb6d: poly([1/2,1/2],[0,0],[1,0]); return true;
-			case 0x1fb6e: poly([1/2,1/2],[1,0],[1,1]); return true;
-			case 0x1fb6f: poly([1/2,1/2],[0,1],[1,1]); return true;
-			default: return false;
+			case 0x1fb6c:
+				poly([1 / 2, 1 / 2], [0, 0], [0, 1]);
+				return true;
+			case 0x1fb6d:
+				poly([1 / 2, 1 / 2], [0, 0], [1, 0]);
+				return true;
+			case 0x1fb6e:
+				poly([1 / 2, 1 / 2], [1, 0], [1, 1]);
+				return true;
+			case 0x1fb6f:
+				poly([1 / 2, 1 / 2], [0, 1], [1, 1]);
+				return true;
+			default:
+				return false;
 		}
 	}
 

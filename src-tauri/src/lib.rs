@@ -33,15 +33,15 @@ mod global_hotkey;
 mod input_line_buffer;
 pub(crate) mod llm_api;
 pub(crate) mod mcp_http;
-pub(crate) mod mdkb_client;
-pub(crate) mod mdkb_commands;
-pub(crate) mod mdkb_daemon;
 #[allow(dead_code)] // Incremental build: wired in story 1196+ (OAuth flow/token/registry)
 pub(crate) mod mcp_oauth;
 pub(crate) mod mcp_proxy;
 pub(crate) mod mcp_upstream_config;
 #[allow(dead_code)] // Used by OAuth discovery (story 1193-7f78), not yet wired
 pub(crate) mod mcp_upstream_credentials;
+pub(crate) mod mdkb_client;
+pub(crate) mod mdkb_commands;
+pub(crate) mod mdkb_daemon;
 #[cfg(feature = "desktop")]
 mod menu;
 #[cfg(feature = "desktop")]

@@ -90,7 +90,10 @@ pub async fn mdkb_goto_definition(
             return Ok(None);
         }
     };
-    match client.symbol_at_position(&repo_path, &file_path, line, col).await {
+    match client
+        .symbol_at_position(&repo_path, &file_path, line, col)
+        .await
+    {
         Ok(Some(sym)) => Ok(Some(DefinitionLocation {
             file_path: sym.file_path,
             line: sym.line_start,
@@ -143,13 +146,14 @@ pub async fn mdkb_references(
 }
 
 #[tauri::command]
-pub async fn mdkb_status(
-    state: State<'_, Arc<AppState>>,
-) -> Result<MdkbStatus, String> {
+pub async fn mdkb_status(state: State<'_, Arc<AppState>>) -> Result<MdkbStatus, String> {
     let daemon = state.mdkb_daemon.lock().await;
     let available = daemon.is_available();
     let connected = daemon.is_connected();
-    Ok(MdkbStatus { available, connected })
+    Ok(MdkbStatus {
+        available,
+        connected,
+    })
 }
 
 #[cfg(test)]

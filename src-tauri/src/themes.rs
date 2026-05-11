@@ -121,10 +121,7 @@ fn parse_theme_file(path: &Path) -> Option<ThemeEntry> {
     let content = std::fs::read_to_string(path).ok()?;
     let wt: WtJson = serde_json::from_str(&content).ok()?;
 
-    let key = path
-        .file_stem()?
-        .to_str()?
-        .to_lowercase();
+    let key = path.file_stem()?.to_str()?.to_lowercase();
 
     let bg = wt.background.as_deref().unwrap_or("#000000");
     let fg = wt.foreground.as_deref().unwrap_or("#ffffff");
@@ -293,9 +290,9 @@ fn derive_app_chrome(bg: &str, fg: &str, ansi: &[String; 16]) -> AppChromeColors
         accent: accent.clone(),
         accent_hover,
         border: border_color,
-        success: ansi[2].clone(),   // green
-        warning: ansi[3].clone(),   // yellow
-        error: ansi[1].clone(),     // red
+        success: ansi[2].clone(), // green
+        warning: ansi[3].clone(), // yellow
+        error: ansi[1].clone(),   // red
         text_on_accent: contrast_text(accent),
         text_on_error: contrast_text(&ansi[1]),
         text_on_success: contrast_text(&ansi[2]),
@@ -310,17 +307,17 @@ const BUILTIN_THEMES: &[(&str, &str)] = &[
     ("commander.json", include_str!("themes/commander.json")),
     ("vscode-dark.json", include_str!("themes/vscode-dark.json")),
     ("tokyo-night.json", include_str!("themes/tokyo-night.json")),
-    ("vscode-light.json", include_str!("themes/vscode-light.json")),
+    (
+        "vscode-light.json",
+        include_str!("themes/vscode-light.json"),
+    ),
     ("dracula.json", include_str!("themes/dracula.json")),
     ("monokai.json", include_str!("themes/monokai.json")),
     (
         "catppuccin-mocha.json",
         include_str!("themes/catppuccin-mocha.json"),
     ),
-    (
-        "github-dark.json",
-        include_str!("themes/github-dark.json"),
-    ),
+    ("github-dark.json", include_str!("themes/github-dark.json")),
     (
         "solarized-dark.json",
         include_str!("themes/solarized-dark.json"),
@@ -350,10 +347,7 @@ pub(crate) fn seed_builtin_themes(dir: &Path) -> std::io::Result<()> {
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "desktop")]
-pub(crate) fn start_theme_watcher(
-    themes_dir: PathBuf,
-    state: &std::sync::Arc<crate::AppState>,
-) {
+pub(crate) fn start_theme_watcher(themes_dir: PathBuf, state: &std::sync::Arc<crate::AppState>) {
     use notify::{RecursiveMode, Watcher};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -361,8 +355,8 @@ pub(crate) fn start_theme_watcher(
     let app_handle = state.app_handle.read().clone();
     let last_emit = std::sync::Arc::new(AtomicU64::new(0));
 
-    let watcher = notify::recommended_watcher(
-        move |result: Result<notify::Event, notify::Error>| {
+    let watcher =
+        notify::recommended_watcher(move |result: Result<notify::Event, notify::Error>| {
             let event = match result {
                 Ok(e) => e,
                 Err(err) => {
@@ -371,9 +365,10 @@ pub(crate) fn start_theme_watcher(
                 }
             };
 
-            let dominated_by_json = event.paths.iter().any(|p| {
-                p.extension().is_some_and(|e| e == "json")
-            });
+            let dominated_by_json = event
+                .paths
+                .iter()
+                .any(|p| p.extension().is_some_and(|e| e == "json"));
             if !dominated_by_json {
                 return;
             }
@@ -389,13 +384,15 @@ pub(crate) fn start_theme_watcher(
             }
             last_emit.store(now_ms, Ordering::Relaxed);
 
-            tracing::info!(source = "theme_watcher", "Themes directory changed, emitting themes-changed");
+            tracing::info!(
+                source = "theme_watcher",
+                "Themes directory changed, emitting themes-changed"
+            );
             if let Some(ref app) = app_handle {
                 use tauri::Emitter as _;
                 let _ = app.emit("themes-changed", ());
             }
-        },
-    );
+        });
 
     match watcher {
         Ok(mut w) => {
@@ -419,7 +416,7 @@ pub(crate) fn start_theme_watcher(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn list_themes(
-    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+    _state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Vec<ThemeEntry> {
     let themes_dir = crate::config::config_dir().join("themes");
     load_themes(&themes_dir)
@@ -661,10 +658,22 @@ mod tests {
     #[test]
     fn derive_dark_theme_chrome() {
         let ansi = [
-            "#000000".into(), "#cc0000".into(), "#00cc00".into(), "#cccc00".into(),
-            "#0000cc".into(), "#cc00cc".into(), "#00cccc".into(), "#cccccc".into(),
-            "#666666".into(), "#ff0000".into(), "#00ff00".into(), "#ffff00".into(),
-            "#0000ff".into(), "#ff00ff".into(), "#00ffff".into(), "#ffffff".into(),
+            "#000000".into(),
+            "#cc0000".into(),
+            "#00cc00".into(),
+            "#cccc00".into(),
+            "#0000cc".into(),
+            "#cc00cc".into(),
+            "#00cccc".into(),
+            "#cccccc".into(),
+            "#666666".into(),
+            "#ff0000".into(),
+            "#00ff00".into(),
+            "#ffff00".into(),
+            "#0000ff".into(),
+            "#ff00ff".into(),
+            "#00ffff".into(),
+            "#ffffff".into(),
         ];
         let ac = derive_app_chrome("#1e1e1e", "#d4d4d4", &ansi);
 
@@ -679,16 +688,31 @@ mod tests {
         // bg_secondary should be lighter than bg_primary for dark themes
         let (_, _, b_primary) = parse_hex(&ac.bg_primary);
         let (_, _, b_secondary) = parse_hex(&ac.bg_secondary);
-        assert!(b_secondary > b_primary, "secondary should be lighter for dark theme");
+        assert!(
+            b_secondary > b_primary,
+            "secondary should be lighter for dark theme"
+        );
     }
 
     #[test]
     fn derive_light_theme_chrome() {
         let ansi = [
-            "#000000".into(), "#cd3131".into(), "#107c10".into(), "#949800".into(),
-            "#0451a5".into(), "#bc05bc".into(), "#0598bc".into(), "#555555".into(),
-            "#666666".into(), "#cd3131".into(), "#14ce14".into(), "#b5ba00".into(),
-            "#0451a5".into(), "#bc05bc".into(), "#0598bc".into(), "#a5a5a5".into(),
+            "#000000".into(),
+            "#cd3131".into(),
+            "#107c10".into(),
+            "#949800".into(),
+            "#0451a5".into(),
+            "#bc05bc".into(),
+            "#0598bc".into(),
+            "#555555".into(),
+            "#666666".into(),
+            "#cd3131".into(),
+            "#14ce14".into(),
+            "#b5ba00".into(),
+            "#0451a5".into(),
+            "#bc05bc".into(),
+            "#0598bc".into(),
+            "#a5a5a5".into(),
         ];
         let ac = derive_app_chrome("#ffffff", "#333333", &ansi);
 
@@ -699,7 +723,10 @@ mod tests {
         // bg_secondary should be darker than bg_primary for light themes
         let (r_primary, _, _) = parse_hex(&ac.bg_primary);
         let (r_secondary, _, _) = parse_hex(&ac.bg_secondary);
-        assert!(r_secondary < r_primary, "secondary should be darker for light theme");
+        assert!(
+            r_secondary < r_primary,
+            "secondary should be darker for light theme"
+        );
     }
 
     #[test]

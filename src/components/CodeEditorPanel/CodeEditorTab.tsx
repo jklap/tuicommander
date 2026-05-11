@@ -27,10 +27,10 @@ import { isMacOS, shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
 import { diffTabsStore } from "../../stores/diffTabs";
 import { editorTabsStore } from "../../stores/editorTabs";
+import { referencesStore } from "../../stores/references";
 import { repositoriesStore } from "../../stores/repositories";
 import { uiStore } from "../../stores/ui";
 import { openFileAction } from "../../utils/filePreview";
-import { referencesStore } from "../../stores/references";
 import { isAbsolutePath } from "../../utils/pathUtils";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import e from "../shared/editor-header.module.css";
@@ -266,10 +266,12 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 					filePath: props.filePath,
 					line: line.number,
 					col,
-				}).then((result) => {
-					if (!result) return;
-					openFileAction(result.filePath, props.repoPath, fsRoot(), result.line);
-				}).catch((e) => appLogger.debug("editor", "go-to-definition failed", { error: String(e) }));
+				})
+					.then((result) => {
+						if (!result) return;
+						openFileAction(result.filePath, props.repoPath, fsRoot(), result.line);
+					})
+					.catch((e) => appLogger.debug("editor", "go-to-definition failed", { error: String(e) }));
 				return true;
 			},
 		}),

@@ -30,14 +30,9 @@ export const ReferencesPanel: Component<ReferencesPanelProps> = (props) => {
 				</div>
 			</div>
 			<Show when={referencesStore.querySymbol}>
-				<div class={s.queryLabel}>
-					{referencesStore.querySymbol}
-				</div>
+				<div class={s.queryLabel}>{referencesStore.querySymbol}</div>
 			</Show>
-			<Show
-				when={!referencesStore.loading}
-				fallback={<div class={s.empty}>Searching...</div>}
-			>
+			<Show when={!referencesStore.loading} fallback={<div class={s.empty}>Searching...</div>}>
 				<Show
 					when={referencesStore.references.length}
 					fallback={

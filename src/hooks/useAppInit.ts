@@ -1,7 +1,6 @@
 import { invoke, listen } from "../invoke";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
-import { listenForThemeChanges, loadThemes } from "../themes";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { mdTabsStore } from "../stores/mdTabs";
@@ -11,6 +10,7 @@ import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
+import { listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri } from "../transport";
 import type { SavedTerminal } from "../types";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";

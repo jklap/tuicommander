@@ -100,9 +100,22 @@ interface LoadedTheme {
 }
 
 const ANSI_NAMES: readonly (keyof TerminalTheme)[] = [
-	"black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-	"brightBlack", "brightRed", "brightGreen", "brightYellow",
-	"brightBlue", "brightMagenta", "brightCyan", "brightWhite",
+	"black",
+	"red",
+	"green",
+	"yellow",
+	"blue",
+	"magenta",
+	"cyan",
+	"white",
+	"brightBlack",
+	"brightRed",
+	"brightGreen",
+	"brightYellow",
+	"brightBlue",
+	"brightMagenta",
+	"brightCyan",
+	"brightWhite",
 ];
 
 function mapRustEntry(entry: RustThemeEntry): LoadedTheme {
@@ -263,9 +276,22 @@ export function applyFontFamily(font: FontType): void {
 }
 
 const ANSI_KEYS: readonly (keyof TerminalTheme)[] = [
-	"black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-	"brightBlack", "brightRed", "brightGreen", "brightYellow",
-	"brightBlue", "brightMagenta", "brightCyan", "brightWhite",
+	"black",
+	"red",
+	"green",
+	"yellow",
+	"blue",
+	"magenta",
+	"cyan",
+	"white",
+	"brightBlack",
+	"brightRed",
+	"brightGreen",
+	"brightYellow",
+	"brightBlue",
+	"brightMagenta",
+	"brightCyan",
+	"brightWhite",
 ];
 
 /** Apply an app theme by setting CSS custom properties on the document root */

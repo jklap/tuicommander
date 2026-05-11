@@ -71,23 +71,30 @@ impl MdkbClient {
         self.stream.flush().await?;
 
         let mut hdr = [0u8; 4];
-        self.stream.read_exact(&mut hdr).await.context("mdkb: read response header")?;
+        self.stream
+            .read_exact(&mut hdr)
+            .await
+            .context("mdkb: read response header")?;
         let resp_len = u32::from_le_bytes(hdr) as usize;
         if resp_len == 0 || resp_len > MAX_RESPONSE_BYTES {
             bail!("mdkb: invalid response length {resp_len}");
         }
 
         let mut resp_buf = vec![0u8; resp_len];
-        self.stream.read_exact(&mut resp_buf).await.context("mdkb: read response body")?;
+        self.stream
+            .read_exact(&mut resp_buf)
+            .await
+            .context("mdkb: read response body")?;
 
-        let resp: RpcResponse = serde_json::from_slice(&resp_buf)
-            .context("mdkb: parse response")?;
+        let resp: RpcResponse =
+            serde_json::from_slice(&resp_buf).context("mdkb: parse response")?;
 
         if let Some(err) = resp.error {
             bail!("mdkb RPC error {}: {}", err.code, err.message);
         }
 
-        resp.result.ok_or_else(|| anyhow::anyhow!("mdkb: response missing both result and error"))
+        resp.result
+            .ok_or_else(|| anyhow::anyhow!("mdkb: response missing both result and error"))
     }
 
     pub async fn ping(&mut self) -> Result<bool> {
@@ -96,12 +103,17 @@ impl MdkbClient {
     }
 
     pub async fn symbols_in_file(&mut self, root: &str, file: &str) -> Result<Vec<MdkbSymbol>> {
-        let resp = self.call("symbols_in_file", json!({
-            "root": root,
-            "file": file,
-        })).await?;
-        let symbols: Vec<MdkbSymbol> = serde_json::from_value(resp)
-            .context("mdkb: parse symbols_in_file response")?;
+        let resp = self
+            .call(
+                "symbols_in_file",
+                json!({
+                    "root": root,
+                    "file": file,
+                }),
+            )
+            .await?;
+        let symbols: Vec<MdkbSymbol> =
+            serde_json::from_value(resp).context("mdkb: parse symbols_in_file response")?;
         Ok(symbols)
     }
 
@@ -112,33 +124,36 @@ impl MdkbClient {
         line: u32,
         col: Option<u32>,
     ) -> Result<Option<MdkbSymbol>> {
-        let resp = self.call("symbol_at_position", json!({
-            "root": root,
-            "file": file,
-            "line": line,
-            "col": col,
-        })).await?;
+        let resp = self
+            .call(
+                "symbol_at_position",
+                json!({
+                    "root": root,
+                    "file": file,
+                    "line": line,
+                    "col": col,
+                }),
+            )
+            .await?;
         if resp.is_null() {
             return Ok(None);
         }
-        let sym: MdkbSymbol = serde_json::from_value(resp)
-            .context("mdkb: parse symbol_at_position response")?;
+        let sym: MdkbSymbol =
+            serde_json::from_value(resp).context("mdkb: parse symbol_at_position response")?;
         Ok(Some(sym))
     }
 
-    pub async fn code_graph(
-        &mut self,
-        root: &str,
-        name: &str,
-        direction: &str,
-    ) -> Result<Value> {
-        self.call("code_graph", json!({
-            "root": root,
-            "name": name,
-            "direction": direction,
-        })).await
+    pub async fn code_graph(&mut self, root: &str, name: &str, direction: &str) -> Result<Value> {
+        self.call(
+            "code_graph",
+            json!({
+                "root": root,
+                "name": name,
+                "direction": direction,
+            }),
+        )
+        .await
     }
-
 }
 
 #[cfg(test)]
@@ -218,7 +233,10 @@ mod tests {
     async fn test_symbols_in_file() {
         let (path, _server) = spawn_mock_server().await;
         let mut client = connect_to_mock(&path).await;
-        let symbols = client.symbols_in_file("/repo", "src/main.rs").await.unwrap();
+        let symbols = client
+            .symbols_in_file("/repo", "src/main.rs")
+            .await
+            .unwrap();
         assert_eq!(symbols.len(), 2);
         assert_eq!(symbols[0].name, "foo");
         assert_eq!(symbols[0].line_start, 1);
@@ -230,7 +248,10 @@ mod tests {
     async fn test_rpc_error_propagation() {
         let (path, _server) = spawn_mock_server().await;
         let mut client = connect_to_mock(&path).await;
-        let err = client.call("bad_method", json!({"root": "/repo"})).await.unwrap_err();
+        let err = client
+            .call("bad_method", json!({"root": "/repo"}))
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("unknown tool: bad_method"));
     }
 

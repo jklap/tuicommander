@@ -95,17 +95,10 @@ export const OutlinePanel: Component<OutlinePanelProps> = (props) => {
 					</button>
 				</div>
 			</div>
-			<Show
-				when={!symbols.loading}
-				fallback={<div class={s.empty}>Loading symbols...</div>}
-			>
+			<Show when={!symbols.loading} fallback={<div class={s.empty}>Loading symbols...</div>}>
 				<Show
 					when={symbols()?.length}
-					fallback={
-						<div class={s.empty}>
-							{activeFile() ? "No symbols found" : "Open a file to see its outline"}
-						</div>
-					}
+					fallback={<div class={s.empty}>{activeFile() ? "No symbols found" : "Open a file to see its outline"}</div>}
 				>
 					<div class={s.symbolList}>
 						<For each={symbols()}>

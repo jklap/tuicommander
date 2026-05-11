@@ -58,10 +58,7 @@ export const PanelOrchestrator: Component<PanelOrchestratorProps> = (props) => {
 			</Show>
 
 			<Show when={!uiStore.isDetached("outline")}>
-				<OutlinePanel
-					visible={uiStore.state.outlinePanelVisible}
-					onClose={() => uiStore.toggleOutlinePanel()}
-				/>
+				<OutlinePanel visible={uiStore.state.outlinePanelVisible} onClose={() => uiStore.toggleOutlinePanel()} />
 			</Show>
 
 			<Show when={!uiStore.isDetached("references")}>

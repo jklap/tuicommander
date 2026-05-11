@@ -164,22 +164,86 @@ const ATTR_DEFAULT_BG: u8 = 0b1000_0000;
 fn xterm_color_rgb(index: u8) -> Rgb {
     match index {
         // 16 standard ANSI colors — Tango/GNOME palette (xterm.js default)
-        0 => Rgb { r: 0x2e, g: 0x34, b: 0x36 },
-        1 => Rgb { r: 0xcc, g: 0x00, b: 0x00 },
-        2 => Rgb { r: 0x4e, g: 0x9a, b: 0x06 },
-        3 => Rgb { r: 0xc4, g: 0xa0, b: 0x00 },
-        4 => Rgb { r: 0x34, g: 0x65, b: 0xa4 },
-        5 => Rgb { r: 0x75, g: 0x50, b: 0x7b },
-        6 => Rgb { r: 0x06, g: 0x98, b: 0x9a },
-        7 => Rgb { r: 0xd3, g: 0xd7, b: 0xcf },
-        8 => Rgb { r: 0x55, g: 0x57, b: 0x53 },
-        9 => Rgb { r: 0xef, g: 0x29, b: 0x29 },
-        10 => Rgb { r: 0x8a, g: 0xe2, b: 0x34 },
-        11 => Rgb { r: 0xfc, g: 0xe9, b: 0x4f },
-        12 => Rgb { r: 0x73, g: 0x9f, b: 0xcf },
-        13 => Rgb { r: 0xad, g: 0x7f, b: 0xa8 },
-        14 => Rgb { r: 0x34, g: 0xe2, b: 0xe2 },
-        15 => Rgb { r: 0xee, g: 0xee, b: 0xec },
+        0 => Rgb {
+            r: 0x2e,
+            g: 0x34,
+            b: 0x36,
+        },
+        1 => Rgb {
+            r: 0xcc,
+            g: 0x00,
+            b: 0x00,
+        },
+        2 => Rgb {
+            r: 0x4e,
+            g: 0x9a,
+            b: 0x06,
+        },
+        3 => Rgb {
+            r: 0xc4,
+            g: 0xa0,
+            b: 0x00,
+        },
+        4 => Rgb {
+            r: 0x34,
+            g: 0x65,
+            b: 0xa4,
+        },
+        5 => Rgb {
+            r: 0x75,
+            g: 0x50,
+            b: 0x7b,
+        },
+        6 => Rgb {
+            r: 0x06,
+            g: 0x98,
+            b: 0x9a,
+        },
+        7 => Rgb {
+            r: 0xd3,
+            g: 0xd7,
+            b: 0xcf,
+        },
+        8 => Rgb {
+            r: 0x55,
+            g: 0x57,
+            b: 0x53,
+        },
+        9 => Rgb {
+            r: 0xef,
+            g: 0x29,
+            b: 0x29,
+        },
+        10 => Rgb {
+            r: 0x8a,
+            g: 0xe2,
+            b: 0x34,
+        },
+        11 => Rgb {
+            r: 0xfc,
+            g: 0xe9,
+            b: 0x4f,
+        },
+        12 => Rgb {
+            r: 0x73,
+            g: 0x9f,
+            b: 0xcf,
+        },
+        13 => Rgb {
+            r: 0xad,
+            g: 0x7f,
+            b: 0xa8,
+        },
+        14 => Rgb {
+            r: 0x34,
+            g: 0xe2,
+            b: 0xe2,
+        },
+        15 => Rgb {
+            r: 0xee,
+            g: 0xee,
+            b: 0xec,
+        },
         // 216-color cube (indices 16-231)
         16..=231 => {
             let n = index - 16;
