@@ -955,23 +955,48 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			case 0x257f:
 				seg = HU | D;
 				break; // ╿
-			// Dashes: render as regular line (close enough)
+			// Triple-dash: 3 dashes, 9 segments total, 2:1 dash:gap ratio
 			case 0x2504:
-			case 0x2505:
-				seg = L | R;
-				break; // ┄┅
+			case 0x2505: {
+				ctx.lineWidth = cp === 0x2505 ? hlw : lw;
+				const seg = w / 9;
+				for (let i = 0; i < 3; i++) {
+					const sx = x + i * 3 * seg;
+					ctx.fillRect(sx, cy - ctx.lineWidth / 2, seg * 2, ctx.lineWidth);
+				}
+				return true;
+			}
 			case 0x2506:
-			case 0x2507:
-				seg = U | D;
-				break; // ┆┇
+			case 0x2507: {
+				ctx.lineWidth = cp === 0x2507 ? hlw : lw;
+				const seg = h / 9;
+				for (let i = 0; i < 3; i++) {
+					const sy = y + i * 3 * seg;
+					ctx.fillRect(cx - ctx.lineWidth / 2, sy, ctx.lineWidth, seg * 2);
+				}
+				return true;
+			}
+			// Quadruple-dash: 4 dashes, 12 segments total, 2:1 dash:gap ratio
 			case 0x2508:
-			case 0x2509:
-				seg = L | R;
-				break; // ┈┉
+			case 0x2509: {
+				ctx.lineWidth = cp === 0x2509 ? hlw : lw;
+				const seg = w / 12;
+				for (let i = 0; i < 4; i++) {
+					const sx = x + i * 3 * seg;
+					ctx.fillRect(sx, cy - ctx.lineWidth / 2, seg * 2, ctx.lineWidth);
+				}
+				return true;
+			}
 			case 0x250a:
-			case 0x250b:
-				seg = U | D;
-				break; // ┊┋
+			case 0x250b: {
+				ctx.lineWidth = cp === 0x250b ? hlw : lw;
+				const seg = h / 12;
+				for (let i = 0; i < 4; i++) {
+					const sy = y + i * 3 * seg;
+					ctx.fillRect(cx - ctx.lineWidth / 2, sy, ctx.lineWidth, seg * 2);
+				}
+				return true;
+			}
 			// Rounded corners
 			case 0x256d:
 				seg = R | D;
@@ -985,15 +1010,27 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			case 0x2570:
 				seg = R | U;
 				break; // ╰
-			// Light/heavy dashes (additional)
+			// Double-dash: 2 dashes, 6 segments total, 2:1 dash:gap ratio
 			case 0x254c:
-			case 0x254d:
-				seg = L | R;
-				break; // ╌╍
+			case 0x254d: {
+				ctx.lineWidth = cp === 0x254d ? hlw : lw;
+				const seg = w / 6;
+				for (let i = 0; i < 2; i++) {
+					const sx = x + i * 3 * seg;
+					ctx.fillRect(sx, cy - ctx.lineWidth / 2, seg * 2, ctx.lineWidth);
+				}
+				return true;
+			}
 			case 0x254e:
-			case 0x254f:
-				seg = U | D;
-				break; // ╎╏
+			case 0x254f: {
+				ctx.lineWidth = cp === 0x254f ? hlw : lw;
+				const seg = h / 6;
+				for (let i = 0; i < 2; i++) {
+					const sy = y + i * 3 * seg;
+					ctx.fillRect(cx - ctx.lineWidth / 2, sy, ctx.lineWidth, seg * 2);
+				}
+				return true;
+			}
 			// Diagonals
 			case 0x2571: {
 				line(right, y, x, bottom);
@@ -1197,6 +1234,434 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 	}
 
+	function drawPowerlineChar(
+		cp: number,
+		x: number,
+		y: number,
+		m: CellMetrics,
+		fgP: number,
+		bgP: number,
+		a: number,
+	): boolean {
+		const w = m.cellWidth;
+		const h = m.cellHeight;
+		const fg = resolveFg(fgP, bgP, a, cachedFgDefault);
+		const bg = resolveBg(fgP, bgP, a, cachedBgDefault);
+
+		switch (cp) {
+			// Right-pointing triangle (filled)
+			case 0xe0b0: {
+				ctx.fillStyle = bg;
+				ctx.fillRect(x, y, w, h);
+				ctx.beginPath();
+				ctx.moveTo(x, y);
+				ctx.lineTo(x + w, y + h / 2);
+				ctx.lineTo(x, y + h);
+				ctx.closePath();
+				ctx.fillStyle = fg;
+				ctx.fill();
+				return true;
+			}
+			// Right-pointing triangle (line)
+			case 0xe0b1: {
+				ctx.beginPath();
+				ctx.moveTo(x, y);
+				ctx.lineTo(x + w, y + h / 2);
+				ctx.lineTo(x, y + h);
+				ctx.strokeStyle = fg;
+				ctx.lineWidth = 1;
+				ctx.stroke();
+				return true;
+			}
+			// Left-pointing triangle (filled)
+			case 0xe0b2: {
+				ctx.fillStyle = bg;
+				ctx.fillRect(x, y, w, h);
+				ctx.beginPath();
+				ctx.moveTo(x + w, y);
+				ctx.lineTo(x, y + h / 2);
+				ctx.lineTo(x + w, y + h);
+				ctx.closePath();
+				ctx.fillStyle = fg;
+				ctx.fill();
+				return true;
+			}
+			// Left-pointing triangle (line)
+			case 0xe0b3: {
+				ctx.beginPath();
+				ctx.moveTo(x + w, y);
+				ctx.lineTo(x, y + h / 2);
+				ctx.lineTo(x + w, y + h);
+				ctx.strokeStyle = fg;
+				ctx.lineWidth = 1;
+				ctx.stroke();
+				return true;
+			}
+			// Right semicircle (filled)
+			case 0xe0b4: {
+				ctx.fillStyle = bg;
+				ctx.fillRect(x, y, w, h);
+				ctx.beginPath();
+				ctx.moveTo(x, y);
+				ctx.quadraticCurveTo(x + w * 2, y + h / 2, x, y + h);
+				ctx.closePath();
+				ctx.fillStyle = fg;
+				ctx.fill();
+				return true;
+			}
+			// Right semicircle (line)
+			case 0xe0b5: {
+				ctx.beginPath();
+				ctx.moveTo(x, y);
+				ctx.quadraticCurveTo(x + w * 2, y + h / 2, x, y + h);
+				ctx.strokeStyle = fg;
+				ctx.lineWidth = 1;
+				ctx.stroke();
+				return true;
+			}
+			// Left semicircle (filled)
+			case 0xe0b6: {
+				ctx.fillStyle = bg;
+				ctx.fillRect(x, y, w, h);
+				ctx.beginPath();
+				ctx.moveTo(x + w, y);
+				ctx.quadraticCurveTo(x - w, y + h / 2, x + w, y + h);
+				ctx.closePath();
+				ctx.fillStyle = fg;
+				ctx.fill();
+				return true;
+			}
+			// Left semicircle (line)
+			case 0xe0b7: {
+				ctx.beginPath();
+				ctx.moveTo(x + w, y);
+				ctx.quadraticCurveTo(x - w, y + h / 2, x + w, y + h);
+				ctx.strokeStyle = fg;
+				ctx.lineWidth = 1;
+				ctx.stroke();
+				return true;
+			}
+			// Lower-left triangle (filled)
+			case 0xe0b8: {
+				ctx.fillStyle = bg;
+				ctx.fillRect(x, y, w, h);
+				ctx.beginPath();
+				ctx.moveTo(x, y + h);
+				ctx.lineTo(x + w, y);
+				ctx.lineTo(x + w, y + h);
+				ctx.closePath();
+				ctx.fillStyle = fg;
+				ctx.fill();
+				return true;
+			}
+			// Lower-left triangle (line)
+			case 0xe0b9: {
+				ctx.beginPath();
+				ctx.moveTo(x, y + h);
+				ctx.lineTo(x + w, y);
+				ctx.strokeStyle = fg;
+				ctx.lineWidth = 1;
+				ctx.stroke();
+				return true;
+			}
+			// Lower-right triangle (filled)
+			case 0xe0ba: {
+				ctx.fillStyle = bg;
+				ctx.fillRect(x, y, w, h);
+				ctx.beginPath();
+				ctx.moveTo(x, y);
+				ctx.lineTo(x + w, y + h);
+				ctx.lineTo(x, y + h);
+				ctx.closePath();
+				ctx.fillStyle = fg;
+				ctx.fill();
+				return true;
+			}
+			// Lower-right triangle (line)
+			case 0xe0bb: {
+				ctx.beginPath();
+				ctx.moveTo(x, y);
+				ctx.lineTo(x + w, y + h);
+				ctx.strokeStyle = fg;
+				ctx.lineWidth = 1;
+				ctx.stroke();
+				return true;
+			}
+			// Upper-left triangle (filled)
+			case 0xe0bc: {
+				ctx.fillStyle = bg;
+				ctx.fillRect(x, y, w, h);
+				ctx.beginPath();
+				ctx.moveTo(x, y);
+				ctx.lineTo(x + w, y);
+				ctx.lineTo(x + w, y + h);
+				ctx.closePath();
+				ctx.fillStyle = fg;
+				ctx.fill();
+				return true;
+			}
+			// Upper-left triangle (line)
+			case 0xe0bd: {
+				ctx.beginPath();
+				ctx.moveTo(x, y + h);
+				ctx.lineTo(x + w, y);
+				ctx.strokeStyle = fg;
+				ctx.lineWidth = 1;
+				ctx.stroke();
+				return true;
+			}
+			// Upper-right triangle (filled)
+			case 0xe0be: {
+				ctx.fillStyle = bg;
+				ctx.fillRect(x, y, w, h);
+				ctx.beginPath();
+				ctx.moveTo(x, y);
+				ctx.lineTo(x + w, y);
+				ctx.lineTo(x, y + h);
+				ctx.closePath();
+				ctx.fillStyle = fg;
+				ctx.fill();
+				return true;
+			}
+			// Upper-right triangle (line)
+			case 0xe0bf: {
+				ctx.beginPath();
+				ctx.moveTo(x + w, y + h);
+				ctx.lineTo(x, y);
+				ctx.strokeStyle = fg;
+				ctx.lineWidth = 1;
+				ctx.stroke();
+				return true;
+			}
+			default:
+				return false;
+		}
+	}
+
+	// Braille: 2 columns × 4 rows, bit layout per Unicode/ISO 11548
+	// bit0=dot1(r0c0) bit1=dot2(r1c0) bit2=dot3(r2c0) bit3=dot4(r0c1)
+	// bit4=dot5(r1c1) bit5=dot6(r2c1) bit6=dot7(r3c0) bit7=dot8(r3c1)
+	function drawBrailleChar(cp: number, x: number, y: number, m: CellMetrics): void {
+		const dots = cp - 0x2800;
+		if (dots === 0) return;
+		const w = m.cellWidth;
+		const h = m.cellHeight;
+		const r = Math.max(0.5, w / 8);
+		const areaW = w / 2;
+		const areaH = h / 4;
+		const map = [
+			[0, 0],
+			[0, 1],
+			[0, 2],
+			[1, 0],
+			[1, 1],
+			[1, 2],
+			[0, 3],
+			[1, 3],
+		];
+		for (let i = 0; i < 8; i++) {
+			if (dots & (1 << i)) {
+				const [col, row] = map[i];
+				const cx = x + col * areaW + areaW / 2;
+				const cy = y + row * areaH + areaH / 2;
+				ctx.beginPath();
+				ctx.arc(cx, cy, r, 0, Math.PI * 2);
+				ctx.fill();
+			}
+		}
+	}
+
+	// Sextant bit lookup: index → 6-bit mask
+	// bit0=TL bit1=TR bit2=ML bit3=MR bit4=BL bit5=BR
+	// Skips 0b000000 (empty), 0b010101 (left half = U+258C), 0b101010 (right half = U+2590), 0b111111 (full = U+2588)
+	const SEXTANT_MAP: number[] = (() => {
+		const t: number[] = [];
+		for (let bits = 1; bits < 63; bits++) {
+			if (bits === 0b010101 || bits === 0b101010) continue;
+			t.push(bits);
+		}
+		return t;
+	})();
+
+	function drawLegacyComputingChar(cp: number, x: number, y: number, m: CellMetrics): boolean {
+		const w = m.cellWidth;
+		const h = m.cellHeight;
+
+		// Sextant block elements (U+1FB00–U+1FB3B): 2×3 grid
+		if (cp >= 0x1fb00 && cp <= 0x1fb3b) {
+			const bits = SEXTANT_MAP[cp - 0x1fb00];
+			if (bits === undefined) return false;
+			const hw = Math.ceil(w / 2);
+			const th = Math.floor(h / 3);
+			const widths = [hw, w - hw];
+			const heights = [th, th, h - th * 2];
+			const cols = [0, hw];
+			const rows = [0, th, th * 2];
+			for (let bit = 0; bit < 6; bit++) {
+				if (bits & (1 << bit)) {
+					const col = bit & 1;
+					const row = bit >> 1;
+					ctx.fillRect(x + cols[col], y + rows[row], widths[col], heights[row]);
+				}
+			}
+			return true;
+		}
+
+		// Smooth mosaic wedge/triangle characters (U+1FB3C–U+1FB6F)
+		if (cp >= 0x1fb3c && cp <= 0x1fb6f) {
+			return drawWedgeChar(cp, x, y, w, h);
+		}
+
+		// Vertical 1/8 strips at positions 2–7 (U+1FB70–U+1FB75)
+		if (cp >= 0x1fb70 && cp <= 0x1fb75) {
+			const pos = cp - 0x1fb70 + 1; // positions 1–6 → columns 2–7
+			const x0 = Math.round((w * pos) / 8);
+			const x1 = Math.round((w * (pos + 1)) / 8);
+			ctx.fillRect(x + x0, y, x1 - x0, h);
+			return true;
+		}
+
+		// Horizontal 1/8 strips at positions 2–7 (U+1FB76–U+1FB7B)
+		if (cp >= 0x1fb76 && cp <= 0x1fb7b) {
+			const pos = cp - 0x1fb76 + 1;
+			const y0 = Math.round((h * pos) / 8);
+			const y1 = Math.round((h * (pos + 1)) / 8);
+			ctx.fillRect(x, y + y0, w, y1 - y0);
+			return true;
+		}
+
+		// Combined corner 1/8 blocks (U+1FB7C–U+1FB81)
+		if (cp >= 0x1fb7c && cp <= 0x1fb81) {
+			const ew = Math.round(w / 8);
+			const eh = Math.round(h / 8);
+			switch (cp) {
+				case 0x1fb7c: // left + lower
+					ctx.fillRect(x, y, ew, h);
+					ctx.fillRect(x, y + h - eh, w, eh);
+					return true;
+				case 0x1fb7d: // left + upper
+					ctx.fillRect(x, y, ew, h);
+					ctx.fillRect(x, y, w, eh);
+					return true;
+				case 0x1fb7e: // right + upper
+					ctx.fillRect(x + w - ew, y, ew, h);
+					ctx.fillRect(x, y, w, eh);
+					return true;
+				case 0x1fb7f: // right + lower
+					ctx.fillRect(x + w - ew, y, ew, h);
+					ctx.fillRect(x, y + h - eh, w, eh);
+					return true;
+				case 0x1fb80: // upper + lower
+					ctx.fillRect(x, y, w, eh);
+					ctx.fillRect(x, y + h - eh, w, eh);
+					return true;
+				case 0x1fb81: // rows 1,3,5,8
+					ctx.fillRect(x, y, w, eh);
+					ctx.fillRect(x, y + Math.round((h * 2) / 8), w, eh);
+					ctx.fillRect(x, y + Math.round((h * 4) / 8), w, eh);
+					ctx.fillRect(x, y + h - eh, w, eh);
+					return true;
+			}
+			return false;
+		}
+
+		// Upper block fractions (U+1FB82–U+1FB86): 2/8, 3/8, 5/8, 6/8, 7/8
+		if (cp >= 0x1fb82 && cp <= 0x1fb86) {
+			const eighths = [2, 3, 5, 6, 7][cp - 0x1fb82];
+			ctx.fillRect(x, y, w, Math.round((h * eighths) / 8));
+			return true;
+		}
+
+		// Right block fractions (U+1FB87–U+1FB8B): 2/8, 3/8, 5/8, 6/8, 7/8
+		if (cp >= 0x1fb87 && cp <= 0x1fb8b) {
+			const eighths = [2, 3, 5, 6, 7][cp - 0x1fb87];
+			const bw = Math.round((w * eighths) / 8);
+			ctx.fillRect(x + w - bw, y, bw, h);
+			return true;
+		}
+
+		return false;
+	}
+
+	function drawWedgeChar(cp: number, x: number, y: number, w: number, h: number): boolean {
+		// Polygon vertices in normalized coords → absolute
+		type Pt = [number, number];
+		const poly = (...pts: Pt[]) => {
+			ctx.beginPath();
+			ctx.moveTo(x + pts[0][0] * w, y + pts[0][1] * h);
+			for (let i = 1; i < pts.length; i++) ctx.lineTo(x + pts[i][0] * w, y + pts[i][1] * h);
+			ctx.closePath();
+			ctx.fill();
+		};
+		switch (cp) {
+			// Lower-left family
+			case 0x1fb3c: poly([0,2/3],[0,1],[1/2,1]); return true;
+			case 0x1fb3d: poly([0,2/3],[0,1],[1,1]); return true;
+			case 0x1fb3e: poly([0,1/3],[0,1],[1/2,1]); return true;
+			case 0x1fb3f: poly([0,1/3],[0,1],[1,1]); return true;
+			case 0x1fb40: poly([0,0],[0,1],[1/2,1]); return true;
+			// Lower-right/large family
+			case 0x1fb41: poly([1/2,0],[1,0],[1,1],[0,1],[0,1/3]); return true;
+			case 0x1fb42: poly([1,0],[1,1],[0,1],[0,1/3]); return true;
+			case 0x1fb43: poly([1/2,0],[1,0],[1,1],[0,1],[0,2/3]); return true;
+			case 0x1fb44: poly([1,0],[1,1],[0,1],[0,2/3]); return true;
+			case 0x1fb45: poly([1/2,0],[1,0],[1,1],[0,1]); return true;
+			case 0x1fb46: poly([0,2/3],[1,1/3],[1,1],[0,1]); return true;
+			case 0x1fb47: poly([1/2,1],[1,2/3],[1,1]); return true;
+			case 0x1fb48: poly([0,1],[1,2/3],[1,1]); return true;
+			case 0x1fb49: poly([1/2,1],[1,1/3],[1,1]); return true;
+			case 0x1fb4a: poly([0,1],[1,1/3],[1,1]); return true;
+			case 0x1fb4b: poly([1/2,1],[1,0],[1,1]); return true;
+			// Lower-left mirror family
+			case 0x1fb4c: poly([0,0],[1/2,0],[1,1/3],[1,1],[0,1]); return true;
+			case 0x1fb4d: poly([0,0],[1,1/3],[1,1],[0,1]); return true;
+			case 0x1fb4e: poly([0,0],[1/2,0],[1,2/3],[1,1],[0,1]); return true;
+			case 0x1fb4f: poly([0,0],[1,2/3],[1,1],[0,1]); return true;
+			case 0x1fb50: poly([0,0],[1/2,0],[1,1],[0,1]); return true;
+			case 0x1fb51: poly([0,1/3],[1,2/3],[1,1],[0,1]); return true;
+			// Upper-right diagonal family
+			case 0x1fb52: poly([0,0],[1,0],[1,1],[1/2,1],[0,2/3]); return true;
+			case 0x1fb53: poly([0,0],[1,0],[1,1],[0,2/3]); return true;
+			case 0x1fb54: poly([0,0],[1,0],[1,1],[1/2,1],[0,1/3]); return true;
+			case 0x1fb55: poly([0,0],[1,0],[1,1],[0,1/3]); return true;
+			case 0x1fb56: poly([0,0],[1,0],[1,1],[1/2,1]); return true;
+			// Upper-left family
+			case 0x1fb57: poly([0,0],[1/2,0],[0,1/3]); return true;
+			case 0x1fb58: poly([0,0],[1,0],[0,1/3]); return true;
+			case 0x1fb59: poly([0,0],[1/2,0],[0,2/3]); return true;
+			case 0x1fb5a: poly([0,0],[1,0],[0,2/3]); return true;
+			case 0x1fb5b: poly([0,0],[1/2,0],[0,1]); return true;
+			case 0x1fb5c: poly([0,0],[1,0],[1,1/3],[0,2/3]); return true;
+			case 0x1fb5d: poly([0,0],[1,0],[1,2/3],[1/2,1],[0,1]); return true;
+			case 0x1fb5e: poly([0,0],[1,0],[1,2/3],[0,1]); return true;
+			case 0x1fb5f: poly([0,0],[1,0],[1,1/3],[1/2,1],[0,1]); return true;
+			case 0x1fb60: poly([0,0],[1,0],[1,1/3],[0,1]); return true;
+			case 0x1fb61: poly([0,0],[1,0],[1/2,1],[0,1]); return true;
+			// Upper-right corner family
+			case 0x1fb62: poly([1/2,0],[1,0],[1,1/3]); return true;
+			case 0x1fb63: poly([0,0],[1,0],[1,1/3]); return true;
+			case 0x1fb64: poly([1/2,0],[1,0],[1,2/3]); return true;
+			case 0x1fb65: poly([0,0],[1,0],[1,2/3]); return true;
+			case 0x1fb66: poly([1/2,0],[1,0],[1,1]); return true;
+			case 0x1fb67: poly([0,0],[1,0],[1,2/3],[0,1/3]); return true;
+			// Three-quarter blocks (center at 1/2, 1/2 → 4 triangles, fill 3)
+			case 0x1fb68: // missing left
+				poly([0,0],[1,0],[1/2,1/2]); poly([1,0],[1,1],[1/2,1/2]); poly([0,1],[1,1],[1/2,1/2]); return true;
+			case 0x1fb69: // missing upper
+				poly([0,0],[0,1],[1/2,1/2]); poly([0,1],[1,1],[1/2,1/2]); poly([1,0],[1,1],[1/2,1/2]); return true;
+			case 0x1fb6a: // missing right
+				poly([0,0],[1,0],[1/2,1/2]); poly([0,0],[0,1],[1/2,1/2]); poly([0,1],[1,1],[1/2,1/2]); return true;
+			case 0x1fb6b: // missing lower
+				poly([0,0],[1,0],[1/2,1/2]); poly([0,0],[0,1],[1/2,1/2]); poly([1,0],[1,1],[1/2,1/2]); return true;
+			// One-quarter triangles
+			case 0x1fb6c: poly([1/2,1/2],[0,0],[0,1]); return true;
+			case 0x1fb6d: poly([1/2,1/2],[0,0],[1,0]); return true;
+			case 0x1fb6e: poly([1/2,1/2],[1,0],[1,1]); return true;
+			case 0x1fb6f: poly([1/2,1/2],[0,1],[1,1]); return true;
+			default: return false;
+		}
+	}
+
 	function paintRow(row: DecodedFrame["rows"][0], y: number, m: CellMetrics, fontFamily?: string) {
 		fontFamily ??= settingsStore.getFontFamily();
 
@@ -1249,6 +1714,18 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				ctx.fillStyle = resolveFg(fgP, bgP, a, cachedFgDefault);
 				drawBlockChar(cp, x, y, m);
 				continue;
+			}
+			if (cp >= 0xe0b0 && cp <= 0xe0bf) {
+				if (drawPowerlineChar(cp, x, y, m, fgP, bgP, a)) continue;
+			}
+			if (cp >= 0x2800 && cp <= 0x28ff) {
+				ctx.fillStyle = resolveFg(fgP, bgP, a, cachedFgDefault);
+				drawBrailleChar(cp, x, y, m);
+				continue;
+			}
+			if (cp >= 0x1fb00 && cp <= 0x1fb8b) {
+				ctx.fillStyle = resolveFg(fgP, bgP, a, cachedFgDefault);
+				if (drawLegacyComputingChar(cp, x, y, m)) continue;
 			}
 
 			const font = buildFontStyle(a, m.fontSize, fontFamily);
