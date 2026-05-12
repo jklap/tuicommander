@@ -1,3 +1,4 @@
+use alacritty_terminal::grid::ReflowMode;
 use dashmap::DashMap;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -2167,6 +2168,15 @@ impl VtLogBuffer {
     /// arrives as short lines (not wrapped fragments) and CUU cursor
     /// addressing still works because the lines are shorter than grid cols.
     pub fn resize(&mut self, rows: u16, cols: u16) {
+        self.resize_with_shell_state(rows, cols, crate::pty::SHELL_NULL);
+    }
+
+    /// Resize with shell_state context for smarter reflow:
+    /// - alt_screen active → None (TUI programs handle layout)
+    /// - shell busy → HistoryOnly (Ink/command may use cursor positioning)
+    /// - shell idle → All (only old prompts on screen, safe to reflow)
+    /// - reflow_history disabled → None always
+    pub fn resize_with_shell_state(&mut self, rows: u16, cols: u16, shell_state: u8) {
         let prev = self.pty_cols;
         self.pty_cols = cols;
         if cols > self.max_cols {
@@ -2179,8 +2189,14 @@ impl VtLogBuffer {
         } else if cols.saturating_mul(2) >= self.max_cols {
             self.suppress_capture = false;
         }
-        self.grid.resize(rows, cols);
-        // Re-sync scrollback count after resize (grid may adjust scrollback).
+        let mode = if !self.grid.reflow_history || self.grid.is_alternate_screen() {
+            ReflowMode::None
+        } else if shell_state == crate::pty::SHELL_IDLE {
+            ReflowMode::All
+        } else {
+            ReflowMode::HistoryOnly
+        };
+        self.grid.resize_with_mode(rows, cols, mode);
         self.scrollback_read = self.grid.scrollback_count();
     }
 
@@ -2346,6 +2362,14 @@ impl VtLogBuffer {
 
     pub(crate) fn grid_hyperlink_at(&self, row: usize, col: usize) -> Option<String> {
         self.grid.hyperlink_at(row, col)
+    }
+
+    pub(crate) fn grid_hyperlink_span(
+        &self,
+        row: usize,
+        col: usize,
+    ) -> Option<(usize, usize, String)> {
+        self.grid.hyperlink_span(row, col)
     }
 
     // --- private helpers ---

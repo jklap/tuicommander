@@ -6,7 +6,7 @@ import { isMacOS } from "./platform";
 import { appLogger } from "./stores/appLogger";
 import { settingsStore } from "./stores/settings";
 import { terminalsStore } from "./stores/terminals";
-import { applyAppTheme, applyFontFamily, listenForThemeChanges, loadThemes } from "./themes";
+import { applyAppTheme, applyFontFamily, listenForThemeChanges, loadThemes, themesLoaded } from "./themes";
 
 const MIN_FONT_SIZE = 8;
 const MAX_FONT_SIZE = 32;
@@ -93,8 +93,10 @@ export const FloatingTerminal: Component = () => {
 		}, 150);
 	});
 
-	// Apply theme to the floating window
-	createEffect(() => applyAppTheme(settingsStore.state.theme));
+	// Apply theme to the floating window (guard: skip until loadThemes populates the Map)
+	createEffect(() => {
+		if (themesLoaded()) applyAppTheme(settingsStore.state.theme);
+	});
 
 	// Sync --font-mono CSS variable when font selection changes
 	createEffect(() => applyFontFamily(settingsStore.state.font));

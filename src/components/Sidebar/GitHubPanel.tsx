@@ -5,6 +5,8 @@ import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { githubStore } from "../../stores/github";
+import { repoSettingsStore } from "../../stores/repoSettings";
+import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import type { BranchPrStatus, GitHubIssue, IssueFilterMode } from "../../types";
 import { cx } from "../../utils";
@@ -17,7 +19,6 @@ import {
 	type StepStatus,
 } from "../PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
-import { repositoriesStore } from "../../stores/repositories";
 import { PrSection } from "./PrSection";
 import s from "./Sidebar.module.css";
 
@@ -128,7 +129,10 @@ export const GitHubPanel: Component<{
 	});
 
 	const filteredPrs = createMemo(() => {
-		const { prHideDrafts, prHideConflicting, prHideCiFailing } = settingsStore.state;
+		const effective = repoSettingsStore.getEffective(props.repoPath);
+		const prHideDrafts = effective?.prHideDrafts ?? settingsStore.state.prHideDrafts;
+		const prHideConflicting = effective?.prHideConflicting ?? settingsStore.state.prHideConflicting;
+		const prHideCiFailing = effective?.prHideCiFailing ?? settingsStore.state.prHideCiFailing;
 		return props.prs.filter((pr) => {
 			if (prHideDrafts && pr.is_draft) return false;
 			if (prHideConflicting && pr.mergeable === "CONFLICTING") return false;

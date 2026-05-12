@@ -349,7 +349,7 @@ fn current_interval(visible: bool, fail_count: u32, rate_budget: u32) -> Duratio
 }
 
 #[cfg(feature = "desktop")]
-/// Execute a unified batch poll (PRs + Issues) and emit Tauri events for both.
+#[allow(clippy::too_many_arguments)]
 async fn poll_batch(
     state: &AppState,
     handle: &AppHandle,
@@ -372,7 +372,15 @@ async fn poll_batch(
     } else {
         None
     };
-    match crate::github::get_all_batch_impl(paths, include_merged, issue_filter, pr_hide_drafts, state, etag).await
+    match crate::github::get_all_batch_impl(
+        paths,
+        include_merged,
+        issue_filter,
+        pr_hide_drafts,
+        state,
+        etag,
+    )
+    .await
     {
         Ok(result) => {
             ps.fail_count = 0;

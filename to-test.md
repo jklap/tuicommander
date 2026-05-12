@@ -782,3 +782,21 @@ Features to test when TUICommander is more usable.
 - [ ] Cooldown: pasting the error text twice in quick succession fires only one toast (3s cooldown)
 - [ ] Fish shell (`chsh` or spawn explicitly): conflict triggers `set -gx TUIC_SESSION …` syntax, not `export`
 - [ ] False-positive guard: an agent pasting the source of `output_parser.rs` (regex line) does NOT trigger a reset — indented string literals rejected by `line_is_code_or_diff`
+
+## CanvasTerminal lastFg Color Cache Fix (2026-05-11)
+- [ ] Powerline prompt (Starship/P10k/Agnoster): wrapped lines preserve correct foreground colors — no color bleeding from powerline arrow glyphs into subsequent text
+- [ ] Box drawing characters (borders, frames) followed by regular text → text has correct fg, not the box drawing color
+- [ ] Braille patterns (e.g. from `spark` or progress indicators) followed by text → text fg correct
+- [ ] Block elements (▄▀█ etc.) followed by text → text fg correct
+- [ ] Theme switch → powerline prompt re-renders with correct colors on all segments
+- [ ] Bold text after a powerline separator → bold + correct fg (not the arrow's fg)
+
+## Reflow: WRAPLINE Stale Flag Clearing (2026-05-11)
+- [ ] Type a long command that wraps, press Enter, widen the terminal → wrapped line unwraps into a single line (correct merge)
+- [ ] Type a long command that wraps, press Enter, new prompt appears below, widen terminal → old wrapped line unwraps correctly, new prompt stays on its own line (no merge corruption)
+- [ ] Type a long command that wraps, press Enter, command produces output, widen terminal → wrapped command unwraps, output lines remain independent
+- [ ] Shell sends `\r` to redraw current line (e.g. bash prompt redraw) → stale WRAPLINE cleared, no phantom merges on resize
+- [ ] Alternate screen app (vim, less) → `ReflowMode::None` applies, no reflow on alt screen
+- [ ] `clear` command (CSI 2J) → previously wrapped lines in scrollback unwrap correctly
+- [ ] Rapid resize (drag terminal edge) → no corruption, final state correct
+- [ ] History-only reflow (experimental flag off) → only scrollback rows reflow, screen rows padded/truncated

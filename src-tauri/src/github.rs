@@ -1089,7 +1089,8 @@ pub(crate) async fn get_all_batch_impl(
     // Always fetch viewer login — needed for both issue filtering and viewer PR search.
     let viewer = get_viewer_login(state).await.unwrap_or_default();
 
-    let (query, aliases) = build_unified_batch_query(&repos, include_merged, filter_mode, &viewer, pr_hide_drafts);
+    let (query, aliases) =
+        build_unified_batch_query(&repos, include_merged, filter_mode, &viewer, pr_hide_drafts);
     let response = graphql_with_retry(state, &query, serde_json::Value::Null).await?;
 
     // Store rate-limit budget for proactive throttling in the poller
@@ -3661,14 +3662,20 @@ mod tests {
     fn test_build_unified_batch_query_hide_drafts_adds_filter() {
         let repos = vec![("/path".to_string(), "owner".to_string(), "repo".to_string())];
         let (query, _) = build_unified_batch_query(&repos, false, "disabled", "alice", true);
-        assert!(query.contains("-is:draft"), "draft filter should appear in viewer search");
+        assert!(
+            query.contains("-is:draft"),
+            "draft filter should appear in viewer search"
+        );
     }
 
     #[test]
     fn test_build_unified_batch_query_show_drafts_no_filter() {
         let repos = vec![("/path".to_string(), "owner".to_string(), "repo".to_string())];
         let (query, _) = build_unified_batch_query(&repos, false, "disabled", "alice", false);
-        assert!(!query.contains("-is:draft"), "draft filter should not appear when hide_drafts is false");
+        assert!(
+            !query.contains("-is:draft"),
+            "draft filter should not appear when hide_drafts is false"
+        );
     }
 
     #[test]
@@ -3676,22 +3683,37 @@ mod tests {
         let repos = vec![("/path".to_string(), "owner".to_string(), "repo".to_string())];
         let (query_hide, _) = build_unified_batch_query(&repos, false, "disabled", "", true);
         let (query_show, _) = build_unified_batch_query(&repos, false, "disabled", "", false);
-        assert!(query_hide.contains("first: 40"), "hide_drafts should fetch 40 PRs");
-        assert!(query_show.contains("first: 20"), "show_drafts should fetch 20 PRs");
+        assert!(
+            query_hide.contains("first: 40"),
+            "hide_drafts should fetch 40 PRs"
+        );
+        assert!(
+            query_show.contains("first: 20"),
+            "show_drafts should fetch 20 PRs"
+        );
     }
 
     #[test]
     fn test_build_unified_batch_query_no_viewer_prs_section_without_viewer() {
         let repos = vec![("/path".to_string(), "owner".to_string(), "repo".to_string())];
         let (query, _) = build_unified_batch_query(&repos, false, "disabled", "", true);
-        assert!(!query.contains("viewerPrs"), "no viewerPrs section when viewer is empty");
+        assert!(
+            !query.contains("viewerPrs"),
+            "no viewerPrs section when viewer is empty"
+        );
     }
 
     #[test]
     fn test_build_unified_batch_query_viewer_prs_section_with_viewer() {
         let repos = vec![("/path".to_string(), "owner".to_string(), "repo".to_string())];
         let (query, _) = build_unified_batch_query(&repos, false, "disabled", "alice", false);
-        assert!(query.contains("viewerPrs"), "viewerPrs section present when viewer is set");
-        assert!(query.contains("author:alice"), "viewer search targets alice");
+        assert!(
+            query.contains("viewerPrs"),
+            "viewerPrs section present when viewer is set"
+        );
+        assert!(
+            query.contains("author:alice"),
+            "viewer search targets alice"
+        );
     }
 }

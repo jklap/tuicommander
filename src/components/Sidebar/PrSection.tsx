@@ -219,9 +219,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 													</Show>
 													<Show
 														when={
-															pr.state?.toUpperCase() === "OPEN" &&
-															!pr.is_draft &&
-															pr.review_decision !== "APPROVED"
+															pr.state?.toUpperCase() === "OPEN" && !pr.is_draft && pr.review_decision !== "APPROVED"
 														}
 													>
 														<button
@@ -272,8 +270,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 															const cs = githubStore.getCheckSummary(props.repoPath, pr.branch);
 															if (p.id === "smart-fix-ci") return (cs?.failed ?? 0) > 0;
 															if (p.id === "smart-resolve-conflicts") return pr.mergeable === "CONFLICTING";
-															if (p.id === "smart-review-comments")
-																return pr.review_decision === "CHANGES_REQUESTED";
+															if (p.id === "smart-review-comments") return pr.review_decision === "CHANGES_REQUESTED";
 															return true;
 														}}
 														contextVariables={() => prContextVariables(pr)}

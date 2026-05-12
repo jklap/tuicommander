@@ -47,11 +47,12 @@ const CiAutoHealToggle: Component<{ repoPath: string; branch: string }> = (props
 	};
 
 	return (
-		<div class={s.autoHealRow}>
-			<label class={s.autoHealToggle}>
+		<div class={s.autoHealRow} onClick={toggle}>
+			<label class={s.autoHealToggle} onClick={(e) => e.stopPropagation()}>
 				<input type="checkbox" checked={enabled()} onChange={toggle} />
-				<span>{t("prDetail.autoHeal", "Auto-heal CI")}</span>
+				<span class={s.autoHealSlider} />
 			</label>
+			<span class={s.autoHealLabel}>{t("prDetail.autoHeal", "Auto-heal CI")}</span>
 			<Show when={healing()}>
 				<span class={s.autoHealStatus}>
 					{t("prDetail.healing", "Healing")} ({attempts()}/3)

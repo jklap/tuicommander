@@ -525,9 +525,7 @@ export const RepoSection: Component<{
 	});
 	const otherCount = createMemo(() => {
 		const login = viewerLogin();
-		const otherPrs = login
-			? remoteOnlyPrs().filter((pr) => pr.author !== login).length
-			: remoteOnlyPrs().length;
+		const otherPrs = login ? remoteOnlyPrs().filter((pr) => pr.author !== login).length : remoteOnlyPrs().length;
 		return otherPrs + repoIssues().length;
 	});
 	const ghBadgeCount = createMemo(() => myPrsCount() + otherCount());

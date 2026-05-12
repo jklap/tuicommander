@@ -406,25 +406,75 @@
   color: var(--error);
 }
 
-/* Auto-heal CI toggle */
+/* Auto-heal CI toggle — styled like .checkItem */
 .autoHealRow {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 0;
-  font-size: var(--font-sm);
+  gap: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-lg);
+  font-size: var(--font-md);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.autoHealRow:hover {
+  background: var(--bg-highlight);
 }
 
 .autoHealToggle {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  cursor: pointer;
-  color: var(--fg-secondary);
+  position: relative;
+  display: inline-block;
+  width: 30px;
+  height: 16px;
+  min-height: 16px;
+  max-height: 16px;
+  flex-shrink: 0;
 }
 
 .autoHealToggle input {
-  accent-color: var(--accent);
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.autoHealSlider {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.autoHealSlider::after {
+  content: "";
+  display: block;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  background: var(--fg-muted);
+  border-radius: 9999px;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.autoHealToggle input:checked + .autoHealSlider {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.autoHealToggle input:checked + .autoHealSlider::after {
+  transform: translateX(14px);
+  background: white;
+}
+
+.autoHealLabel {
+  flex: 1;
+  color: var(--fg-primary);
 }
 
 .autoHealStatus {

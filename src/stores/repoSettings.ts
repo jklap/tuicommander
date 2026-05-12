@@ -9,6 +9,7 @@ import type {
 	WorktreeStorage,
 } from "./repoDefaults";
 import { repoDefaultsStore } from "./repoDefaults";
+import { settingsStore } from "./settings";
 
 /** Per-repository settings — overridable fields are nullable (null = inherit from global defaults) */
 export interface RepoSettings {
@@ -49,6 +50,12 @@ export interface RepoSettings {
 	autoDeleteOnPrClose: AutoDeleteOnPrClose | null;
 	/** Allowlist of upstream MCP server names for this repo (null = all servers) */
 	mcpUpstreams: string[] | null;
+	/** null = inherit from settingsStore (global) */
+	prHideDrafts: boolean | null;
+	/** null = inherit from settingsStore (global) */
+	prHideConflicting: boolean | null;
+	/** null = inherit from settingsStore (global) */
+	prHideCiFailing: boolean | null;
 	/** Human-readable labels for branches/worktrees, keyed by branch name */
 	branchLabels: Record<string, string>;
 }
@@ -76,6 +83,9 @@ export interface EffectiveRepoSettings {
 	autoDeleteOnPrClose: AutoDeleteOnPrClose;
 	/** Resolved MCP upstream allowlist (null = all servers) */
 	mcpUpstreams: string[] | null;
+	prHideDrafts: boolean;
+	prHideConflicting: boolean;
+	prHideCiFailing: boolean;
 	/** Human-readable labels for branches/worktrees, keyed by branch name */
 	branchLabels: Record<string, string>;
 }
@@ -100,6 +110,9 @@ const OVERRIDABLE_NULL_DEFAULTS: Pick<
 	| "autoFetchIntervalMinutes"
 	| "autoDeleteOnPrClose"
 	| "mcpUpstreams"
+	| "prHideDrafts"
+	| "prHideConflicting"
+	| "prHideCiFailing"
 > = {
 	baseBranch: null,
 	copyIgnoredFiles: null,
@@ -118,6 +131,9 @@ const OVERRIDABLE_NULL_DEFAULTS: Pick<
 	autoFetchIntervalMinutes: null,
 	autoDeleteOnPrClose: null,
 	mcpUpstreams: null,
+	prHideDrafts: null,
+	prHideConflicting: null,
+	prHideCiFailing: null,
 };
 
 /** Repo-local config loaded from .tuic.json (team-shareable, snake_case from Rust) */
@@ -255,6 +271,9 @@ function createRepoSettingsStore() {
 				autoDeleteOnPrClose:
 					settings.autoDeleteOnPrClose ?? local?.auto_delete_on_pr_close ?? defaults.autoDeleteOnPrClose,
 				mcpUpstreams: settings.mcpUpstreams ?? local?.mcp_upstreams ?? null,
+				prHideDrafts: settings.prHideDrafts ?? settingsStore.state.prHideDrafts,
+				prHideConflicting: settings.prHideConflicting ?? settingsStore.state.prHideConflicting,
+				prHideCiFailing: settings.prHideCiFailing ?? settingsStore.state.prHideCiFailing,
 				branchLabels: settings.branchLabels ?? {},
 			};
 		},

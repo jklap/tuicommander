@@ -3656,8 +3656,16 @@ pub(crate) fn resize_pty(
         })
         .map_err(|e| format!("Failed to resize PTY: {e}"))?;
     // Resize VT log buffer dimensions to match new terminal size.
+    // Pass shell_state so reflow can be smarter: idle → All, busy → HistoryOnly.
+    let shell_state = state
+        .shell_states
+        .get(&session_id)
+        .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(SHELL_NULL);
     if let Some(vt_log) = state.vt_log_buffers.get(&session_id) {
-        vt_log.lock().resize(rows, cols);
+        vt_log
+            .lock()
+            .resize_with_shell_state(rows, cols, shell_state);
     }
     // Update terminal rows for cursor-up clamping in the reader thread.
     if let Some(r) = state.terminal_rows.get(&session_id) {
@@ -4661,6 +4669,20 @@ pub(crate) fn terminal_hyperlink_at(
         .vt_log_buffers
         .get(&session_id)
         .and_then(|vt| vt.lock().grid_hyperlink_at(row, col))
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn terminal_hyperlink_span(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    row: usize,
+    col: usize,
+) -> Option<(usize, usize, String)> {
+    state
+        .vt_log_buffers
+        .get(&session_id)
+        .and_then(|vt| vt.lock().grid_hyperlink_span(row, col))
 }
 
 #[cfg(feature = "desktop")]

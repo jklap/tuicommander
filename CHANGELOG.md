@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Per-repo PR visibility filters** — Override global draft/conflicting/CI-failing PR filter settings per repository. Tri-state toggle (Show / Default / Hide) in repo settings under "PR Visibility".
+- **TriStateToggle component** — Reusable 3-position toggle (hide / default / show) matching existing pill-switch style, used for per-repo PR filter overrides.
+- **`terminal_hyperlink_span`** — New Tauri command that returns the full contiguous span of an OSC 8 hyperlink at a given cell, enabling correct hover underlines across the entire link.
+
+### Fixed
+- **Terminal scroll-to-bottom on click** — Clicking in a scrolled-up terminal no longer snaps to bottom. Mouse events (SGR reports, focus/blur) now use `writePtyNoScroll()` which writes to the PTY without resetting scroll position.
+- **OSC 8 hyperlink hover underline** — Hover underline now spans the full link instead of a single character, using the new `terminal_hyperlink_span` backend API.
+- **OSC 8 `file://` URI links** — Clicking `file:///path` links now correctly opens the file by stripping the `file://` prefix before path resolution.
+- **Auto-heal CI toggle style** — Replaced native HTML checkbox with pill-switch toggle matching the CI check item row style (proper padding, hover, alignment).
+- **Vitest localStorage shim** — Test setup now handles `localStorage` being fully undefined (not just missing `.clear()`), fixing 524 test failures in environments without `--localstorage-file`.
+
+### Changed
+- **Cell width rounding** — `measureFont()` now uses `Math.round()` instead of `Math.ceil()` for cell width calculation, producing tighter character spacing.
+
+### Community
+- [@paulovitin](https://github.com/paulovitin) — extract `nextDefaultName()` to eliminate tab naming duplication (#35)
+
 ## [1.2.0] - 2026-05-10
 
 ### Added

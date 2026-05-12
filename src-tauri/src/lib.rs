@@ -1240,6 +1240,7 @@ pub fn run() {
             pty::terminal_get_lines,
             pty::terminal_get_cursor_line,
             pty::terminal_hyperlink_at,
+            pty::terminal_hyperlink_span,
             pty::set_session_visible,
             pty::update_session_cwd,
             pty::set_session_name,

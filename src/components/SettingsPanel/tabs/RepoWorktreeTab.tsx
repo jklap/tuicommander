@@ -10,7 +10,9 @@ import type {
 	WorktreeStorage,
 } from "../../../stores/repoDefaults";
 import type { RepoSettings } from "../../../stores/repoSettings";
+import { settingsStore } from "../../../stores/settings";
 import { ColorSwatchPicker } from "../../shared/ColorSwatchPicker";
+import { type TriState, TriStateToggle } from "../../shared/TriStateToggle";
 import s from "../Settings.module.css";
 
 export interface RepoTabProps {
@@ -26,6 +28,18 @@ function effectiveBool(override: boolean | null, fallback: boolean): boolean {
 
 /** "inherit" sentinel value for nullable dropdowns */
 const INHERIT = "__inherit__";
+
+/** Convert a nullable "hide" boolean to TriState */
+function hideToTriState(value: boolean | null): TriState {
+	if (value === null) return "default";
+	return value ? "hide" : "show";
+}
+
+/** Convert TriState back to nullable "hide" boolean */
+function triStateToHide(state: TriState): boolean | null {
+	if (state === "default") return null;
+	return state === "hide";
+}
 
 export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 	const branchOptions = [
@@ -303,6 +317,28 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<option value="auto">{t("repoWorktree.autoDelete.auto", "Auto-delete silently")}</option>
 				</select>
 				<p class={s.hint}>{t("repoWorktree.hint.autoDelete", "Delete local branch when its PR is merged or closed")}</p>
+			</div>
+
+			<div class={s.group}>
+				<label>PR Visibility</label>
+				<TriStateToggle
+					value={hideToTriState(props.settings.prHideDrafts)}
+					label="Draft PRs"
+					defaultLabel={settingsStore.state.prHideDrafts ? "Hide" : "Show"}
+					onChange={(v) => props.onUpdate("prHideDrafts", triStateToHide(v))}
+				/>
+				<TriStateToggle
+					value={hideToTriState(props.settings.prHideConflicting)}
+					label="Conflicting PRs"
+					defaultLabel={settingsStore.state.prHideConflicting ? "Hide" : "Show"}
+					onChange={(v) => props.onUpdate("prHideConflicting", triStateToHide(v))}
+				/>
+				<TriStateToggle
+					value={hideToTriState(props.settings.prHideCiFailing)}
+					label="CI Failing PRs"
+					defaultLabel={settingsStore.state.prHideCiFailing ? "Hide" : "Show"}
+					onChange={(v) => props.onUpdate("prHideCiFailing", triStateToHide(v))}
+				/>
 			</div>
 
 			<Show when={isMacOS()}>

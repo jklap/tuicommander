@@ -985,16 +985,29 @@ impl<T> Term<T> {
 
         self.grid.cursor_cell().flags.insert(Flags::WRAPLINE);
 
-        if self.grid.cursor.point.line + 1 >= self.scroll_region.end {
-            self.linefeed();
-        } else {
-            self.damage_cursor();
-            self.grid.cursor.point.line += 1;
-        }
+        self.advance_line();
 
         self.grid.cursor.point.column = Column(0);
         self.grid.cursor.input_needs_wrap = false;
         self.damage_cursor();
+    }
+
+    /// Move cursor to the next line, scrolling if at the bottom of the scroll
+    /// region.  Shared by `wrapline` (which preserves WRAPLINE) and `linefeed`
+    /// (which clears it).
+    #[inline]
+    fn advance_line(&mut self)
+    where
+        T: EventListener,
+    {
+        let next = self.grid.cursor.point.line + 1;
+        if next >= self.scroll_region.end {
+            self.scroll_up(1);
+        } else if next < self.screen_lines() {
+            self.damage_cursor();
+            self.grid.cursor.point.line += 1;
+            self.damage_cursor();
+        }
     }
 
     /// Write `c` to the cell at the cursor position.
@@ -1102,6 +1115,20 @@ impl<T: EventListener> Handler for Term<T> {
 
             self.grid[line][column].push_zerowidth(c);
             return;
+        }
+
+        // Clear stale WRAPLINE on the line above when writing at column 0
+        // outside a wrap continuation.  This prevents grow_columns from
+        // incorrectly merging independently-written rows.
+        if !self.grid.cursor.input_needs_wrap
+            && self.grid.cursor.point.column == Column(0)
+            && self.grid.cursor.point.line > Line(0)
+        {
+            let prev = self.grid.cursor.point.line - 1i32;
+            let cols = self.columns();
+            if cols > 0 {
+                self.grid[prev][Column(cols - 1)].flags.remove(Flags::WRAPLINE);
+            }
         }
 
         // Move cursor to next line.
@@ -1432,8 +1459,16 @@ impl<T: EventListener> Handler for Term<T> {
     fn carriage_return(&mut self) {
         trace!("Carriage return");
         let new_col = 0;
-        let line = self.grid.cursor.point.line.0 as usize;
-        self.damage.damage_line(line, new_col, self.grid.cursor.point.column.0);
+        let line = self.grid.cursor.point.line;
+        self.damage.damage_line(line.0 as usize, new_col, self.grid.cursor.point.column.0);
+
+        // CR resets to column 0 — clear any stale WRAPLINE on this line.
+        // If the line later wraps again, wrapline() will re-set the flag.
+        let cols = self.columns();
+        if cols > 0 {
+            self.grid[line][Column(cols - 1)].flags.remove(Flags::WRAPLINE);
+        }
+
         self.grid.cursor.point.column = Column(new_col);
         self.grid.cursor.input_needs_wrap = false;
     }
@@ -1442,14 +1477,17 @@ impl<T: EventListener> Handler for Term<T> {
     #[inline]
     fn linefeed(&mut self) {
         trace!("Linefeed");
-        let next = self.grid.cursor.point.line + 1;
-        if next == self.scroll_region.end {
-            self.scroll_up(1);
-        } else if next < self.screen_lines() {
-            self.damage_cursor();
-            self.grid.cursor.point.line += 1;
-            self.damage_cursor();
+
+        // An explicit LF means the current line ends here — clear any stale
+        // WRAPLINE flag so grow_columns won't merge the next line into this one.
+        // wrapline() bypasses this by calling advance_line() directly.
+        let line = self.grid.cursor.point.line;
+        let cols = self.columns();
+        if cols > 0 {
+            self.grid[line][Column(cols - 1)].flags.remove(Flags::WRAPLINE);
         }
+
+        self.advance_line();
     }
 
     /// Set current position as a tabstop.

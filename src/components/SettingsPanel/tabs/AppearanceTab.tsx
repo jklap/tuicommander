@@ -21,7 +21,13 @@ interface PreviewSpan {
 type PreviewLine = PreviewSpan[];
 
 const PREVIEW_LINES: PreviewLine[] = [
-	[{ text: " projectX ", bg: "blue", color: "white", bold: true }, { text: "", color: "blue", bg: "green" }, { text: "  main ", bg: "green", color: "black", bold: true }, { text: "", color: "green" }, { text: " cat server.ts" }],
+	[
+		{ text: " projectX ", bg: "blue", color: "white", bold: true },
+		{ text: "", color: "blue", bg: "green" },
+		{ text: "  main ", bg: "green", color: "black", bold: true },
+		{ text: "", color: "green" },
+		{ text: " cat server.ts" },
+	],
 	[
 		{ text: "import", color: "dim" },
 		{ text: " { serve } " },
@@ -31,18 +37,36 @@ const PREVIEW_LINES: PreviewLine[] = [
 	],
 	[{ text: "const", color: "dim" }, { text: " port = " }, { text: "8080", color: "yellow" }, { text: ";" }],
 	[{ text: "" }],
-	[{ text: " projectX ", bg: "blue", color: "white", bold: true }, { text: "", color: "blue", bg: "green" }, { text: "  main ", bg: "green", color: "black", bold: true }, { text: "", color: "green" }, { text: " git diff" }],
+	[
+		{ text: " projectX ", bg: "blue", color: "white", bold: true },
+		{ text: "", color: "blue", bg: "green" },
+		{ text: "  main ", bg: "green", color: "black", bold: true },
+		{ text: "", color: "green" },
+		{ text: " git diff" },
+	],
 	[{ text: "@@ -2,3 +2,5 @@", color: "cyan" }],
 	[{ text: "-const port = 8080;", color: "red" }],
 	[{ text: "+const port = 3000;", color: "green" }],
 	[{ text: "+serve({ port });", color: "green" }],
 	[{ text: "" }],
-	[{ text: " projectX ", bg: "blue", color: "white", bold: true }, { text: "", color: "blue", bg: "green" }, { text: "  main ", bg: "green", color: "black", bold: true }, { text: "", color: "green" }, { text: " npm test" }],
+	[
+		{ text: " projectX ", bg: "blue", color: "white", bold: true },
+		{ text: "", color: "blue", bg: "green" },
+		{ text: "  main ", bg: "green", color: "black", bold: true },
+		{ text: "", color: "green" },
+		{ text: " npm test" },
+	],
 	[{ text: "✓", color: "green" }, { text: " server " }, { text: "(4ms)", color: "dim" }],
 	[{ text: "✓", color: "green" }, { text: " routes " }, { text: "(2ms)", color: "dim" }],
 	[{ text: "✓", color: "green" }, { text: " logger " }, { text: "(1ms)", color: "dim" }],
 	[{ text: "" }],
-	[{ text: " projectX ", bg: "blue", color: "white", bold: true }, { text: "", color: "blue", bg: "green" }, { text: "  main ", bg: "green", color: "black", bold: true }, { text: "", color: "green" }, { text: " " }],
+	[
+		{ text: " projectX ", bg: "blue", color: "white", bold: true },
+		{ text: "", color: "blue", bg: "green" },
+		{ text: "  main ", bg: "green", color: "black", bold: true },
+		{ text: "", color: "green" },
+		{ text: " " },
+	],
 ];
 
 function getThemeColor(name: string): string {
@@ -130,9 +154,7 @@ const TerminalPreview: Component = () => {
 				}
 
 				ctx.fillStyle = span.color ? getThemeColor(span.color) : fgDefault;
-				const fontStr = span.bold
-					? `700 ${size}px ${font}`
-					: `${weight} ${size}px ${font}`;
+				const fontStr = span.bold ? `700 ${size}px ${font}` : `${weight} ${size}px ${font}`;
 				ctx.font = fontStr;
 
 				for (let i = 0; i < text.length; i++) {

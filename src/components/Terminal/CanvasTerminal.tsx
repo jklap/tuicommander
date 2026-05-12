@@ -161,15 +161,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		return s;
 	}
 
+	function writePtyNoScroll(data: string) {
+		invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch((e) => {
+			appLogger.warn("terminal", "PTY write failed", { sessionId: props.sessionId, error: e });
+		});
+	}
+
 	function writePty(data: string) {
 		if (currentFrame && currentFrame.displayOffset > 0) {
 			invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta: -currentFrame.displayOffset }).catch(
 				ipcErr("terminal_scroll"),
 			);
 		}
-		invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch((e) => {
-			appLogger.warn("terminal", "PTY write failed", { sessionId: props.sessionId, error: e });
-		});
+		writePtyNoScroll(data);
 	}
 
 	function scheduleRepaint() {
@@ -1795,7 +1799,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 
 		// Pass 2: text — render each glyph at its exact grid position to prevent
-		// cursor drift (cellWidth is Math.ceil'd, so batched fillText runs
+		// cursor drift (cellWidth is Math.round'd, so batched fillText runs
 		// accumulate sub-pixel error over long lines).
 		let lastFont = "";
 		let lastFg = "";
@@ -1817,24 +1821,33 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					ctx.font = buildFontStyle(a, m.fontSize, fontFamily);
 					ctx.fillText(String.fromCodePoint(cp), x, y + m.baseline);
 				}
+				lastFg = "";
 				continue;
 			}
 			if ((cp >= 0x2580 && cp <= 0x2593) || (cp >= 0x2596 && cp <= 0x259f)) {
 				ctx.fillStyle = resolveFg(fgP, bgP, a, cachedFgDefault);
 				drawBlockChar(cp, x, y, m);
+				lastFg = "";
 				continue;
 			}
 			if (cp >= 0xe0b0 && cp <= 0xe0bf) {
-				if (drawPowerlineChar(cp, x, y, m, fgP, bgP, a)) continue;
+				if (drawPowerlineChar(cp, x, y, m, fgP, bgP, a)) {
+					lastFg = "";
+					continue;
+				}
 			}
 			if (cp >= 0x2800 && cp <= 0x28ff) {
 				ctx.fillStyle = resolveFg(fgP, bgP, a, cachedFgDefault);
 				drawBrailleChar(cp, x, y, m);
+				lastFg = "";
 				continue;
 			}
 			if (cp >= 0x1fb00 && cp <= 0x1fb8b) {
 				ctx.fillStyle = resolveFg(fgP, bgP, a, cachedFgDefault);
-				if (drawLegacyComputingChar(cp, x, y, m)) continue;
+				if (drawLegacyComputingChar(cp, x, y, m)) {
+					lastFg = "";
+					continue;
+				}
 			}
 
 			const font = buildFontStyle(a, m.fontSize, fontFamily);
@@ -2077,13 +2090,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		// OSC 8 hyperlinks take priority — the program explicitly tagged this cell
 		try {
-			const uri = (await ref("terminal_hyperlink_at", {
+			const span = (await ref("terminal_hyperlink_span", {
 				sessionId: props.sessionId,
 				row,
 				col,
-			})) as string | null;
-			if (uri) {
-				hoveredLink = { row, colStart: col, colEnd: col + 1, path: uri };
+			})) as [number, number, string] | null;
+			if (span) {
+				const [colStart, colEnd, uri] = span;
+				hoveredLink = { row, colStart, colEnd, path: uri };
 				canvasRef.style.cursor = "pointer";
 				if (currentFrame) {
 					const m = metrics();
@@ -2273,13 +2287,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			setFocused(true);
 			startBlink();
 			props.onFocus?.();
-			if (currentFrame?.focusReporting) writePty("\x1b[I");
+			if (currentFrame?.focusReporting) writePtyNoScroll("\x1b[I");
 		});
 		keyInputRef.addEventListener("blur", () => {
 			setFocused(false);
 			stopBlink();
 			repaintCursorIfNeeded();
-			if (currentFrame?.focusReporting) writePty("\x1b[O");
+			if (currentFrame?.focusReporting) writePtyNoScroll("\x1b[O");
 		});
 
 		// Clear stray text outside of composition. During composition the input
@@ -2547,7 +2561,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
 				const pos = canvasToGrid(e);
 				if (currentFrame.sgrMouse) {
-					writePty(sgrMouseSequence(e.button, pos.col, pos.row, true, e));
+					writePtyNoScroll(sgrMouseSequence(e.button, pos.col, pos.row, true, e));
 				}
 				e.preventDefault();
 				return;
@@ -2621,11 +2635,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
 				if (currentFrame.mouseMode >= 3) {
 					const pos = canvasToGrid(e);
-					writePty(sgrMouseSequence(35, pos.col, pos.row, true, e));
+					writePtyNoScroll(sgrMouseSequence(35, pos.col, pos.row, true, e));
 				} else if (currentFrame.mouseMode >= 2 && e.buttons > 0) {
 					const pos = canvasToGrid(e);
 					const btn = e.buttons & 1 ? 0 : e.buttons & 4 ? 1 : 2;
-					writePty(sgrMouseSequence(32 + btn, pos.col, pos.row, true, e));
+					writePtyNoScroll(sgrMouseSequence(32 + btn, pos.col, pos.row, true, e));
 				}
 				return;
 			}
@@ -2653,7 +2667,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
 				const pos = canvasToGrid(e);
 				if (currentFrame.sgrMouse) {
-					writePty(sgrMouseSequence(e.button, pos.col, pos.row, false, e));
+					writePtyNoScroll(sgrMouseSequence(e.button, pos.col, pos.row, false, e));
 				}
 				return;
 			}
@@ -2684,7 +2698,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (hoveredLink.path.startsWith("http://") || hoveredLink.path.startsWith("https://")) {
 				handleOpenUrl(hoveredLink.path);
 			} else {
-				props.onOpenFilePath?.(hoveredLink.path, hoveredLink.line, hoveredLink.col);
+				const path = hoveredLink.path.startsWith("file://") ? hoveredLink.path.slice(7) : hoveredLink.path;
+				props.onOpenFilePath?.(path, hoveredLink.line, hoveredLink.col);
 			}
 		});
 
@@ -2701,7 +2716,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (currentFrame && currentFrame.mouseMode > 0) {
 				const pos = canvasToGrid(e as unknown as MouseEvent);
 				const btn = e.deltaY < 0 ? 64 : 65;
-				writePty(sgrMouseSequence(btn, pos.col, pos.row, true, e as unknown as MouseEvent));
+				writePtyNoScroll(sgrMouseSequence(btn, pos.col, pos.row, true, e as unknown as MouseEvent));
 				return;
 			}
 			const m = metrics();

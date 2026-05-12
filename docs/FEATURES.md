@@ -69,6 +69,7 @@
 - Paths validated against filesystem before activation (Rust `resolve_terminal_path`)
 - `.md`/`.mdx` → opens in Markdown panel; preview-capable files (HTML, PDF, images, video, audio, plain text/data) → open in the Preview tab (section 3.15); all other code files → open in the built-in code editor
 - `file://` URLs are recognized in addition to plain paths — the prefix is stripped and the path resolved like any other
+- OSC 8 hyperlinks: programs that emit hyperlink escape sequences (e.g. Claude Code, modern `ls`) produce clickable links; hover underline spans the full link text (via `terminal_hyperlink_span` backend API)
 - Supports `:line` and `:line:col` suffixes for precise navigation
 - Recognized extensions: rs, ts, tsx, js, jsx, py, go, java, kt, swift, c, cpp, cs, rb, php, lua, zig, css, scss, html, vue, svelte, json, yaml, toml, sql, graphql, tf, sh, dockerfile, and more
 
@@ -716,7 +717,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Sci-fi themed auto-generated names
 - Three creation flows: dialog (with base ref dropdown), instant (auto-name), right-click branch (quick-clone with hybrid `{branch}--{random}` name)
 - Base ref selection: choose which branch to start from when creating new worktrees
-- Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior
+- Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before a worktree is archived or deleted; non-zero exit blocks the operation
 - Merge & Archive: right-click → merge branch into main, then archive or delete based on setting
@@ -789,22 +790,29 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Review button: if the branch's active agent has a run config named "review", spawns a terminal running the interpolated command with `{pr_number}`, `{branch}`, `{base_branch}`, `{repo}`, `{pr_url}`. Hidden when no matching config exists
 - Triggered from: sidebar PR badge, status bar PR badge, status bar CI badge, toolbar notification bell
 
-### 8.4 CI Auto-Heal
+### 8.4 PR Visibility Filters
+- Global settings (Settings > GitHub): hide draft PRs, hide conflicting PRs, hide CI-failing PRs
+- Per-repo overrides (Settings > [Repo] > PR Visibility): tri-state toggle per filter (Show / Default / Hide)
+- Default = inherit from global setting, shown in parentheses (e.g. "Draft PRs (Show)")
+- Resolution chain: per-repo override → global setting
+- TriStateToggle component: 3-position pill switch (left=hide, center=default, right=show) matching existing toggle style
+
+### 8.5 CI Auto-Heal
 - When CI checks fail on a branch with an active agent terminal, auto-heal can fetch failure logs and inject them into the agent
-- Toggle per-branch via checkbox in PR detail popover (visible when CI checks are failing)
+- Toggle per-branch via pill-switch toggle in PR detail popover (visible when CI checks are failing), styled consistently with CI check item rows
 - Fetches logs via `gh run view --log-failed`, truncated to ~4000 chars
 - Waits for agent to be idle/awaiting input before injecting
 - Max 3 attempts per failure cycle, then stops and logs a warning
 - Attempt counter visible in PR detail popover
 - Status tracked per-branch in `BranchState.ciAutoHeal`
 
-### 8.5 PR Notifications
+### 8.6 PR Notifications
 - Types: Merged, Closed, Conflicts, CI Failed, Changes Requested, Ready
 - Toolbar bell with count badge
 - Individual dismiss or dismiss all
 - Click to open PR detail popover
 
-### 8.5 Merge PR via GitHub API
+### 8.7 Merge PR via GitHub API
 - Merge PRs directly from TUICommander without switching to GitHub web
 - Configurable merge strategy per repo: merge commit, squash, or rebase (Settings > Repository > Worktree tab)
 - Merge method auto-detected from repo's allowed methods via GitHub API (`get_repo_merge_methods`); auto-fallback to squash on HTTP 405 rejection
@@ -819,7 +827,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - After-merge behavior setting for worktrees: `archive` (auto-archive), `delete` (remove), `ask` (show dialog)
 - When `afterMerge=ask`: unified cleanup dialog includes an archive/delete worktree step (with inline selector) alongside branch cleanup steps — replaces the old 3-button MergePostActionDialog
 
-### 8.6 Auto-Delete Branch on PR Close
+### 8.8 Auto-Delete Branch on PR Close
 - Per-repo setting: Off (default) / Ask / Auto
 - Triggered when GitHub polling detects PR merged or closed transition
 - If branch has a linked worktree, removes worktree first then deletes branch
@@ -827,7 +835,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Uses safe `git branch -d` (refuses unmerged branches)
 - Deduplication prevents double-firing on the same PR
 
-### 8.7 GitHub Issues Panel
+### 8.9 GitHub Issues Panel
 - Issues displayed in a collapsible section within the GitHub panel alongside PRs
 - Filter modes: Assigned (default), Created, Mentioned, All, Disabled
 - Filter persisted in app config (`issue_filter` field) and configurable in Settings > GitHub
@@ -840,17 +848,17 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - MCP HTTP endpoint: `GET /repo/issues?path=...` returns issues JSON
 - MCP HTTP endpoint: `POST /repo/issues/close` closes an issue
 
-### 8.8 Polling
+### 8.10 Polling
 - Active window: every 30 seconds
 - Hidden window: every 2 minutes
 - API budget: ~2 calls/min/repo
 
-### 8.9 Token Resolution
+### 8.11 Token Resolution
 - Priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring token → `gh_token` crate → `gh auth token` CLI
 - `gh_token` crate with empty-string bug workaround
 - Fallback to `gh auth token` CLI
 
-### 8.10 OAuth Device Flow Login
+### 8.12 OAuth Device Flow Login
 - One-click GitHub authentication from Settings > GitHub tab
 - Uses GitHub OAuth App Device Flow (no client secret, works on desktop)
 - Token stored in OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)

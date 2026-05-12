@@ -485,15 +485,20 @@ impl TerminalGrid {
     /// When `reflow_history` is enabled, scrollback rows are reflowed (wrapped/
     /// unwrapped) to match the new column width while the visible screen is left
     /// untouched — preserving cursor-addressed TUI positioning.
+    #[cfg(test)]
     pub fn resize(&mut self, rows: u16, cols: u16) {
-        let size = GridSize {
-            cols: cols as usize,
-            lines: rows as usize,
-        };
         let mode = if self.reflow_history {
             ReflowMode::HistoryOnly
         } else {
             ReflowMode::None
+        };
+        self.resize_with_mode(rows, cols, mode);
+    }
+
+    pub fn resize_with_mode(&mut self, rows: u16, cols: u16, mode: ReflowMode) {
+        let size = GridSize {
+            cols: cols as usize,
+            lines: rows as usize,
         };
         self.term.resize_reflow(size, mode);
         self.prev_rows.clear();
@@ -768,6 +773,42 @@ impl TerminalGrid {
         }
         let cell = &grid[line][Column(col)];
         cell.hyperlink().map(|h| h.uri().to_owned())
+    }
+
+    pub fn hyperlink_span(&self, row: usize, col: usize) -> Option<(usize, usize, String)> {
+        let grid = self.term.grid();
+        let display_offset = grid.display_offset();
+        let line = Line(row as i32 - display_offset as i32);
+        let num_cols = grid.columns();
+        if col >= num_cols || line < grid.topmost_line() || line > grid.bottommost_line() {
+            return None;
+        }
+        let uri = grid[line][Column(col)].hyperlink()?.uri().to_owned();
+        let mut start = col;
+        while start > 0 {
+            if let Some(h) = grid[line][Column(start - 1)].hyperlink() {
+                if h.uri() == uri {
+                    start -= 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        let mut end = col + 1;
+        while end < num_cols {
+            if let Some(h) = grid[line][Column(end)].hyperlink() {
+                if h.uri() == uri {
+                    end += 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
+        }
+        Some((start, end, uri))
     }
 
     /// Mark all rows as dirty so the next serialize_dirty_rows returns a full frame.
@@ -2293,6 +2334,341 @@ mod tests {
         assert_eq!(
             history_after_none, history_before_none,
             "without reflow, history count should be unchanged (but content truncated)"
+        );
+    }
+
+    /// Helper: find the cell data offset for a given (row_index, col) in a serialized frame.
+    /// Returns the byte offset of the cell's 11-byte block, or None if not found.
+    fn find_cell_offset(buf: &[u8], target_row: u16, target_col: u16) -> Option<usize> {
+        let (num_rows, _, _, _) = decode_header(buf);
+        let mut offset = TEST_HEADER_SIZE;
+        for _ in 0..num_rows {
+            let row_idx = u16::from_le_bytes([buf[offset], buf[offset + 1]]);
+            let col_count = u16::from_le_bytes([buf[offset + 2], buf[offset + 3]]);
+            offset += 4;
+            if row_idx == target_row && target_col < col_count {
+                return Some(offset + target_col as usize * 11);
+            }
+            offset += col_count as usize * 11;
+        }
+        None
+    }
+
+    #[test]
+    fn serialize_wrapped_line_preserves_indexed_color() {
+        // 10-column grid: a 15-char string with indexed blue fg + yellow bg wraps at col 10.
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        // ESC[38;5;4m = indexed fg 4 (blue), ESC[48;5;3m = indexed bg 3 (yellow)
+        let _ = grid.process(b"\x1b[38;5;4m\x1b[48;5;3mABCDEFGHIJKLMNO\x1b[0m");
+        let buf = grid.serialize_dirty_rows();
+        assert!(!buf.is_empty());
+
+        let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
+        let (ch0, fg_r0, fg_g0, fg_b0, bg_r0, bg_g0, bg_b0, attrs0) = decode_cell(&buf, off0);
+        assert_eq!(ch0, 'A');
+        assert_eq!(attrs0 & super::ATTR_DEFAULT_FG, 0, "row 0 fg NOT default");
+        assert_eq!(attrs0 & super::ATTR_DEFAULT_BG, 0, "row 0 bg NOT default");
+
+        let off1 = find_cell_offset(&buf, 1, 0).expect("row 1 present");
+        let (ch1, fg_r1, fg_g1, fg_b1, bg_r1, bg_g1, bg_b1, attrs1) = decode_cell(&buf, off1);
+        assert_eq!(ch1, 'K');
+        assert_eq!(
+            attrs1 & super::ATTR_DEFAULT_FG,
+            0,
+            "wrapped row fg NOT default"
+        );
+        assert_eq!(
+            attrs1 & super::ATTR_DEFAULT_BG,
+            0,
+            "wrapped row bg NOT default"
+        );
+        assert_eq!(
+            (fg_r0, fg_g0, fg_b0),
+            (fg_r1, fg_g1, fg_b1),
+            "fg same on wrap"
+        );
+        assert_eq!(
+            (bg_r0, bg_g0, bg_b0),
+            (bg_r1, bg_g1, bg_b1),
+            "bg same on wrap"
+        );
+    }
+
+    #[test]
+    fn serialize_wrapped_line_preserves_named_color() {
+        // Same test but with Named colors (ESC[34m = blue, ESC[43m = yellow bg)
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"\x1b[34m\x1b[43mABCDEFGHIJKLMNO\x1b[0m");
+        let buf = grid.serialize_dirty_rows();
+        assert!(!buf.is_empty());
+
+        let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
+        let (ch0, fg_r0, fg_g0, fg_b0, bg_r0, bg_g0, bg_b0, attrs0) = decode_cell(&buf, off0);
+        assert_eq!(ch0, 'A');
+        assert_eq!(attrs0 & super::ATTR_DEFAULT_FG, 0, "row 0 fg NOT default");
+        assert_eq!(attrs0 & super::ATTR_DEFAULT_BG, 0, "row 0 bg NOT default");
+
+        let off1 = find_cell_offset(&buf, 1, 0).expect("row 1 present");
+        let (ch1, fg_r1, fg_g1, fg_b1, bg_r1, bg_g1, bg_b1, attrs1) = decode_cell(&buf, off1);
+        assert_eq!(ch1, 'K');
+        assert_eq!(
+            attrs1 & super::ATTR_DEFAULT_FG,
+            0,
+            "wrapped row fg NOT default"
+        );
+        assert_eq!(
+            attrs1 & super::ATTR_DEFAULT_BG,
+            0,
+            "wrapped row bg NOT default"
+        );
+        assert_eq!(
+            (fg_r0, fg_g0, fg_b0),
+            (fg_r1, fg_g1, fg_b1),
+            "fg same on wrap"
+        );
+        assert_eq!(
+            (bg_r0, bg_g0, bg_b0),
+            (bg_r1, bg_g1, bg_b1),
+            "bg same on wrap"
+        );
+    }
+
+    #[test]
+    fn serialize_wrapped_bold_named_color() {
+        // Bold + Named blue fg on a wrapping line
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"\x1b[1;34m\x1b[43mABCDEFGHIJKLMNO\x1b[0m");
+        let buf = grid.serialize_dirty_rows();
+        assert!(!buf.is_empty());
+
+        let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
+        let (ch0, fg_r0, fg_g0, fg_b0, _, _, _, attrs0) = decode_cell(&buf, off0);
+        assert_eq!(ch0, 'A');
+        assert_ne!(attrs0 & super::ATTR_BOLD, 0, "bold flag set row 0");
+        assert_eq!(attrs0 & super::ATTR_DEFAULT_FG, 0, "row 0 fg NOT default");
+
+        let off1 = find_cell_offset(&buf, 1, 0).expect("row 1 present");
+        let (ch1, fg_r1, fg_g1, fg_b1, _, _, _, attrs1) = decode_cell(&buf, off1);
+        assert_eq!(ch1, 'K');
+        assert_ne!(attrs1 & super::ATTR_BOLD, 0, "bold flag set row 1");
+        assert_eq!(
+            attrs1 & super::ATTR_DEFAULT_FG,
+            0,
+            "wrapped row fg NOT default"
+        );
+        assert_eq!(
+            (fg_r0, fg_g0, fg_b0),
+            (fg_r1, fg_g1, fg_b1),
+            "fg same on wrap"
+        );
+    }
+
+    #[test]
+    fn serialize_reflow_preserves_color() {
+        // Write a colored line that fits, then shrink cols to force reflow wrap.
+        let mut grid = TerminalGrid::new(5, 20, 100);
+        grid.reflow_history = true;
+        // Write 15 chars with blue fg + yellow bg, then newline to push into history
+        let _ = grid.process(b"\x1b[34m\x1b[43mABCDEFGHIJKLMNO\x1b[0m\r\n\r\n\r\n\r\n\r\n");
+        let _ = grid.serialize_dirty_rows(); // drain
+
+        // Shrink to 10 cols — should reflow the 15-char line into 2 rows in history
+        grid.resize(5, 10);
+        // Scroll up to view history
+        grid.scroll(5);
+        let buf = grid.serialize_dirty_rows();
+        assert!(!buf.is_empty());
+
+        // Find cells — the reflowed content should be in the first rows
+        // Row 0 should have the first 10 chars, row 1 the remaining 5
+        let off0 = find_cell_offset(&buf, 0, 0).expect("row 0 present");
+        let (ch0, fg_r0, fg_g0, fg_b0, _, _, _, attrs0) = decode_cell(&buf, off0);
+        assert_eq!(ch0, 'A');
+        assert_eq!(
+            attrs0 & super::ATTR_DEFAULT_FG,
+            0,
+            "reflow row 0 fg NOT default"
+        );
+
+        let off1 = find_cell_offset(&buf, 1, 0).expect("row 1 present");
+        let (ch1, fg_r1, fg_g1, fg_b1, _, _, _, attrs1) = decode_cell(&buf, off1);
+        assert_eq!(ch1, 'K');
+        assert_eq!(
+            attrs1 & super::ATTR_DEFAULT_FG,
+            0,
+            "reflow row 1 fg NOT default"
+        );
+        assert_eq!(
+            (fg_r0, fg_g0, fg_b0),
+            (fg_r1, fg_g1, fg_b1),
+            "fg same after reflow wrap"
+        );
+    }
+
+    #[test]
+    fn serialize_agnoster_prompt_wrap_preserves_color() {
+        // Reproduce actual agnoster prompt at 60 cols (wraps around col 60).
+        // The git segment uses fg=black(30), bg=yellow(43).
+        // After wrapping, the continuation row must have the same fg/bg.
+        let mut grid = TerminalGrid::new(10, 60, 0);
+
+        // Exact sequence from raw PTY capture (simplified):
+        // Reset + clear + draw prompt
+        let prompt = b"\x1b[0m\x1b[27m\x1b[24m\x1b[J\x1b[39m\x1b[0m\x1b[49m\
+            \x1b[40m\x1b[39m stefano.straus@DGQT92CJFP \
+            \x1b[44m\x1b[30m\x1b[30m ~/Gits/LS/gh-metrics \
+            \x1b[43m\x1b[34m\x1b[30m\xee\x82\xb0 POC-00001/fix-production-errors \xc2\xb1 \
+            \x1b[49m\x1b[33m\xee\x82\xb0\x1b[39m ";
+        let _ = grid.process(prompt);
+
+        // zsh re-renders: \r\r\e[A then redraws the prompt
+        let redraw = b"\r\r\x1b[A\x1b[0m\x1b[27m\x1b[24m\x1b[J\x1b[39m\x1b[0m\x1b[49m\
+            \x1b[40m\x1b[39m stefano.straus@DGQT92CJFP \
+            \x1b[44m\x1b[30m\x1b[30m ~/Gits/LS/gh-metrics \
+            \x1b[43m\x1b[34m\x1b[30m\xee\x82\xb0 POC-00001/fix-production-errors \xc2\xb1 \
+            \x1b[49m\x1b[33m\xee\x82\xb0\x1b[39m ";
+        let _ = grid.process(redraw);
+        let buf = grid.serialize_dirty_rows();
+        assert!(!buf.is_empty());
+
+        // The prompt is ~82 chars. At 60 cols, it wraps.
+        // Find 'P' of "POC-00001" in the git segment (skip past "DGQT92CJFP" at col ~25)
+        let mut git_row0_col = None;
+        let mut git_row1_col = None;
+        for col in 30..60u16 {
+            if let Some(off) = find_cell_offset(&buf, 0, col) {
+                let (ch, _, _, _, _, _, _, _) = decode_cell(&buf, off);
+                if ch == 'P' {
+                    git_row0_col = Some(col);
+                    break;
+                }
+            }
+        }
+        // Find a letter on row 1 that's part of the wrapped content
+        for col in 0..60u16 {
+            if let Some(off) = find_cell_offset(&buf, 1, col) {
+                let (ch, _, _, _, _, _, _, _) = decode_cell(&buf, off);
+                if ch.is_ascii_alphabetic() {
+                    git_row1_col = Some(col);
+                    break;
+                }
+            }
+        }
+
+        let col0 = git_row0_col.expect("found git segment char on row 0");
+        let col1 = git_row1_col.expect("found wrapped char on row 1");
+
+        let off0 = find_cell_offset(&buf, 0, col0).unwrap();
+        let (_, fg_r0, fg_g0, fg_b0, bg_r0, bg_g0, bg_b0, attrs0) = decode_cell(&buf, off0);
+
+        let off1 = find_cell_offset(&buf, 1, col1).unwrap();
+        let (ch1, fg_r1, fg_g1, fg_b1, bg_r1, bg_g1, bg_b1, attrs1) = decode_cell(&buf, off1);
+
+        // Both should have fg=black (Named, index 0), bg=yellow (Named, index 3)
+        assert_eq!(
+            attrs0 & super::ATTR_DEFAULT_FG,
+            0,
+            "row 0 git fg NOT default"
+        );
+        assert_eq!(
+            attrs1 & super::ATTR_DEFAULT_FG,
+            0,
+            "row 1 git fg NOT default (got char '{ch1}')"
+        );
+        assert_eq!(
+            attrs0 & super::ATTR_DEFAULT_BG,
+            0,
+            "row 0 git bg NOT default"
+        );
+        assert_eq!(
+            attrs1 & super::ATTR_DEFAULT_BG,
+            0,
+            "row 1 git bg NOT default"
+        );
+        assert_eq!(
+            (fg_r0, fg_g0, fg_b0),
+            (fg_r1, fg_g1, fg_b1),
+            "fg color must match between row 0 and wrapped row 1"
+        );
+        assert_eq!(
+            (bg_r0, bg_g0, bg_b0),
+            (bg_r1, bg_g1, bg_b1),
+            "bg color must match between row 0 and wrapped row 1"
+        );
+    }
+
+    #[test]
+    fn serialize_resize_then_redraw_preserves_color() {
+        // Simulate: prompt at 80 cols (fits on 1 row), resize to 60, zsh redraws.
+        let mut grid = TerminalGrid::new(10, 80, 100);
+        grid.reflow_history = true;
+
+        let prompt = b"\x1b[0m\x1b[J\x1b[40m\x1b[39m stefano.straus@DGQT92CJFP \
+            \x1b[44m\x1b[30m\xee\x82\xb0\x1b[30m ~/Gits/LS/gh-metrics \
+            \x1b[43m\x1b[34m\xee\x82\xb0\x1b[30m POC-00001/fix-production-errors \xc2\xb1 \
+            \x1b[49m\x1b[33m\xee\x82\xb0\x1b[39m ";
+        let _ = grid.process(prompt);
+        let _ = grid.serialize_dirty_rows(); // drain frame
+
+        // Resize to 60 cols (visible screen NOT reflowed — HistoryOnly mode)
+        grid.resize(10, 60);
+        let _ = grid.serialize_dirty_rows(); // drain resize frame
+
+        // zsh SIGWINCH: re-renders prompt at 60 cols (\r\e[A\e[J + prompt)
+        let redraw = b"\r\x1b[0m\x1b[J\x1b[40m\x1b[39m stefano.straus@DGQT92CJFP \
+            \x1b[44m\x1b[30m\xee\x82\xb0\x1b[30m ~/Gits/LS/gh-metrics \
+            \x1b[43m\x1b[34m\xee\x82\xb0\x1b[30m POC-00001/fix-production-errors \xc2\xb1 \
+            \x1b[49m\x1b[33m\xee\x82\xb0\x1b[39m ";
+        let _ = grid.process(redraw);
+        let buf = grid.serialize_dirty_rows();
+        assert!(!buf.is_empty());
+
+        // Find git segment cells on both rows — prompt wraps around col 50-60
+        // Row 1: start of git segment text ("POC-00001...")
+        // Row 2: continuation ("1/fix-production-errors ±")
+        let mut row1_git = None;
+        for col in 50..60u16 {
+            if let Some(off) = find_cell_offset(&buf, 1, col) {
+                let (ch, _, _, _, _, _, _, a) = decode_cell(&buf, off);
+                if ch.is_ascii_alphanumeric() && (a & super::ATTR_DEFAULT_BG == 0) {
+                    row1_git = Some(col);
+                    break;
+                }
+            }
+        }
+        let mut row2_git = None;
+        for col in 0..60u16 {
+            if let Some(off) = find_cell_offset(&buf, 2, col) {
+                let (ch, _, _, _, _, _, _, a) = decode_cell(&buf, off);
+                if ch.is_ascii_alphabetic() && (a & super::ATTR_DEFAULT_BG == 0) {
+                    row2_git = Some(col);
+                    break;
+                }
+            }
+        }
+
+        let col1 = row1_git.expect("found git segment on row 1");
+        let col2 = row2_git.expect("found git segment on row 2");
+
+        let off1 = find_cell_offset(&buf, 1, col1).unwrap();
+        let (_, fg_r1, fg_g1, fg_b1, bg_r1, bg_g1, bg_b1, a1) = decode_cell(&buf, off1);
+
+        let off2 = find_cell_offset(&buf, 2, col2).unwrap();
+        let (_, fg_r2, fg_g2, fg_b2, bg_r2, bg_g2, bg_b2, a2) = decode_cell(&buf, off2);
+
+        assert_eq!(a1 & super::ATTR_DEFAULT_FG, 0, "row 1 fg NOT default");
+        assert_eq!(a2 & super::ATTR_DEFAULT_FG, 0, "row 2 fg NOT default");
+        assert_eq!(a1 & super::ATTR_DEFAULT_BG, 0, "row 1 bg NOT default");
+        assert_eq!(a2 & super::ATTR_DEFAULT_BG, 0, "row 2 bg NOT default");
+        assert_eq!(
+            (fg_r1, fg_g1, fg_b1),
+            (fg_r2, fg_g2, fg_b2),
+            "fg must match on resize+redraw wrap"
+        );
+        assert_eq!(
+            (bg_r1, bg_g1, bg_b1),
+            (bg_r2, bg_g2, bg_b2),
+            "bg must match on resize+redraw wrap"
         );
     }
 }

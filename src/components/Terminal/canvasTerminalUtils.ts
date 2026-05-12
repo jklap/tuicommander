@@ -206,7 +206,7 @@ export function measureFont(
 ): CellMetrics {
 	ctx.font = `${fontWeight} ${fontSize}px ${fontFamily}`;
 	const m = ctx.measureText("W");
-	const cellWidth = Math.ceil(m.width);
+	const cellWidth = Math.round(m.width);
 
 	const ascent = m.fontBoundingBoxAscent ?? m.actualBoundingBoxAscent;
 	const descent = m.fontBoundingBoxDescent ?? m.actualBoundingBoxDescent;
