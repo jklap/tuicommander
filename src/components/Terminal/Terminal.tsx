@@ -872,13 +872,20 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		openSearch: () => setSearchVisible(true),
 		closeSearch: () => setSearchVisible(false),
 		toggleCompose: () => {
-			if (sessionId) {
+			if (composeOpen()) {
+				setComposeOpen(false);
+				canvasTerminalRef()?.focus();
+				return;
+			}
+			if (sessionId && !pendingComposeText()) {
 				invoke("terminal_get_cursor_line", { sessionId })
 					.then((raw) => {
 						setPendingComposeText(stripPrompt(raw as string));
 						setComposeOpen(true);
 					})
-					.catch(() => setComposeOpen((p) => !p));
+					.catch(() => setComposeOpen(true));
+			} else {
+				setComposeOpen(true);
 			}
 		},
 		openComposeWithText: (text: string) => {
@@ -1071,6 +1078,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			<ComposePanel
 				isOpen={composeOpen}
 				initialText={pendingComposeText}
+				onTextChange={setPendingComposeText}
 				onClose={() => {
 					setComposeOpen(false);
 					canvasTerminalRef()?.focus();
@@ -1080,12 +1088,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						try {
 							const term = terminalsStore.get(props.id);
 							await pty.sendCommand(sessionId, text, term?.agentType);
+							setPendingComposeText("");
 							setComposeOpen(false);
 							canvasTerminalRef()?.focus();
 						} catch (err) {
 							appLogger.error("terminal", "ComposePanel send failed", { sessionId, error: err });
 						}
 					} else {
+						setPendingComposeText("");
 						setComposeOpen(false);
 						canvasTerminalRef()?.focus();
 					}

@@ -42,11 +42,12 @@ export interface ComposePanelProps {
 	initialText: Accessor<string>;
 	onClose: () => void;
 	onSend: (text: string) => void | Promise<void>;
+	onTextChange?: (text: string) => void;
 }
 
 export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	const { ref, editorView, createExtension } = createCodeMirror({
-		onValueChange: () => {},
+		onValueChange: (value) => props.onTextChange?.(value),
 	});
 
 	createExtension(composeTheme);
@@ -81,13 +82,15 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 		requestAnimationFrame(() =>
 			requestAnimationFrame(() => {
 				const view = editorView();
-				if (view) {
+				if (!view) return;
+				const current = view.state.doc.toString();
+				if (current !== initial) {
 					view.dispatch({
 						changes: { from: 0, to: view.state.doc.length, insert: initial },
 						selection: { anchor: initial.length },
 					});
-					view.focus();
 				}
+				view.focus();
 			}),
 		);
 	});
