@@ -4656,6 +4656,23 @@ pub(crate) fn terminal_get_row_text(
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
+pub(crate) fn terminal_get_selection_text(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    start_row: usize,
+    start_col: usize,
+    end_row: usize,
+    end_col: usize,
+) -> String {
+    state
+        .vt_log_buffers
+        .get(&session_id)
+        .map(|vt| vt.lock().grid_get_selection_text(start_row, start_col, end_row, end_col))
+        .unwrap_or_default()
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
 pub(crate) fn terminal_get_lines(
     state: State<'_, Arc<AppState>>,
     session_id: String,
