@@ -66,8 +66,9 @@ jobs:
       - name: Patch nightly version
         shell: bash
         run: |
-          # Append nightly timestamp to current version
+          # Append nightly timestamp to current version (strip any existing -nightly suffix first)
           VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+          VERSION="${VERSION%%-nightly*}"
           NIGHTLY="$VERSION-nightly.$(date -u +%Y%m%d).t$(date -u +%H%M)"
           echo "Nightly version: $NIGHTLY (from $VERSION)"
 
