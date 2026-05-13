@@ -1,6 +1,7 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
+import "./markdown-content.css";
 import { type Component, createEffect, createMemo, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { stripAnsi } from "../../utils/stripAnsi";
@@ -76,6 +77,44 @@ function buildCheckboxLineMap(source: string): number[] {
 		}
 	}
 	return map;
+}
+
+let mermaidInitialized = false;
+let mermaidIdCounter = 0;
+
+async function renderMermaidBlocks(container: HTMLElement): Promise<void> {
+	const codeEls = container.querySelectorAll<HTMLElement>("code.language-mermaid");
+	if (codeEls.length === 0) return;
+	try {
+		const { default: mermaid } = await import("mermaid");
+		if (!mermaidInitialized) {
+			mermaid.initialize({
+				startOnLoad: false,
+				theme: "dark",
+				fontFamily: "var(--font-ui)",
+				securityLevel: "strict",
+			});
+			mermaidInitialized = true;
+		}
+		for (const codeEl of codeEls) {
+			const pre = codeEl.parentElement;
+			if (!pre || pre.tagName !== "PRE" || pre.dataset.mermaidRendered) continue;
+			const source = codeEl.textContent?.trim();
+			if (!source) continue;
+			const id = `mermaid-${++mermaidIdCounter}`;
+			try {
+				const { svg } = await mermaid.render(id, source);
+				const wrapper = document.createElement("div");
+				wrapper.className = "mermaid-diagram";
+				wrapper.innerHTML = svg;
+				pre.replaceWith(wrapper);
+			} catch {
+				pre.dataset.mermaidRendered = "error";
+			}
+		}
+	} catch (err) {
+		appLogger.warn("app", "Mermaid load failed", err);
+	}
 }
 
 export const ContentRenderer: Component<ContentRendererProps> = (props) => {
@@ -175,6 +214,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	let containerRef: HTMLDivElement | undefined;
 
 	// After render, set indeterminate property on [~] checkboxes (not settable via HTML attribute)
+	// and render Mermaid diagrams from ```mermaid code blocks.
 	createEffect(() => {
 		processedContent(); // subscribe to re-renders
 		if (!containerRef) return;
@@ -183,6 +223,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 			containerRef.querySelectorAll<HTMLInputElement>(`input[${TILDE_SENTINEL}]`).forEach((cb) => {
 				cb.indeterminate = true;
 			});
+			renderMermaidBlocks(containerRef);
 		});
 		onCleanup(() => cancelAnimationFrame(raf));
 	});
