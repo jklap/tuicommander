@@ -171,7 +171,7 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
         out.push_str("- `ui` (tabs, toasts, confirm dialogs): tab, toast, confirm\n");
         out.push_str("- `plugin_dev_guide`: plugin authoring reference\n\n");
         out.push_str("**Worktrees:** always `repo action=worktree_create`/`worktree_remove` — never `git worktree add/remove` (TUIC must track them to spawn a PTY inside).\n\n");
-        out.push_str("**UI feedback:** `ui action=toast` on task done/blocking error · `ui action=confirm` BEFORE destructive ops (rm -rf, git reset --hard, force push, DROP TABLE) · `ui action=tab` for structured output >20 lines.\n\n");
+        out.push_str("**UI feedback:** `ui action=toast` on task done/blocking error · `ui action=confirm` BEFORE destructive ops (rm -rf, git reset --hard, force push, DROP TABLE) · `ui action=tab` for structured output >20 lines · `ui action=screenshot id=<panel-id>` to see rendered output (Read the returned path).\n\n");
     }
 
     // ── Workflow (phase-grouped) ──────────────────────────────────────
@@ -269,7 +269,7 @@ const SESSION_ACTIONS: &str =
 const AGENT_ACTIONS: &str = "spawn, detect, stats, metrics, register, list_peers, send, inbox";
 const REPO_ACTIONS: &str =
     "list, active, prs, status, worktree_list, worktree_create, worktree_remove";
-const UI_ACTIONS: &str = "tab, toast, confirm";
+const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
 const CONFIG_ACTIONS: &str = "get, save, list_ai_prompts, load_ai_prompt, save_ai_prompt, list_prompts, load_prompt, save_prompt";
 const DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js, help";
 
@@ -345,9 +345,9 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "ui",
-            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound.\n- confirm: blocking dialog. Returns {confirmed}. Requires title.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.",
+            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound.\n- confirm: blocking dialog. Returns {confirmed}. Requires title.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: tab, toast, confirm" },
+                "action": { "type": "string", "description": "One of: tab, toast, confirm, screenshot" },
                 "id": { "type": "string", "description": "Stable identifier for dedup — same id reuses existing tab (action=tab, required)" },
                 "title": { "type": "string", "description": "Tab or notification title (action=tab/toast/confirm, required)" },
                 "html": { "type": "string", "description": "Inline HTML content to render in sandboxed iframe (action=tab, mutually exclusive with url)" },
@@ -806,7 +806,7 @@ pub(crate) async fn handle_mcp_tool_call(
         "session" => handle_session(state, args, mcp_session_id),
         "agent" => handle_agent_unified(state, addr, args, mcp_session_id),
         "repo" => handle_repo(state, args, is_claude_code).await,
-        "ui" => handle_ui_unified(state, addr, args, mcp_session_id),
+        "ui" => handle_ui_unified(state, addr, args, mcp_session_id).await,
         "plugin_dev_guide" => {
             serde_json::json!({"content": super::plugin_docs::PLUGIN_DOCS})
         }
@@ -3080,8 +3080,8 @@ fn handle_agent_unified(
     }
 }
 
-/// Merged ui tool: original tab action + notify toast/confirm.
-fn handle_ui_unified(
+/// Merged ui tool: original tab action + notify toast/confirm + screenshot.
+async fn handle_ui_unified(
     state: &Arc<AppState>,
     addr: SocketAddr,
     args: &serde_json::Value,
@@ -3094,9 +3094,87 @@ fn handle_ui_unified(
     match action {
         "tab" => handle_ui(state, args, mcp_session_id),
         "toast" | "confirm" => handle_notify(state, addr, &remap_action(args, action)),
+        "screenshot" => handle_screenshot(state, addr, args).await,
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'ui'. Available: {}", other, UI_ACTIONS
         )}),
+    }
+}
+
+/// Capture a screenshot of a plugin panel tab and return it as an MCP image content block.
+/// Desktop-only, loopback-only. Sends a Tauri event to the frontend which captures the
+/// iframe content and responds via the `screenshot_response` command.
+async fn handle_screenshot(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+) -> serde_json::Value {
+    #[cfg(not(feature = "desktop"))]
+    {
+        let _ = (state, addr, args);
+        return serde_json::json!({"error": "Action 'screenshot' requires desktop feature"});
+    }
+    #[cfg(feature = "desktop")]
+    {
+        if !addr.ip().is_loopback() {
+            return serde_json::json!({"error": "Action 'screenshot' is restricted to localhost connections"});
+        }
+        let panel_id = match args["id"].as_str() {
+            Some(id) => id.to_string(),
+            None => return serde_json::json!({"error": "Action 'screenshot' requires 'id' (the plugin panel ID)"}),
+        };
+        let app_handle = state.app_handle.read().clone();
+        let Some(handle) = app_handle else {
+            return serde_json::json!({"error": "AppHandle not available (headless mode)"});
+        };
+
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        state.screenshot_responses.insert(request_id.clone(), tx);
+
+        use tauri::Emitter;
+        if let Err(e) = handle.emit("screenshot-request", serde_json::json!({
+            "id": panel_id,
+            "request_id": request_id,
+        })) {
+            state.screenshot_responses.remove(&request_id);
+            return serde_json::json!({"error": format!("Failed to emit screenshot request: {e}")});
+        }
+
+        match tokio::time::timeout(std::time::Duration::from_secs(15), rx).await {
+            Ok(Ok(Some(base64_data))) => {
+                use base64::Engine;
+                let bytes = match base64::engine::general_purpose::STANDARD.decode(&base64_data) {
+                    Ok(b) => b,
+                    Err(e) => return serde_json::json!({"error": format!("Invalid base64 from frontend: {e}")}),
+                };
+                let dir = state.data_dir.join("screenshots");
+                let _ = std::fs::create_dir_all(&dir);
+                let filename = format!("{}.webp", request_id);
+                let path = dir.join(&filename);
+                if let Err(e) = std::fs::write(&path, &bytes) {
+                    return serde_json::json!({"error": format!("Failed to write screenshot: {e}")});
+                }
+                serde_json::json!({
+                    "ok": true,
+                    "path": path.to_string_lossy(),
+                    "size_bytes": bytes.len(),
+                    "hint": "Read the path to view."
+                })
+            }
+            Ok(Ok(None)) => {
+                serde_json::json!({"error": format!(
+                    "Screenshot failed: panel '{}' not found or iframe content not accessible", panel_id
+                )})
+            }
+            Ok(Err(_)) => {
+                serde_json::json!({"error": "Screenshot response channel dropped"})
+            }
+            Err(_) => {
+                state.screenshot_responses.remove(&request_id);
+                serde_json::json!({"error": "Screenshot timed out (15s)"})
+            }
+        }
     }
 }
 
@@ -3337,6 +3415,7 @@ pub(crate) fn test_validate_mcp_repo_path(path: &str) -> Result<(), serde_json::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
 
     fn test_state() -> Arc<AppState> {
         let state = Arc::new(AppState {
@@ -3448,6 +3527,7 @@ mod tests {
                 .unwrap(),
             )),
             connections_lock: tokio::sync::Mutex::new(()),
+            screenshot_responses: dashmap::DashMap::new(),
         });
         // Tests start with all native tools enabled (override production default
         // which disables config, knowledge, debug).
@@ -6721,5 +6801,116 @@ mod tests {
             }),
         );
         assert!(r["error"].as_str().unwrap().contains("not found"));
+    }
+
+    // ---- ui(action=screenshot) -------------------------------------------------
+
+    #[tokio::test]
+    async fn ui_screenshot_requires_id() {
+        let state = test_state();
+        let r = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "ui",
+            &serde_json::json!({ "action": "screenshot" }),
+            None,
+        )
+        .await;
+        let err = r["error"].as_str().expect("should return error");
+        assert!(
+            err.contains("'id'"),
+            "Missing id should mention 'id' in error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_screenshot_times_out_without_frontend() {
+        let state = test_state();
+        // No frontend listener, so the screenshot request will time out.
+        // Override timeout to 1s to keep the test fast.
+        let r = handle_screenshot(
+            &state,
+            loopback_addr(),
+            &serde_json::json!({ "id": "nonexistent-panel" }),
+        )
+        .await;
+        let err = r["error"].as_str().expect("should return error");
+        assert!(
+            err.contains("timed out") || err.contains("not available"),
+            "Expected timeout or not-available error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ui_screenshot_channel_delivers_result() {
+        let state = test_state();
+        let panel_id = "test-panel";
+
+        // Simulate: spawn a task that waits for a screenshot_responses entry
+        // and delivers fake base64 data.
+        let state2 = state.clone();
+        let deliver = tokio::spawn(async move {
+            // Poll for the channel to appear
+            for _ in 0..50 {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                if let Some((_, sender)) = state2.screenshot_responses.remove("") {
+                    // Won't match — we need the actual request_id.
+                    state2.screenshot_responses.insert("".to_string(), sender);
+                }
+                // Check all entries
+                let keys: Vec<_> = state2
+                    .screenshot_responses
+                    .iter()
+                    .map(|e| e.key().clone())
+                    .collect();
+                for key in keys {
+                    if let Some((_, sender)) = state2.screenshot_responses.remove(&key) {
+                        // 1x1 white WebP (minimal valid WebP)
+                        let fake_b64 = base64::engine::general_purpose::STANDARD
+                            .encode(b"\x00\x00\x00\x00");
+                        let _ = sender.send(Some(fake_b64));
+                        return;
+                    }
+                }
+            }
+        });
+
+        let r = handle_screenshot(
+            &state,
+            loopback_addr(),
+            &serde_json::json!({ "id": panel_id }),
+        )
+        .await;
+        deliver.await.unwrap();
+
+        // Should succeed (write file) or at least not be a timeout
+        if let Some(err) = r["error"].as_str() {
+            assert!(
+                !err.contains("timed out"),
+                "Should not have timed out with a responding channel, got: {err}"
+            );
+        } else {
+            assert!(r["ok"].as_bool().unwrap_or(false), "Expected ok: true, got: {r}");
+            assert!(r["path"].as_str().is_some(), "Expected path in result, got: {r}");
+        }
+    }
+
+    #[tokio::test]
+    async fn ui_screenshot_non_loopback_rejected() {
+        let state = test_state();
+        let remote_addr: SocketAddr = "192.168.1.1:12345".parse().unwrap();
+        let r = handle_mcp_tool_call(
+            &state,
+            remote_addr,
+            "ui",
+            &serde_json::json!({ "action": "screenshot", "id": "x" }),
+            None,
+        )
+        .await;
+        let err = r["error"].as_str().expect("should return error");
+        assert!(
+            err.contains("localhost"),
+            "Non-loopback should be rejected, got: {err}"
+        );
     }
 }

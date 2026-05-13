@@ -475,6 +475,25 @@ export async function initApp(deps: AppInitDeps) {
 		}
 	}).catch((err) => appLogger.error("app", "Failed to register close-html-tabs listener", err));
 
+	// Screenshot capture: MCP ui(action=screenshot) → capture iframe → respond
+	listen<{ id: string; request_id: string }>("screenshot-request", async (event) => {
+		const { id, request_id } = event.payload;
+		try {
+			const container = document.querySelector(`[data-plugin-id="${CSS.escape(id)}"]`);
+			const iframe = container?.querySelector("iframe") as HTMLIFrameElement | null;
+			if (!iframe) {
+				await invoke("screenshot_response", { requestId: request_id, data: null });
+				return;
+			}
+			const { captureIframeAsWebp } = await import("../utils/captureIframe");
+			const base64 = await captureIframeAsWebp(iframe);
+			await invoke("screenshot_response", { requestId: request_id, data: base64 });
+		} catch (err) {
+			appLogger.error("app", `Screenshot capture failed for panel '${id}'`, err);
+			await invoke("screenshot_response", { requestId: request_id, data: null });
+		}
+	}).catch((err) => appLogger.error("app", "Failed to register screenshot-request listener", err));
+
 	// Check for surviving PTY sessions (persists across Vite HMR reloads)
 	let survivingSessions: Awaited<ReturnType<typeof deps.pty.listActiveSessions>> = [];
 	try {

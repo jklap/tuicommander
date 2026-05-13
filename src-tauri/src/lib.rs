@@ -272,6 +272,20 @@ fn clear_repo_caches(state: State<'_, Arc<AppState>>, path: String) {
     state.invalidate_repo_caches(&path);
 }
 
+/// Receive a screenshot response from the frontend (captured iframe content).
+/// Pairs with the `screenshot-request` Tauri event emitted by `ui(action=screenshot)`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+fn screenshot_response(
+    state: State<'_, Arc<AppState>>,
+    request_id: String,
+    data: Option<String>,
+) {
+    if let Some((_, sender)) = state.screenshot_responses.remove(&request_id) {
+        let _ = sender.send(data);
+    }
+}
+
 /// One IPv4 address found on a network interface.
 #[derive(serde::Serialize)]
 struct LocalIpEntry {
@@ -1239,6 +1253,7 @@ pub fn run() {
             pty::terminal_search,
             pty::terminal_search_buffer,
             pty::terminal_get_row_text,
+            pty::terminal_get_selection_text,
             pty::terminal_get_lines,
             pty::terminal_get_cursor_line,
             pty::terminal_hyperlink_at,
@@ -1514,6 +1529,7 @@ pub fn run() {
             claude_usage::get_claude_usage_timeline,
             claude_usage::get_claude_session_stats,
             claude_usage::get_claude_project_list,
+            screenshot_response,
             app_logger::push_log,
             app_logger::get_logs,
             app_logger::clear_logs,

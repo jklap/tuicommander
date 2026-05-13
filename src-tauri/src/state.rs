@@ -1062,6 +1062,9 @@ pub struct AppState {
     pub(crate) tunnel_audit: Arc<parking_lot::Mutex<crate::tunnels::audit::AuditLog>>,
     /// Serializes load-modify-save on `connections.json` to prevent TOCTOU races.
     pub(crate) connections_lock: tokio::sync::Mutex<()>,
+    /// Pending screenshot requests: request_id → oneshot sender for base64 image data.
+    /// Populated by MCP `ui(action=screenshot)`, consumed by `screenshot_response` command.
+    pub(crate) screenshot_responses: DashMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
 }
 
 impl AppState {
@@ -1174,6 +1177,7 @@ impl AppState {
             tunnel_manager,
             tunnel_audit,
             connections_lock: tokio::sync::Mutex::new(()),
+            screenshot_responses: DashMap::new(),
         }
     }
 
@@ -2352,6 +2356,16 @@ impl VtLogBuffer {
         self.grid.cursor_point()
     }
 
+    pub(crate) fn grid_get_selection_text(
+        &self,
+        start_row: usize,
+        start_col: usize,
+        end_row: usize,
+        end_col: usize,
+    ) -> String {
+        self.grid.get_selection_text(start_row, start_col, end_row, end_col)
+    }
+
     pub(crate) fn grid_get_lines(&self, start: usize, end: usize) -> Vec<String> {
         let total = self.grid.total_lines();
         let clamped_end = end.min(total);
@@ -3119,6 +3133,7 @@ mod tests {
                 .unwrap(),
             )),
             connections_lock: tokio::sync::Mutex::new(()),
+            screenshot_responses: DashMap::new(),
         }
     }
 

@@ -1682,6 +1682,7 @@ mod tests {
                 .unwrap(),
             )),
             connections_lock: tokio::sync::Mutex::new(()),
+            screenshot_responses: DashMap::new(),
         });
         // Override default disabled_native_tools so all 8 tools are visible in tests
         state.config.write().disabled_native_tools = Vec::new();

@@ -9,6 +9,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import { attachIframeKeyForwarder } from "../../utils/iframeKeyForwarder";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { PLUGIN_BASE_CSS } from "./pluginBaseStyles";
@@ -127,6 +128,7 @@ function injectThemeVars(html: string): string {
 export const PluginPanel: Component<PluginPanelProps> = (props) => {
 	let iframeRef: HTMLIFrameElement | undefined;
 	let containerRef: HTMLDivElement | undefined;
+	let cleanupKeyForwarder: (() => void) | undefined;
 	const menu = createContextMenu();
 
 	/**
@@ -188,8 +190,17 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 		}
 	};
 
+	const installKeyForwarder = () => {
+		cleanupKeyForwarder?.();
+		cleanupKeyForwarder = undefined;
+		if (iframeRef) {
+			cleanupKeyForwarder = attachIframeKeyForwarder(iframeRef);
+		}
+	};
+
 	const sendSdkInit = () => {
 		injectSdkIntoUrlIframe();
+		installKeyForwarder();
 		sendToIframe({ type: "tuic:sdk-init", version: TUIC_SDK_VERSION });
 		sendToIframe({ type: "tuic:repo-changed", repoPath: repositoriesStore.state.activeRepoPath ?? null });
 		sendToIframe({ type: "tuic:theme-changed", theme: extractThemeObject() });
@@ -341,7 +352,10 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 	// Register message listener and send channel on mount; clean up on unmount
 	onMount(() => {
 		window.addEventListener("message", handleMessage);
-		onCleanup(() => window.removeEventListener("message", handleMessage));
+		onCleanup(() => {
+			window.removeEventListener("message", handleMessage);
+			cleanupKeyForwarder?.();
+		});
 
 		const tabId = props.tab.id;
 		pluginRegistry.registerPanelSendChannel(tabId, (data: unknown) => {
@@ -404,6 +418,7 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 			ref={containerRef}
 			data-focus-target="plugin-iframe"
 			data-tab-id={props.tab.id}
+			data-plugin-id={props.tab.pluginId}
 			tabIndex={-1}
 			style={{
 				width: "100%",
@@ -437,7 +452,7 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
            iframe element on reload — avoids the srcdoc write races that
            can leave it blank. */
 				<Show when={reloadKey()} keyed>
-					<iframe ref={iframeRef} sandbox="allow-scripts allow-same-origin" srcdoc={srcdoc()} style={iframeStyle} />
+					<iframe ref={iframeRef} sandbox="allow-scripts allow-same-origin" srcdoc={srcdoc()} style={iframeStyle} onLoad={installKeyForwarder} />
 				</Show>
 			)}
 			<ContextMenu
