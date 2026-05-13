@@ -48,6 +48,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "resources": ["icons/32x32.png"],
     "createUpdaterArtifacts": true,
     "externalBin": [
       "binaries/tuic-bridge",

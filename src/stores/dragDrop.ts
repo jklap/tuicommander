@@ -253,6 +253,30 @@ export function clearPaneDropHover(): void {
 	}
 }
 
+let _dragIconPath: string | null = null;
+
+async function resolveDragIcon(): Promise<string> {
+	if (_dragIconPath) return _dragIconPath;
+	try {
+		const { resolveResource } = await import("@tauri-apps/api/path");
+		_dragIconPath = await resolveResource("icons/32x32.png");
+	} catch {
+		_dragIconPath = "";
+	}
+	return _dragIconPath;
+}
+
+export async function startNativeDrag(paths: string[]): Promise<void> {
+	if (!isTauri() || paths.length === 0) return;
+	try {
+		const { startDrag } = await import("@crabnebula/tauri-plugin-drag");
+		const icon = await resolveDragIcon();
+		await startDrag({ item: paths, icon });
+	} catch (err) {
+		appLogger.warn("app", "Native drag failed", err);
+	}
+}
+
 /** Find pane group ID at CSS pixel coordinates. */
 export function findPaneGroupAtPoint(x: number, y: number): string | null {
 	const el = document.elementFromPoint(x, y);

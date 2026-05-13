@@ -1,7 +1,7 @@
 import { type Component, createSignal, For, Show } from "solid-js";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
 import { appLogger } from "../../stores/appLogger";
-import { markInternalDragEnd, markInternalDragStart } from "../../stores/dragDrop";
+import { markInternalDragEnd, markInternalDragStart, startNativeDrag } from "../../stores/dragDrop";
 import type { DirEntry } from "../../types/fs";
 import { cx } from "../../utils";
 import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
@@ -70,6 +70,7 @@ export const TreeNode: Component<TreeNodeProps> = (props) => {
 					e.dataTransfer!.setData("text/plain", p);
 					e.dataTransfer!.effectAllowed = "copy";
 					markInternalDragStart();
+					startNativeDrag([p]);
 				}}
 				onDragEnd={() => markInternalDragEnd()}
 				data-drop-target={props.entry.is_dir ? "folder" : undefined}

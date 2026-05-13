@@ -6,7 +6,7 @@ import { t } from "../../i18n";
 import { invoke, listen } from "../../invoke";
 import { getModifierSymbol, shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
-import { markInternalDragEnd, markInternalDragStart } from "../../stores/dragDrop";
+import { markInternalDragEnd, markInternalDragStart, startNativeDrag } from "../../stores/dragDrop";
 import { repositoriesStore } from "../../stores/repositories";
 import { uiStore } from "../../stores/ui";
 import type { ContentMatch, DirEntry } from "../../types/fs";
@@ -1110,6 +1110,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 												e.dataTransfer!.setData("text/plain", p);
 												e.dataTransfer!.effectAllowed = "copy";
 												markInternalDragStart();
+												startNativeDrag([p]);
 											}}
 											onDragEnd={() => markInternalDragEnd()}
 											onClick={() => {
