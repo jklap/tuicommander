@@ -61,3 +61,29 @@ export function relativeTime(isoString: string): string {
 	const months = Math.floor(diffDay / 30);
 	return `${months}mo ago`;
 }
+
+/** Short time-of-day string for an ISO timestamp (e.g., "14:32"). */
+function timeOfDay(isoString: string): string {
+	const d = new Date(isoString);
+	return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+/**
+ * Relative time with time-of-day suffix for recent commits (< 7 days).
+ * E.g., "1d ago · 14:32" or "3w ago" (no time for older).
+ */
+export function relativeTimeWithClock(isoString: string): string {
+	if (!isoString) return "";
+	const rel = relativeTime(isoString);
+	const diffDay = Math.floor((Date.now() - new Date(isoString).getTime()) / 86_400_000);
+	if (diffDay < 7) return `${rel} · ${timeOfDay(isoString)}`;
+	return rel;
+}
+
+/** Full date+time string for tooltips (e.g., "2026-05-12 14:32:05"). */
+export function fullTimestamp(isoString: string): string {
+	if (!isoString) return "";
+	const d = new Date(isoString);
+	const pad = (n: number) => String(n).padStart(2, "0");
+	return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}

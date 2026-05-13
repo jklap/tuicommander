@@ -5,7 +5,7 @@ import { appLogger } from "../../stores/appLogger";
 import { isDiffStatus } from "../../stores/diffTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { cx } from "../../utils";
-import { relativeTime } from "../../utils/time";
+import { fullTimestamp, relativeTimeWithClock } from "../../utils/time";
 import type { GraphNode } from "./CommitGraph";
 import { CommitGraph, graphWidth } from "./CommitGraph";
 import type { OpenDiffFn } from "./GitPanel";
@@ -321,8 +321,8 @@ export const LogTab: Component<LogTabProps> = (props) => {
 										{/* Line 2: hash + author + time */}
 										<div class={s.commitLine2}>
 											<span class={s.commitHash}>{commit()?.hash.slice(0, 7)}</span>
-											<span class={s.commitMeta}>
-												{commit()?.author_name} · {commit() ? relativeTime(commit()!.author_date) : ""}
+											<span class={s.commitMeta} title={commit() ? fullTimestamp(commit()!.author_date) : ""}>
+												{commit()?.author_name} · {commit() ? relativeTimeWithClock(commit()!.author_date) : ""}
 											</span>
 										</div>
 										{/* Expanded: changed files list */}
