@@ -455,6 +455,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 	}
 
+	function selectionSpansOffscreen(): boolean {
+		if (!selectionStart || !selectionEnd) return false;
+		const absStartRow = Math.min(selectionStart.row, selectionEnd.row);
+		const absEndRow = Math.max(selectionStart.row, selectionEnd.row);
+		for (let absRi = absStartRow; absRi <= absEndRow; absRi++) {
+			if (absRowToViewport(absRi) === null) return true;
+		}
+		return false;
+	}
+
 	function getLocalSelectionText(): string {
 		if (!selectionStart || !selectionEnd) return "";
 		const absStartRow = Math.min(selectionStart.row, selectionEnd.row);
@@ -2097,7 +2107,24 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			})) as [number, number, string] | null;
 			if (span) {
 				const [colStart, colEnd, uri] = span;
-				hoveredLink = { row, colStart, colEnd, path: uri };
+				let resolvedPath = uri;
+				if (!uri.startsWith("http://") && !uri.startsWith("https://")) {
+					const raw = uri.startsWith("file://") ? uri.slice(7) : uri;
+					const termId = terminalsStore.getTerminalForSession(props.sessionId);
+					const termData = termId ? terminalsStore.get(termId) : undefined;
+					const cwd = termData?.cwd || "";
+					try {
+						const r = (await ref("resolve_terminal_path", { cwd, candidate: raw })) as {
+							absolute_path: string;
+							is_directory: boolean;
+						} | null;
+						if (r) resolvedPath = r.absolute_path;
+					} catch {
+						/* resolve failed — use raw URI */
+					}
+				}
+				if (!alive || gen !== linkCheckGeneration) return;
+				hoveredLink = { row, colStart, colEnd, path: resolvedPath };
 				canvasRef.style.cursor = "pointer";
 				if (currentFrame) {
 					const m = metrics();
@@ -2965,7 +2992,18 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			| ((msg: string) => void)
 			| undefined;
 		try {
-			const text = getLocalSelectionText();
+			let text: string;
+			if (selectionSpansOffscreen() && invokeRef && selectionStart && selectionEnd) {
+				text = (await invokeRef("terminal_get_selection_text", {
+					sessionId: props.sessionId,
+					startRow: selectionStart.row,
+					startCol: selectionStart.col,
+					endRow: selectionEnd.row,
+					endCol: selectionEnd.col,
+				})) as string;
+			} else {
+				text = getLocalSelectionText();
+			}
 			if (text) {
 				cachedSelectionText = text;
 				await navigator.clipboard.writeText(text);

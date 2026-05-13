@@ -38,6 +38,7 @@ export interface DecodedFrame {
 	mouseMode: 0 | 1 | 2 | 3;
 	sgrMouse: boolean;
 	focusReporting: boolean;
+	bracketedPaste: boolean;
 	screenRows: number;
 	screenCols: number;
 	rows: DecodedRow[];
@@ -89,6 +90,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 	const mouseMode = ((frameFlags >> 3) & 0x03) as 0 | 1 | 2 | 3;
 	const sgrMouse = (frameFlags & 0x20) !== 0;
 	const focusReporting = (frameFlags & 0x40) !== 0;
+	const bracketedPaste = (frameFlags & 0x80) !== 0;
 
 	const rows: DecodedRow[] = [];
 	for (let r = 0; r < numRows; r++) {
@@ -134,6 +136,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 		mouseMode,
 		sgrMouse,
 		focusReporting,
+		bracketedPaste,
 		screenRows,
 		screenCols,
 		rows,

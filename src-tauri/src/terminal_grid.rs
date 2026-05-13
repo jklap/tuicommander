@@ -953,6 +953,61 @@ impl TerminalGrid {
         self.row_to_text(line).unwrap_or_default()
     }
 
+    /// Extract text for a selection range using absolute row coordinates.
+    ///
+    /// Absolute rows: 0 = oldest history line, historySize = first screen line.
+    /// Columns are 0-based cell indices.
+    pub fn get_selection_text(
+        &self,
+        start_row: usize,
+        start_col: usize,
+        end_row: usize,
+        end_col: usize,
+    ) -> String {
+        let grid = self.term.grid();
+        let history_size = grid.history_size();
+        let num_cols = grid.columns();
+        let mut lines = Vec::new();
+
+        let (r0, c0, r1, c1) = if start_row < end_row || (start_row == end_row && start_col <= end_col) {
+            (start_row, start_col, end_row, end_col)
+        } else {
+            (end_row, end_col, start_row, start_col)
+        };
+
+        for abs_row in r0..=r1 {
+            let line = Line(abs_row as i32 - history_size as i32);
+            if line < grid.topmost_line() || line > grid.bottommost_line() {
+                lines.push(String::new());
+                continue;
+            }
+
+            let col_start = if abs_row == r0 { c0 } else { 0 };
+            let col_end = if abs_row == r1 { c1.min(num_cols.saturating_sub(1)) } else { num_cols.saturating_sub(1) };
+
+            let mut text = String::new();
+            for col in col_start..=col_end {
+                if col >= num_cols {
+                    break;
+                }
+                let cell = &grid[line][Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                text.push(cell.c);
+            }
+            let trimmed_len = text.trim_end().len();
+            text.truncate(trimmed_len);
+            lines.push(text);
+        }
+
+        while lines.last().map_or(false, |l| l.is_empty()) {
+            lines.pop();
+        }
+
+        lines.join("\n")
+    }
+
     /// Serialize dirty rows as a compact binary frame.
     ///
     /// Uses alacritty's built-in damage tracking to identify changed rows.
@@ -971,7 +1026,7 @@ impl TerminalGrid {
     ///                 bit4=report_associated_text
     /// frame_flags: bit0=bell, bits1-2=cursor_shape (0=block,1=underline,2=beam),
     ///              bits3-4=mouse_mode (0=none,1=click,2=drag,3=motion),
-    ///              bit5=sgr_mouse, bit6=focus_reporting
+    ///              bit5=sgr_mouse, bit6=focus_reporting, bit7=bracketed_paste
     pub fn serialize_dirty_rows(&mut self) -> Vec<u8> {
         let num_cols = self.term.grid().columns();
         let num_lines = self.term.grid().screen_lines();
@@ -1062,6 +1117,10 @@ impl TerminalGrid {
         // bit 6: focus reporting
         if mode.contains(TermMode::FOCUS_IN_OUT) {
             frame_flags |= 0x40;
+        }
+        // bit 7: bracketed paste mode
+        if mode.contains(TermMode::BRACKETED_PASTE) {
+            frame_flags |= 0x80;
         }
 
         buf.extend_from_slice(&(row_count as u16).to_le_bytes());
@@ -1724,6 +1783,42 @@ mod tests {
         assert_eq!(text, "first");
         let text = grid.get_row_text(1);
         assert_eq!(text, "second");
+    }
+
+    #[test]
+    fn get_selection_text_single_row() {
+        let mut grid = TerminalGrid::new(5, 20, 0);
+        let _ = grid.process(b"hello world");
+        // historySize=0, so screen row 0 = absRow 0
+        let text = grid.get_selection_text(0, 6, 0, 10);
+        assert_eq!(text, "world");
+    }
+
+    #[test]
+    fn get_selection_text_multi_row() {
+        let mut grid = TerminalGrid::new(5, 20, 0);
+        let _ = grid.process(b"first\r\nsecond\r\nthird");
+        let text = grid.get_selection_text(0, 0, 2, 4);
+        assert_eq!(text, "first\nsecond\nthird");
+    }
+
+    #[test]
+    fn get_selection_text_with_scrollback() {
+        let mut grid = TerminalGrid::new(3, 20, 100);
+        let _ = grid.process(b"line1\r\nline2\r\nline3\r\nline4\r\nline5");
+        // 2 lines in history (line1, line2), 3 on screen (line3, line4, line5)
+        // absRow 0 = line1, absRow 1 = line2, absRow 2 = line3, ...
+        let text = grid.get_selection_text(0, 0, 4, 4);
+        assert_eq!(text, "line1\nline2\nline3\nline4\nline5");
+    }
+
+    #[test]
+    fn get_selection_text_reversed_coords() {
+        let mut grid = TerminalGrid::new(5, 20, 0);
+        let _ = grid.process(b"hello world");
+        // end before start — should still work
+        let text = grid.get_selection_text(0, 10, 0, 6);
+        assert_eq!(text, "world");
     }
 
     // --- Scrollback reading tests ---
