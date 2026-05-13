@@ -71,6 +71,8 @@ vi.mock("../../stores/repositories", () => ({
 		reorderGroups: mockReorderGroups,
 		getParkedRepos: vi.fn(() => []),
 		setPark: vi.fn(),
+		setParkGroup: vi.fn(),
+		isGroupFullyParked: vi.fn(() => false),
 		get: vi.fn(() => undefined),
 		setActive: vi.fn(),
 	},
