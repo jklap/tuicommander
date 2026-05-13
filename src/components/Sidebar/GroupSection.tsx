@@ -19,11 +19,18 @@ export const GroupSection: Component<{
 }> = (props) => {
 	const groupMenu = createContextMenu();
 
-	const groupMenuItems = (): ContextMenuItem[] => [
-		{ label: "Rename Group", action: () => props.onRename(props.group.id) },
-		{ label: "Change Color", action: () => props.onColorChange(props.group.id) },
-		{ label: "Delete Group", action: () => repositoriesStore.deleteGroup(props.group.id) },
-	];
+	const groupMenuItems = (): ContextMenuItem[] => {
+		const allParked = repositoriesStore.isGroupFullyParked(props.group.id);
+		return [
+			{ label: "Rename Group", action: () => props.onRename(props.group.id) },
+			{ label: "Change Color", action: () => props.onColorChange(props.group.id) },
+			{
+				label: allParked ? "Unpark Group" : "Park Group",
+				action: () => repositoriesStore.setParkGroup(props.group.id, !allParked),
+			},
+			{ label: "Delete Group", action: () => repositoriesStore.deleteGroup(props.group.id) },
+		];
+	};
 
 	return (
 		<div class={cx(s.groupSection, props.dragOverClass)} data-sidebar-group={props.group.id}>

@@ -974,12 +974,13 @@ const App: Component = () => {
 	};
 
 	// Build agent submenu items for the context menu
-	/** Launch an agent in the active terminal, injecting --session-id when supported */
+	/** Launch an agent in the active terminal */
 	const launchAgentInActiveTerminal = async (agentType: AgentType, cmd: string) => {
 		const active = terminalsStore.getActive();
 		if (!active?.ref || !active.sessionId) return;
-		// Use the tab's stable tuicSession UUID as --session-id so resume works via TUIC_SESSION
-		const agentSessionId = active.tuicSession ?? (agentType === "claude" ? crypto.randomUUID() : null);
+		// Claude: no --session-id injection — session is discovered from disk after launch.
+		// Other agents: inject tab UUID as session ID when supported.
+		const agentSessionId = agentType === "claude" ? null : (active.tuicSession ?? null);
 		const finalCmd = buildAgentLaunchCommand(cmd, agentSessionId, agentType);
 		// Shell family matters here: we're still at the user's shell prompt
 		// (agent not running yet) so Ctrl-U must match the shell, not the agent.
@@ -993,7 +994,6 @@ const App: Component = () => {
 		terminalsStore.update(active.id, {
 			name: AGENTS[agentType].name,
 			nameIsCustom: true,
-			agentSessionId,
 		});
 	};
 
@@ -1036,7 +1036,7 @@ const App: Component = () => {
 	const buildSidebarAgentMenuItems = (repoPath: string, branchName: string): ContextMenuItem[] => {
 		const enabled = agentDetection
 			.getAvailable()
-			.filter((a) => a.type !== "git" && settingsStore.isAgentEnabled(a.type));
+			.filter((a) => a.type !== "git" && a.type !== "api" && settingsStore.isAgentEnabled(a.type));
 		if (enabled.length === 0) return [];
 
 		const buildAgentEntry = (agent: (typeof enabled)[0]) => {
@@ -1046,15 +1046,15 @@ const App: Component = () => {
 			const launchAgent = async (cmd: string) => {
 				const termId = await gitOps.handleAddTerminalToBranch(repoPath, branchName);
 				if (termId) {
-					// Use the new tab's stable tuicSession UUID as --session-id
+					// Claude: no --session-id injection — session is discovered from disk after launch.
+					// Other agents: inject tab UUID as session ID when supported.
 					const term = terminalsStore.get(termId);
-					const agentSessionId = term?.tuicSession ?? (agent.type === "claude" ? crypto.randomUUID() : null);
+					const agentSessionId = agent.type === "claude" ? null : (term?.tuicSession ?? null);
 					const finalCmd = buildAgentLaunchCommand(cmd, agentSessionId, agent.type);
 					terminalsStore.update(termId, {
 						name: agentConfig.name,
 						nameIsCustom: true,
 						pendingInitCommand: finalCmd,
-						agentSessionId,
 						agentType: agent.type,
 					});
 				}
@@ -1756,6 +1756,19 @@ const App: Component = () => {
 					const branch = repo.activeBranch || Object.keys(repo.branches)[0];
 					if (branch) gitOps.handleBranchSelect(repo.path, branch);
 				},
+			});
+		}
+
+		// Dynamic: park/unpark groups
+		for (const group of Object.values(repositoriesStore.state.groups)) {
+			if (group.repoOrder.length === 0) continue;
+			const allParked = repositoriesStore.isGroupFullyParked(group.id);
+			entries.push({
+				id: allParked ? `unpark-group:${group.id}` : `park-group:${group.id}`,
+				label: allParked ? `Unpark Group: ${group.name}` : `Park Group: ${group.name}`,
+				category: "Repository",
+				keybinding: "",
+				execute: () => repositoriesStore.setParkGroup(group.id, !allParked),
 			});
 		}
 

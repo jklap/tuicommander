@@ -582,6 +582,22 @@ function createRepositoriesStore() {
 			});
 		},
 
+		/** Park or unpark all repositories in a group at once. */
+		setParkGroup(groupId: string, parked: boolean): void {
+			const group = state.groups[groupId];
+			if (!group) return;
+			for (const path of group.repoOrder) {
+				this.setPark(path, parked);
+			}
+		},
+
+		/** Check if all repos in a group are parked */
+		isGroupFullyParked(groupId: string): boolean {
+			const group = state.groups[groupId];
+			if (!group || group.repoOrder.length === 0) return false;
+			return group.repoOrder.every((path) => state.repositories[path]?.parked);
+		},
+
 		/** Get all parked repositories */
 		getParkedRepos(): RepositoryState[] {
 			return Object.values(state.repositories).filter((r) => r.parked);
