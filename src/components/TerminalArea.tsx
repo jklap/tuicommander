@@ -1,5 +1,4 @@
 import { type Component, createEffect, createMemo, For, type JSX, Show } from "solid-js";
-import s from "./TerminalArea.module.css";
 import noTuiOpenImg from "../assets/no-tui-open.png";
 import { useFileDrop } from "../hooks/useFileDrop";
 import { diffTabsStore } from "../stores/diffTabs";
@@ -17,6 +16,7 @@ import { PaneNodeView } from "./PaneTree/PaneTree";
 import SuggestOverlay from "./SuggestOverlay/SuggestOverlay";
 import { MdTabContent } from "./shared/MdTabContent";
 import { Terminal } from "./Terminal";
+import s from "./TerminalArea.module.css";
 import TipOfTheDay from "./TipOfTheDay/TipOfTheDay";
 
 export interface TerminalAreaProps {

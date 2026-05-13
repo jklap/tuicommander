@@ -17,11 +17,11 @@ import { makeBranchKey } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
-import { getRepoColor } from "../../utils/repoColor";
 import { handleOpenUrl } from "../../utils/openUrl";
 import type { LeafRect } from "../../utils/paneTreeGeometry";
 import { computeLeafRects } from "../../utils/paneTreeGeometry";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
+import { getRepoColor } from "../../utils/repoColor";
 import type { ContextMenuItem } from "../ContextMenu/ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { GlobeIcon } from "../GlobeIcon";
@@ -770,7 +770,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 											isDragOver() && dragOverSide() === "right" && s.dragOverRight,
 										)}
 										data-tab-id={id}
-										style={repoColor() ? { "--repo-color": repoColor() } as any : undefined}
+										style={repoColor() ? ({ "--repo-color": repoColor() } as any) : undefined}
 										onClick={handleTabClick}
 										onAuxClick={(e) => {
 											if (e.button === 1) handleCloseTab(e);

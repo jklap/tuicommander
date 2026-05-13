@@ -153,7 +153,10 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 					envOverrides: {},
 				});
 				if (found && found !== current.agentSessionId) {
-					appLogger.debug("app", `[AgentDetect] ${termId} discovered agentSessionId "${found}" (was "${current.agentSessionId}")`);
+					appLogger.debug(
+						"app",
+						`[AgentDetect] ${termId} discovered agentSessionId "${found}" (was "${current.agentSessionId}")`,
+					);
 					terminalsStore.update(termId, { agentSessionId: found });
 				}
 			} catch (err) {

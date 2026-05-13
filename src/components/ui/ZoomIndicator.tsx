@@ -9,5 +9,9 @@ export interface ZoomIndicatorProps {
 export const ZoomIndicator: Component<ZoomIndicatorProps> = (props) => {
 	const percentage = () => Math.round((props.fontSize / props.defaultFontSize) * 100);
 
-	return <span class={s.indicator} data-testid="zoom-indicator">{percentage()}%</span>;
+	return (
+		<span class={s.indicator} data-testid="zoom-indicator">
+			{percentage()}%
+		</span>
+	);
 };

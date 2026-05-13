@@ -405,7 +405,12 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 				{/* Mic button - hold to talk (rightmost) */}
 				<Show when={dictationStore.state.enabled}>
 					<button
-						class={cx(s.toggleBtn, dictationStore.state.recording && s.micRecording, dictationStore.state.processing && s.micProcessing, dictationStore.state.loading && s.micLoading)}
+						class={cx(
+							s.toggleBtn,
+							dictationStore.state.recording && s.micRecording,
+							dictationStore.state.processing && s.micProcessing,
+							dictationStore.state.loading && s.micLoading,
+						)}
 						onMouseDown={(e) => {
 							if (e.button === 0) props.onDictationStart();
 						}}

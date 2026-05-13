@@ -67,7 +67,12 @@ export const Dropdown: Component<DropdownProps> = (props) => {
 
 	return (
 		<Show when={props.visible}>
-			<div ref={dropdownRef} class={cx(s.dropdown, props.position === "top" && s.top, props.class)} data-testid="dropdown" data-position={props.position || "bottom"}>
+			<div
+				ref={dropdownRef}
+				class={cx(s.dropdown, props.position === "top" && s.top, props.class)}
+				data-testid="dropdown"
+				data-position={props.position || "bottom"}
+			>
 				<For each={props.items}>
 					{(item) => (
 						<Show when={!item.divider} fallback={<div class={s.divider} data-testid="dropdown-divider" />}>
@@ -79,9 +84,13 @@ export const Dropdown: Component<DropdownProps> = (props) => {
 								onClick={() => !item.disabled && props.onSelect(item.id)}
 							>
 								<Show when={item.icon}>
-									<span class={s.itemIcon} data-testid="dropdown-item-icon">{item.icon}</span>
+									<span class={s.itemIcon} data-testid="dropdown-item-icon">
+										{item.icon}
+									</span>
 								</Show>
-								<span class={s.itemLabel} data-testid="dropdown-item-label">{item.label}</span>
+								<span class={s.itemLabel} data-testid="dropdown-item-label">
+									{item.label}
+								</span>
 							</div>
 						</Show>
 					)}

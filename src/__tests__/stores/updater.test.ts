@@ -125,7 +125,11 @@ describe("updaterStore", () => {
 
 		it("times out after 10s and shows error", async () => {
 			// check() never resolves
-			{ const p = hangingPromise(); pendingPromises.push(p); mockCheck.mockReturnValue(p); }
+			{
+				const p = hangingPromise();
+				pendingPromises.push(p);
+				mockCheck.mockReturnValue(p);
+			}
 
 			await testInScopeAsync(async () => {
 				const checkPromise = store.checkForUpdate();
@@ -167,7 +171,11 @@ describe("updaterStore", () => {
 		});
 
 		it("is a no-op when already checking", async () => {
-			{ const p = hangingPromise(); pendingPromises.push(p); mockCheck.mockReturnValue(p); } // never resolves
+			{
+				const p = hangingPromise();
+				pendingPromises.push(p);
+				mockCheck.mockReturnValue(p);
+			} // never resolves
 
 			await testInScopeAsync(async () => {
 				store.checkForUpdate(); // starts check
@@ -283,7 +291,11 @@ describe("updaterStore", () => {
 		it("handles stable check timeout gracefully and falls back to nightly", async () => {
 			mockSettingsState.updateChannel = "nightly";
 			// Stable: times out
-			{ const p = hangingPromise(); pendingPromises.push(p); mockCheck.mockReturnValue(p); }
+			{
+				const p = hangingPromise();
+				pendingPromises.push(p);
+				mockCheck.mockReturnValue(p);
+			}
 			// Nightly: available
 			mockRpc.mockResolvedValue({
 				available: true,

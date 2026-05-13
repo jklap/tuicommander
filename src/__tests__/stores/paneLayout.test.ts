@@ -5,6 +5,7 @@ vi.mock("../../invoke", () => ({
 }));
 
 import { paneLayoutStore } from "../../stores/paneLayout";
+
 afterEach(() => paneLayoutStore._testCancelPendingSave());
 
 import {

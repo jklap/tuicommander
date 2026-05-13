@@ -5,10 +5,7 @@
  * Requires same-origin access (srcdoc iframes with allow-same-origin sandbox).
  * Returns null if the iframe content is not accessible.
  */
-export async function captureIframeAsWebp(
-	iframe: HTMLIFrameElement,
-	quality = 0.75,
-): Promise<string | null> {
+export async function captureIframeAsWebp(iframe: HTMLIFrameElement, quality = 0.75): Promise<string | null> {
 	const doc = iframe.contentDocument;
 	if (!doc?.documentElement) return null;
 

@@ -66,6 +66,7 @@ import { DictationToast } from "./components/DictationToast/DictationToast";
 import { ErrorLogPanel } from "./components/ErrorLogPanel";
 import { McpPopup } from "./components/McpPopup/McpPopup";
 import { MobileViewBanner } from "./components/MobileViewBanner";
+import qd from "./components/QuitDialog/QuitDialog.module.css";
 import { ToastContainer } from "./components/ToastContainer/ToastContainer";
 import { type WorktreeActions, WorktreeManager } from "./components/WorktreeManager";
 import { initDeepLinkHandler } from "./deep-link-handler";
@@ -148,7 +149,6 @@ import { createPanelSyncProvider, type PanelAction } from "./utils/panelSync";
 import { initPaneTabAssignment } from "./utils/paneTabAssign";
 import { pathBasename, pathStartsWith, pathStripPrefix } from "./utils/pathUtils";
 import { getShellFamily, sendCommand } from "./utils/sendCommand";
-import qd from "./components/QuitDialog/QuitDialog.module.css";
 
 const getDefaultFontSize = () => settingsStore.state.defaultFontSize;
 const getMaxTabNameLength = () => settingsStore.state.maxTabNameLength;

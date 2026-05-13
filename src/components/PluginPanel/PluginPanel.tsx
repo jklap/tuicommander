@@ -452,7 +452,13 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
            iframe element on reload — avoids the srcdoc write races that
            can leave it blank. */
 				<Show when={reloadKey()} keyed>
-					<iframe ref={iframeRef} sandbox="allow-scripts allow-same-origin" srcdoc={srcdoc()} style={iframeStyle} onLoad={installKeyForwarder} />
+					<iframe
+						ref={iframeRef}
+						sandbox="allow-scripts allow-same-origin"
+						srcdoc={srcdoc()}
+						style={iframeStyle}
+						onLoad={installKeyForwarder}
+					/>
 				</Show>
 			)}
 			<ContextMenu
