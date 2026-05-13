@@ -112,17 +112,16 @@ fn read_environ_raw(pid: u32) -> Result<Vec<String>, std::io::Error> {
 
 #[cfg(target_os = "windows")]
 fn read_environ_raw(pid: u32) -> Result<Vec<String>, std::io::Error> {
-    use std::io::{Error, ErrorKind};
+    use std::io::Error;
+    use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
     use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::Threading::{
-        NtQueryInformationProcess, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
-        ProcessBasicInformation,
+        OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
     };
 
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, 0, pid);
-        if handle == 0 {
+        if handle.is_null() {
             return Err(Error::last_os_error());
         }
 
@@ -137,10 +136,8 @@ unsafe fn read_environ_from_handle(
     handle: windows_sys::Win32::Foundation::HANDLE,
 ) -> Result<Vec<String>, std::io::Error> {
     use std::io::{Error, ErrorKind};
+    use windows_sys::Wdk::System::Threading::{NtQueryInformationProcess, ProcessBasicInformation};
     use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
-    use windows_sys::Win32::System::Threading::{
-        NtQueryInformationProcess, ProcessBasicInformation,
-    };
 
     // Step 1: Get PEB address via NtQueryInformationProcess
     #[repr(C)]
