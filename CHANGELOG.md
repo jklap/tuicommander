@@ -7,11 +7,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **Native drag to external apps** — Drag files from the File Browser to Finder, email clients, and other external applications using OS-level drag via `tauri-plugin-drag`.
+- **Mermaid diagram rendering** — Fenced ` ```mermaid ` code blocks in markdown tabs are rendered as interactive SVG diagrams. Mermaid.js is lazy-loaded on first use with dark theme and strict security.
+- **Group park/unpark** — Park or unpark all repositories in a sidebar group at once via context menu or command palette.
+- **Status bar pulse animation** — Status messages (e.g., "Copied to clipboard") flash with a single 600ms color pulse to attract attention.
 - **Per-repo PR visibility filters** — Override global draft/conflicting/CI-failing PR filter settings per repository. Tri-state toggle (Show / Default / Hide) in repo settings under "PR Visibility".
 - **TriStateToggle component** — Reusable 3-position toggle (hide / default / show) matching existing pill-switch style, used for per-repo PR filter overrides.
 - **`terminal_hyperlink_span`** — New Tauri command that returns the full contiguous span of an OSC 8 hyperlink at a given cell, enabling correct hover underlines across the entire link.
 
 ### Fixed
+- **Compose panel text persistence** — Text in the compose panel is preserved when closing and reopening the panel, instead of being lost.
+- **External API hidden from agent menu** — The "External API" entry no longer appears in the "Add Agent" sidebar submenu since it's not a CLI agent.
 - **Terminal scroll-to-bottom on click** — Clicking in a scrolled-up terminal no longer snaps to bottom. Mouse events (SGR reports, focus/blur) now use `writePtyNoScroll()` which writes to the PTY without resetting scroll position.
 - **OSC 8 hyperlink hover underline** — Hover underline now spans the full link instead of a single character, using the new `terminal_hyperlink_span` backend API.
 - **OSC 8 `file://` URI links** — Clicking `file:///path` links now correctly opens the file by stripping the `file://` prefix before path resolution.
@@ -19,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Vitest localStorage shim** — Test setup now handles `localStorage` being fully undefined (not just missing `.clear()`), fixing 524 test failures in environments without `--localstorage-file`.
 
 ### Changed
+- **Markdown CSS extraction** — All `#markdown-content` styles moved from the monolithic `styles.css` to a dedicated `markdown-content.css` file next to ContentRenderer. Dead CSS sections cleaned from styles.css (~200 lines removed).
 - **Cell width rounding** — `measureFont()` now uses `Math.round()` instead of `Math.ceil()` for cell width calculation, producing tighter character spacing.
 
 ### Community

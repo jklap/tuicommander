@@ -114,6 +114,7 @@
 - Visual overlay with dashed border appears during drag hover
 - Global `dragover`/`drop` `preventDefault` prevents the Tauri webview from treating drops as browser navigation (which would replace the UI with a white screen)
 - macOS file association: `.md`/`.mdx` files registered with TUICommander — double-click in Finder opens them directly
+- **Drag to external apps**: Drag files from the File Browser to external applications (Finder, email clients, etc.) using native OS-level drag via `tauri-plugin-drag`. Works alongside internal drag & drop (tab reorder, split panes)
 
 ### 1.14 Cross-Terminal Search
 - Type `~` in the command palette (`Cmd+P`) to search text across all open terminal buffers
@@ -194,6 +195,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 
 ### 2.7 Park Repos
 - Right-click any repo in the sidebar to park or unpark it
+- **Group park/unpark**: right-click a group header or use the command palette to park or unpark all repos in a group at once
 - Parked repos are hidden from the main repository list
 - Sidebar footer button opens a popover showing all parked repos
 - Unpark a repo from the popover to restore it to the main list
@@ -221,6 +223,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Header bar shows file path (or title for virtual tabs) with Edit button (pencil icon) to open in CodeEditor
 - `Cmd+F` search: find text in rendered markdown with highlight navigation (shared SearchBar component)
 - **Interactive GFM checkboxes**: `- [ ]`, `- [x]`, and `- [~]` task-list items render as clickable checkboxes. Clicking cycles through unchecked → checked → in-progress → unchecked. Changes are written back to the source `.md` file on disk. The `[~]` state renders as an indeterminate (half-filled) checkbox — non-standard GFM extension for tracking in-progress items
+- **Mermaid diagrams**: fenced code blocks with ` ```mermaid ` are rendered as interactive SVG diagrams. Mermaid.js is lazy-loaded on first use with dark theme
 - **Inline review comments (tweaks)**: select text in rendered markdown, add a comment — stored as HTML comment markers invisible to standard renderers but readable by humans and LLMs
 
 ### 3.4 File Browser Panel (`Cmd+E`)
@@ -469,7 +472,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 
 ### 5.1 Left Section
 - Zoom indicator: current font size (shown when != default)
-- Status info text (with pendulum ticker for overflow)
+- Status info text (with pendulum ticker for overflow, pulse animation on new messages)
 - CWD path: shortened with `~/`, click to copy to clipboard (shows "Copied!" feedback)
 - Unified agent badge with priority cascade:
   1. Rate limit warning (highest): count + countdown timer when sessions are rate-limited
