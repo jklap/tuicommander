@@ -221,6 +221,8 @@ export function createContextMenu() {
 		}
 	};
 
+	onCleanup(() => cancelAnimationFrame(closeRaf));
+
 	return {
 		visible,
 		position,

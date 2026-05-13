@@ -2,7 +2,6 @@ import { createEffect, onCleanup } from "solid-js";
 import { AGENT_TYPES, AGENTS, type AgentType } from "../agents";
 import { invoke } from "../invoke";
 import { pluginRegistry } from "../plugins/pluginRegistry";
-import { agentConfigsStore } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { terminalsStore } from "../stores/terminals";
 
@@ -32,7 +31,6 @@ function toAgentType(value: string | null): AgentType | null {
 }
 
 // Module-level state shared between pollAll and event-driven detection
-const discoveryAttempted = new Set<string>();
 const nullStreak = new Map<string, number>();
 
 /**
@@ -47,7 +45,6 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 	const current = terminalsStore.get(termId);
 	if (!current) {
 		// Terminal removed — clean up module-level tracking state
-		discoveryAttempted.delete(termId);
 		nullStreak.delete(termId);
 		return;
 	}
@@ -99,7 +96,6 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 		// Reset agent-specific state carried over from the previous agent.
 		if (prevAgentType !== null) {
 			terminalsStore.update(termId, { agentSessionId: null });
-			discoveryAttempted.delete(termId);
 			if (agentType === null) {
 				nullStreak.delete(termId);
 			}
@@ -118,40 +114,46 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 		}
 	}
 
-	// null→agent: attempt session discovery if supported and not yet tried.
-	// Skip discovery when tuicSession is set — it IS the session ID
-	// (shell integration injects --session-id $TUIC_SESSION into claude calls).
-	// Discovery is only needed for terminals without tuicSession (legacy, manual launches).
-	if (
-		agentType !== null &&
-		current.agentSessionId === null &&
-		!discoveryAttempted.has(termId) &&
-		!current.tuicSession
-	) {
+	// Attempt session discovery when an agent is running.
+	// Agents with sessionDiscovery: always re-discover (session ID changes after /clear, /new, etc.).
+	// Agents without sessionDiscovery: nothing to discover.
+	if (agentType !== null) {
 		const disc = AGENTS[agentType].sessionDiscovery;
 		if (disc) {
-			discoveryAttempted.add(termId);
 			const cwd = current.cwd ?? null;
 
-			// Collect UUIDs already claimed by other terminals
+			// Collect UUIDs already claimed by other terminals (exclude self)
 			const claimedIds: string[] = [];
 			for (const id of terminalsStore.getIds()) {
+				if (id === termId) continue;
 				const sid = terminalsStore.get(id)?.agentSessionId;
 				if (sid) claimedIds.push(sid);
 			}
 
-			const claudeConfigDir =
-				agentType === "claude" ? (agentConfigsStore.getDefaultConfig("claude")?.env?.CLAUDE_CONFIG_DIR ?? null) : null;
+			// Read the agent's leaf PID so the backend can extract env vars
+			// (CLAUDE_CONFIG_DIR, GEMINI_CLI_HOME, CODEX_HOME) directly from
+			// the process's initial environment — the ground-truth source.
+			let agentPid: number | null = null;
+			if (current.sessionId) {
+				try {
+					agentPid = await invoke<number | null>("get_session_leaf_pid", {
+						sessionId: current.sessionId,
+					});
+				} catch {
+					// Process may have exited — fall through to run-config fallback
+				}
+			}
 
 			try {
 				const found = await invoke<string | null>("discover_agent_session", {
 					agentType,
 					cwd,
 					claimedIds,
-					claudeConfigDir,
+					agentPid,
+					envOverrides: {},
 				});
-				if (found) {
-					appLogger.debug("app", `[AgentDetect] ${termId} discovered agentSessionId "${found}"`);
+				if (found && found !== current.agentSessionId) {
+					appLogger.debug("app", `[AgentDetect] ${termId} discovered agentSessionId "${found}" (was "${current.agentSessionId}")`);
 					terminalsStore.update(termId, { agentSessionId: found });
 				}
 			} catch (err) {

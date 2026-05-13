@@ -84,7 +84,10 @@ describe("PluginPanel", () => {
 		removeEventListenerSpy = vi.spyOn(window, "removeEventListener");
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		vi.runAllTicks();
+		vi.advanceTimersByTime(0);
+		await vi.runAllTimersAsync();
 		vi.useRealTimers();
 		addEventListenerSpy.mockRestore();
 		removeEventListenerSpy.mockRestore();

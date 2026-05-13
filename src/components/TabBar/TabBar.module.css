@@ -315,6 +315,20 @@
 }
 
 
+/* Repo color tint — bottom-to-center gradient in global workspace */
+.tab[style*="--repo-color"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to top, color-mix(in srgb, var(--repo-color) 12%, transparent), transparent 60%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.tab[style*="--repo-color"].active::after {
+  background: linear-gradient(to top, color-mix(in srgb, var(--repo-color) 18%, transparent), transparent 60%);
+}
+
 /* Diff tabs */
 .tab.diffTab {
   background: linear-gradient(to bottom, rgba(var(--tab-diff-rgb), 0.1), rgba(var(--tab-diff-rgb), 0.05));

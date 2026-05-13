@@ -20,9 +20,10 @@ describe("useSplitPanes", () => {
 		splitPanes = useSplitPanes();
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		paneLayoutStore._testCancelPendingSave();
 		_testCancelPendingTimers();
+		await new Promise((r) => setImmediate(r));
 	});
 
 	describe("handleSplit", () => {

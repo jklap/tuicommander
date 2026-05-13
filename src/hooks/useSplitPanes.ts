@@ -3,6 +3,7 @@ import { type PaneLayoutState, paneLayoutStore } from "../stores/paneLayout";
 import { terminalsStore } from "../stores/terminals";
 
 let refitTimer: ReturnType<typeof setTimeout> | null = null;
+let focusRaf = 0;
 
 /** Re-fit terminals in all pane groups after CSS flex layout settles (~150ms). */
 function refitPaneTerminals() {
@@ -26,6 +27,8 @@ export function _testCancelPendingTimers(): void {
 		clearTimeout(refitTimer);
 		refitTimer = null;
 	}
+	cancelAnimationFrame(focusRaf);
+	focusRaf = 0;
 }
 
 /** Split pane management using recursive pane tree */
@@ -84,7 +87,8 @@ export function useSplitPanes() {
 			const termTab = newActiveGroup.tabs.find((t) => t.type === "terminal");
 			if (termTab) {
 				terminalsStore.setActive(termTab.id);
-				requestAnimationFrame(() => terminalsStore.get(termTab.id)?.ref?.focus());
+				cancelAnimationFrame(focusRaf);
+				focusRaf = requestAnimationFrame(() => terminalsStore.get(termTab.id)?.ref?.focus());
 			}
 		}
 

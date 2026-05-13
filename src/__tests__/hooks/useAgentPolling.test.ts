@@ -108,11 +108,16 @@ describe("useAgentPolling", () => {
 
 	describe("session discovery", () => {
 		it("calls discover_agent_session when agentType transitions null→agent and agentSessionId is null", async () => {
-			// First poll returns null, second returns "claude" (triggers discovery in same poll cycle)
-			mockInvoke
-				.mockResolvedValueOnce(null) // get_session_foreground_process → null
-				.mockResolvedValueOnce("claude") // get_session_foreground_process → claude
-				.mockResolvedValueOnce("found-uuid"); // discover_agent_session → uuid
+			let pollCount = 0;
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "get_session_foreground_process") {
+					pollCount++;
+					return Promise.resolve(pollCount >= 2 ? "claude" : null);
+				}
+				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
+				if (cmd === "discover_agent_session") return Promise.resolve("found-uuid");
+				return Promise.resolve(null);
+			});
 
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
@@ -135,30 +140,77 @@ describe("useAgentPolling", () => {
 			});
 		});
 
-		it("does not retry discover_agent_session on subsequent polls", async () => {
-			mockInvoke
-				.mockResolvedValueOnce("claude") // poll 1: claude
-				.mockResolvedValueOnce("found-uuid") // discover: uuid
-				.mockResolvedValueOnce("claude") // poll 2: still claude
-				.mockResolvedValueOnce("claude"); // poll 3: still claude
+		it("re-discovers claude session on subsequent polls (tracks /clear)", async () => {
+			let discoverCount = 0;
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "get_session_foreground_process") return Promise.resolve("claude");
+				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
+				if (cmd === "discover_agent_session") {
+					discoverCount++;
+					return Promise.resolve(discoverCount <= 2 ? "uuid-1" : "uuid-2");
+				}
+				return Promise.resolve(null);
+			});
 
 			await testInScopeAsync(async () => {
-				store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 
 				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
 				useAgentPolling();
 
 				await tick(30_000); // poll 1 + discovery
-				await tick(30_000); // poll 2 (no discovery)
-				await tick(30_000); // poll 3 (no discovery)
+				expect(store.get(id)?.agentSessionId).toBe("uuid-1");
+
+				await tick(30_000); // poll 2 + re-discover (same uuid, no store update)
+				expect(store.get(id)?.agentSessionId).toBe("uuid-1");
+
+				await tick(30_000); // poll 3 + re-discover (new uuid after /clear)
+				expect(store.get(id)?.agentSessionId).toBe("uuid-2");
 
 				const discoveryCalls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "discover_agent_session");
-				expect(discoveryCalls).toHaveLength(1);
+				expect(discoveryCalls).toHaveLength(3);
 			});
 		});
 
-		it("skips discovery when tuicSession is set (shell integration handles session binding)", async () => {
-			mockInvoke.mockResolvedValue("claude");
+		it("re-discovers non-claude agents on subsequent polls too", async () => {
+			let discoverCount = 0;
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "get_session_foreground_process") return Promise.resolve("gemini");
+				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
+				if (cmd === "discover_agent_session") {
+					discoverCount++;
+					return Promise.resolve(discoverCount <= 2 ? "found-uuid" : "new-uuid");
+				}
+				return Promise.resolve(null);
+			});
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+
+				await tick(30_000); // poll 1 + discovery
+				expect(store.get(id)?.agentSessionId).toBe("found-uuid");
+
+				await tick(30_000); // poll 2 + re-discover (same uuid)
+				expect(store.get(id)?.agentSessionId).toBe("found-uuid");
+
+				await tick(30_000); // poll 3 + re-discover (new uuid after /clear)
+				expect(store.get(id)?.agentSessionId).toBe("new-uuid");
+
+				const discoveryCalls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "discover_agent_session");
+				expect(discoveryCalls).toHaveLength(3);
+			});
+		});
+
+		it("discovers claude session even when tuicSession is set", async () => {
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "get_session_foreground_process") return Promise.resolve("claude");
+				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
+				if (cmd === "discover_agent_session") return Promise.resolve("discovered-uuid");
+				return Promise.resolve(null);
+			});
 
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
@@ -171,7 +223,32 @@ describe("useAgentPolling", () => {
 				expect(store.get(id)?.agentType).toBe("claude");
 
 				const discoveryCalls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "discover_agent_session");
-				expect(discoveryCalls).toHaveLength(0);
+				expect(discoveryCalls).toHaveLength(1);
+				expect(store.get(id)?.agentSessionId).toBe("discovered-uuid");
+			});
+		});
+
+		it("discovers non-claude agents even when tuicSession is set", async () => {
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "get_session_foreground_process") return Promise.resolve("gemini");
+				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
+				if (cmd === "discover_agent_session") return Promise.resolve("discovered-uuid");
+				return Promise.resolve(null);
+			});
+
+			await testInScopeAsync(async () => {
+				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+				store.update(id, { tuicSession: "tuic-uuid-123" });
+
+				const { useAgentPolling } = await import("../../hooks/useAgentPolling");
+				useAgentPolling();
+
+				await tick(30_000);
+				expect(store.get(id)?.agentType).toBe("gemini");
+
+				const discoveryCalls = mockInvoke.mock.calls.filter(([cmd]) => cmd === "discover_agent_session");
+				expect(discoveryCalls).toHaveLength(1);
+				expect(store.get(id)?.agentSessionId).toBe("discovered-uuid");
 			});
 		});
 
@@ -251,6 +328,7 @@ describe("useAgentPolling", () => {
 			let foregroundReturn: string | null = "claude";
 			mockInvoke.mockImplementation((cmd: string) => {
 				if (cmd === "get_session_foreground_process") return Promise.resolve(foregroundReturn);
+				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
 				if (cmd === "discover_agent_session") return Promise.resolve(null);
 				return Promise.resolve(null);
 			});
@@ -316,15 +394,20 @@ describe("useAgentPolling", () => {
 		it("clears agentSessionId on agent→null transition and allows re-discovery", async () => {
 			// NULL_THRESHOLD is 3: need 3 consecutive idle-source null detections before clearing.
 			// Only source="idle" can clear — polls never clear (sticky agentType fix).
-			mockInvoke
-				.mockResolvedValueOnce("claude") // poll 1: claude detected
-				.mockResolvedValueOnce("uuid-1") // discover: uuid-1
-				.mockResolvedValueOnce("claude") // poll 2: still claude
-				.mockResolvedValueOnce(null) // idle 1: null streak 1
-				.mockResolvedValueOnce(null) // idle 2: null streak 2
-				.mockResolvedValueOnce(null) // idle 3: null streak 3 → cleared
-				.mockResolvedValueOnce("claude") // poll 3: claude re-launched
-				.mockResolvedValueOnce("uuid-2"); // re-discover: uuid-2
+			let phase: "active1" | "idle" | "active2" = "active1";
+			let discoverCount = 0;
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "get_session_foreground_process") {
+					if (phase === "idle") return Promise.resolve(null);
+					return Promise.resolve("claude");
+				}
+				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
+				if (cmd === "discover_agent_session") {
+					discoverCount++;
+					return Promise.resolve(discoverCount <= 2 ? "uuid-1" : "uuid-2");
+				}
+				return Promise.resolve(null);
+			});
 
 			await testInScopeAsync(async () => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
@@ -332,17 +415,19 @@ describe("useAgentPolling", () => {
 				const { useAgentPolling, detectAgentForTerminal } = await import("../../hooks/useAgentPolling");
 				useAgentPolling();
 
-				await tick(30_000); // poll 1: claude + discovery queued
-				await tick(30_000); // poll 2: still claude (discovery already done)
+				await tick(30_000); // poll 1: claude + discovery
+				await tick(30_000); // poll 2: still claude + re-discover (same uuid)
 				expect(store.get(id)?.agentSessionId).toBe("uuid-1");
 
 				// Idle-source detections can clear agentType after NULL_THRESHOLD consecutive nulls
+				phase = "idle";
 				await detectAgentForTerminal(id, "idle"); // idle 1: null streak 1 — still holding
 				await detectAgentForTerminal(id, "idle"); // idle 2: null streak 2 — still holding
 				await detectAgentForTerminal(id, "idle"); // idle 3: null streak 3 → cleared
 				expect(store.get(id)?.agentType).toBeNull();
 				expect(store.get(id)?.agentSessionId).toBeNull();
 
+				phase = "active2";
 				await tick(30_000); // poll 3: re-launched → re-discovery
 				expect(store.get(id)?.agentType).toBe("claude");
 				expect(store.get(id)?.agentSessionId).toBe("uuid-2");
@@ -350,12 +435,16 @@ describe("useAgentPolling", () => {
 		});
 
 		it("passes claimed_ids from other terminals to avoid duplicate assignment", async () => {
-			// Two terminals, both running claude — processed sequentially
-			mockInvoke
-				.mockResolvedValueOnce("claude") // term-1: get_session_foreground_process
-				.mockResolvedValueOnce("uuid-a") // term-1: discover_agent_session
-				.mockResolvedValueOnce("claude") // term-2: get_session_foreground_process
-				.mockResolvedValueOnce("uuid-b"); // term-2: discover_agent_session
+			let discoverCount = 0;
+			mockInvoke.mockImplementation((cmd: string) => {
+				if (cmd === "get_session_foreground_process") return Promise.resolve("claude");
+				if (cmd === "get_session_leaf_pid") return Promise.resolve(1234);
+				if (cmd === "discover_agent_session") {
+					discoverCount++;
+					return Promise.resolve(discoverCount === 1 ? "uuid-a" : "uuid-b");
+				}
+				return Promise.resolve(null);
+			});
 
 			await testInScopeAsync(async () => {
 				const id1 = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));

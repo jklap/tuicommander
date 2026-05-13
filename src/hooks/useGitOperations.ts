@@ -2,7 +2,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { batch, createSignal } from "solid-js";
 import type { WorktreeCreateOptions } from "../components/CreateWorktreeDialog";
 import { invoke } from "../invoke";
-import { agentConfigsStore } from "../stores/agentConfigs";
 import { appLogger } from "../stores/appLogger";
 import { githubStore } from "../stores/github";
 import { globalWorkspaceStore } from "../stores/globalWorkspace";
@@ -413,15 +412,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		}
 		if (orphanPaths.length === 0) return;
 
-		const closeTerminalsInWorktree = async (wtPath: string) => {
-			for (const termId of terminalsStore.getIds()) {
-				const terminal = terminalsStore.get(termId);
-				if (terminal?.cwd && (terminal.cwd === wtPath || terminal.cwd.startsWith(wtPath + "/"))) {
-					await deps.closeTerminal(termId, true);
-				}
-			}
-		};
-
 		if (orphanCleanup === "on") {
 			// Auto-remove silently
 			for (const wtPath of orphanPaths) {
@@ -740,16 +730,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 									pendingResumeCommand: resumeCmd,
 									agentSessionId: terminal.agentSessionId ?? null,
 								});
-							} else if (terminal.tuicSession && terminal.cwd) {
-								const claudeConfigDir =
-									terminal.agentType === "claude"
-										? (agentConfigsStore.getDefaultConfig("claude")?.env?.CLAUDE_CONFIG_DIR ?? null)
-										: null;
-								invoke("preflight_session_inject", {
-									tuicSession: terminal.tuicSession,
-									cwd: terminal.cwd,
-									claudeConfigDir,
-								}).catch(() => {});
 							}
 						}),
 					).catch((e) => appLogger.warn("terminal", "Resume command verification failed", { error: String(e) }));
@@ -1152,6 +1132,16 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	/** Merge a worktree branch into target, then archive/delete based on setting.
 	 *  When the branch has an open PR, uses GitHub API with the configured merge strategy.
 	 *  Falls back to local git merge if no PR is found or GitHub API fails. */
+	/** Close all terminals whose cwd is inside a worktree path. */
+	const closeTerminalsInWorktree = async (wtPath: string) => {
+		for (const termId of terminalsStore.getIds()) {
+			const terminal = terminalsStore.get(termId);
+			if (terminal?.cwd && (terminal.cwd === wtPath || terminal.cwd.startsWith(wtPath + "/"))) {
+				await deps.closeTerminal(termId, true);
+			}
+		}
+	};
+
 	/** Close all terminals belonging to a branch. */
 	const closeTerminalsForBranch = async (repoPath: string, branchName: string) => {
 		const repoState = repositoriesStore.get(repoPath);

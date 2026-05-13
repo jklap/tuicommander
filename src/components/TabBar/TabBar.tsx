@@ -17,6 +17,7 @@ import { makeBranchKey } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
 import { keyFor } from "../../utils/hotkey";
+import { getRepoColor } from "../../utils/repoColor";
 import { handleOpenUrl } from "../../utils/openUrl";
 import type { LeafRect } from "../../utils/paneTreeGeometry";
 import { computeLeafRects } from "../../utils/paneTreeGeometry";
@@ -730,6 +731,11 @@ export const TabBar: Component<TabBarProps> = (props) => {
 							const isPromoted = () => globalWorkspaceStore.isPromoted(id);
 							const [hovered, setHovered] = createSignal(false);
 							const repoName = () => repositoriesStore.getRepoForTerminal(id);
+							const repoColor = () => {
+								if (!globalWorkspaceStore.isActive()) return undefined;
+								const path = repositoriesStore.getRepoPathForTerminal(id);
+								return path ? getRepoColor(path) : undefined;
+							};
 
 							const handleTabClick = () => {
 								if (isDetached()) {
@@ -764,6 +770,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 											isDragOver() && dragOverSide() === "right" && s.dragOverRight,
 										)}
 										data-tab-id={id}
+										style={repoColor() ? { "--repo-color": repoColor() } as any : undefined}
 										onClick={handleTabClick}
 										onAuxClick={(e) => {
 											if (e.button === 1) handleCloseTab(e);

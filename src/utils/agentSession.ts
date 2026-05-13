@@ -3,12 +3,6 @@ import { agentConfigsStore } from "../stores/agentConfigs";
 import { rpc } from "../transport";
 import { pathBasename } from "./pathUtils";
 
-function getClaudeConfigDir(agentType: AgentType): string | null {
-	if (agentType !== "claude") return null;
-	const runConfig = agentConfigsStore.getDefaultConfig(agentType);
-	return runConfig?.env?.CLAUDE_CONFIG_DIR ?? null;
-}
-
 /**
  * Apply the agent's default run config to a resume command.
  *
@@ -81,15 +75,12 @@ export function buildResumeCommand(agentType: AgentType, agentSessionId?: string
 }
 
 /**
- * Verify a TUIC_SESSION UUID against the agent's local session storage, then
+ * Verify a session UUID against the agent's local session storage, then
  * build the appropriate resume command.
  *
- * Priority: tuicSession (verified on disk) > agentSessionId > static resumeCommand.
+ * For Claude: uses agentSessionId (discovered from disk during the session).
+ * For other agents: tries tuicSession first, then agentSessionId.
  * Falls back gracefully when verify_agent_session is unavailable (browser mode).
- *
- * When tuicSession is set and verification runs but fails, the session is gone —
- * we return null instead of falling back to agentSessionId, which may point to
- * an older, unrelated session discovered at agent-detection time.
  */
 export async function verifyAndBuildResumeCommand(
 	agentType: AgentType,
@@ -97,29 +88,33 @@ export async function verifyAndBuildResumeCommand(
 	tuicSession?: string | null,
 	agentSessionId?: string | null,
 ): Promise<string | null> {
-	const claudeConfigDir = getClaudeConfigDir(agentType);
+	const disc = AGENTS[agentType].sessionDiscovery;
 
-	// Try tuicSession first — it's the stable tab UUID injected as env var
-	if (tuicSession && cwd && AGENTS[agentType].sessionDiscovery) {
+	// For Claude, agentSessionId is the source of truth (discovered from newest session file).
+	// For other agents, tuicSession is preferred (injected at launch via shell wrapper).
+	const sessionId = agentType === "claude" ? agentSessionId : (tuicSession ?? agentSessionId);
+
+	if (sessionId && cwd && disc) {
 		try {
+			// At restore time the agent process has exited, so agentPid is null.
+			// The backend falls back to default paths (or run-config env if provided).
 			const exists = await rpc<boolean>("verify_agent_session", {
 				agentType,
-				sessionId: tuicSession,
+				sessionId,
 				cwd,
-				claudeConfigDir,
+				agentPid: null,
+				envOverrides: {},
 			});
 			if (exists) {
-				const cmd = AGENTS[agentType].sessionDiscovery!.resumeWithId(tuicSession);
+				const cmd = disc.resumeWithId(sessionId);
 				return applyDefaultRunConfig(agentType, cmd);
 			}
-			// Verification ran but session file not found — session is gone.
-			// Don't fall back to agentSessionId which may be stale.
 			return null;
 		} catch {
 			// verify_agent_session unavailable (browser mode) — fall through
 		}
 	}
 
-	// No tuicSession or browser mode — fall back to agentSessionId or static resumeCommand
+	// No verified session — fall back to static resumeCommand
 	return buildResumeCommand(agentType, agentSessionId);
 }

@@ -251,7 +251,7 @@ describe("createContextMenu", () => {
 		});
 	});
 
-	it("close sets visible to false", () => {
+	it("close sets visible to false", async () => {
 		testInScope(() => {
 			const menu = createContextMenu();
 			const mockEvent = {
@@ -266,5 +266,7 @@ describe("createContextMenu", () => {
 			menu.close();
 			expect(menu.visible()).toBe(false);
 		});
+		// Flush happy-dom's setImmediate-based requestAnimationFrame from close()
+		await new Promise((r) => setImmediate(r));
 	});
 });

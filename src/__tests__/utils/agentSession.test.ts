@@ -127,28 +127,29 @@ describe("verifyAndBuildResumeCommand", () => {
 		mockRpc.mockReset();
 	});
 
-	it("uses tuicSession when verified on disk", async () => {
+	it("uses agentSessionId (not tuicSession) for claude verification", async () => {
 		mockRpc.mockResolvedValueOnce(true);
-		const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", "old-session-id");
+		const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", "discovered-session-id");
 		expect(mockRpc).toHaveBeenCalledWith("verify_agent_session", {
 			agentType: "claude",
-			sessionId: "tuic-uuid-1",
+			sessionId: "discovered-session-id",
 			cwd: "/tmp/repo",
-			claudeConfigDir: null,
+			agentPid: null,
+			envOverrides: {},
 		});
-		expect(result).toBe("claude --resume tuic-uuid-1");
+		expect(result).toBe("claude --resume discovered-session-id");
 	});
 
-	it("returns null when tuicSession not verified (session gone, no stale fallback)", async () => {
+	it("returns null when claude agentSessionId not verified (session gone)", async () => {
 		mockRpc.mockResolvedValueOnce(false);
-		const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", "old-session-id");
+		const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", "stale-session");
 		expect(result).toBeNull();
 	});
 
-	it("returns null when tuicSession set but file missing (no stale fallback)", async () => {
-		mockRpc.mockResolvedValueOnce(false);
+	it("returns null when claude has no agentSessionId", async () => {
 		const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", "tuic-uuid-1", null);
-		expect(result).toBeNull();
+		expect(mockRpc).not.toHaveBeenCalled();
+		expect(result).toBe("claude --continue");
 	});
 
 	it("falls back gracefully when rpc throws (browser mode)", async () => {
@@ -157,13 +158,7 @@ describe("verifyAndBuildResumeCommand", () => {
 		expect(result).toBe("claude --resume old-session-id");
 	});
 
-	it("skips verification when tuicSession is null", async () => {
-		const result = await verifyAndBuildResumeCommand("claude", "/tmp/repo", null, "old-session-id");
-		expect(mockRpc).not.toHaveBeenCalled();
-		expect(result).toBe("claude --resume old-session-id");
-	});
-
-	it("skips verification when cwd is null", async () => {
+	it("uses agentSessionId directly when cwd is null (no verification)", async () => {
 		const result = await verifyAndBuildResumeCommand("claude", null, "tuic-uuid-1", "old-session-id");
 		expect(mockRpc).not.toHaveBeenCalled();
 		expect(result).toBe("claude --resume old-session-id");
@@ -187,7 +182,8 @@ describe("verifyAndBuildResumeCommand", () => {
 			agentType: "gemini",
 			sessionId: "tuic-uuid-1",
 			cwd: "/tmp/repo",
-			claudeConfigDir: null,
+			agentPid: null,
+			envOverrides: {},
 		});
 		expect(result).toBe("gemini --resume tuic-uuid-1");
 	});
