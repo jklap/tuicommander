@@ -7,7 +7,6 @@ export type AgentType =
 	| "codex"
 	| "amp"
 	| "cursor"
-	| "warp"
 	| "goose"
 	| "droid"
 	| "git"
@@ -22,7 +21,6 @@ export const AGENT_TYPES: readonly AgentType[] = [
 	"codex",
 	"amp",
 	"cursor",
-	"warp",
 	"goose",
 	"droid",
 	"git",
@@ -221,25 +219,6 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 			prompt: [/\(Y\)es\/\(N\)o/],
 		},
 	},
-	warp: {
-		type: "warp",
-		name: "Warp Oz",
-		binary: "oz",
-		description: "Warp's AI agent (local + cloud)",
-		defaultHeadlessTemplate: 'oz agent run "{prompt}"',
-		resumeCommand: null,
-		sessionDiscovery: null,
-		spawnArgs: (prompt) => {
-			return ["agent", "run", prompt];
-		},
-		outputFormat: "text",
-		detectPatterns: {
-			rateLimit: [/rate.?limit/i, /429/],
-			completion: [],
-			error: [/error:/i, /failed:/i],
-			prompt: [],
-		},
-	},
 	goose: {
 		type: "goose",
 		name: "Goose",
@@ -354,7 +333,6 @@ export const MCP_SUPPORT: Record<AgentType, boolean> = {
 	codex: true,
 	amp: true,
 	cursor: true,
-	warp: false,
 	goose: true,
 	droid: false,
 	git: false,
@@ -370,7 +348,6 @@ export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string }> =
 	codex: { icon: "X", color: "#ef4444" },
 	amp: { icon: "A", color: "#ff5543" },
 	cursor: { icon: "C", color: "#000000" },
-	warp: { icon: "W", color: "#01a4ff" },
 	goose: { icon: "G", color: "#f59e0b" },
 	droid: { icon: "D", color: "#f97316" },
 	git: { icon: "G", color: "#f05032" },
