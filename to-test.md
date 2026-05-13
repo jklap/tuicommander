@@ -800,3 +800,46 @@ Features to test when TUICommander is more usable.
 - [ ] `clear` command (CSI 2J) → previously wrapped lines in scrollback unwrap correctly
 - [ ] Rapid resize (drag terminal edge) → no corruption, final state correct
 - [ ] History-only reflow (experimental flag off) → only scrollback rows reflow, screen rows padded/truncated
+
+## File Browser: Native Drag to External Apps (2026-05-13)
+- [ ] Flat view: drag a file from file browser to Finder → file is copied to the Finder location
+- [ ] Flat view: drag a file from file browser to Mail.app compose → file is attached
+- [ ] Tree view: drag a file from tree node to an external app → same behavior as flat view
+- [ ] Drag a directory to Finder → directory is copied
+- [ ] Internal drag still works: drag a file to a folder within the file browser → file moves/copies
+- [ ] Internal drag still works: drag a file to a terminal → path is pasted
+- [ ] Drag icon shows the app's 32x32 icon during native drag
+
+## Compose Panel: Text Persistence (2026-05-13)
+- [ ] Open compose (Cmd+I) → type text → close (Esc) → reopen (Cmd+I) → text is preserved
+- [ ] Cmd+I when compose is open → closes it (proper toggle)
+- [ ] Send a command (Ctrl+Enter) → compose closes → reopen → editor is empty (reset after send)
+- [ ] Open compose with no prior text → cursor line is pre-populated (first open behavior)
+- [ ] Open compose, type something, close, open again → typed text preserved, NOT overwritten by cursor line
+
+## Status Bar: Pulse on Status Change (2026-05-13)
+- [ ] Copy text in terminal (Cmd+C on selection) → "Copied to clipboard" flashes accent color then fades
+- [ ] Git operation → status message pulses once in accent color
+- [ ] "Ready" status does not pulse (only non-Ready messages trigger it)
+- [ ] Pulse is a single flash (accent → normal), not repeating
+
+## Group Park/Unpark (2026-05-13)
+- [ ] Right-click group header → "Park Group" option visible
+- [ ] Park Group → all repos in group disappear from sidebar
+- [ ] Command palette → "Unpark Group: <name>" → all repos reappear
+- [ ] Right-click on fully-parked group header → shows "Unpark Group" instead
+- [ ] Partially parked group (some repos parked individually) → "Park Group" parks the rest
+- [ ] Park Group stops file watchers for all repos in the group
+
+## Markdown Tab: Mermaid Diagram Rendering (2026-05-13)
+- [ ] Open a .md file with a ```mermaid code block → diagram renders as SVG (not raw text)
+- [ ] Flowchart (graph TD/LR) renders correctly with dark theme
+- [ ] Sequence diagram renders correctly
+- [ ] Multiple mermaid blocks in one file all render
+- [ ] Non-mermaid code blocks still render as syntax-highlighted code (no regression)
+- [ ] Invalid mermaid syntax → shows the raw code block (graceful fallback)
+- [ ] Mermaid library loads lazily (only when a mermaid block is present)
+
+## Sidebar: External API Hidden from Agent Menu (2026-05-13)
+- [ ] Right-click branch → Add Agent submenu → "External API" is NOT listed
+- [ ] Tab bar Add Agent menu → "External API" is NOT listed (was already filtered)

@@ -42,6 +42,18 @@ All business logic in Rust. Frontend only renders and handles interaction — no
 
 NEVER write text + `\r` directly to a PTY. Always use `sendCommand()` from `src/utils/sendCommand.ts` — it handles agent-specific Enter semantics (Ink raw mode needs split writes). This applies to dictation, command palette, suggested actions, and any other feature that sends input to a terminal.
 
+## Agent Session Management
+
+TUIC tracks each agent's session ID for resume-after-restart. Two strategies coexist:
+
+**Discovery-based (Claude, Gemini, Codex).** TUIC does NOT inject `--session-id` at launch — the agent creates its own UUID. TUIC discovers the active session by scanning the agent's session directory for the newest file, re-checking every 30s poll. This survives `/clear` (all three agents have it: Claude `/clear`, Gemini `/clear`+`/new`, Codex `/clear`+`/new`+`/fork`) because re-discovery picks up the new session file. Resume uses `agentSessionId` (disk-discovered), not `tuicSession`.
+
+**Forced injection (Goose).** Shell wrapper injects `--name $TUIC_SESSION` into `goose session/run` commands. The TUIC tab UUID IS the goose session name. Discovery returns `None` (SQLite storage, no filesystem scan). Resume uses `tuicSession`.
+
+**No session tracking (Aider, Amp, Cursor, Warp, Droid, OpenCode).** Either no local session files, cloud-only, or no UUID-based resume. `TUIC_SESSION` env var is available but unused.
+
+When adding a new agent: choose discovery-based if the agent writes session files to disk (add `sessionDiscovery` to `agents.ts` and a Rust `discover_*_session` to `agent_session.rs`). Choose forced injection only when discovery is impossible (e.g., SQLite-only storage).
+
 ## Logging
 
 Use `appLogger` from `src/stores/appLogger.ts` — never `console.log/warn/error`. Check app logs via `GET http://localhost:9876/logs` (supports `?level=`, `?source=`, `?limit=` filters) before asking Boss for logs.
