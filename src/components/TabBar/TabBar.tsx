@@ -770,7 +770,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 											isDragOver() && dragOverSide() === "right" && s.dragOverRight,
 										)}
 										data-tab-id={id}
-										style={repoColor() ? ({ "--repo-color": repoColor() } as any) : undefined}
+										style={repoColor() ? ({ "--repo-color": repoColor() } as Record<string, string>) : undefined}
 										onClick={handleTabClick}
 										onAuxClick={(e) => {
 											if (e.button === 1) handleCloseTab(e);

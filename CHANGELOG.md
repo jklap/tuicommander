@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.2-nightly] - 2026-05-13
+
 ### Added
 - **MCP panel screenshot** — MCP agents can capture plugin panel content as WebP images via `ui(action=screenshot, id=<pluginId>)`. Enables agents to visually verify rendered HTML dashboards.
 - **Iframe keyboard shortcut forwarding** — TUIC keyboard shortcuts now work when an iframe (plugin panel, HTML preview) has focus. A key forwarder re-dispatches matching shortcut events to the parent document.

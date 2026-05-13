@@ -5,6 +5,7 @@ import { useRepository } from "../../hooks/useRepository";
 import { invoke } from "../../invoke";
 import { shortenHomePath } from "../../platform";
 import { appLogger } from "../../stores/appLogger";
+import { editorTabsStore } from "../../stores/editorTabs";
 import { type HtmlPreviewTab as HtmlPreviewTabData, mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { attachIframeKeyForwarder } from "../../utils/iframeKeyForwarder";
@@ -117,6 +118,11 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 		);
 	};
 
+	const handleEdit = () => {
+		const { fsRoot, repoPath, filePath } = props.tab;
+		editorTabsStore.add(fsRoot || repoPath, filePath);
+	};
+
 	const displayPath = () => {
 		const { fsRoot, repoPath, filePath } = props.tab;
 		const root = fsRoot || repoPath;
@@ -129,6 +135,11 @@ export const HtmlPreviewTab: Component<HtmlPreviewTabProps> = (props) => {
 				<span class={e.filename} title={displayPath()}>
 					{props.tab.fileName}
 				</span>
+				<button class={e.btn} onClick={handleEdit} title="Edit source">
+					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+						<path d="M11.13 1.47a1.5 1.5 0 0 1 2.12 0l1.28 1.28a1.5 1.5 0 0 1 0 2.12L5.9 13.5a1 1 0 0 1-.5.27l-3.5.87a.5.5 0 0 1-.6-.6l.87-3.5a1 1 0 0 1 .27-.5L11.13 1.47ZM12.2 2.53l-8.46 8.47-.58 2.34 2.34-.58 8.47-8.46-1.77-1.77Z" />
+					</svg>
+				</button>
 				<button class={e.btn} onClick={handleOpenExternal} title="Open externally">
 					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
 						<path d="M9 2h5v5l-2-2-3 3-2-2 3-3zm-3 7l-3 3 2 2H0V9l2 2 3-3z" />

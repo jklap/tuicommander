@@ -34,16 +34,15 @@ static CIRCUIT: Mutex<CircuitBreaker> = Mutex::new(CircuitBreaker {
 
 fn circuit_check() -> Result<(), String> {
     let cb = CIRCUIT.lock().unwrap_or_else(|e| e.into_inner());
-    if cb.failures >= CIRCUIT_BREAKER_THRESHOLD {
-        if let Some(last) = cb.last_failure {
-            if last.elapsed() < CIRCUIT_BREAKER_COOLDOWN {
-                return Err(format!(
-                    "Keyring unavailable (failed {} times). Retrying in {}s.",
-                    cb.failures,
-                    (CIRCUIT_BREAKER_COOLDOWN - last.elapsed()).as_secs()
-                ));
-            }
-        }
+    if cb.failures >= CIRCUIT_BREAKER_THRESHOLD
+        && let Some(last) = cb.last_failure
+        && last.elapsed() < CIRCUIT_BREAKER_COOLDOWN
+    {
+        return Err(format!(
+            "Keyring unavailable (failed {} times). Retrying in {}s.",
+            cb.failures,
+            (CIRCUIT_BREAKER_COOLDOWN - last.elapsed()).as_secs()
+        ));
     }
     Ok(())
 }
