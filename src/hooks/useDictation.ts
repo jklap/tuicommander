@@ -120,14 +120,17 @@ export function useDictation(deps: DictationDeps) {
 		const el = focusTarget;
 		focusTarget = null;
 
-		// xterm.js uses a hidden textarea (.xterm-helper-textarea) for keyboard input.
-		// Writing directly to it via .value doesn't reach the PTY — route to the
-		// terminal fallback below instead.
-		const isXtermTextarea = el instanceof HTMLTextAreaElement && el.closest(".xterm");
+		// Terminal components use hidden input/textarea elements for keyboard capture.
+		// Writing directly to .value doesn't reach the PTY — route to the terminal
+		// fallback below instead. Covers both xterm (.xterm) and CanvasTerminal
+		// ([data-terminal-container]).
+		const isTerminalInput =
+			(el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) &&
+			(el.closest(".xterm") || el.closest("[data-terminal-container]"));
 
 		const autoSend = dictationStore.state.autoSend;
 
-		if (!isXtermTextarea && el && (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)) {
+		if (!isTerminalInput && el && (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)) {
 			const start = el.selectionStart ?? el.value.length;
 			const end = el.selectionEnd ?? start;
 			const before = el.value.slice(0, start);

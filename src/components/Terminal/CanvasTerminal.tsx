@@ -2993,6 +2993,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	return (
 		<div
 			ref={containerRef!}
+			data-terminal-container
 			style={{
 				position: "relative",
 				width: "100%",

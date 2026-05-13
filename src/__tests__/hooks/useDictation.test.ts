@@ -225,6 +225,63 @@ describe("useDictation", () => {
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Dictation: transcription failed");
 		});
 
+		it("routes to PTY when focus is on an input inside [data-terminal-container]", async () => {
+			const container = document.createElement("div");
+			container.setAttribute("data-terminal-container", "");
+			const input = document.createElement("input");
+			input.type = "text";
+			container.appendChild(input);
+			document.body.appendChild(container);
+
+			const id = terminalsStore.add({
+				sessionId: "sess-ct",
+				fontSize: 14,
+				name: "CanvasTerminal",
+				cwd: null,
+				awaitingInput: null,
+			});
+			terminalsStore.setActive(id);
+			input.focus();
+
+			try {
+				await dictation.handleDictationStart();
+				await dictation.handleDictationStop();
+
+				expect(input.value).toBe("");
+				expect(mockPty.write).toHaveBeenCalledWith("sess-ct", "hello world");
+			} finally {
+				document.body.removeChild(container);
+			}
+		});
+
+		it("routes to PTY when focus is on a textarea inside .xterm", async () => {
+			const container = document.createElement("div");
+			container.classList.add("xterm");
+			const textarea = document.createElement("textarea");
+			container.appendChild(textarea);
+			document.body.appendChild(container);
+
+			const id = terminalsStore.add({
+				sessionId: "sess-xt",
+				fontSize: 14,
+				name: "XtermTerminal",
+				cwd: null,
+				awaitingInput: null,
+			});
+			terminalsStore.setActive(id);
+			textarea.focus();
+
+			try {
+				await dictation.handleDictationStart();
+				await dictation.handleDictationStop();
+
+				expect(textarea.value).toBe("");
+				expect(mockPty.write).toHaveBeenCalledWith("sess-xt", "hello world");
+			} finally {
+				document.body.removeChild(container);
+			}
+		});
+
 		it("inserts into focused textarea instead of terminal", async () => {
 			const textarea = document.createElement("textarea");
 			textarea.value = "existing ";
