@@ -2443,7 +2443,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				navigator.clipboard
 					.readText()
 					.then((text) => {
-						if (text) writePty(`\x1b[200~${text}\x1b[201~`);
+						if (text) {
+							if (currentFrame?.bracketedPaste) {
+								writePty(`\x1b[200~${text}\x1b[201~`);
+							} else {
+								writePty(text);
+							}
+						}
 					})
 					.catch(ipcErr("clipboard_read"));
 				return;
@@ -2548,7 +2554,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}
 			}
 			const text = e.clipboardData?.getData("text");
-			if (text) writePty(`\x1b[200~${text}\x1b[201~`);
+			if (text) {
+				if (currentFrame?.bracketedPaste) {
+					writePty(`\x1b[200~${text}\x1b[201~`);
+				} else {
+					writePty(text);
+				}
+			}
 			e.preventDefault();
 		});
 
@@ -2599,7 +2611,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 						const cp = row.codepoints[col];
 						if (cp === 0 || cp === 32) return false;
 						const ch = String.fromCodePoint(cp);
-						return !/[\s\t\x00-\x1f\x7f "'`(){}[\]<>|;:,.!?@#$%^&*~=+\-/\\]/.test(ch);
+						return !/[\s\t\x00-\x1f\x7f "'`(){}[\]<>|;:,.!?@#$%^&*~=+/\\]/.test(ch);
 					};
 					let left = pos.col;
 					let right = pos.col;
