@@ -681,7 +681,10 @@ mod tests {
 
         // get() should recover instead of failing
         let result = get(Credential::AiChatApiKey);
-        assert!(result.is_ok(), "corrupt vault should recover, got: {result:?}");
+        assert!(
+            result.is_ok(),
+            "corrupt vault should recover, got: {result:?}"
+        );
         assert_eq!(result.unwrap(), None);
 
         // Setting a new credential should work (fresh vault)

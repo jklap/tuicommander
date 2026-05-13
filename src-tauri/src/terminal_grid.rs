@@ -969,11 +969,12 @@ impl TerminalGrid {
         let num_cols = grid.columns();
         let mut lines = Vec::new();
 
-        let (r0, c0, r1, c1) = if start_row < end_row || (start_row == end_row && start_col <= end_col) {
-            (start_row, start_col, end_row, end_col)
-        } else {
-            (end_row, end_col, start_row, start_col)
-        };
+        let (r0, c0, r1, c1) =
+            if start_row < end_row || (start_row == end_row && start_col <= end_col) {
+                (start_row, start_col, end_row, end_col)
+            } else {
+                (end_row, end_col, start_row, start_col)
+            };
 
         for abs_row in r0..=r1 {
             let line = Line(abs_row as i32 - history_size as i32);
@@ -983,7 +984,11 @@ impl TerminalGrid {
             }
 
             let col_start = if abs_row == r0 { c0 } else { 0 };
-            let col_end = if abs_row == r1 { c1.min(num_cols.saturating_sub(1)) } else { num_cols.saturating_sub(1) };
+            let col_end = if abs_row == r1 {
+                c1.min(num_cols.saturating_sub(1))
+            } else {
+                num_cols.saturating_sub(1)
+            };
 
             let mut text = String::new();
             for col in col_start..=col_end {

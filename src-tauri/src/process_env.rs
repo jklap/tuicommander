@@ -116,8 +116,8 @@ fn read_environ_raw(pid: u32) -> Result<Vec<String>, std::io::Error> {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Diagnostics::Debug::ReadProcessMemory;
     use windows_sys::Win32::System::Threading::{
-        NtQueryInformationProcess, OpenProcess, ProcessBasicInformation,
-        PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+        NtQueryInformationProcess, OpenProcess, PROCESS_QUERY_INFORMATION, PROCESS_VM_READ,
+        ProcessBasicInformation,
     };
 
     unsafe {
@@ -160,7 +160,10 @@ unsafe fn read_environ_from_handle(
         &mut return_length,
     );
     if status != 0 {
-        return Err(Error::new(ErrorKind::Other, format!("NtQueryInformationProcess failed: {status:#x}")));
+        return Err(Error::new(
+            ErrorKind::Other,
+            format!("NtQueryInformationProcess failed: {status:#x}"),
+        ));
     }
 
     // Step 2: Read RTL_USER_PROCESS_PARAMETERS pointer from PEB
@@ -302,10 +305,10 @@ mod tests {
         // argc=1, exec="/bin/sh\0", argv[0]="sh\0", env "FOO=bar\0" "BAZ=qux\0"
         let mut buf = Vec::new();
         buf.extend_from_slice(&1i32.to_ne_bytes()); // argc = 1
-        buf.extend_from_slice(b"/bin/sh\0");         // exec_path
-        buf.extend_from_slice(b"sh\0");              // argv[0]
-        buf.extend_from_slice(b"FOO=bar\0");         // env[0]
-        buf.extend_from_slice(b"BAZ=qux\0");         // env[1]
+        buf.extend_from_slice(b"/bin/sh\0"); // exec_path
+        buf.extend_from_slice(b"sh\0"); // argv[0]
+        buf.extend_from_slice(b"FOO=bar\0"); // env[0]
+        buf.extend_from_slice(b"BAZ=qux\0"); // env[1]
 
         let entries = collect_cstrings(&buf[4 + 8 + 3..]); // skip argc + exec + argv
         // The real parser uses skip_cstring logic; test collect_cstrings directly

@@ -3121,7 +3121,9 @@ async fn handle_screenshot(
         }
         let panel_id = match args["id"].as_str() {
             Some(id) => id.to_string(),
-            None => return serde_json::json!({"error": "Action 'screenshot' requires 'id' (the plugin panel ID)"}),
+            None => {
+                return serde_json::json!({"error": "Action 'screenshot' requires 'id' (the plugin panel ID)"});
+            }
         };
         let app_handle = state.app_handle.read().clone();
         let Some(handle) = app_handle else {
@@ -3133,10 +3135,13 @@ async fn handle_screenshot(
         state.screenshot_responses.insert(request_id.clone(), tx);
 
         use tauri::Emitter;
-        if let Err(e) = handle.emit("screenshot-request", serde_json::json!({
-            "id": panel_id,
-            "request_id": request_id,
-        })) {
+        if let Err(e) = handle.emit(
+            "screenshot-request",
+            serde_json::json!({
+                "id": panel_id,
+                "request_id": request_id,
+            }),
+        ) {
             state.screenshot_responses.remove(&request_id);
             return serde_json::json!({"error": format!("Failed to emit screenshot request: {e}")});
         }
@@ -3146,7 +3151,9 @@ async fn handle_screenshot(
                 use base64::Engine;
                 let bytes = match base64::engine::general_purpose::STANDARD.decode(&base64_data) {
                     Ok(b) => b,
-                    Err(e) => return serde_json::json!({"error": format!("Invalid base64 from frontend: {e}")}),
+                    Err(e) => {
+                        return serde_json::json!({"error": format!("Invalid base64 from frontend: {e}")});
+                    }
                 };
                 let dir = state.data_dir.join("screenshots");
                 let _ = std::fs::create_dir_all(&dir);
@@ -6866,8 +6873,8 @@ mod tests {
                 for key in keys {
                     if let Some((_, sender)) = state2.screenshot_responses.remove(&key) {
                         // 1x1 white WebP (minimal valid WebP)
-                        let fake_b64 = base64::engine::general_purpose::STANDARD
-                            .encode(b"\x00\x00\x00\x00");
+                        let fake_b64 =
+                            base64::engine::general_purpose::STANDARD.encode(b"\x00\x00\x00\x00");
                         let _ = sender.send(Some(fake_b64));
                         return;
                     }
@@ -6890,8 +6897,14 @@ mod tests {
                 "Should not have timed out with a responding channel, got: {err}"
             );
         } else {
-            assert!(r["ok"].as_bool().unwrap_or(false), "Expected ok: true, got: {r}");
-            assert!(r["path"].as_str().is_some(), "Expected path in result, got: {r}");
+            assert!(
+                r["ok"].as_bool().unwrap_or(false),
+                "Expected ok: true, got: {r}"
+            );
+            assert!(
+                r["path"].as_str().is_some(),
+                "Expected path in result, got: {r}"
+            );
         }
     }
 

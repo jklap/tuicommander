@@ -49,10 +49,7 @@ pub(crate) fn discover_agent_session(
             &claimed_ids,
             env.get("GEMINI_CLI_HOME").map(|s| s.as_str()),
         ),
-        "codex" => discover_codex_session(
-            &claimed_ids,
-            env.get("CODEX_HOME").map(|s| s.as_str()),
-        ),
+        "codex" => discover_codex_session(&claimed_ids, env.get("CODEX_HOME").map(|s| s.as_str())),
         // Goose stores sessions in SQLite — no filesystem discovery.
         // Shell wrapper injects --name $TUIC_SESSION for deterministic binding.
         "goose" => None,
@@ -359,10 +356,7 @@ pub(crate) fn verify_agent_session(
             &cwd,
             env.get("GEMINI_CLI_HOME").map(|s| s.as_str()),
         ),
-        "codex" => verify_codex_session(
-            &session_id,
-            env.get("CODEX_HOME").map(|s| s.as_str()),
-        ),
+        "codex" => verify_codex_session(&session_id, env.get("CODEX_HOME").map(|s| s.as_str())),
         "goose" => verify_goose_session(),
         _ => false,
     }

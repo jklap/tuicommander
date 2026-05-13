@@ -279,7 +279,7 @@ fn build_vapid_authorization(
     subject: &str,
     valid_secs: u64,
 ) -> Result<axum::http::HeaderValue, String> {
-    use p256::ecdsa::{signature::Signer, Signature};
+    use p256::ecdsa::{Signature, signature::Signer};
 
     let jwt_header = Base64UrlUnpadded::encode_string(br#"{"alg":"ES256","typ":"JWT"}"#);
 
@@ -307,7 +307,10 @@ fn build_vapid_authorization(
     let jwt = format!("{signing_input}.{sig_b64}");
 
     let public_b64 = Base64UrlUnpadded::encode_string(
-        signing_key.verifying_key().to_encoded_point(false).as_bytes(),
+        signing_key
+            .verifying_key()
+            .to_encoded_point(false)
+            .as_bytes(),
     );
 
     axum::http::HeaderValue::try_from(format!("vapid t={jwt}, k={public_b64}"))
@@ -359,7 +362,12 @@ fn build_push_request(
         arr.into()
     };
 
-    let auth_header = match build_vapid_authorization(vapid_signing_key, &endpoint, vapid_subject, 12 * 3600) {
+    let auth_header = match build_vapid_authorization(
+        vapid_signing_key,
+        &endpoint,
+        vapid_subject,
+        12 * 3600,
+    ) {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(source = "push", endpoint = %sub.endpoint, "VAPID signing failed: {e}");
@@ -370,7 +378,9 @@ fn build_push_request(
     let builder = web_push_native::WebPushBuilder::new(endpoint, ua_public, ua_auth);
     match builder.build(payload_bytes.to_vec()) {
         Ok(mut request) => {
-            request.headers_mut().insert(axum::http::header::AUTHORIZATION, auth_header);
+            request
+                .headers_mut()
+                .insert(axum::http::header::AUTHORIZATION, auth_header);
             Some((sub.endpoint.clone(), request))
         }
         Err(e) => {
@@ -467,8 +477,15 @@ mod tests {
 
         // Public key: 65 bytes uncompressed (0x04 prefix + X + Y)
         let pub_bytes = base64ct::Base64UrlUnpadded::decode_vec(&pub_b64).unwrap();
-        assert_eq!(pub_bytes.len(), 65, "public key must be 65 bytes uncompressed");
-        assert_eq!(pub_bytes[0], 0x04, "uncompressed point must start with 0x04");
+        assert_eq!(
+            pub_bytes.len(),
+            65,
+            "public key must be 65 bytes uncompressed"
+        );
+        assert_eq!(
+            pub_bytes[0], 0x04,
+            "uncompressed point must start with 0x04"
+        );
 
         // Key round-trip: private → load → same public key
         let sk = p256::SecretKey::from_slice(&priv_bytes).unwrap();
@@ -489,7 +506,10 @@ mod tests {
                 .unwrap();
 
         let header_str = header_val.to_str().unwrap();
-        assert!(header_str.starts_with("vapid t="), "must start with 'vapid t='");
+        assert!(
+            header_str.starts_with("vapid t="),
+            "must start with 'vapid t='"
+        );
         assert!(header_str.contains(", k="), "must contain ', k=' separator");
 
         // Extract and decode the JWT
@@ -518,6 +538,10 @@ mod tests {
 
         // Signature must be 64 bytes (IEEE P1363 r||s)
         let sig_bytes = base64ct::Base64UrlUnpadded::decode_vec(parts[2]).unwrap();
-        assert_eq!(sig_bytes.len(), 64, "ES256 signature must be 64 bytes (r||s)");
+        assert_eq!(
+            sig_bytes.len(),
+            64,
+            "ES256 signature must be 64 bytes (r||s)"
+        );
     }
 }

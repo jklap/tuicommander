@@ -276,11 +276,7 @@ fn clear_repo_caches(state: State<'_, Arc<AppState>>, path: String) {
 /// Pairs with the `screenshot-request` Tauri event emitted by `ui(action=screenshot)`.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-fn screenshot_response(
-    state: State<'_, Arc<AppState>>,
-    request_id: String,
-    data: Option<String>,
-) {
+fn screenshot_response(state: State<'_, Arc<AppState>>, request_id: String, data: Option<String>) {
     if let Some((_, sender)) = state.screenshot_responses.remove(&request_id) {
         let _ = sender.send(data);
     }

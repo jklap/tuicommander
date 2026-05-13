@@ -39,7 +39,11 @@ mod platform {
             Ok(false)
         }
 
-        pub async fn symbols_in_file(&mut self, _root: &str, _file: &str) -> Result<Vec<MdkbSymbol>> {
+        pub async fn symbols_in_file(
+            &mut self,
+            _root: &str,
+            _file: &str,
+        ) -> Result<Vec<MdkbSymbol>> {
             Ok(vec![])
         }
 
@@ -53,7 +57,12 @@ mod platform {
             Ok(None)
         }
 
-        pub async fn code_graph(&mut self, _root: &str, _name: &str, _direction: &str) -> Result<Value> {
+        pub async fn code_graph(
+            &mut self,
+            _root: &str,
+            _name: &str,
+            _direction: &str,
+        ) -> Result<Value> {
             bail!("mdkb: not available on this platform")
         }
     }
@@ -195,7 +204,12 @@ mod platform {
             Ok(Some(sym))
         }
 
-        pub async fn code_graph(&mut self, root: &str, name: &str, direction: &str) -> Result<Value> {
+        pub async fn code_graph(
+            &mut self,
+            root: &str,
+            name: &str,
+            direction: &str,
+        ) -> Result<Value> {
             self.call(
                 "code_graph",
                 json!({
@@ -215,8 +229,8 @@ pub use platform::MdkbClient;
 mod tests {
     use super::*;
     use std::path::Path;
-    use tokio::net::{UnixListener, UnixStream};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{UnixListener, UnixStream};
 
     async fn spawn_mock_server() -> (PathBuf, tokio::task::JoinHandle<()>) {
         let dir = tempfile::tempdir().unwrap();

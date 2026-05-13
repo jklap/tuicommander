@@ -4667,7 +4667,10 @@ pub(crate) fn terminal_get_selection_text(
     state
         .vt_log_buffers
         .get(&session_id)
-        .map(|vt| vt.lock().grid_get_selection_text(start_row, start_col, end_row, end_col))
+        .map(|vt| {
+            vt.lock()
+                .grid_get_selection_text(start_row, start_col, end_row, end_col)
+        })
         .unwrap_or_default()
 }
 
