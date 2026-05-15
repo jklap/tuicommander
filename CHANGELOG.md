@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Git log time-of-day** — Commits within 7 days now show "1d ago · 14:32" instead of just "1d ago". Hover shows the full timestamp. Helps distinguish same-day commits when deciding what to revert.
 - **Terminal text selection API** — New `terminal_get_selection_text` Tauri command extracts text from a row/column range in the terminal grid.
 - **Double-click word selection** — Double-clicking in the terminal now includes hyphens (`-`) and underscores (`_`) in word boundaries, matching common shell identifiers.
+- **Preview tab Edit button** — Preview tab header now has an Edit button (pencil icon) that opens the file in the built-in code editor.
 - **Native drag to external apps** — Drag files from the File Browser to Finder, email clients, and other external applications using OS-level drag via `tauri-plugin-drag`.
 - **Mermaid diagram rendering** — Fenced ` ```mermaid ` code blocks in markdown tabs are rendered as interactive SVG diagrams. Mermaid.js is lazy-loaded on first use with dark theme and strict security.
 - **Group park/unpark** — Park or unpark all repositories in a sidebar group at once via context menu or command palette.
@@ -31,6 +32,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Terminal scroll-to-bottom on click** — Clicking in a scrolled-up terminal no longer snaps to bottom. Mouse events (SGR reports, focus/blur) now use `writePtyNoScroll()` which writes to the PTY without resetting scroll position.
 - **OSC 8 hyperlink hover underline** — Hover underline now spans the full link instead of a single character, using the new `terminal_hyperlink_span` backend API.
 - **OSC 8 `file://` URI links** — Clicking `file:///path` links now correctly opens the file by stripping the `file://` prefix before path resolution.
+- **OSC 8 tilde path resolution** — OSC 8 hyperlinks with `~/` paths now resolve through `resolve_terminal_path`, expanding the home directory before opening.
+- **Offscreen selection copy** — Copying terminal text that extends beyond the visible viewport now delegates to the backend, which has full scrollback access. Previously, offscreen rows were silently dropped.
 - **Auto-heal CI toggle style** — Replaced native HTML checkbox with pill-switch toggle matching the CI check item row style (proper padding, hover, alignment).
 - **Vitest localStorage shim** — Test setup now handles `localStorage` being fully undefined (not just missing `.clear()`), fixing 524 test failures in environments without `--localstorage-file`.
 
