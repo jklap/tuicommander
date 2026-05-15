@@ -351,6 +351,7 @@ const App: Component = () => {
 		Partial<Record<StepId, StepStatus>>
 	>({});
 	const [worktreeCleanupStepErrors, setWorktreeCleanupStepErrors] = createSignal<Partial<Record<StepId, string>>>({});
+	const [worktreeCleanupStepNotes, setWorktreeCleanupStepNotes] = createSignal<Partial<Record<StepId, string>>>({});
 	const [worktreeCleanupAction, setWorktreeCleanupAction] = createSignal<"archive" | "delete">("archive");
 
 	const handleWorktreeCleanupExecute = async (steps: CleanupStep[], options?: { unstash?: boolean }) => {
@@ -359,6 +360,7 @@ const App: Component = () => {
 		setWorktreeCleanupExecuting(true);
 		setWorktreeCleanupStepStatuses({});
 		setWorktreeCleanupStepErrors({});
+		setWorktreeCleanupStepNotes({});
 		await executeCleanup({
 			repoPath: ctx.repoPath,
 			branchName: ctx.branchName,
@@ -371,6 +373,7 @@ const App: Component = () => {
 				setWorktreeCleanupStepStatuses((prev) => ({ ...prev, [id]: result as StepStatus }));
 				if (error) setWorktreeCleanupStepErrors((prev) => ({ ...prev, [id]: error }));
 			},
+			onStepNote: (id, note) => setWorktreeCleanupStepNotes((prev) => ({ ...prev, [id]: note })),
 			closeTerminalsForBranch: gitOps.closeTerminalsForBranch,
 		});
 		// Brief delay so user sees final statuses
@@ -2585,6 +2588,7 @@ const App: Component = () => {
 							executing={worktreeCleanupExecuting()}
 							stepStatuses={worktreeCleanupStepStatuses()}
 							stepErrors={worktreeCleanupStepErrors()}
+							stepNotes={worktreeCleanupStepNotes()}
 							onExecute={handleWorktreeCleanupExecute}
 							onSkip={handleWorktreeCleanupSkip}
 						/>
