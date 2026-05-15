@@ -88,14 +88,6 @@ pub(crate) fn cached_read(service_name: &str) -> Result<Option<String>, String> 
     Ok(value)
 }
 
-#[allow(dead_code)]
-pub(crate) fn invalidate_cache(service_name: &str) {
-    let mut guard = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(map) = guard.as_mut() {
-        map.remove(service_name);
-    }
-}
-
 fn read_credential_uncached(service_name: &str) -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
     {
@@ -187,28 +179,6 @@ mod tests {
         let result = plugin_read_credential_inner("");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("empty"));
-    }
-
-    #[test]
-    fn invalidate_cache_removes_entry() {
-        let mut guard = CACHE.lock().unwrap();
-        let map = guard.get_or_insert_with(HashMap::new);
-        map.insert(
-            "test-invalidate".to_string(),
-            CachedEntry {
-                value: Some("cached-value".into()),
-                fetched_at: Instant::now(),
-            },
-        );
-        drop(guard);
-
-        invalidate_cache("test-invalidate");
-
-        let guard = CACHE.lock().unwrap();
-        assert!(
-            guard.as_ref().unwrap().get("test-invalidate").is_none(),
-            "entry should be removed after invalidation"
-        );
     }
 
     #[cfg(target_os = "macos")]

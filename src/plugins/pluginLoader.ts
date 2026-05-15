@@ -9,6 +9,7 @@
 import { invoke, listen } from "../invoke";
 import { appLogger } from "../stores/appLogger";
 import { pluginStore } from "../stores/pluginStore";
+import { terminalsStore } from "../stores/terminals";
 import { isTauri } from "../transport";
 import { pluginRegistry } from "./pluginRegistry";
 import type { TuiPlugin } from "./types";
@@ -295,20 +296,20 @@ async function handlePluginChanged(event: { payload: string[] }): Promise<void> 
 		}
 
 		await loadPlugin(manifest);
-
-		// After hot-reload, replay agent-started + shell-state for all
-		// terminals with running agents. The plugin lost its in-memory
-		// session map on unload; without replay it never re-discovers
-		// sessions that were already active.
-		replayActiveAgents();
 	}
+
+	// After hot-reload, replay agent-started + shell-state for all
+	// terminals with running agents. The plugin lost its in-memory
+	// session map on unload; without replay it never re-discovers
+	// sessions that were already active. Called once after all changed
+	// plugins have been reloaded to avoid duplicate dispatches.
+	replayActiveAgents(terminalsStore);
 }
 
 /** Replay agent-started events for terminals that already have a running agent. */
-function replayActiveAgents(): void {
-	const { terminalsStore } = require("../stores/terminals") as typeof import("../stores/terminals");
-	for (const id of terminalsStore.getIds()) {
-		const t = terminalsStore.get(id);
+function replayActiveAgents(store: typeof terminalsStore): void {
+	for (const id of store.getIds()) {
+		const t = store.get(id);
 		if (t?.agentType && t.sessionId) {
 			pluginRegistry.notifyStateChange({
 				type: "agent-started",

@@ -85,7 +85,6 @@ export function shellSplit(input: string): string[] {
 interface ResolvedAgent {
 	agent: string | null;
 	isApi: boolean;
-	fallback: boolean;
 }
 
 function resolveHeadlessAgent(prompt: SavedPrompt): ResolvedAgent {
@@ -93,14 +92,14 @@ function resolveHeadlessAgent(prompt: SavedPrompt): ResolvedAgent {
 	const global = agentConfigsStore.getHeadlessAgent();
 
 	if (preferred) {
-		if (preferred === "api") return { agent: "api", isApi: true, fallback: false };
+		if (preferred === "api") return { agent: "api", isApi: true };
 		const template = agentConfigsStore.getHeadlessTemplate(preferred);
-		if (template) return { agent: preferred, isApi: false, fallback: false };
+		if (template) return { agent: preferred, isApi: false };
 		appLogger.warn("prompts", `Preferred agent "${preferred}" has no template, falling back to global`);
 	}
 
-	if (!global) return { agent: null, isApi: false, fallback: !!preferred };
-	return { agent: global, isApi: global === "api", fallback: !!preferred };
+	if (!global) return { agent: null, isApi: false };
+	return { agent: global, isApi: global === "api" };
 }
 
 export function useSmartPrompts() {

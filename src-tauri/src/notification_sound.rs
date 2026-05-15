@@ -252,10 +252,9 @@ pub(crate) struct AudioOutputDevice {
 
 pub(crate) fn list_output_devices() -> Vec<AudioOutputDevice> {
     let host = rodio::cpal::default_host();
-    let default_name = host
+    let default_name: Option<String> = host
         .default_output_device()
-        .and_then(|d| d.name().ok())
-        .unwrap_or_default();
+        .and_then(|d| d.name().ok());
 
     host.output_devices()
         .map(|devices| {
@@ -263,7 +262,7 @@ pub(crate) fn list_output_devices() -> Vec<AudioOutputDevice> {
                 .filter_map(|d| {
                     let name = d.name().ok()?;
                     Some(AudioOutputDevice {
-                        is_default: name == default_name,
+                        is_default: default_name.as_deref() == Some(name.as_str()),
                         name,
                     })
                 })

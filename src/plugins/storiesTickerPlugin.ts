@@ -82,7 +82,11 @@ class StoriesTickerPlugin implements TuiPlugin {
 			if (repo) this.refresh(repo.path);
 		})
 			.then((unlisten) => {
-				this.unlistenDirChanged = unlisten;
+				if (this.watchedDir === storiesDir) {
+					this.unlistenDirChanged = unlisten;
+				} else {
+					unlisten();
+				}
 			})
 			.catch((err) => {
 				appLogger.warn("plugin", "[stories-ticker] Failed to register dir-changed listener", err);

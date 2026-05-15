@@ -163,7 +163,8 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		requestAnimationFrame(() => rerunSearch());
 	});
 
-	// Reload file content when this tab gains focus (catches external edits).
+	// Reload file content when this tab gains focus or the repo revision bumps
+	// (catches external edits both on tab switch and while the tab is already active).
 	createEffect(() => {
 		const isActive = mdTabsStore.state.activeId === props.tab.id;
 		if (!isActive) return;
@@ -172,12 +173,27 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		const { filePath, fsRoot, repoPath } = tab as FileTab;
 		const root = fsRoot || repoPath;
 
+		// Subscribe to repo revision so the effect re-runs on external file changes.
+		void (repoPath ? repositoriesStore.getRevision(repoPath) : 0);
+
+		// Capture current content before the async read to avoid a stale compare.
+		const currentContent = content();
+		let cancelled = false;
+		onCleanup(() => {
+			cancelled = true;
+		});
+
 		(async () => {
 			try {
 				const diskContent = await readFileContent(root, filePath);
-				if (diskContent !== content()) setContent(diskContent);
-			} catch {
-				// File may have been deleted — ignore
+				if (!cancelled && diskContent !== currentContent) setContent(diskContent);
+			} catch (err) {
+				if (cancelled) return;
+				const msg = err instanceof Error ? err.message : String(err);
+				// Silently ignore expected errors (file deleted); log anything else.
+				if (!msg.includes("No such file") && !msg.includes("os error 2")) {
+					appLogger.warn("app", "focus-reload readFileContent failed", { repoPath, filePath, error: msg });
+				}
 			}
 		})();
 	});

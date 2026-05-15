@@ -1,5 +1,5 @@
 import { type Component, createMemo, createSignal, For, onMount, Show } from "solid-js";
-import { AGENTS, type AgentType } from "../../../agents";
+import { AGENT_TYPES, AGENTS, type AgentType } from "../../../agents";
 import { SMART_PROMPTS_BUILTIN } from "../../../data/smartPromptsBuiltIn";
 import { useAgentDetection } from "../../../hooks/useAgentDetection";
 import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
@@ -407,7 +407,7 @@ const PromptEditor: Component<{
 						onChange={(e) => {
 							const val = e.currentTarget.value || undefined;
 							promptLibraryStore.updatePrompt(props.prompt.id, {
-								preferredAgent: val as AgentType | undefined,
+								preferredAgent: val && AGENT_TYPES.includes(val as AgentType) ? (val as AgentType) : undefined,
 							});
 						}}
 					>
@@ -660,7 +660,7 @@ export const SmartPromptsTab: Component = () => {
 					value={agentConfigsStore.getHeadlessAgent() ?? ""}
 					onChange={(e) => {
 						const val = e.currentTarget.value;
-						agentConfigsStore.setHeadlessAgent(val ? (val as AgentType) : null);
+						agentConfigsStore.setHeadlessAgent(val && AGENT_TYPES.includes(val as AgentType) ? (val as AgentType) : null);
 					}}
 				>
 					<option value="">— Not configured —</option>

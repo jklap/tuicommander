@@ -60,7 +60,6 @@ pub struct SubscribeResult {
 // Internal types
 // ---------------------------------------------------------------------------
 
-#[allow(dead_code)]
 const MAX_MESSAGES: usize = 100;
 
 #[cfg(feature = "desktop")]

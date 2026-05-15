@@ -1402,4 +1402,66 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Built-in plugin"));
     }
+
+    // -- is_plugin_code_change --
+
+    #[cfg(feature = "desktop")]
+    mod plugin_code_change {
+        use super::super::is_plugin_code_change;
+        use std::path::Path;
+
+        #[test]
+        fn main_js_is_code() {
+            assert!(is_plugin_code_change(Path::new("my-plugin/main.js")));
+        }
+
+        #[test]
+        fn mjs_is_code() {
+            assert!(is_plugin_code_change(Path::new("my-plugin/index.mjs")));
+        }
+
+        #[test]
+        fn json_is_code() {
+            assert!(is_plugin_code_change(Path::new("my-plugin/manifest.json")));
+        }
+
+        #[test]
+        fn data_stats_json_is_not_code() {
+            // Under <plugin_id>/data/ — runtime data, must NOT trigger hot-reload
+            assert!(!is_plugin_code_change(Path::new("my-plugin/data/stats.json")));
+        }
+
+        #[test]
+        fn data_subdir_any_file_is_not_code() {
+            assert!(!is_plugin_code_change(Path::new("my-plugin/data/sub/counts.json")));
+        }
+
+        #[test]
+        fn image_png_is_not_code() {
+            assert!(!is_plugin_code_change(Path::new("my-plugin/image.png")));
+        }
+
+        #[test]
+        fn css_file_is_not_code() {
+            // CSS is not in the allowed set — no hot-reload for stylesheets
+            assert!(!is_plugin_code_change(Path::new("my-plugin/styles.css")));
+        }
+
+        #[test]
+        fn bare_plugin_id_no_filename_is_not_code() {
+            // Only one component — fails the len < 2 guard
+            assert!(!is_plugin_code_change(Path::new("my-plugin")));
+        }
+
+        #[test]
+        fn empty_path_is_not_code() {
+            assert!(!is_plugin_code_change(Path::new("")));
+        }
+
+        #[test]
+        fn nested_js_not_in_data_is_code() {
+            // dist/ subfolder is code, not data
+            assert!(is_plugin_code_change(Path::new("my-plugin/dist/bundle.js")));
+        }
+    }
 }
