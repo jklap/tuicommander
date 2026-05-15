@@ -163,24 +163,23 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 		requestAnimationFrame(() => rerunSearch());
 	});
 
-	// Poll for file changes (external edits, agent modifications).
+	// Reload file content when this tab gains focus (catches external edits).
 	createEffect(() => {
+		const isActive = mdTabsStore.state.activeId === props.tab.id;
+		if (!isActive) return;
 		const tab = props.tab;
 		if (tab.type !== "file" || !tab.filePath) return;
 		const { filePath, fsRoot, repoPath } = tab as FileTab;
 		const root = fsRoot || repoPath;
 
-		const timer = setInterval(async () => {
-			if (document.visibilityState === "hidden") return;
-			if (mdTabsStore.state.activeId !== props.tab.id) return;
+		(async () => {
 			try {
 				const diskContent = await readFileContent(root, filePath);
 				if (diskContent !== content()) setContent(diskContent);
 			} catch {
 				// File may have been deleted — ignore
 			}
-		}, 5000);
-		onCleanup(() => clearInterval(timer));
+		})();
 	});
 
 	/** Run search with current term and options */
