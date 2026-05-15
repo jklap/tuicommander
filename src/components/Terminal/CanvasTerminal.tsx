@@ -106,6 +106,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let selectionStart: { col: number; row: number } | null = null;
 	let selectionEnd: { col: number; row: number } | null = null;
 	let cachedSelectionText = "";
+	let selectionScrollTimer: ReturnType<typeof setInterval> | null = null;
+	let selectionScrollDelta = 0;
 
 	// Link detection
 	const linkCache = new Map<
@@ -188,6 +190,37 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				paintFrame(currentFrame, m, dirty);
 			}
 		});
+	}
+
+	function startSelectionScroll(delta: number) {
+		if (selectionScrollTimer !== null && selectionScrollDelta === delta) return;
+		stopSelectionScroll();
+		selectionScrollDelta = delta;
+		const speed = Math.min(Math.abs(delta), 5);
+		const interval = Math.max(20, 80 - speed * 12);
+		selectionScrollTimer = setInterval(() => {
+			if (!selecting || !selectionStart || !currentFrame || !invokeRef) {
+				stopSelectionScroll();
+				return;
+			}
+			const scrollDir = delta > 0 ? 1 : -1;
+			invokeRef("terminal_scroll", { sessionId: props.sessionId, delta: scrollDir }).catch(ipcErr("terminal_scroll"));
+			const edgeRow = scrollDir > 0 ? 0 : (currentFrame.screenRows || lastResizeRows) - 1;
+			const absRow = viewportRowToAbs(edgeRow);
+			if (absRow !== null) {
+				selectionEnd = { col: scrollDir > 0 ? 0 : 9999, row: absRow + scrollDir };
+				const m = metrics();
+				if (m) paintFrame(currentFrame, m);
+			}
+		}, interval);
+	}
+
+	function stopSelectionScroll() {
+		if (selectionScrollTimer !== null) {
+			clearInterval(selectionScrollTimer);
+			selectionScrollTimer = null;
+			selectionScrollDelta = 0;
+		}
 	}
 
 	function canvasToGrid(e: MouseEvent): { col: number; row: number } {
@@ -2684,12 +2717,27 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 
 			if (selecting && selectionStart) {
+				const rect = canvasRef.getBoundingClientRect();
+				const m = metrics();
+				if (m) {
+					const yAbove = rect.top - e.clientY;
+					const yBelow = e.clientY - rect.bottom;
+					if (yAbove > 0) {
+						const rows = Math.ceil(yAbove / m.cellHeight);
+						startSelectionScroll(rows);
+					} else if (yBelow > 0) {
+						const rows = Math.ceil(yBelow / m.cellHeight);
+						startSelectionScroll(-rows);
+					} else {
+						stopSelectionScroll();
+					}
+				}
 				const pos = canvasToGrid(e);
 				const absRow = viewportRowToAbs(pos.row);
 				if (absRow === null) return;
 				selectionEnd = { col: pos.col, row: absRow };
-				const m = metrics();
-				if (currentFrame && m) paintFrame(currentFrame, m);
+				const mRepaint = metrics();
+				if (currentFrame && mRepaint) paintFrame(currentFrame, mRepaint);
 			}
 
 			// Link detection (throttled)
@@ -2710,6 +2758,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}
 				return;
 			}
+			stopSelectionScroll();
 			if (selecting && selectionStart && selectionEnd) {
 				if (selectionStart.row !== selectionEnd.row || selectionStart.col !== selectionEnd.col) {
 					copySelection();
@@ -2881,6 +2930,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				document.removeEventListener("mouseup", onMouseUp);
 				document.removeEventListener("mousemove", onScrollDragMove);
 				document.removeEventListener("mouseup", onScrollDragUp);
+				stopSelectionScroll();
 				transport?.unsubscribe();
 			};
 		} catch (e) {
@@ -2893,6 +2943,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				document.removeEventListener("mouseup", onMouseUp);
 				document.removeEventListener("mousemove", onScrollDragMove);
 				document.removeEventListener("mouseup", onScrollDragUp);
+				stopSelectionScroll();
 			};
 		}
 
