@@ -711,6 +711,8 @@ pub(crate) struct NotificationConfig {
     pub(crate) volume: f64,
     #[serde(default)]
     pub(crate) sounds: NotificationSounds,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) audio_device: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -727,6 +729,7 @@ impl Default for NotificationConfig {
             enabled: true,
             volume: 0.5,
             sounds: NotificationSounds::default(),
+            audio_device: None,
         }
     }
 }
@@ -1811,12 +1814,14 @@ mod tests {
                 warning: false,
                 info: true,
             },
+            audio_device: Some("Test Speaker".to_string()),
         };
         let loaded: NotificationConfig = round_trip_in_dir(dir.path(), "notifications.json", &cfg);
         assert!(!loaded.enabled);
         assert!((loaded.volume - 0.8).abs() < f64::EPSILON);
         assert!(loaded.sounds.question);
         assert!(!loaded.sounds.error);
+        assert_eq!(loaded.audio_device.as_deref(), Some("Test Speaker"));
     }
 
     #[test]

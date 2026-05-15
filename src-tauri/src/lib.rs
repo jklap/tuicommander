@@ -1519,6 +1519,7 @@ pub fn run() {
             app_logger::get_logs,
             app_logger::clear_logs,
             notification_sound::play_notification_sound,
+            notification_sound::list_audio_output_devices,
             git_graph::get_commit_graph,
             tuic_cli::get_cli_status,
             tuic_cli::install_cli,

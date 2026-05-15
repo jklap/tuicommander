@@ -16,6 +16,7 @@ function copyDefaults(): NotificationConfig {
 	return {
 		...DEFAULT_NOTIFICATION_CONFIG,
 		sounds: { ...DEFAULT_NOTIFICATION_CONFIG.sounds },
+		audio_device: DEFAULT_NOTIFICATION_CONFIG.audio_device,
 	};
 }
 
@@ -81,6 +82,13 @@ function createNotificationsStore() {
 			const clampedVolume = Math.max(0, Math.min(1, volume));
 			setState("config", "volume", clampedVolume);
 			notificationManager.setVolume(clampedVolume);
+			saveConfig(state.config);
+		},
+
+		/** Set the audio output device (null = system default) */
+		setAudioDevice(device: string | null): void {
+			setState("config", "audio_device", device);
+			notificationManager.updateConfig({ audio_device: device });
 			saveConfig(state.config);
 		},
 
