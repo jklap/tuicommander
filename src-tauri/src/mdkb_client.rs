@@ -79,6 +79,13 @@ mod platform {
 
     const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 
+    fn unwrap_text_field(resp: &Value) -> Result<String> {
+        match resp.get("text").and_then(Value::as_str) {
+            Some(t) => Ok(t.to_string()),
+            None => serde_json::to_string(resp).context("mdkb: serialize fallback response"),
+        }
+    }
+
     #[derive(Debug)]
     pub struct MdkbClient {
         #[cfg(not(test))]
@@ -173,8 +180,9 @@ mod platform {
                     }),
                 )
                 .await?;
+            let text = unwrap_text_field(&resp)?;
             let symbols: Vec<MdkbSymbol> =
-                serde_json::from_value(resp).context("mdkb: parse symbols_in_file response")?;
+                serde_json::from_str(&text).context("mdkb: parse symbols_in_file response")?;
             Ok(symbols)
         }
 
@@ -196,11 +204,12 @@ mod platform {
                     }),
                 )
                 .await?;
-            if resp.is_null() {
+            let text = unwrap_text_field(&resp)?;
+            if text == "null" || text.is_empty() {
                 return Ok(None);
             }
             let sym: MdkbSymbol =
-                serde_json::from_value(resp).context("mdkb: parse symbol_at_position response")?;
+                serde_json::from_str(&text).context("mdkb: parse symbol_at_position response")?;
             Ok(Some(sym))
         }
 
@@ -210,15 +219,18 @@ mod platform {
             name: &str,
             direction: &str,
         ) -> Result<Value> {
-            self.call(
-                "code_graph",
-                json!({
-                    "root": root,
-                    "name": name,
-                    "direction": direction,
-                }),
-            )
-            .await
+            let resp = self
+                .call(
+                    "code_graph",
+                    json!({
+                        "root": root,
+                        "name": name,
+                        "direction": direction,
+                    }),
+                )
+                .await?;
+            let text = unwrap_text_field(&resp)?;
+            serde_json::from_str(&text).context("mdkb: parse code_graph response")
         }
     }
 }
@@ -257,14 +269,17 @@ mod tests {
 
                 let response = match method {
                     "ping" => json!({"jsonrpc": "2.0", "id": id, "result": {"pong": true}}),
-                    "symbols_in_file" => json!({
-                        "jsonrpc": "2.0",
-                        "id": id,
-                        "result": [
+                    "symbols_in_file" => {
+                        let symbols = json!([
                             {"name": "foo", "kind": "Function", "file_path": "src/main.rs", "line_start": 1, "line_end": 10, "signature": "fn foo()", "scope_context": null},
                             {"name": "bar", "kind": "Function", "file_path": "src/main.rs", "line_start": 12, "line_end": 20, "signature": "fn bar(x: i32)", "scope_context": "foo"}
-                        ]
-                    }),
+                        ]);
+                        json!({
+                            "jsonrpc": "2.0",
+                            "id": id,
+                            "result": {"text": symbols.to_string(), "tokens": 0}
+                        })
+                    }
                     "bad_method" => json!({
                         "jsonrpc": "2.0",
                         "id": id,
