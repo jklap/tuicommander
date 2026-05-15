@@ -918,6 +918,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 						onClick={() => {
 							uiStore.setFileBrowserViewMode("tree");
 							setCurrentSubdir(".");
+							setSearchQuery("");
 						}}
 						title="Tree view"
 					>
