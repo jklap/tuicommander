@@ -342,6 +342,55 @@ describe("executeCleanup", () => {
 		expect(mockInvoke).not.toHaveBeenCalledWith("finalize_merged_worktree", expect.anything());
 	});
 
+	/**
+	 * Regression test for the "Keep worktree" bug.
+	 *
+	 * PostMergeCleanupDialog lets the user UNCHECK the "Archive/Delete worktree"
+	 * step (intent: keep the worktree on disk) while leaving the "Delete local
+	 * branch" step CHECKED. Today executeCleanup invokes
+	 * `delete_local_branch` with only `{ repoPath, branchName }` — no signal
+	 * for the Rust side that the worktree must be preserved. The Rust impl
+	 * (`delete_local_branch_impl` in `src-tauri/src/worktree.rs`) then
+	 * unconditionally calls `remove_worktree_by_branch`, destroying the
+	 * worktree the user explicitly kept.
+	 *
+	 * Acceptable fixes:
+	 *   (a) Skip delete-local when worktree step is unchecked (and warn the
+	 *       user — git refuses `branch -d` on a branch checked out in a
+	 *       linked worktree anyway).
+	 *   (b) Pass `keepWorktree: true` so the Rust side skips the cascade.
+	 *
+	 * Either way, the current invocation contract is wrong. This test fails
+	 * today and guards the fix.
+	 */
+	it("does not destroy the kept worktree when user unchecks the worktree step", async () => {
+		const config = makeConfig({
+			steps: [
+				{ id: "worktree", checked: false }, // user KEEPS the worktree
+				{ id: "switch", checked: false },
+				{ id: "pull", checked: false },
+				{ id: "delete-local", checked: true }, // still wants branch gone
+				{ id: "delete-remote", checked: false },
+			],
+			worktreeAction: "archive",
+		});
+		await executeCleanup(config);
+
+		const deleteLocalCall = mockInvoke.mock.calls.find(
+			(c: unknown[]) => c[0] === "delete_local_branch",
+		);
+
+		// Either delete-local is skipped entirely (option a), or it must
+		// carry a keep-worktree signal so the Rust cascade is bypassed
+		// (option b). Today neither is true: delete-local fires with no flag.
+		if (deleteLocalCall === undefined) {
+			// Option (a) — accept the skip and bail out.
+			return;
+		}
+		const args = deleteLocalCall[1] as Record<string, unknown> | undefined;
+		expect(args?.keepWorktree).toBe(true);
+	});
+
 	it("calls bumpRevision at the end even without local delete", async () => {
 		const config = makeConfig({
 			steps: [

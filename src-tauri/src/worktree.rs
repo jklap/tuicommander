@@ -1797,6 +1797,47 @@ branch refs/heads/feat
         assert!(!wt.path.exists(), "Worktree directory should be gone");
     }
 
+    /// Regression test for the "Keep worktree" bug.
+    ///
+    /// PostMergeCleanupDialog lets the user uncheck the "Archive/Delete worktree"
+    /// step (intent: keep the worktree on disk) while leaving the "Delete local
+    /// branch" step checked. The frontend then invokes `delete_local_branch`,
+    /// which routes here through `delete_local_branch_impl`. Today this function
+    /// has no opt-out: when a linked worktree exists it unconditionally calls
+    /// `remove_worktree_by_branch`, so the worktree directory is destroyed
+    /// regardless of the user's intent.
+    ///
+    /// Expected behaviour: a code path that deletes the branch ref while
+    /// preserving the worktree directory on disk. This test fails today and
+    /// guards the fix.
+    #[test]
+    fn delete_local_branch_should_preserve_worktree_when_user_keeps_it() {
+        let repo = setup_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let worktrees_dir = repo.path().join("worktrees");
+
+        let config = WorktreeConfig {
+            task_name: "wt-keep".to_string(),
+            base_repo: repo_path.clone(),
+            branch: None,
+            create_branch: false,
+        };
+        let wt = create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("Failed to create worktree");
+        assert!(wt.path.exists(), "precondition: worktree should exist");
+
+        // Simulates PostMergeCleanupDialog flow with the worktree step
+        // unchecked but delete-local checked. The current API offers no way
+        // to express "keep worktree", so the cascade runs unconditionally.
+        let _ = delete_local_branch_impl(&repo_path, &wt.name);
+
+        assert!(
+            wt.path.exists(),
+            "BUG: linked worktree was deleted by the delete_local_branch cascade \
+             even though the user chose to keep it in the cleanup dialog"
+        );
+    }
+
     #[test]
     fn check_worktree_dirty_clean_worktree() {
         let repo = setup_test_repo();
