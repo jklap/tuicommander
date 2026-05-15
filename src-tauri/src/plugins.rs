@@ -868,6 +868,26 @@ pub fn uninstall_plugin(id: String, app_handle: AppHandle) -> Result<(), String>
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "desktop")]
+/// Check if a changed path within a plugin dir is source code (not runtime data).
+/// Plugin data is stored under `<plugin_id>/data/` — changes there must not
+/// trigger hot-reload (the plugin itself writes stats/config at runtime).
+fn is_plugin_code_change(relative: &std::path::Path) -> bool {
+    let components: Vec<_> = relative.components().collect();
+    // Need at least plugin_id + filename
+    if components.len() < 2 {
+        return false;
+    }
+    // Skip anything under <plugin_id>/data/
+    if components.len() > 2 && components[1].as_os_str() == "data" {
+        return false;
+    }
+    // Only reload for code files
+    matches!(
+        relative.extension().and_then(|e| e.to_str()),
+        Some("js" | "mjs" | "json")
+    )
+}
+
 /// Start watching the plugins directory for changes and emit `plugin-changed`
 /// events to the frontend. Uses the same debouncer pattern as repo_watcher.
 pub fn start_plugin_watcher(app_handle: &AppHandle) {
@@ -943,14 +963,19 @@ pub fn start_plugin_watcher(app_handle: &AppHandle) {
                 Err(_) => break,
             };
 
-            // Process this event
+            // Process this event — only JS code and manifest changes
+            // trigger hot-reload. Data files (stats, caches, config)
+            // written at runtime must not cause a reload.
             for path in &event.paths {
-                if let Ok(relative) = path.strip_prefix(&dir)
-                    && let Some(first) = relative.components().next()
-                {
-                    let id = first.as_os_str().to_string_lossy().to_string();
-                    if !id.starts_with('.') && !changed_ids.contains(&id) {
-                        changed_ids.push(id);
+                if let Ok(relative) = path.strip_prefix(&dir) {
+                    if !is_plugin_code_change(relative) {
+                        continue;
+                    }
+                    if let Some(first) = relative.components().next() {
+                        let id = first.as_os_str().to_string_lossy().to_string();
+                        if !id.starts_with('.') && !changed_ids.contains(&id) {
+                            changed_ids.push(id);
+                        }
                     }
                 }
             }
@@ -959,12 +984,15 @@ pub fn start_plugin_watcher(app_handle: &AppHandle) {
             while let Ok(result) = rx.recv_timeout(debounce) {
                 if let Ok(event) = result {
                     for path in &event.paths {
-                        if let Ok(relative) = path.strip_prefix(&dir)
-                            && let Some(first) = relative.components().next()
-                        {
-                            let id = first.as_os_str().to_string_lossy().to_string();
-                            if !id.starts_with('.') && !changed_ids.contains(&id) {
-                                changed_ids.push(id);
+                        if let Ok(relative) = path.strip_prefix(&dir) {
+                            if !is_plugin_code_change(relative) {
+                                continue;
+                            }
+                            if let Some(first) = relative.components().next() {
+                                let id = first.as_os_str().to_string_lossy().to_string();
+                                if !id.starts_with('.') && !changed_ids.contains(&id) {
+                                    changed_ids.push(id);
+                                }
                             }
                         }
                     }
