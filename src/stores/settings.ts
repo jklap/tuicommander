@@ -736,6 +736,7 @@ registerDebugSnapshot("settings", () => {
 		theme: s.theme,
 		language: s.language,
 		splitTabMode: s.splitTabMode,
+		tabOrderingMode: s.tabOrderingMode,
 		bellStyle: s.bellStyle,
 		updateChannel: s.updateChannel,
 		intentTabTitle: s.intentTabTitle,
