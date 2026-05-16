@@ -7001,21 +7001,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tauri-plugin-drag"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "729ca0ce4b1169869d3405216d3c09a524f41ea5e2eec89f917cd6623f8a70ca"
-dependencies = [
- "base64 0.22.1",
- "drag",
- "serde",
- "serde_json",
- "tauri",
- "tauri-plugin",
- "thiserror 2.0.18",
-]
-
-[[package]]
 name = "tauri-plugin-fs"
 version = "2.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7857,6 +7842,7 @@ dependencies = [
  "cron",
  "dashmap",
  "dirs",
+ "drag",
  "futures-util",
  "genai",
  "gh-token",
@@ -7899,7 +7885,6 @@ dependencies = [
  "tauri-plugin-clipboard-manager",
  "tauri-plugin-deep-link",
  "tauri-plugin-dialog",
- "tauri-plugin-drag",
  "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
  "tauri-plugin-process",

@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 import { createSignal } from "solid-js";
 import { isTauri } from "../transport";
 import { appLogger } from "./appLogger";
@@ -269,9 +270,8 @@ async function resolveDragIcon(): Promise<string> {
 export async function startNativeDrag(paths: string[]): Promise<void> {
 	if (!isTauri() || paths.length === 0) return;
 	try {
-		const { startDrag } = await import("@crabnebula/tauri-plugin-drag");
 		const icon = await resolveDragIcon();
-		await startDrag({ item: paths, icon });
+		await invoke("start_native_drag", { paths, icon });
 	} catch (err) {
 		appLogger.warn("app", "Native drag failed", err);
 	}

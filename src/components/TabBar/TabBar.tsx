@@ -89,6 +89,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 	const [dragOverId, setDragOverId] = createSignal<string | null>(null);
 	const [dragOverSide, setDragOverSide] = createSignal<"left" | "right" | null>(null);
 	const [draggingId, setDraggingId] = createSignal<string | null>(null);
+	const [dragInvalid, setDragInvalid] = createSignal(false);
 	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const smartPrompts = useSmartPrompts();
 
@@ -463,6 +464,14 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		mdTabsStore.evictNonPinnedPluginPanelsForOtherRepos(current);
 	});
 
+	const tabTypeOf = (tabId: string): "terminal" | "markdown" | "diff" | "editor" | null => {
+		if (activeTerminals().includes(tabId)) return "terminal";
+		if (visibleMdIds().includes(tabId)) return "markdown";
+		if (visibleDiffIds().includes(tabId)) return "diff";
+		if (visibleEditIds().includes(tabId)) return "editor";
+		return null;
+	};
+
 	// Mouse-based drag — replaces HTML5 DnD which conflicts with Tauri dragDropEnabled=true
 	const handleMouseDrag = (
 		e: MouseEvent,
@@ -475,12 +484,15 @@ export const TabBar: Component<TabBarProps> = (props) => {
 				const el = document.elementFromPoint(x, y);
 				const tabEl = el?.closest("[data-tab-id]") as HTMLElement | null;
 				if (tabEl && tabEl.dataset.tabId !== id) {
+					const targetId = tabEl.dataset.tabId!;
 					const rect = tabEl.getBoundingClientRect();
-					setDragOverId(tabEl.dataset.tabId!);
+					setDragOverId(targetId);
 					setDragOverSide(x < rect.left + rect.width / 2 ? "left" : "right");
+					setDragInvalid(tabTypeOf(id) !== tabTypeOf(targetId));
 				} else {
 					setDragOverId(null);
 					setDragOverSide(null);
+					setDragInvalid(false);
 				}
 			},
 			onDrop: (x, y) => {
@@ -567,6 +579,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		setDraggingId(null);
 		setDragOverId(null);
 		setDragOverSide(null);
+		setDragInvalid(false);
 	};
 
 	const commitRename = (id: string, input: HTMLInputElement) => {
@@ -768,6 +781,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 											isDragging() && s.dragging,
 											isDragOver() && dragOverSide() === "left" && s.dragOverLeft,
 											isDragOver() && dragOverSide() === "right" && s.dragOverRight,
+											isDragOver() && dragInvalid() && s.dragInvalid,
 										)}
 										data-tab-id={id}
 										style={repoColor() ? ({ "--repo-color": repoColor() } as Record<string, string>) : undefined}
@@ -869,7 +883,15 @@ export const TabBar: Component<TabBarProps> = (props) => {
 							return (
 								<Show when={diffTab()}>
 									<div
-										class={cx(s.tab, s.diffTab, isActive() && s.active)}
+										class={cx(
+											s.tab,
+											s.diffTab,
+											isActive() && s.active,
+											draggingId() === id && s.dragging,
+											dragOverId() === id && draggingId() !== id && dragOverSide() === "left" && s.dragOverLeft,
+											dragOverId() === id && draggingId() !== id && dragOverSide() === "right" && s.dragOverRight,
+											dragOverId() === id && draggingId() !== id && dragInvalid() && s.dragInvalid,
+										)}
 										data-tab-id={id}
 										onClick={() => {
 											diffTabsStore.setActive(id);
@@ -943,6 +965,10 @@ export const TabBar: Component<TabBarProps> = (props) => {
 											s.tab,
 											mdTab()?.type === "file" ? s.mdTab : mdTab()?.type === "pr-diff" ? s.diffTab : s.panelTab,
 											isActive() && s.active,
+											draggingId() === id && s.dragging,
+											dragOverId() === id && draggingId() !== id && dragOverSide() === "left" && s.dragOverLeft,
+											dragOverId() === id && draggingId() !== id && dragOverSide() === "right" && s.dragOverRight,
+											dragOverId() === id && draggingId() !== id && dragInvalid() && s.dragInvalid,
 										)}
 										data-tab-id={id}
 										onClick={() => {
@@ -1025,7 +1051,15 @@ export const TabBar: Component<TabBarProps> = (props) => {
 							return (
 								<Show when={editTab()}>
 									<div
-										class={cx(s.tab, s.editTab, isActive() && s.active)}
+										class={cx(
+											s.tab,
+											s.editTab,
+											isActive() && s.active,
+											draggingId() === id && s.dragging,
+											dragOverId() === id && draggingId() !== id && dragOverSide() === "left" && s.dragOverLeft,
+											dragOverId() === id && draggingId() !== id && dragOverSide() === "right" && s.dragOverRight,
+											dragOverId() === id && draggingId() !== id && dragInvalid() && s.dragInvalid,
+										)}
 										data-tab-id={id}
 										onClick={() => {
 											editorTabsStore.setActive(id);

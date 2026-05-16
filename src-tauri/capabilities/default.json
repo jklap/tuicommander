@@ -23,7 +23,6 @@
     "clipboard-manager:allow-write-text",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",
-    "global-shortcut:allow-is-registered",
-    "drag:default"
+    "global-shortcut:allow-is-registered"
   ]
 }
