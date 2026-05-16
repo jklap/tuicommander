@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Tab ordering modes** — New Appearance setting with 3 modes: "Grouped by Type" (default, current behavior), "Terminals First" (terminals grouped left, non-terminals freely interleaved), and "Free" (any tab draggable to any position). Settings > Appearance > Tabs.
+
+### Fixed
+- **Clipboard soft-wrap** — Copying text from terminal no longer inserts spurious newlines at soft-wrap boundaries. The `WRAPLINE` flag is now respected during text extraction.
+
 ## [1.2.2-nightly] - 2026-05-13
 
 ### Added

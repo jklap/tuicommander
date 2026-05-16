@@ -1052,6 +1052,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Terminal font: 11 bundled monospace fonts (JetBrains Mono default)
 - Default font size: 8-32px slider
 - Split tab mode: separate / unified
+- Tab ordering mode: grouped-by-type (default, tabs grouped by kind), terminals-first (terminals left, others freely interleaved), free (any tab anywhere)
 - Max tab name length: 10-60 slider
 - Repository groups: create, rename, delete, color-coded
 - Reset panel sizes: restore sidebar and panel widths to defaults
