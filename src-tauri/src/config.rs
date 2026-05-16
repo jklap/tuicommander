@@ -208,6 +208,16 @@ pub(crate) enum SplitTabMode {
     Unified,
 }
 
+/// Tab ordering mode for the tab bar
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum TabOrderingMode {
+    #[default]
+    GroupedByType,
+    TerminalsFirst,
+    Free,
+}
+
 /// Where to create worktree directories
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -481,6 +491,9 @@ pub(crate) struct AppConfig {
     /// Split tab mode: separate (each pane gets a tab) or unified (one shared tab)
     #[serde(default)]
     pub(crate) split_tab_mode: SplitTabMode,
+    /// Tab ordering mode: grouped-by-type, terminals-first, or free
+    #[serde(default)]
+    pub(crate) tab_ordering_mode: TabOrderingMode,
     /// Auto-show PR detail popover when a branch has PR data
     #[serde(default = "default_true")]
     pub(crate) auto_show_pr_popover: bool,
@@ -637,6 +650,7 @@ impl Default for AppConfig {
             confirm_before_closing_tab: true,
             max_tab_name_length: default_max_tab_name_length(),
             split_tab_mode: SplitTabMode::default(),
+            tab_ordering_mode: TabOrderingMode::default(),
             auto_show_pr_popover: true,
             prevent_sleep_when_busy: false,
             auto_update_enabled: true,
@@ -1601,6 +1615,7 @@ mod tests {
             confirm_before_closing_tab: true,
             max_tab_name_length: 40,
             split_tab_mode: SplitTabMode::Unified,
+            tab_ordering_mode: TabOrderingMode::TerminalsFirst,
             auto_show_pr_popover: true,
             prevent_sleep_when_busy: true,
             auto_update_enabled: false,
@@ -2105,6 +2120,38 @@ mod tests {
         let cfg2 = AppConfig::default();
         let json2 = serde_json::to_string(&cfg2).unwrap();
         assert!(json2.contains(r#""split_tab_mode":"separate""#));
+    }
+
+    #[test]
+    fn tab_ordering_mode_serializes_as_kebab_case() {
+        let cfg = AppConfig {
+            tab_ordering_mode: TabOrderingMode::TerminalsFirst,
+            ..AppConfig::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains(r#""tab_ordering_mode":"terminals-first""#));
+
+        let cfg2 = AppConfig {
+            tab_ordering_mode: TabOrderingMode::Free,
+            ..AppConfig::default()
+        };
+        let json2 = serde_json::to_string(&cfg2).unwrap();
+        assert!(json2.contains(r#""tab_ordering_mode":"free""#));
+
+        let cfg3 = AppConfig::default();
+        let json3 = serde_json::to_string(&cfg3).unwrap();
+        assert!(json3.contains(r#""tab_ordering_mode":"grouped-by-type""#));
+    }
+
+    #[test]
+    fn tab_ordering_mode_round_trip() {
+        let cfg = AppConfig {
+            tab_ordering_mode: TabOrderingMode::Free,
+            ..AppConfig::default()
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let loaded: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded.tab_ordering_mode, TabOrderingMode::Free);
     }
 
     #[test]

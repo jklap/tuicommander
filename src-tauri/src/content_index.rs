@@ -88,6 +88,9 @@ pub struct ContentIndex {
     repo_root: PathBuf,
     /// Whether the index has been built at least once.
     ready: bool,
+    /// Files confirmed binary (rel_path → mtime). Carried across rebuilds
+    /// so we skip the 8KB read probe for files whose mtime hasn't changed.
+    known_binaries: HashMap<String, u64>,
 }
 
 /// Result of a BM25 file-level query: ranked file paths.
@@ -111,6 +114,7 @@ impl ContentIndex {
             path_to_idx: HashMap::new(),
             repo_root,
             ready: false,
+            known_binaries: HashMap::new(),
         }
     }
 
@@ -121,7 +125,11 @@ impl ContentIndex {
     /// provided, the walker yields cooperatively every `THROTTLE_CHECKPOINT_INTERVAL`
     /// files and pauses entirely while a search is active. Pass `None` for
     /// tests or one-shot builds where throttling is irrelevant.
-    pub fn build(repo_root: PathBuf, throttle: Option<&IndexerThrottle>) -> Self {
+    pub fn build(
+        repo_root: PathBuf,
+        throttle: Option<&IndexerThrottle>,
+        prior_binaries: HashMap<String, u64>,
+    ) -> Self {
         let canonical = repo_root
             .canonicalize()
             .unwrap_or_else(|_| repo_root.clone());
@@ -129,6 +137,7 @@ impl ContentIndex {
         let mut entries = Vec::new();
         let mut corpus = Vec::new();
         let mut path_to_idx = HashMap::new();
+        let mut known_binaries = HashMap::new();
 
         let walker = WalkBuilder::new(&canonical)
             .hidden(false)
@@ -165,18 +174,8 @@ impl ContentIndex {
                 continue;
             }
 
-            // Skip binary files (check first 8 KB for null bytes)
-            if is_binary(entry.path()) {
-                continue;
-            }
-
             let rel_path = match entry.path().strip_prefix(&canonical) {
                 Ok(p) => p.to_string_lossy().replace('\\', "/"),
-                Err(_) => continue,
-            };
-
-            let content = match std::fs::read_to_string(entry.path()) {
-                Ok(c) => c,
                 Err(_) => continue,
             };
 
@@ -185,6 +184,23 @@ impl ContentIndex {
                 .ok()
                 .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
                 .map_or(0, |d| d.as_secs());
+
+            // Skip binary files — use cached result if mtime unchanged
+            if let Some(&cached_mtime) = prior_binaries.get(&rel_path) {
+                if cached_mtime == mtime {
+                    known_binaries.insert(rel_path, mtime);
+                    continue;
+                }
+            }
+            if is_binary(entry.path()) {
+                known_binaries.insert(rel_path, mtime);
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(entry.path()) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
             let idx = entries.len();
             path_to_idx.insert(rel_path.clone(), idx);
@@ -203,6 +219,7 @@ impl ContentIndex {
             path_to_idx,
             repo_root: canonical,
             ready: true,
+            known_binaries,
         }
     }
 
@@ -300,7 +317,7 @@ pub fn ensure_index(
     spawn_build(
         repo_for_log,
         move || {
-            let built = ContentIndex::build(PathBuf::from(&repo), Some(&throttle));
+            let built = ContentIndex::build(PathBuf::from(&repo), Some(&throttle), HashMap::new());
             *index_ref.write() = built;
             tracing::info!(repo = %repo, "content index built");
         },
@@ -333,10 +350,12 @@ pub fn rebuild_index(
     let repo = repo_path.to_string();
     let throttle = Arc::clone(&state.indexer_throttle);
     let repo_for_log = repo.clone();
+    let prior_binaries = index.read().known_binaries.clone();
     spawn_build(
         repo_for_log,
         move || {
-            let built = ContentIndex::build(PathBuf::from(&repo), Some(&throttle));
+            let built =
+                ContentIndex::build(PathBuf::from(&repo), Some(&throttle), prior_binaries);
             *index.write() = built;
             tracing::debug!(repo = %repo, "content index rebuilt");
         },
@@ -425,7 +444,7 @@ mod tests {
     #[test]
     fn build_indexes_text_files() {
         let repo = make_test_repo();
-        let index = ContentIndex::build(repo.path().to_path_buf(), None);
+        let index = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
 
         assert!(index.is_ready());
         assert_eq!(index.len(), 5); // main.rs, lib.rs, search.rs, README.md, src/utils.rs
@@ -434,7 +453,7 @@ mod tests {
     #[test]
     fn search_finds_relevant_file() {
         let repo = make_test_repo();
-        let index = ContentIndex::build(repo.path().to_path_buf(), None);
+        let index = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
 
         let results = index.search("BM25 search implementation", 5);
         assert!(!results.is_empty());
@@ -444,7 +463,7 @@ mod tests {
     #[test]
     fn search_ranks_by_relevance() {
         let repo = make_test_repo();
-        let index = ContentIndex::build(repo.path().to_path_buf(), None);
+        let index = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
 
         // "println hello" should rank main.rs first
         let results = index.search("println hello", 5);
@@ -455,7 +474,7 @@ mod tests {
     #[test]
     fn search_empty_query_returns_nothing() {
         let repo = make_test_repo();
-        let index = ContentIndex::build(repo.path().to_path_buf(), None);
+        let index = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
 
         assert!(index.search("", 5).is_empty());
         assert!(index.search("   ", 5).is_empty());
@@ -477,7 +496,7 @@ mod tests {
         // Binary file: contains null bytes
         fs::write(root.join("binary.bin"), b"\x00\x01\x02\x03").unwrap();
 
-        let index = ContentIndex::build(root.to_path_buf(), None);
+        let index = ContentIndex::build(root.to_path_buf(), None, HashMap::new());
         assert_eq!(index.len(), 1); // only text.rs
     }
 
@@ -491,7 +510,7 @@ mod tests {
         let large = "x".repeat(MAX_FILE_SIZE as usize + 1);
         fs::write(root.join("large.txt"), large).unwrap();
 
-        let index = ContentIndex::build(root.to_path_buf(), None);
+        let index = ContentIndex::build(root.to_path_buf(), None, HashMap::new());
         assert_eq!(index.len(), 1); // only small.rs
     }
 
@@ -501,7 +520,7 @@ mod tests {
         let root = dir.path();
         fs::write(root.join("test.rs"), "fn test() {}").unwrap();
 
-        let index = ContentIndex::build(root.to_path_buf(), None);
+        let index = ContentIndex::build(root.to_path_buf(), None, HashMap::new());
         let abs = index.absolute_path("test.rs");
         assert!(abs.ends_with("test.rs"));
         assert!(abs.is_absolute());
@@ -510,7 +529,7 @@ mod tests {
     #[test]
     fn search_finds_file_in_subdirectory() {
         let repo = make_test_repo();
-        let index = ContentIndex::build(repo.path().to_path_buf(), None);
+        let index = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
 
         let results = index.search("format_result to_uppercase", 5);
         assert!(!results.is_empty());
@@ -528,7 +547,7 @@ mod tests {
         fs::write(root.join(".git/HEAD"), "ref: refs/heads/main\n").unwrap();
         fs::write(root.join(".git/objects/pack.txt"), "pack data here").unwrap();
 
-        let index = ContentIndex::build(root.to_path_buf(), None);
+        let index = ContentIndex::build(root.to_path_buf(), None, HashMap::new());
         assert_eq!(index.len(), 1); // only real.rs
         assert!(index.search("pack data", 5).is_empty());
     }
@@ -547,7 +566,7 @@ mod tests {
             fs::write(root.join(format!("file_{i}.rs")), content).unwrap();
         }
 
-        let index = ContentIndex::build(root.to_path_buf(), None);
+        let index = ContentIndex::build(root.to_path_buf(), None, HashMap::new());
         assert_eq!(index.len(), 200);
 
         // Warm up
