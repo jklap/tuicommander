@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/tuic-bridge", "crates/tuic-cli"]
+members = [".", "crates/tuic-bridge", "crates/tuic-cli", "patches/alacritty_terminal"]
 
 [package]
 name = "tuicommander"

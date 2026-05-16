@@ -973,9 +973,23 @@ fn emit_shell_state(state: &crate::state::AppState, session_id: &str, shell_stat
         .session_states
         .get(session_id)
         .and_then(|s| s.agent_type.clone());
+    let last_output = state.vt_log_buffers.get(session_id).and_then(|vt| {
+        let rows = vt.lock().screen_rows();
+        let mut line = rows
+            .iter()
+            .rev()
+            .map(|r| r.trim())
+            .find(|r| !r.is_empty())?
+            .to_string();
+        if line.len() > 120 {
+            line.truncate(120);
+        }
+        Some(line)
+    });
     let parsed = ParsedEvent::ShellState {
         state: shell_state.to_string(),
         agent_type,
+        last_output,
     };
     match serde_json::to_value(&parsed) {
         Ok(json) => {
@@ -4858,6 +4872,20 @@ pub(crate) fn terminal_get_row_text(
         .get(&session_id)
         .map(|vt| vt.lock().grid_get_row_text(row))
         .unwrap_or_default()
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn terminal_get_logical_line(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    row: usize,
+) -> (usize, String) {
+    state
+        .vt_log_buffers
+        .get(&session_id)
+        .map(|vt| vt.lock().grid_get_logical_line(row))
+        .unwrap_or((row, String::new()))
 }
 
 #[cfg(feature = "desktop")]

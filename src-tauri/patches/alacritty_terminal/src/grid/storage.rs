@@ -151,7 +151,7 @@ impl<T> Storage<T> {
     /// instructions. This implementation achieves the swap in only 8 movups
     /// instructions.
     pub fn swap(&mut self, a: Line, b: Line) {
-        debug_assert_eq!(mem::size_of::<Row<T>>(), mem::size_of::<usize>() * 4);
+        debug_assert_eq!(mem::size_of::<Row<T>>(), mem::size_of::<usize>() * 5);
 
         let a = self.compute_index(a);
         let b = self.compute_index(b);
@@ -167,7 +167,7 @@ impl<T> Storage<T> {
             //
             // The optimizer unrolls this loop and vectorizes it.
             let mut tmp: MaybeUninit<usize>;
-            for i in 0..4 {
+            for i in 0..5 {
                 tmp = *a_ptr.offset(i);
                 *a_ptr.offset(i) = *b_ptr.offset(i);
                 *b_ptr.offset(i) = tmp;

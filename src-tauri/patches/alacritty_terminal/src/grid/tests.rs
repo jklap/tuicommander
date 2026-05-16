@@ -257,6 +257,7 @@ fn grow_reflow() {
     let mut grid = Grid::<Cell>::new(2, 2, 0);
     grid[Line(0)][Column(0)] = cell('1');
     grid[Line(0)][Column(1)] = wrap_cell('2');
+    grid[Line(0)].reflow_wrap = true;
     grid[Line(1)][Column(0)] = cell('3');
     grid[Line(1)][Column(1)] = Cell::default();
 
@@ -281,8 +282,10 @@ fn grow_reflow_multiline() {
     let mut grid = Grid::<Cell>::new(3, 2, 0);
     grid[Line(0)][Column(0)] = cell('1');
     grid[Line(0)][Column(1)] = wrap_cell('2');
+    grid[Line(0)].reflow_wrap = true;
     grid[Line(1)][Column(0)] = cell('3');
     grid[Line(1)][Column(1)] = wrap_cell('4');
+    grid[Line(1)].reflow_wrap = true;
     grid[Line(2)][Column(0)] = cell('5');
     grid[Line(2)][Column(1)] = cell('6');
 

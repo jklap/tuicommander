@@ -127,12 +127,15 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         };
 
         // Check if a row needs to be unwrapped (joined with the row above).
+        // Only merge rows whose WRAPLINE was set by a prior shrink_columns
+        // (reflow_wrap=true), not stale natural terminal wraps.
         let should_reflow = |row: &Row<T>, buf_idx: usize| -> bool {
             let len = Column(row.len());
             reflow_for(buf_idx)
                 && len.0 > 0
                 && len < columns
                 && row[len - 1].flags().contains(Flags::WRAPLINE)
+                && row.reflow_wrap
         };
 
         self.columns = columns;
@@ -252,22 +255,19 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                 // Set wrap flag if next line still has cells.
                 cell.flags_mut().insert(Flags::WRAPLINE);
             }
+            last_row.reflow_wrap = true;
 
             reversed.push(row);
             reversed_idx.push(i);
         }
 
         // Make sure we have at least the viewport filled.
-        // Prepend blanks at the oldest end (front) of `reversed` so that after
-        // the final drain(..).rev() they become the topmost screen rows — not
-        // the cursor row at inner[0] where resize_with would place them.
+        // Append blanks at the end of `reversed` so that after the final
+        // drain(..).rev() they become the topmost screen rows (inner[0..delta]).
         if reversed.len() < self.lines {
             let delta = self.lines - reversed.len();
             self.cursor.point.line = max(self.cursor.point.line - delta as i32, Line(0));
-            let mut padded: Vec<Row<T>> =
-                (0..delta).map(|_| Row::new(columns)).collect();
-            padded.append(&mut reversed);
-            reversed = padded;
+            reversed.resize_with(self.lines, || Row::new(columns));
         }
 
         // Pull content down to put cursor in correct position, or move cursor up if there's no
@@ -376,6 +376,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                 if len > 0 && wrapped[len - 1].flags().contains(Flags::LEADING_WIDE_CHAR_SPACER) {
                     if len == 1 {
                         row[Column(columns - 1)].flags_mut().insert(Flags::WRAPLINE);
+                        row.reflow_wrap = true;
                         new_raw.push(row);
                         break;
                     } else {
@@ -388,8 +389,11 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                 new_raw.push(row);
 
                 // Set line as wrapped if cells got removed.
-                if let Some(cell) = new_raw.last_mut().and_then(|r| r.last_mut()) {
-                    cell.flags_mut().insert(Flags::WRAPLINE);
+                if let Some(r) = new_raw.last_mut() {
+                    if let Some(cell) = r.last_mut() {
+                        cell.flags_mut().insert(Flags::WRAPLINE);
+                    }
+                    r.reflow_wrap = true;
                 }
 
                 // Buffer overflow for next iteration only if i >= 1: at i=0
@@ -432,6 +436,7 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                         wrapped.resize_with(columns, T::default);
                     }
                     row = Row::from_vec(wrapped, occ);
+                    row.reflow_wrap = true;
 
                     if i < self.display_offset {
                         // Since we added a new line, rotate up the viewport.

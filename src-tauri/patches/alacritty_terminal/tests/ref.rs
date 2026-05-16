@@ -121,6 +121,13 @@ fn ref_test(dir: &Path) {
     term_grid.truncate();
 
     if grid != term_grid {
+        if std::env::var("ALACRITTY_REGEN_FIXTURES").is_ok() {
+            let new_json = json::to_string(&term_grid).unwrap();
+            fs::write(dir.join("grid.json"), new_json).unwrap();
+            println!("Regenerated {}", dir.display());
+            return;
+        }
+
         for i in 0..grid.total_lines() {
             for j in 0..grid.columns() {
                 let cell = &term_grid[Line(i as i32)][Column(j)];

@@ -2175,12 +2175,10 @@ impl VtLogBuffer {
         self.resize_with_shell_state(rows, cols, crate::pty::SHELL_NULL);
     }
 
-    /// Resize with shell_state context for smarter reflow:
-    /// - alt_screen active → None (TUI programs handle layout)
-    /// - shell busy → HistoryOnly (Ink/command may use cursor positioning)
-    /// - shell idle → All (only old prompts on screen, safe to reflow)
-    /// - reflow_history disabled → None always
-    pub fn resize_with_shell_state(&mut self, rows: u16, cols: u16, shell_state: u8) {
+    /// Resize with reflow. The reflow_wrap flag on Row prevents stale
+    /// natural wraps from merging — only shrink-produced wraps get merged.
+    /// Alt screen and reflow_history=false disable reflow entirely.
+    pub fn resize_with_shell_state(&mut self, rows: u16, cols: u16, _shell_state: u8) {
         let prev = self.pty_cols;
         self.pty_cols = cols;
         if cols > self.max_cols {
@@ -2195,10 +2193,8 @@ impl VtLogBuffer {
         }
         let mode = if !self.grid.reflow_history || self.grid.is_alternate_screen() {
             ReflowMode::None
-        } else if shell_state == crate::pty::SHELL_IDLE {
-            ReflowMode::All
         } else {
-            ReflowMode::HistoryOnly
+            ReflowMode::All
         };
         self.grid.resize_with_mode(rows, cols, mode);
         self.scrollback_read = self.grid.scrollback_count();
@@ -2346,6 +2342,10 @@ impl VtLogBuffer {
 
     pub(crate) fn grid_get_row_text(&self, row: usize) -> String {
         self.grid.get_row_text(row)
+    }
+
+    pub(crate) fn grid_get_logical_line(&self, row: usize) -> (usize, String) {
+        self.grid.get_logical_line(row)
     }
 
     pub(crate) fn grid_get_cursor_line(&self) -> String {

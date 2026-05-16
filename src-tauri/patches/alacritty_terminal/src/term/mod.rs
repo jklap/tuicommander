@@ -985,11 +985,18 @@ impl<T> Term<T> {
 
         self.grid.cursor_cell().flags.insert(Flags::WRAPLINE);
 
-        self.advance_line();
-
-        self.grid.cursor.point.column = Column(0);
-        self.grid.cursor.input_needs_wrap = false;
-        self.damage_cursor();
+        let next = self.grid.cursor.point.line + 1;
+        if next >= self.scroll_region.end {
+            self.grid.cursor.point.column = Column(0);
+            self.grid.cursor.input_needs_wrap = false;
+            self.scroll_up(1);
+        } else if next < self.screen_lines() {
+            self.damage_cursor();
+            self.grid.cursor.point.line += 1;
+            self.grid.cursor.point.column = Column(0);
+            self.grid.cursor.input_needs_wrap = false;
+            self.damage_cursor();
+        }
     }
 
     /// Move cursor to the next line, scrolling if at the bottom of the scroll
@@ -1480,7 +1487,6 @@ impl<T: EventListener> Handler for Term<T> {
 
         // An explicit LF means the current line ends here — clear any stale
         // WRAPLINE flag so grow_columns won't merge the next line into this one.
-        // wrapline() bypasses this by calling advance_line() directly.
         let line = self.grid.cursor.point.line;
         let cols = self.columns();
         if cols > 0 {

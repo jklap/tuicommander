@@ -151,6 +151,7 @@ pub struct Cell {
     pub fg: Color,
     pub bg: Color,
     pub flags: Flags,
+    #[cfg_attr(feature = "serde", serde(default))]
     pub cell_type: Osc133CellType,
     pub extra: Option<Arc<CellExtra>>,
 }
