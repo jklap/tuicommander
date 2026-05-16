@@ -792,8 +792,8 @@ Features to test when TUICommander is more usable.
 - [HUMAN] Bold text after a powerline separator → bold + correct fg (not the arrow's fg)
 
 ## Reflow: WRAPLINE Stale Flag Clearing (2026-05-11)
-- [ ] Type a long command that wraps, press Enter, widen the terminal → wrapped line unwraps into a single line (correct merge) **BUG: first row shows duplicated/merged prompt. Fix: #1721-8895 — grow_columns blank padding at wrong end**
-- [ ] Type a long command that wraps, press Enter, new prompt appears below, widen terminal → old wrapped line unwraps correctly, new prompt stays on its own line (no merge corruption) **BUG: same root cause**
+- [x] Type a long command that wraps, press Enter, widen the terminal → wrapped line unwraps into a single line (correct merge) **FIXED: #1721-8895 — grow_columns cursor-at-Line(0) clamping bypass**
+- [x] Type a long command that wraps, press Enter, new prompt appears below, widen terminal → old wrapped line unwraps correctly, new prompt stays on its own line (no merge corruption) **FIXED: same root cause**
 - [HUMAN] Type a long command that wraps, press Enter, command produces output, widen terminal → wrapped command unwraps, output lines remain independent
 - [HUMAN] Shell sends `\r` to redraw current line (e.g. bash prompt redraw) → stale WRAPLINE cleared, no phantom merges on resize
 - [HUMAN] Alternate screen app (vim, less) → `ReflowMode::None` applies, no reflow on alt screen

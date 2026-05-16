@@ -220,7 +220,15 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                 // this will always be either `0` or `1`.
                 let line_delta = self.cursor.point.line - target.line;
 
-                if line_delta != 0 && row.is_clear() {
+                if row.is_clear() {
+                    if line_delta != 0 {
+                        continue;
+                    }
+                    // Cursor at Line(0): sub() clamped by Boundary::Cursor so
+                    // line_delta is 0 even though the row was fully absorbed into
+                    // the previous entry.  Position cursor at end of merged row.
+                    self.cursor.point.column = Column(columns - 1);
+                    cursor_line_delta += 1;
                     continue;
                 }
 
@@ -250,10 +258,16 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         }
 
         // Make sure we have at least the viewport filled.
+        // Prepend blanks at the oldest end (front) of `reversed` so that after
+        // the final drain(..).rev() they become the topmost screen rows — not
+        // the cursor row at inner[0] where resize_with would place them.
         if reversed.len() < self.lines {
-            let delta = (self.lines - reversed.len()) as i32;
-            self.cursor.point.line = max(self.cursor.point.line - delta, Line(0));
-            reversed.resize_with(self.lines, || Row::new(columns));
+            let delta = self.lines - reversed.len();
+            self.cursor.point.line = max(self.cursor.point.line - delta as i32, Line(0));
+            let mut padded: Vec<Row<T>> =
+                (0..delta).map(|_| Row::new(columns)).collect();
+            padded.append(&mut reversed);
+            reversed = padded;
         }
 
         // Pull content down to put cursor in correct position, or move cursor up if there's no
@@ -378,6 +392,10 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
                     cell.flags_mut().insert(Flags::WRAPLINE);
                 }
 
+                // Buffer overflow for next iteration only if i >= 1: at i=0
+                // (bottom of ring buffer) there is no subsequent iteration to
+                // consume the buffer, so overflow must be handled inline via
+                // the else branch below.
                 if wrapped
                     .last()
                     .map(|c| c.flags().contains(Flags::WRAPLINE) && i >= 1)

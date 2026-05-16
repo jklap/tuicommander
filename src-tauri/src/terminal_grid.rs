@@ -2463,6 +2463,36 @@ mod tests {
         );
     }
 
+    /// Shrink then grow with ReflowMode::All: cursor-row content round-trips.
+    /// Regression: grow_columns blank-padding must land at the topmost screen
+    /// row, not at the cursor row (inner[0]).
+    #[test]
+    fn reflow_all_shrink_grow_cursor_row_roundtrip() {
+        let mut grid = TerminalGrid::new(4, 20, 10);
+        let _ = grid.process(b"ABCDEFGHIJKLMNOPQRST");
+        let (line_before, _) = grid.cursor_point();
+
+        // Shrink 20→10 with All reflow: prompt wraps into two rows.
+        grid.resize_with_mode(4, 10, ReflowMode::All);
+
+        // Grow back 10→20 with All reflow: rows should merge.
+        grid.resize_with_mode(4, 20, ReflowMode::All);
+
+        let rows_after = grid.screen_text_rows();
+        let (line_after, _) = grid.cursor_point();
+
+        // The prompt must be on the cursor's line, not displaced.
+        assert_eq!(
+            rows_after[line_after as usize].trim_end(),
+            "ABCDEFGHIJKLMNOPQRST",
+            "prompt must be on cursor row after shrink-grow roundtrip"
+        );
+        assert_eq!(
+            line_after, line_before,
+            "cursor line must return to original position"
+        );
+    }
+
     /// Helper: find the cell data offset for a given (row_index, col) in a serialized frame.
     /// Returns the byte offset of the cell's 11-byte block, or None if not found.
     fn find_cell_offset(buf: &[u8], target_row: u16, target_col: u16) -> Option<usize> {
