@@ -122,6 +122,7 @@ pub(crate) const ALWAYS_EXCLUDED_DIRS: &[&str] = &[
     ".hg",
     ".svn",
     ".jj",
+    ".mdkb",
     "node_modules",
     "target",
     "dist",
