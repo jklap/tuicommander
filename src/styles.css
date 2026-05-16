@@ -20,7 +20,9 @@
 #app.focus-mode #git-panel,
 #app.focus-mode #markdown-panel,
 #app.focus-mode #notes-panel,
-#app.focus-mode #file-browser-panel {
+#app.focus-mode #file-browser-panel,
+#app.focus-mode #outline-panel,
+#app.focus-mode #references-panel {
   display: none !important;
 }
 
