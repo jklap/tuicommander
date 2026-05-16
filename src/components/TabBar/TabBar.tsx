@@ -498,7 +498,13 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					const rect = tabEl.getBoundingClientRect();
 					setDragOverId(targetId);
 					setDragOverSide(x < rect.left + rect.width / 2 ? "left" : "right");
-					setDragInvalid(tabTypeOf(id) !== tabTypeOf(targetId));
+					if (isGroupedMode()) {
+						setDragInvalid(tabTypeOf(id) !== tabTypeOf(targetId));
+					} else {
+						const srcType = tabTypeOf(id);
+						const tgtType = tabTypeOf(targetId);
+						setDragInvalid((srcType === "terminal") !== (tgtType === "terminal"));
+					}
 				} else {
 					setDragOverId(null);
 					setDragOverSide(null);
@@ -522,15 +528,24 @@ export const TabBar: Component<TabBarProps> = (props) => {
 						if (fromIndex !== clampedTo) {
 							props.onReorder?.(fromIndex, clampedTo);
 						}
-					} else if (visibleMdIds().includes(sourceId) && visibleMdIds().includes(overId)) {
-						const side = overSide === "left" ? "before" : "after";
-						mdTabsStore.reorderByIds(sourceId, overId, side);
-					} else if (visibleDiffIds().includes(sourceId) && visibleDiffIds().includes(overId)) {
-						const side = overSide === "left" ? "before" : "after";
-						diffTabsStore.reorderByIds(sourceId, overId, side);
-					} else if (visibleEditIds().includes(sourceId) && visibleEditIds().includes(overId)) {
-						const side = overSide === "left" ? "before" : "after";
-						editorTabsStore.reorderByIds(sourceId, overId, side);
+					} else if (isGroupedMode()) {
+						if (visibleMdIds().includes(sourceId) && visibleMdIds().includes(overId)) {
+							const side = overSide === "left" ? "before" : "after";
+							mdTabsStore.reorderByIds(sourceId, overId, side);
+						} else if (visibleDiffIds().includes(sourceId) && visibleDiffIds().includes(overId)) {
+							const side = overSide === "left" ? "before" : "after";
+							diffTabsStore.reorderByIds(sourceId, overId, side);
+						} else if (visibleEditIds().includes(sourceId) && visibleEditIds().includes(overId)) {
+							const side = overSide === "left" ? "before" : "after";
+							editorTabsStore.reorderByIds(sourceId, overId, side);
+						}
+					} else {
+						const srcIsTerminal = termIds.includes(sourceId);
+						const tgtIsTerminal = termIds.includes(overId);
+						if (!srcIsTerminal && !tgtIsTerminal) {
+							const side = overSide === "left" ? "before" : "after";
+							tabOrderingStore.reorder(sourceId, overId, side);
+						}
 					}
 					resetDragState();
 					return;
