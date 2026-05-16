@@ -1,4 +1,4 @@
-import { batch, type Component, createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { batch, type Component, createEffect, createMemo, createSignal, For, Match, onCleanup, onMount, Show, Switch } from "solid-js";
 import { openPathsAsTabs } from "../../hooks/useFileDrop";
 import { initMouseDrag } from "../../hooks/useMouseDrag";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
@@ -13,6 +13,8 @@ import { globalWorkspaceStore } from "../../stores/globalWorkspace";
 import { mdTabsStore, type PluginPanelTab } from "../../stores/mdTabs";
 import { paneLayoutStore } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
+import { settingsStore } from "../../stores/settings";
+import { tabOrderingStore } from "../../stores/tabOrdering";
 import { makeBranchKey } from "../../stores/tabManager";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
@@ -440,6 +442,14 @@ export const TabBar: Component<TabBarProps> = (props) => {
 	const visibleDiffIds = () => diffTabsStore.getVisibleIds(activeBranchKey());
 	const visibleMdIds = () => mdTabsStore.getVisibleIds(activeBranchKey());
 	const visibleEditIds = () => editorTabsStore.getVisibleIds(activeBranchKey());
+
+	const isGroupedMode = () => settingsStore.state.tabOrderingMode === "grouped-by-type";
+
+	const mergedNonTerminalIds = () => {
+		if (isGroupedMode()) return [];
+		const allIds = new Set([...visibleDiffIds(), ...visibleMdIds(), ...visibleEditIds()]);
+		return tabOrderingStore.getOrdered(allIds);
+	};
 
 	// Deactivate non-terminal tabs that become invisible after branch switch
 	createEffect(() => {
@@ -874,6 +884,8 @@ export const TabBar: Component<TabBarProps> = (props) => {
 						}}
 					</For>
 
+					{/* Non-terminal tabs: grouped mode renders 3 separate For blocks */}
+					<Show when={isGroupedMode()}>
 					{/* Diff tabs */}
 					<For each={visibleDiffIds()}>
 						{(id) => {
@@ -1111,6 +1123,210 @@ export const TabBar: Component<TabBarProps> = (props) => {
 							);
 						}}
 					</For>
+					</Show>
+
+					{/* Non-terminal tabs: merged mode (terminals-first / free) */}
+					<Show when={!isGroupedMode()}>
+					<For each={mergedNonTerminalIds()}>
+						{(id) => {
+							const type = () => tabTypeOf(id);
+							return (
+								<Switch>
+									<Match when={type() === "diff"}>
+										{(() => {
+											const diffTab = () => diffTabsStore.get(id);
+											const isActive = () => diffTabsStore.state.activeId === id;
+											return (
+												<Show when={diffTab()}>
+													<div
+														class={cx(
+															s.tab,
+															s.diffTab,
+															isActive() && s.active,
+															draggingId() === id && s.dragging,
+															dragOverId() === id && draggingId() !== id && dragOverSide() === "left" && s.dragOverLeft,
+															dragOverId() === id && draggingId() !== id && dragOverSide() === "right" && s.dragOverRight,
+															dragOverId() === id && draggingId() !== id && dragInvalid() && s.dragInvalid,
+														)}
+														data-tab-id={id}
+														onClick={() => {
+															diffTabsStore.setActive(id);
+															props.onTabSelect(id);
+														}}
+														onAuxClick={(e) => {
+															if (e.button === 1) {
+																e.preventDefault();
+																diffTabsStore.remove(id);
+																props.onTabClose(id);
+															}
+														}}
+														onContextMenu={(e) => openTabContextMenu(e, id)}
+														title={diffTab()?.filePath}
+														onMouseDown={(e) => handleMouseDrag(e, id, "diff")}
+													>
+														<span class={s.tabIcon}>
+															<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+																<path
+																	fill-rule="evenodd"
+																	d="M3 1a1 1 0 00-1 1v12a1 1 0 001 1h10a1 1 0 001-1V5.5L9.5 1H3zm6.5 1.5v2.5H12L9.5 2.5zM8 6a.5.5 0 01.5.5v1h1a.5.5 0 010 1h-1v1a.5.5 0 01-1 0v-1h-1a.5.5 0 010-1h1v-1A.5.5 0 018 6zm-3 5a.5.5 0 000 1h5a.5.5 0 000-1H5z"
+																/>
+															</svg>
+														</span>
+														<span class={s.tabName}>
+															{diffTab()?.fileName}
+															{diffTab()?.scope ? ` (${diffTab()?.scope?.slice(0, 7)})` : ""}
+														</span>
+														<PanePositionIcon tabId={id} rects={paneRects()} />
+														<button
+															class={s.tabClose}
+															title={t("tabBar.close", "Close")}
+															onClick={(e) => {
+																e.stopPropagation();
+																diffTabsStore.remove(id);
+																props.onTabClose(id);
+															}}
+														>
+															×
+														</button>
+													</div>
+												</Show>
+											);
+										})()}
+									</Match>
+									<Match when={type() === "markdown"}>
+										{(() => {
+											const mdTab = () => mdTabsStore.get(id);
+											const isActive = () => mdTabsStore.state.activeId === id;
+											return (
+												<Show when={mdTab()}>
+													<div
+														class={cx(
+															s.tab,
+															mdTab()?.type === "file" ? s.mdTab : mdTab()?.type === "pr-diff" ? s.diffTab : s.panelTab,
+															isActive() && s.active,
+															draggingId() === id && s.dragging,
+															dragOverId() === id && draggingId() !== id && dragOverSide() === "left" && s.dragOverLeft,
+															dragOverId() === id && draggingId() !== id && dragOverSide() === "right" && s.dragOverRight,
+															dragOverId() === id && draggingId() !== id && dragInvalid() && s.dragInvalid,
+														)}
+														data-tab-id={id}
+														onClick={() => {
+															mdTabsStore.setActive(id);
+															props.onTabSelect(id);
+														}}
+														onAuxClick={(e) => {
+															if (e.button === 1) {
+																e.preventDefault();
+																mdTabsStore.remove(id);
+																props.onTabClose(id);
+															}
+														}}
+														onContextMenu={(e) => openTabContextMenu(e, id)}
+														title={(() => {
+															const tab = mdTab();
+															return tab?.type === "file"
+																? tab.filePath
+																: tab?.type === "pr-diff"
+																	? `PR #${tab.prNumber}: ${tab.prTitle}`
+																	: tab?.title;
+														})()}
+														onMouseDown={(e) => handleMouseDrag(e, id, "markdown")}
+													>
+														<span class={s.tabIcon}>
+															<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+																<path
+																	fill-rule="evenodd"
+																	d="M3 1a1 1 0 00-1 1v12a1 1 0 001 1h10a1 1 0 001-1V5.5L9.5 1H3zm6.5 1.5v2.5H12L9.5 2.5zM4.5 7.5h7a.5.5 0 010 1h-7a.5.5 0 010-1zm0 2.5h7a.5.5 0 010 1h-7a.5.5 0 010-1zm0 2.5h4a.5.5 0 010 1h-4a.5.5 0 010-1z"
+																/>
+															</svg>
+														</span>
+														<span class={s.tabName}>
+															{(() => {
+																const tab = mdTab();
+																return tab?.type === "file" ? tab.fileName : tab?.title;
+															})()}
+														</span>
+														<PanePositionIcon tabId={id} rects={paneRects()} />
+														<button
+															class={s.tabClose}
+															title={t("tabBar.close", "Close")}
+															onClick={(e) => {
+																e.stopPropagation();
+																mdTabsStore.remove(id);
+																props.onTabClose(id);
+															}}
+														>
+															×
+														</button>
+													</div>
+												</Show>
+											);
+										})()}
+									</Match>
+									<Match when={type() === "editor"}>
+										{(() => {
+											const editTab = () => editorTabsStore.get(id);
+											const isActive = () => editorTabsStore.state.activeId === id;
+											return (
+												<Show when={editTab()}>
+													<div
+														class={cx(
+															s.tab,
+															s.editTab,
+															isActive() && s.active,
+															draggingId() === id && s.dragging,
+															dragOverId() === id && draggingId() !== id && dragOverSide() === "left" && s.dragOverLeft,
+															dragOverId() === id && draggingId() !== id && dragOverSide() === "right" && s.dragOverRight,
+															dragOverId() === id && draggingId() !== id && dragInvalid() && s.dragInvalid,
+														)}
+														data-tab-id={id}
+														onClick={() => {
+															editorTabsStore.setActive(id);
+															props.onTabSelect(id);
+														}}
+														onAuxClick={(e) => {
+															if (e.button === 1) {
+																e.preventDefault();
+																props.onTabClose(id);
+															}
+														}}
+														onContextMenu={(e) => openTabContextMenu(e, id)}
+														title={editTab()?.filePath}
+														onMouseDown={(e) => handleMouseDrag(e, id, "editor")}
+													>
+														<span class={s.tabIcon}>
+															{editTab()?.isDirty ? (
+																<svg width="8" height="8" viewBox="0 0 8 8" fill="currentColor">
+																	<circle cx="4" cy="4" r="4" />
+																</svg>
+															) : (
+																<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+																	<path d="M11.13 1.47a1.5 1.5 0 012.12 0l1.28 1.28a1.5 1.5 0 010 2.12L5.9 13.5a1 1 0 01-.5.27l-3.5.87a.5.5 0 01-.6-.6l.87-3.5a1 1 0 01.27-.5L11.13 1.47zm1.07 1.06L3.74 11l-.58 2.34 2.34-.58 8.47-8.46-1.77-1.77z" />
+																</svg>
+															)}
+														</span>
+														<span class={s.tabName}>{editTab()?.fileName}</span>
+														<PanePositionIcon tabId={id} rects={paneRects()} />
+														<button
+															class={s.tabClose}
+															title={t("tabBar.close", "Close")}
+															onClick={(e) => {
+																e.stopPropagation();
+																props.onTabClose(id);
+															}}
+														>
+															×
+														</button>
+													</div>
+												</Show>
+											);
+										})()}
+									</Match>
+								</Switch>
+							);
+						}}
+					</For>
+					</Show>
 				</div>
 				{/* end .tabs */}
 
