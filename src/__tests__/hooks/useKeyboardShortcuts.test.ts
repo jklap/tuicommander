@@ -71,6 +71,7 @@ function createMockHandlers(): ShortcutHandlers {
 		openAiTriage: vi.fn(),
 		toggleComposePanel: vi.fn(),
 		detachActivityDashboard: vi.fn(),
+		toggleProcessManager: vi.fn(),
 		refreshTerminal: vi.fn(),
 	};
 }

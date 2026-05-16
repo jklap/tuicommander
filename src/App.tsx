@@ -35,6 +35,7 @@ import {
 	type StepId,
 	type StepStatus,
 } from "./components/PostMergeCleanupDialog/PostMergeCleanupDialog";
+import { ProcessManagerModal } from "./components/ProcessManagerModal/ProcessManagerModal";
 import { PromptDialog } from "./components/PromptDialog";
 import { RenameBranchDialog } from "./components/RenameBranchDialog";
 import { RunCommandDialog } from "./components/RunCommandDialog";
@@ -291,6 +292,7 @@ const App: Component = () => {
 	const repo = useRepository();
 	const dialogs = useConfirmDialog();
 
+	const [showProcessManager, setShowProcessManager] = createSignal(false);
 	const [whatsNewVersion, setWhatsNewVersion] = createSignal<string | null>(null);
 	const whatsNewEntry = () => {
 		const v = whatsNewVersion();
@@ -1687,6 +1689,7 @@ const App: Component = () => {
 				appLogger.error("app", "Failed to detach Activity Dashboard", { error: String(e) }),
 			);
 		},
+		toggleProcessManager: () => setShowProcessManager((v) => !v),
 		newFile: () => {
 			const defaultPath = gitOps.activeWorktreePath() || repositoriesStore.state.activeRepoPath || undefined;
 			(async () => {
@@ -2547,6 +2550,11 @@ const App: Component = () => {
 					await confirmFolderDrop(req);
 				}}
 			/>
+
+			{/* Process Manager modal */}
+			<Show when={showProcessManager()}>
+				<ProcessManagerModal onClose={() => setShowProcessManager(false)} />
+			</Show>
 
 			{/* What's New dialog — shown once after stable version update */}
 			<WhatsNewDialog

@@ -85,6 +85,7 @@ export interface ShortcutHandlers {
 	openAiTriage: () => void;
 	toggleComposePanel: () => void;
 	detachActivityDashboard: () => void;
+	toggleProcessManager: () => void;
 }
 
 /** Keys that are modifiers only — not real shortcut targets */

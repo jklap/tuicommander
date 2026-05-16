@@ -67,6 +67,7 @@ export const ACTION_NAMES = [
 	"toggle-compose-panel",
 	"detach-activity-dashboard",
 	"toggle-tunnels",
+	"process-manager",
 	// Numbered tabs and branches
 	...Array.from({ length: 9 }, (_, i) => `switch-tab-${i + 1}`),
 	...Array.from({ length: 9 }, (_, i) => `switch-branch-${i + 1}`),

@@ -23,9 +23,9 @@ vi.mock("../../stores/appLogger", () => ({
 }));
 
 import { invoke, listen } from "../../invoke";
-import { appLogger } from "../../stores/appLogger";
-import { storiesTickerPlugin } from "../../plugins/storiesTickerPlugin";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
+import { storiesTickerPlugin } from "../../plugins/storiesTickerPlugin";
+import { appLogger } from "../../stores/appLogger";
 import { repositoriesStore } from "../../stores/repositories";
 import { statusBarTicker } from "../../stores/statusBarTicker";
 import type { DirEntry } from "../../types/fs";
@@ -44,7 +44,15 @@ const flushAll = async () => {
 
 /** Build a minimal DirEntry fixture for a story file */
 function storyFile(name: string): DirEntry {
-	return { name, is_dir: false, path: `/repo/stories/${name}`, size: 100, modified_at: 0, git_status: "", is_ignored: false };
+	return {
+		name,
+		is_dir: false,
+		path: `/repo/stories/${name}`,
+		size: 100,
+		modified_at: 0,
+		git_status: "",
+		is_ignored: false,
+	};
 }
 
 beforeEach(() => {
@@ -101,7 +109,15 @@ describe("refresh: ticker reflects open story count", () => {
 			storyFile("def-complete-other.md"), // closed
 			storyFile("ghi-wontfix-bug.md"), // closed
 			storyFile("jkl-ready-task.md"), // open
-			{ name: "notes.txt", is_dir: false, path: "/repo/stories/notes.txt", size: 50, modified_at: 0, git_status: "", is_ignored: false }, // non-md
+			{
+				name: "notes.txt",
+				is_dir: false,
+				path: "/repo/stories/notes.txt",
+				size: 50,
+				modified_at: 0,
+				git_status: "",
+				is_ignored: false,
+			}, // non-md
 		]);
 
 		pluginRegistry.register(storiesTickerPlugin);
@@ -182,11 +198,7 @@ describe("refresh: error handling", () => {
 		pluginRegistry.register(storiesTickerPlugin);
 		await flushAll();
 
-		expect(appLogger.warn).toHaveBeenCalledWith(
-			"plugin",
-			"[stories-ticker] Failed to scan stories",
-			expect.any(Error),
-		);
+		expect(appLogger.warn).toHaveBeenCalledWith("plugin", "[stories-ticker] Failed to scan stories", expect.any(Error));
 	});
 
 	it("clears ticker on error", async () => {

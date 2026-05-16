@@ -44,6 +44,7 @@ pub(crate) mod mdkb_commands;
 pub(crate) mod mdkb_daemon;
 #[cfg(feature = "desktop")]
 mod menu;
+mod native_drag;
 #[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
 mod output_parser;
@@ -1078,7 +1079,7 @@ pub fn run() {
         .manage(crate::fs::ContentSearchCancel(std::sync::Mutex::new(None)))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        .plugin(tauri_plugin_drag::init());
+;
 
     #[cfg(feature = "desktop")]
     let builder = builder
@@ -1201,6 +1202,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            native_drag::start_native_drag,
+            remote_connection::list_remote_connections,
+            remote_connection::save_remote_connection,
+            remote_connection::delete_remote_connection,
             open_secondary_window,
             panel_window::open_panel_window,
             panel_window::focus_panel_window,
@@ -1237,6 +1242,7 @@ pub fn run() {
             pty::get_session_metrics,
             pty::can_spawn_session,
             pty::list_active_sessions,
+            pty::get_process_stats,
             pty::read_vt_log,
             pty::subscribe_terminal_grid,
             pty::unsubscribe_terminal_grid,

@@ -4383,6 +4383,207 @@ pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<Activ
         .collect()
 }
 
+/// Per-process resource usage for the process manager modal.
+#[derive(Clone, Serialize)]
+pub(crate) struct ProcessStats {
+    session_id: Option<String>,
+    name: String,
+    pid: u32,
+    rss_kb: u64,
+    cpu_pct: f32,
+}
+
+/// Collect CPU/memory stats for TUIC itself and all PTY child process trees.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn get_process_stats(state: State<'_, Arc<AppState>>) -> Vec<ProcessStats> {
+    let mut pids: Vec<(Option<String>, String, u32)> = Vec::new();
+
+    // TUIC's own process
+    let own_pid = std::process::id();
+    pids.push((None, "TUICommander".to_string(), own_pid));
+
+    // Collect child PIDs from all PTY sessions
+    for entry in state.sessions.iter() {
+        let session_id = entry.key().clone();
+        let session = entry.value().lock();
+        let display = session
+            .display_name
+            .clone()
+            .unwrap_or_else(|| session_id.chars().take(8).collect());
+
+        #[cfg(not(windows))]
+        let child_pid = session.master.process_group_leader().map(|p| p as u32);
+        #[cfg(windows)]
+        let child_pid = session._child.process_id();
+
+        if let Some(pid) = child_pid {
+            pids.push((Some(session_id.clone()), display.clone(), pid));
+            // Walk descendants
+            if let Some(descendants) = collect_descendant_pids(pid) {
+                for dpid in descendants {
+                    let name = process_name_from_pid(dpid).unwrap_or_else(|| format!("pid:{dpid}"));
+                    pids.push((Some(session_id.clone()), name, dpid));
+                }
+            }
+        }
+    }
+
+    if pids.is_empty() {
+        return vec![];
+    }
+
+    let pid_list: Vec<u32> = pids.iter().map(|(_, _, p)| *p).collect();
+    let stats_map = query_process_stats(&pid_list);
+
+    pids.into_iter()
+        .map(|(sid, name, pid)| {
+            let (rss_kb, cpu_pct) = stats_map.get(&pid).copied().unwrap_or((0, 0.0));
+            ProcessStats {
+                session_id: sid,
+                name,
+                pid,
+                rss_kb,
+                cpu_pct,
+            }
+        })
+        .collect()
+}
+
+/// Collect all descendant PIDs of a process (excluding the root itself).
+#[cfg(feature = "desktop")]
+fn collect_descendant_pids(root: u32) -> Option<Vec<u32>> {
+    #[cfg(not(windows))]
+    {
+        let output = std::process::Command::new("ps")
+            .args(["-eo", "pid,ppid"])
+            .output()
+            .ok()?;
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut parent_map: std::collections::HashMap<u32, Vec<u32>> =
+            std::collections::HashMap::new();
+        for line in text.lines().skip(1) {
+            let mut parts = line.split_whitespace();
+            let pid: u32 = parts.next()?.parse().ok()?;
+            let ppid: u32 = parts.next()?.parse().ok()?;
+            parent_map.entry(ppid).or_default().push(pid);
+        }
+        let mut result = Vec::new();
+        let mut stack = vec![root];
+        while let Some(p) = stack.pop() {
+            if let Some(children) = parent_map.get(&p) {
+                for &child in children {
+                    result.push(child);
+                    stack.push(child);
+                }
+            }
+        }
+        Some(result)
+    }
+    #[cfg(windows)]
+    {
+        // On Windows, deepest_descendant_pid already walks the tree.
+        // Reuse the snapshot logic to collect all descendants.
+        use windows::Win32::System::Diagnostics::ToolHelp::*;
+        let snap = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.ok()?;
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        let mut parent_map: std::collections::HashMap<u32, Vec<u32>> =
+            std::collections::HashMap::new();
+        if unsafe { Process32FirstW(snap, &mut entry) }.is_ok() {
+            loop {
+                parent_map
+                    .entry(entry.th32ParentProcessID)
+                    .or_default()
+                    .push(entry.th32ProcessID);
+                if unsafe { Process32NextW(snap, &mut entry) }.is_err() {
+                    break;
+                }
+            }
+        }
+        let mut result = Vec::new();
+        let mut stack = vec![root];
+        while let Some(p) = stack.pop() {
+            if let Some(children) = parent_map.get(&p) {
+                for &child in children {
+                    result.push(child);
+                    stack.push(child);
+                }
+            }
+        }
+        Some(result)
+    }
+}
+
+/// Query RSS (KB) and CPU% for a batch of PIDs using `ps` on Unix.
+#[cfg(all(feature = "desktop", not(windows)))]
+fn query_process_stats(pids: &[u32]) -> std::collections::HashMap<u32, (u64, f32)> {
+    let mut map = std::collections::HashMap::new();
+    if pids.is_empty() {
+        return map;
+    }
+    let pid_args: Vec<String> = pids.iter().map(|p| p.to_string()).collect();
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-o", "pid,rss,%cpu", "-p"])
+        .arg(pid_args.join(","))
+        .output()
+    else {
+        return map;
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines().skip(1) {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3
+            && let (Ok(pid), Ok(rss), Ok(cpu)) = (
+                parts[0].parse::<u32>(),
+                parts[1].parse::<u64>(),
+                parts[2].parse::<f32>(),
+            )
+        {
+            map.insert(pid, (rss, cpu));
+        }
+    }
+    map
+}
+
+/// Query RSS (KB) and CPU% for a batch of PIDs on Windows.
+#[cfg(all(feature = "desktop", windows))]
+fn query_process_stats(pids: &[u32]) -> std::collections::HashMap<u32, (u64, f32)> {
+    let mut map = std::collections::HashMap::new();
+    for &pid in pids {
+        if let Some((rss, cpu)) = query_single_process_windows(pid) {
+            map.insert(pid, (rss, cpu));
+        }
+    }
+    map
+}
+
+#[cfg(all(feature = "desktop", windows))]
+fn query_single_process_windows(pid: u32) -> Option<(u64, f32)> {
+    use windows::Win32::System::ProcessStatus::*;
+    use windows::Win32::System::Threading::*;
+    let handle =
+        unsafe { OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, false, pid) }.ok()?;
+    let mut mem_info = PROCESS_MEMORY_COUNTERS::default();
+    mem_info.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+    let ok = unsafe {
+        GetProcessMemoryInfo(
+            handle,
+            &mut mem_info,
+            std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32,
+        )
+    };
+    let _ = unsafe { CloseHandle(handle) };
+    if ok.is_err() {
+        return None;
+    }
+    let rss_kb = mem_info.WorkingSetSize / 1024;
+    // CPU% is expensive on Windows (needs two snapshots); report 0 for now
+    Some((rss_kb as u64, 0.0))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct VtLogChunk {
     pub lines: Vec<crate::state::LogLine>,
