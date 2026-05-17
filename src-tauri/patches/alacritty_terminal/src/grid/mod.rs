@@ -16,7 +16,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
-pub use self::resize::{ReflowMode, ReflowOpts};
+pub use self::resize::ReflowMode;
 pub use self::row::Row;
 use self::storage::Storage;
 

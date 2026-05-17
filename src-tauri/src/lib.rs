@@ -1255,6 +1255,7 @@ pub fn run() {
             pty::terminal_search,
             pty::terminal_search_buffer,
             pty::terminal_get_row_text,
+            pty::terminal_get_logical_line,
             pty::terminal_get_selection_text,
             pty::terminal_get_lines,
             pty::terminal_get_cursor_line,

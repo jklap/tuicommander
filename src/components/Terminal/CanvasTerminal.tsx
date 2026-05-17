@@ -2211,6 +2211,39 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 
 			if (fileMatches.length === 0 && urlMatches.length === 0) {
+				// Fallback: try logical line (joined soft-wrapped rows) for split file paths
+				try {
+					const logical = (await ref("terminal_get_logical_line", {
+						sessionId: props.sessionId,
+						row,
+					})) as [number, string];
+					if (logical) {
+						const [logicalStart, logicalText] = logical;
+						if (logicalText.length > rowText.length) {
+							const cols = lastResizeCols;
+							const rowOffset = (row - logicalStart) * cols;
+							fpRe.lastIndex = 0;
+							while ((match = fpRe.exec(logicalText)) !== null) {
+								const idx = logicalText.indexOf(match[1], match.index);
+								const localIdx = idx - rowOffset;
+								if (localIdx >= 0 && localIdx < cols) {
+									fileMatches.push({ text: match[1], candidate: match[1], index: localIdx });
+								}
+							}
+							fuRe.lastIndex = 0;
+							while ((match = fuRe.exec(logicalText)) !== null) {
+								const localIdx = match.index - rowOffset;
+								if (localIdx >= 0 && localIdx < cols) {
+									fileMatches.push({ text: match[0], candidate: match[1], index: localIdx });
+								}
+							}
+						}
+					}
+				} catch {
+					/* command may not exist on older backend */
+				}
+			}
+			if (fileMatches.length === 0 && urlMatches.length === 0) {
 				linkCache.set(cacheKey, null);
 				if (linkCache.size > 200) {
 					const oldest = linkCache.keys().next().value;

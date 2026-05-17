@@ -973,23 +973,9 @@ fn emit_shell_state(state: &crate::state::AppState, session_id: &str, shell_stat
         .session_states
         .get(session_id)
         .and_then(|s| s.agent_type.clone());
-    let last_output = state.vt_log_buffers.get(session_id).and_then(|vt| {
-        let rows = vt.lock().screen_rows();
-        let mut line = rows
-            .iter()
-            .rev()
-            .map(|r| r.trim())
-            .find(|r| !r.is_empty())?
-            .to_string();
-        if line.len() > 120 {
-            line.truncate(120);
-        }
-        Some(line)
-    });
     let parsed = ParsedEvent::ShellState {
         state: shell_state.to_string(),
         agent_type,
-        last_output,
     };
     match serde_json::to_value(&parsed) {
         Ok(json) => {
@@ -3125,12 +3111,6 @@ pub(crate) async fn create_pty(
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
     let mut vt_log = VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY);
-    {
-        let cfg = state.config.read();
-        if cfg.is_experimental_enabled(cfg.scrollback_reflow) {
-            vt_log.set_ink_heuristic_reflow(true);
-        }
-    }
     if let Some(colors) = state.ansi_colors.read().as_ref() {
         vt_log.set_ansi_colors(colors);
     }
@@ -3234,12 +3214,6 @@ pub(crate) async fn spawn_session_for_agent(
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
     let mut vt_log = VtLogBuffer::new(rows, cols, VT_LOG_BUFFER_CAPACITY);
-    {
-        let cfg = state.config.read();
-        if cfg.is_experimental_enabled(cfg.scrollback_reflow) {
-            vt_log.set_ink_heuristic_reflow(true);
-        }
-    }
     if let Some(colors) = state.ansi_colors.read().as_ref() {
         vt_log.set_ansi_colors(colors);
     }
@@ -3393,12 +3367,6 @@ pub(crate) async fn create_pty_with_worktree(
         Mutex::new(OutputRingBuffer::new(OUTPUT_RING_BUFFER_CAPACITY)),
     );
     let mut vt_log = VtLogBuffer::new(24, 220, VT_LOG_BUFFER_CAPACITY);
-    {
-        let cfg = state.config.read();
-        if cfg.is_experimental_enabled(cfg.scrollback_reflow) {
-            vt_log.set_ink_heuristic_reflow(true);
-        }
-    }
     if let Some(colors) = state.ansi_colors.read().as_ref() {
         vt_log.set_ansi_colors(colors);
     }

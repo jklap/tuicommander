@@ -324,9 +324,6 @@ pub struct TerminalGrid {
     /// visible screen untouched. Preserves TUI cursor positioning on screen
     /// while keeping scrollback readable across resize cycles.
     pub reflow_history: bool,
-    /// Experimental: treat history rows filling exactly the old width as
-    /// soft-wrapped (for Ink/TUI apps that use explicit \n instead of WRAPLINE).
-    pub ink_heuristic_reflow: bool,
 }
 
 impl TerminalGrid {
@@ -362,7 +359,6 @@ impl TerminalGrid {
             bell_flag,
             events,
             reflow_history: true,
-            ink_heuristic_reflow: false,
         }
     }
 
@@ -500,13 +496,11 @@ impl TerminalGrid {
     }
 
     pub fn resize_with_mode(&mut self, rows: u16, cols: u16, mode: ReflowMode) {
-        use alacritty_terminal::grid::ReflowOpts;
-        let opts = ReflowOpts { ink_heuristic: self.ink_heuristic_reflow };
         let size = GridSize {
             cols: cols as usize,
             lines: rows as usize,
         };
-        self.term.resize_reflow_with_opts(size, mode, opts);
+        self.term.resize_reflow(size, mode);
         self.prev_rows.clear();
         self.term.mark_fully_damaged();
     }

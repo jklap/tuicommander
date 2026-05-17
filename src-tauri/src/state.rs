@@ -2102,15 +2102,6 @@ impl VtLogBuffer {
         }
     }
 
-    /// Enable history-only reflow: scrollback rows are reflowed on column
-    /// resize while the visible screen stays untouched.
-    pub fn set_reflow_history(&mut self, enabled: bool) {
-        self.grid.reflow_history = enabled;
-    }
-
-    pub fn set_ink_heuristic_reflow(&mut self, enabled: bool) {
-        self.grid.ink_heuristic_reflow = enabled;
-    }
 
     pub fn set_ansi_colors(&mut self, colors: &[[u8; 3]; 16]) {
         self.grid.set_ansi_colors(colors);
