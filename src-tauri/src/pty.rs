@@ -3128,7 +3128,7 @@ pub(crate) async fn create_pty(
     {
         let cfg = state.config.read();
         if cfg.is_experimental_enabled(cfg.scrollback_reflow) {
-            vt_log.set_reflow_history(true);
+            vt_log.set_ink_heuristic_reflow(true);
         }
     }
     if let Some(colors) = state.ansi_colors.read().as_ref() {
@@ -3237,7 +3237,7 @@ pub(crate) async fn spawn_session_for_agent(
     {
         let cfg = state.config.read();
         if cfg.is_experimental_enabled(cfg.scrollback_reflow) {
-            vt_log.set_reflow_history(true);
+            vt_log.set_ink_heuristic_reflow(true);
         }
     }
     if let Some(colors) = state.ansi_colors.read().as_ref() {
@@ -3396,7 +3396,7 @@ pub(crate) async fn create_pty_with_worktree(
     {
         let cfg = state.config.read();
         if cfg.is_experimental_enabled(cfg.scrollback_reflow) {
-            vt_log.set_reflow_history(true);
+            vt_log.set_ink_heuristic_reflow(true);
         }
     }
     if let Some(colors) = state.ansi_colors.read().as_ref() {
