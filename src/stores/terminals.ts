@@ -680,12 +680,12 @@ function createTerminalsStore() {
 
 		/** Check if a tab is currently detached */
 		isDetached(tabId: string): boolean {
-			return tabId in state.detachedWindows;
+			return state.detachedWindows[tabId] !== undefined;
 		},
 
 		/** Get all non-detached terminal IDs */
 		getAttachedIds(): string[] {
-			return Object.keys(state.terminals).filter((id) => !(id in state.detachedWindows));
+			return Object.keys(state.terminals).filter((id) => state.detachedWindows[id] === undefined);
 		},
 
 		/** Record last PTY output timestamp without triggering reactive graph */

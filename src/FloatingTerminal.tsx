@@ -172,17 +172,85 @@ export const FloatingTerminal: Component = () => {
 		onCleanup(() => unlistenClose?.());
 	});
 
+	const terminal = () => terminalsStore.get(tabId);
+	const isBusy = () => terminalsStore.isBusy(tabId);
+	const shellState = () => terminal()?.shellState;
+	const awaitingInput = () => terminal()?.awaitingInput;
+
+	const statusColor = () => {
+		if (awaitingInput()) return "var(--warning, #d29922)";
+		if (isBusy()) return "var(--activity, #58a6ff)";
+		if (shellState() === "idle") return "var(--success, #3fb950)";
+		if (shellState() === "exited") return "var(--text-muted, #666)";
+		return "var(--text-secondary, #848d97)";
+	};
+
+	const statusLabel = () => {
+		if (awaitingInput() === "question") return "Waiting for input";
+		if (awaitingInput() === "error") return "Error";
+		if (awaitingInput()) return "Awaiting input";
+		if (isBusy()) return "Running";
+		if (shellState() === "idle") return "Idle";
+		if (shellState() === "exited") return "Exited";
+		return "";
+	};
+
 	return (
 		<div
 			style={{
 				width: "100%",
 				height: "100vh",
+				display: "flex",
+				"flex-direction": "column",
 				background: "var(--bg-primary, #1e1e1e)",
 				overflow: "hidden",
 			}}
 		>
 			<Show when={ready()}>
-				<Terminal id={tabId} alwaysVisible onFocus={() => {}} onSessionExit={handleSessionExit} />
+				<div
+					style={{
+						display: "flex",
+						"align-items": "center",
+						gap: "6px",
+						padding: "3px 12px",
+						"font-size": "11px",
+						"font-family": "var(--font-mono, monospace)",
+						color: "var(--text-secondary, #848d97)",
+						background: "var(--bg-secondary, #161b22)",
+						"border-bottom": "1px solid var(--border, #30363d)",
+						"-webkit-app-region": "drag",
+						"min-height": "20px",
+					}}
+				>
+					<span style={{ color: statusColor(), "font-size": "8px" }}>●</span>
+					<span style={{ color: statusColor() }}>{statusLabel()}</span>
+					<span style={{ flex: "1" }} />
+					<button
+						type="button"
+						onClick={() => {
+							getCurrentWebviewWindow()
+								.close()
+								.catch(() => {});
+						}}
+						style={{
+							"-webkit-app-region": "no-drag",
+							background: "none",
+							border: "1px solid var(--border, #30363d)",
+							"border-radius": "3px",
+							color: "var(--text-secondary, #848d97)",
+							"font-size": "10px",
+							"font-family": "var(--font-mono, monospace)",
+							padding: "1px 6px",
+							cursor: "pointer",
+							"line-height": "1.4",
+						}}
+					>
+						Reattach
+					</button>
+				</div>
+				<div style={{ flex: "1", "min-height": "0" }}>
+					<Terminal id={tabId} alwaysVisible onFocus={() => {}} onSessionExit={handleSessionExit} />
+				</div>
 			</Show>
 			<Show when={error()}>
 				<div

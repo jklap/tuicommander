@@ -1421,13 +1421,26 @@ const App: Component = () => {
 		const windowLabel = `floating-${tabId}`;
 		const url = `index.html#/floating?sessionId=${encodeURIComponent(term.sessionId)}&tabId=${encodeURIComponent(tabId)}&name=${encodeURIComponent(term.name)}`;
 
-		new WebviewWindow(windowLabel, {
+		const floatingWin = new WebviewWindow(windowLabel, {
 			url,
 			title: term.name || "Terminal",
 			width: 800,
 			height: 600,
 			center: true,
 			decorations: true,
+		});
+
+		floatingWin.once("tauri://destroyed", () => {
+			if (terminalsStore.isDetached(tabId)) {
+				reattachFallback(tabId);
+				setTimeout(() => {
+					const ref = terminalsStore.get(tabId)?.ref;
+					if (ref) {
+						ref.refresh();
+						ref.fit();
+					}
+				}, 150);
+			}
 		});
 
 		terminalsStore.detach(tabId, windowLabel);
@@ -1487,10 +1500,9 @@ const App: Component = () => {
 
 		listen<{ tabId: string; sessionId: string }>("reattach-terminal", (event) => {
 			const { tabId } = event.payload;
+			if (!terminalsStore.isDetached(tabId)) return;
 			reattachFallback(tabId);
 			setStatusInfo("Tab reattached");
-			// Force refresh after the pane becomes visible again — the terminal
-			// canvas may have lost its rendering context while hidden with display:none.
 			setTimeout(() => {
 				const ref = terminalsStore.get(tabId)?.ref;
 				if (ref) {
