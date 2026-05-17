@@ -316,8 +316,8 @@ mod tests {
         if let Some(path) = result {
             let p = std::path::Path::new(&path);
             assert!(p.exists(), "Resolved path must exist");
-            let in_trusted = is_in_trusted_dir(p)
-                || trusted_dirs().iter().any(|d| d.join("mdkb").exists());
+            let in_trusted =
+                is_in_trusted_dir(p) || trusted_dirs().iter().any(|d| d.join("mdkb").exists());
             assert!(in_trusted, "mdkb must be reachable from a trusted dir");
         }
     }

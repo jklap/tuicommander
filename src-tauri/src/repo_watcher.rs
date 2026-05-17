@@ -67,15 +67,15 @@ pub(crate) fn classify_path(
     }
 
     // Always-excluded directories — noise regardless of .gitignore
-    if let Ok(rel) = path.strip_prefix(repo_root) {
-        if let Some(first) = rel.components().next() {
-            let name = first.as_os_str();
-            if crate::fs::ALWAYS_EXCLUDED_DIRS
-                .iter()
-                .any(|d| name == std::ffi::OsStr::new(d))
-            {
-                return EventCategory::Noise;
-            }
+    if let Ok(rel) = path.strip_prefix(repo_root)
+        && let Some(first) = rel.components().next()
+    {
+        let name = first.as_os_str();
+        if crate::fs::ALWAYS_EXCLUDED_DIRS
+            .iter()
+            .any(|d| name == std::ffi::OsStr::new(d))
+        {
+            return EventCategory::Noise;
         }
     }
 
