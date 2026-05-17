@@ -21,6 +21,8 @@ import {
 	computeCursorRect,
 	type DecodedFrame,
 	decodeBinaryFrame,
+	GUTTER_PX,
+	SCROLLBAR_PX,
 	snapLineHeight,
 } from "./canvasTerminalUtils";
 import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } from "./glyphCache";
@@ -114,15 +116,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		string,
 		{ text: string; path: string; line?: number; col?: number; index: number }[] | null
 	>();
-	let hoveredLink: { row: number; colStart: number; colEnd: number; path: string; line?: number; col?: number } | null =
-		null;
+	let hoveredLink: {
+		row: number;
+		colStart: number;
+		colEnd: number;
+		path: string;
+		line?: number;
+		col?: number;
+		spans?: { row: number; colStart: number; colEnd: number }[];
+	} | null = null;
 	const detectedLinks = new Map<number, { colStart: number; colEnd: number }[]>();
 
 	// Cached CSS custom properties (re-read on remeasure, not every frame)
 	let cachedBgDefault = "#1e1e1e";
 	let cachedFgDefault = "#d4d4d4";
-
-	const GUTTER_PX = 6;
 
 	// Pixel scroll accumulator: shared by wheel + touch handlers.
 	// Accumulates raw pixel delta; when it crosses cellHeight, emits a line scroll to backend.
@@ -267,7 +274,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		cachedBgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
 		cachedFgDefault = getComputedStyle(canvasRef).getPropertyValue("--text-primary").trim() || "#d4d4d4";
 
-		const cols = Math.floor((rect.width - GUTTER_PX) / m.cellWidth);
+		const cols = Math.floor((rect.width - GUTTER_PX - SCROLLBAR_PX) / m.cellWidth);
 		const rows = Math.floor(rect.height / m.cellHeight);
 		if (cols <= 0 || rows <= 0) return;
 		const logicalW = cols * m.cellWidth + GUTTER_PX;
@@ -372,15 +379,19 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		// Solid underline for hovered link
 		if (hoveredLink) {
-			const vpRow = hoveredLink.row;
-			if (vpRow >= 0 && vpRow < maxRow) {
-				const x = hoveredLink.colStart * m.cellWidth;
-				const w = (hoveredLink.colEnd - hoveredLink.colStart) * m.cellWidth;
-				const y = vpRow * m.cellHeight + m.cellHeight - 1 + 0.5;
-				octx.beginPath();
-				octx.moveTo(x, y);
-				octx.lineTo(x + w, y);
-				octx.stroke();
+			const rowSpans = hoveredLink.spans || [
+				{ row: hoveredLink.row, colStart: hoveredLink.colStart, colEnd: hoveredLink.colEnd },
+			];
+			for (const span of rowSpans) {
+				if (span.row >= 0 && span.row < maxRow) {
+					const x = span.colStart * m.cellWidth;
+					const w = (span.colEnd - span.colStart) * m.cellWidth;
+					const y = span.row * m.cellHeight + m.cellHeight - 1 + 0.5;
+					octx.beginPath();
+					octx.moveTo(x, y);
+					octx.lineTo(x + w, y);
+					octx.stroke();
+				}
 			}
 		}
 	}
@@ -2063,6 +2074,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const ref = invokeRef;
 		if (!ref || !alive) return;
 		const maxRow = currentFrame?.screenRows || lastResizeRows;
+		const cols = lastScreenCols > 0 ? lastScreenCols : currentFrame?.screenCols || 80;
 		const now = Date.now();
 		const toCheck: { text: string; candidates: { colStart: number; colEnd: number; raw: string }[] }[] = [];
 
@@ -2091,13 +2103,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (candidates.length > 0) toCheck.push({ text, candidates });
 		}
 
-		if (toCheck.length === 0) return;
-
 		const termId = terminalsStore.getTerminalForSession(props.sessionId);
 		const termData = termId ? terminalsStore.get(termId) : undefined;
 		const cwd = termData?.cwd || "";
 		let anyFound = false;
 
+		// Single-row verification
 		for (const item of toCheck) {
 			if (!alive) return;
 			const verified: { colStart: number; colEnd: number }[] = [];
@@ -2118,6 +2129,59 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 			fileLinkCache.set(item.text, { spans: verified.length > 0 ? verified : null, ts: Date.now() });
 			if (verified.length > 0) anyFound = true;
+		}
+
+		// Multi-row pass: detect file:// URLs spanning soft-wrapped rows.
+		// Check each row that is full-width (likely wrapped) for partial file:// prefix.
+		const checkedLogicalStarts = new Set<number>();
+		for (let i = 0; i < maxRow; i++) {
+			if (!alive) return;
+			const row = rowMap.get(i);
+			if (!row) continue;
+			const text = rowToText(row);
+			if (text.length < cols) continue; // not full-width, not wrapped
+			if (!text.includes("file://")) continue;
+			if (checkedLogicalStarts.has(i)) continue;
+			try {
+				const [startRow, logicalText] = (await ref("terminal_get_logical_line", {
+					sessionId: props.sessionId,
+					row: i,
+				})) as [number, string];
+				if (!alive) return;
+				if (startRow === i && logicalText === text) continue; // single row
+				checkedLogicalStarts.add(startRow);
+				FILE_URL_RE.lastIndex = 0;
+				let m: RegExpExecArray | null;
+				while ((m = FILE_URL_RE.exec(logicalText)) !== null) {
+					const matchEnd = m.index + m[0].length;
+					// Only process if this match spans multiple rows
+					if (Math.floor(m.index / cols) === Math.floor((matchEnd - 1) / cols)) continue;
+					try {
+						const r = (await ref("resolve_terminal_path", { cwd, candidate: m[1] })) as {
+							absolute_path: string;
+							is_directory: boolean;
+						} | null;
+						if (!r) continue;
+						// Add spans to detectedLinks for each row
+						for (let offset = m.index; offset < matchEnd; ) {
+							const spanRow = startRow + Math.floor(offset / cols);
+							const spanColStart = offset % cols;
+							const remaining = matchEnd - offset;
+							const spanColEnd = Math.min(spanColStart + remaining, cols);
+							const existing = detectedLinks.get(spanRow) || [];
+							existing.push({ colStart: spanColStart, colEnd: spanColEnd });
+							detectedLinks.set(spanRow, existing);
+							offset += spanColEnd - spanColStart;
+						}
+						anyFound = true;
+					} catch {
+						/* resolve failed */
+					}
+				}
+			} catch {
+				/* terminal_get_logical_line not available */
+				break;
+			}
 		}
 
 		if (anyFound) {
@@ -2211,39 +2275,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 
 			if (fileMatches.length === 0 && urlMatches.length === 0) {
-				// Fallback: try logical line (joined soft-wrapped rows) for split file paths
-				try {
-					const logical = (await ref("terminal_get_logical_line", {
-						sessionId: props.sessionId,
-						row,
-					})) as [number, string];
-					if (logical) {
-						const [logicalStart, logicalText] = logical;
-						if (logicalText.length > rowText.length) {
-							const cols = lastResizeCols;
-							const rowOffset = (row - logicalStart) * cols;
-							fpRe.lastIndex = 0;
-							while ((match = fpRe.exec(logicalText)) !== null) {
-								const idx = logicalText.indexOf(match[1], match.index);
-								const localIdx = idx - rowOffset;
-								if (localIdx >= 0 && localIdx < cols) {
-									fileMatches.push({ text: match[1], candidate: match[1], index: localIdx });
-								}
-							}
-							fuRe.lastIndex = 0;
-							while ((match = fuRe.exec(logicalText)) !== null) {
-								const localIdx = match.index - rowOffset;
-								if (localIdx >= 0 && localIdx < cols) {
-									fileMatches.push({ text: match[0], candidate: match[1], index: localIdx });
-								}
-							}
-						}
-					}
-				} catch {
-					/* command may not exist on older backend */
-				}
-			}
-			if (fileMatches.length === 0 && urlMatches.length === 0) {
 				linkCache.set(cacheKey, null);
 				if (linkCache.size > 200) {
 					const oldest = linkCache.keys().next().value;
@@ -2305,6 +2336,82 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}
 			}
 		}
+
+		// If no single-row link found, try logical line (joins soft-wrapped rows)
+		if (!hoveredLink && ref) {
+			try {
+				const [startRow, logicalText] = (await ref("terminal_get_logical_line", {
+					sessionId: props.sessionId,
+					row,
+				})) as [number, string];
+				if (!alive || gen !== linkCheckGeneration) return;
+				if (startRow !== row || logicalText !== rowText) {
+					const cols = lastScreenCols > 0 ? lastScreenCols : currentFrame?.screenCols || 80;
+					const colOffset = (row - startRow) * cols;
+					const logicalCol = colOffset + col;
+					const fuRe = FILE_URL_RE;
+					const fpRe = FILE_PATH_RE;
+					const webRe = WEB_URL_RE;
+					const logicalMatches: { text: string; candidate: string; index: number; isUrl: boolean }[] = [];
+
+					fuRe.lastIndex = 0;
+					let m: RegExpExecArray | null;
+					while ((m = fuRe.exec(logicalText)) !== null) {
+						logicalMatches.push({ text: m[0], candidate: m[1], index: m.index, isUrl: false });
+					}
+					fpRe.lastIndex = 0;
+					while ((m = fpRe.exec(logicalText)) !== null) {
+						const idx = logicalText.indexOf(m[1], m.index);
+						logicalMatches.push({ text: m[1], candidate: m[1], index: idx, isUrl: false });
+					}
+					webRe.lastIndex = 0;
+					while ((m = webRe.exec(logicalText)) !== null) {
+						logicalMatches.push({ text: m[0], candidate: m[0], index: m.index, isUrl: true });
+					}
+
+					for (const lm of logicalMatches) {
+						const matchEnd = lm.index + lm.text.length;
+						if (logicalCol >= lm.index && logicalCol < matchEnd) {
+							let resolvedPath = lm.candidate;
+							if (!lm.isUrl) {
+								const termId = terminalsStore.getTerminalForSession(props.sessionId);
+								const termData = termId ? terminalsStore.get(termId) : undefined;
+								const cwd = termData?.cwd || "";
+								const r = (await ref("resolve_terminal_path", { cwd, candidate: lm.candidate })) as {
+									absolute_path: string;
+									is_directory: boolean;
+								} | null;
+								if (!alive || gen !== linkCheckGeneration) return;
+								if (!r) break;
+								resolvedPath = r.absolute_path;
+							}
+							// Build multi-row spans
+							const spans: { row: number; colStart: number; colEnd: number }[] = [];
+							for (let offset = lm.index; offset < matchEnd; ) {
+								const spanRow = startRow + Math.floor(offset / cols);
+								const spanColStart = offset % cols;
+								const remaining = matchEnd - offset;
+								const spanColEnd = Math.min(spanColStart + remaining, cols);
+								spans.push({ row: spanRow, colStart: spanColStart, colEnd: spanColEnd });
+								offset += spanColEnd - spanColStart;
+							}
+							const firstSpan = spans[0];
+							hoveredLink = {
+								row: firstSpan.row,
+								colStart: firstSpan.colStart,
+								colEnd: firstSpan.colEnd,
+								path: resolvedPath,
+								spans,
+							};
+							break;
+						}
+					}
+				}
+			} catch {
+				/* terminal_get_logical_line not available */
+			}
+		}
+
 		canvasRef.style.cursor = hoveredLink ? "pointer" : "text";
 		if (currentFrame) {
 			const m = metrics();
