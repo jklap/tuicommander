@@ -3116,6 +3116,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				fullRepaintNeeded = true;
 				currentFrame = null;
 				lastDisplayOffset = -1;
+				lastResizeCols = 0;
+				lastResizeRows = 0;
 				remeasure();
 				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 			},
