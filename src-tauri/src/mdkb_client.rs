@@ -269,6 +269,7 @@ pub use platform::MdkbClient;
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::path::Path;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::{UnixListener, UnixStream};
