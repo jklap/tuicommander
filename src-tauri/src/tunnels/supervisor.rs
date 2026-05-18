@@ -362,20 +362,21 @@ mod tests {
     use std::io::Write;
     use std::net::SocketAddr;
     use std::sync::atomic::AtomicU32;
-    use tempfile::NamedTempFile;
+    use tempfile::TempPath;
     use tokio::net::TcpListener;
 
-    fn fake_ssh_script(behavior: &str) -> NamedTempFile {
-        let mut f = NamedTempFile::new().unwrap();
+    fn fake_ssh_script(behavior: &str) -> TempPath {
+        let mut f = tempfile::NamedTempFile::new().unwrap();
         writeln!(f, "#!/bin/sh").unwrap();
         writeln!(f, "{behavior}").unwrap();
         f.as_file().sync_all().unwrap();
+        let path = f.into_temp_path();
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(f.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
-        f
+        path
     }
 
     fn test_profile() -> TunnelProfile {
@@ -411,7 +412,7 @@ mod tests {
         let (cb, statuses) = status_collector();
 
         let mut sup =
-            TunnelSupervisor::start_with_binary(test_profile(), script.path().to_path_buf(), cb)
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb)
                 .await;
 
         // Wait for the process to exit and supervisor to settle.
@@ -439,7 +440,7 @@ mod tests {
         let (cb, statuses) = status_collector();
 
         let mut sup =
-            TunnelSupervisor::start_with_binary(test_profile(), script.path().to_path_buf(), cb)
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb)
                 .await;
 
         tokio::time::sleep(Duration::from_secs(2)).await;
@@ -482,7 +483,7 @@ mod tests {
         let (cb, statuses) = status_collector();
 
         let mut sup =
-            TunnelSupervisor::start_with_binary(test_profile(), script.path().to_path_buf(), cb)
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb)
                 .await;
 
         // Wait long enough for at least 2 retry attempts (first backoff ~1s, second ~2s).
@@ -529,7 +530,7 @@ mod tests {
         let (cb, _statuses) = status_collector();
 
         let mut sup =
-            TunnelSupervisor::start_with_binary(test_profile(), script.path().to_path_buf(), cb)
+            TunnelSupervisor::start_with_binary(test_profile(), script.to_path_buf(), cb)
                 .await;
 
         // Wait for health check to pass.
@@ -574,7 +575,7 @@ mod tests {
         let (cb, _statuses) = status_collector();
 
         let sup =
-            TunnelSupervisor::start_with_binary(profile, script.path().to_path_buf(), cb).await;
+            TunnelSupervisor::start_with_binary(profile, script.to_path_buf(), cb).await;
 
         // Should immediately be in Error state — no spawn.
         let status = sup.status();
