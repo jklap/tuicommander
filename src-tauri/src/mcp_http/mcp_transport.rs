@@ -352,7 +352,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "title": { "type": "string", "description": "Tab or notification title (action=tab/toast/confirm, required)" },
                 "html": { "type": "string", "description": "Inline HTML content to render in sandboxed iframe (action=tab, mutually exclusive with url)" },
                 "url": { "type": "string", "description": "Tab URL (action=tab, xor html). http(s) → iframe. file:///path → read and inline. tuic://edit/<path>?line=N → native editor. tuic://open/<path> → markdown tab. Absolute paths need `//` prefix." },
-                "pinned": { "type": "boolean", "description": "Pin tab across all branches (default true)" },
+                "pinned": { "type": "boolean", "description": "Pin tab across all branches (default false)" },
                 "focus": { "type": "boolean", "description": "Switch to this tab after open/update (action=tab, default true). Pass false to update silently without stealing focus." },
                 "message": { "type": "string", "description": "Optional body text (action=toast/confirm)" },
                 "level": { "type": "string", "description": "Toast level: info, warn, error (default: info)" },
@@ -2510,7 +2510,7 @@ fn handle_ui(
                     "warning": format!("Session '{}' already has an active terminal. Use the terminal tab instead of creating an HTML tab.", sid)
                 });
             }
-            let pinned = args["pinned"].as_bool().unwrap_or(true);
+            let pinned = args["pinned"].as_bool().unwrap_or(false);
             let focus = args["focus"].as_bool().unwrap_or(true);
             // Resolve origin repo for the calling MCP session so the tab lands
             // in the repo where the agent is actually working, not whichever
@@ -5010,7 +5010,7 @@ mod tests {
                 assert_eq!(title, "Test");
                 assert_eq!(html, "<p>hello</p>");
                 assert!(url.is_none(), "url should be None for html tab");
-                assert!(pinned, "pinned should default to true");
+                assert!(!pinned, "pinned should default to false");
                 assert!(focus, "focus should default to true");
                 assert!(
                     origin_repo_path.is_none(),
