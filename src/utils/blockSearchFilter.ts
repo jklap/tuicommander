@@ -14,17 +14,11 @@ export function filterMatchesToBlock(
 	blocks: readonly BlockRange[],
 	viewportCenter: number,
 ): SearchMatch[] {
-	const block = blocks.find(
-		(b) =>
-			viewportCenter >= b.promptLine &&
-			(b.endLine == null || viewportCenter < b.endLine),
-	);
+	const block = blocks.find((b) => viewportCenter >= b.promptLine && (b.endLine == null || viewportCenter < b.endLine));
 	if (!block) return matches;
 	const end = block.endLine;
 	if (end == null) {
 		return matches.filter((m) => m.row >= block.promptLine);
 	}
-	return matches.filter(
-		(m) => m.row >= block.promptLine && m.row < end,
-	);
+	return matches.filter((m) => m.row >= block.promptLine && m.row < end);
 }

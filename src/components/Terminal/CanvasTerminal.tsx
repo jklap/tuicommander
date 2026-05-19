@@ -489,7 +489,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const startVp = absRowToViewport(foldStart);
 			if (startVp === null) continue;
 			const endVp = absRowToViewport(foldEnd - 1);
-			const lastVp = endVp ?? (lastResizeRows - 1);
+			const lastVp = endVp ?? lastResizeRows - 1;
 			const y = startVp * m.cellHeight;
 			const h = (lastVp - startVp + 1) * m.cellHeight;
 			octx.fillStyle = cachedBgDefault;
@@ -707,7 +707,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (!scrollbarRef || !settingsStore.state.showScrollbarMarks) return;
 		if (!scrollbarMarksContainer) {
 			scrollbarMarksContainer = document.createElement("div");
-			scrollbarMarksContainer.style.cssText = "position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none";
+			scrollbarMarksContainer.style.cssText =
+				"position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none";
 			scrollbarRef.appendChild(scrollbarMarksContainer);
 		}
 		const term = terminalsStore.get(props.terminalId);
@@ -2678,12 +2679,22 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 
 			// Cmd+Shift+. (macOS) or Ctrl+Shift+. (Win/Linux): toggle fold on current block
-			if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "." && !e.altKey && settingsStore.state.blockFoldingEnabled) {
+			if (
+				(e.metaKey || e.ctrlKey) &&
+				e.shiftKey &&
+				e.key === "." &&
+				!e.altKey &&
+				settingsStore.state.blockFoldingEnabled
+			) {
 				const term = terminalsStore.get(props.terminalId);
 				if (term && currentFrame) {
 					const viewTop = currentFrame.historySize - currentFrame.displayOffset;
-					const blocks = [...term.commandBlocks, term.activeBlock].filter(Boolean) as import("../../stores/terminals").CommandBlock[];
-					const current = blocks.find((b) => b.promptLine <= viewTop + (lastResizeRows >> 1) && (b.endLine ?? Infinity) >= viewTop);
+					const blocks = [...term.commandBlocks, term.activeBlock].filter(
+						Boolean,
+					) as import("../../stores/terminals").CommandBlock[];
+					const current = blocks.find(
+						(b) => b.promptLine <= viewTop + (lastResizeRows >> 1) && (b.endLine ?? Infinity) >= viewTop,
+					);
 					if (current) {
 						terminalsStore.toggleBlockFold(props.terminalId, current.promptLine);
 						fullRepaintNeeded = true;
@@ -2914,7 +2925,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				if (rawX < GUTTER_PX) {
 					const term = terminalsStore.get(props.terminalId);
 					if (term) {
-						const allBlocks = [...term.commandBlocks, term.activeBlock].filter(Boolean) as import("../../stores/terminals").CommandBlock[];
+						const allBlocks = [...term.commandBlocks, term.activeBlock].filter(
+							Boolean,
+						) as import("../../stores/terminals").CommandBlock[];
 						const block = allBlocks.find((b) => b.promptLine <= absRow && (b.endLine ?? Infinity) >= absRow);
 						if (block) {
 							const startRow = (block.executionLine ?? block.promptLine) + 1;
@@ -3287,9 +3300,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				if (blockScope && currentFrame) {
 					const term = terminalsStore.get(props.terminalId);
 					if (term) {
-						const allBlocks = term.activeBlock
-							? [...term.commandBlocks, term.activeBlock]
-							: term.commandBlocks;
+						const allBlocks = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
 						const viewTop = currentFrame.historySize - currentFrame.displayOffset;
 						const viewCenter = viewTop + Math.floor(currentFrame.screenRows / 2);
 						matches = filterMatchesToBlock(matches, allBlocks, viewCenter);

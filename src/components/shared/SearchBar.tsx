@@ -1,4 +1,4 @@
-import { type Component, For, createEffect, createSignal, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, Show } from "solid-js";
 import { cx } from "../../utils";
 import type { SearchOptions } from "./DomSearchEngine";
 import s from "./SearchBar.module.css";
