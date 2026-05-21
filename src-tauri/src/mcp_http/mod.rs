@@ -1308,6 +1308,10 @@ pub async fn start_server(
             &state.mcp_upstream_registry,
         ));
 
+        // Spawn standby checker: SIGSTOP idle+unfocused sessions after timeout
+        #[cfg(unix)]
+        crate::pty::spawn_standby_checker(Arc::clone(&state));
+
         // --- Unix socket listener (always on, no auth) ---
         #[cfg(unix)]
         {
@@ -1691,6 +1695,7 @@ mod tests {
             )),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
+            standby_sessions: DashMap::new(),
         });
         // Override default disabled_native_tools so all 8 tools are visible in tests
         state.config.write().disabled_native_tools = Vec::new();

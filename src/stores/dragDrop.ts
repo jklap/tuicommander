@@ -82,8 +82,9 @@ function isMac(): boolean {
 
 /** Update modifier state from a keyboard event. */
 function updateModifierFromEvent(e: KeyboardEvent) {
-	setCopyModifierHeld(isMac() ? e.altKey : e.ctrlKey);
-	setShiftHeld(e.shiftKey);
+	const nextCopy = isMac() ? e.altKey : e.ctrlKey;
+	if (nextCopy !== copyModifierHeld()) setCopyModifierHeld(nextCopy);
+	if (e.shiftKey !== shiftHeld()) setShiftHeld(e.shiftKey);
 }
 
 /**

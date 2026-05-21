@@ -581,6 +581,9 @@ pub(crate) struct AppConfig {
     /// rejection after. Coordinate those call sites if live reload is ever added.
     #[serde(default)]
     pub(crate) ai_terminal_mcp_enabled: bool,
+    /// Minutes of idle + unfocused before SIGSTOP on process group. 0 = disabled.
+    #[serde(default = "default_standby_timeout")]
+    pub(crate) standby_timeout_minutes: u16,
 }
 
 fn default_language() -> String {
@@ -597,6 +600,10 @@ fn default_update_channel() -> String {
 
 fn default_session_token_duration_secs() -> u64 {
     86400
+}
+
+fn default_standby_timeout() -> u16 {
+    5
 }
 
 fn default_bell_style() -> String {
@@ -680,6 +687,7 @@ impl Default for AppConfig {
             cursor_style: default_cursor_style(),
             terminal_renderer: default_terminal_renderer(),
             ai_terminal_mcp_enabled: false,
+            standby_timeout_minutes: default_standby_timeout(),
         }
     }
 }
@@ -1646,6 +1654,7 @@ mod tests {
             cursor_style: "bar".to_string(),
             terminal_renderer: "webgl".to_string(),
             auto_update_plugins_enabled: false,
+            standby_timeout_minutes: 5,
         };
         let loaded: AppConfig = round_trip_in_dir(dir.path(), "config.json", &cfg);
         assert_eq!(loaded.shell.as_deref(), Some("/bin/zsh"));

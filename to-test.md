@@ -2,6 +2,13 @@
 
 Features to test when TUICommander is more usable.
 
+## Auto-Standby (2026-05-21)
+- [HUMAN] Settings → General → "Auto-Standby Timeout" control appears; set to 1 min, change back to 5, set to 0 (Off)
+- [HUMAN] With timeout=1: open two tabs, switch away from one for 1+ min while it's idle → standby badge (⏸) appears in the background tab
+- [HUMAN] Click the standby tab → badge disappears immediately (SIGCONT on focus)
+- [HUMAN] `curl http://localhost:<port>/session/list` → standby field present, `true` for stopped session
+- [HUMAN] Set timeout=0 → within 30s, any currently stopped sessions wake up (no badge remains)
+
 ## Detachable Panels
 - [HUMAN] Activity Dashboard: click detach button in header → opens in separate window
 - [HUMAN] Activity Dashboard detached: rows show live terminal status updates (~1 Hz)

@@ -192,18 +192,18 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
 		if (sound === "error") {
 			appLogger.info("terminal", `[Notify] ${props.id} error — awaitingInput transition`);
-			notificationsStore.playError();
+			notificationsStore.playError(props.id);
 		} else if (sound === "question") {
 			if (confident) {
 				appLogger.info("terminal", `[Notify] ${props.id} question — awaitingInput transition`);
-				notificationsStore.playQuestion();
+				notificationsStore.playQuestion(props.id);
 			} else {
 				// Debounce low-confidence questions: if cleared within 500ms, skip notification
 				questionDebounceTimer = setTimeout(() => {
 					questionDebounceTimer = 0;
 					if (terminalsStore.get(props.id)?.awaitingInput === "question") {
 						appLogger.info("terminal", `[Notify] ${props.id} question — awaitingInput transition (debounced)`);
-						notificationsStore.playQuestion();
+						notificationsStore.playQuestion(props.id);
 					}
 				}, 500) as unknown as number;
 			}
@@ -864,13 +864,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				pty.write(sessionId, data).catch((err) => appLogger.error("terminal", "Failed to write to PTY", err));
 		},
 		writeln: (data: string) => {
-			if (sessionId) pty.write(sessionId, data + "\n").catch((err) => appLogger.error("terminal", "writeln failed", err));
+			if (sessionId)
+				pty.write(sessionId, data + "\n").catch((err) => appLogger.error("terminal", "writeln failed", err));
 		},
 		input: (data: string) => {
 			if (sessionId) pty.write(sessionId, data).catch((err) => appLogger.error("terminal", "input failed", err));
 		},
 		clear: () => {
-			if (sessionId) pty.write(sessionId, "\x1b[2J\x1b[H\x1b[3J").catch((err) => appLogger.error("terminal", "clear failed", err));
+			if (sessionId)
+				pty.write(sessionId, "\x1b[2J\x1b[H\x1b[3J").catch((err) => appLogger.error("terminal", "clear failed", err));
 		},
 		refresh: () => canvasTerminalRef()?.refresh(),
 		focus: () => {

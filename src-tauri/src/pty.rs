@@ -2468,6 +2468,8 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     state.terminal_rows.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
     state.shell_state_since_ms.remove(session_id);
+    #[cfg(unix)]
+    state.standby_sessions.remove(session_id);
     state.session_parent.remove(session_id);
     // mcp_to_session maps mcp_session_id → tuic_session. The reverse index
     // session_to_mcp lets us drop O(k) entries (k = mcp sessions for this
@@ -3817,8 +3819,163 @@ pub(crate) fn resume_pty(
         .get(&session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
     entry.lock().paused.store(false, Ordering::Relaxed);
+    #[cfg(unix)]
+    if let Err(e) = wake_session(&state, &session_id) {
+        tracing::debug!(session_id = %session_id, error = %e, "Wake on resume (may not be in standby)");
+    }
     tracing::debug!(session_id = %session_id, "PTY reader resumed (flow control)");
     Ok(())
+}
+
+/// Periodically checks all sessions for standby eligibility.
+/// A session enters standby when:
+/// 1. standby_timeout_minutes > 0
+/// 2. session_visibility == false (tab not focused)
+/// 3. shell_state == SHELL_IDLE
+/// 4. idle duration >= timeout
+/// 5. not already in standby
+/// 6. startup_settled == true
+#[cfg(unix)]
+pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
+    use std::time::Duration;
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop {
+            interval.tick().await;
+            let timeout_min = state.config.read().standby_timeout_minutes;
+            if timeout_min == 0 {
+                continue;
+            }
+            let timeout_ms = u64::from(timeout_min) * 60_000;
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+
+            for entry in state.session_visibility.iter() {
+                let session_id = entry.key();
+                let visible = *entry.value();
+                if visible {
+                    continue;
+                }
+                if state.standby_sessions.contains_key(session_id.as_str()) {
+                    continue;
+                }
+
+                let is_idle = state
+                    .shell_states
+                    .get(session_id.as_str())
+                    .map(|a| a.load(Ordering::Acquire) == SHELL_IDLE)
+                    .unwrap_or(false);
+                if !is_idle {
+                    continue;
+                }
+
+                let idle_since = state
+                    .shell_state_since_ms
+                    .get(session_id.as_str())
+                    .map(|a| a.load(Ordering::Acquire))
+                    .unwrap_or(now_ms);
+                if now_ms.saturating_sub(idle_since) < timeout_ms {
+                    continue;
+                }
+
+                let settled = state
+                    .silence_states
+                    .get(session_id.as_str())
+                    .map(|e| e.lock().startup_settled)
+                    .unwrap_or(false);
+                if !settled {
+                    continue;
+                }
+
+                if let Err(e) = standby_session(&state, session_id) {
+                    tracing::warn!(session_id, error = %e, "Standby failed");
+                }
+            }
+        }
+    });
+}
+
+/// SIGSTOP the entire process group of a session.
+/// Returns Ok(true) if stopped, Ok(false) if already in standby or session gone.
+#[cfg(unix)]
+pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool, String> {
+    if state.standby_sessions.contains_key(session_id) {
+        return Ok(false);
+    }
+    let pgid = {
+        let entry = state
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("Session not found: {session_id}"))?;
+        let session = entry.value().lock();
+        session
+            .master
+            .process_group_leader()
+            .ok_or_else(|| "No process group leader".to_string())?
+    };
+    if pgid <= 1 || pgid == unsafe { libc::getpgid(0) } {
+        return Err(format!("Unsafe pgid {pgid} — refusing SIGSTOP"));
+    }
+    let ret = unsafe { libc::kill(-pgid, libc::SIGSTOP) };
+    if ret != 0 {
+        return Err(format!(
+            "SIGSTOP failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    state.standby_sessions.insert(session_id.to_string(), now);
+    tracing::info!(session_id, pgid, "Session entered standby (SIGSTOP)");
+    emit_standby_event(state, session_id, true);
+    Ok(true)
+}
+
+/// SIGCONT a session in standby. Returns Ok(true) if woken, Ok(false) if not in standby.
+#[cfg(unix)]
+pub(crate) fn wake_session(state: &AppState, session_id: &str) -> Result<bool, String> {
+    if state.standby_sessions.remove(session_id).is_none() {
+        return Ok(false);
+    }
+    let pgid = {
+        let entry = state
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| format!("Session not found: {session_id}"))?;
+        let session = entry.value().lock();
+        session
+            .master
+            .process_group_leader()
+            .ok_or_else(|| "No process group leader".to_string())?
+    };
+    let ret = unsafe { libc::kill(-pgid, libc::SIGCONT) };
+    if ret != 0 {
+        return Err(format!(
+            "SIGCONT failed: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    tracing::info!(session_id, pgid, "Session woken from standby (SIGCONT)");
+    emit_standby_event(state, session_id, false);
+    Ok(true)
+}
+
+#[cfg(unix)]
+fn emit_standby_event(state: &AppState, session_id: &str, standby: bool) {
+    #[cfg(feature = "desktop")]
+    if let Some(ref app) = *state.app_handle.read() {
+        let _ = app.emit(
+            "session-standby",
+            serde_json::json!({
+                "session_id": session_id,
+                "standby": standby,
+            }),
+        );
+    }
 }
 
 /// Query current kitty keyboard protocol flags for a session.
@@ -5078,7 +5235,11 @@ pub(crate) async fn set_session_visible(
     session_id: String,
     visible: bool,
 ) -> Result<(), String> {
-    state.session_visibility.insert(session_id, visible);
+    state.session_visibility.insert(session_id.clone(), visible);
+    #[cfg(unix)]
+    if visible && let Err(e) = wake_session(&state, &session_id) {
+        tracing::warn!(session_id, error = %e, "Wake on focus failed");
+    }
     Ok(())
 }
 

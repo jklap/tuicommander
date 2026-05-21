@@ -88,6 +88,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let activeSearchIndex = -1;
 	let cursorBlinkOn = true;
 	let blinkInterval: ReturnType<typeof setInterval> | undefined;
+	let blinkResetAt = 0;
 	let unsubscribe: (() => void) | undefined;
 	let resizeObserver: ResizeObserver | undefined;
 	let visibilityObserver: IntersectionObserver | undefined;
@@ -685,7 +686,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (!scrollbarRef || !scrollThumbRef) return;
 		const total = frame.historySize + (frame.screenRows || lastResizeRows || 24);
 		const m = metrics();
-		const visible = m ? lastResizeRows || Math.floor(canvasRef.clientHeight / m.cellHeight) : (lastResizeRows || 24);
+		const visible = m ? lastResizeRows || Math.floor(canvasRef.clientHeight / m.cellHeight) : lastResizeRows || 24;
 
 		if (frame.historySize === 0) {
 			scrollbarRef.style.display = "none";
@@ -826,17 +827,22 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	function startBlink() {
-		stopBlink();
+		if (blinkInterval != null) return;
 		cursorBlinkOn = true;
+		blinkResetAt = performance.now();
 		blinkInterval = setInterval(() => {
-			cursorBlinkOn = !cursorBlinkOn;
-			if (rafId === undefined) {
-				rafId = requestAnimationFrame(() => {
-					rafId = undefined;
-					if (!alive || hidden) return;
-					const m = metrics();
-					if (currentFrame && m) repaintCursorOnly(currentFrame, m);
-				});
+			const elapsed = performance.now() - blinkResetAt;
+			const phase = Math.floor(elapsed / 700) % 2 === 0;
+			if (cursorBlinkOn !== phase) {
+				cursorBlinkOn = phase;
+				if (rafId === undefined) {
+					rafId = requestAnimationFrame(() => {
+						rafId = undefined;
+						if (!alive || hidden) return;
+						const m = metrics();
+						if (currentFrame && m) repaintCursorOnly(currentFrame, m);
+					});
+				}
 			}
 		}, 700);
 	}
@@ -850,7 +856,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	function resetBlink() {
 		cursorBlinkOn = true;
-		startBlink();
+		blinkResetAt = performance.now();
+		if (blinkInterval == null) startBlink();
 	}
 
 	function drawBoxDrawingChar(cp: number, x: number, y: number, m: CellMetrics): boolean {

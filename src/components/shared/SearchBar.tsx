@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, For, Show } from "solid-js";
+import { type Component, createEffect, createSignal, For, type JSX, Show } from "solid-js";
 import { cx } from "../../utils";
 import type { SearchOptions } from "./DomSearchEngine";
 import s from "./SearchBar.module.css";
@@ -6,7 +6,7 @@ import s from "./SearchBar.module.css";
 export interface ExtraToggle {
 	active: boolean;
 	title: string;
-	icon: () => any;
+	icon: () => JSX.Element;
 	onToggle: () => void;
 }
 

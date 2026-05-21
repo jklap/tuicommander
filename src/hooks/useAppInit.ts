@@ -353,6 +353,12 @@ export async function initApp(deps: AppInitDeps) {
 		if (termId) terminalsStore.update(termId, { alias });
 	}).catch((err) => appLogger.error("app", "Failed to register term-alias-assigned listener", err));
 
+	listen<{ session_id: string; standby: boolean }>("session-standby", (event) => {
+		const { session_id, standby } = event.payload;
+		const termId = terminalsStore.getTerminalForSession(session_id);
+		if (termId) terminalsStore.update(termId, { standby });
+	}).catch((err) => appLogger.error("app", "Failed to register session-standby listener", err));
+
 	// Listen for UI tab open/update requests from MCP tools
 	listen<{
 		id: string;

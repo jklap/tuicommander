@@ -394,20 +394,17 @@ export const TIPS: Tip[] = [
 	},
 	{
 		feature: "Block-Scoped Search",
-		description:
-			"Toggle block-scoped search to restrict find-in-terminal to only the current command block's output.",
+		description: "Toggle block-scoped search to restrict find-in-terminal to only the current command block's output.",
 		shortcut: `${mod}+Shift+B`,
 	},
 	{
 		feature: "Block Timestamps",
-		description:
-			"Hold Ctrl+Cmd to reveal when each command block started, shown as relative time in the gutter.",
+		description: "Hold Ctrl+Cmd to reveal when each command block started, shown as relative time in the gutter.",
 		shortcut: null,
 	},
 	{
 		feature: "Navigate Between Blocks",
-		description:
-			"Jump between command block boundaries to quickly hop through your terminal history.",
+		description: "Jump between command block boundaries to quickly hop through your terminal history.",
 		shortcut: `${mod}+Shift+Up/Down`,
 	},
 	{

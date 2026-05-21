@@ -9,6 +9,51 @@ import {
 import { isTauri } from "../transport";
 import { appLogger } from "./appLogger";
 
+interface PlayOptions {
+	terminalId?: string;
+}
+
+const OS_NOTIFICATION_TITLES: Record<NotificationSound, string> = {
+	question: "Agent needs input",
+	error: "Error detected",
+	completion: "Task completed",
+	warning: "Warning",
+	info: "Info",
+};
+
+let osNotificationPermission: NotificationPermission | null = null;
+
+async function ensureNotificationPermission(): Promise<boolean> {
+	if (!("Notification" in window)) return false;
+	if (osNotificationPermission === null) {
+		osNotificationPermission = Notification.permission;
+	}
+	if (osNotificationPermission === "granted") return true;
+	if (osNotificationPermission === "denied") return false;
+	osNotificationPermission = await Notification.requestPermission();
+	return osNotificationPermission === "granted";
+}
+
+function sendOsNotification(sound: NotificationSound, terminalId: string, tabName: string): void {
+	const n = new Notification(OS_NOTIFICATION_TITLES[sound], {
+		body: tabName,
+		silent: true,
+	});
+	n.onclick = () => {
+		n.close();
+		import("./terminals").then(({ terminalsStore }) => {
+			terminalsStore.setActive(terminalId);
+		});
+		if (isTauri()) {
+			import("@tauri-apps/api/window").then(({ getCurrentWindow }) => {
+				getCurrentWindow().setFocus();
+			});
+		} else {
+			window.focus();
+		}
+	};
+}
+
 const LEGACY_STORAGE_KEY = "tui-commander-notifications";
 
 /** Create a fresh copy of the default config */
@@ -99,8 +144,8 @@ function createNotificationsStore() {
 			saveConfig(state.config);
 		},
 
-		/** Play a notification sound; also increments dock badge when window is not focused */
-		async play(sound: NotificationSound): Promise<void> {
+		/** Play a notification sound; also increments dock badge and sends OS notification when window is not focused */
+		async play(sound: NotificationSound, opts?: PlayOptions): Promise<void> {
 			const caller =
 				new Error().stack
 					?.split("\n")
@@ -111,32 +156,42 @@ function createNotificationsStore() {
 			await notificationManager.play(sound);
 			if (!document.hasFocus()) {
 				actions.incrementBadge();
+				if (opts?.terminalId) {
+					ensureNotificationPermission().then((ok) => {
+						if (!ok) return;
+						import("./terminals").then(({ terminalsStore }) => {
+							const term = terminalsStore.get(opts.terminalId!);
+							const tabName = term?.name ?? opts.terminalId!;
+							sendOsNotification(sound, opts.terminalId!, tabName);
+						});
+					});
+				}
 			}
 		},
 
 		/** Play question notification */
-		async playQuestion(): Promise<void> {
-			await actions.play("question");
+		async playQuestion(terminalId?: string): Promise<void> {
+			await actions.play("question", { terminalId });
 		},
 
 		/** Play error notification */
-		async playError(): Promise<void> {
-			await actions.play("error");
+		async playError(terminalId?: string): Promise<void> {
+			await actions.play("error", { terminalId });
 		},
 
 		/** Play completion notification */
-		async playCompletion(): Promise<void> {
-			await actions.play("completion");
+		async playCompletion(terminalId?: string): Promise<void> {
+			await actions.play("completion", { terminalId });
 		},
 
 		/** Play warning notification */
-		async playWarning(): Promise<void> {
-			await actions.play("warning");
+		async playWarning(terminalId?: string): Promise<void> {
+			await actions.play("warning", { terminalId });
 		},
 
 		/** Play info notification */
-		async playInfo(): Promise<void> {
-			await actions.play("info");
+		async playInfo(terminalId?: string): Promise<void> {
+			await actions.play("info", { terminalId });
 		},
 
 		/** Test a notification sound (bypasses enabled check) */

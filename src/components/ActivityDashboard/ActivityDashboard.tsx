@@ -62,6 +62,7 @@ export type TerminalRow = {
 	status: { label: string; className: string };
 	isWorking: boolean;
 	lastDataAt: number | null;
+	idleSince: number | null;
 	lastPrompt: string | null;
 	agentIntent: string | null;
 	currentTask: string | null;
@@ -134,6 +135,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 			status,
 			isWorking: isRL || !!term.awaitingInput || terminalsStore.isBusy(id),
 			lastDataAt: terminalsStore.getLastDataAt(id),
+			idleSince: term.idleSince,
 			lastPrompt: term.lastPrompt,
 			agentIntent: term.agentIntent,
 			// Claude Code spinner verbs are decorative garbage — suppress them
@@ -152,7 +154,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 			const term = terminalsStore.get(id);
 			const isRL = !!(term?.sessionId && rateLimitStore.isRateLimited(term.sessionId));
 			const working = isRL || !!term?.awaitingInput || terminalsStore.isBusy(id);
-			return { id, working, idx, t: terminalsStore.getLastDataAt(id) ?? 0 };
+			return { id, working, idx, t: term?.idleSince ?? terminalsStore.getLastDataAt(id) ?? 0 };
 		});
 		const workingItems = items.filter((x) => x.working).sort((a, b) => a.idx - b.idx);
 		const idleItems = items.filter((x) => !x.working).sort((a, b) => b.t - a.t);
@@ -202,7 +204,10 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 
 				<For each={terminals()}>
 					{(term) => (
-						<div class={`${s.row} ${term.isActive ? s.activeRow : ""}`} onClick={() => handleRowClick(term.id)}>
+						<div
+							class={`${s.row} ${term.isActive ? s.activeRow : ""} ${!term.isWorking ? s.idleRow : ""}`}
+							onClick={() => handleRowClick(term.id)}
+						>
 							<div class={s.rowMain}>
 								<div class={s.nameCell}>
 									<span class={s.termName}>{term.name}</span>
@@ -214,7 +219,7 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 								</div>
 								<span class={s.agent}>{term.agent}</span>
 								<span class={`${s.status} ${term.status.className}`}>{term.status.label}</span>
-								<span class={s.lastActivity}>{formatRelativeTime(term.lastDataAt)}</span>
+								<span class={s.lastActivity}>{term.isWorking ? "" : formatRelativeTime(term.idleSince)}</span>
 								<button
 									class={`${s.promoteBtn} ${term.isPromoted ? s.promoted : ""}`}
 									title={term.isPromoted ? "Remove from Global Workspace" : "Promote to Global Workspace"}

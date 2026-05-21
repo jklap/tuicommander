@@ -895,7 +895,7 @@ const App: Component = () => {
 			}
 			appLogger.info("terminal", `[Notify] ${id} completion — busy for ${Math.round(durationMs / 1000)}s then idle`);
 			terminalsStore.update(id, { activity: true, unseen: true });
-			notificationsStore.playCompletion();
+			notificationsStore.playCompletion(id);
 		};
 
 		const t = terminalsStore.get(id);
@@ -2353,7 +2353,8 @@ const App: Component = () => {
 									: undefined
 								: gitOps.currentRepoPath()
 						}
-						cwd={gitOps.activeWorktreePath()}
+						cwd={terminalsStore.getActive()?.cwd || gitOps.activeWorktreePath()}
+						repoRoot={gitOps.activeWorktreePath()}
 						onBranchRenamed={(oldName, newName) => {
 							const repoPath = gitOps.currentRepoPath();
 							if (repoPath) {

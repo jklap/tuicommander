@@ -857,6 +857,10 @@ fn handle_session(
                     crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed))
                 });
                 let alias = state.term_aliases.get(&id).map(|e| e.value().clone());
+                #[cfg(unix)]
+                let standby = state.standby_sessions.contains_key(id.as_str());
+                #[cfg(not(unix))]
+                let standby = false;
                 serde_json::json!({
                     "session_id": id,
                     "alias": alias,
@@ -867,6 +871,7 @@ fn handle_session(
                     "foreground_pgid": pgid,
                     "foreground_process": process_name,
                     "shell_state": shell_state,
+                    "standby": standby,
                 })
             }).collect();
             serde_json::json!(sessions)
@@ -1169,6 +1174,10 @@ fn handle_session(
                     };
                     let is_idle = ss.shell_state.as_deref() == Some("idle");
                     let is_busy = ss.shell_state.as_deref() == Some("busy");
+                    #[cfg(unix)]
+                    let standby = state.standby_sessions.contains_key(session_id);
+                    #[cfg(not(unix))]
+                    let standby = false;
                     serde_json::json!({
                         "session_id": session_id,
                         "shell_state": ss.shell_state,
@@ -1179,6 +1188,7 @@ fn handle_session(
                         "exit_code": exit_code,
                         "idle_since_ms": if is_idle && elapsed > 0 { serde_json::json!(elapsed) } else { serde_json::Value::Null },
                         "busy_duration_ms": if is_busy && elapsed > 0 { serde_json::json!(elapsed) } else { serde_json::Value::Null },
+                        "standby": standby,
                     })
                 }
                 None => serde_json::json!({"error": format!("Session '{}' not found", session_id)}),
@@ -2006,6 +2016,11 @@ fn handle_messaging(
                     .or_insert(0) += 1;
             }
             inbox.push_back(msg);
+            drop(inbox);
+            #[cfg(unix)]
+            if let Err(e) = crate::pty::wake_session(state, to) {
+                tracing::debug!(session = %to, error = %e, "Wake on message delivery failed");
+            }
             serde_json::json!({"ok": true, "message_id": msg_id, "delivered_via_channel": pushed})
         }
         "inbox" => {
@@ -3539,6 +3554,7 @@ mod tests {
             )),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: dashmap::DashMap::new(),
+            standby_sessions: dashmap::DashMap::new(),
         });
         // Tests start with all native tools enabled (override production default
         // which disables config, knowledge, debug).

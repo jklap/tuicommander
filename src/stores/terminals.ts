@@ -55,6 +55,7 @@ export interface TerminalData {
 	pendingInitCommand: string | null; // Setup/run script to auto-execute on first shell idle
 	usageLimit: { percentage: number; limitType: string } | null; // Claude Code usage limit
 	lastDataAt: number | null; // Timestamp of last PTY output
+	idleSince: number | null; // Timestamp when shellState transitioned to idle
 	lastPrompt: string | null; // Last relevant user prompt (>= 10 words), set by Rust
 	agentIntent: string | null; // LLM-declared intent via intent: token
 	currentTask: string | null; // Current agent task from status-line parsing (e.g. "Reading files")
@@ -68,6 +69,7 @@ export interface TerminalData {
 	activeBlock: CommandBlock | null; // Current in-progress block (A received, D not yet)
 	foldedBlocks: Set<number>; // promptLine values of folded blocks
 	alias: string | null; // Human-friendly alias from Rust (e.g. "tc-1")
+	standby: boolean; // Session is SIGSTOP'd (auto-standby)
 }
 
 /** Fields auto-populated with defaults when creating a terminal — callers only provide the remaining fields. */
@@ -84,6 +86,7 @@ type TerminalCreateData = Omit<
 	| "pendingInitCommand"
 	| "usageLimit"
 	| "lastDataAt"
+	| "idleSince"
 	| "lastPrompt"
 	| "agentIntent"
 	| "currentTask"
@@ -98,6 +101,7 @@ type TerminalCreateData = Omit<
 	| "activeBlock"
 	| "foldedBlocks"
 	| "alias"
+	| "standby"
 > & { tuicSession?: string | null; isRemote?: boolean; agentType?: AgentType | null; agentSessionId?: string | null };
 
 /** Terminal component ref interface */
@@ -195,6 +199,7 @@ function createTerminalsStore() {
 				appLogger.debug("terminal", `[ShellDebounce] ${id} cooldown cancelled (re-entered busy)`);
 			}
 			setState("debouncedBusy", id, true);
+			setState("terminals", id, "idleSince", null);
 			if (!hadCooldown) {
 				busySinceMap.set(id, Date.now());
 				for (const cb of idleToBusyCallbacks) cb(id);
@@ -212,6 +217,7 @@ function createTerminalsStore() {
 		} else if (next === "idle" && prev !== "busy") {
 			// Direct null→idle (e.g. Rust sync on tab switch) — mark startup complete
 			reachedIdleSet.add(id);
+			if (!state.terminals[id]?.idleSince) setState("terminals", id, "idleSince", Date.now());
 		} else if (next === null && state.terminals[id]?.awaitingInput) {
 			// Process exit (shellState reset to null) — clear any stuck error/question
 			// badge so the next session doesn't inherit stale state from the last child.
@@ -220,6 +226,7 @@ function createTerminalsStore() {
 		} else if (next !== "busy" && prev === "busy") {
 			// First idle marks shell startup as complete
 			if (next === "idle") reachedIdleSet.add(id);
+			setState("terminals", id, "idleSince", Date.now());
 			// Leaving busy: freeze duration, start cooldown
 			const since = busySinceMap.get(id);
 			const duration = since != null ? Date.now() - since : 0;
@@ -295,6 +302,7 @@ function createTerminalsStore() {
 				pendingInitCommand: null,
 				usageLimit: null,
 				lastDataAt: null,
+				idleSince: null,
 				lastPrompt: null,
 				agentIntent: null,
 				currentTask: null,
@@ -309,6 +317,7 @@ function createTerminalsStore() {
 				activeBlock: null,
 				foldedBlocks: new Set<number>(),
 				alias: null,
+				standby: false,
 				...data,
 			});
 			if (data.sessionId) sessionToTerminal.set(data.sessionId, id);
@@ -329,6 +338,7 @@ function createTerminalsStore() {
 				pendingInitCommand: null,
 				usageLimit: null,
 				lastDataAt: null,
+				idleSince: null,
 				lastPrompt: null,
 				agentIntent: null,
 				currentTask: null,
@@ -343,6 +353,7 @@ function createTerminalsStore() {
 				activeBlock: null,
 				foldedBlocks: new Set<number>(),
 				alias: null,
+				standby: false,
 				...data,
 			});
 			if (data.sessionId) sessionToTerminal.set(data.sessionId, id);

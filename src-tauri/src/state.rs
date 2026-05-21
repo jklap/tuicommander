@@ -1065,6 +1065,9 @@ pub struct AppState {
     /// Pending screenshot requests: request_id → oneshot sender for base64 image data.
     /// Populated by MCP `ui(action=screenshot)`, consumed by `screenshot_response` command.
     pub(crate) screenshot_responses: DashMap<String, tokio::sync::oneshot::Sender<Option<String>>>,
+    /// Sessions currently in standby (SIGSTOP'd). session_id → epoch ms when stopped.
+    #[cfg(unix)]
+    pub(crate) standby_sessions: DashMap<String, u64>,
 }
 
 impl AppState {
@@ -1178,6 +1181,8 @@ impl AppState {
             tunnel_audit,
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
+            #[cfg(unix)]
+            standby_sessions: DashMap::new(),
         }
     }
 
@@ -3137,6 +3142,7 @@ mod tests {
             )),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
+            standby_sessions: DashMap::new(),
         }
     }
 

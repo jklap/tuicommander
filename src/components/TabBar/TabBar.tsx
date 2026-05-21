@@ -647,7 +647,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 	const updateScrollState = () => {
 		const el = tabsRef;
 		if (!el) return;
-		const threshold = 4;
+		const threshold = 8;
 		const hasOverflow = el.scrollWidth > el.clientWidth + threshold;
 		batch(() => {
 			setCanScrollLeft(hasOverflow && el.scrollLeft > threshold);
@@ -678,6 +678,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 			if (!tabsRef) return;
 			const activeEl = tabsRef.querySelector(`.${s.active}`) as HTMLElement | null;
 			activeEl?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "nearest" });
+			updateScrollState();
 		});
 	});
 
@@ -828,6 +829,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 												!awaitingInput() && isIdle() && !isUnseen() && s.shellIdle,
 												isExited() && s.shellExited,
 												isRemote() && s.remoteTab,
+												terminal()?.standby && s.standby,
 												isDragging() && s.dragging,
 												isDragOver() && dragOverSide() === "left" && s.dragOverLeft,
 												isDragOver() && dragOverSide() === "right" && s.dragOverRight,
@@ -859,6 +861,14 @@ export const TabBar: Component<TabBarProps> = (props) => {
 												fallback={
 													<span class={s.tabName}>
 														{terminal()?.name}
+														<Show when={terminal()?.standby}>
+															<span class={s.standbyBadge} title="Standby (paused)">
+																<svg viewBox="0 0 8 10" width="8" height="10" fill="currentColor">
+																	<rect x="0" y="0" width="3" height="10" />
+																	<rect x="5" y="0" width="3" height="10" />
+																</svg>
+															</span>
+														</Show>
 														<Show when={isDetached()}>
 															<svg
 																class={s.detachedIcon}
@@ -1222,6 +1232,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 																!awaitingInput() && isIdle() && !isUnseen() && s.shellIdle,
 																isExited() && s.shellExited,
 																isRemote() && s.remoteTab,
+																terminal()?.standby && s.standby,
 																isDragging() && s.dragging,
 																isDragOver() && dragOverSide() === "left" && s.dragOverLeft,
 																isDragOver() && dragOverSide() === "right" && s.dragOverRight,
@@ -1250,6 +1261,14 @@ export const TabBar: Component<TabBarProps> = (props) => {
 																fallback={
 																	<span class={s.tabName}>
 																		{terminal()?.name}
+																		<Show when={terminal()?.standby}>
+																			<span class={s.standbyBadge} title="Standby (paused)">
+																				<svg viewBox="0 0 8 10" width="8" height="10" fill="currentColor">
+																					<rect x="0" y="0" width="3" height="10" />
+																					<rect x="5" y="0" width="3" height="10" />
+																				</svg>
+																			</span>
+																		</Show>
 																		<Show when={isDetached()}>
 																			<svg
 																				class={s.detachedIcon}

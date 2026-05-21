@@ -24,6 +24,7 @@ function snapshotToRows(snap: ActivitySnapshot): TerminalRow[] {
 		status: terminalStatusLabel(t.shellState, t.awaitingInput, t.isRateLimited, statusClasses),
 		isWorking: t.isRateLimited || !!t.awaitingInput || t.shellState === "busy",
 		lastDataAt: t.lastDataAt,
+		idleSince: t.idleSince,
 		lastPrompt: t.lastPrompt,
 		agentIntent: t.agentIntent,
 		currentTask: t.currentTask,

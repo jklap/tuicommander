@@ -6,7 +6,7 @@ import type { IdeType, UpdateChannel } from "../../../stores/settings";
 import { IDE_NAMES, settingsStore } from "../../../stores/settings";
 import { updaterStore } from "../../../stores/updater";
 import { isTauri } from "../../../transport";
-import { SettingInput, SettingSelect, SettingToggle } from "../SettingFields";
+import { SettingInput, SettingSelect, SettingSlider, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
 interface CliStatus {
@@ -271,6 +271,17 @@ export const GeneralTab: Component = () => {
 				onChange={(v) => settingsStore.setPreventSleepWhenBusy(v)}
 				label={t("general.toggle.preventSleepWhenBusy", "Prevent sleep when busy")}
 				hint={t("general.hint.preventSleepWhenBusy", "Keep the system awake while scripts are running")}
+			/>
+
+			<SettingSlider
+				label="Auto-Standby Timeout"
+				value={settingsStore.state.standbyTimeoutMinutes}
+				onChange={(v) => settingsStore.setStandbyTimeoutMinutes(v)}
+				min={0}
+				max={60}
+				step={1}
+				formatValue={(v) => (v === 0 ? "Off" : `${v} min`)}
+				hint="Pause idle background sessions after this duration to save resources. 0 = disabled."
 			/>
 
 			<h3>{t("general.heading.updates", "Updates")}</h3>

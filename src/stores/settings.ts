@@ -55,6 +55,7 @@ interface RustAppConfig {
 	show_block_timestamps?: boolean;
 	show_scrollbar_marks?: boolean;
 	block_folding_enabled?: boolean;
+	standby_timeout_minutes?: number;
 }
 
 // Default values
@@ -309,6 +310,7 @@ interface SettingsStoreState {
 	showBlockTimestamps: boolean;
 	showScrollbarMarks: boolean;
 	blockFoldingEnabled: boolean;
+	standbyTimeoutMinutes: number;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -354,6 +356,7 @@ function createSettingsStore() {
 		showBlockTimestamps: true,
 		showScrollbarMarks: true,
 		blockFoldingEnabled: true,
+		standbyTimeoutMinutes: 5,
 	});
 
 	// Shadow copy of the last loaded config — preserves fields not tracked in SolidJS store
@@ -404,6 +407,7 @@ function createSettingsStore() {
 			show_block_timestamps: state.showBlockTimestamps,
 			show_scrollbar_marks: state.showScrollbarMarks,
 			block_folding_enabled: state.blockFoldingEnabled,
+			standby_timeout_minutes: state.standbyTimeoutMinutes,
 			services: baseConfig?.services ?? { auth: { session_token_duration_secs: 86400 } },
 			mcp_server_enabled: baseConfig?.mcp_server_enabled ?? true,
 		};
@@ -483,6 +487,7 @@ function createSettingsStore() {
 				setState("showBlockTimestamps", config.show_block_timestamps ?? true);
 				setState("showScrollbarMarks", config.show_scrollbar_marks ?? true);
 				setState("blockFoldingEnabled", config.block_folding_enabled ?? true);
+				setState("standbyTimeoutMinutes", config.standby_timeout_minutes ?? 5);
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate settings", err);
 			}
@@ -556,6 +561,11 @@ function createSettingsStore() {
 		/** Set prevent-sleep-when-busy preference */
 		setPreventSleepWhenBusy(enabled: boolean): void {
 			setState("preventSleepWhenBusy", enabled);
+			save();
+		},
+
+		setStandbyTimeoutMinutes(minutes: number): void {
+			setState("standbyTimeoutMinutes", Math.max(0, Math.min(60, minutes)));
 			save();
 		},
 
