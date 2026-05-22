@@ -2,6 +2,34 @@
 
 Features to test when TUICommander is more usable.
 
+## File Browser Intra-Tree Drag & Drop (2026-05-22)
+- [HUMAN] Drag a file onto a folder in the file browser → file moves into that folder
+- [HUMAN] Drag a file onto its own parent folder → no-op (no error)
+- [HUMAN] Drag a folder into one of its own descendants → no-op (circular move prevented)
+- [HUMAN] Tree view: same drag & drop behavior works with nested tree nodes
+- [HUMAN] After move: file browser auto-refreshes showing the file in its new location
+
+## Dormant Repo Throttling (2026-05-22)
+- [HUMAN] Open repos with and without terminals → repos without terminals should have reduced watcher/polling activity (check logs for "throttled" or "dormant")
+- [HUMAN] Switch to a cold repo → data refreshes immediately (no stale state)
+
+## ANSI Colors in Markdown Code Blocks (2026-05-21)
+- [HUMAN] Open a .md file with ANSI escape sequences in a code fence → colors render correctly (not stripped)
+- [HUMAN] Prose text with ANSI escapes → escapes are stripped (not colorized)
+
+## Plugin Watcher Fix - Issue #43 (2026-05-22)
+- [HUMAN] Install a plugin but keep it disabled → no UI flashing/cycling
+- [HUMAN] Install a plugin and enable it → hot-reload works on code file changes
+- [HUMAN] Plugin writing runtime data to its `data/` subdirectory → no hot-reload triggered
+
+## Block Timestamp Overlap Fix (2026-05-20)
+- [HUMAN] Run several short commands in quick succession → hold Ctrl+Cmd → timestamp labels don't overlap vertically
+- [HUMAN] Search for text → orange marks appear in scrollbar at match positions
+
+## Expanded Menu Bar (2026-05-22)
+- [HUMAN] All new menu items trigger the correct action (New File, Find in Content, Clear Scrollback, Refresh Terminal, etc.)
+- [HUMAN] No double-firing when using menu items that also have keyboard shortcuts
+
 ## Auto-Standby (2026-05-21)
 - [HUMAN] Settings → General → "Auto-Standby Timeout" control appears; set to 1 min, change back to 5, set to 0 (Off)
 - [HUMAN] With timeout=1: open two tabs, switch away from one for 1+ min while it's idle → standby badge (⏸) appears in the background tab
@@ -441,11 +469,11 @@ Features to test when TUICommander is more usable.
 ## Native System Menu Bar (Stories 192 + 193)
 - [x] Menu bar visible on macOS (top of screen), Windows/Linux (under title bar)
 - [x] macOS: App menu has About, Services, Hide, Hide Others, Show All, Quit (+ Check for Updates)
-- [x] File menu: New Tab, Close Tab, Reopen Closed Tab, Settings, (Quit on non-macOS)
-- [x] Edit menu: Undo, Redo, Cut, Copy, Paste, Select All, Clear Terminal
-- [x] View menu: Toggle Sidebar, Split Right/Down, Zoom In/Out/Reset, Diff/Markdown/Notes panels
+- [x] File menu: New Tab, New File, Close Tab, Reopen Closed Tab, Settings, (Quit on non-macOS)
+- [x] Edit menu: Undo, Redo, Cut, Copy, Paste, Select All, Find in Content, Clear Terminal, Clear Scrollback, Refresh Terminal
+- [x] View menu: Toggle Sidebar, Split Right/Down, Maximize/Restore Pane, Focus Mode, Zoom In/Out/Reset, Zoom All In/Out/Reset, File Browser, Diff/Markdown/Notes/Outline/AI Chat/Compose/Global Workspace panels
 - [x] Go menu: Next/Previous Tab, Switch to Tab 1-9
-- [x] Tools menu: Prompt Library, Run/Edit & Run Command, Git Panel, Branches, Diff Scroll, Task Queue
+- [x] Tools menu: Prompt Library, Run/Edit & Run Command, Search File Contents, Git Panel, Branches, Diff Scroll, Task Queue, SSH Tunnels, Process Manager
 - [x] Help menu: Help Panel, About TUICommander (+ Check for Updates on non-macOS)
 - [HUMAN] Clicking menu items triggers correct action (same as keyboard shortcut)
 - [x] Accelerator labels show correct modifier key per platform (CmdOrCtrl in code → Tauri resolves)

@@ -12,18 +12,32 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Generators modal** — Secure value generators accessible from the command palette (`open-generators`). Generates: Password, UUID v4, UUID v7, ULID, CUID2, JWT Secret, TOTP Secret, Nano ID, Slug, Ed25519 Key Pair. All generation happens in the Rust backend via `ring` crate.
 - **Process stats & monitor** — New MCP session action `process_stats` and HTTP routes (`/process/stats`, `/process/monitor`) returning CPU% and RSS memory for TUIC and all child process trees. The monitor route serves a self-contained HTML dashboard.
 - **App logger extra fields** — Tracing events now capture all extra fields (beyond `message` and `source`) as a JSON `data` column, making structured logging queryable via the `/logs` endpoint.
+- **Auto-standby** — SIGSTOP entire PTY process groups after configurable N minutes of being both unfocused and idle. SIGCONT on tab focus or agent message arrival. Settings at `Settings > General > Auto-Standby Timeout` (default 5 min, 0 = disabled). Pause badge in tab bar.
+- **ANSI colors in markdown code blocks** — Code fences containing ANSI escape sequences are now colorized using `ansi-to-html` instead of being stripped.
+- **Dormant repo throttling** — Cold repos (no active terminals) get 15s watcher debounce (vs 1.5s) and GitHub polling every ~10min with per-path jitter. Switching to a cold repo triggers immediate data refresh. New `set_hot_repos` command and `PUT /watchers/hot-repos` endpoint.
+- **File browser intra-tree drag & drop** — Drag files and folders between directories within the file browser tree. Uses `renamePath` for the actual move.
+- **Expanded menu bar** — New File, Find in Content, Clear Scrollback, Refresh Terminal, Maximize/Restore Pane, Focus Mode, Zoom All Terminals, File Browser, Outline, AI Chat, Compose, Global Workspace, Content Search, SSH Tunnels, Process Manager.
+- **`prefers-reduced-motion` support** — Global CSS media query disables animations and transitions for users who prefer reduced motion.
 
 ### Changed
 - **GitHub polling: updated_at change detection** — Replaced ETag-based HTTP caching with `updated_at` timestamp comparison, fixing stale data when GitHub CDN caches return 304 on changed content.
 - **GitHub module split** — Extracted `github_debug` module for API debug logging. Fixed route prefix (`github` → `github-poller`). Removed dead Tauri commands.
 - **PTY write error handling** — PTY writer `write_all`/`flush` failures are now logged via `tracing::warn` instead of silently ignored.
 - **Session write tracing** — `write_pty` slash_mode logging downgraded from `info` to `trace` to reduce log noise.
+- **Panel unmounting** — Outline, References, AiTriage, and Activity Dashboard panels now unmount when closed, releasing memos/subscriptions.
+- **CanvasTerminal visibility** — Hidden terminals shrink canvas to 1x1px and clear caches. Cursor hidden when terminal is unfocused.
+- **Dev build profile** — `[profile.dev]` opt-level=1 with dependencies at opt-level=2 for faster dev builds.
 
 ### Fixed
 - **Idle keepalive spinner detection** — Tool progress spinners (◐◑◒◓) now detected for CC idle keepalive, preventing false idle transitions during tool execution.
 - **MCP default pinned=false** — MCP-created tabs no longer default to pinned, preventing unintended tab persistence across branch switches.
 - **Build: cfg-gate desktop modules** — Desktop-only modules properly gated for `tuic-remote` and agent-only builds.
 - **CI: check-remote job** — New CI job catches missing `cfg(desktop)` gates before they break remote builds.
+- **Block timestamp overlap** — `paintBlockTimestamps` now skips labels that would overlap vertically, preventing consecutive close prompts from rendering on top of each other.
+- **Search scrollbar marks** — Orange markers for search match positions in the scrollbar, de-duplicated by pixel row, with cache key tied to search state.
+- **Plugin watcher spurious reload** (#43) — Watcher now filters by `EventKind` (only Create/Modify(Data)/Modify(Name)/Remove), ignoring access/metadata events that caused ~1s flash loops on some Linux configurations. Disabled plugins are skipped entirely (zero IPC, zero store updates).
+- **ContentIndex rebuild storm** — 60-second cooldown between consecutive index rebuilds for the same repo.
+- **Memory caps** — Tool calls capped at 500, activity items at 500, PR notifications at 200 to prevent unbounded memory growth in long sessions.
 
 ## [1.2.3-nightly] - 2026-05-19
 
