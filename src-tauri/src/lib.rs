@@ -1486,6 +1486,7 @@ pub fn run() {
             ai_agent::commands::watcher_update,
             repo_watcher::start_repo_watcher,
             repo_watcher::stop_repo_watcher,
+            repo_watcher::set_hot_repos,
             dir_watcher::start_dir_watcher,
             dir_watcher::stop_dir_watcher,
             sleep_prevention::block_sleep,

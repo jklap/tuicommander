@@ -7,6 +7,21 @@ import { makeBranchKey } from "./tabManager";
 
 const LEGACY_STORAGE_KEY = "tui-commander-repos";
 
+/** Returns paths of repos that have at least one active terminal. */
+function getHotRepoPaths(repositories: Record<string, RepositoryState>): string[] {
+	return Object.entries(repositories)
+		.filter(([, repo]) =>
+			Object.values(repo.branches).some((b) => b.terminals.length > 0),
+		)
+		.map(([path]) => path);
+}
+
+function syncHotRepos(repositories: Record<string, RepositoryState>): void {
+	invoke("set_hot_repos", { paths: getHotRepoPaths(repositories) }).catch((err: unknown) =>
+		appLogger.warn("store", "Failed to sync hot repos", err),
+	);
+}
+
 /** Branch with its terminals */
 export interface BranchState {
 	name: string;
@@ -229,6 +244,7 @@ function createRepositoriesStore() {
 					}
 				}
 				hydrated = true;
+				syncHotRepos(state.repositories);
 			} catch (err) {
 				appLogger.error("store", "Failed to hydrate repositories", err);
 				// hydrated stays false — saves are blocked to prevent data loss
@@ -294,6 +310,10 @@ function createRepositoriesStore() {
 		setActive(path: string | null): void {
 			setState("activeRepoPath", path);
 			save();
+			if (path && !getHotRepoPaths(state.repositories).includes(path)) {
+				setState("revisions", path, (n) => (n ?? 0) + 1);
+				invoke("github_poll_repo", { path }).catch(() => {});
+			}
 		},
 
 		/** Update the display name of a repository */
@@ -367,6 +387,7 @@ function createRepositoriesStore() {
 					}
 				});
 				save();
+				syncHotRepos(state.repositories);
 			}
 		},
 
@@ -389,6 +410,7 @@ function createRepositoriesStore() {
 				}
 			});
 			save();
+			syncHotRepos(state.repositories);
 		},
 
 		/** Set run command for a branch */

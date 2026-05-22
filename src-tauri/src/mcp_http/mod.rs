@@ -1082,6 +1082,10 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
             post(watcher_routes::start_dir_watcher_http)
                 .delete(watcher_routes::stop_dir_watcher_http),
         )
+        .route(
+            "/watchers/hot-repos",
+            put(watcher_routes::set_hot_repos_http),
+        )
         // Logs
         .route(
             "/logs",
@@ -1696,6 +1700,7 @@ mod tests {
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
             standby_sessions: DashMap::new(),
+            hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
         });
         // Override default disabled_native_tools so all 8 tools are visible in tests
         state.config.write().disabled_native_tools = Vec::new();
