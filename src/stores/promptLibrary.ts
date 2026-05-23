@@ -372,6 +372,8 @@ function createPromptLibraryStore() {
 					prompts = state.recentIds.map((id) => state.prompts[id]).filter((p): p is SavedPrompt => p !== undefined);
 				} else if (state.selectedCategory === "favorite") {
 					prompts = prompts.filter((p) => p.isFavorite);
+				} else if (state.selectedCategory === "custom") {
+					prompts = prompts.filter((p) => !p.builtIn);
 				} else {
 					prompts = prompts.filter((p) => p.category === state.selectedCategory);
 				}
