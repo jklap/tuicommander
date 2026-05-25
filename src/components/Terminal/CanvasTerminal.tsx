@@ -2113,11 +2113,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 			fullRepaintNeeded = true;
 		} else if (scrollChanged && !geomChanged) {
-			// Scroll changed but only partial rows arrived — old row indices are stale.
-			// DON'T clear rowMap (would cause blank flash). Instead request a full frame;
-			// when it arrives, the >= screenRowCount branch above will replace rowMap.
+			// Scroll changed but only partial rows arrived. Old rowMap entries are keyed
+			// to the previous viewportTop — rendering them with the new displayOffset maps
+			// them to wrong screen positions, producing ghost content.
+			// Clear immediately (brief blank < ~5ms) and request a full frame.
+			rowMap.clear();
+			detectedLinks.clear();
 			fullRepaintNeeded = true;
 			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
+			currentFrame = frame;
+			return;
 		}
 		for (const row of frame.rows) {
 			rowMap.set(row.index, row);
