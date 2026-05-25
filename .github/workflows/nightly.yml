@@ -265,6 +265,38 @@ jobs:
           gh release edit nightly --repo "$GITHUB_REPOSITORY" --notes-file "$NOTES"
           rm -f "$NOTES"
 
+      - name: Create versioned nightly release
+        if: needs.build.result == 'success'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=$(python3 -c "import json; print(json.load(open('src-tauri/tauri.conf.json'))['version'])")
+
+          # Only create versioned release when version contains -nightly
+          if [[ "$VERSION" != *-nightly* ]]; then
+            echo "Version $VERSION is not a nightly — skipping"
+            exit 0
+          fi
+
+          # Strip timestamp suffix to get base tag (1.2.6-nightly.20260525.t1343 → 1.2.6-nightly)
+          BASE="${VERSION%%-nightly*}-nightly"
+          TAG="v${BASE}"
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" &>/dev/null; then
+            echo "Release $TAG already exists — skipping"
+            exit 0
+          fi
+
+          echo "Creating versioned release: $TAG"
+          git tag -f "$TAG"
+          git push origin "$TAG" --force
+
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "TUICommander $TAG" \
+            --notes "Nightly build from \`main\`. Download the latest rolling build from the [nightly release](https://github.com/sstraus/tuicommander/releases/tag/nightly)." \
+            --prerelease
+
   retry-failed:
     needs: build
     if: failure()
