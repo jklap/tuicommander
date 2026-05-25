@@ -1232,23 +1232,6 @@ fn spawn_silence_timer(
                     if let Some(vt) = state.vt_log_buffers.get(&session_id) {
                         vt.lock().process(b"\x1b[?25h");
                     }
-                    let elapsed_ms = state
-                        .last_output_ms
-                        .get(&session_id)
-                        .map(|ts| {
-                            let now = std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis() as u64;
-                            now.saturating_sub(ts.load(std::sync::atomic::Ordering::Relaxed))
-                        })
-                        .unwrap_or(0);
-                    tracing::info!(
-                        source = "shell-spike",
-                        session_id = %session_id,
-                        elapsed_ms,
-                        "BUSY→IDLE: silence {elapsed_ms}ms"
-                    );
                     emit_shell_state(&state, &session_id, "idle");
                     record_inferred_outcome_if_no_osc133(&state, &session_id);
                 }
@@ -2332,24 +2315,6 @@ impl ChunkProcessor {
             let prev = atom.load(std::sync::atomic::Ordering::Acquire);
             if prev != SHELL_BUSY && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
             {
-                let rows_summary: String = changed_rows
-                    .iter()
-                    .take(3)
-                    .map(|r| {
-                        let t = r.text.chars().take(60).collect::<String>();
-                        t.replace('\n', "\\n")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                tracing::info!(
-                    source = "shell-spike",
-                    session_id = %session_id,
-                    chrome_only,
-                    has_spinner,
-                    has_status_line,
-                    rows = changed_rows.len(),
-                    "IDLE→BUSY: rows=[{rows_summary}]"
-                );
                 emit_shell_state(state, session_id, "busy");
             }
         }
@@ -3926,7 +3891,7 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
 
             let vis_count = state.session_visibility.len();
             let sessions_count = state.sessions.len();
-            tracing::info!(
+            tracing::trace!(
                 vis_count,
                 sessions_count,
                 timeout_min,
@@ -3937,7 +3902,6 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                 let session_id = entry.key();
                 let visible = *entry.value();
                 if visible {
-                    tracing::info!(session_id = session_id.as_str(), "Standby skip: visible");
                     continue;
                 }
                 if state.standby_sessions.contains_key(session_id.as_str()) {
@@ -3950,7 +3914,6 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                     .map(|a| a.load(Ordering::Acquire));
                 let is_idle = shell_raw == Some(SHELL_IDLE);
                 if !is_idle {
-                    tracing::info!(session_id = session_id.as_str(), shell_raw = ?shell_raw, "Standby skip: not idle");
                     continue;
                 }
 
@@ -3961,12 +3924,6 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                     .unwrap_or(now_ms);
                 let idle_ms = now_ms.saturating_sub(idle_since);
                 if idle_ms < timeout_ms {
-                    tracing::info!(
-                        session_id = session_id.as_str(),
-                        idle_ms,
-                        timeout_ms,
-                        "Standby skip: not long enough"
-                    );
                     continue;
                 }
 
@@ -3976,14 +3933,10 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                     .map(|e| e.lock().startup_settled)
                     .unwrap_or(false);
                 if !settled {
-                    tracing::info!(
-                        session_id = session_id.as_str(),
-                        "Standby skip: not settled"
-                    );
                     continue;
                 }
 
-                tracing::info!(
+                tracing::debug!(
                     session_id = session_id.as_str(),
                     idle_ms,
                     "Standby: all conditions met, stopping"
