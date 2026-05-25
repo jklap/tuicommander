@@ -674,6 +674,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}
 			}
 		}
+
+		syncImePosition(frame.cursorRow, frame.cursorCol, m);
+	}
+
+	function syncImePosition(row: number, col: number, m: CellMetrics) {
+		const x = GUTTER_PX + col * m.cellWidth;
+		const y = row * m.cellHeight;
+		keyInputRef.style.left = `${x}px`;
+		keyInputRef.style.top = `${y}px`;
+		keyInputRef.style.height = `${m.cellHeight}px`;
+		keyInputRef.style.fontSize = `${m.fontSize}px`;
 	}
 
 	// --- Scrollbar ---
@@ -2654,6 +2665,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		// --- Keyboard ---
 		const composition = createCompositionState();
+		keyInputRef.addEventListener("compositionstart", () => {
+			const m = metrics();
+			if (currentFrame && m) syncImePosition(currentFrame.cursorRow, currentFrame.cursorCol, m);
+		});
 		keyInputRef.addEventListener("compositionend", (e) => {
 			const data = composition.onCompositionEnd(e.data);
 			if (data) writePty(data);
@@ -3532,18 +3547,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				type="text"
 				aria-hidden="true"
 				style={{
-					position: "fixed",
-					top: "-9999px",
-					left: "-9999px",
-					width: "0",
-					height: "0",
+					position: "absolute",
+					top: "0",
+					left: "0",
+					width: "1px",
+					height: "1em",
 					opacity: "0",
 					border: "none",
 					outline: "none",
 					padding: "0",
 					margin: "0",
+					overflow: "hidden",
 					"pointer-events": "none",
 					"font-size": "1px",
+					"z-index": "-1",
 				}}
 				tabIndex={-1}
 				autocomplete="off"
