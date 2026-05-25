@@ -958,3 +958,28 @@ Features to test when TUICommander is more usable.
 - [HUMAN] Panel: auto-refresh at 5s interval shows live CPU/memory updates
 - [HUMAN] Panel: changing refresh interval to Manual stops auto-polling
 - [HUMAN] Panel: Refresh button triggers immediate data fetch
+
+## IME Candidate Window Positioning — Issue #42 Bug 1 (2026-05-25)
+- [HUMAN] Windows + Chinese Pinyin IME: type in a plain shell terminal → IME candidate window appears near the cursor (not at top-left corner of screen)
+- [HUMAN] Windows + Chinese Pinyin IME: type in Claude Code terminal → same behavior, candidate window near cursor
+- [HUMAN] macOS + Japanese IME: type in terminal → candidate window appears near cursor
+- [HUMAN] macOS + dead-key composition (accents: `, ´, ^, ¨) → still works correctly (no regression from IME repositioning)
+- [HUMAN] Scroll terminal while IME is not composing → cursor position updates (input element follows cursor on next paint)
+- [HUMAN] Resize terminal window during typing → IME input position adjusts to new cursor coordinates
+- [HUMAN] Split pane: IME candidate window appears in the correct pane (not in the other pane)
+- [HUMAN] macOS Option+key sequences (Alt+B word back, Alt+F word forward) → still work correctly (no regression)
+
+## Worktree Fixes — PR #47 (2026-05-25)
+- [HUMAN] Create a worktree, delete its directory externally (rm -rf), then view it in sidebar → branch name shows the actual HEAD (or error), not the originally requested branch
+- [HUMAN] Click "Remove" on a worktree → button shows "…" and is disabled during removal → re-enables after completion
+- [HUMAN] Double-click "Remove" on a worktree rapidly → only one removal operation runs (no concurrent remove errors)
+- [HUMAN] Remove a worktree that has already been partially cleaned up → error message is clear, no crash
+- [HUMAN] Remove a worktree while another removal is in flight (different branch) → both complete independently
+
+## Git Diff: Deleted File Fix (2026-05-25, uncommitted)
+- [HUMAN] Delete a tracked file (`git rm foo.txt`), open its diff → diff shows deletion (red lines), no crash
+- [HUMAN] Untracked new file → diff shows addition (green lines) as before (no regression)
+- [HUMAN] Modified file → diff shows changes as before (no regression)
+
+## PTY Debug Logging Cleanup (2026-05-25, uncommitted)
+- No user-visible behavior change — removed shell-spike debug logging from BUSY↔IDLE transitions

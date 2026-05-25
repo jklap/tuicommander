@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **IME candidate window positioning** — Hidden input element now tracks the terminal cursor position so East Asian IME candidate windows (Chinese Pinyin, Japanese, Korean) appear near the cursor instead of at the top-left corner of the screen. Also adds `compositionstart` handler for accurate position at composition onset. ([#42](https://github.com/sstraus/tuicommander/issues/42))
+- **Git diff crash on deleted files** — `get_file_diff` no longer attempts `--no-index` for files deleted from disk, falling through to standard `git diff` which reads from the index.
+- **Worktree stale directory** — Stale worktree directories now read the actual HEAD instead of echoing the originally requested branch; concurrent removal prevented via reentrancy guard. ([#47](https://github.com/sstraus/tuicommander/pull/47))
+
 ## [1.2.6-nightly] - 2026-05-25
 
 ### Added
