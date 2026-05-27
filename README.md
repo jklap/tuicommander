@@ -16,6 +16,8 @@
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Linux%20%7C%20Windows-lightgrey?style=flat-square" alt="Platform">
   <img src="https://img.shields.io/badge/rust-backend-DEA584?style=flat-square&logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/tauri-v2-24C8D8?style=flat-square&logo=tauri&logoColor=white" alt="Tauri v2">
+  <a href="https://github.com/sstraus/tuicommander/actions/workflows/audit.yml"><img src="https://img.shields.io/github/actions/workflow/status/sstraus/tuicommander/audit.yml?style=flat-square&label=audit" alt="Dependency Audit"></a>
+  <a href="https://github.com/sstraus/tuicommander/stargazers"><img src="https://img.shields.io/github/stars/sstraus/tuicommander?style=flat-square" alt="Stars"></a>
 </p>
 
 <p align="center">
