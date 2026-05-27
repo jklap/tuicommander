@@ -46,13 +46,13 @@ export interface GitOperationsDeps {
 			diff_stats: Record<string, { additions: number; deletions: number }>;
 			last_commit_ts: Record<string, number | null>;
 		}>;
-		removeWorktree: (repoPath: string, branchName: string, deleteBranch: boolean) => Promise<void>;
+		removeWorktree: (repoPath: string, branchName: string, deleteBranch: boolean, force?: boolean) => Promise<void>;
 		createWorktree: (
 			baseRepo: string,
 			branchName: string,
 			createBranch?: boolean,
 			baseRef?: string,
-		) => Promise<{ name: string; path: string; branch: string; base_repo: string }>;
+		) => Promise<{ status: "ok" | "pending"; name: string; path: string; branch: string; base_repo: string }>;
 		renameBranch: (repoPath: string, oldName: string, newName: string) => Promise<void>;
 		generateWorktreeName: (existingNames: string[]) => Promise<string>;
 		generateCloneBranchName: (sourceBranch: string, existingNames: string[]) => Promise<string>;
@@ -89,6 +89,7 @@ export interface GitOperationsDeps {
 	dialogs: {
 		confirmRemoveRepo: (repoName: string) => Promise<boolean>;
 		confirmRemoveWorktree: (branchName: string) => Promise<boolean>;
+		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (paths: string[]) => Promise<boolean>;
 		/** Browser mode only: show an in-app text-input dialog to enter a repo path */
@@ -112,7 +113,22 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	const [repoStatus, setRepoStatus] = createSignal<"clean" | "dirty" | "conflict" | "merge" | "unknown">("unknown");
 	const [branchToRename, setBranchToRename] = createSignal<{ repoPath: string; branchName: string } | null>(null);
 	const [creatingWorktreeRepos, setCreatingWorktreeRepos] = createSignal<Set<string>>(new Set());
+	// Key: `${repoPath}::${branchName}` — prevents concurrent remove calls for same branch
 	const [removingBranches, setRemovingBranches] = createSignal<Set<string>>(new Set());
+
+	// Pending creates whose Rust background recreation is still in-flight. When the
+	// async create_worktree returned status:'pending', we deferred running the
+	// setup script / spawning the initial terminal until the worktree files
+	// actually exist. The refresh handler drains this map once `isPreparing` is
+	// cleared for a branch (success path). On `worktree-create-failed` (Rust
+	// error path) the entry is removed without running setup.
+	type PendingCreation = {
+		repoPath: string;
+		displayName: string;
+		result: { name: string; path: string; branch: string; base_repo: string };
+	};
+	const pendingCreations = new Map<string, PendingCreation>(); // key: `${repoPath}::${branchName}`
+	const pendingKey = (repoPath: string, branchName: string) => `${repoPath}::${branchName}`;
 	const [worktreeDialogState, setWorktreeDialogState] = createSignal<{
 		repoPath: string;
 		suggestedName: string;
@@ -171,6 +187,35 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	// blocked indefinitely.
 	const recentlyProcessedBranches = new Map<string, number>();
 	const PROCESS_DEDUP_WINDOW_MS = 2000;
+
+	// Grace period: branches just created via setupNewWorktree are protected from
+	// refresh-triggered removal for CREATION_GRACE_WINDOW_MS. This guards against
+	// the race where git hasn't fully registered the new worktree by the time the
+	// first repo-changed refresh fires (idempotent dir-exists path, slow FS, etc.).
+	const recentlyCreatedBranches = new Map<string, number>();
+	// Bumped from 5s → 60s to cover the worst-case background stale-recovery
+	// flow (large checkout, LFS, slow FS). 5s was shorter than the typical
+	// recreate window, so the failure path silently removed the placeholder
+	// before the grace expired.
+	const CREATION_GRACE_WINDOW_MS = 60_000;
+	const markRecentlyCreated = (repoPath: string, branchName: string): void => {
+		const now = Date.now();
+		for (const [k, ts] of recentlyCreatedBranches) {
+			if (now - ts > CREATION_GRACE_WINDOW_MS) recentlyCreatedBranches.delete(k);
+		}
+		recentlyCreatedBranches.set(`${repoPath}::${branchName}`, now);
+	};
+	const isRecentlyCreated = (repoPath: string, branchName: string): boolean => {
+		const key = `${repoPath}::${branchName}`;
+		const ts = recentlyCreatedBranches.get(key);
+		if (ts === undefined) return false;
+		if (Date.now() - ts > CREATION_GRACE_WINDOW_MS) {
+			recentlyCreatedBranches.delete(key);
+			return false;
+		}
+		return true;
+	};
+
 	const alreadyProcessed = (repoPath: string, branchName: string): boolean => {
 		const key = `${repoPath}::${branchName}`;
 		const ts = recentlyProcessedBranches.get(key);
@@ -201,6 +246,9 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 				const repo = repositoriesStore.get(repoPath);
 				if (!repo) return;
+				// Snapshot branch keys before any await so we can detect user-triggered
+				// removals that happen while async ops are in-flight (race condition guard).
+				const priorBranchKeys = new Set(Object.keys(repo.branches));
 				// Non-git directories: check if they became a git repo
 				if (repo.isGitRepo === false) {
 					try {
@@ -279,6 +327,16 @@ export function useGitOperations(deps: GitOperationsDeps) {
 						// The store removal may not have settled yet (batch scheduled), so
 						// we'd otherwise re-enqueue the same close+remove.
 						if (alreadyProcessed(repoPath, branchName)) continue;
+						// Skip branches just created — git may not have fully registered the
+						// worktree by the time the first repo-changed refresh fires.
+						if (isRecentlyCreated(repoPath, branchName)) {
+							appLogger.info(
+								"git",
+								`refreshAllBranchStats: CREATION GRACE skipping "${branchName}" (just created)`,
+								{ repoPath },
+							);
+							continue;
+						}
 						// If this is the stale activeBranch and we found a replacement, allow removal
 						if (branchName === active && activeBranchReplacement) {
 							appLogger.info(
@@ -341,13 +399,39 @@ export function useGitOperations(deps: GitOperationsDeps) {
 					}
 				}
 
+				const drainedPendings: PendingCreation[] = [];
 				batch(() => {
+					// Guard against race: if a branch was present before our async ops
+					// but is now gone from the live store, the user deleted it while we
+					// were in-flight. Don't resurrect it via stale worktreePaths data.
+					const liveRepo = repositoriesStore.get(repoPath);
 					// Create new worktree branches first so mergeBranchState has a target
 					for (const [branchName, wtPath] of Object.entries(worktreePaths)) {
-						repositoriesStore.setBranch(repoPath, branchName, {
+						if (priorBranchKeys.has(branchName) && !liveRepo?.branches[branchName]) {
+							appLogger.info("git", `refreshAllBranchStats: RACE GUARD blocked resurrection of "${branchName}"`, {
+								repoPath,
+								worktreePath: wtPath,
+							});
+							continue;
+						}
+						appLogger.debug("git", `refreshAllBranchStats: setBranch "${branchName}"`, { worktreePath: wtPath });
+						const update: Partial<import("../stores/repositories").BranchState> = {
 							worktreePath: wtPath,
 							isMerged: mergedSet.has(branchName),
-						});
+						};
+						// Branch finished background preparation — clear placeholder state
+						// and queue the deferred setupNewWorktree (setup script, initial
+						// terminal, runScript) for after the batch commits.
+						if (liveRepo?.branches[branchName]?.isPreparing) {
+							update.isPreparing = false;
+							const k = pendingKey(repoPath, branchName);
+							const pend = pendingCreations.get(k);
+							if (pend) {
+								pendingCreations.delete(k);
+								drainedPendings.push(pend);
+							}
+						}
+						repositoriesStore.setBranch(repoPath, branchName, update);
 					}
 					// Migrate terminal state from stale activeBranch to its replacement
 					if (active && activeBranchReplacement && toRemove.includes(active)) {
@@ -358,6 +442,23 @@ export function useGitOperations(deps: GitOperationsDeps) {
 						repositoriesStore.removeBranch(repoPath, branchName);
 					}
 				});
+
+				// Drain pending creates: their backing worktree directory finally
+				// exists, so it's safe to run the setup script + spawn the initial
+				// terminal. Releases the per-repo creatingWorktreeRepos lock that
+				// confirmCreateWorktree/handleCreateWorktreeFromBranch held open.
+				for (const pend of drainedPendings) {
+					try {
+						await setupNewWorktree(pend.repoPath, pend.result, pend.displayName);
+					} catch (err) {
+						appLogger.error("git", `setupNewWorktree (pending drain) failed for ${pend.result.branch}`, err);
+					}
+					setCreatingWorktreeRepos((prev) => {
+						const next = new Set(prev);
+						next.delete(pend.repoPath);
+						return next;
+					});
+				}
 
 				const updatedRepo = repositoriesStore.get(repoPath);
 				if (!updatedRepo) return;
@@ -696,7 +797,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 							tuicSession: terminal.tuicSession ?? crypto.randomUUID(),
 							agentType: terminal.agentType ?? null,
 							agentSessionId: terminal.agentSessionId ?? null,
-							agentLaunchCommand: terminal.agentLaunchCommand ?? null,
 						});
 						repositoriesStore.addTerminalToBranch(repoPath, branchName, id);
 						restoredIds.push({ id, terminal });
@@ -726,7 +826,6 @@ export function useGitOperations(deps: GitOperationsDeps) {
 								terminal.cwd,
 								terminal.tuicSession,
 								terminal.agentSessionId,
-								terminal.agentLaunchCommand,
 							);
 							if (resumeCmd) {
 								terminalsStore.update(id, {
@@ -799,44 +898,136 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 	const handleRemoveBranch = async (repoPath: string, branchName: string) => {
 		const removeKey = `${repoPath}::${branchName}`;
+		// Lock IMMEDIATELY (synchronously) to prevent concurrent invocations that race the awaits below
 		if (removingBranches().has(removeKey)) return;
+		setRemovingBranches((prev) => new Set([...prev, removeKey]));
 
-		const repoState = repositoriesStore.get(repoPath);
-		const branch = repoState?.branches[branchName];
-		if (!branch?.worktreePath) {
-			deps.setStatusInfo(`Cannot remove ${branchName}: not a worktree`);
-			return;
-		}
-
-		const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName);
-		if (!confirmed) return;
-
-		setRemovingBranches((prev) => new Set(prev).add(removeKey));
-		try {
-			for (const termId of branch.terminals) {
-				await deps.closeTerminal(termId, true);
-			}
-
-			const effective = repoSettingsStore.getEffective(repoPath);
-			const deleteBranch = effective?.deleteBranchOnRemove ?? true;
-			try {
-				await deps.repo.removeWorktree(repoPath, branchName, deleteBranch);
-				deps.setStatusInfo(`Removed ${branchName}`);
-			} catch (err) {
-				const reason = err instanceof Error ? err.message : String(err);
-				appLogger.error("git", `Failed to remove worktree for ${branchName}: ${reason}`);
-				deps.setStatusInfo(`Removed ${branchName} from UI (worktree removal failed)`);
-			}
-
-			repositoriesStore.removeBranch(repoPath, branchName);
-			repoSettingsStore.setLabel(repoPath, branchName, null);
-		} finally {
+		const clearLock = () => {
 			setRemovingBranches((prev) => {
 				const next = new Set(prev);
 				next.delete(removeKey);
 				return next;
 			});
+		};
+
+		const repoState = repositoriesStore.get(repoPath);
+		const branch = repoState?.branches[branchName];
+		if (!branch?.worktreePath) {
+			deps.setStatusInfo(`Cannot remove ${branchName}: not a worktree`);
+			clearLock();
+			return;
 		}
+
+		const confirmed = await deps.dialogs.confirmRemoveWorktree(branchName);
+		if (!confirmed) {
+			clearLock();
+			return;
+		}
+
+		// Show "Removing…" in sidebar as soon as the user confirms — before
+		// the terminal-close loop, which can take noticeable time. Otherwise
+		// the lock is held while the UI still appears clickable.
+		repositoriesStore.setBranch(repoPath, branchName, { isRemoving: true });
+
+		// Close terminals defensively: a thrown error here used to leak the
+		// removingBranches lock (clearLock was unreachable) and left isRemoving
+		// stuck. Catch per-terminal so one bad PTY doesn't block cleanup.
+		for (const termId of branch.terminals) {
+			try {
+				await deps.closeTerminal(termId, true);
+			} catch (err) {
+				appLogger.warn("git", `handleRemoveBranch: closeTerminal failed`, {
+					termId,
+					branchName,
+					error: err instanceof Error ? err.message : String(err),
+				});
+			}
+		}
+
+		const effective = repoSettingsStore.getEffective(repoPath);
+		const deleteBranch = effective?.deleteBranchOnRemove ?? true;
+		appLogger.info("git", `handleRemoveBranch: invoking remove_worktree`, {
+			repoPath,
+			branchName,
+			worktreePath: branch.worktreePath,
+			deleteBranch,
+		});
+
+		// Tracks whether to remove the branch from the store at the end.
+		// Set to true on success or non-fatal non-lock errors (old "remove from UI" behavior).
+		// Stays false when: locked+cancelled, or force-remove failed (worktree still in git).
+		let shouldRemoveFromStore = false;
+		try {
+			await deps.repo.removeWorktree(repoPath, branchName, deleteBranch);
+			appLogger.info("git", `handleRemoveBranch: remove_worktree SUCCESS`, { branchName });
+			shouldRemoveFromStore = true;
+			deps.setStatusInfo(`Removed ${branchName}`);
+		} catch (err) {
+			const reason = err instanceof Error ? err.message : String(err);
+			if (reason.startsWith("worktree_locked:")) {
+				// Worktree is locked by a Claude agent — ask user to confirm force removal
+				repositoriesStore.setBranch(repoPath, branchName, { isRemoving: false });
+				appLogger.warn("git", `handleRemoveBranch: worktree locked — showing confirmation dialog`, { branchName, reason });
+				// Pass deleteBranch so the dialog can warn about unmerged-commit loss
+				// when force=true causes `git branch -D` to run on a branch with
+				// unpushed work. Catch dialog rejection so the removingBranches
+				// lock is released even when the modal subsystem errors out.
+				let forceConfirmed = false;
+				try {
+					forceConfirmed = await (deps.dialogs.confirmRemoveLockedWorktree?.(branchName, deleteBranch) ?? false);
+				} catch (dialogErr) {
+					appLogger.error("git", `handleRemoveBranch: confirmRemoveLockedWorktree threw`, {
+						branchName,
+						error: dialogErr instanceof Error ? dialogErr.message : String(dialogErr),
+					});
+					deps.setStatusInfo(`Failed to confirm force-remove for ${branchName}`);
+					clearLock();
+					return;
+				}
+				if (!forceConfirmed) {
+					appLogger.info("git", `handleRemoveBranch: user cancelled force removal of locked worktree`, { branchName });
+					clearLock();
+					return;
+				}
+				repositoriesStore.setBranch(repoPath, branchName, { isRemoving: true });
+				try {
+					await deps.repo.removeWorktree(repoPath, branchName, deleteBranch, true);
+					appLogger.info("git", `handleRemoveBranch: force remove_worktree SUCCESS`, { branchName });
+					shouldRemoveFromStore = true;
+					deps.setStatusInfo(`Removed ${branchName}`);
+				} catch (forceErr) {
+					const forceReason = forceErr instanceof Error ? forceErr.message : String(forceErr);
+					appLogger.error("git", `handleRemoveBranch: force remove_worktree FAILED`, { branchName, reason: forceReason });
+					deps.setStatusInfo(`Failed to remove ${branchName}: ${forceReason}`);
+					repositoriesStore.setBranch(repoPath, branchName, { isRemoving: false });
+					clearLock();
+					return;
+				}
+			} else if (reason.startsWith("worktree_is_main:")) {
+				appLogger.warn("git", `handleRemoveBranch: branch is in main worktree — cannot remove as worktree`, { branchName });
+				deps.setStatusInfo(`Cannot remove ${branchName}: branch is in the main worktree, not a linked worktree`);
+				repositoriesStore.setBranch(repoPath, branchName, { isRemoving: false });
+				clearLock();
+				return;
+			} else {
+				appLogger.error("git", `handleRemoveBranch: remove_worktree FAILED — branch will be removed from UI only`, {
+					branchName,
+					reason,
+				});
+				shouldRemoveFromStore = true;
+				deps.setStatusInfo(`Removed ${branchName} from UI (worktree removal failed)`);
+			}
+		}
+
+		if (!shouldRemoveFromStore) {
+			repositoriesStore.setBranch(repoPath, branchName, { isRemoving: false });
+			clearLock();
+			return;
+		}
+		appLogger.info("git", `handleRemoveBranch: calling removeBranch on store`, { branchName });
+		clearLock();
+		repositoriesStore.removeBranch(repoPath, branchName);
+		repoSettingsStore.setLabel(repoPath, branchName, null);
 	};
 
 	const handleOpenRenameBranchDialog = (repoPath: string, branchName: string) => {
@@ -1049,6 +1240,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		result: { name: string; path: string; branch: string; base_repo: string },
 		displayName: string,
 	) => {
+		markRecentlyCreated(repoPath, result.branch);
 		repositoriesStore.setBranch(repoPath, result.branch, { worktreePath: result.path });
 		repositoriesStore.setActiveBranch(repoPath, result.branch);
 
@@ -1092,6 +1284,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		if (creatingWorktreeRepos().has(repoPath)) return;
 		setCreatingWorktreeRepos((prev) => new Set([...prev, repoPath]));
 
+		let pendingHandoff = false;
 		try {
 			deps.setStatusInfo(`Creating worktree ${options.branchName}...`);
 			const result = await deps.repo.createWorktree(
@@ -1101,20 +1294,43 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				options.baseRef,
 			);
 
-			// Close dialog only on success
 			setWorktreeDialogState(null);
-			await setupNewWorktree(repoPath, result, options.branchName);
+
+			if (result.status === "pending") {
+				// Stale directory being cleaned up in background — show placeholder
+				// and defer setupNewWorktree until the recreate completes (drained
+				// in refreshAllBranchStats when isPreparing clears).
+				markRecentlyCreated(repoPath, result.branch);
+				repositoriesStore.setBranch(repoPath, result.branch, {
+					worktreePath: result.path,
+					isPreparing: true,
+				});
+				repositoriesStore.setActiveBranch(repoPath, result.branch);
+				deps.setStatusInfo(`Preparing worktree ${options.branchName}...`);
+				pendingCreations.set(pendingKey(repoPath, result.branch), {
+					repoPath,
+					displayName: options.branchName,
+					result,
+				});
+				// Keep the per-repo create lock held until the background recreate
+				// completes (drainPendingCreation / handleWorktreeCreateFailed).
+				pendingHandoff = true;
+			} else {
+				await setupNewWorktree(repoPath, result, options.branchName);
+			}
 		} catch (err) {
 			appLogger.error("git", "Failed to create worktree", err);
 			deps.setStatusInfo(`Failed to create worktree: ${err}`);
 			// Re-throw so the dialog can show the error and stay open
 			throw err;
 		} finally {
-			setCreatingWorktreeRepos((prev) => {
-				const next = new Set(prev);
-				next.delete(repoPath);
-				return next;
-			});
+			if (!pendingHandoff) {
+				setCreatingWorktreeRepos((prev) => {
+					const next = new Set(prev);
+					next.delete(repoPath);
+					return next;
+				});
+			}
 		}
 	};
 
@@ -1123,6 +1339,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		if (creatingWorktreeRepos().has(repoPath)) return;
 		setCreatingWorktreeRepos((prev) => new Set([...prev, repoPath]));
 
+		let pendingHandoff = false;
 		try {
 			const repoState = repositoriesStore.get(repoPath);
 			const existingBranches = repoState ? Object.keys(repoState.branches) : [];
@@ -1131,16 +1348,39 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			deps.setStatusInfo(`Creating worktree ${cloneName}...`);
 			const result = await deps.repo.createWorktree(repoPath, cloneName, true, branchName);
 
-			await setupNewWorktree(repoPath, result, cloneName);
+			if (result.status === "pending") {
+				// Stale directory being cleaned up in background — show placeholder.
+				// Mirrors confirmCreateWorktree: do NOT call setupNewWorktree because
+				// the worktree files don't exist yet (setup script would race against
+				// the background `rm -rf` + recreate). Setup runs after recreate
+				// completes, via drainPendingCreation.
+				markRecentlyCreated(repoPath, result.branch);
+				repositoriesStore.setBranch(repoPath, result.branch, {
+					worktreePath: result.path,
+					isPreparing: true,
+				});
+				repositoriesStore.setActiveBranch(repoPath, result.branch);
+				deps.setStatusInfo(`Preparing worktree ${cloneName}...`);
+				pendingCreations.set(pendingKey(repoPath, result.branch), {
+					repoPath,
+					displayName: cloneName,
+					result,
+				});
+				pendingHandoff = true;
+			} else {
+				await setupNewWorktree(repoPath, result, cloneName);
+			}
 		} catch (err) {
 			appLogger.error("git", "Failed to create worktree from branch", err);
 			deps.setStatusInfo(`Failed to create worktree: ${err}`);
 		} finally {
-			setCreatingWorktreeRepos((prev) => {
-				const next = new Set(prev);
-				next.delete(repoPath);
-				return next;
-			});
+			if (!pendingHandoff) {
+				setCreatingWorktreeRepos((prev) => {
+					const next = new Set(prev);
+					next.delete(repoPath);
+					return next;
+				});
+			}
 		}
 	};
 
@@ -1599,6 +1839,27 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		);
 	};
 
+	/** Handle the `worktree-create-failed` event emitted by the Rust background
+	 *  recreate task. Drops the pending creation (no setup), removes the
+	 *  placeholder from the store, releases the per-repo create lock, and
+	 *  surfaces the error to the user. */
+	const handleWorktreeCreateFailed = (payload: {
+		repoPath: string;
+		branch: string;
+		reason: string;
+	}) => {
+		const { repoPath, branch, reason } = payload;
+		appLogger.error("git", `Worktree creation failed`, payload);
+		pendingCreations.delete(pendingKey(repoPath, branch));
+		repositoriesStore.removeBranch(repoPath, branch);
+		setCreatingWorktreeRepos((prev) => {
+			const next = new Set(prev);
+			next.delete(repoPath);
+			return next;
+		});
+		deps.setStatusInfo(`Failed to create worktree ${branch}: ${reason}`);
+	};
+
 	/** Cancel any pending CWD debounce timer for a terminal (call on terminal close). */
 	const cancelCwdTracking = (terminalId: string) => {
 		const timer = cwdDebounceTimers.get(terminalId);
@@ -1676,6 +1937,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		setWorktreeDialogState,
 		creatingWorktreeRepos,
 		removingBranches,
+		handleWorktreeCreateFailed,
 		handleNewTab,
 		handleRunCommand,
 		executeRunCommand,

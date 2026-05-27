@@ -76,8 +76,8 @@ export function useRepository() {
 	}
 
 	/** Remove a worktree by branch name */
-	async function removeWorktree(repoPath: string, branchName: string, deleteBranch: boolean): Promise<void> {
-		await invoke("remove_worktree", { repoPath, branchName, deleteBranch });
+	async function removeWorktree(repoPath: string, branchName: string, deleteBranch: boolean, force?: boolean): Promise<void> {
+		await invoke("remove_worktree", { repoPath, branchName, deleteBranch, force: force ?? false });
 	}
 
 	/** Create a new worktree with a branch */
@@ -87,6 +87,7 @@ export function useRepository() {
 		createBranch?: boolean,
 		baseRef?: string,
 	): Promise<{
+		status: "ok" | "pending";
 		name: string;
 		path: string;
 		branch: string;

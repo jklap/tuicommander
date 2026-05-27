@@ -340,7 +340,7 @@ const App: Component = () => {
 	const gitOps = useGitOperations({
 		repo,
 		pty,
-		dialogs: { ...dialogs, promptRepoPath, confirmOrphanCleanup: dialogs.confirmOrphanCleanup },
+		dialogs: { ...dialogs, promptRepoPath, confirmOrphanCleanup: dialogs.confirmOrphanCleanup, confirmRemoveLockedWorktree: dialogs.confirmRemoveLockedWorktree },
 		closeTerminal: terminalLifecycle.closeTerminal,
 		createNewTerminal: terminalLifecycle.createNewTerminal,
 		setStatusInfo,
@@ -588,6 +588,7 @@ const App: Component = () => {
 			setCurrentBranch: gitOps.setCurrentBranch,
 			handleBranchSelect: gitOps.handleBranchSelect,
 			refreshAllBranchStats: gitOps.refreshAllBranchStats,
+			handleWorktreeCreateFailed: gitOps.handleWorktreeCreateFailed,
 			getDefaultFontSize,
 			stores: {
 				hydrate: async () => {

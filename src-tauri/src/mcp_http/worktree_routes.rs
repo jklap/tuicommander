@@ -67,11 +67,30 @@ pub(super) async fn create_worktree_http(
         std::path::Path::new(&config.base_repo),
         &state.worktrees_dir,
     );
-    match crate::worktree::create_worktree_internal(
-        &worktrees_dir,
-        &config,
-        body.base_ref.as_deref(),
-    ) {
+    // Use the stale-recovery wrapper so MCP clients heal automatically when an
+    // orphaned worktree directory is sitting where the new one should land.
+    // Off-loaded onto spawn_blocking because git worktree add can take seconds.
+    let base_ref = body.base_ref.clone();
+    let config_bg = config.clone();
+    let worktrees_dir_bg = worktrees_dir.clone();
+    let result = match tokio::task::spawn_blocking(move || {
+        crate::worktree::create_worktree_with_stale_recovery(
+            &worktrees_dir_bg,
+            &config_bg,
+            base_ref.as_deref(),
+        )
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("task panic: {e}")})),
+            );
+        }
+    };
+    match result {
         Ok(wt) => {
             state.invalidate_repo_caches(&body.base_repo);
             (
@@ -103,6 +122,7 @@ pub(super) async fn remove_worktree_http(
         &branch,
         q.delete_branch.unwrap_or(true),
         None,
+        q.force.unwrap_or(false),
     ) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
@@ -149,7 +169,7 @@ pub(super) async fn remove_orphan_worktree_http(
         branch: None,
         base_repo: std::path::PathBuf::from(&body.repo_path),
     };
-    match crate::worktree::remove_worktree_internal(&worktree) {
+    match crate::worktree::remove_worktree_internal(&worktree, false) {
         Ok(()) => {
             state.invalidate_repo_caches(&body.repo_path);
             (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response()
@@ -232,6 +252,7 @@ pub(super) async fn finalize_merged_worktree_http(
             &body.branch_name,
             true,
             None,
+            false,
         )
         .map(|_| serde_json::json!({"merged": true, "action": "deleted", "archive_path": null})),
         other => Err(format!(

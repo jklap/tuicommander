@@ -61,6 +61,7 @@ describe("useGitOperations", () => {
 	const mockDialogs = {
 		confirmRemoveRepo: vi.fn().mockResolvedValue(true),
 		confirmRemoveWorktree: vi.fn().mockResolvedValue(true),
+		confirmRemoveLockedWorktree: vi.fn().mockResolvedValue(true),
 	};
 
 	const mockCloseTerminal = vi.fn().mockResolvedValue(undefined);
@@ -78,6 +79,7 @@ describe("useGitOperations", () => {
 		mockPty.canSpawn.mockResolvedValue(true);
 		mockDialogs.confirmRemoveRepo.mockResolvedValue(true);
 		mockDialogs.confirmRemoveWorktree.mockResolvedValue(true);
+		mockDialogs.confirmRemoveLockedWorktree.mockResolvedValue(true);
 
 		gitOps = useGitOperations({
 			repo: mockRepo,
@@ -536,6 +538,58 @@ describe("useGitOperations", () => {
 			await gitOps.handleRemoveBranch("/repo", "main");
 
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Cannot remove main: not a worktree");
+		});
+
+		it("sets isRemoving=true on store before invoking backend", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+
+			// Capture isRemoving state when removeWorktree is invoked
+			let isRemovingWhenInvoked: boolean | undefined;
+			mockRepo.removeWorktree = vi.fn(async () => {
+				isRemovingWhenInvoked = repositoriesStore.get("/repo")?.branches["feature"]?.isRemoving;
+			});
+
+			await gitOps.handleRemoveBranch("/repo", "feature");
+
+			expect(isRemovingWhenInvoked).toBe(true);
+			// After success: branch fully removed from store
+			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+		});
+
+		it("prevents concurrent remove calls for the same branch", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+
+			// Block the first invoke until we release it
+			let resolveFirst: (() => void) | undefined;
+			let firstInvokedPromise: Promise<void>;
+			let resolveFirstInvoked: (() => void) | undefined;
+			firstInvokedPromise = new Promise<void>((r) => {
+				resolveFirstInvoked = r;
+			});
+			let invocationCount = 0;
+			mockRepo.removeWorktree = vi.fn(async () => {
+				invocationCount++;
+				if (invocationCount === 1) {
+					resolveFirstInvoked?.();
+					await new Promise<void>((resolve) => {
+						resolveFirst = resolve;
+					});
+				}
+			});
+
+			const first = gitOps.handleRemoveBranch("/repo", "feature");
+			// Wait until the first call has reached removeWorktree (lock is set)
+			await firstInvokedPromise;
+			// Now fire the second call — should hit the lock and no-op
+			const second = gitOps.handleRemoveBranch("/repo", "feature");
+			await second;
+			// Release the first call
+			resolveFirst?.();
+			await first;
+
+			expect(invocationCount).toBe(1);
 		});
 	});
 
@@ -1029,6 +1083,63 @@ describe("useGitOperations", () => {
 			// Branch should have been removed from the store
 			expect(repositoriesStore.get("/repo")?.branches["worktree-agent-abc"]).toBeUndefined();
 		});
+
+		it("does not resurrect a branch deleted by user while refresh was in-flight", async () => {
+			// Regression: refreshAllBranchStats fetches worktree_paths before the deletion
+			// completes. When the batch runs with stale data (deleted branch still in
+			// worktree_paths), setBranch must not re-add it if the user already removed it.
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/.worktrees/feature" });
+
+			// Hold getRepoStructure so we can inject a user deletion before it resolves
+			let resolveStructure!: (v: unknown) => void;
+			mockRepo.getRepoStructure.mockReturnValueOnce(new Promise((r) => (resolveStructure = r)));
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
+
+			const refreshPromise = gitOps.refreshAllBranchStats();
+
+			// User deletes "feature" while refresh is awaiting getRepoStructure
+			repositoriesStore.removeBranch("/repo", "feature");
+
+			// Resolve with STALE data: "feature" still present in worktree_paths
+			resolveStructure({
+				worktree_paths: { main: "/repo", feature: "/repo/.worktrees/feature" },
+				merged_branches: [],
+			});
+
+			await refreshPromise;
+
+			// Refresh must not resurrect the user-deleted branch
+			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+			expect(repositoriesStore.get("/repo")?.branches["main"]).toBeDefined();
+		});
+
+		it("still adds genuinely new external worktrees that were not in the snapshot", async () => {
+			// Guard: the race-condition fix must only skip branches that were in the
+			// snapshot AND are now gone. A brand-new external worktree (never in snapshot)
+			// must still be discovered and added.
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+
+			mockRepo.getRepoStructure.mockResolvedValue({
+				worktree_paths: { main: "/repo", "external-new": "/repo/.worktrees/external-new" },
+				merged_branches: [],
+			});
+			mockRepo.getRepoDiffStats.mockResolvedValue({
+				diff_stats: {
+					"/repo": { additions: 0, deletions: 0 },
+					"/repo/.worktrees/external-new": { additions: 2, deletions: 1 },
+				},
+				last_commit_ts: {},
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			const newBranch = repositoriesStore.get("/repo")?.branches["external-new"];
+			expect(newBranch).toBeDefined();
+			expect(newBranch?.worktreePath).toBe("/repo/.worktrees/external-new");
+		});
 	});
 
 	describe("refreshAllBranchStats — progressive loading", () => {
@@ -1148,6 +1259,86 @@ describe("useGitOperations", () => {
 			await gitOps.handleRemoveBranch("/repo", "feature");
 
 			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+		});
+	});
+
+	describe("handleRemoveBranch (locked worktree)", () => {
+		const LOCKED_ERROR = "worktree_locked:fatal: cannot remove a locked working tree, lock reason: claude agent";
+
+		it("shows confirmation dialog when worktree is locked by agent", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR));
+
+			await gitOps.handleRemoveBranch("/repo", "feature");
+
+			// Dialog now receives the deleteBranch flag so it can warn about
+			// unmerged-commit loss when `-D` will run.
+			expect(mockDialogs.confirmRemoveLockedWorktree).toHaveBeenCalledWith("feature", true);
+		});
+
+		it("retries with force=true when user confirms force removal of locked worktree", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			mockRepo.removeWorktree
+				.mockRejectedValueOnce(new Error(LOCKED_ERROR)) // first attempt: locked
+				.mockResolvedValueOnce(undefined); // second attempt (force): success
+
+			await gitOps.handleRemoveBranch("/repo", "feature");
+
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
+			expect(mockRepo.removeWorktree).toHaveBeenLastCalledWith("/repo", "feature", true, true);
+			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+		});
+
+		it("keeps branch in store when user cancels force removal of locked worktree", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(LOCKED_ERROR));
+			mockDialogs.confirmRemoveLockedWorktree.mockResolvedValue(false);
+
+			await gitOps.handleRemoveBranch("/repo", "feature");
+
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(1); // no retry
+			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+		});
+
+		it("keeps branch in store when force removal also fails", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt" });
+			mockRepo.removeWorktree
+				.mockRejectedValueOnce(new Error(LOCKED_ERROR))
+				.mockRejectedValueOnce(new Error("git worktree remove failed (locked): permission denied"));
+
+			await gitOps.handleRemoveBranch("/repo", "feature");
+
+			expect(mockRepo.removeWorktree).toHaveBeenCalledTimes(2);
+			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeDefined();
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Failed to remove"));
+		});
+	});
+
+	describe("handleRemoveBranch (main worktree)", () => {
+		const MAIN_ERROR = "worktree_is_main:fatal: '/repo' is a main working tree";
+
+		it("keeps branch in store when worktree is the main repo directory", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "feat/main-checkout", { worktreePath: "/repo" });
+			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(MAIN_ERROR));
+
+			await gitOps.handleRemoveBranch("/repo", "feat/main-checkout");
+
+			expect(repositoriesStore.get("/repo")?.branches["feat/main-checkout"]).toBeDefined();
+		});
+
+		it("shows descriptive status message when worktree is main repo", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "feat/main-checkout", { worktreePath: "/repo" });
+			mockRepo.removeWorktree.mockRejectedValueOnce(new Error(MAIN_ERROR));
+
+			await gitOps.handleRemoveBranch("/repo", "feat/main-checkout");
+
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("main worktree"));
 		});
 	});
 
@@ -1340,6 +1531,35 @@ describe("useGitOperations", () => {
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Created worktree develop");
 		});
 
+		it("handles pending status: shows placeholder with isPreparing=true, no setup script", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { setupScript: "npm install" });
+
+			mockRepo.generateWorktreeName.mockResolvedValue("feat-x");
+			mockRepo.listLocalBranches.mockResolvedValue(["main"]);
+			mockRepo.createWorktree.mockResolvedValue({
+				status: "pending",
+				name: "feat-x",
+				path: "/repo/.worktrees/feat-x",
+				branch: "feat-x",
+				base_repo: "/repo",
+			});
+
+			await gitOps.handleAddWorktree("/repo");
+			await gitOps.confirmCreateWorktree({ branchName: "feat-x", createBranch: false, baseRef: "main" });
+
+			// Placeholder branch added with isPreparing=true
+			const branch = repositoriesStore.get("/repo")?.branches["feat-x"];
+			expect(branch?.isPreparing).toBe(true);
+			expect(branch?.worktreePath).toBe("/repo/.worktrees/feat-x");
+
+			// Setup script must NOT run for pending — backend hasn't created files yet
+			expect(mockRepo.runSetupScript).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Preparing worktree"));
+		});
+
 		it("reports error on worktree creation failure", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			mockRepo.generateWorktreeName.mockResolvedValue("bold-nexus-042");
@@ -1514,6 +1734,36 @@ describe("useGitOperations", () => {
 			const branch = repositoriesStore.get("/repo")?.branches["main--wt-42"];
 			const termId = branch!.terminals[0];
 			expect(terminalsStore.get(termId)?.pendingInitCommand).toBeNull();
+		});
+
+		it("handles pending status: shows placeholder with isPreparing=true, no setup script", async () => {
+			// Stale-dir cleanup races against setup script: when backend returns
+			// status:"pending", the worktree files don't exist yet, so calling
+			// setupNewWorktree (npm install etc.) would race with the background
+			// `rm -rf` + recreate.
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setActive("/repo");
+			repositoriesStore.setActiveBranch("/repo", "main");
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { setupScript: "npm ci" });
+
+			mockRepo.generateCloneBranchName.mockResolvedValue("main--wt-42");
+			mockRepo.createWorktree.mockResolvedValue({
+				status: "pending",
+				name: "main--wt-42",
+				path: "/repo/wt/main--wt-42",
+				branch: "main--wt-42",
+				base_repo: "/repo",
+			});
+
+			await gitOps.handleCreateWorktreeFromBranch("/repo", "main");
+
+			const branch = repositoriesStore.get("/repo")?.branches["main--wt-42"];
+			expect(branch?.isPreparing).toBe(true);
+			expect(branch?.worktreePath).toBe("/repo/wt/main--wt-42");
+			expect(mockRepo.runSetupScript).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Preparing worktree"));
 		});
 	});
 
