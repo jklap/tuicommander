@@ -74,6 +74,7 @@ function playSound(level: "info" | "warn" | "error"): void {
 
 function createToastsStore() {
 	const [state, setState] = createStore<{ toasts: Toast[] }>({ toasts: [] });
+	const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
 	return {
 		get toasts() {
@@ -91,12 +92,16 @@ function createToastsStore() {
 			const toast: Toast = { id, title, message, level, createdAt: Date.now(), action };
 			setState("toasts", (prev) => [...prev, toast]);
 			if (sound) playSound(level);
-			// Auto-dismiss after 4s
-			setTimeout(() => this.remove(id), 4000);
+			dismissTimers.set(id, setTimeout(() => this.remove(id), 4000));
 			return id;
 		},
 
 		remove(id: number) {
+			const timer = dismissTimers.get(id);
+			if (timer !== undefined) {
+				clearTimeout(timer);
+				dismissTimers.delete(id);
+			}
 			setState("toasts", (prev) => prev.filter((t) => t.id !== id));
 		},
 	};
