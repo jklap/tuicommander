@@ -243,7 +243,6 @@ pub(crate) fn create_worktree_internal(
     })
 }
 
-/// Remove a git worktree
 /// Error prefix returned when a worktree is git-locked and `force` is false.
 /// The JS layer checks for this prefix to show a confirmation dialog before retrying.
 pub(crate) const LOCKED_WORKTREE_PREFIX: &str = "worktree_locked:";
@@ -637,58 +636,21 @@ pub(crate) async fn create_worktree(
                     }
                 };
 
-                // Step 1: try `git worktree remove --force` for registered worktrees.
-                let _ = tokio::task::spawn_blocking({
+                // Steps 1-2: clean up the stale directory (git worktree remove
+                // --force + fs::remove_dir_all fallback). Reuses the synchronous
+                // `cleanup_stale_worktree_dir` via spawn_blocking.
+                let cleanup_ok = tokio::task::spawn_blocking({
                     let p = stale_path_bg.clone();
-                    let r = PathBuf::from(&config_bg.base_repo);
-                    move || {
-                        let _ = git_cmd(&r)
-                            .args(["worktree", "remove", "--force", &p.to_string_lossy()])
-                            .run();
-                    }
+                    let r = config_bg.base_repo.clone();
+                    move || cleanup_stale_worktree_dir(&r, &p)
                 })
-                .await;
-
-                // Step 2: if the directory still exists (git removed metadata only,
-                // or never knew about this path), force-remove the filesystem entry.
-                let stale_path_check = stale_path_bg.clone();
-                let still_exists = tokio::task::spawn_blocking(move || stale_path_check.exists())
-                    .await
-                    .unwrap_or(false);
-                if still_exists {
-                    if let Err(e) = tokio::fs::remove_dir_all(&stale_path_bg).await {
-                        // Try one more time via blocking std::fs in case the async
-                        // path failed due to file locks (Windows, AV scanners).
-                        let p = stale_path_bg.clone();
-                        let blocking_res =
-                            tokio::task::spawn_blocking(move || std::fs::remove_dir_all(&p))
-                                .await
-                                .ok()
-                                .and_then(|r| r.err());
-                        if let Some(blocking_err) = blocking_res {
-                            let reason =
-                                format!("stale dir cleanup failed: {e}; retry: {blocking_err}");
-                            tracing::error!(source = "worktree", reason = %reason);
-                            emit_creation_failed(reason);
-                            emit_repo_changed();
-                            return;
-                        }
-                    }
-                    // Re-verify after cleanup attempts; if still present, abort.
-                    let p = stale_path_bg.clone();
-                    let still_there = tokio::task::spawn_blocking(move || p.exists())
-                        .await
-                        .unwrap_or(false);
-                    if still_there {
-                        let reason = format!(
-                            "stale dir '{}' still present after cleanup",
-                            stale_path_bg.display()
-                        );
-                        tracing::error!(source = "worktree", reason = %reason);
-                        emit_creation_failed(reason);
-                        emit_repo_changed();
-                        return;
-                    }
+                .await
+                .unwrap_or_else(|e| Err(format!("cleanup task panicked: {e}")));
+                if let Err(reason) = cleanup_ok {
+                    tracing::error!(source = "worktree", reason = %reason);
+                    emit_creation_failed(reason);
+                    emit_repo_changed();
+                    return;
                 }
 
                 // Step 3: recreate the worktree.

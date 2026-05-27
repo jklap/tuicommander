@@ -797,6 +797,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 							tuicSession: terminal.tuicSession ?? crypto.randomUUID(),
 							agentType: terminal.agentType ?? null,
 							agentSessionId: terminal.agentSessionId ?? null,
+							agentLaunchCommand: terminal.agentLaunchCommand ?? null,
 						});
 						repositoriesStore.addTerminalToBranch(repoPath, branchName, id);
 						restoredIds.push({ id, terminal });
@@ -826,6 +827,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 								terminal.cwd,
 								terminal.tuicSession,
 								terminal.agentSessionId,
+								terminal.agentLaunchCommand,
 							);
 							if (resumeCmd) {
 								terminalsStore.update(id, {
