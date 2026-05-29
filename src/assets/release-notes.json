@@ -7,9 +7,18 @@
       "Auto-heal CI toggle restyled to match the rest of the UI"
     ],
     "contributions": [
-      { "text": "PR visibility filters and viewer PR guarantee", "author": "paulovitin" },
-      { "text": "Fix zsh compinit with ZDOTDIR trick", "author": "paulovitin" },
-      { "text": "Extract nextDefaultName() to eliminate tab naming duplication", "author": "paulovitin" }
+      {
+        "text": "PR visibility filters and viewer PR guarantee",
+        "author": "paulovitin"
+      },
+      {
+        "text": "Fix zsh compinit with ZDOTDIR trick",
+        "author": "paulovitin"
+      },
+      {
+        "text": "Extract nextDefaultName() to eliminate tab naming duplication",
+        "author": "paulovitin"
+      }
     ],
     "date": "2026-05-12"
   },
@@ -23,8 +32,22 @@
       "Search and filter inputs no longer get mangled by macOS autocorrect"
     ],
     "contributions": [
-      { "text": "Dead-key composition (accents, quotes) now works correctly on macOS", "author": "paulovitin" }
+      {
+        "text": "Dead-key composition (accents, quotes) now works correctly on macOS",
+        "author": "paulovitin"
+      }
     ],
     "date": "2026-05-08"
+  },
+  "1.2.9-nightly": {
+    "highlights": [
+      "Cmd/Ctrl+F search now works inside HTML previews and plugin panels",
+      "App recovers automatically if the main window config is missing or corrupted",
+      "File drops from Finder to File Browser now land on the correct panel on Retina displays",
+      "Plugin iframes no longer reload twice when pressing Cmd/Ctrl+R",
+      "Linux and Windows release builds no longer fail on macOS-only window APIs",
+      "UI freeze detector tracks main-thread stalls for diagnostics"
+    ],
+    "date": "2026-05-29"
   }
 }

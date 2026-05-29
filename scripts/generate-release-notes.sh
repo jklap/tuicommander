@@ -36,7 +36,7 @@ fi
 
 # Extract contributions from ### Community section
 # Format: - [@user](url) — description (#PR)
-COMMUNITY_LINES=$(echo "$SECTION" | awk '/^### Community/,/^###/' | grep '^- ')
+COMMUNITY_LINES=$(echo "$SECTION" | awk '/^### Community/,/^###/' | grep '^- ' || true)
 if [ -n "$COMMUNITY_LINES" ]; then
   echo "==> Community contributions found:"
   echo "$COMMUNITY_LINES"

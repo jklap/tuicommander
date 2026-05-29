@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.9-nightly] - 2026-05-29
+
+### Added
+- **In-iframe Cmd/Ctrl+F search** — HTML previews and plugin panels now support find-in-page via an injected search overlay.
+- **UI freeze detector** — A RAF-loop watchdog records main-thread stalls for diagnostics.
+- **Programmatic main-window recovery** — If the window config is missing (bad edit/merge), the main window is now created programmatically so the app never starts headless.
+
+### Fixed
+- **Finder → File Browser drop coordinates (macOS Retina)** — Tauri reports drag-drop positions in logical (CSS) pixels on macOS; dividing by `devicePixelRatio` halved them on Retina and routed drops to the terminal behind the panel. Coordinates are now correct per-platform.
+- **Duplicate plugin reload on Cmd/Ctrl+R** — The SDK and search scripts both posted `tuic:reload-request`, double-reloading plugin iframes. Deduplicated to a single handler.
+- **Cross-platform release build** — Guarded macOS-only window-builder methods (`hidden_title`, `title_bar_style`) behind `cfg(target_os = "macos")` so Linux and Windows builds compile.
+
 ## [1.2.8-nightly] - 2026-05-29
 
 ### Added
