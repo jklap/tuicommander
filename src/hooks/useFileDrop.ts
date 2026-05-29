@@ -82,10 +82,10 @@ function elementAtDropPoint(rawX: number, rawY: number): Element | null {
  * Walk up from `el` looking for an ancestor declaring `data-drop-target`.
  * Returns the element and its associated data (absolute path for folder drops).
  */
-interface DropTargetInfo {
-	kind: "folder" | "tab-bar" | "pane";
-	absPath?: string;
-}
+type DropTargetInfo =
+	| { kind: "folder"; absPath: string }
+	| { kind: "tab-bar" }
+	| { kind: "pane" };
 function findDropTarget(el: Element | null): DropTargetInfo | null {
 	let cur: Element | null = el;
 	while (cur) {
@@ -172,7 +172,7 @@ async function dispatchTauriDrop(paths: string[], x: number, y: number): Promise
 	if (target?.kind === "folder") {
 		const mode: "move" | "copy" = dragDropStore.copyModifierHeld() ? "copy" : "move";
 		await executeFolderDrop(
-			{ destDir: target.absPath!, paths, mode },
+			{ destDir: target.absPath, paths, mode },
 			{
 				allowRecursive: false,
 				onNeedsConfirm: (req) => {
