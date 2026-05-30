@@ -1195,6 +1195,17 @@ pub(crate) async fn get_repo_summary_impl(
         .map_err(|e| format!("get_worktree_paths failed: {e}"))?;
 
     // Run diff stats and last-commit timestamps concurrently.
+    // DEFERRED (2026-05-30) — unbounded git fan-out (FD exhaustion source).
+    // This per-worktree spawn loop, multiplied across all registered repos on
+    // repo_watcher "repo-changed" bursts, can spike concurrent git pipes past
+    // the macOS launchd soft FD limit (256) → EMFILE. Mitigated for now by
+    // raising the soft limit to 65536 at startup (lib.rs raise_fd_limit).
+    // Proper fix (separate session): gate ONLY monitoring git work behind a
+    // shared Semaphore — classify operational (commit/push/stage/checkout/diff-
+    // on-click: never throttle) vs monitoring (this, get_repo_summary/structure/
+    // diff_stats, branches-detail, github_poller ls-remote/rev-list batch).
+    // Chokepoints: get_repo_summary_impl (here), get_repo_structure_impl/
+    // get_repo_diff_stats_impl, github::get_all_batch_impl.
     let paths: Vec<String> = worktree_paths.values().cloned().collect();
     let mut diff_handles = Vec::with_capacity(paths.len());
     for path in paths {

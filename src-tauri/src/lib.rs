@@ -881,6 +881,44 @@ fn get_relay_status(state: State<'_, Arc<AppState>>) -> serde_json::Value {
     })
 }
 
+/// Raise the open-file descriptor soft limit toward the hard limit.
+///
+/// No-op when the current soft limit already meets the target (e.g. launched
+/// from a terminal that inherited a high ulimit). On non-Unix this does nothing.
+#[cfg(unix)]
+fn raise_fd_limit() {
+    // macOS caps per-process descriptors at kern.maxfilesperproc (≈138k here);
+    // 64k is comfortably below that and far above our steady state (~95) plus
+    // any realistic git fan-out.
+    const DESIRED: libc::rlim_t = 65_536;
+    let mut lim = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } != 0 {
+        tracing::warn!(source = "boot", "getrlimit(RLIMIT_NOFILE) failed; leaving FD limit unchanged");
+        return;
+    }
+    let target = if lim.rlim_max == libc::RLIM_INFINITY {
+        DESIRED
+    } else {
+        DESIRED.min(lim.rlim_max)
+    };
+    if lim.rlim_cur >= target {
+        return;
+    }
+    let old = lim.rlim_cur;
+    lim.rlim_cur = target;
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &lim) } == 0 {
+        tracing::info!(source = "boot", "Raised FD soft limit {old} → {target}");
+    } else {
+        tracing::warn!(source = "boot", "setrlimit(RLIMIT_NOFILE) {old} → {target} failed");
+    }
+}
+
+#[cfg(not(unix))]
+fn raise_fd_limit() {}
+
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -898,6 +936,14 @@ pub fn run() {
         app_logger::LOG_RING_CAPACITY,
     )));
     app_logger::init_tracing(log_buffer.clone());
+
+    // Raise the open-file descriptor soft limit before any watcher or subprocess
+    // fan-out starts. macOS GUI apps launched via launchd inherit a soft
+    // RLIMIT_NOFILE of just 256 (`launchctl limit maxfiles`). TUIC spawns many
+    // subprocesses (git, agents, PTYs) and watches many repos; a repo-change
+    // burst can fan out enough concurrent git pipes to cross 256 → EMFILE
+    // ("Too many open files"). Best-effort: logs and continues on failure.
+    raise_fd_limit();
 
     // Default worktrees directory: <config_dir>/worktrees
     let worktrees_dir = config::config_dir().join("worktrees");
