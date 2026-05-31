@@ -2385,6 +2385,14 @@ impl VtLogBuffer {
         self.grid.search_buffer(query)
     }
 
+    pub(crate) fn grid_enumerate_hyperlinks(&self) -> Vec<(usize, usize, usize, String)> {
+        self.grid.enumerate_visible_hyperlinks()
+    }
+
+    pub(crate) fn grid_extract_semantic_zones(&self) -> Vec<(String, usize, usize, String)> {
+        self.grid.extract_semantic_zones()
+    }
+
     // --- Row text delegate ---
 
     pub(crate) fn grid_get_row_text(&self, row: usize) -> String {

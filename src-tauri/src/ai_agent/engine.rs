@@ -235,10 +235,22 @@ pub(crate) fn classify_phase(tool_names: &[&str]) -> ToolPhase {
     for &name in tool_names {
         match name {
             "write_file" | "edit_file" | "send_input" | "send_key" | "run_command"
-            | "call_tool" | "spawn_session" => has_write = true,
+            | "call_tool" | "spawn_session" | "watch_for" => has_write = true,
             "search_files" | "search_code" | "list_files" | "search_tools" => has_search = true,
-            "read_screen" | "read_file" | "get_state" | "get_context" | "list_sessions"
-            | "get_agent_status" => has_read = true,
+            "read_screen"
+            | "read_file"
+            | "get_state"
+            | "get_context"
+            | "list_sessions"
+            | "get_agent_status"
+            | "get_command_history"
+            | "explain_last_failure"
+            | "get_error_fixes"
+            | "list_watches"
+            | "cancel_watch"
+            | "search_scrollback"
+            | "get_hyperlinks"
+            | "get_semantic_zones" => has_read = true,
             _ => {}
         }
     }

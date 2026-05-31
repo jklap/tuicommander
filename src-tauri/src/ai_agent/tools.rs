@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use super::safety::{KeyRisk, RegexSafetyChecker, SafeKey, SafetyVerdict};
 use super::sandbox::FileSandbox;
+use super::watcher;
 use crate::state::AppState;
 
 /// Max file size accepted by `read_file` / `edit_file` (10 MB).
@@ -69,12 +70,12 @@ pub fn tool_definitions() -> Value {
     json!([
         {
             "name": "read_screen",
-            "description": "Read terminal content. Returns JSON {screen, cursor}. Pass since_cursor from a previous response to get only new lines (delta mode); omit for full viewport snapshot.",
+            "description": "Read terminal content. Returns JSON {screen, cursor, shell_state, awaiting_input, agent_intent?, agent_type?}. shell_state is 'busy' while the agent is working (a spinner like 'Caramelizing…' means busy, NOT idle) and 'idle' when it has stopped; awaiting_input is true when blocked on a user question. Pass since_cursor from a previous response to get only new lines (delta mode); omit for full viewport snapshot.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
                     "session_id": { "type": "string", "description": "PTY session ID" },
-                    "lines": { "type": "integer", "description": "Max lines to return (default: 50)", "default": 50 },
+                    "lines": { "type": "integer", "description": "Max lines to return (default: 50, capped at 500)", "default": 50 },
                     "since_cursor": { "type": "integer", "description": "Cursor from a previous call — returns only new log lines since this position" }
                 },
                 "required": ["session_id"]
@@ -131,7 +132,42 @@ pub fn tool_definitions() -> Value {
         },
         {
             "name": "get_context",
-            "description": "Get compact terminal context: shell state, CWD, git branch, dirty status, recent exit codes. ~500 chars for system prompt injection.",
+            "description": "Get compact terminal context: shell state, CWD, git branch (from .git/HEAD, no subprocess), the last command's exit code, and agent type. Cheap — prefer this over running pwd/git for orientation.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "PTY session ID" }
+                },
+                "required": ["session_id"]
+            }
+        },
+        {
+            "name": "get_command_history",
+            "description": "List recent commands run in this session, captured from OSC 133 shell-integration markers. Each entry has {command, cwd, exit_code, duration_ms, error_type, timestamp}, most-recent first. Use this instead of scraping the screen to see what ran and what failed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "PTY session ID" },
+                    "limit": { "type": "integer", "description": "Max entries (default: 20, capped at 200)", "default": 20 },
+                    "errors_only": { "type": "boolean", "description": "Only return commands that errored", "default": false }
+                },
+                "required": ["session_id"]
+            }
+        },
+        {
+            "name": "explain_last_failure",
+            "description": "Return the most recent failed command (non-zero exit or classified error) with its captured output, exit code, error type, and cwd. Answers 'why did my last command fail?' in one call. Returns {found:false} if nothing has failed.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "PTY session ID" }
+                },
+                "required": ["session_id"]
+            }
+        },
+        {
+            "name": "get_error_fixes",
+            "description": "Return known error→fix correlations for this session: for each error_type, the commands that previously resolved it (a Success recorded shortly after the error). Use before retrying a known-failing operation.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -333,6 +369,82 @@ pub fn tool_definitions() -> Value {
                 },
                 "required": ["id"]
             }
+        },
+        {
+            "name": "watch_for",
+            "description": "Arm a reactive watch on THIS session: when the trigger fires, a fresh autonomous agent conversation runs your instructions. Requires user approval to arm. Bounded by max_fires and cooldown so it cannot loop unchecked.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "trigger": {
+                        "type": "object",
+                        "description": "Trigger spec. One of: {\"type\":\"command_done\",\"on_failure_only\":true} | {\"type\":\"error\"} | {\"type\":\"idle\"} | {\"type\":\"busy\"} | {\"type\":\"question\",\"confident_only\":true} | {\"type\":\"unseen\"} | {\"type\":\"pattern\",\"regex\":\"...\"}",
+                        "properties": {
+                            "type": { "type": "string", "enum": ["idle", "busy", "command_done", "question", "error", "unseen", "pattern"] }
+                        },
+                        "required": ["type"]
+                    },
+                    "instructions": { "type": "string", "description": "What the agent should do when the watch fires (max 8192 chars)" },
+                    "name": { "type": "string", "description": "Optional human-readable label for the watch" },
+                    "max_fires": { "type": "integer", "description": "Max times this watch may fire before auto-stopping (default 3, min 1)", "minimum": 1 },
+                    "cooldown_secs": { "type": "integer", "description": "Minimum seconds between fires (default 10, min 5)", "minimum": 5 }
+                },
+                "required": ["trigger", "instructions"]
+            }
+        },
+        {
+            "name": "list_watches",
+            "description": "List reactive watches armed on THIS session, with id, name, trigger, status, and fire count.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {}
+            }
+        },
+        {
+            "name": "cancel_watch",
+            "description": "Cancel a reactive watch on THIS session by id (from list_watches).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "watch_id": { "type": "string", "description": "Watch id to cancel" }
+                },
+                "required": ["watch_id"]
+            }
+        },
+        {
+            "name": "search_scrollback",
+            "description": "Regex-search a session's terminal scrollback (visible screen + history). Returns matching lines with line_index and match offsets; secrets are redacted.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session to search" },
+                    "query": { "type": "string", "description": "Regex pattern (alacritty syntax, max 1024 chars)" },
+                    "limit": { "type": "integer", "description": "Max matches to return (default 50, max 500)" }
+                },
+                "required": ["session_id", "query"]
+            }
+        },
+        {
+            "name": "get_hyperlinks",
+            "description": "List OSC 8 hyperlinks on a session's active screen (e.g. file:// or https:// links emitted by tools). Returns line_index, column span, and URI per link; secrets are redacted.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session to inspect" }
+                },
+                "required": ["session_id"]
+            }
+        },
+        {
+            "name": "get_semantic_zones",
+            "description": "Extract OSC 133 semantic zones (prompt / input / output) from a session's active screen, grouping contiguous same-type cells. Returns kind, line span, and text per zone; secrets are redacted.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": { "type": "string", "description": "Session to inspect" }
+                },
+                "required": ["session_id"]
+            }
         }
     ])
 }
@@ -493,7 +605,9 @@ fn exec_read_screen(state: &AppState, args: &Value) -> ToolResult {
         Some(s) => s,
         None => return ToolResult::err("Missing session_id"),
     };
-    let max_lines = args["lines"].as_u64().unwrap_or(50) as usize;
+    // Cap at 500 (matches drive_agent) so a model can't pull the whole ring
+    // buffer in delta mode; the non-delta path is already viewport-bounded.
+    let max_lines = (args["lines"].as_u64().unwrap_or(50) as usize).min(500);
     let since_cursor = args["since_cursor"].as_u64().map(|v| v as usize);
 
     let vt_log = match state.vt_log_buffers.get(session_id) {
@@ -519,7 +633,107 @@ fn exec_read_screen(state: &AppState, args: &Value) -> ToolResult {
         (visible.join("\n"), cursor)
     };
 
-    ToolResult::ok(json!({"screen": redact_secrets(&text), "cursor": cursor}).to_string())
+    // Attach live session state so the model can tell whether the agent is
+    // working (busy/spinner) vs paused — the screen text alone (e.g. a static
+    // "Caramelizing…" spinner frame) is not enough to infer activity.
+    let mut payload = json!({"screen": redact_secrets(&text), "cursor": cursor});
+    if let Some(ss) = state.session_state_with_shell(session_id)
+        && let Some(obj) = payload.as_object_mut()
+    {
+        if let Some(shell_state) = ss.shell_state {
+            obj.insert("shell_state".into(), json!(shell_state));
+        }
+        obj.insert("awaiting_input".into(), json!(ss.awaiting_input));
+        if let Some(intent) = ss.agent_intent {
+            obj.insert("agent_intent".into(), json!(intent));
+        }
+        if let Some(agent_type) = ss.agent_type {
+            obj.insert("agent_type".into(), json!(agent_type));
+        }
+    }
+    ToolResult::ok(payload.to_string())
+}
+
+fn exec_search_scrollback(state: &AppState, args: &Value) -> ToolResult {
+    let session_id = match args["session_id"].as_str() {
+        Some(s) => s,
+        None => return ToolResult::err("Missing session_id"),
+    };
+    let query = match args["query"].as_str() {
+        Some(s) if !s.is_empty() => s,
+        _ => return ToolResult::err("Missing query"),
+    };
+    let limit = (args["limit"].as_u64().unwrap_or(50) as usize).min(500);
+
+    let vt_log = match state.vt_log_buffers.get(session_id) {
+        Some(v) => v,
+        None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
+    };
+    let matches: Vec<Value> = vt_log
+        .lock()
+        .grid_search_buffer(query)
+        .into_iter()
+        .take(limit)
+        .map(|m| {
+            json!({
+                "line_index": m.line_index,
+                "line_text": redact_secrets(&m.line_text),
+                "match_start": m.match_start,
+                "match_end": m.match_end,
+            })
+        })
+        .collect();
+    ToolResult::ok(json!({ "matches": matches }).to_string())
+}
+
+fn exec_get_hyperlinks(state: &AppState, args: &Value) -> ToolResult {
+    let session_id = match args["session_id"].as_str() {
+        Some(s) => s,
+        None => return ToolResult::err("Missing session_id"),
+    };
+    let vt_log = match state.vt_log_buffers.get(session_id) {
+        Some(v) => v,
+        None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
+    };
+    let links: Vec<Value> = vt_log
+        .lock()
+        .grid_enumerate_hyperlinks()
+        .into_iter()
+        .map(|(row, start, end, uri)| {
+            json!({
+                "line_index": row,
+                "start_col": start,
+                "end_col": end,
+                "uri": redact_secrets(&uri),
+            })
+        })
+        .collect();
+    ToolResult::ok(json!({ "hyperlinks": links }).to_string())
+}
+
+fn exec_get_semantic_zones(state: &AppState, args: &Value) -> ToolResult {
+    let session_id = match args["session_id"].as_str() {
+        Some(s) => s,
+        None => return ToolResult::err("Missing session_id"),
+    };
+    let vt_log = match state.vt_log_buffers.get(session_id) {
+        Some(v) => v,
+        None => return ToolResult::err(format!("No VT buffer for session: {session_id}")),
+    };
+    let zones: Vec<Value> = vt_log
+        .lock()
+        .grid_extract_semantic_zones()
+        .into_iter()
+        .map(|(kind, start, end, text)| {
+            json!({
+                "kind": kind,
+                "start_line": start,
+                "end_line": end,
+                "text": redact_secrets(&text),
+            })
+        })
+        .collect();
+    ToolResult::ok(json!({ "zones": zones }).to_string())
 }
 
 fn exec_send_input_inner(state: &AppState, args: &Value, skip_safety: bool) -> ToolResult {
@@ -687,15 +901,125 @@ fn exec_get_context(state: &AppState, args: &Value) -> ToolResult {
         .and_then(|s| s.terminal_mode.as_ref())
         .map(|m| serde_json::to_string(m).unwrap_or_default())
         .unwrap_or_else(|| "shell".to_string());
+    drop(ss);
+
+    // Working directory from the live PtySession.
+    let cwd = state
+        .sessions
+        .get(session_id)
+        .and_then(|s| s.lock().cwd.clone());
+
+    // Git branch via a cheap .git/HEAD read — no subprocess, no index lock.
+    let git_branch = cwd
+        .as_deref()
+        .and_then(|c| crate::git::read_branch_from_head(std::path::Path::new(c)));
+
+    // Most recent command's exit code from the OSC 133 knowledge store.
+    let last_exit_code = state
+        .session_knowledge
+        .get(session_id)
+        .and_then(|entry| entry.lock().commands.back().and_then(|c| c.exit_code));
 
     let context = json!({
         "shell_state": shell_state,
         "agent_type": agent_type,
         "terminal_mode": terminal_mode,
+        "cwd": cwd,
+        "git_branch": git_branch,
+        "last_exit_code": last_exit_code,
         "session_id": session_id,
     });
 
     ToolResult::ok(context.to_string())
+}
+
+/// Maps a `CommandOutcome` classification to its `error_type`, if any.
+fn outcome_error_type(class: &crate::ai_agent::knowledge::OutcomeClass) -> Option<&str> {
+    match class {
+        crate::ai_agent::knowledge::OutcomeClass::Error { error_type } => Some(error_type.as_str()),
+        _ => None,
+    }
+}
+
+/// Execute `get_command_history`: recent OSC 133 command outcomes, newest first.
+fn exec_get_command_history(state: &AppState, args: &Value) -> ToolResult {
+    let session_id = match args["session_id"].as_str() {
+        Some(s) => s,
+        None => return ToolResult::err("Missing session_id"),
+    };
+    let limit = (args["limit"].as_u64().unwrap_or(20) as usize).min(200);
+    let errors_only = args["errors_only"].as_bool().unwrap_or(false);
+
+    let Some(entry) = state.session_knowledge.get(session_id) else {
+        return ToolResult::ok(json!({"commands": []}).to_string());
+    };
+    let k = entry.lock();
+    let commands: Vec<Value> = k
+        .commands
+        .iter()
+        .rev()
+        .filter(|c| !errors_only || outcome_error_type(&c.classification).is_some())
+        .take(limit)
+        .map(|c| {
+            json!({
+                "command": c.command,
+                "cwd": c.cwd,
+                "exit_code": c.exit_code,
+                "duration_ms": c.duration_ms,
+                "error_type": outcome_error_type(&c.classification),
+                "timestamp": c.timestamp,
+            })
+        })
+        .collect();
+    ToolResult::ok(json!({"commands": commands}).to_string())
+}
+
+/// Execute `explain_last_failure`: the most recent failed command + its output.
+fn exec_explain_last_failure(state: &AppState, args: &Value) -> ToolResult {
+    let session_id = match args["session_id"].as_str() {
+        Some(s) => s,
+        None => return ToolResult::err("Missing session_id"),
+    };
+    let Some(entry) = state.session_knowledge.get(session_id) else {
+        return ToolResult::ok(json!({"found": false}).to_string());
+    };
+    let k = entry.lock();
+    let failure = k.commands.iter().rev().find(|c| {
+        outcome_error_type(&c.classification).is_some() || c.exit_code.is_some_and(|e| e != 0)
+    });
+    match failure {
+        Some(c) => ToolResult::ok(
+            json!({
+                "found": true,
+                "command": c.command,
+                "exit_code": c.exit_code,
+                "error_type": outcome_error_type(&c.classification),
+                "output": c.output_snippet,
+                "cwd": c.cwd,
+                "duration_ms": c.duration_ms,
+            })
+            .to_string(),
+        ),
+        None => ToolResult::ok(json!({"found": false}).to_string()),
+    }
+}
+
+/// Execute `get_error_fixes`: known error→fix correlations for this session.
+fn exec_get_error_fixes(state: &AppState, args: &Value) -> ToolResult {
+    let session_id = match args["session_id"].as_str() {
+        Some(s) => s,
+        None => return ToolResult::err("Missing session_id"),
+    };
+    let Some(entry) = state.session_knowledge.get(session_id) else {
+        return ToolResult::ok(json!({"fixes": []}).to_string());
+    };
+    let k = entry.lock();
+    let fixes: Vec<Value> = k
+        .error_fix_pairs
+        .iter()
+        .map(|(err, cmds)| json!({"error_type": err, "fix_commands": cmds}))
+        .collect();
+    ToolResult::ok(json!({"fixes": fixes}).to_string())
 }
 
 // ── Drive agent (atomic send→wait→read) ─────────────────────
@@ -1916,6 +2240,118 @@ fn exec_cancel_schedule(args: &Value) -> ToolResult {
     ToolResult::ok(json!({ "cancelled": id }).to_string())
 }
 
+// ── watch_for / list_watches / cancel_watch ──────────────────────────────
+// Reactive watches reuse the WatcherEngine (cooldown/burst/max_fires safety).
+// All watches are scoped to the agent's bound session_id — never args — so an
+// agent cannot arm or cancel watches on another session.
+
+fn exec_watch_for(
+    state: &AppState,
+    session_id: &str,
+    args: &Value,
+    skip_safety: bool,
+) -> ToolResult {
+    let trigger: watcher::WatcherTrigger = match serde_json::from_value(args["trigger"].clone()) {
+        Ok(t) => t,
+        Err(e) => return ToolResult::err(format!("Invalid trigger: {e}")),
+    };
+    let instructions = match args["instructions"].as_str() {
+        Some(s) if !s.trim().is_empty() => s.to_string(),
+        _ => return ToolResult::err("Missing instructions"),
+    };
+
+    if !skip_safety {
+        let td = serde_json::to_string(&trigger).unwrap_or_default();
+        let preview: String = instructions.chars().take(80).collect();
+        return ToolResult::approval(
+            format!("Arm reactive watch ({td}) → {preview}"),
+            format!("watch_for {td}"),
+        );
+    }
+
+    let Some(engine) = state.watcher_engine.get() else {
+        return ToolResult::err("Watcher engine not initialized");
+    };
+
+    let rule = watcher::WatcherRule {
+        id: String::new(),
+        name: args["name"].as_str().unwrap_or("model watch").to_string(),
+        session_id: Some(session_id.to_string()),
+        template_id: None,
+        trigger,
+        instructions,
+        max_fires: args["max_fires"]
+            .as_u64()
+            .map(|v| v as u32)
+            .unwrap_or(3)
+            .max(1),
+        fire_count: 0,
+        cooldown_secs: args["cooldown_secs"]
+            .as_u64()
+            .map(|v| (v as u32).max(5))
+            .unwrap_or_else(watcher::default_cooldown),
+        burst_threshold: watcher::default_burst_threshold(),
+        burst_window_secs: watcher::default_burst_window(),
+        status: watcher::WatcherStatus::Active,
+        created_at: 0,
+    };
+
+    let cfg = engine.config();
+    let mut config = cfg.write();
+    match watcher::create_rule(&mut config, rule) {
+        Ok(id) => ToolResult::ok(json!({ "watch_id": id, "status": "armed" }).to_string()),
+        Err(e) => ToolResult::err(format!("Failed to arm watch: {e}")),
+    }
+}
+
+fn exec_list_watches(state: &AppState, session_id: &str) -> ToolResult {
+    let Some(engine) = state.watcher_engine.get() else {
+        return ToolResult::err("Watcher engine not initialized");
+    };
+    let cfg = engine.config();
+    let config = cfg.read();
+    let watches: Vec<Value> = config
+        .rules
+        .iter()
+        .filter(|r| r.session_id.as_deref() == Some(session_id))
+        .map(|r| {
+            json!({
+                "watch_id": r.id,
+                "name": r.name,
+                "trigger": r.trigger,
+                "status": r.status,
+                "fire_count": r.fire_count,
+                "max_fires": r.max_fires,
+            })
+        })
+        .collect();
+    ToolResult::ok(json!({ "watches": watches }).to_string())
+}
+
+fn exec_cancel_watch(state: &AppState, session_id: &str, args: &Value) -> ToolResult {
+    let watch_id = match args["watch_id"].as_str() {
+        Some(s) if !s.trim().is_empty() => s.trim().to_string(),
+        _ => return ToolResult::err("Missing watch_id"),
+    };
+    let Some(engine) = state.watcher_engine.get() else {
+        return ToolResult::err("Watcher engine not initialized");
+    };
+    let cfg = engine.config();
+    let mut config = cfg.write();
+    // Scope to the agent's session: only cancel a watch this session owns.
+    let owned = config
+        .rules
+        .iter()
+        .any(|r| r.id == watch_id && r.session_id.as_deref() == Some(session_id));
+    if !owned {
+        return ToolResult::err(format!("No watch '{watch_id}' on this session"));
+    }
+    match watcher::delete_rule(&mut config, &watch_id) {
+        Ok(()) => ToolResult::ok(json!({ "cancelled": watch_id }).to_string()),
+        Err(e) => ToolResult::err(format!("Failed to cancel watch: {e}")),
+    }
+}
+
 /// `args` (the LLM still supplies it) but the dispatch-level value is the
 /// source of truth for cross-session isolation.
 pub async fn dispatch(
@@ -1973,11 +2409,17 @@ async fn dispatch_inner(
     }
     match fn_name {
         "read_screen" => exec_read_screen(state, args),
+        "search_scrollback" => exec_search_scrollback(state, args),
+        "get_hyperlinks" => exec_get_hyperlinks(state, args),
+        "get_semantic_zones" => exec_get_semantic_zones(state, args),
         "send_input" => exec_send_input_inner(state, args, skip_safety),
         "send_key" => exec_send_key_inner(state, args, skip_safety),
         "wait_for" => exec_wait_for(state, args).await,
         "get_state" => exec_get_state(state, args),
         "get_context" => exec_get_context(state, args),
+        "get_command_history" => exec_get_command_history(state, args),
+        "explain_last_failure" => exec_explain_last_failure(state, args),
+        "get_error_fixes" => exec_get_error_fixes(state, args),
         "read_file" => exec_read_file(state, session_id, args),
         "write_file" => exec_write_file_inner(state, session_id, args, skip_safety),
         "edit_file" => exec_edit_file_inner(state, session_id, args, skip_safety),
@@ -1994,6 +2436,9 @@ async fn dispatch_inner(
         "schedule_task" => exec_schedule_task(args),
         "list_schedules" => exec_list_schedules(),
         "cancel_schedule" => exec_cancel_schedule(args),
+        "watch_for" => exec_watch_for(state, session_id, args, skip_safety),
+        "list_watches" => exec_list_watches(state, session_id),
+        "cancel_watch" => exec_cancel_watch(state, session_id, args),
         other => ToolResult::err(format!("Unknown tool: {other}")),
     }
 }
@@ -2016,10 +2461,10 @@ mod tests {
     const FILESYSTEM_SEARCH_TOOLS: &[&str] = &["list_files", "search_files"];
 
     #[test]
-    fn definitions_returns_22_tools() {
+    fn definitions_returns_31_tools() {
         let defs = tool_definitions();
         let arr = defs.as_array().unwrap();
-        assert_eq!(arr.len(), 22);
+        assert_eq!(arr.len(), 31);
     }
 
     #[test]
@@ -2051,6 +2496,9 @@ mod tests {
                 "wait_for",
                 "get_state",
                 "get_context",
+                "get_command_history",
+                "explain_last_failure",
+                "get_error_fixes",
                 "read_file",
                 "write_file",
                 "edit_file",
@@ -2067,6 +2515,12 @@ mod tests {
                 "schedule_task",
                 "list_schedules",
                 "cancel_schedule",
+                "watch_for",
+                "list_watches",
+                "cancel_watch",
+                "search_scrollback",
+                "get_hyperlinks",
+                "get_semantic_zones",
             ]
         );
     }
@@ -2464,6 +2918,159 @@ mod tests {
         assert!(parsed["screen"].is_string(), "response must include screen");
         let new_cursor = parsed["cursor"].as_u64().unwrap();
         assert!(new_cursor > cursor_before as u64, "cursor must advance");
+    }
+
+    #[tokio::test]
+    async fn read_screen_includes_live_session_state() {
+        // read_screen must surface shell_state/awaiting_input/agent_intent so the
+        // model can tell a working agent (busy spinner) from a paused one.
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        state
+            .vt_log_buffers
+            .insert("rs-state".to_string(), parking_lot::Mutex::new(vt));
+        state.shell_states.insert(
+            "rs-state".to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        let mut ss = crate::state::SessionState {
+            awaiting_input: true,
+            agent_intent: Some("running tests".to_string()),
+            ..Default::default()
+        };
+        ss.agent_type = Some("claude-code".to_string());
+        state.session_states.insert("rs-state".to_string(), ss);
+
+        let result = dispatch(
+            &state,
+            "rs-state",
+            "read_screen",
+            &json!({"session_id": "rs-state"}),
+        )
+        .await;
+        assert!(result.success, "should succeed: {}", result.output);
+        let parsed: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+        assert_eq!(
+            parsed["shell_state"], "busy",
+            "must surface live shell_state"
+        );
+        assert_eq!(
+            parsed["awaiting_input"], true,
+            "must surface awaiting_input"
+        );
+        assert_eq!(parsed["agent_intent"], "running tests");
+        assert_eq!(parsed["agent_type"], "claude-code");
+    }
+
+    #[tokio::test]
+    async fn knowledge_query_tools_read_osc133_outcomes() {
+        use crate::ai_agent::knowledge::{CommandOutcome, OutcomeClass, SessionKnowledge};
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut k = SessionKnowledge::new();
+        k.record(CommandOutcome {
+            timestamp: 1,
+            command: "cargo build".into(),
+            cwd: "/repo".into(),
+            exit_code: Some(101),
+            output_snippet: "error[E0432]: unresolved import".into(),
+            classification: OutcomeClass::Error {
+                error_type: "rust_compilation".into(),
+            },
+            duration_ms: 1200,
+            id: 0,
+        });
+        k.record(CommandOutcome {
+            timestamp: 2,
+            command: "cargo add foo".into(),
+            cwd: "/repo".into(),
+            exit_code: Some(0),
+            output_snippet: "ok".into(),
+            classification: OutcomeClass::Success,
+            duration_ms: 50,
+            id: 0,
+        });
+        state
+            .session_knowledge
+            .insert("kh".into(), parking_lot::Mutex::new(k));
+
+        // get_command_history: newest first, both commands.
+        let r = dispatch(
+            &state,
+            "kh",
+            "get_command_history",
+            &json!({"session_id": "kh"}),
+        )
+        .await;
+        assert!(r.success, "{}", r.output);
+        let v: serde_json::Value = serde_json::from_str(&r.output).unwrap();
+        let cmds = v["commands"].as_array().unwrap();
+        assert_eq!(cmds.len(), 2);
+        assert_eq!(cmds[0]["command"], "cargo add foo");
+        assert_eq!(cmds[1]["exit_code"], 101);
+
+        // errors_only filter.
+        let r = dispatch(
+            &state,
+            "kh",
+            "get_command_history",
+            &json!({"session_id": "kh", "errors_only": true}),
+        )
+        .await;
+        let v: serde_json::Value = serde_json::from_str(&r.output).unwrap();
+        let cmds = v["commands"].as_array().unwrap();
+        assert_eq!(cmds.len(), 1);
+        assert_eq!(cmds[0]["error_type"], "rust_compilation");
+
+        // explain_last_failure: finds the failing build.
+        let r = dispatch(
+            &state,
+            "kh",
+            "explain_last_failure",
+            &json!({"session_id": "kh"}),
+        )
+        .await;
+        let v: serde_json::Value = serde_json::from_str(&r.output).unwrap();
+        assert_eq!(v["found"], true);
+        assert_eq!(v["exit_code"], 101);
+        assert_eq!(v["error_type"], "rust_compilation");
+        assert!(v["output"].as_str().unwrap().contains("E0432"));
+
+        // get_error_fixes: success-after-error correlated the fix.
+        let r = dispatch(
+            &state,
+            "kh",
+            "get_error_fixes",
+            &json!({"session_id": "kh"}),
+        )
+        .await;
+        let v: serde_json::Value = serde_json::from_str(&r.output).unwrap();
+        let fixes = v["fixes"].as_array().unwrap();
+        assert_eq!(fixes.len(), 1);
+        assert_eq!(fixes[0]["error_type"], "rust_compilation");
+        assert_eq!(fixes[0]["fix_commands"][0], "cargo add foo");
+    }
+
+    #[tokio::test]
+    async fn knowledge_query_tools_empty_session() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let r = dispatch(
+            &state,
+            "none",
+            "get_command_history",
+            &json!({"session_id": "none"}),
+        )
+        .await;
+        assert!(r.success);
+        assert!(r.output.contains("\"commands\":[]"));
+        let r = dispatch(
+            &state,
+            "none",
+            "explain_last_failure",
+            &json!({"session_id": "none"}),
+        )
+        .await;
+        assert!(r.success);
+        assert!(r.output.contains("\"found\":false"));
     }
 
     #[tokio::test]
@@ -3870,5 +4477,292 @@ mod tests {
     fn cancel_schedule_rejects_nonexistent_id() {
         let r = exec_cancel_schedule(&json!({ "id": "nonexistent-job-xyz" }));
         assert!(!r.success);
+    }
+
+    // ── watch_for / list_watches / cancel_watch ─────────────────
+
+    #[tokio::test]
+    async fn watch_for_requires_approval_to_arm() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let r = dispatch(
+            &state,
+            "ws-1",
+            "watch_for",
+            &json!({"trigger": {"type": "error"}, "instructions": "investigate"}),
+        )
+        .await;
+        assert!(r.needs_approval, "arming a watch must require approval");
+    }
+
+    #[tokio::test]
+    async fn watch_for_rejects_invalid_trigger() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let r = dispatch(
+            &state,
+            "ws-2",
+            "watch_for",
+            &json!({"trigger": {"type": "nonsense"}, "instructions": "x"}),
+        )
+        .await;
+        assert!(!r.success);
+        assert!(r.output.contains("Invalid trigger"), "got: {}", r.output);
+    }
+
+    #[tokio::test]
+    async fn watch_for_rejects_missing_instructions() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let r = dispatch(
+            &state,
+            "ws-3",
+            "watch_for",
+            &json!({"trigger": {"type": "idle"}}),
+        )
+        .await;
+        assert!(!r.success);
+        assert!(r.output.contains("instructions"), "got: {}", r.output);
+    }
+
+    #[tokio::test]
+    async fn watch_lifecycle_arm_list_cancel_scoped_to_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let engine = Arc::new(super::super::watcher::WatcherEngine::new(state.clone()));
+        let _ = state.watcher_engine.set(engine);
+
+        // Arm via the approved path (skips safety, as the user just approved).
+        let armed = dispatch_approved(
+            &state,
+            "wl-1",
+            "watch_for",
+            &json!({
+                "trigger": {"type": "command_done", "on_failure_only": true},
+                "instructions": "summarize the failure",
+                "name": "fail-watch"
+            }),
+        )
+        .await;
+        assert!(armed.success, "arm failed: {}", armed.output);
+        let armed_json: Value = serde_json::from_str(&armed.output).unwrap();
+        assert_eq!(armed_json["status"], "armed");
+        let watch_id = armed_json["watch_id"].as_str().unwrap().to_string();
+
+        // Reachable via engine.config(), scoped to this session.
+        {
+            let cfg = state.watcher_engine.get().unwrap().config();
+            let config = cfg.read();
+            assert!(
+                config
+                    .rules
+                    .iter()
+                    .any(|r| r.id == watch_id && r.session_id.as_deref() == Some("wl-1")),
+                "armed rule not found in config for session wl-1"
+            );
+        }
+
+        // list_watches returns it for the owning session.
+        let listed = dispatch(&state, "wl-1", "list_watches", &json!({})).await;
+        assert!(listed.success);
+        let listed_json: Value = serde_json::from_str(&listed.output).unwrap();
+        let watches = listed_json["watches"].as_array().unwrap();
+        assert_eq!(watches.len(), 1);
+        assert_eq!(watches[0]["watch_id"], watch_id);
+
+        // A different session sees none of wl-1's watches.
+        let other = dispatch(&state, "wl-other", "list_watches", &json!({})).await;
+        let other_json: Value = serde_json::from_str(&other.output).unwrap();
+        assert_eq!(other_json["watches"].as_array().unwrap().len(), 0);
+
+        // A foreign session cannot cancel wl-1's watch.
+        let bad = dispatch(
+            &state,
+            "wl-other",
+            "cancel_watch",
+            &json!({"watch_id": watch_id}),
+        )
+        .await;
+        assert!(!bad.success, "foreign session must not cancel the watch");
+
+        // The owner cancels it.
+        let cancelled = dispatch(
+            &state,
+            "wl-1",
+            "cancel_watch",
+            &json!({"watch_id": watch_id}),
+        )
+        .await;
+        assert!(cancelled.success, "cancel failed: {}", cancelled.output);
+
+        // Gone afterwards.
+        let after = dispatch(&state, "wl-1", "list_watches", &json!({})).await;
+        let after_json: Value = serde_json::from_str(&after.output).unwrap();
+        assert_eq!(after_json["watches"].as_array().unwrap().len(), 0);
+    }
+
+    // ── search_scrollback ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn search_scrollback_returns_matches_with_offsets() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        vt.process(b"the quick brown fox\r\njumped over fox tracks\r\n");
+        state
+            .vt_log_buffers
+            .insert("sb-1".to_string(), parking_lot::Mutex::new(vt));
+
+        let r = dispatch(
+            &state,
+            "sb-1",
+            "search_scrollback",
+            &json!({"session_id": "sb-1", "query": "fox"}),
+        )
+        .await;
+        assert!(r.success, "search failed: {}", r.output);
+        let json: Value = serde_json::from_str(&r.output).unwrap();
+        let matches = json["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 2, "expected two 'fox' matches");
+        for m in matches {
+            assert!(m["line_index"].is_number());
+            assert!(m["line_text"].as_str().unwrap().contains("fox"));
+            assert!(m["match_end"].as_u64().unwrap() > m["match_start"].as_u64().unwrap());
+        }
+    }
+
+    #[tokio::test]
+    async fn search_scrollback_missing_buffer_errors() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let r = dispatch(
+            &state,
+            "sb-none",
+            "search_scrollback",
+            &json!({"session_id": "sb-none", "query": "x"}),
+        )
+        .await;
+        assert!(!r.success);
+        assert!(r.output.contains("No VT buffer"), "got: {}", r.output);
+    }
+
+    #[tokio::test]
+    async fn search_scrollback_respects_limit() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        vt.process(b"match\r\nmatch\r\nmatch\r\n");
+        state
+            .vt_log_buffers
+            .insert("sb-lim".to_string(), parking_lot::Mutex::new(vt));
+
+        let r = dispatch(
+            &state,
+            "sb-lim",
+            "search_scrollback",
+            &json!({"session_id": "sb-lim", "query": "match", "limit": 2}),
+        )
+        .await;
+        assert!(r.success);
+        let json: Value = serde_json::from_str(&r.output).unwrap();
+        assert_eq!(json["matches"].as_array().unwrap().len(), 2);
+    }
+
+    // ── get_hyperlinks ───────────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_hyperlinks_returns_osc8_links() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        // OSC 8 hyperlink: ESC ] 8 ; ; URI BEL  text  ESC ] 8 ; ; BEL
+        vt.process(b"\x1b]8;;https://example.com/page\x07click here\x1b]8;;\x07\r\n");
+        state
+            .vt_log_buffers
+            .insert("hl-1".to_string(), parking_lot::Mutex::new(vt));
+
+        let r = dispatch(
+            &state,
+            "hl-1",
+            "get_hyperlinks",
+            &json!({"session_id": "hl-1"}),
+        )
+        .await;
+        assert!(r.success, "get_hyperlinks failed: {}", r.output);
+        let json: Value = serde_json::from_str(&r.output).unwrap();
+        let links = json["hyperlinks"].as_array().unwrap();
+        assert_eq!(links.len(), 1, "expected one coalesced link");
+        assert!(links[0]["uri"].as_str().unwrap().contains("example.com"));
+        assert!(
+            links[0]["end_col"].as_u64().unwrap() > links[0]["start_col"].as_u64().unwrap(),
+            "span must be non-empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_hyperlinks_empty_when_none() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        vt.process(b"no links here\r\n");
+        state
+            .vt_log_buffers
+            .insert("hl-2".to_string(), parking_lot::Mutex::new(vt));
+
+        let r = dispatch(
+            &state,
+            "hl-2",
+            "get_hyperlinks",
+            &json!({"session_id": "hl-2"}),
+        )
+        .await;
+        assert!(r.success);
+        let json: Value = serde_json::from_str(&r.output).unwrap();
+        assert_eq!(json["hyperlinks"].as_array().unwrap().len(), 0);
+    }
+
+    // ── get_semantic_zones ───────────────────────────────────────
+
+    #[tokio::test]
+    async fn get_semantic_zones_groups_prompt_input_output() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        // OSC 133: A=prompt, B=input (command), C=output.
+        vt.process(b"\x1b]133;A\x07$ \x1b]133;B\x07ls -la\x1b]133;C\x07file1.txt");
+        state
+            .vt_log_buffers
+            .insert("sz-1".to_string(), parking_lot::Mutex::new(vt));
+
+        let r = dispatch(
+            &state,
+            "sz-1",
+            "get_semantic_zones",
+            &json!({"session_id": "sz-1"}),
+        )
+        .await;
+        assert!(r.success, "get_semantic_zones failed: {}", r.output);
+        let json: Value = serde_json::from_str(&r.output).unwrap();
+        let zones = json["zones"].as_array().unwrap();
+        let kinds: Vec<&str> = zones.iter().map(|z| z["kind"].as_str().unwrap()).collect();
+        assert!(kinds.contains(&"prompt"), "kinds: {kinds:?}");
+        assert!(kinds.contains(&"input"), "kinds: {kinds:?}");
+        assert!(kinds.contains(&"output"), "kinds: {kinds:?}");
+        let output_zone = zones.iter().find(|z| z["kind"] == "output").unwrap();
+        assert!(output_zone["text"].as_str().unwrap().contains("file1.txt"));
+    }
+
+    #[tokio::test]
+    async fn get_semantic_zones_empty_for_plain_text() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut vt = crate::state::VtLogBuffer::new(24, 80, 10_000);
+        vt.process(b"plain output, no osc133\r\n");
+        state
+            .vt_log_buffers
+            .insert("sz-2".to_string(), parking_lot::Mutex::new(vt));
+
+        let r = dispatch(
+            &state,
+            "sz-2",
+            "get_semantic_zones",
+            &json!({"session_id": "sz-2"}),
+        )
+        .await;
+        assert!(r.success);
+        let json: Value = serde_json::from_str(&r.output).unwrap();
+        assert_eq!(json["zones"].as_array().unwrap().len(), 0);
     }
 }

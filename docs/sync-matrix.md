@@ -165,7 +165,8 @@ OSC 133 outcome capture, or the `ai_terminal_*` MCP tools:
 | File | What to update |
 |------|----------------|
 | `src-tauri/src/ai_agent/engine.rs` | ReAct loop, approval flow, ACTIVE_AGENTS registry, system prompt |
-| `src-tauri/src/ai_agent/tools.rs` | Tool dispatch: 19 tools (terminal, filesystem, drive_agent, search, list_sessions) |
+| `src-tauri/src/ai_agent/tools.rs` | Tool dispatch: 31 tools (terminal observe incl. get_command_history/explain_last_failure/get_error_fixes/search_scrollback/get_hyperlinks/get_semantic_zones, reactive watches watch_for/list_watches/cancel_watch, filesystem, drive_agent, search, list_sessions). Tool count assertions live in tools.rs `#[cfg(test)]` — bump them on add/remove |
+| `src-tauri/src/terminal_grid.rs` | Grid reader methods backing agent tools: `search_buffer`, `enumerate_visible_hyperlinks` (get_hyperlinks), `extract_semantic_zones` (get_semantic_zones); `VtLogBuffer` delegates in `state.rs` |
 | `src-tauri/src/ai_agent/safety.rs` | SafetyChecker: command safety + file-write sensitive path rules |
 | `src-tauri/src/ai_agent/sandbox.rs` | FileSandbox: path jail for filesystem tools (canonicalize + starts_with) |
 | `src-tauri/src/mcp_http/ai_terminal.rs` | MCP exposure of all 13 `ai_terminal_*` tools; write-tool confirmation |

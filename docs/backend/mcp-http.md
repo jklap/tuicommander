@@ -202,12 +202,12 @@ rejected while an internal agent loop is active on the target session.
 
 | Tool | Params | Description |
 |------|--------|-------------|
-| `ai_terminal_read_screen` | `session_id`, `lines?` (default 50), `since_cursor?` | Read terminal text. Returns `{screen, cursor}`. Pass `since_cursor` for delta mode. Output passes through secret redaction. |
+| `ai_terminal_read_screen` | `session_id`, `lines?` (default 50, max 500), `since_cursor?` | Read terminal text. Returns `{screen, cursor, shell_state, awaiting_input, agent_intent?, agent_type?}` — `shell_state` is `busy` while the agent works (a spinner means busy, not idle), `idle` once stopped; `awaiting_input` is true when blocked on a question. Pass `since_cursor` for delta mode. Output passes through secret redaction. |
 | `ai_terminal_send_input` | `session_id`, `text` | Send a text command to the session. Always prompts for confirmation. |
 | `ai_terminal_send_key` | `session_id`, `key` (enter/tab/ctrl+c/escape/up/down/…) | Send a single special key. Always prompts for confirmation. |
 | `ai_terminal_wait_for` | `session_id`, `pattern?`, `timeout_ms?` (10000), `stability_ms?` (500) | Wait for a regex match or for the screen to stabilise. |
 | `ai_terminal_get_state` | `session_id` | Return structured `SessionState` (shell_state, cwd, terminal_mode, agent_type, …). |
-| `ai_terminal_get_context` | `session_id` | Compact ~500-char context summary (mode, recent CWDs, recent errors, known fixes, TUI apps). |
+| `ai_terminal_get_context` | `session_id` | Cheap orientation: `{shell_state, cwd, git_branch, last_exit_code, agent_type, terminal_mode}`. Git branch read from `.git/HEAD` (no subprocess, no index lock). |
 | `ai_terminal_drive_agent` | `session_id`, `command?`, `timeout_ms?` (30000), `wait_pattern?`, `lines?` (80), `since_cursor?` | Atomic send→wait→read. Sends command, waits for idle/pattern, returns `{screen, cursor, shell_state, session_state}`. Pass `since_cursor` for delta mode. Requires user confirmation. |
 | `ai_terminal_search_code` | `query`, `path?`, `limit?` | BM25 semantic search over repo files via `AppState::content_index`. Returns ranked file paths with relevance scores. Useful for codebase exploration without regex. |
 

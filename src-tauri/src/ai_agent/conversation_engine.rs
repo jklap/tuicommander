@@ -138,7 +138,14 @@ fn build_base_system_prompt(session_id: &str) -> String {
          - Never put comments (lines starting with #) inside code blocks.\n\
          - Do NOT ask for confirmation before suggesting a command.\n\n\
          ## Terminal tools\n\
-         - read_screen / get_context — observe terminal state\n\
+         - read_screen — observe terminal text + live shell_state/awaiting_input\n\
+         - search_scrollback — regex-search the scrollback (screen + history)\n\
+         - get_hyperlinks — list OSC 8 links (file://, https://) on the active screen\n\
+         - get_semantic_zones — OSC 133 prompt/input/output zones on the active screen\n\
+         - get_context — cheap orientation: shell state, cwd, git branch, last exit code\n\
+         - get_command_history — recent commands with exit codes/durations (OSC 133)\n\
+         - explain_last_failure — the last failed command + its captured output\n\
+         - get_error_fixes — known error→fix correlations for this session\n\
          - send_input — type a command into the interactive shell\n\
          - send_key — send a special key (ctrl+c, enter, …)\n\
          - wait_for — wait until a regex appears or the screen stabilizes\n\
@@ -159,6 +166,10 @@ fn build_base_system_prompt(session_id: &str) -> String {
          - list_sessions — enumerate active PTY sessions\n\
          - spawn_session — create a new PTY tab\n\
          - get_agent_status — query another agent's state\n\n\
+         ## Reactive watches\n\
+         - watch_for — arm a watch on this session (idle/busy/command_done/question/error/unseen/pattern); when it fires, a fresh agent runs your instructions (user-approved, bounded by max_fires/cooldown)\n\
+         - list_watches — list watches armed on this session\n\
+         - cancel_watch — cancel a watch by id\n\n\
          Always observe before acting. Prefer targeted, minimal commands. \
          When a task is complete, stop calling tools and summarize what you did."
     )
@@ -393,19 +404,23 @@ async fn run_conversation(
 
     // Build system prompt — merged from agent + chat rules
     let base_system_prompt = build_base_system_prompt(&session_id);
-    let context_section = assemble_context(&state, &session_id);
     let cross_session = super::context::build_cross_session_section(&state, &session_id);
+    let mut last_context = assemble_context(&state, &session_id);
     let mut last_knowledge = super::context::build_knowledge_section(&state, &session_id);
 
-    // Inject context as part of base; cross-session + knowledge appended
-    let base_with_context = format!("{base_system_prompt}\n\n{context_section}");
+    // Compose the full system prompt from the live terminal context + knowledge.
+    // The context (shell_state, awaiting_input, recent output) is re-assembled
+    // each iteration so the model never reasons about a stale iteration-0 snapshot.
+    let compose = |context: &str, knowledge: Option<&str>| {
+        compose_system_prompt(
+            &format!("{base_system_prompt}\n\n{context}"),
+            cross_session.as_deref(),
+            knowledge,
+        )
+    };
 
     let mut chat_req = ChatRequest::default()
-        .with_system(compose_system_prompt(
-            &base_with_context,
-            cross_session.as_deref(),
-            last_knowledge.as_deref(),
-        ))
+        .with_system(compose(&last_context, last_knowledge.as_deref()))
         .with_tools(genai_tools.clone())
         .append_message(ChatMessage::user(&initial_message));
 
@@ -429,16 +444,15 @@ async fn run_conversation(
             return Ok("timeout".into());
         }
 
-        // Refresh knowledge each iteration
+        // Refresh terminal context + knowledge each iteration so shell_state,
+        // awaiting_input, and recent terminal output stay live across the loop.
         if iteration > 0 {
-            let current = super::context::build_knowledge_section(&state, &session_id);
-            if current != last_knowledge {
-                chat_req.system = Some(compose_system_prompt(
-                    &base_with_context,
-                    cross_session.as_deref(),
-                    current.as_deref(),
-                ));
-                last_knowledge = current;
+            let current_context = assemble_context(&state, &session_id);
+            let current_knowledge = super::context::build_knowledge_section(&state, &session_id);
+            if current_context != last_context || current_knowledge != last_knowledge {
+                chat_req.system = Some(compose(&current_context, current_knowledge.as_deref()));
+                last_context = current_context;
+                last_knowledge = current_knowledge;
             }
         }
 

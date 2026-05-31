@@ -258,7 +258,7 @@ plus a Tauri-side query for the per-session knowledge store.
 | `send_key` | `session_id, key` | Send a special key (enter, tab, ctrl+c, escape, arrows). |
 | `wait_for` | `session_id, pattern?, timeout_ms?, stability_ms?` | Wait for regex match or screen stability. |
 | `get_state` | `session_id` | Structured session metadata (shell_state, cwd, terminal_mode). |
-| `get_context` | `session_id` | Compact ~500-char context summary. |
+| `get_context` | `session_id` | Cheap orientation: `{shell_state, cwd, git_branch, last_exit_code, agent_type}`. Branch from `.git/HEAD` (no subprocess). |
 
 **Filesystem tools** (sandboxed per session via `FileSandbox`):
 

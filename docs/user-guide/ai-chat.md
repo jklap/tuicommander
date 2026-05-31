@@ -187,7 +187,7 @@ The same six ReAct tools are exposed to external MCP clients (Claude Code, Curso
 | `ai_terminal_send_key` | Send a single special key — **always** prompts for confirmation. |
 | `ai_terminal_wait_for` | Wait for regex match or screen stability. |
 | `ai_terminal_get_state` | Structured `SessionState`. |
-| `ai_terminal_get_context` | ~500-char compact context summary. |
+| `ai_terminal_get_context` | Cheap orientation: shell state, cwd, git branch, last exit code, agent type. |
 
 Input tools are refused while the internal agent loop is active on that session, so an external agent can't fight the internal one for the same PTY.
 

@@ -2,7 +2,7 @@ use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::grid::{Dimensions, ReflowMode};
 use alacritty_terminal::index::{Column, Line, Point};
-use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::term::cell::{Flags, Osc133CellType};
 use alacritty_terminal::term::color::{Colors, named_color_to_index};
 use alacritty_terminal::term::search::RegexSearch;
 use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
@@ -815,6 +815,91 @@ impl TerminalGrid {
             }
         }
         Some((start, end, uri))
+    }
+
+    /// Enumerate OSC 8 hyperlinks on the active screen, coalescing adjacent
+    /// cells that share a URI into a single span. Returns
+    /// `(line_index, start_col, end_col, uri)` where `line_index` is the
+    /// absolute scrollback index used by `search_buffer` (history + screen row).
+    pub fn enumerate_visible_hyperlinks(&self) -> Vec<(usize, usize, usize, String)> {
+        let grid = self.term.grid();
+        let history = grid.history_size();
+        let rows = grid.screen_lines();
+        let cols = grid.columns();
+        let mut out = Vec::new();
+        for row in 0..rows {
+            let line = Line(row as i32);
+            let abs_row = (line.0 + history as i32) as usize;
+            let mut col = 0;
+            while col < cols {
+                let Some(h) = grid[line][Column(col)].hyperlink() else {
+                    col += 1;
+                    continue;
+                };
+                let uri = h.uri().to_owned();
+                let start = col;
+                col += 1;
+                while col < cols {
+                    match grid[line][Column(col)].hyperlink() {
+                        Some(h2) if h2.uri() == uri => col += 1,
+                        _ => break,
+                    }
+                }
+                out.push((abs_row, start, col, uri));
+            }
+        }
+        out
+    }
+
+    /// Group the active screen's cells into OSC 133 semantic zones (prompt /
+    /// input / output), coalescing contiguous cells of the same type in reading
+    /// order. Returns `(kind, start_line, end_line, text)` with absolute line
+    /// indices; untagged (`None`) cells are skipped.
+    pub fn extract_semantic_zones(&self) -> Vec<(String, usize, usize, String)> {
+        let grid = self.term.grid();
+        let history = grid.history_size();
+        let rows = grid.screen_lines();
+        let cols = grid.columns();
+        let mut zones: Vec<(Osc133CellType, usize, usize, String)> = Vec::new();
+        for row in 0..rows {
+            let line = Line(row as i32);
+            let abs_row = (line.0 + history as i32) as usize;
+            for col in 0..cols {
+                let cell = &grid[line][Column(col)];
+                let ct = cell.cell_type;
+                if ct == Osc133CellType::None {
+                    continue;
+                }
+                let ch = if cell.c == '\0' { ' ' } else { cell.c };
+                match zones.last_mut() {
+                    Some((kind, _start, end, text)) if *kind == ct => {
+                        if *end != abs_row {
+                            text.push('\n');
+                            *end = abs_row;
+                        }
+                        text.push(ch);
+                    }
+                    _ => zones.push((ct, abs_row, abs_row, ch.to_string())),
+                }
+            }
+        }
+        zones
+            .into_iter()
+            .map(|(kind, start, end, text)| {
+                let label = match kind {
+                    Osc133CellType::Prompt => "prompt",
+                    Osc133CellType::Input => "input",
+                    Osc133CellType::Output => "output",
+                    Osc133CellType::None => "none",
+                };
+                let cleaned = text
+                    .split('\n')
+                    .map(|l| l.trim_end())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (label.to_string(), start, end, cleaned)
+            })
+            .collect()
     }
 
     /// Mark all rows as dirty so the next serialize_dirty_rows returns a full frame.
