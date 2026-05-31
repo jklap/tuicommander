@@ -279,6 +279,18 @@ fn var_cache() -> &'static parking_lot::Mutex<HashMap<(String, String), CacheEnt
     CACHE.get_or_init(|| parking_lot::Mutex::new(HashMap::new()))
 }
 
+/// Drop all cached prompt-variable entries for a repo.
+///
+/// Hooked into `AppState::invalidate_repo_caches` so that git-backed prompt
+/// vars (`{diff}`, `{changed_files}`, `{last_commit}`, …) reflect repo state
+/// immediately after a commit/checkout instead of lingering up to
+/// `VAR_CACHE_TTL` (3s).
+pub(crate) fn invalidate_repo_vars(path: &str) {
+    var_cache()
+        .lock()
+        .retain(|(repo, _), _| repo.as_str() != path);
+}
+
 fn resolve_single_var(repo_path: &str, var: &str) -> Option<String> {
     match var {
         "branch" => git_output(repo_path, &["rev-parse", "--abbrev-ref", "HEAD"]),
@@ -722,5 +734,41 @@ mod tests {
         assert!(result.ends_with("[...truncated]"));
         // Verify it's valid UTF-8 (won't panic if we got here)
         assert!(result.len() <= 50_003 + 15); // max + char_len + marker
+    }
+
+    // --- var_cache invalidation tests ---
+
+    #[test]
+    fn invalidate_repo_vars_removes_only_target_repo() {
+        // Unique paths so this never races with other tests sharing the global cache.
+        let repo_a = "/test/invalidate_repo_vars/repo_a";
+        let repo_b = "/test/invalidate_repo_vars/repo_b";
+        {
+            let mut cache = var_cache().lock();
+            for var in ["diff", "changed_files"] {
+                cache.insert(
+                    (repo_a.to_string(), var.to_string()),
+                    CacheEntry {
+                        value: "stale".to_string(),
+                        fetched_at: Instant::now(),
+                    },
+                );
+            }
+            cache.insert(
+                (repo_b.to_string(), "diff".to_string()),
+                CacheEntry {
+                    value: "keep".to_string(),
+                    fetched_at: Instant::now(),
+                },
+            );
+        }
+
+        invalidate_repo_vars(repo_a);
+
+        let cache = var_cache().lock();
+        assert!(!cache.contains_key(&(repo_a.to_string(), "diff".to_string())));
+        assert!(!cache.contains_key(&(repo_a.to_string(), "changed_files".to_string())));
+        // Other repo's entries untouched.
+        assert!(cache.contains_key(&(repo_b.to_string(), "diff".to_string())));
     }
 }

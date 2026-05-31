@@ -1572,6 +1572,7 @@ impl AppState {
     /// Invalidate caches for a specific repo path.
     pub(crate) fn invalidate_repo_caches(&self, path: &str) {
         self.git_cache.invalidate_repo(path);
+        crate::prompt::invalidate_repo_vars(path);
     }
 
     /// Default rate limit expiry when no retry_after_ms is provided (120s).
