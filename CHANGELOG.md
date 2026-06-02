@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.11-nightly] - 2026-06-02
+
 ### Fixed
 - **False completion sounds on wake (sleep/lid reopen)** — The silence timer's sleep-wake guard measured the inter-tick gap with `Instant` (monotonic), but on macOS `Instant` does not advance while the system is asleep, so the guard never fired and the wall-clock jump triggered a false busy→idle completion sound on every terminal. The gap is now measured against the same wall clock the idle decision uses.
 - **Sleep counted as UI freezes** — The frontend freeze detector logged multi-minute "UI freeze" gaps on every lid reopen (RAF pauses during sleep). Gaps over 10s are now treated as system sleep and skipped, so the freeze count and logs reflect only real main-thread stalls.
