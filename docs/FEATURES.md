@@ -3,7 +3,7 @@
 > Canonical feature inventory. Update this file when adding, changing, or removing features.
 > See [AGENTS.md](../AGENTS.md) for the maintenance requirement.
 
-**Version:** 1.1.0 | **Last verified:** 2026-05-04
+**Version:** 1.1.1 | **Last verified:** 2026-06-02
 
 ---
 
@@ -153,6 +153,17 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 - **Block navigation** — `Cmd+Shift+Up/Down` jumps between block boundaries
 - **Block cap** — Sessions are capped at 500 command blocks; oldest blocks are evicted when the cap is reached
 - **Settings** — Configure block features at Settings > Terminal > Blocks: show/hide timestamps, enable/disable folding
+
+### 1.19 Auto-Standby (Unix)
+
+Idle, unfocused terminals are suspended to stop them consuming CPU and battery. A background checker (every 30s) sends `SIGSTOP` to the entire process group of a session — `kill(-pgid, …)`, so children (dev servers, agent processes) are paused too, not just the shell.
+
+- **Entry conditions (all required)** — timeout enabled (`> 0`), tab not focused, shell state idle, idle for at least the timeout, session startup settled, and not already in standby
+- **Wake** — `SIGCONT` fires the instant the tab is focused or a message arrives for the agent; the process resumes exactly where it stopped (no session loss, no restart)
+- **Safety** — the process-group id is validated before signalling; an unsafe pgid is refused rather than risking a stop sent to the wrong group
+- **Pause badge** — suspended tabs show a pause indicator in the tab bar
+- **Event** — `session-standby` (`{ session_id, standby }`) emitted on stop/wake
+- **Settings** — Settings > General > Auto-Standby Timeout (default 5 min; `0` disables)
 
 ---
 
@@ -1703,6 +1714,13 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Scripts in `scripts/perf/`: IPC latency, PTY throughput, CPU recording, Tokio console, memory snapshots
 - `tokio-console` feature flag for async task inspection
 - See `docs/guides/profiling.md`
+
+### 20.10 Process Monitor
+- Reports CPU% and resident memory (RSS) for TUIC and every child process tree, each row attributed to the session that owns it
+- Unix: a single batched `ps -o pid,rss,%cpu` query across all PIDs (not one stat per process); Windows: per-process working-set size via the platform API
+- Three surfaces over the same data: MCP `session action=process_stats`, HTTP `GET /process/stats` (JSON `{ session_id, name, pid, rss_kb, cpu_pct }`), and `GET /process/monitor` (a self-contained HTML dashboard with no build step or external assets)
+- Frontend `ProcessManagerModal` opens the dashboard in-app
+- Use to diagnose which agent/terminal is driving high CPU or memory
 
 ## 21. CLI Companion (`tuic`)
 
