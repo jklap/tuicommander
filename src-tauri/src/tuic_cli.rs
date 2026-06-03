@@ -7,8 +7,6 @@
 //! - Tracking whether the first-run prompt has been dismissed
 
 use serde::Serialize;
-#[cfg(feature = "desktop")]
-use tauri::Manager;
 
 #[derive(Serialize)]
 pub(crate) struct CliStatus {
@@ -25,7 +23,7 @@ pub(crate) struct CliStatus {
 
 /// Check CLI installation status.
 #[tauri::command]
-pub(crate) fn get_cli_status(app: tauri::AppHandle) -> CliStatus {
+pub(crate) fn get_cli_status() -> CliStatus {
     let prompt_dismissed = crate::config::config_dir()
         .join(".cli-prompt-dismissed")
         .exists();
@@ -43,7 +41,7 @@ pub(crate) fn get_cli_status(app: tauri::AppHandle) -> CliStatus {
     }
 
     // Check if installed version matches current sidecar
-    let version_match = check_version_match(&app, &install_path);
+    let version_match = check_version_match(&install_path);
     let auto_updatable = install_path_writable(&install_path);
 
     CliStatus {
@@ -58,8 +56,8 @@ pub(crate) fn get_cli_status(app: tauri::AppHandle) -> CliStatus {
 /// Install the CLI binary to the system PATH.
 /// On macOS, uses osascript for admin privileges if needed.
 #[tauri::command]
-pub(crate) fn install_cli(app: tauri::AppHandle) -> Result<String, String> {
-    let sidecar_path = resolve_sidecar_path(&app)?;
+pub(crate) fn install_cli() -> Result<String, String> {
+    let sidecar_path = resolve_sidecar_path()?;
     let install_path = resolve_install_path();
 
     copy_with_elevation(&sidecar_path, &install_path)?;
@@ -110,17 +108,17 @@ pub(crate) fn set_last_seen_version(version: String) {
 
 /// Auto-update: if the CLI is installed, overwrite it with the current sidecar.
 /// Called at app startup — silent, no elevation prompt (relies on existing permissions).
-pub(crate) fn auto_update_cli(app: &tauri::AppHandle) {
+pub(crate) fn auto_update_cli() {
     let install_path = resolve_install_path();
     if !std::path::Path::new(&install_path).exists() {
         return;
     }
 
-    if check_version_match(app, &install_path) {
+    if check_version_match(&install_path) {
         return;
     }
 
-    let Ok(sidecar_path) = resolve_sidecar_path(app) else {
+    let Ok(sidecar_path) = resolve_sidecar_path() else {
         return;
     };
 
@@ -166,42 +164,48 @@ fn resolve_install_path() -> String {
     }
 }
 
-fn resolve_sidecar_path(app: &tauri::AppHandle) -> Result<String, String> {
-    let target = current_target_triple();
-    let ext = if cfg!(target_os = "windows") {
-        ".exe"
+/// Bundled sidecar filename (no target-triple suffix — Tauri strips it at
+/// bundle time, so the installed file is plain `tuic`/`tuic.exe`).
+fn sidecar_name() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "tuic.exe"
     } else {
-        ""
-    };
+        "tuic"
+    }
+}
 
-    // Release mode: sidecar embedded in app bundle resources
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        let sidecar = resource_dir.join(format!("binaries/tuic-{target}{ext}"));
-        if sidecar.exists() {
-            return Ok(sidecar.to_string_lossy().to_string());
+/// Locate the bundled `tuic` sidecar to copy into PATH.
+///
+/// `externalBin` sidecars are installed *next to the main executable* —
+/// `Contents/MacOS/` on macOS, the install dir on Windows, the same dir on
+/// Linux — NOT under the resource dir. This mirrors `detect_bridge_binary`
+/// in `agent_mcp.rs`; the previous resource-dir lookup never resolved in a
+/// packaged build and fell through to the dev path, which only exists on the
+/// build machine (the root cause of issue #52).
+fn resolve_sidecar_path() -> Result<String, String> {
+    let name = sidecar_name();
+
+    // Release: sidecar bundled alongside the main executable.
+    // Dev (`cargo tauri dev`/`build`): also next to the built app under target/.
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let candidate = dir.join(name);
+        if candidate.exists() {
+            return Ok(candidate.to_string_lossy().to_string());
         }
     }
 
-    // Dev mode: try the workspace target directory
-    let dev_binary =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("target/debug/tuic{ext}"));
-    if dev_binary.exists() {
-        return Ok(dev_binary.to_string_lossy().to_string());
-    }
-
-    // Also try release build in dev
-    let release_binary =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("target/release/tuic{ext}"));
-    if release_binary.exists() {
-        return Ok(release_binary.to_string_lossy().to_string());
+    // Dev fallback: workspace target directory (build:sidecar output).
+    let manifest = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for profile in ["debug", "release"] {
+        let dev_binary = manifest.join(format!("target/{profile}")).join(name);
+        if dev_binary.exists() {
+            return Ok(dev_binary.to_string_lossy().to_string());
+        }
     }
 
     Err("tuic CLI binary not found. Run 'cargo build -p tuic-cli' first.".to_string())
-}
-
-fn current_target_triple() -> String {
-    // Build-time target triple, same format as `rustc --print host-tuple`
-    env!("TUIC_TARGET_TRIPLE").to_string()
 }
 
 /// Run `<path> --version` and return its trimmed stdout (e.g. "tuic 1.1.0").
@@ -222,8 +226,8 @@ fn cli_version(path: &str) -> Option<String> {
 /// version strings — NOT file size, which flaps on every rebuild of the same
 /// version (different rustc/deps produce different-sized but identical-version
 /// binaries). If either version can't be determined, treat as a mismatch.
-fn check_version_match(app: &tauri::AppHandle, installed_path: &str) -> bool {
-    let Ok(sidecar_path) = resolve_sidecar_path(app) else {
+fn check_version_match(installed_path: &str) -> bool {
+    let Ok(sidecar_path) = resolve_sidecar_path() else {
         return false;
     };
     match (cli_version(installed_path), cli_version(&sidecar_path)) {
@@ -297,6 +301,32 @@ pub(crate) fn copy_with_elevation(src: &str, dst: &str) -> Result<(), String> {
 
     #[allow(unreachable_code)]
     Err("Unsupported platform".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for issue #52: the bundled sidecar must be looked up by its
+    /// plain name (no `-{target-triple}` suffix), since Tauri strips the triple
+    /// when bundling `externalBin`. A reintroduced triple would make the lookup
+    /// miss the packaged binary and fall through to the dev-only path.
+    #[test]
+    fn sidecar_name_has_no_target_triple() {
+        let name = sidecar_name();
+        assert!(
+            !name.contains("aarch64")
+                && !name.contains("x86_64")
+                && !name.contains("apple")
+                && !name.contains("pc-windows")
+                && !name.contains("unknown-linux"),
+            "sidecar name must not embed a target triple, got {name:?}"
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(name, "tuic.exe");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(name, "tuic");
+    }
 }
 
 pub(crate) fn remove_with_elevation(path: &str) -> Result<(), String> {

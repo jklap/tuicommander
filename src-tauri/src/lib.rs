@@ -1255,7 +1255,7 @@ pub fn run() {
 
             // Auto-update CLI binary if installed
             #[cfg(feature = "desktop")]
-            tuic_cli::auto_update_cli(app.handle());
+            tuic_cli::auto_update_cli();
 
             // Pre-warm content indices based on index_strategy setting:
             // - "active_only": only the active repo at boot
