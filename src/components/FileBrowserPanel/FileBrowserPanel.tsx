@@ -193,7 +193,11 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		// Restore subdir when root changes (merged from separate effect to avoid double fetch)
 		if (fsRoot !== lastRepoPath) {
 			// Remember where we were in the previous root before switching away. (#72)
-			if (lastRepoPath !== null) rootToSubdir.set(lastRepoPath, untrack(() => currentSubdir()));
+			if (lastRepoPath !== null)
+				rootToSubdir.set(
+					lastRepoPath,
+					untrack(() => currentSubdir()),
+				);
 			lastRepoPath = fsRoot;
 			scrollCache.clear();
 			pendingScrollRestore = null;

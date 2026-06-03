@@ -572,6 +572,11 @@ describe("transport", () => {
 			expect(instances[1].url).toContain("offset=80");
 			expect(instances[1].url).not.toContain("offset=50");
 
+			// Complete the reconnect handshake so the in-flight connect() promise settles.
+			// (A real browser WebSocket fires onclose on close(); the mock does not, so an
+			// unsettled connect() promise would otherwise leak past the test.)
+			instances[1].onopen?.();
+
 			unsub();
 			globalThis.WebSocket = origWs;
 			vi.useRealTimers();

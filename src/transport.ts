@@ -855,6 +855,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			return { method: "GET", path };
 		},
 	},
+	search_content_all: {
+		map: (args, p) => {
+			let path = `/fs/search-content-all?query=${p("query")}&caseSensitive=${p("caseSensitive")}`;
+			if (args.limit != null) path += `&limit=${encodeURIComponent(String(args.limit))}`;
+			return { method: "GET", path };
+		},
+	},
 
 	// --- Notes ---
 	load_notes: { map: () => ({ method: "GET", path: "/config/notes" }) },

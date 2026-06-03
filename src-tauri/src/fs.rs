@@ -440,6 +440,151 @@ pub fn warm_content_index(
     crate::content_index::ensure_index(&app_state, &repo_path);
 }
 
+/// Emit a `ContentSearchResult` to the frontend as `content-search-batch` events
+/// in chunks of 50, honoring cancellation. Always emits a final (possibly empty)
+/// batch so the UI knows the search is done. Shared by single- and all-repo search.
+#[cfg(feature = "desktop")]
+fn emit_content_batches(
+    app: &tauri::AppHandle,
+    result: ContentSearchResult,
+    cancel: &Arc<AtomicBool>,
+) {
+    let batch_size = 50;
+    let total = result.matches.len();
+    let mut sent = 0;
+
+    for chunk in result.matches.chunks(batch_size) {
+        if cancel.load(Ordering::Relaxed) {
+            return;
+        }
+        sent += chunk.len();
+        let _ = app.emit(
+            "content-search-batch",
+            &ContentSearchBatch {
+                matches: chunk.to_vec(),
+                is_final: sent >= total,
+                files_searched: result.files_searched,
+                files_skipped: result.files_skipped,
+                truncated: result.truncated,
+            },
+        );
+    }
+
+    // No matches → still emit a final empty batch so the UI stops spinning.
+    if total == 0 {
+        let _ = app.emit(
+            "content-search-batch",
+            &ContentSearchBatch {
+                matches: Vec::new(),
+                is_final: true,
+                files_searched: result.files_searched,
+                files_skipped: result.files_skipped,
+                truncated: result.truncated,
+            },
+        );
+    }
+}
+
+/// Search every ready content index (all registered repos) and merge the results,
+/// tagging each match with its `repo_path`. The global limit is split evenly across
+/// repos (min 5 each). Repos whose index isn't built yet are skipped. Shared by the
+/// `search_content_all` Tauri command and the `/fs/search-content-all` HTTP route.
+pub(crate) fn search_content_all_impl(
+    content_indices: &dashmap::DashMap<
+        String,
+        Arc<parking_lot::RwLock<crate::content_index::ContentIndex>>,
+    >,
+    query: &str,
+    case_sensitive: bool,
+    global_limit: usize,
+) -> ContentSearchResult {
+    let repos: Vec<(
+        String,
+        Arc<parking_lot::RwLock<crate::content_index::ContentIndex>>,
+    )> = content_indices
+        .iter()
+        .map(|e| (e.key().clone(), Arc::clone(e.value())))
+        .collect();
+
+    let per_repo_limit = (global_limit / repos.len().max(1)).max(5);
+
+    let mut all_matches = Vec::new();
+    let mut files_searched: u32 = 0;
+
+    for (repo_path, index_arc) in &repos {
+        let index = index_arc.read();
+        if !index.is_ready() {
+            continue;
+        }
+        if let Ok(result) = search_via_index(&index, query, case_sensitive, Some(per_repo_limit)) {
+            files_searched += result.files_searched;
+            for mut m in result.matches {
+                m.repo_path = Some(repo_path.clone());
+                all_matches.push(m);
+                if all_matches.len() >= global_limit {
+                    break;
+                }
+            }
+        }
+        if all_matches.len() >= global_limit {
+            break;
+        }
+    }
+
+    let truncated = all_matches.len() >= global_limit;
+    ContentSearchResult {
+        matches: all_matches,
+        files_searched,
+        files_skipped: 0,
+        truncated,
+    }
+}
+
+/// Streaming cross-repo content search. Mirrors `search_content` but fans out over
+/// every ready content index instead of a single repo; results arrive via the same
+/// `content-search-batch` events (each match carries its `repo_path`).
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn search_content_all(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, ContentSearchCancel>,
+    app_state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    query: String,
+    case_sensitive: Option<bool>,
+    limit: Option<usize>,
+) -> Result<(), String> {
+    // Cancel any previous search (shares the slot with single-repo search).
+    let cancel_token = Arc::new(AtomicBool::new(false));
+    {
+        let mut prev = state.0.lock().map_err(|e| e.to_string())?;
+        if let Some(old) = prev.take() {
+            old.store(true, Ordering::Relaxed);
+        }
+        *prev = Some(cancel_token.clone());
+    }
+
+    let case_sensitive = case_sensitive.unwrap_or(false);
+    let global_limit = limit.unwrap_or(100);
+    let app_state = std::sync::Arc::clone(&app_state);
+    let throttle_guard = app_state.indexer_throttle.begin_search();
+
+    tokio::task::spawn_blocking(move || {
+        let _throttle_guard = throttle_guard;
+        let result = search_content_all_impl(
+            &app_state.content_indices,
+            &query,
+            case_sensitive,
+            global_limit,
+        );
+        if cancel_token.load(Ordering::Relaxed) {
+            return;
+        }
+        emit_content_batches(&app, result, &cancel_token);
+    });
+
+    Ok(())
+}
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -489,45 +634,10 @@ pub async fn search_content(
             limit,
         ) {
             Ok(result) => {
-                // Check cancellation
                 if cancel_token.load(Ordering::Relaxed) {
                     return;
                 }
-
-                // Emit results in batches of 50
-                let batch_size = 50;
-                let total_matches = result.matches.len();
-                let mut sent = 0;
-
-                for chunk in result.matches.chunks(batch_size) {
-                    if cancel_token.load(Ordering::Relaxed) {
-                        return;
-                    }
-
-                    sent += chunk.len();
-                    let is_final = sent >= total_matches;
-
-                    let batch = ContentSearchBatch {
-                        matches: chunk.to_vec(),
-                        is_final,
-                        files_searched: result.files_searched,
-                        files_skipped: result.files_skipped,
-                        truncated: result.truncated,
-                    };
-                    let _ = app.emit("content-search-batch", &batch);
-                }
-
-                // If no matches at all, still emit a final empty batch
-                if total_matches == 0 {
-                    let batch = ContentSearchBatch {
-                        matches: Vec::new(),
-                        is_final: true,
-                        files_searched: result.files_searched,
-                        files_skipped: result.files_skipped,
-                        truncated: result.truncated,
-                    };
-                    let _ = app.emit("content-search-batch", &batch);
-                }
+                emit_content_batches(&app, result, &cancel_token);
             }
             Err(e) => {
                 let _ = app.emit("content-search-error", &e);
@@ -2590,5 +2700,96 @@ mod tests {
         assert_eq!(res.moved, 1);
         assert_eq!(res.skipped, 1);
         assert!(res.errors.is_empty());
+    }
+
+    // --- Cross-repo content search (search_content_all_impl) ---
+
+    fn ready_index(
+        dir: &std::path::Path,
+    ) -> Arc<parking_lot::RwLock<crate::content_index::ContentIndex>> {
+        Arc::new(parking_lot::RwLock::new(
+            crate::content_index::ContentIndex::build(
+                dir.to_path_buf(),
+                None,
+                std::collections::HashMap::new(),
+            ),
+        ))
+    }
+
+    #[test]
+    fn search_content_all_merges_and_tags_each_repo() {
+        let repo_a = TempDir::new().unwrap();
+        fs::write(
+            repo_a.path().join("a.txt"),
+            "the zebrafish swims in repo a\n",
+        )
+        .unwrap();
+        let repo_b = TempDir::new().unwrap();
+        fs::write(
+            repo_b.path().join("b.txt"),
+            "another zebrafish lives in repo b\n",
+        )
+        .unwrap();
+
+        let path_a = repo_a.path().to_string_lossy().to_string();
+        let path_b = repo_b.path().to_string_lossy().to_string();
+        let indices = dashmap::DashMap::new();
+        indices.insert(path_a.clone(), ready_index(repo_a.path()));
+        indices.insert(path_b.clone(), ready_index(repo_b.path()));
+
+        let result = search_content_all_impl(&indices, "zebrafish", false, 100);
+
+        assert_eq!(result.matches.len(), 2, "one match per repo");
+        let repos: std::collections::HashSet<_> = result
+            .matches
+            .iter()
+            .filter_map(|m| m.repo_path.clone())
+            .collect();
+        assert!(repos.contains(&path_a), "match tagged with repo a");
+        assert!(repos.contains(&path_b), "match tagged with repo b");
+    }
+
+    #[test]
+    fn search_content_all_skips_unready_indices() {
+        let repo_a = TempDir::new().unwrap();
+        fs::write(repo_a.path().join("a.txt"), "the zebrafish swims here\n").unwrap();
+        let repo_b = TempDir::new().unwrap();
+        fs::write(repo_b.path().join("b.txt"), "zebrafish also here\n").unwrap();
+
+        let path_a = repo_a.path().to_string_lossy().to_string();
+        let path_b = repo_b.path().to_string_lossy().to_string();
+        let indices = dashmap::DashMap::new();
+        indices.insert(path_a.clone(), ready_index(repo_a.path()));
+        // repo_b's index never built → not ready → must be skipped
+        indices.insert(
+            path_b.clone(),
+            Arc::new(parking_lot::RwLock::new(
+                crate::content_index::ContentIndex::empty(repo_b.path().to_path_buf()),
+            )),
+        );
+
+        let result = search_content_all_impl(&indices, "zebrafish", false, 100);
+
+        assert_eq!(result.matches.len(), 1, "only the ready repo contributes");
+        assert_eq!(
+            result.matches[0].repo_path.as_deref(),
+            Some(path_a.as_str())
+        );
+    }
+
+    #[test]
+    fn search_content_all_no_matches_returns_empty() {
+        let repo = TempDir::new().unwrap();
+        fs::write(repo.path().join("a.txt"), "nothing relevant here\n").unwrap();
+        let indices = dashmap::DashMap::new();
+        indices.insert(
+            repo.path().to_string_lossy().to_string(),
+            ready_index(repo.path()),
+        );
+
+        let result = search_content_all_impl(&indices, "zebrafish", false, 100);
+
+        assert!(result.matches.is_empty());
+        assert!(!result.truncated);
     }
 }
