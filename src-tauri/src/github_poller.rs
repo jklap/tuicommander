@@ -184,6 +184,11 @@ pub(crate) enum PollerCmd {
     UpdatePaths(Vec<String>),
     SetIssueFilter(String),
     SetPrHideDrafts(bool),
+    /// Re-emit current PR + issue state for all repos on the next poll, even when
+    /// unchanged. Sent when the frontend (re)subscribes (e.g. webview reload after
+    /// standby): the frontend store reset to empty, but the poller's change-detection
+    /// would otherwise suppress re-sending unchanged data, leaving the UI blank.
+    ForceResync,
     Stop,
 }
 
@@ -213,6 +218,9 @@ struct PollMutableState {
     last_pr_updated_at: HashMap<String, Option<String>>,
     /// Per-repo max issue updated_at — `None` means known-empty issue set.
     last_issue_updated_at: HashMap<String, Option<String>>,
+    /// When set, the next poll re-emits PR + issue state regardless of change
+    /// detection, then clears. Set by `PollerCmd::ForceResync`.
+    force_resync: bool,
 }
 
 #[cfg(feature = "desktop")]
@@ -227,6 +235,7 @@ async fn poll_loop(state: Arc<AppState>, handle: AppHandle, mut rx: mpsc::Receiv
         last_changed: HashMap::new(),
         last_pr_updated_at: HashMap::new(),
         last_issue_updated_at: HashMap::new(),
+        force_resync: false,
     };
     let mut startup = true;
     let mut poll_cycle: u32 = 0;
@@ -310,6 +319,13 @@ async fn poll_loop(state: Arc<AppState>, handle: AppHandle, mut rx: mpsc::Receiv
                             pending_poll_at = Some(tokio::time::Instant::now());
                         }
                     }
+                    Some(PollerCmd::ForceResync) => {
+                        // Frontend re-subscribed: re-emit full state on an immediate
+                        // poll over all paths, bypassing change detection.
+                        ps.force_resync = true;
+                        pending_poll_paths.clear();
+                        pending_poll_at = Some(tokio::time::Instant::now());
+                    }
                     Some(PollerCmd::Stop) | None => break,
                 }
             }
@@ -380,6 +396,19 @@ fn current_interval(visible: bool, fail_count: u32, rate_budget: u32) -> Duratio
     Duration::from_millis(backoff.min(MAX_INTERVAL.as_millis() as f64) as u64)
 }
 
+/// Decide whether to (re-)emit a repo's PR or issue snapshot to the frontend.
+///
+/// Normally we only emit when the data changed since the previous poll (cheap
+/// change detection on the max `updated_at`). `force` overrides that for a full
+/// resync: when the frontend re-subscribes (e.g. webview reload after standby)
+/// its store reset to empty, so unchanged data must be re-sent or the UI stays
+/// blank until the next real change. `prev_ts == None` means this repo was never
+/// polled before, which always counts as changed.
+#[cfg(any(feature = "desktop", test))]
+fn should_emit(prev_ts: Option<&Option<String>>, cur_ts: &Option<String>, force: bool) -> bool {
+    force || prev_ts.is_none_or(|p| p != cur_ts)
+}
+
 #[cfg(feature = "desktop")]
 async fn poll_batch(
     state: &AppState,
@@ -409,6 +438,10 @@ async fn poll_batch(
         Ok(result) => {
             ps.fail_count = 0;
             let now = Instant::now();
+            // One-shot full re-emit requested by a frontend re-subscribe. Consumed
+            // here so a single successful poll re-hydrates the (reset) frontend store.
+            let force = ps.force_resync;
+            ps.force_resync = false;
 
             for (repo_path, statuses) in result.prs {
                 let changed =
@@ -425,11 +458,10 @@ async fn poll_batch(
                     .filter(|s| !s.is_empty())
                     .max()
                     .map(|s| s.to_string());
-                let prev_ts = ps.last_pr_updated_at.get(&repo_path);
-                let data_changed = prev_ts.is_none_or(|p| *p != cur_ts);
+                let emit = should_emit(ps.last_pr_updated_at.get(&repo_path), &cur_ts, force);
                 ps.last_pr_updated_at.insert(repo_path.clone(), cur_ts);
 
-                if data_changed {
+                if emit {
                     let _ = handle.emit(
                         "github-pr-update",
                         PrUpdatePayload {
@@ -451,11 +483,10 @@ async fn poll_batch(
                     .filter(|s| !s.is_empty())
                     .max()
                     .map(|s| s.to_string());
-                let prev_ts = ps.last_issue_updated_at.get(&repo_path);
-                let data_changed = prev_ts.is_none_or(|p| *p != cur_ts);
+                let emit = should_emit(ps.last_issue_updated_at.get(&repo_path), &cur_ts, force);
                 ps.last_issue_updated_at.insert(repo_path.clone(), cur_ts);
 
-                if data_changed {
+                if emit {
                     let _ = handle.emit(
                         "github-issues-update",
                         IssuesUpdatePayload {
@@ -564,6 +595,15 @@ pub(crate) async fn github_start_polling(
                 tracing::warn!(
                     source = "github",
                     "Failed to send SetPrHideDrafts to poller: {e}"
+                );
+            }
+            // Frontend just (re)subscribed — its store reset to empty (e.g. webview
+            // reload after standby). Force a full re-emit so unchanged PRs/issues
+            // re-hydrate instead of staying blank until the next data change.
+            if let Err(e) = poller.cmd_tx.try_send(PollerCmd::ForceResync) {
+                tracing::warn!(
+                    source = "github",
+                    "Failed to send ForceResync to poller: {e}"
                 );
             }
         }
@@ -893,5 +933,52 @@ mod tests {
             offsets.len() >= 2,
             "hash should produce at least 2 distinct offsets for 5 paths"
         );
+    }
+
+    // --- should_emit: change detection vs. forced resync ------------------
+    // The bug these guard: after standby the webview reloads, resetting the
+    // frontend GitHub store to empty. The Rust poller survives and keeps its
+    // change-detection state, so unchanged PRs/issues were never re-sent and the
+    // sidebar badges (incl. issue counts) stayed blank. `force` fixes that by
+    // re-emitting current state on a frontend re-subscribe.
+
+    #[test]
+    fn emit_on_first_poll() {
+        // Never-polled repo (no prior timestamp) is always new data → emit.
+        let cur = Some("2026-06-03T00:00:00Z".to_string());
+        assert!(should_emit(None, &cur, false));
+    }
+
+    #[test]
+    fn no_emit_when_unchanged() {
+        // The optimization: identical max updated_at and no resync → skip emit.
+        let ts = Some("2026-06-03T00:00:00Z".to_string());
+        assert!(!should_emit(Some(&ts), &ts, false));
+    }
+
+    #[test]
+    fn emit_when_changed() {
+        let prev = Some("2026-06-03T00:00:00Z".to_string());
+        let cur = Some("2026-06-03T09:00:00Z".to_string());
+        assert!(should_emit(Some(&prev), &cur, false));
+    }
+
+    #[test]
+    fn resync_re_emits_unchanged_data() {
+        // THE FIX: data is identical, but the frontend re-subscribed (force=true)
+        // so we must re-send it — otherwise the reset store stays empty.
+        let ts = Some("2026-06-03T00:00:00Z".to_string());
+        assert!(should_emit(Some(&ts), &ts, true));
+    }
+
+    #[test]
+    fn resync_re_emits_known_empty_repo() {
+        // A repo with zero open issues (cur = None) that was already known-empty
+        // (prev = Some(None)): no change, but a resync must still re-confirm the
+        // empty set so the frontend doesn't show stale counts.
+        let prev: Option<String> = None;
+        let cur: Option<String> = None;
+        assert!(!should_emit(Some(&prev), &cur, false));
+        assert!(should_emit(Some(&prev), &cur, true));
     }
 }

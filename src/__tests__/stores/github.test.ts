@@ -366,6 +366,23 @@ describe("githubStore", () => {
 			});
 		});
 
+		it("triggerCiHeal fires the registered ciFailed callback on demand", () => {
+			testInScope(() => {
+				const cb = vi.fn();
+				store.setOnCiFailed(cb);
+				store.triggerCiHeal("/repo1", "feature/x", 42);
+				expect(cb).toHaveBeenCalledWith("/repo1", "feature/x", 42);
+				store.setOnCiFailed(null);
+			});
+		});
+
+		it("triggerCiHeal is a no-op when no ciFailed callback is registered", () => {
+			testInScope(() => {
+				store.setOnCiFailed(null);
+				expect(() => store.triggerCiHeal("/repo1", "feature/x", 42)).not.toThrow();
+			});
+		});
+
 		it("forwards visibility changes to Rust poller", async () => {
 			await testInScopeAsync(async () => {
 				store.startPolling();

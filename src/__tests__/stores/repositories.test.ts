@@ -78,6 +78,32 @@ describe("repositoriesStore", () => {
 		});
 	});
 
+	describe("setCiAutoHeal()", () => {
+		it("persists ciAutoHeal via invoke (debounced)", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setBranch("/repo", "main");
+				store.setCiAutoHeal("/repo", "main", { enabled: true, attempts: 1 });
+				vi.advanceTimersByTime(500);
+				const calls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
+				const last = calls[calls.length - 1];
+				expect(last[1].config.repos["/repo"].branches["main"].ciAutoHeal).toEqual({ enabled: true, attempts: 1 });
+			});
+		});
+
+		it("never persists the transient healing flag", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "test" });
+				store.setBranch("/repo", "main");
+				store.setCiAutoHeal("/repo", "main", { enabled: true, attempts: 2, healing: true });
+				vi.advanceTimersByTime(500);
+				const calls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
+				const last = calls[calls.length - 1];
+				expect(last[1].config.repos["/repo"].branches["main"].ciAutoHeal.healing).toBe(false);
+			});
+		});
+	});
+
 	describe("remove()", () => {
 		it("removes a repository", () => {
 			testInScope(() => {

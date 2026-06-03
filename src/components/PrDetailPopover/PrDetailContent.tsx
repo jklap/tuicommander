@@ -39,11 +39,21 @@ const CiAutoHealToggle: Component<{ repoPath: string; branch: string }> = (props
 	const attempts = () => healState()?.attempts ?? 0;
 
 	const toggle = () => {
+		const turningOn = !enabled();
 		const current = healState();
 		repositoriesStore.setCiAutoHeal(props.repoPath, props.branch, {
-			enabled: !enabled(),
-			attempts: enabled() ? 0 : (current?.attempts ?? 0),
+			enabled: turningOn,
+			attempts: turningOn ? (current?.attempts ?? 0) : 0,
 		});
+		// Enabling while CI is already red: the green→red transition event has already
+		// passed, so kick off a heal attempt now instead of waiting for the next failure.
+		if (turningOn) {
+			const pr = githubStore.getBranchPrData(props.repoPath, props.branch);
+			const failed = githubStore.getCheckSummary(props.repoPath, props.branch)?.failed ?? 0;
+			if (pr && failed > 0) {
+				githubStore.triggerCiHeal(props.repoPath, props.branch, pr.number);
+			}
+		}
 	};
 
 	return (

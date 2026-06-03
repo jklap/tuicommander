@@ -370,6 +370,11 @@ function createGitHubStore() {
 		setOnCiRecovered(cb: ((repoPath: string, branch: string, prNumber: number) => void) | null): void {
 			ciRecoveredCallback = cb;
 		},
+		/** Fire the CI-failed handler on demand (e.g. when auto-heal is enabled while CI
+		 *  is already red) — the transition event only fires once on green→red. */
+		triggerCiHeal(repoPath: string, branch: string, prNumber: number): void {
+			ciFailedCallback?.(repoPath, branch, prNumber);
+		},
 	};
 }
 

@@ -111,7 +111,13 @@ function saveReposImmediate(
 	for (const [path, repo] of Object.entries(repositories)) {
 		const branches: Record<string, BranchState> = {};
 		for (const [name, branch] of Object.entries(repo.branches)) {
-			branches[name] = { ...branch, terminals: [] };
+			const persisted: BranchState = { ...branch, terminals: [] };
+			// `healing` is a transient runtime flag; never persist it (a crash mid-heal
+			// would otherwise leave the toggle showing "Healing" forever after reload).
+			if (persisted.ciAutoHeal?.healing) {
+				persisted.ciAutoHeal = { ...persisted.ciAutoHeal, healing: false };
+			}
+			branches[name] = persisted;
 		}
 		serializable[path] = { ...repo, branches };
 	}
@@ -427,6 +433,7 @@ function createRepositoriesStore() {
 		setCiAutoHeal(repoPath: string, branchName: string, value: BranchState["ciAutoHeal"]): void {
 			if (!state.repositories[repoPath]?.branches[branchName]) return;
 			setState("repositories", repoPath, "branches", branchName, "ciAutoHeal", value);
+			save();
 		},
 
 		/** Update branch stats (additions/deletions) — only if branch already exists */
