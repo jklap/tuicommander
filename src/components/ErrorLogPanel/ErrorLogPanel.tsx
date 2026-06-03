@@ -11,6 +11,16 @@ const LEVEL_OPTIONS: Array<{ value: AppLogLevel | "all"; label: string }> = [
 	{ value: "debug", label: "Debug" },
 ];
 
+// Severity rank: picking a level shows that level and everything more severe
+// (e.g. "Warn" intermingles Warn + Error), matching common log-viewer behaviour.
+const LEVEL_SEVERITY: Record<AppLogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
+
+/** True if an entry of `level` should be shown under the selected `filter`.
+ *  "all" shows everything; any level shows itself and all more-severe levels. */
+export function levelPassesThreshold(level: AppLogLevel, filter: AppLogLevel | "all"): boolean {
+	return filter === "all" || LEVEL_SEVERITY[level] >= LEVEL_SEVERITY[filter];
+}
+
 const SOURCE_OPTIONS: Array<{ value: AppLogSource | "all"; label: string }> = [
 	{ value: "all", label: "All Sources" },
 	{ value: "app", label: "App" },
@@ -119,7 +129,7 @@ export const ErrorLogPanel: Component = () => {
 		const search = searchText().toLowerCase();
 
 		return entries.filter((entry) => {
-			if (level !== "all" && entry.level !== level) return false;
+			if (!levelPassesThreshold(entry.level, level)) return false;
 			if (source !== "all" && entry.source !== source) return false;
 			if (search && !entry.message.toLowerCase().includes(search)) return false;
 			return true;
@@ -155,6 +165,7 @@ export const ErrorLogPanel: Component = () => {
 									<button
 										class={`${s.levelBtn} ${levelFilter() === opt.value ? s.levelBtnActive : ""}`}
 										onClick={() => setLevelFilter(opt.value)}
+										title={opt.value === "all" ? "Show all log levels" : `Show ${opt.label} and more severe levels`}
 									>
 										{opt.label}
 									</button>
