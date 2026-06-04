@@ -60,6 +60,15 @@ pub(crate) enum PrTransition {
         pr_number: i32,
         title: String,
     },
+    Pushed {
+        repo_path: String,
+        branch: String,
+        pr_number: i32,
+        title: String,
+        head_ref_oid: String,
+        /// PR author login — used by the watcher's authored_by_others filter.
+        author: String,
+    },
 }
 
 fn is_ready(pr: &BranchPrStatus) -> bool {
@@ -137,6 +146,19 @@ pub(crate) fn detect_transitions(
                 title: title.clone(),
             });
         }
+    }
+
+    // New commit pushed to an open PR: head_ref_oid changed. Independent signal
+    // (a push can coincide with ci_failed etc.), carries the new oid for dedup.
+    if new_state == "OPEN" && old.head_ref_oid != new.head_ref_oid && !new.head_ref_oid.is_empty() {
+        out.push(PrTransition::Pushed {
+            repo_path: rp.clone(),
+            branch: branch.clone(),
+            pr_number,
+            title: title.clone(),
+            head_ref_oid: new.head_ref_oid.clone(),
+            author: new.author.clone(),
+        });
     }
 
     // CI recovery: failed → all passing, suppressed when "ready" already fired
@@ -854,6 +876,45 @@ mod tests {
         let t = detect_transitions("/repo", &old, &new);
         assert_eq!(t.len(), 1);
         assert!(matches!(&t[0], PrTransition::Ready { .. }));
+    }
+
+    #[test]
+    fn transition_pushed() {
+        // New commit on an open PR: head_ref_oid changed → exactly one Pushed.
+        let mut old = make_pr("OPEN", "MERGEABLE", "", 0, 0);
+        old.head_ref_oid = "aaa111".to_string();
+        let mut new = make_pr("OPEN", "MERGEABLE", "", 0, 0);
+        new.head_ref_oid = "bbb222".to_string();
+        new.author = "octocat".to_string();
+        let t = detect_transitions("/repo", &old, &new);
+        assert_eq!(t.len(), 1);
+        assert!(matches!(
+            &t[0],
+            PrTransition::Pushed { head_ref_oid, author, .. }
+                if head_ref_oid == "bbb222" && author == "octocat"
+        ));
+    }
+
+    #[test]
+    fn pushed_same_oid_none() {
+        // Unchanged head_ref_oid → no Pushed.
+        let mut old = make_pr("OPEN", "MERGEABLE", "", 0, 0);
+        old.head_ref_oid = "aaa111".to_string();
+        let mut new = make_pr("OPEN", "MERGEABLE", "", 0, 0);
+        new.head_ref_oid = "aaa111".to_string();
+        let t = detect_transitions("/repo", &old, &new);
+        assert!(!t.iter().any(|x| matches!(x, PrTransition::Pushed { .. })));
+    }
+
+    #[test]
+    fn pushed_non_open_none() {
+        // oid changed but PR is no longer OPEN → no Pushed (Closed fires instead).
+        let mut old = make_pr("OPEN", "MERGEABLE", "", 0, 0);
+        old.head_ref_oid = "aaa111".to_string();
+        let mut new = make_pr("CLOSED", "MERGEABLE", "", 0, 0);
+        new.head_ref_oid = "bbb222".to_string();
+        let t = detect_transitions("/repo", &old, &new);
+        assert!(!t.iter().any(|x| matches!(x, PrTransition::Pushed { .. })));
     }
 
     #[test]

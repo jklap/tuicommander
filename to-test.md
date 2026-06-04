@@ -1127,3 +1127,18 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [HUMAN] Cut a file in repo A, switch to repo B, paste → file moves to B and is gone from A
 - [HUMAN] Same-repo: copy a file, double-click into a subdir, Cmd+V → file appears in the subdir (focus fix: keyboard paste works after entering a folder)
 - [HUMAN] Paste a file that no longer exists (delete source externally first) → an error toast "Copy failed"/"Move failed" appears instead of silent nothing
+
+## Watcher PR-pushed worktree provisioning (2026-06-04)
+- [x] Reuse existing worktree session for (repo, branch) _(verified: watcher.rs find_session_for_branch_reuse_and_miss unit test + find_existing_pr_session adapter)_
+- [HUMAN] New commit on another author's open PR → watcher provisions a worktree (appears in TUIC) + spawns a live PTY session (real GitHub PR + push required)
+- [HUMAN] Second push to the same PR branch → reuses the same worktree session, no duplicate worktree
+
+## Watcher-fire frontend handoff (2026-06-04)
+- [x] handleWatcherFire dispatch logic _(verified: src/__tests__/watcherFire.test.ts — 5 cases: prompt→execute, instructions→startAgent, PR→assisted, PR-instructions→assisted, missing-prompt→warn)_
+- [HUMAN] End-to-end: a real watcher-fire event triggers the smart prompt in the target terminal session
+- [HUMAN] PR-review fire: agent's `gh pr review/approve/comment` surfaces a pendingApproval (ui:confirm) dialog before hitting GitHub
+
+## WatcherManager: PR-pushed trigger + repo + prompt picker (2026-06-04)
+- [x] pr_pushed in trigger dropdown; repo selector + authored-by-others toggle gated by isGitTrigger _(verified: WatcherManager.tsx <Show when={isGitTrigger(formTrigger())}> + watcherManager.test.ts)_
+- [x] Smart-prompt picker sets prompt_id; instructions is advanced fallback _(verified: formPromptId signal + showAdvanced toggle; watcherFormReady test covers prompt-or-instructions)_
+- [VISUAL] Open Watchers popover, select "PR pushed": repo dropdown + "authored by others" checkbox appear, terminal-only instruction textarea collapses to advanced; layout matches STYLE_GUIDE — screenshot after rebuild

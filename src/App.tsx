@@ -144,6 +144,7 @@ import { tunnelPanelStore } from "./stores/tunnelPanel";
 import { uiStore } from "./stores/ui";
 import { updaterStore } from "./stores/updater";
 import { userActivityStore } from "./stores/userActivity";
+import { handleWatcherFire, type WatcherFirePayload, watcherFireDeps } from "./stores/watcherFire";
 import { worktreeManagerStore } from "./stores/worktreeManager";
 import { applyAppTheme, applyFontFamily, themesLoaded } from "./themes";
 import { isTauri } from "./transport";
@@ -559,6 +560,19 @@ const App: Component = () => {
 					conversationStore.startAgent(session_id, proposed_goal);
 				},
 			});
+		}).then((fn) => {
+			unlisten = fn;
+		});
+		onCleanup(() => unlisten?.());
+	}
+
+	// Backend watcher fires: resolve the referenced smart prompt (or instructions)
+	// and run it in the target session. PR fires go through the assisted gate.
+	{
+		let unlisten: (() => void) | undefined;
+		const deps = watcherFireDeps((p) => smartPrompts.executeSmartPrompt(p));
+		listen<WatcherFirePayload>("watcher-fire", (event) => {
+			void handleWatcherFire(event.payload, deps);
 		}).then((fn) => {
 			unlisten = fn;
 		});
