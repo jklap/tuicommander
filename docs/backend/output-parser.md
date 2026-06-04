@@ -153,9 +153,9 @@ ParsedEvent::Suggest {
 }
 ```
 
-Detected as a single-line plain-prefix token at column 0: `suggest: A | B | C`.
+Detected as a single-line plain-prefix token at column 0: `suggest: [ A | B | C ]`.
 
-Items are pipe-delimited. The `conceal_suggest()` function strips the line from the PTY byte stream (replacing it with `\x1b[2K` erase-line) so the token never reaches the terminal. Handles both `\n`-delimited and Ink-style `\r`-delimited segments with CUF cursor-forward encoding. Parsing is agent-gated.
+The whole token must sit on one row and the bracketed content may not contain a nested `[`/`]`. These two constraints make a false capture impossible: a wrapped line lacks the closing `]` on the same row, and a mermaid/markdown line carries a nested `[`, so neither matches. Items are pipe-delimited (2–4 per the protocol). Parsing is agent-gated; the raw token is stripped from the log delivered to PWA/REST consumers by `strip_structural_tokens`, and concealed on the desktop canvas by the frontend overlay.
 
 ### UsageLimit
 

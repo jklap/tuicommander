@@ -98,7 +98,7 @@ Tips for getting started:
 ### Agent response (completed)
 ```
 ✦ The version of this project is 0.9.5, as specified in the package.json file.
-  suggest: View CHANGELOG.md | Check README.md | List active sessions | Search codebase
+  suggest: [ View CHANGELOG.md | Check README.md | List active sessions ]
 ```
 
 - `✦` (U+2726, purple rgb 215,175,255) prefix for agent output

@@ -1969,7 +1969,13 @@ impl ChunkProcessor {
                             self.handle_tuic_state(&payload, session_id, state);
                         }
                         "suggest" => {
-                            let items: Vec<String> = payload
+                            // Tolerate an optional `[ … ]` wrapper so this OSC
+                            // channel accepts the same payload as the text token
+                            // (`suggest: [ A | B | C ]`).
+                            let inner = payload.trim();
+                            let inner = inner.strip_prefix('[').unwrap_or(inner);
+                            let inner = inner.strip_suffix(']').unwrap_or(inner);
+                            let items: Vec<String> = inner
                                 .split('|')
                                 .map(|s| s.trim().to_string())
                                 .filter(|s| !s.is_empty())

@@ -151,7 +151,7 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
         out.push_str("- `intent: <desc> (<title>)` on work-phase change. `<title>` ≤3 words, spaces not hyphens.\n");
     }
     if show_suggest {
-        out.push_str("- `suggest:` — after task done: `suggest: A | B | C` — EXACTLY 3 items separated by `|`, each item ≤40 chars, entire line must fit one terminal row. Never emit 4+ items or multi-line suggestions.\n");
+        out.push_str("- `suggest:` — after task done: `suggest: [ A | B | C ]` — wrap the WHOLE list in one `[ … ]`, EXACTLY 3 items separated by `|`, each item ≤40 chars. The brackets bound the token (parsed even if it wraps); never emit 4+ items.\n");
     }
     out.push('\n');
 

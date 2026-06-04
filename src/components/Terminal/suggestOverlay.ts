@@ -15,82 +15,48 @@ const INTENT_RE = /^intent:\s+\S/;
  *  `suggest: long item that wraps...` (with the pipe on the next row) is
  *  still a new block boundary and the walk MUST stop here. (#1380-3b9c) */
 const SUGGEST_STOP_RE = /^[\t ]*(?:[●⏺][\t ]+)?suggest:\s+\S/;
-/** Status spinner / shell prompt row: a strong terminator for the conceal
- *  walk even when no blank line separates it from the wrapped tail. */
-const TERMINATOR_RE = /^[\t ]*[*$#❯>›●⏺]/;
 
 /**
  * Given a suggest anchor row at `anchorIndex`, return the 0-based indexes of
- * subsequent rows that should be visually hidden as continuations of the
- * same suggest block.
+ * subsequent rows that should be visually hidden as continuations of the same
+ * `suggest: [ … ]` block.
  *
- * Rules (mirror Rust `parse_suggest_with_line`'s tail walk):
- *  1. xterm-wrapped rows (`isWrapped === true`) are always hidden.
- *  2. After the wrap chain ends, hide consecutive non-wrapped rows as
- *     pipeless tails when the suggest already has 2+ pipes (3+ items),
- *     until a terminator row (empty / new token / status spinner / prompt).
- *  3. A new `suggest:`, `intent:`, or terminator row stops the walk.
- *
- * Without these bounds, the overlay would swallow arbitrary Makefile/table/diff
- * rows that happen to contain pipes (story 1276-a3c2).
+ * The bracket pair bounds the token: the closing `]` is a hard terminator, so
+ * the walk simply hides every row after the anchor up to and including the row
+ * that carries `]`. A single-line suggest closes on the anchor itself → nothing
+ * extra to hide. A new `suggest:`/`intent:` token before the `]` stops the walk
+ * defensively. Because the `]` bounds the block, stray pipe rows (Makefile /
+ * mermaid / tables) can never be swallowed.
  */
 export function continuationRowsAfterSuggest(
 	anchorIndex: number,
 	totalRows: number,
 	getRow: (i: number) => RowSnapshot | null,
 ): number[] {
-	const hidden: number[] = [];
-	let pipeTailStarted = false;
-	let hadWrapped = false;
-	// Count pipes across anchor + hidden rows to decide whether a pipeless tail
-	// is safe to consume (mirrors Rust tail-join logic in parse_suggest).
 	const anchor = getRow(anchorIndex);
-	let pipeCount = anchor ? (anchor.text.match(/\|/g) || []).length : 0;
+	// Single-line bracketed suggest closes on the anchor row.
+	if (!anchor || anchor.text.includes("]")) return [];
+	const hidden: number[] = [];
 	for (let i = anchorIndex + 1; i < totalRows; i++) {
 		const row = getRow(i);
 		if (!row) break;
+		// A new token begins a different block — stop before it.
 		if (SUGGEST_STOP_RE.test(row.text) || INTENT_RE.test(row.text)) break;
-		if (row.isWrapped) {
-			hidden.push(i);
-			hadWrapped = true;
-			pipeCount += (row.text.match(/\|/g) || []).length;
-			continue;
-		}
-		// Empty row terminates the block (matches Rust parser).
-		if (row.text.trim() === "") break;
-		// Strong terminators that appear right after the wrap chain.
-		if (TERMINATOR_RE.test(row.text)) break;
-		if (row.text.includes("|")) {
-			// Pipe rows are valid continuations when they're adjacent to the
-			// anchor or to previously hidden rows. A pipeless gap between pipe
-			// rows signals unrelated content (Makefile/table — story 1276-a3c2).
-			if (pipeTailStarted) break;
-			hidden.push(i);
-			pipeTailStarted = true;
-			pipeCount += (row.text.match(/\|/g) || []).length;
-			continue;
-		}
-		// Pipeless tail rows: hide them when the suggest is clearly complete
-		// (wrapped + 2+ pipes already counted). Multiple consecutive pipeless
-		// rows are accepted — long final items can wrap across several lines.
-		if (hadWrapped && pipeCount >= 2) {
-			hidden.push(i);
-			pipeTailStarted = true;
-			continue;
-		}
-		break;
+		hidden.push(i);
+		// The closing `]` ends the bracketed token — hide it, then stop.
+		if (row.text.includes("]")) break;
 	}
 	return hidden;
 }
 
 /**
- * Determine whether the row at `anchorIndex` is the start of a suggest block.
+ * Determine whether the row at `anchorIndex` is the start of a `suggest: [ … ]`
+ * block — i.e. one the Rust parser would accept and render as chips.
  *
- * When the terminal is wide enough, `suggest: A | B | C` fits on one line and
- * the simple `SUGGEST_RE` (requires `|` on the same row) matches.  On narrow
- * terminals the pipe may be pushed onto a wrapped continuation row.  This
- * function handles both cases by checking wrapped rows for a `|` when the
- * anchor contains `suggest:` but no pipe.
+ * Requires the bracketed form: a `suggest:` anchor at column 0 that opens a `[`
+ * and contains a `|` separator. When the terminal is wide enough both land on
+ * the anchor row; on narrow terminals the first `|` may wrap onto a continuation
+ * row, so wrapped rows are checked too.
  */
 export function isSuggestBlock(
 	anchorIndex: number,
@@ -100,13 +66,13 @@ export function isSuggestBlock(
 	const row = getRow(anchorIndex);
 	if (!row) return false;
 
-	// Must at least look like a suggest anchor at column 0
-	if (!SUGGEST_ANCHOR_RE.test(row.text)) return false;
+	// Must look like a bracketed suggest anchor at column 0.
+	if (!SUGGEST_ANCHOR_RE.test(row.text) || !row.text.includes("[")) return false;
 
-	// Fast path: pipe on same line — classic case
+	// Fast path: pipe on the same line — classic case.
 	if (row.text.includes("|")) return true;
 
-	// Check wrapped continuation rows for a pipe separator
+	// Otherwise the first `|` may have wrapped onto a continuation row.
 	for (let i = anchorIndex + 1; i < totalRows; i++) {
 		const next = getRow(i);
 		if (!next?.isWrapped) break;
