@@ -67,6 +67,9 @@ const state = createRendererState({
 	// Gated by fonts-ready in the reducer; never called before fonts load.
 	onFrame: (buf) => {
 		const frame = decodeBinaryFrame(buf);
+		// Return the drained buffer to the main thread for pool recycling
+		// (ping-pong, zero-copy). Decode has already read it into typed arrays.
+		(self as unknown as { postMessage(m: unknown, t: Transferable[]): void }).postMessage(buf, [buf]);
 		if (!frame) return;
 		applyFrameToGrid(gridState, frame);
 		scheduler.schedule();

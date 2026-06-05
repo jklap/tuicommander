@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
 	createRendererState,
+	dispatchFrameToWorker,
 	type FontEnv,
 	type FontFaceLike,
 	type FontPayload,
@@ -214,5 +215,110 @@ describe("font loading + ready-gating", () => {
 		expect(worker.posts).toHaveLength(1);
 		expect(worker.posts[0].msg).toMatchObject({ type: "fonts" });
 		expect(worker.posts[0].transfer).toEqual([s1, s2]);
+	});
+});
+
+// --- Frame transfer (ping-pong) + ack-before-transfer ---
+
+describe("WorkerRenderer.postFrame + buffer pool (ping-pong)", () => {
+	it("transfers the frame buffer (neuters sender) as a frame message", () => {
+		const worker = makeFakeWorker();
+		const r = new WorkerRenderer(worker);
+		const buf = new ArrayBuffer(64);
+
+		r.postFrame(buf);
+
+		expect(worker.posts).toHaveLength(1);
+		expect(worker.posts[0].msg).toMatchObject({ type: "frame", buf });
+		expect(worker.posts[0].transfer).toEqual([buf]);
+	});
+
+	it("recycles a returned buffer and reuses it on acquire (zero re-alloc)", () => {
+		const r = new WorkerRenderer(makeFakeWorker());
+		const buf = new ArrayBuffer(128);
+
+		r.recycle(buf);
+		expect(r.acquire(128)).toBe(buf); // same instance reused
+	});
+
+	it("allocates a fresh buffer when the pool is empty (never exhausts)", () => {
+		const r = new WorkerRenderer(makeFakeWorker());
+		const got = r.acquire(256);
+		expect(got).toBeInstanceOf(ArrayBuffer);
+		expect(got.byteLength).toBe(256);
+	});
+
+	it("does not return an undersized pooled buffer; allocs to fit", () => {
+		const r = new WorkerRenderer(makeFakeWorker());
+		r.recycle(new ArrayBuffer(8));
+		const got = r.acquire(64);
+		expect(got.byteLength).toBe(64);
+	});
+
+	it("bounds the pool (double-buffer): excess recycled buffers are dropped", () => {
+		const r = new WorkerRenderer(makeFakeWorker());
+		const a = new ArrayBuffer(16);
+		const b = new ArrayBuffer(16);
+		const c = new ArrayBuffer(16);
+		r.recycle(a);
+		r.recycle(b);
+		r.recycle(c); // over cap of 2 -> dropped
+
+		const first = r.acquire(16);
+		const second = r.acquire(16);
+		const third = r.acquire(16); // pool empty -> fresh alloc
+		expect([first, second]).toContain(a);
+		expect([first, second]).toContain(b);
+		expect(third).not.toBe(a);
+		expect(third).not.toBe(b);
+		expect(third).not.toBe(c);
+	});
+
+	it("survives back-to-back frames: pool never exhausts, acquire always returns", () => {
+		const r = new WorkerRenderer(makeFakeWorker());
+		for (let i = 0; i < 10; i++) {
+			const buf = r.acquire(32); // always returns (pooled or fresh)
+			expect(buf.byteLength).toBeGreaterThanOrEqual(32);
+			r.postFrame(buf); // transfer to worker
+			r.recycle(new ArrayBuffer(32)); // worker returns a drained buffer
+		}
+	});
+});
+
+describe("dispatchFrameToWorker — ack BEFORE transfer (ticker must not starve)", () => {
+	it("calls ack on the main thread before transferring to the worker", () => {
+		const worker = makeFakeWorker();
+		const r = new WorkerRenderer(worker);
+		const order: string[] = [];
+		const ack = vi.fn(() => order.push("ack"));
+		const originalPost = worker.postMessage.bind(worker);
+		worker.postMessage = (msg: unknown, transfer?: Transferable[]) => {
+			order.push("post");
+			originalPost(msg, transfer);
+		};
+		const buf = new ArrayBuffer(48);
+
+		dispatchFrameToWorker(buf, r, ack);
+
+		expect(ack).toHaveBeenCalledTimes(1);
+		expect(order).toEqual(["ack", "post"]); // ack strictly before transfer
+		expect(worker.posts[0].transfer).toEqual([buf]);
+	});
+
+	it("acks before each transfer across back-to-back frames", () => {
+		const worker = makeFakeWorker();
+		const r = new WorkerRenderer(worker);
+		const order: string[] = [];
+		const ack = () => order.push("ack");
+		const originalPost = worker.postMessage.bind(worker);
+		worker.postMessage = (msg: unknown, transfer?: Transferable[]) => {
+			order.push("post");
+			originalPost(msg, transfer);
+		};
+
+		dispatchFrameToWorker(new ArrayBuffer(8), r, ack);
+		dispatchFrameToWorker(new ArrayBuffer(8), r, ack);
+
+		expect(order).toEqual(["ack", "post", "ack", "post"]);
 	});
 });

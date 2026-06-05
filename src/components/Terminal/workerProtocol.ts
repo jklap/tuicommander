@@ -80,8 +80,13 @@ export interface FontEnv {
  *     <canvas>, which is a distinct element)
  */
 export class WorkerRenderer {
+	/** Ping-pong double buffer: keep at most this many drained buffers for reuse. */
+	private static readonly MAX_FRAME_POOL = 2;
+
 	private readonly worker: WorkerLike;
 	private transferredNode: TransferableCanvas | null = null;
+	/** Drained frame buffers returned by the worker, recycled to avoid GC churn. */
+	private readonly framePool: ArrayBuffer[] = [];
 
 	constructor(worker: WorkerLike) {
 		this.worker = worker;
@@ -111,6 +116,50 @@ export class WorkerRenderer {
 			payloads.map((p) => p.source),
 		);
 	}
+
+	/**
+	 * Transfer a frame buffer to the worker (zero-copy; neuters the sender's
+	 * reference). The worker drains it on decode and posts it back for recycling.
+	 */
+	postFrame(buf: ArrayBuffer): void {
+		const message: FrameMessage = { type: "frame", buf };
+		this.worker.postMessage(message, [buf]);
+	}
+
+	/**
+	 * Recycle a drained buffer the worker returned. Bounded (ping-pong): once the
+	 * pool is full, extra buffers are dropped to GC so it never grows unbounded.
+	 */
+	recycle(buf: ArrayBuffer): void {
+		if (this.framePool.length < WorkerRenderer.MAX_FRAME_POOL) {
+			this.framePool.push(buf);
+		}
+	}
+
+	/**
+	 * Get a writable buffer of at least `byteLength`: reuse a pooled one that
+	 * fits, else allocate a fresh one. Always returns — the pool never exhausts,
+	 * so the main thread is never blocked waiting on the worker to return one.
+	 */
+	acquire(byteLength: number): ArrayBuffer {
+		for (let i = 0; i < this.framePool.length; i++) {
+			if (this.framePool[i].byteLength >= byteLength) {
+				return this.framePool.splice(i, 1)[0];
+			}
+		}
+		return new ArrayBuffer(byteLength);
+	}
+}
+
+/**
+ * Sacrosanct frame-receipt ordering: ack on the MAIN thread FIRST (the backend
+ * ack only clears the in-flight flag; the ticker sends the next frame on its
+ * own schedule), THEN transfer the buffer to the worker. Worker paint is never
+ * on the ack path, so the 16ms ticker cannot starve.
+ */
+export function dispatchFrameToWorker(buf: ArrayBuffer, renderer: WorkerRenderer, ack: () => void): void {
+	ack();
+	renderer.postFrame(buf);
 }
 
 // --- Worker side ---
