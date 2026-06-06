@@ -13,12 +13,7 @@
 
 import { type CellMetrics, decodeBinaryFrame } from "./canvasTerminalUtils";
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
-import {
-	applyFrameToGrid,
-	applyResize,
-	createRepaintScheduler,
-	createWorkerGridState,
-} from "./workerGridState";
+import { applyFrameToGrid, applyResize, createRepaintScheduler, createWorkerGridState } from "./workerGridState";
 import {
 	createRendererState,
 	type FontDescriptors,
@@ -60,6 +55,17 @@ const scheduler = createRepaintScheduler(
 		});
 		gridState.fullRepaintNeeded = false;
 		gridState.pendingDirtyRows.clear();
+	},
+	// WebKit can fully suspend worker rAF under CPU pressure (e.g. a Rust build at
+	// 100% CPU), freezing the terminal. A setTimeout fallback guarantees the paint
+	// still lands so glyphs/Ink animations never go completely immobile.
+	// 16ms (≈vsync): WebKit also DEPRIORITIZES worker rAF for sporadic paints (one
+	// keystroke at a time), so the fallback — not rAF — drives single-char repaints.
+	// At 100ms that added a ~2-char input lag vs the main-thread path; 16ms removes it.
+	{
+		setTimer: (cb, ms) => self.setTimeout(cb, ms) as unknown as number,
+		clearTimer: (id) => self.clearTimeout(id),
+		fallbackMs: 16,
 	},
 );
 
