@@ -28,6 +28,7 @@ pub(crate) mod git;
 pub(crate) mod git_cli;
 pub(crate) mod git_graph;
 pub(crate) mod github;
+pub(crate) mod github_account;
 pub(crate) mod github_auth;
 #[cfg(test)]
 mod github_compat_tests;

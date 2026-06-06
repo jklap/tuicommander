@@ -62,6 +62,51 @@ pub(crate) fn read_remote_url(repo_path: &Path) -> Option<String> {
     parse_git_config_remote_url(&config_content, "origin")
 }
 
+/// Enumerate ALL git remotes as `(name, url)` from .git/config (file I/O, no
+/// subprocess). Unlike [`read_remote_url`] — which only reads `origin` — this
+/// surfaces every remote so the caller can detect multi-remote ambiguity
+/// (origin + upstream + fork) when binding a repo to a GitHub account.
+pub(crate) fn list_remotes(repo_path: &Path) -> Vec<(String, String)> {
+    let Some(git_dir) = resolve_git_dir(repo_path) else {
+        return Vec::new();
+    };
+    let Ok(config_content) = fs::read_to_string(git_dir.join("config")) else {
+        return Vec::new();
+    };
+    parse_git_config_remotes(&config_content)
+}
+
+/// Parse all `[remote "<name>"] url = <url>` pairs from a git config string.
+fn parse_git_config_remotes(config: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut current: Option<String> = None;
+    for line in config.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            current = parse_remote_section_name(trimmed);
+            continue;
+        }
+        if let Some(name) = &current
+            && let Some(rest) = trimmed.strip_prefix("url")
+        {
+            let rest = rest.trim_start();
+            if let Some(value) = rest.strip_prefix('=') {
+                out.push((name.clone(), value.trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// Extract `origin` from a `[remote "origin"]` section header, or `None` for
+/// any other section.
+fn parse_remote_section_name(header: &str) -> Option<String> {
+    header
+        .strip_prefix("[remote \"")?
+        .strip_suffix("\"]")
+        .map(|name| name.to_string())
+}
+
 /// Parse a git config string for a remote's URL.
 fn parse_git_config_remote_url(config: &str, remote_name: &str) -> Option<String> {
     let section_header = format!("[remote \"{remote_name}\"]");
@@ -2799,6 +2844,66 @@ pub(crate) async fn get_file_blame(path: String, file: String) -> Result<Vec<Bla
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- list_remotes / parse_git_config_remotes ---
+
+    #[test]
+    fn parse_config_remotes_enumerates_all() {
+        let config = r#"[core]
+    repositoryformatversion = 0
+[remote "origin"]
+    url = git@github.com:octocat/hello.git
+    fetch = +refs/heads/*:refs/remotes/origin/*
+[branch "main"]
+    remote = origin
+[remote "upstream"]
+    url = https://github.com/upstream/hello.git
+"#;
+        let remotes = parse_git_config_remotes(config);
+        assert_eq!(
+            remotes,
+            vec![
+                ("origin".to_string(), "git@github.com:octocat/hello.git".to_string()),
+                ("upstream".to_string(), "https://github.com/upstream/hello.git".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_config_remotes_ignores_pushurl_and_non_remotes() {
+        let config = r#"[remote "origin"]
+    url = git@github.com:octocat/hello.git
+    pushurl = git@github.com:octocat/fork.git
+"#;
+        let remotes = parse_git_config_remotes(config);
+        assert_eq!(
+            remotes,
+            vec![("origin".to_string(), "git@github.com:octocat/hello.git".to_string())]
+        );
+    }
+
+    #[test]
+    fn list_remotes_reads_from_git_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let git_dir = dir.path().join(".git");
+        std::fs::create_dir_all(&git_dir).expect("mkdir .git");
+        std::fs::write(
+            git_dir.join("config"),
+            "[remote \"origin\"]\n\turl = git@github.com:octocat/hello.git\n",
+        )
+        .expect("write config");
+        let remotes = list_remotes(dir.path());
+        assert_eq!(
+            remotes,
+            vec![("origin".to_string(), "git@github.com:octocat/hello.git".to_string())]
+        );
+    }
+
+    #[test]
+    fn list_remotes_empty_for_non_repo() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(list_remotes(dir.path()).is_empty());
+    }
 
     #[test]
     fn get_repo_initials_splits_on_hyphens() {
