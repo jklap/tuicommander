@@ -88,23 +88,62 @@ pub(crate) fn read_branch_from_head(repo_path: &Path) -> Option<String> {
     None // detached HEAD
 }
 
-/// Read the origin remote URL from .git/config (file I/O, no subprocess).
+/// Resolve the git config file holding a repo's remotes, handling linked
+/// worktrees.
+///
+/// A normal repo has `<gitdir>/config`. A linked worktree's gitdir has NO
+/// `config` of its own — remotes live in the COMMON config (pointed at by the
+/// worktree's `commondir` file). Falling back to the common config makes remote
+/// resolution work in worktrees too. For a normal checkout `<gitdir>/config`
+/// exists, so behavior there is unchanged.
+fn resolve_git_config_path(repo_path: &Path) -> Option<PathBuf> {
+    let git_dir = resolve_git_dir(repo_path)?;
+    let own = git_dir.join("config");
+    if own.is_file() {
+        return Some(own);
+    }
+    // Linked worktree: the config (with the remotes) lives in the common dir.
+    let cfg = common_git_dir(&git_dir).join("config");
+    cfg.is_file().then_some(cfg)
+}
+
+/// The common git dir for a (possibly-worktree) gitdir.
+///
+/// A linked worktree's gitdir has a `commondir` file pointing at the main `.git`,
+/// where the shared refs (`refs/heads`, `refs/remotes`, `packed-refs`) and config
+/// live. A normal gitdir has no `commondir`, so this returns it unchanged —
+/// making callers worktree-aware without altering normal-checkout behavior.
+fn common_git_dir(git_dir: &Path) -> PathBuf {
+    match fs::read_to_string(git_dir.join("commondir")) {
+        Ok(rel) => {
+            let rel = rel.trim();
+            let common = if Path::new(rel).is_absolute() {
+                PathBuf::from(rel)
+            } else {
+                git_dir.join(rel)
+            };
+            common.canonicalize().unwrap_or(common)
+        }
+        Err(_) => git_dir.to_path_buf(),
+    }
+}
+
+/// Read the origin remote URL from the git config (file I/O, no subprocess).
 /// Parses the `[remote "origin"]` section for the `url` key.
 pub(crate) fn read_remote_url(repo_path: &Path) -> Option<String> {
-    let git_dir = resolve_git_dir(repo_path)?;
-    let config_content = fs::read_to_string(git_dir.join("config")).ok()?;
+    let config_content = fs::read_to_string(resolve_git_config_path(repo_path)?).ok()?;
     parse_git_config_remote_url(&config_content, "origin")
 }
 
-/// Enumerate ALL git remotes as `(name, url)` from .git/config (file I/O, no
+/// Enumerate ALL git remotes as `(name, url)` from the git config (file I/O, no
 /// subprocess). Unlike [`read_remote_url`] — which only reads `origin` — this
 /// surfaces every remote so the caller can detect multi-remote ambiguity
 /// (origin + upstream + fork) when binding a repo to a GitHub account.
 pub(crate) fn list_remotes(repo_path: &Path) -> Vec<(String, String)> {
-    let Some(git_dir) = resolve_git_dir(repo_path) else {
+    let Some(cfg) = resolve_git_config_path(repo_path) else {
         return Vec::new();
     };
-    let Ok(config_content) = fs::read_to_string(git_dir.join("config")) else {
+    let Ok(config_content) = fs::read_to_string(cfg) else {
         return Vec::new();
     };
     parse_git_config_remotes(&config_content)
@@ -1052,6 +1091,10 @@ pub(crate) fn sort_branches(branches: &mut [serde_json::Value]) {
 /// 2. Read `refs/remotes/origin/HEAD` symref (set by `git clone` or `git remote set-head`)
 /// 3. Return `None` if no default branch can be determined
 fn detect_default_branch(git_dir: &Path) -> Option<String> {
+    // Refs live in the common dir for linked worktrees (identical for normal
+    // repos), so resolve them there.
+    let refs_dir = common_git_dir(git_dir);
+    let git_dir = refs_dir.as_path();
     // 1. Check well-known candidate names in local refs
     if let Some(name) = MAIN_BRANCH_CANDIDATES.iter().find(|name| {
         git_dir.join("refs/heads").join(name).exists()
