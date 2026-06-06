@@ -223,6 +223,7 @@ pub(crate) fn compute_git_fingerprint(
 /// - attached HEAD → `"<refpath>=<sha>"` (resolving the loose ref), or `"ref: <refpath>"`
 ///   if the ref is packed/unreadable (still distinguishes branches);
 /// - detached HEAD → the raw commit SHA.
+///
 /// Empty string if HEAD can't be read.
 fn resolve_head_target(git_dir: &Path) -> String {
     let head = std::fs::read_to_string(git_dir.join("HEAD")).unwrap_or_default();

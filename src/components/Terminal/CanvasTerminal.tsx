@@ -21,21 +21,16 @@ import {
 	SCROLLBAR_PX,
 	snapLineHeight,
 } from "./canvasTerminalUtils";
-import {
-	installFrameTimingDebugHook,
-	isFrameTimingEnabled,
-	recordFrameTiming,
-	resetFrameTiming,
-} from "./frameTiming";
 import { fetchFontPayloads, resolveWorkerFontFaces } from "./fontAssets";
-import { createGridRenderer, type GridRenderer } from "./gridRenderer";
-import { decideFrameGrid } from "./workerGridState";
-import { chooseRenderer, receiveFrame, WorkerRenderer } from "./workerProtocol";
+import { installFrameTimingDebugHook, isFrameTimingEnabled, recordFrameTiming, resetFrameTiming } from "./frameTiming";
 import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } from "./glyphCache";
+import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex } from "./linkProvider";
 import { continuationRowsAfterSuggest, isSuggestBlock } from "./suggestOverlay";
 import { altSequenceFromCode, createCompositionState, keyToSequence } from "./terminalInput";
+import { decideFrameGrid } from "./workerGridState";
+import { chooseRenderer, receiveFrame, WorkerRenderer } from "./workerProtocol";
 
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame };
@@ -185,7 +180,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let fullRepaintNeeded = true;
 	let hidden = false;
 	let lastHistorySize = -1;
-
 
 	function writePtyNoScroll(data: string) {
 		invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch((e) => {
@@ -652,7 +646,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		return lines.join("\n");
 	}
 
-
 	function paintCursor(frame: DecodedFrame, m: CellMetrics) {
 		if (frame.displayOffset > 0) return;
 		if (!frame.cursorVisible) return;
@@ -880,7 +873,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (blinkInterval == null) startBlink();
 	}
 
-
 	function repaintCursorOnly(frame: DecodedFrame, m: CellMetrics) {
 		repaintOverlay(frame, m);
 	}
@@ -905,8 +897,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// neuters the buffer. See receiveFrame for the sacrosanct ordering.
 		const timing = isFrameTimingEnabled();
 		const frame = receiveFrame(buffer, {
-			ack: () =>
-				invokeRef?.("ack_terminal_frame", { sessionId: props.sessionId }).catch(ipcErr("ack_terminal_frame")),
+			ack: () => invokeRef?.("ack_terminal_frame", { sessionId: props.sessionId }).catch(ipcErr("ack_terminal_frame")),
 			decode: (buf) => {
 				const decodeT0 = timing ? performance.now() : 0;
 				const f = decodeBinaryFrame(buf);

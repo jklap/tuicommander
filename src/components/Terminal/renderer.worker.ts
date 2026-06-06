@@ -13,12 +13,7 @@
 
 import { type CellMetrics, decodeBinaryFrame } from "./canvasTerminalUtils";
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
-import {
-	applyFrameToGrid,
-	applyResize,
-	createRepaintScheduler,
-	createWorkerGridState,
-} from "./workerGridState";
+import { applyFrameToGrid, applyResize, createRepaintScheduler, createWorkerGridState } from "./workerGridState";
 import {
 	createRendererState,
 	type FontDescriptors,
