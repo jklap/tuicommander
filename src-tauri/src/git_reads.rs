@@ -262,8 +262,47 @@ impl GitReads for GixGitReads {
     }
 
     fn worktree_paths(&self, repo: &Path) -> Result<HashMap<String, String>, String> {
-        let _repo = self.repo(repo)?;
-        unimplemented!("gix worktree_paths — Step 10")
+        use gix::bstr::ByteSlice;
+        let grepo = self.repo(repo)?;
+        let mut map = HashMap::new();
+
+        let branch_of = |r: &gix::Repository| -> Option<String> {
+            r.head_ref()
+                .ok()
+                .flatten()
+                .map(|href| href.name().shorten().to_str_lossy().into_owned())
+        };
+        // `git worktree list` reports resolved real paths (symlinks followed,
+        // e.g. macOS /var -> /private/var). Match that so paths are byte-equal.
+        let real = |p: &Path| -> String {
+            std::fs::canonicalize(p)
+                .unwrap_or_else(|_| p.to_path_buf())
+                .to_string_lossy()
+                .into_owned()
+        };
+
+        // Main worktree (gix's worktrees() lists only LINKED ones). Standard
+        // non-bare layout: the main work dir is the `.git` directory's parent.
+        if let Some(main_wd) = grepo.common_dir().parent()
+            && main_wd.exists()
+            && let Ok(main_repo) = gix::open(main_wd)
+            && let Some(branch) = branch_of(&main_repo)
+        {
+            map.insert(branch, real(main_wd));
+        }
+
+        // Linked worktrees on a branch whose directory still exists.
+        for proxy in grepo.worktrees().map_err(|e| e.to_string())? {
+            let Ok(base) = proxy.base() else { continue };
+            if !base.exists() {
+                continue;
+            }
+            let Ok(wt_repo) = proxy.into_repo() else { continue };
+            if let Some(branch) = branch_of(&wt_repo) {
+                map.insert(branch, real(&base));
+            }
+        }
+        Ok(map)
     }
 
     fn status_counts(&self, repo: &Path) -> StatusCounts {
@@ -312,7 +351,8 @@ impl Default for PerOpBackend {
             graph_commits: Backend::Cli,
             // Flipped to gix in Step 9 (parity test: shootout_ahead_behind).
             ahead_behind: Backend::Gix,
-            worktree_paths: Backend::Cli,
+            // Flipped to gix in Step 10 (parity test: shootout_worktrees).
+            worktree_paths: Backend::Gix,
             status_counts: Backend::Cli,
             diff_stats: Backend::Cli,
             blame: Backend::Cli,
@@ -599,6 +639,26 @@ mod tests {
             .to_string();
         let cli_head = run_git(&repo, &["rev-parse", "HEAD"]).trim().to_string();
         assert_eq!(gix_head, cli_head);
+    }
+
+    /// Step 10: gix worktree_paths == CLI, including the main worktree (gix
+    /// omits it) and a linked worktree; detached/missing worktrees excluded.
+    #[test]
+    fn shootout_worktrees() {
+        let (_guard, repo) = fixture_repo();
+        let wt_dir = tempfile::tempdir().unwrap();
+        let wt = wt_dir.path().join("linked");
+        run_git(
+            &repo,
+            &["worktree", "add", "-b", "wt-branch", wt.to_str().unwrap()],
+        );
+
+        let cli = CliGitReads;
+        let gix = GixGitReads::new();
+        let a = cli.worktree_paths(&repo).unwrap();
+        let b = gix.worktree_paths(&repo).unwrap();
+        assert_eq!(a, b, "worktree_paths gix != cli\ncli={a:#?}\ngix={b:#?}");
+        assert!(a.contains_key("main") && a.contains_key("wt-branch"));
     }
 
     /// Step 8: commit_log + graph_commits stay on the CLI. gix 0.84's rev_walk

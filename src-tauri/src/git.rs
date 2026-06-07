@@ -1192,7 +1192,7 @@ pub(crate) async fn get_repo_summary_impl(
     // Spawn worktree_paths concurrently while we fetch/check merged_branches cache.
     let wt_path = repo_path.clone();
     let worktree_handle =
-        tokio::task::spawn_blocking(move || crate::worktree::get_worktree_paths(wt_path));
+        tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)));
 
     let mb_path = repo_path.clone();
     let merged_branches = cached_try(
@@ -1267,7 +1267,7 @@ pub(crate) async fn get_repo_structure_impl(
     let _permit = state.monitoring_git_permit().await;
     let wt_path = repo_path.clone();
     let worktree_handle =
-        tokio::task::spawn_blocking(move || crate::worktree::get_worktree_paths(wt_path));
+        tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)));
 
     let mb_path = repo_path.clone();
     let merged_branches = cached_try(
@@ -1308,7 +1308,7 @@ pub(crate) async fn get_repo_diff_stats_impl(
     // Need worktree paths to know which directories to diff
     let wt_path = repo_path.clone();
     let worktree_paths =
-        tokio::task::spawn_blocking(move || crate::worktree::get_worktree_paths(wt_path))
+        tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)))
             .await
             .map_err(|e| format!("spawn_blocking error: {e}"))?
             .map_err(|e| format!("get_worktree_paths failed: {e}"))?;
