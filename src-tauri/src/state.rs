@@ -2493,7 +2493,16 @@ pub(crate) mod tests_support {
     use super::*;
 
     pub fn make_test_app_state() -> AppState {
-        let data_dir = std::env::temp_dir().join("test-tuic-data");
+        // Unique data dir per call: AppState::new eagerly opens
+        // `data_dir/tunnel_audit.db`, so a shared path makes parallel tests
+        // collide on the SQLite file (concurrent opens → SQLITE_BUSY
+        // "database is locked"). The pid + monotonic seq keeps each test's
+        // on-disk DB isolated.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let data_dir =
+            std::env::temp_dir().join(format!("test-tuic-data-{}-{}", std::process::id(), seq));
         let _ = std::fs::create_dir_all(&data_dir);
         let log_buffer = Arc::new(parking_lot::Mutex::new(
             crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
@@ -2521,7 +2530,19 @@ mod tests {
     #[test]
     fn test_state_has_data_dir() {
         let state = tests_support::make_test_app_state();
-        assert_eq!(state.data_dir, std::env::temp_dir().join("test-tuic-data"));
+        // make_test_app_state assigns a unique per-call dir under temp (named
+        // `test-tuic-data-<pid>-<seq>`) so parallel tests don't share the
+        // tunnel_audit.db SQLite file.
+        assert!(state.data_dir.starts_with(std::env::temp_dir()));
+        assert!(
+            state
+                .data_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("test-tuic-data")),
+            "unexpected data_dir: {:?}",
+            state.data_dir
+        );
     }
 
     // ── split_name_segments ──────────────────────────────────
