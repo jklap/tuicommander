@@ -305,9 +305,15 @@ impl GitReads for GixGitReads {
         Ok(map)
     }
 
+    // status_counts stays on the CLI (Step 11 decision). gix 0.84's status model
+    // — separate tree/index and index/worktree passes, `Rewrite` rename items,
+    // untracked-directory collapsing, and multi-stage conflict entries — does not
+    // reach byte-for-byte parity with `git status --porcelain=v2` counts within
+    // scope. The plan also mandates a CLI fallback for sparse-checkout and
+    // submodule repos; keeping the whole op on the CLI satisfies that too.
     fn status_counts(&self, repo: &Path) -> StatusCounts {
         let _repo = self.repo(repo);
-        unimplemented!("gix status_counts — Step 11")
+        unimplemented!("status_counts stays on CLI — gix status != porcelain-v2 counts")
     }
 
     fn diff_stats(&self, repo: &Path, _scope: Option<&str>) -> DiffStats {
@@ -659,6 +665,63 @@ mod tests {
         let b = gix.worktree_paths(&repo).unwrap();
         assert_eq!(a, b, "worktree_paths gix != cli\ncli={a:#?}\ngix={b:#?}");
         assert!(a.contains_key("main") && a.contains_key("wt-branch"));
+    }
+
+    /// Init a fresh, empty repo with one committed `a.txt` and return guard+path.
+    fn clean_repo() -> (tempfile::TempDir, std::path::PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().to_path_buf();
+        run_git(&p, &["init", "-b", "main"]);
+        run_git(&p, &["config", "user.email", "t@t"]);
+        run_git(&p, &["config", "user.name", "T"]);
+        run_git(&p, &["config", "core.hooksPath", "/dev/null"]);
+        std::fs::write(p.join("a.txt"), "a\n").unwrap();
+        run_git(&p, &["add", "a.txt"]);
+        run_git(&p, &["commit", "-m", "init", "--no-verify"]);
+        (dir, p)
+    }
+
+    /// Step 11: status_counts stays on the CLI (gix 0.84 status can't match
+    /// porcelain-v2 counts byte-for-byte). This guards the CLI counting across
+    /// clean/staged/unstaged/untracked/renamed; and because the op is CLI for
+    /// ALL repos, sparse-checkout (and submodule) repos inherently use the CLI.
+    #[test]
+    fn status_counts_cli_cases_and_fallback() {
+        // clean
+        let (_g0, clean) = clean_repo();
+        let sc = git_reads().status_counts(&clean);
+        assert_eq!((sc.status.as_str(), sc.staged, sc.changed), ("clean", 0, 0));
+
+        // staged modification
+        let (_g1, staged) = clean_repo();
+        std::fs::write(staged.join("a.txt"), "a2\n").unwrap();
+        run_git(&staged, &["add", "a.txt"]);
+        let sc = git_reads().status_counts(&staged);
+        assert_eq!((sc.status.as_str(), sc.staged), ("dirty", 1));
+        // plus an unstaged edit on top → porcelain "1 MM": staged AND changed.
+        std::fs::write(staged.join("a.txt"), "a3\n").unwrap();
+        let sc = git_reads().status_counts(&staged);
+        assert_eq!(sc.staged, 1);
+        assert!(sc.changed >= 1);
+
+        // untracked only
+        let (_g2, untracked) = clean_repo();
+        std::fs::write(untracked.join("new.txt"), "n\n").unwrap();
+        let sc = git_reads().status_counts(&untracked);
+        assert_eq!(sc.status, "dirty");
+        assert_eq!(sc.changed, 1);
+
+        // staged rename → porcelain "2 R.": one staged entry.
+        let (_g3, renamed) = clean_repo();
+        run_git(&renamed, &["mv", "a.txt", "b.txt"]);
+        let sc = git_reads().status_counts(&renamed);
+        assert_eq!(sc.staged, 1);
+
+        // sparse-checkout repo: must still be served (via CLI) without error.
+        let (_g4, sparse) = clean_repo();
+        run_git(&sparse, &["sparse-checkout", "init"]);
+        let sc = git_reads().status_counts(&sparse);
+        assert_eq!(sc.status, "clean");
     }
 
     /// Step 8: commit_log + graph_commits stay on the CLI. gix 0.84's rev_walk
