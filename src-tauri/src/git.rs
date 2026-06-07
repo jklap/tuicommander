@@ -2773,17 +2773,44 @@ fn parse_blame_porcelain(output: &str) -> Vec<BlameLine> {
 }
 
 /// Get per-line blame information for a file.
-/// CLI blame via `git blame --porcelain`. Verifies the file is tracked first so
-/// callers get a clear error instead of git's cryptic "no such path in HEAD".
-pub(crate) fn blame_cli(repo: &Path, file: &str) -> Result<Vec<BlameLine>, String> {
-    let tracked = git_cmd(repo)
+/// True if `file`'s history contains a rename. `git blame` (and gix blame)
+/// without -C/-M stop at the rename boundary, but git follows the path's rename
+/// in history while gix does not — so a renamed file must use the CLI blame for
+/// matching per-line attribution. Detected via `git log --follow --diff-filter=R`.
+pub(crate) fn file_history_has_rename(repo: &Path, file: &str) -> bool {
+    git_cmd(repo)
+        .args([
+            "log",
+            "--follow",
+            "--diff-filter=R",
+            "--format=%H",
+            "--",
+            file,
+        ])
+        .run_silent()
+        .map(|o| !o.stdout.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// Verify `file` is tracked, returning a friendly error if not (instead of
+/// git's cryptic "no such path in HEAD"). Shared by both blame adapters.
+pub(crate) fn ensure_file_tracked(repo: &Path, file: &str) -> Result<(), String> {
+    if git_cmd(repo)
         .args(["ls-files", "--error-unmatch", file])
-        .run();
-    if tracked.is_err() {
+        .run()
+        .is_err()
+    {
         return Err(format!(
             "File is not tracked by git — blame unavailable: {file}"
         ));
     }
+    Ok(())
+}
+
+/// CLI blame via `git blame --porcelain`. Verifies the file is tracked first so
+/// callers get a clear error instead of git's cryptic "no such path in HEAD".
+pub(crate) fn blame_cli(repo: &Path, file: &str) -> Result<Vec<BlameLine>, String> {
+    ensure_file_tracked(repo, file)?;
 
     let out = git_cmd(repo)
         .args(["blame", "--porcelain", file])

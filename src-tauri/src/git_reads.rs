@@ -328,9 +328,51 @@ impl GitReads for GixGitReads {
         unimplemented!("diff_stats stays on CLI — worktree shortstat parity not feasible")
     }
 
-    fn blame(&self, repo: &Path, _file: &str) -> Result<Vec<BlameLine>, String> {
-        let _repo = self.repo(repo)?;
-        unimplemented!("gix blame — Step 13")
+    fn blame(&self, repo: &Path, file: &str) -> Result<Vec<BlameLine>, String> {
+        use gix::bstr::ByteSlice;
+        // Same friendly "not tracked" error contract as the CLI adapter.
+        crate::git::ensure_file_tracked(repo, file)?;
+        let grepo = self.repo(repo)?;
+
+        // gix blame, like `git blame` without -C/-M, does not follow content
+        // across a file rename — it stops at the rename boundary. When the
+        // file's history contains a rename, git's per-line attribution differs,
+        // so fall back to the CLI (which is what the panel expects).
+        if crate::git::file_history_has_rename(repo, file) {
+            return crate::git::blame_cli(repo, file);
+        }
+
+        let head = grepo.head_id().map_err(|e| e.to_string())?.detach();
+        let outcome = grepo
+            .blame_file(file.into(), head, Default::default())
+            .map_err(|e| e.to_string())?;
+
+        let mut out = Vec::new();
+        for (entry, lines) in outcome.entries_with_lines() {
+            let commit = grepo.find_commit(entry.commit_id).map_err(|e| e.to_string())?;
+            let sig = commit.author().map_err(|e| e.to_string())?;
+            let author = sig.name.to_str_lossy().trim().to_string();
+            let author_time = sig.time().map_err(|e| e.to_string())?.seconds;
+            let hash = entry.commit_id.to_string();
+            for (i, line) in lines.iter().enumerate() {
+                // gix keeps the line terminator in the token; `git blame
+                // --porcelain` content omits it. Strip a trailing LF (and CR).
+                let raw = line.to_str_lossy();
+                let content = raw
+                    .strip_suffix('\n')
+                    .map(|s| s.strip_suffix('\r').unwrap_or(s))
+                    .unwrap_or(&raw)
+                    .to_string();
+                out.push(BlameLine {
+                    hash: hash.clone(),
+                    author: author.clone(),
+                    author_time,
+                    line_number: entry.start_in_blamed_file + i as u32 + 1,
+                    content,
+                });
+            }
+        }
+        Ok(out)
     }
 }
 
@@ -368,7 +410,9 @@ impl Default for PerOpBackend {
             worktree_paths: Backend::Gix,
             status_counts: Backend::Cli,
             diff_stats: Backend::Cli,
-            blame: Backend::Cli,
+            // Flipped to gix in Step 13 (parity test: shootout_blame); renamed
+            // files fall back to CLI inside the gix adapter.
+            blame: Backend::Gix,
         }
     }
 }
@@ -773,6 +817,37 @@ mod tests {
             ))
             .unwrap()
         );
+    }
+
+    /// Step 13: gix blame == CLI on a non-renamed file (line→commit, author,
+    /// time, content); a file with rename history falls back to the CLI.
+    #[test]
+    fn shootout_blame() {
+        let (_g, repo) = clean_repo();
+        // a.txt: extend across two commits so >1 commit attributes lines.
+        std::fs::write(repo.join("a.txt"), "a\nb\n").unwrap();
+        run_git(&repo, &["commit", "-am", "two lines", "--no-verify"]);
+        std::fs::write(repo.join("a.txt"), "a\nb\nc\n").unwrap();
+        run_git(&repo, &["commit", "-am", "three lines", "--no-verify"]);
+
+        let cli = CliGitReads;
+        let gix = GixGitReads::new();
+        assert!(!crate::git::file_history_has_rename(&repo, "a.txt"));
+        let a = cli.blame(&repo, "a.txt");
+        let b = gix.blame(&repo, "a.txt");
+        assert_ok_json_eq(&a, &b, "blame (no rename)");
+        assert_eq!(b.unwrap().len(), 3);
+
+        // Renamed-history file: git follows the rename, gix does not, so the
+        // gix adapter must fall back to the CLI and match exactly.
+        run_git(&repo, &["mv", "a.txt", "renamed.txt"]);
+        run_git(&repo, &["commit", "-m", "rename a->renamed", "--no-verify"]);
+        std::fs::write(repo.join("renamed.txt"), "a\nb\nc\nd\n").unwrap();
+        run_git(&repo, &["commit", "-am", "append d", "--no-verify"]);
+        assert!(crate::git::file_history_has_rename(&repo, "renamed.txt"));
+        let a = cli.blame(&repo, "renamed.txt");
+        let b = gix.blame(&repo, "renamed.txt"); // routes to CLI internally
+        assert_ok_json_eq(&a, &b, "blame (renamed → CLI fallback)");
     }
 
     /// Step 8: commit_log + graph_commits stay on the CLI. gix 0.84's rev_walk
