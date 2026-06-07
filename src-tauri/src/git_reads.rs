@@ -214,6 +214,11 @@ impl GitReads for GixGitReads {
         Ok(branches)
     }
 
+    // commit_log / graph_commits stay on the CLI (Step 8 decision): gix 0.84's
+    // `rev_walk().sorting()` offers only BreadthFirst / ByCommitTime and has NO
+    // topological sort, so `git log --topo-order` ordering cannot be reproduced
+    // byte-for-byte for merge histories. Flipping would violate the byte-parity
+    // mandate. See `commit_log_and_graph_stay_on_cli` (Step 8).
     fn commit_log(
         &self,
         repo: &Path,
@@ -221,12 +226,12 @@ impl GitReads for GixGitReads {
         _after: Option<String>,
     ) -> Result<Vec<CommitLogEntry>, String> {
         let _repo = self.repo(repo)?;
-        unimplemented!("gix commit_log — Step 8")
+        unimplemented!("commit_log stays on CLI — gix 0.84 rev_walk lacks topo-order")
     }
 
     fn graph_commits(&self, repo: &Path, _count: u32) -> Result<Vec<RawCommit>, String> {
         let _repo = self.repo(repo)?;
-        unimplemented!("gix graph_commits — Step 8")
+        unimplemented!("graph_commits stays on CLI — gix 0.84 rev_walk lacks topo-order")
     }
 
     fn ahead_behind(&self, repo: &Path, _left: &str, _right: &str) -> Result<(u32, u32), String> {
@@ -522,6 +527,36 @@ mod tests {
         assert!(
             !b.unwrap().iter().any(|br| br.is_current),
             "no current branch when detached"
+        );
+    }
+
+    /// Step 8: commit_log + graph_commits stay on the CLI. gix 0.84's rev_walk
+    /// only sorts BreadthFirst / ByCommitTime (no topological order), so it
+    /// cannot reproduce `git log --topo-order` byte-for-byte on merge histories
+    /// — flipping would violate the byte-parity mandate. This guards the CLI
+    /// path: both ops must yield exactly git's --topo-order OID sequence.
+    #[test]
+    fn commit_log_and_graph_stay_on_cli() {
+        let (_guard, repo) = fixture_repo();
+
+        let topo: Vec<String> = run_git(&repo, &["log", "--topo-order", "--pretty=%H"])
+            .lines()
+            .map(str::to_string)
+            .collect();
+        assert!(!topo.is_empty());
+
+        let log = git_reads().commit_log(&repo, None, None).unwrap();
+        assert_eq!(
+            log.iter().map(|c| c.hash.clone()).collect::<Vec<_>>(),
+            topo,
+            "commit_log must match git --topo-order order"
+        );
+
+        let graph = git_reads().graph_commits(&repo, 200).unwrap();
+        assert_eq!(
+            graph.iter().map(|c| c.hash.clone()).collect::<Vec<_>>(),
+            topo,
+            "graph_commits must match git --topo-order order"
         );
     }
 
