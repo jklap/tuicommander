@@ -2,8 +2,8 @@ import { createVirtualizer } from "@tanstack/solid-virtual";
 import { type Component, createSignal, For, type JSX, Show } from "solid-js";
 import type { DiffViewMode } from "../../stores/ui";
 import { cx } from "../../utils";
-import s from "../PrDiffTab/PrDiffTab.module.css";
 import { type DiffFileSection, DiffViewer } from "../ui/DiffViewer";
+import s from "./diffFileList.module.css";
 
 /** Reconstruct the raw diff string for a single file section. */
 export function sectionToRawDiff(section: DiffFileSection): string {
