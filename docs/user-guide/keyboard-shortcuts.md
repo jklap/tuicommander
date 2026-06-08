@@ -36,7 +36,7 @@ See the action table below for all available action names.
 
 A configurable OS-level shortcut to toggle TUICommander's visibility from any application.
 
-- **Configure:** Settings > Keyboard Shortcuts > Global Hotkey (top of the tab)
+- **Configure:** Help > Keyboard Shortcuts > Global Hotkey (top of the tab)
 - **No default** — you must set it yourself (e.g., `Ctrl+Space`, `Cmd+\``)
 - **Toggle behavior:** hidden/minimized → show+focus, visible but unfocused → focus, focused → instant hide
 - `Cmd` and `Ctrl` are treated as distinct modifiers
@@ -123,7 +123,7 @@ Font size range: 8px to 32px, step 2px per action.
 | `Cmd+Shift+W` | Worktree Manager |
 | `Cmd+J` | Task queue |
 | `Cmd+Shift+E` | Toggle error log |
-| `Cmd+Shift+M` | MCP servers popup (per-repo) |
+| `Cmd+Shift+I` | MCP servers popup (per-repo) |
 
 Note: File browser and Markdown panels are mutually exclusive — opening one closes the other.
 
@@ -266,7 +266,7 @@ Hold to record, release to transcribe and inject text into active terminal.
 | `command-palette` | `Cmd+P` | Command palette |
 | `activity-dashboard` | `Cmd+Shift+A` | Activity dashboard |
 | `toggle-error-log` | `Cmd+Shift+E` | Toggle error log |
-| `toggle-mcp-popup` | `Cmd+Shift+M` | MCP servers popup (per-repo) |
+| `toggle-mcp-popup` | `Cmd+Shift+I` | MCP servers popup (per-repo) |
 | `switch-branch-1..9` | `Cmd+Ctrl+1..9` | Switch to branch N |
 | `scroll-to-top` | `Cmd+Home` | Scroll to top |
 | `scroll-to-bottom` | `Cmd+End` | Scroll to bottom |

@@ -109,9 +109,9 @@ Enable HTTP/WebSocket access from other devices on your network. See [Remote Acc
 
 See [Voice Dictation](dictation.md) for full details.
 
-## Keyboard Shortcuts Tab
+## Keyboard Shortcuts (Help panel)
 
-Browse and rebind all app actions:
+The keybinding UI lives in the **Help panel** (Help > Keyboard Shortcuts), not the Settings panel. Browse and rebind all app actions there:
 
 - Every registered action is listed with its current keybinding
 - Click any action row and press a new key combination to rebind it

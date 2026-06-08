@@ -66,7 +66,7 @@ pnpm test:coverage     # Coverage report
 
 **Framework:** Vitest + SolidJS Testing Library + happy-dom
 
-**Coverage:** ~80%+ (830 tests)
+**Coverage:** ~80%+
 
 ## Project Structure
 
@@ -76,7 +76,7 @@ See [Architecture Overview](../architecture/overview.md) for full directory stru
 
 | File | Purpose |
 |------|---------|
-| `src/App.tsx` | Central orchestrator (829 lines) |
+| `src/App.tsx` | Central orchestrator |
 | `src-tauri/src/lib.rs` | Rust app setup, command registration |
 | `src-tauri/src/pty.rs` | PTY session management |
 | `src/hooks/useAppInit.ts` | App initialization |

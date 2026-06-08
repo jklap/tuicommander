@@ -88,13 +88,13 @@ Returns recent output. Format controls what is returned:
 
 | `format` | Response shape | Description |
 |----------|----------------|-------------|
-| (omit) | `{ "data": "<bytes>" }` | Raw PTY bytes, base64-encoded |
-| `text` | `{ "data": "<string>" }` | ANSI-stripped plain text from ring buffer |
-| `log` | `{ "lines": [...], "total_lines": N }` | VT100-extracted clean lines (no ANSI, no TUI garbage) |
+| (omit) | `{ "data": "<string>", "data_length": N, "total_written": N }` | Raw PTY output as a lossy-UTF-8 string (not base64), read from the ring buffer |
+| `text` | `{ "data": "<string>", "data_length": N, "total_written": N }` | Clean VT100 lines from `VtLogBuffer` plus visible screen rows, joined by `\n` (not from the ring buffer) |
+| `log` | `{ "lines": [...], "total_lines": N, "screen": [...], "input_line"? }` | VT100-extracted clean lines (no ANSI, no TUI garbage) plus current screen rows and optional input line |
 
 | Param | Default | Description |
 |-------|---------|-------------|
-| `limit` | (all) | `raw`/`text`: max bytes; `log`: max lines to return |
+| `limit` | raw: 8192 bytes; text/log: all | `raw`/`text`: max bytes; `log`: max lines to return |
 | `offset` | (tail) | `log` only: absolute start offset. When omitted, returns the newest `limit` lines (tail). When provided, returns lines starting from that offset |
 | `format` | (raw) | See table above |
 

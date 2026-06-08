@@ -13,7 +13,7 @@ The same panel switches modes — no separate UI.
 
 ## Opening the panel
 
-- **Hotkey:** `Cmd+Alt+A` (macOS) / `Ctrl+Shift+I` (others) — toggle.
+- **Hotkey:** `Cmd+Alt+A` (macOS) / `Ctrl+Alt+A` (others) — toggle.
 - **Toolbar:** chat icon in the right section of the toolbar.
 - **Context menu:** right-click a terminal → *Send selection to AI Chat* or *Explain this error*.
 

@@ -136,7 +136,7 @@ useAppInit.initApp()
     ├──> promptLibraryStore.hydrate()   → load_prompt_library
     ├──> notesStore.hydrate()           → load_notes
     ├──> keybindingsStore.hydrate()     → load_keybindings
-    ├──> agentConfigsStore.hydrate()    → load_agent_configs
+    ├──> agentConfigsStore.hydrate()    → load_agents_config
     └──> agentDetection.detectAll()     → detect installed AI agents
 ```
 
@@ -146,8 +146,8 @@ useAppInit.initApp()
 
 | Event | Payload | Source |
 |-------|---------|--------|
-| `pty-output` | `{session_id, data}` | PTY reader thread |
-| `pty-exit` | `{session_id, exit_code}` | PTY child exit |
+| `pty-output-{session_id}` | `{session_id, data}` | PTY reader thread |
+| `pty-exit-{session_id}` | `{session_id}` | PTY child exit |
 | `dictation-progress` | `{percent}` | Model download |
 | `menu-event` | `{id}` | Native menu click |
 
@@ -171,19 +171,24 @@ listen("menu-event", (event) => {
 ```
 githubStore.startPolling()
     │
-    every 30s (120s when tab hidden, 300s on rate limit, exponential backoff on errors)
+    ▼
+invoke("github_start_polling", {paths, issueFilter, prHideDrafts})
     │
     ▼
-invoke("get_repo_pr_statuses", {path})  +  invoke("get_github_status", {path})
-    │                                          │
-    ▼                                          ▼
-Rust: GraphQL batch query to GitHub API   Rust: local git ahead/behind
-    │                                          │
-    ▼                                          ▼
-githubStore.updateRepoData(path, statuses)    setState(remoteStatus)
+Rust: github_poller loop (60s base, 120s when tab hidden,
+      300s max, exponential backoff on errors / rate limit)
     │
-    ├──> detectTransitions() — emit PR notifications on state changes
-    │    (merged, closed, blocked, ci_failed, changes_requested, ready)
+    ├──> GraphQL batch query to GitHub API per repo
+    │
+    ▼
+Rust emits Tauri events (only when state changed since last poll):
+    ├──> "github-pr-update"    {repo_path, statuses}
+    ├──> "github-issues-update" {repo_path, issues}
+    └──> "github-transition"   — PR notifications on state changes
+         (merged, closed, blocked, ci_failed, changes_requested, ready)
+    │
+    ▼
+githubStore listen() handlers update store state
     │
     ▼
 Reactive updates to Sidebar CI rings, PR badges

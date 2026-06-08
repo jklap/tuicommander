@@ -1,6 +1,6 @@
 # MCP & HTTP Server
 
-**Module:** `src-tauri/src/mcp_http.rs`
+**Module:** `src-tauri/src/mcp_http/mod.rs`
 
 Optional HTTP/WebSocket server that exposes all Tauri commands as REST endpoints. Enables browser-mode operation and MCP (Model Context Protocol) integration for external AI tools.
 
@@ -9,7 +9,7 @@ Optional HTTP/WebSocket server that exposes all Tauri commands as REST endpoints
 The server has two independent listeners:
 
 - **IPC listener** (always started): On macOS/Linux, listens at `<config_dir>/mcp.sock` (Unix domain socket). On Windows, listens on `\\.\pipe\tuicommander-mcp` (named pipe). No authentication — used by the local `tuic-bridge` sidecar.
-- **TCP listener** (opt-in): Only starts when remote access is enabled. Binds to `0.0.0.0:<remote_access_port>` with Basic Auth.
+- **TCP listener** (opt-in): Only starts when remote access is enabled. Binds to `0.0.0.0:<port>` (port from `services.server`) with Basic Auth.
 
 The `mcp_server_enabled` config flag controls whether the `/mcp` protocol route is active (MCP tool discovery and invocation), not whether the server itself starts. The HTTP API endpoints (sessions, git, config, etc.) are always available on the IPC listener.
 
@@ -18,8 +18,7 @@ Configuration via Settings > Services, or `config.json`:
 ```json
 {
   "mcp_server_enabled": true,
-  "remote_access_enabled": false,
-  "remote_access_port": 9876
+  "mcp_port": 9876
 }
 ```
 
@@ -33,11 +32,10 @@ On startup, the server:
 
 ## Unix Socket Lifecycle (macOS/Linux)
 
-The socket at `<config_dir>/mcp.sock` is managed with three safety layers to survive crashes and rapid restarts:
+The socket at `<config_dir>/mcp.sock` is managed with two safety layers to survive crashes and rapid restarts:
 
 | Layer | Mechanism | Purpose |
 |-------|-----------|---------|
-| **RAII guard** | `SocketGuard(PathBuf)` struct with `impl Drop { remove_file }` | Removes socket when the server task is dropped, even on panic or kill |
 | **Retry bind** | 3 attempts × 100 ms, each removes stale file before trying | A crashed previous run leaves a dead socket file that blocks `bind(2)` — retrying clears it |
 | **Real liveness check** | `UnixStream::connect()` in `get_mcp_status` | `file.exists()` returns `true` for stale sockets; only a real connect reveals whether the server is alive |
 
@@ -191,9 +189,10 @@ Custom URL schemes (`vscode://`, `x-devonthink://`, etc.) do **not** work inside
 
 ### MCP Tools: `ai_terminal_*` (external agent surface)
 
-Seven terminal tools plus one search tool exposed to external MCP clients (e.g. Claude Code, Cursor) that let a
-remote AI agent observe and interact with a TUICommander terminal. All input
-operations (`send_input`, `send_key`, `drive_agent`) require user confirmation and are
+Thirteen tools exposed to external MCP clients (e.g. Claude Code, Cursor) that let a
+remote AI agent observe and interact with a TUICommander terminal, plus read/write/run
+files in the session's sandboxed repo. All input and mutating
+operations (`send_input`, `send_key`, `drive_agent`, `write_file`, `edit_file`, `run_command`) require user confirmation and are
 rejected while an internal agent loop is active on the target session.
 
 **Session aliases** — Every tool that accepts a `session_id` also accepts a human-friendly alias (e.g. `tc-1`). Aliases are auto-assigned from the repo directory name: first letter of each segment joined + per-repo counter. `list_sessions` includes the `alias` field. Aliases reset on app restart.
@@ -209,7 +208,12 @@ rejected while an internal agent loop is active on the target session.
 | `ai_terminal_get_state` | `session_id` | Return structured `SessionState` (shell_state, cwd, terminal_mode, agent_type, …). |
 | `ai_terminal_get_context` | `session_id` | Cheap orientation: `{shell_state, cwd, git_branch, last_exit_code, agent_type, terminal_mode}`. Git branch read from `.git/HEAD` (no subprocess, no index lock). |
 | `ai_terminal_drive_agent` | `session_id`, `command?`, `timeout_ms?` (30000), `wait_pattern?`, `lines?` (80), `since_cursor?` | Atomic send→wait→read. Sends command, waits for idle/pattern, returns `{screen, cursor, shell_state, session_state}`. Pass `since_cursor` for delta mode. Requires user confirmation. |
-| `ai_terminal_search_code` | `query`, `path?`, `limit?` | BM25 semantic search over repo files via `AppState::content_index`. Returns ranked file paths with relevance scores. Useful for codebase exploration without regex. |
+| `ai_terminal_read_file` | `session_id`, `file_path`, `offset?`, `limit?` (default 200, max 2000) | Read a text file from the session's sandboxed repo. Paginated; binary files and files >10MB rejected. Secrets redacted. |
+| `ai_terminal_write_file` | `session_id`, `file_path`, `content` | Create or overwrite a text file. Always prompts for confirmation. Atomic via tmp+rename. |
+| `ai_terminal_edit_file` | `session_id`, `file_path`, `old_string`, `new_string`, `replace_all?` | Surgical search-and-replace on a file. Always prompts for confirmation. `old_string` must be unique unless `replace_all=true`. |
+| `ai_terminal_list_files` | `session_id`, `pattern`, `path?` | List files matching a glob pattern inside the session's sandbox. Max 500 entries. |
+| `ai_terminal_search_files` | `session_id`, `pattern`, `path?`, `glob?`, `context_lines?` | Regex search across files in the session's sandbox. Honors `.gitignore`. Max 50 matches with context lines. |
+| `ai_terminal_run_command` | `session_id`, `command`, `timeout_ms?`, `cwd?` | Run a shell command and capture stdout/stderr. Always prompts for confirmation. Destructive commands blocked. Default timeout 2min, max 10min. |
 
 ### MCP Tool: `debug` — `invoke_js` and the Debug Registry
 

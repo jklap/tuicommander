@@ -4,7 +4,7 @@ TUICommander uses an Obsidian-style plugin system. Plugins extend the Activity C
 
 ## Quick Start: External Plugin
 
-1. Create a directory: `~/.config/tuicommander/plugins/my-plugin/`
+1. Create a directory: `~/.config/com.tuic.commander/plugins/my-plugin/`
 2. Create `manifest.json`:
 
 ```json
@@ -85,7 +85,7 @@ Tauri OutputParser --> pluginRegistry.dispatchStructuredEvent(type, payload, ses
 
 ## Plugin Lifecycle
 
-1. **Discovery** — Rust `list_user_plugins` scans `~/.config/tuicommander/plugins/` for `manifest.json` files
+1. **Discovery** — Rust `list_user_plugins` scans `~/.config/com.tuic.commander/plugins/` for `manifest.json` files
 2. **Validation** — Frontend validates manifest fields and `minAppVersion`
 3. **Import** — `import("plugin://my-plugin/main.js")` loads the module via the custom URI protocol
 4. **Module check** — Default export must have `id`, `onload`, `onunload`
@@ -106,7 +106,7 @@ A broken plugin produces a console error and is skipped. The app always continue
 
 ## Manifest Reference
 
-File: `~/.config/tuicommander/plugins/{id}/manifest.json`
+File: `~/.config/com.tuic.commander/plugins/{id}/manifest.json`
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -398,7 +398,7 @@ Opens a local markdown file in the markdown panel. **Requires `"ui:markdown"` ca
 
 ```typescript
 // Open the plugin's own README
-host.openMarkdownFile("/Users/me/.config/tuicommander/plugins/my-plugin/README.md");
+host.openMarkdownFile("/Users/me/.config/com.tuic.commander/plugins/my-plugin/README.md");
 ```
 
 #### `host.playNotificationSound(sound?) -> Promise<void>`
@@ -1043,7 +1043,7 @@ Invokes a whitelisted Tauri command. Non-whitelisted commands throw immediately.
 | `delete_plugin_data` | `{ plugin_id: string, path: string }` | `void` | none (always allowed) |
 | `get_input_buffer_content` | `{ sessionId: string }` | `string` | `pty:read` |
 
-**Plugin data storage** is sandboxed to `~/.config/tuicommander/plugins/{id}/data/`. No capability required — every plugin can store its own data.
+**Plugin data storage** is sandboxed to `~/.config/com.tuic.commander/plugins/{id}/data/`. No capability required — every plugin can store its own data.
 
 ```typescript
 // Store cache data
@@ -1210,7 +1210,7 @@ esbuild src/main.ts --bundle --format=esm --outfile=main.js --external:nothing
 
 Install by copying the directory to:
 - macOS: `~/Library/Application Support/com.tuic.commander/plugins/my-plugin/`
-- Linux: `~/.config/tuicommander/plugins/my-plugin/`
+- Linux: `~/.config/com.tuic.commander/plugins/my-plugin/`
 - Windows: `%APPDATA%/com.tuic.commander/plugins/my-plugin/`
 
 Directory structure:

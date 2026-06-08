@@ -63,7 +63,7 @@ Launch Claude Code on five branches at once — or mix agents. Each session runs
 
 ### Agent observability — not just terminals
 
-TUICommander auto-detects **10 AI coding agents** (Claude Code, Codex CLI, Aider, Gemini CLI, Amp, Cursor Agent, OpenCode, Warp Oz, Droid, Goose) and understands what they're doing:
+TUICommander auto-detects **9 AI coding agents** (Claude Code, Codex CLI, Aider, Gemini CLI, Amp, Cursor Agent, OpenCode, Droid, Goose) and understands what they're doing:
 
 - **Rate limit detection** — Provider-specific patterns with countdown timers per session.
 - **Question detection** — Y/N prompts, numbered options, inquirer-style menus. Tab indicator, notification sound, keyboard overlay.
@@ -99,7 +99,7 @@ The feedback loop happens in the same window:
 A conversational AI companion that sees your terminal as you see it. Ask about errors, get code suggestions, or let the autonomous agent take the wheel and drive your terminal directly.
 
 - Multi-provider: Ollama (local, free), Anthropic, OpenAI, OpenRouter, or any compatible endpoint
-- Autonomous AI Agent (ReAct loop) with 12 tools: read screen, send input, edit files, search code, run commands
+- Autonomous AI Agent (ReAct loop) with 30+ tools: read screen, send input, edit files, search code, run commands
 - Session knowledge: the agent learns from your terminal history — commands, errors, fix patterns
 - Live cost tracking: prompt/completion tokens and estimated cost per turn
 - Per-terminal chat state, conversation history, detachable panel for multi-monitor
@@ -129,7 +129,7 @@ A **mobile companion PWA** lets you monitor agents from your phone, answer quest
 
 ### Automate repetitive workflows
 
-**30 built-in Smart Prompts** turn common tasks into one-click operations: Smart Commit, Review Changes, Create PR, Fix CI, and more. Context variables like branch, diff, and PR data are resolved automatically.
+**29 built-in Smart Prompts** turn common tasks into one-click operations: Smart Commit, Review Changes, Create PR, Fix CI, and more. Context variables like branch, diff, and PR data are resolved automatically.
 
 - Inject mode (PTY write), headless mode (subprocess), or shell script mode (direct execution)
 - 31 context variables auto-resolved from git, GitHub, and terminal state
@@ -191,7 +191,7 @@ On-device speech-to-text powered by whisper-rs. No cloud service, no API keys, n
 <details>
 <summary><strong>Productivity</strong> — Smart Prompts, palette, keybindings, dictation</summary>
 
-- Smart Prompts (`Cmd+Shift+K`): 30 built-in AI automation prompts with auto-resolved context variables
+- Smart Prompts (`Cmd+Shift+K`): 29 built-in AI automation prompts with auto-resolved context variables
 - Command palette (`Cmd+P`): fuzzy search all actions, files (`!`), file contents (`?`), terminal buffers (`~`)
 - Configurable keybindings with chord support and conflict detection
 - Claude Usage Dashboard: rate limits, 7-day chart, 52-week heatmap, per-project breakdown
@@ -228,7 +228,7 @@ Want the bleeding edge? The **[Nightly](https://github.com/sstraus/tuicommander/
 <details>
 <summary>Build from source</summary>
 
-**Prerequisites:** Node.js 22+, Rust toolchain, [Tauri CLI](https://tauri.app/start/)
+**Prerequisites:** Node.js 24+, Rust toolchain, [Tauri CLI](https://tauri.app/start/)
 
 ```bash
 pnpm install

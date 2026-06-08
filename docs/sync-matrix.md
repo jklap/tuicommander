@@ -371,8 +371,8 @@ When adding or changing `tuic://` schemes:
 | `docs/frontend/transport.md` | Tauri/HTTP dual-mode transport |
 | `docs/frontend/utilities.md` | Utility function reference |
 | `docs/features/ssh-tunnels.md` | SSH tunnel architecture and module map |
-| `docs/user-guide/*.md` | User-facing guides (14 files) |
+| `docs/user-guide/*.md` | User-facing guides (20 files) |
 | **Code-embedded docs** | |
 | `src-tauri/src/mcp_http/plugin_docs.rs` | AI-optimized plugin reference (`PLUGIN_DOCS` const) |
 | `src/actions/actionRegistry.ts` | ACTION_META → auto-populates HelpPanel + Command Palette |
-| `examples/plugins/` | Reference plugin implementations (6 examples) |
+| `examples/plugins/` | Reference plugin implementations (7 examples) |

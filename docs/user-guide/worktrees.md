@@ -55,11 +55,11 @@ Global defaults apply to all repos. Per-repo overrides take precedence when set.
 
 | Setting | Options | Default |
 |---------|---------|---------|
-| **Storage** | Sibling / App directory / Inside repo | Sibling |
+| **Storage** | Sibling / App directory / Inside repo / Claude Code default | Sibling |
 | **Prompt on create** | On / Off | On |
 | **Delete branch on remove** | On / Off | On |
 | **Auto-archive merged** | On / Off | Off |
-| **Orphan cleanup** | Manual / Prompt / Auto | Manual |
+| **Orphan cleanup** | Ask before removing / Auto-remove / Keep | Ask |
 | **PR merge strategy** | Merge / Squash / Rebase | Merge |
 | **After merge** | Archive / Delete / Ask | Archive |
 
