@@ -655,6 +655,36 @@ describe("Sidebar", () => {
 			expect(menuItems[4].textContent).toContain("Remove Repository");
 		});
 
+		it("branch Copy Path item exposes the full path as a native tooltip", () => {
+			setRepos({
+				"/repo1": makeRepo({
+					branches: {
+						main: { name: "main", isMain: true, worktreePath: null, terminals: [], additions: 0, deletions: 0 },
+						"feature/x": {
+							name: "feature/x",
+							isMain: false,
+							worktreePath: "/wt/feature-x",
+							terminals: [],
+							additions: 0,
+							deletions: 0,
+						},
+					},
+				}),
+			});
+			const { container } = render(() => <Sidebar {...defaultProps()} />);
+
+			const branchRow = Array.from(container.querySelectorAll(".branchItem")).find((el) =>
+				el.textContent?.includes("feature/x"),
+			)!;
+			fireEvent.contextMenu(branchRow, { clientX: 50, clientY: 50 });
+
+			const copyPath = Array.from(container.querySelectorAll(".menu .item")).find((el) =>
+				el.textContent?.includes("Copy Path"),
+			)!;
+			expect(copyPath).toBeTruthy();
+			expect(copyPath.getAttribute("title")).toBe("/wt/feature-x");
+		});
+
 		it("repo header click calls toggleExpanded", () => {
 			const { container } = render(() => <Sidebar {...defaultProps()} />);
 			const header = container.querySelector(".repoHeader")!;

@@ -9,6 +9,8 @@ export interface ContextMenuItem {
 	separator?: boolean;
 	disabled?: boolean;
 	children?: ContextMenuItem[];
+	/** Native tooltip shown on hover — e.g. the full path behind a "Copy Path" item */
+	title?: string;
 }
 
 export interface ContextMenuProps {
@@ -72,6 +74,7 @@ const MenuItem: Component<{
 			<div ref={wrapRef} class={s.itemWrap} onMouseEnter={openSubmenu} onMouseLeave={() => setSubmenuOpen(false)}>
 				<button
 					class={cx(s.item, props.item.disabled && s.disabled)}
+					title={props.item.title}
 					onClick={() => {
 						if (props.item.disabled) return;
 						if (hasChildren()) {

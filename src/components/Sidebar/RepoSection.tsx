@@ -259,7 +259,12 @@ export const BranchItem: Component<{
 
 	const contextMenuItems = (): ContextMenuItem[] => {
 		const items: ContextMenuItem[] = [
-			{ label: "Copy Path", action: handleCopyPath, disabled: !props.branch.worktreePath },
+			{
+				label: "Copy Path",
+				title: props.branch.worktreePath ? shortenHomePath(props.branch.worktreePath) : undefined,
+				action: handleCopyPath,
+				disabled: !props.branch.worktreePath,
+			},
 			{ label: "Add Terminal", action: props.onAddTerminal },
 		];
 		if (!props.branch.isShell && props.branch.name) {
