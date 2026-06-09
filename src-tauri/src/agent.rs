@@ -327,21 +327,49 @@ pub(crate) fn open_in_app(
     Ok(())
 }
 
-/// Expand `{path}`/`{file}`/`{line}`/`{column}` placeholders in a custom
-/// launcher's argument template. `{line}`/`{column}` default to 1 when not
-/// provided (e.g. opening a folder) so editor goto args still resolve.
-pub(crate) fn expand_placeholders(
-    args: &[String],
-    path: &str,
+/// Launch context for a custom tool: the paths and cursor position that feed
+/// the placeholder expander. `file` is the focused editor file (absent when no
+/// file is open); `repo` is the active repo/worktree root and acts as the
+/// fallback for `{path}`/`{file}`/`{fileDir}`/`{cwd}`.
+#[derive(serde::Deserialize)]
+pub(crate) struct LaunchContext {
+    /// Focused editor file. `None` → `{path}`/`{file}`/`{fileDir}` fall back to `repo`.
+    file: Option<String>,
+    /// Active repo/worktree root. Required; the universal fallback.
+    repo: String,
+    /// Focused terminal's working directory. `None` → `{cwd}` falls back to `repo`.
+    cwd: Option<String>,
     line: Option<u32>,
     col: Option<u32>,
-) -> Vec<String> {
-    let line_s = line.unwrap_or(1).to_string();
-    let col_s = col.unwrap_or(1).to_string();
+}
+
+/// Expand placeholders in a custom launcher's argument template:
+/// `{path}`/`{file}` (focused file, else repo), `{repo}`, `{fileDir}` (parent
+/// of the focused file, else repo), `{cwd}` (focused terminal cwd, else repo),
+/// `{home}` (user home), `{line}`/`{column}` (cursor, default 1 — e.g. when
+/// opening a folder — so editor goto args still resolve).
+pub(crate) fn expand_placeholders(args: &[String], ctx: &LaunchContext) -> Vec<String> {
+    let file = ctx.file.as_deref().unwrap_or(&ctx.repo);
+    let file_dir = ctx
+        .file
+        .as_deref()
+        .and_then(|f| std::path::Path::new(f).parent())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ctx.repo.clone());
+    let cwd = ctx.cwd.as_deref().unwrap_or(&ctx.repo);
+    let home = dirs::home_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let line_s = ctx.line.unwrap_or(1).to_string();
+    let col_s = ctx.col.unwrap_or(1).to_string();
     args.iter()
         .map(|a| {
-            a.replace("{path}", path)
-                .replace("{file}", path)
+            a.replace("{path}", file)
+                .replace("{file}", file)
+                .replace("{repo}", &ctx.repo)
+                .replace("{fileDir}", &file_dir)
+                .replace("{cwd}", cwd)
+                .replace("{home}", &home)
                 .replace("{line}", &line_s)
                 .replace("{column}", &col_s)
         })
@@ -354,18 +382,16 @@ pub(crate) fn expand_placeholders(
 /// name (resolved on PATH) or an absolute path.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn open_in_custom(
-    path: String,
     executable: String,
     args: Vec<String>,
-    line: Option<u32>,
-    col: Option<u32>,
+    ctx: LaunchContext,
 ) -> Result<(), String> {
     if executable.trim().is_empty() {
         return Err("Custom launcher has no executable".to_string());
     }
     // Drop blank lines from the args editor (textarea is one-arg-per-line).
     let args: Vec<String> = args.into_iter().filter(|a| !a.trim().is_empty()).collect();
-    let expanded = expand_placeholders(&args, &path, line, col);
+    let expanded = expand_placeholders(&args, &ctx);
     Command::new(resolve_cli(&executable))
         .args(&expanded)
         .spawn()
@@ -938,18 +964,85 @@ mod tests {
         }
     }
 
+    fn ctx(
+        file: Option<&str>,
+        repo: &str,
+        cwd: Option<&str>,
+        line: Option<u32>,
+        col: Option<u32>,
+    ) -> LaunchContext {
+        LaunchContext {
+            file: file.map(str::to_string),
+            repo: repo.to_string(),
+            cwd: cwd.map(str::to_string),
+            line,
+            col,
+        }
+    }
+
     #[test]
     fn expand_placeholders_substitutes_path_and_location() {
         let args = vec!["--goto".to_string(), "{file}:{line}:{column}".to_string()];
-        let out = expand_placeholders(&args, "/repo/src/main.rs", Some(42), Some(7));
+        let out = expand_placeholders(
+            &args,
+            &ctx(Some("/repo/src/main.rs"), "/repo", None, Some(42), Some(7)),
+        );
         assert_eq!(out, vec!["--goto", "/repo/src/main.rs:42:7"]);
     }
 
     #[test]
     fn expand_placeholders_path_and_file_are_aliases() {
         let args = vec!["{path}".to_string(), "{file}".to_string()];
-        let out = expand_placeholders(&args, "/a/b", None, None);
+        let out = expand_placeholders(&args, &ctx(Some("/a/b"), "/a", None, None, None));
         assert_eq!(out, vec!["/a/b", "/a/b"]);
+    }
+
+    #[test]
+    fn expand_placeholders_repo_filedir_and_cwd() {
+        let args = vec![
+            "{repo}".to_string(),
+            "{fileDir}".to_string(),
+            "{cwd}".to_string(),
+        ];
+        let out = expand_placeholders(
+            &args,
+            &ctx(
+                Some("/repo/src/main.rs"),
+                "/repo",
+                Some("/tmp/work"),
+                None,
+                None,
+            ),
+        );
+        assert_eq!(out, vec!["/repo", "/repo/src", "/tmp/work"]);
+    }
+
+    #[test]
+    fn expand_placeholders_no_file_falls_back_to_repo() {
+        // No focused file: {path}/{file}/{fileDir} all resolve to the repo root.
+        let args = vec![
+            "{path}".to_string(),
+            "{file}".to_string(),
+            "{fileDir}".to_string(),
+        ];
+        let out = expand_placeholders(&args, &ctx(None, "/proj", None, None, None));
+        assert_eq!(out, vec!["/proj", "/proj", "/proj"]);
+    }
+
+    #[test]
+    fn expand_placeholders_cwd_falls_back_to_repo() {
+        let args = vec!["{cwd}".to_string()];
+        let out = expand_placeholders(&args, &ctx(Some("/repo/f.rs"), "/repo", None, None, None));
+        assert_eq!(out, vec!["/repo"]);
+    }
+
+    #[test]
+    fn expand_placeholders_home_is_substituted() {
+        let args = vec!["{home}".to_string()];
+        let out = expand_placeholders(&args, &ctx(None, "/proj", None, None, None));
+        // Home resolves to a real path on the dev/CI machine — never left literal.
+        assert_ne!(out[0], "{home}");
+        assert!(!out[0].is_empty());
     }
 
     #[test]
@@ -960,20 +1053,20 @@ mod tests {
             "+{line}".to_string(),
             "{column}".to_string(),
         ];
-        let out = expand_placeholders(&args, "/proj", None, None);
+        let out = expand_placeholders(&args, &ctx(None, "/proj", None, None, None));
         assert_eq!(out, vec!["/proj", "+1", "1"]);
     }
 
     #[test]
     fn expand_placeholders_leaves_literals_untouched() {
         let args = vec!["--wait".to_string(), "--reuse-window".to_string()];
-        let out = expand_placeholders(&args, "/x", Some(3), Some(1));
+        let out = expand_placeholders(&args, &ctx(Some("/x"), "/x", None, Some(3), Some(1)));
         assert_eq!(out, vec!["--wait", "--reuse-window"]);
     }
 
     #[test]
     fn open_in_custom_rejects_empty_executable() {
-        let err = open_in_custom("/x".to_string(), "  ".to_string(), vec![], None, None);
+        let err = open_in_custom("  ".to_string(), vec![], ctx(None, "/x", None, None, None));
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("no executable"));
     }

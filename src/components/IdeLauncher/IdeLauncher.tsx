@@ -19,6 +19,11 @@ export interface IdeLauncherProps {
 	repoPath?: string;
 	/** Absolute path of the focused file (editor/MD tab). Code editors open this file; other apps open repoPath. */
 	focusedFilePath?: string;
+	/** Focused terminal's working directory — feeds the custom-launcher {cwd} placeholder. */
+	cwd?: string;
+	/** 1-based editor cursor position — feeds the custom-launcher {line}/{column} placeholders. */
+	cursorLine?: number;
+	cursorCol?: number;
 	runCommand?: string;
 	onOpenInIde?: (ide: IdeType) => void;
 	onRun?: (shiftKey: boolean) => void;
@@ -149,16 +154,20 @@ export const IdeLauncher: Component<IdeLauncherProps> = (props) => {
 		settingsStore.state.customLaunchers.filter((l) => l.enabled && (!l.platform || l.platform === osPlatform()));
 
 	const handleOpenCustom = async (launcher: CustomLauncher) => {
-		const target = props.focusedFilePath ?? props.repoPath;
-		if (!target) return;
+		const repo = props.repoPath;
+		if (!repo) return;
 		setIsOpen(false);
 		try {
 			await invoke("open_in_custom", {
-				path: target,
 				executable: launcher.executable,
 				args: launcher.args,
-				line: null,
-				col: null,
+				ctx: {
+					file: props.focusedFilePath ?? null,
+					repo,
+					cwd: props.cwd ?? null,
+					line: props.cursorLine ?? null,
+					col: props.cursorCol ?? null,
+				},
 			});
 		} catch (err) {
 			appLogger.error("app", "Failed to open in custom launcher", err);

@@ -485,6 +485,18 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 		}),
 	);
 
+	// Surface cursor position to the store for custom-launcher {line}/{column}
+	// placeholders. Separate from the breadcrumb listener above, which short-
+	// circuits when the file has no outline symbols.
+	createExtension(
+		EditorView.updateListener.of((update) => {
+			if (!update.selectionSet) return;
+			const head = update.state.selection.main.head;
+			const line = update.state.doc.lineAt(head);
+			editorTabsStore.setCursor(props.id, line.number, head - line.from + 1);
+		}),
+	);
+
 	// Force CodeMirror to recalculate layout when the editor container resizes.
 	// The container starts as display:none (.terminal-pane without .active),
 	// so CodeMirror computes zero dimensions during initial mount. When the

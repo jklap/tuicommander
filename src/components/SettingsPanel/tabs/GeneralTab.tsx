@@ -399,7 +399,7 @@ export const GeneralTab: Component = () => {
 					<p class={s.hint}>
 						{t(
 							"general.hint.customLaunchers",
-							'Define your own tools for the "Open in" menu. Each argument may use {path}, {file}, {line}, {column} placeholders. One argument per line.',
+							'Define your own tools for the "Open in" menu. Each argument may use {path}, {file}, {fileDir}, {repo}, {cwd}, {home}, {line}, {column} placeholders. One argument per line.',
 						)}
 					</p>
 					<For each={launchers()}>

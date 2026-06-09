@@ -13,6 +13,8 @@ export interface EditorTabData extends BaseTab {
 	isDirty: boolean;
 	initialLine?: number; // Line to scroll to on first mount
 	externalEditable?: boolean; // Allow editing external (absolute-path) files
+	cursorLine?: number; // 1-based cursor line, surfaced for custom-launcher {line}
+	cursorCol?: number; // 1-based cursor column, surfaced for custom-launcher {column}
 }
 
 function createEditorTabsStore() {
@@ -67,6 +69,14 @@ function createEditorTabsStore() {
 		setDirty(id: string, isDirty: boolean): void {
 			if (base.state.tabs[id]) {
 				base._setState("tabs", id, "isDirty", isDirty);
+			}
+		},
+
+		/** Record the editor cursor position (1-based) for custom-launcher placeholders. */
+		setCursor(id: string, line: number, col: number): void {
+			if (base.state.tabs[id]) {
+				base._setState("tabs", id, "cursorLine", line);
+				base._setState("tabs", id, "cursorCol", col);
 			}
 		},
 

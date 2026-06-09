@@ -11,6 +11,7 @@ import type { PrNotification } from "../../stores/prNotifications";
 import { type PrNotificationType, prNotificationsStore } from "../../stores/prNotifications";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
+import { terminalsStore } from "../../stores/terminals";
 import { uiStore } from "../../stores/ui";
 import { updaterStore } from "../../stores/updater";
 import { cx } from "../../utils";
@@ -598,6 +599,9 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 				<IdeLauncher
 					repoPath={launchPath()}
 					focusedFilePath={focusedFilePath()}
+					cwd={terminalsStore.getActive()?.cwd ?? undefined}
+					cursorLine={editorTabsStore.getActive()?.cursorLine}
+					cursorCol={editorTabsStore.getActive()?.cursorCol}
 					runCommand={props.runCommand}
 					onRun={props.onRun}
 				/>
