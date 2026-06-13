@@ -231,6 +231,22 @@ jobs:
           # an absolute path — use `cache-directories` instead.
           cache-directories: ${{ matrix.platform == 'windows-latest' && 'C:/t' || '' }}
 
+      # A restored Windows build cache (C:/t) may hold a CMakeCache.txt from an
+      # older VS generator (e.g. VS 17 2022). When the runner image moves to a
+      # newer VS (18 2026), CMake aborts: "generator does not match the generator
+      # used previously". Drop the stale CMake config so whisper-rs-sys
+      # reconfigures against the current toolchain (sccache still caches the
+      # actual compiles, so the rebuild cost is minimal).
+      - name: Clear stale CMake cache (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (Test-Path C:/t) {
+            Get-ChildItem -Path C:/t -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -eq 'CMakeCache.txt' -or $_.Name -eq 'CMakeFiles' } |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Create dist stub for include_dir
         shell: bash
         run: mkdir -p dist && echo '<html></html>' > dist/index.html
