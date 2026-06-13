@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Nested terminal tabs** (#85) — Optional setting (Appearance ▸ Tabs, default off) that shows a branch's open terminals as a collapsible list under its sidebar row when the branch has more than one terminal, each with a status dot; clicking a sub-item switches to that terminal.
+
+### Changed
+- **Consistent HTML-preview search** — Find-in-page in the Preview tab's HTML view now uses the same SearchBar pill as the editor, diff, terminal and markdown views (with case/regex/whole-word toggles and a match counter), instead of a bespoke in-iframe overlay. The parent drives the iframe over a postMessage bridge; plugin panels keep their own overlay search.
+
 ## [1.4.0] - 2026-06-09
 
 ### Added

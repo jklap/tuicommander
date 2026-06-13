@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SearchOptions } from "../DomSearchEngine";
-import { DomSearchEngine } from "../DomSearchEngine";
+import { buildSearchPattern, DomSearchEngine } from "../DomSearchEngine";
 
 const DEFAULT_OPTS: SearchOptions = { caseSensitive: false, regex: false, wholeWord: false };
 
@@ -178,5 +178,38 @@ describe("DomSearchEngine", () => {
 			const marks = container.querySelectorAll("mark.search-match");
 			expect(marks.length).toBeLessThanOrEqual(1000);
 		});
+	});
+});
+
+describe("buildSearchPattern", () => {
+	it("returns null for an empty term", () => {
+		expect(buildSearchPattern("", DEFAULT_OPTS)).toBeNull();
+	});
+
+	it("escapes regex metacharacters in literal mode", () => {
+		const re = buildSearchPattern("a.b(c)", DEFAULT_OPTS);
+		expect(re).not.toBeNull();
+		expect("a.b(c)".match(re as RegExp)).toHaveLength(1);
+		expect("aXbYc".match(re as RegExp)).toBeNull();
+	});
+
+	it("honors caseSensitive flag", () => {
+		expect(buildSearchPattern("Hi", { ...DEFAULT_OPTS, caseSensitive: true })?.flags).toBe("g");
+		expect(buildSearchPattern("Hi", DEFAULT_OPTS)?.flags).toBe("gi");
+	});
+
+	it("wraps with word boundaries for wholeWord", () => {
+		const re = buildSearchPattern("cat", { ...DEFAULT_OPTS, wholeWord: true });
+		expect("a cat sat".match(re as RegExp)).toHaveLength(1);
+		expect("category".match(re as RegExp)).toBeNull();
+	});
+
+	it("treats the term as a pattern in regex mode", () => {
+		const re = buildSearchPattern("ab+", { ...DEFAULT_OPTS, regex: true });
+		expect("abbb".match(re as RegExp)).toHaveLength(1);
+	});
+
+	it("returns null for an invalid regex", () => {
+		expect(buildSearchPattern("a(", { ...DEFAULT_OPTS, regex: true })).toBeNull();
 	});
 });

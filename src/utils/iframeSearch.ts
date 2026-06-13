@@ -167,6 +167,80 @@ export const IFRAME_SEARCH_SCRIPT = `<script id="tuic-search">
 </script>`;
 
 /**
+ * Search BRIDGE for the HtmlPreviewTab iframe.
+ *
+ * Unlike IFRAME_SEARCH_SCRIPT (which renders its own overlay UI, used by plugin
+ * panels), this script has NO UI of its own. The native TUIC `SearchBar` lives in
+ * the parent document and drives the iframe over postMessage, so HTML-preview
+ * search matches the editor/diff/terminal/markdown look exactly (criterion 3).
+ *
+ * Protocol (parent → iframe):
+ *   {type:"tuic:search", source, flags}  compiled RegExp parts (see buildSearchPattern)
+ *   {type:"tuic:search-next"} / {type:"tuic:search-prev"} / {type:"tuic:search-close"}
+ * (iframe → parent):
+ *   {type:"tuic:search-result", count, index}   match count + active 0-based index
+ *   {type:"tuic:search-open"}                    user pressed Cmd/Ctrl+F inside the iframe
+ *   {type:"tuic:reload-request"}                 user pressed Cmd/Ctrl+R inside the iframe
+ *
+ * Mark colors mirror MarkdownTab.module.css (.search-match / .search-match-active)
+ * since the iframe can't reach the app's CSS.
+ */
+export const IFRAME_SEARCH_BRIDGE_SCRIPT = `<script id="tuic-search-bridge">
+(function(){
+  if(window.__tuicSearchBridge)return;
+  window.__tuicSearchBridge=true;
+  var MAX=1000,matches=[],idx=-1;
+  var NORMAL="background:#ffff0040;border-radius:2px;";
+  var ACTIVE="background:#ff8c00b0;outline:1px solid #ff8c00;border-radius:2px;";
+  function post(type,extra){var m={type:type};if(extra)for(var k in extra)m[k]=extra[k];parent.postMessage(m,"*");}
+  function report(){post("tuic:search-result",{count:matches.length,index:matches.length?idx:-1});}
+  function clearMarks(){
+    var ms=document.querySelectorAll("mark.tuic-sf");
+    for(var i=0;i<ms.length;i++){var m=ms[i],p=m.parentNode;while(m.firstChild)p.insertBefore(m.firstChild,m);p.removeChild(m);p.normalize();}
+    matches=[];idx=-1;
+  }
+  function doSearch(source,flags){
+    clearMarks();
+    if(!source){report();return;}
+    var re;try{re=new RegExp(source,flags);}catch(e){report();return;}
+    var walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null),nodes=[],n;
+    while(n=walker.nextNode()){var pe=n.parentElement;if(!pe)continue;var t=pe.tagName;if(t==="SCRIPT"||t==="STYLE")continue;nodes.push(n);}
+    for(var i=0;i<nodes.length&&matches.length<MAX;i++){
+      var tn=nodes[i],text=tn.textContent;re.lastIndex=0;var mm,ranges=[];
+      while((mm=re.exec(text))!==null){if(mm[0].length===0){re.lastIndex++;continue;}ranges.push([mm.index,mm.index+mm[0].length]);if(ranges.length>=MAX)break;}
+      if(!ranges.length)continue;
+      var p=tn.parentNode,frag=document.createDocumentFragment(),cur=0;
+      for(var r=0;r<ranges.length&&matches.length<MAX;r++){
+        var s=ranges[r][0],e=ranges[r][1];
+        if(s>cur)frag.appendChild(document.createTextNode(text.slice(cur,s)));
+        var mark=document.createElement("mark");mark.className="tuic-sf";mark.style.cssText=NORMAL;mark.textContent=text.slice(s,e);
+        frag.appendChild(mark);matches.push(mark);cur=e;
+      }
+      if(cur<text.length)frag.appendChild(document.createTextNode(text.slice(cur)));
+      p.replaceChild(frag,tn);
+    }
+    if(matches.length){idx=0;hilite();expandDetails();}
+    report();
+  }
+  function hilite(){for(var i=0;i<matches.length;i++)matches[i].style.cssText=i===idx?ACTIVE:NORMAL;if(matches[idx])matches[idx].scrollIntoView({block:"center",behavior:"smooth"});}
+  function expandDetails(){for(var i=0;i<matches.length;i++){var el=matches[i].parentElement;while(el&&el!==document.body){if(el.tagName==="DETAILS")el.setAttribute("open","");el=el.parentElement;}}}
+  function go(d){if(!matches.length)return;idx=(idx+d+matches.length)%matches.length;hilite();report();}
+  window.addEventListener("message",function(e){
+    var d=e.data;if(!d||typeof d!=="object")return;
+    if(d.type==="tuic:search")doSearch(d.source||"",d.flags||"gi");
+    else if(d.type==="tuic:search-next")go(1);
+    else if(d.type==="tuic:search-prev")go(-1);
+    else if(d.type==="tuic:search-close")clearMarks();
+  });
+  document.addEventListener("click",function(e){var a=e.target;while(a&&a.tagName!=="A")a=a.parentElement;if(!a||!a.href)return;var href=a.getAttribute("href")||"";if(href.charAt(0)==="#"){e.preventDefault();var el=document.getElementById(href.slice(1));if(el)el.scrollIntoView({behavior:"smooth"});}},true);
+  document.addEventListener("keydown",function(e){
+    if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&(e.key==="f"||e.key==="F")){e.preventDefault();e.stopPropagation();post("tuic:search-open");}
+    if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&(e.key==="r"||e.key==="R")){e.preventDefault();e.stopPropagation();post("tuic:reload-request");}
+  });
+})();
+</script>`;
+
+/**
  * Scrollbar styling injected into same-origin iframes (HtmlPreviewTab srcdoc) so
  * their scrollbars match the rest of the app. Mirrors the global `::-webkit-scrollbar`
  * rule in global.css — the iframe is a separate document and can't inherit it.

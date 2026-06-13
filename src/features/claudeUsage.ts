@@ -64,13 +64,13 @@ export function formatResetCompact(isoStr: string | null, now: number = Date.now
 
 /** Build status bar ticker text from API data.
  * The API returns utilization as a direct percentage (e.g. 3.0 = 3%, 68.0 = 68%). */
-export function buildTickerText(api: UsageApiResponse): string {
+export function buildTickerText(api: UsageApiResponse, now: number = Date.now()): string {
 	const parts: string[] = [];
 	if (api.five_hour) {
 		parts.push(`5h: ${Math.round(api.five_hour.utilization)}%`);
 	}
 	if (api.seven_day) {
-		const reset = formatResetCompact(api.seven_day.resets_at);
+		const reset = formatResetCompact(api.seven_day.resets_at, now);
 		const suffix = reset ? ` -${reset}` : "";
 		parts.push(`7d: ${Math.round(api.seven_day.utilization)}%${suffix}`);
 	}

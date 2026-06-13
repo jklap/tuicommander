@@ -45,11 +45,14 @@ describe("buildTickerText", () => {
 	};
 
 	it("appends the compact countdown to the 7d bucket", () => {
-		const text = buildTickerText({
-			...empty,
-			five_hour: { utilization: 12, resets_at: null },
-			seven_day: { utilization: 5, resets_at: isoIn(3 * DAY + 5 * HOUR) },
-		});
+		const text = buildTickerText(
+			{
+				...empty,
+				five_hour: { utilization: 12, resets_at: null },
+				seven_day: { utilization: 5, resets_at: isoIn(3 * DAY + 5 * HOUR) },
+			},
+			NOW,
+		);
 		expect(text).toBe("5h: 12% · 7d: 5% -3d");
 	});
 

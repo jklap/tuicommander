@@ -18,6 +18,23 @@ export interface SearchEngine {
 /** Maximum number of matches to highlight (performance cap) */
 const MAX_HIGHLIGHTS = 1000;
 
+/**
+ * Compile a search term + options into a global RegExp, or `null` if the term is
+ * empty or an invalid regex. Shared by DomSearchEngine and the HtmlPreviewTab
+ * iframe search bridge so literal-escaping, whole-word, case and regex semantics
+ * are identical app-wide.
+ */
+export function buildSearchPattern(term: string, opts: SearchOptions): RegExp | null {
+	if (!term) return null;
+	try {
+		let src = opts.regex ? term : term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		if (opts.wholeWord) src = `\\b${src}\\b`;
+		return new RegExp(src, opts.caseSensitive ? "g" : "gi");
+	} catch {
+		return null;
+	}
+}
+
 const MATCH_CLASS = "search-match";
 const ACTIVE_CLASS = "search-match-active";
 
@@ -172,17 +189,8 @@ export class DomSearchEngine implements SearchEngine {
 	search(term: string, opts: SearchOptions): number {
 		this.clear();
 
-		if (!term) return 0;
-
-		let pattern: RegExp;
-		try {
-			let src = opts.regex ? term : term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-			if (opts.wholeWord) src = `\\b${src}\\b`;
-			const flags = opts.caseSensitive ? "g" : "gi";
-			pattern = new RegExp(src, flags);
-		} catch {
-			return 0;
-		}
+		const pattern = buildSearchPattern(term, opts);
+		if (!pattern) return 0;
 
 		const runs = collectTextRuns(this.container);
 

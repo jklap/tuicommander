@@ -206,6 +206,12 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Dismiss/Show Dismissed: remote-only PRs can be dismissed from the sidebar; a "Show Dismissed" toggle reveals them again
 - Branch sorting: main/master/develop always first, then alphabetical; merged PR branches sorted last
 
+### 2.3.1 Nested Terminal Tabs (opt-in)
+- Off by default. Enable via **Settings → Appearance → Tabs → "Nested Terminal Tabs"** (`tab_tree_enabled`).
+- When on, a branch with **more than one** terminal shows a collapsible list of its terminals directly under the branch row, each with a status dot (busy / idle / unseen / error / question) and the terminal name. Clicking a sub-item switches to that terminal.
+- The caret toggles the list; clicking an unfocused branch focuses it and opens the list (never collapses on a focus-switch), while re-clicking the already-focused branch toggles it.
+- Single-terminal branches stay compact — no caret, no list — and the whole feature is inert when the setting is off.
+
 ### 2.4 Git Quick Actions
 - Bottom of sidebar when a repo is active
 - Pull, Push, Fetch, Stash buttons — execute in active terminal
@@ -429,7 +435,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Multi-format file previewer opened from clickable file paths, drag & drop, File Browser, or Command Palette
 - File routing handled by `classifyFile()` in `src/utils/filePreview.ts`
 - Supported formats:
-  - **HTML** — rendered in sandboxed iframe with "Open in browser" button
+  - **HTML** — rendered in sandboxed iframe with "Open in browser" button; `Cmd/Ctrl+F` find-in-page uses the shared SearchBar pill (case/regex/whole-word toggles), which drives the iframe over a postMessage bridge and highlights matches in place
   - **PDF** — rendered via asset protocol in embedded iframe
   - **Images** — PNG, JPG/JPEG, GIF, WebP, SVG, AVIF, ICO, BMP — rendered as `<img>` via asset protocol
   - **Video** — MP4, WebM, OGG, MOV — rendered as `<video>` with native controls
