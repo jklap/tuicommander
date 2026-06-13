@@ -1421,6 +1421,22 @@ fn spawn_silence_timer(
 // ChunkProcessor: shared output processing logic for desktop & headless readers
 // ---------------------------------------------------------------------------
 
+/// Extract a clean prompt from grok's "⚠ Action Required" OSC 0 title.
+/// Strips the leading warning / "Action Required" marker, the spinner braille
+/// frame, and separators, leaving the human-readable action description.
+/// `"⚠ Action Required - ⠙ - Running: echo x - Execute Shell …"` → `"Running: echo x - Execute Shell …"`.
+fn clean_action_required_title(title: &str) -> String {
+    let after = title.split("Action Required").nth(1).unwrap_or(title);
+    let cleaned = after
+        .trim_start_matches(|c: char| c == '-' || c == ' ' || ('\u{2800}'..='\u{28FF}').contains(&c))
+        .trim();
+    if cleaned.is_empty() {
+        "grok is awaiting approval".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
 /// Per-session mutable state for processing PTY output chunks.
 /// Holds dedup state, parser, and session CWD for PlanFile resolution.
 /// Used by `spawn_reader_thread`.
@@ -1482,6 +1498,10 @@ struct ChunkProcessor {
     /// Absolute buffer line of the last heuristic agent-block start.
     /// Used to emit AgentBlock end when the next block starts or agent exits.
     last_agent_block_line: Option<usize>,
+    /// Edge-detect grok's OSC 0 "Action Required" approval title so a permission
+    /// prompt fires the question notification exactly once (the title repaints
+    /// every spinner tick). True while the last title signalled awaiting-approval.
+    grok_title_awaiting: bool,
 }
 
 impl ChunkProcessor {
@@ -1507,6 +1527,7 @@ impl ChunkProcessor {
             tuic_session,
             last_session_conflict_mark: None,
             last_agent_block_line: None,
+            grok_title_awaiting: false,
         }
     }
 
@@ -1919,6 +1940,25 @@ impl ChunkProcessor {
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), &title);
                         }
+                        // grok signals an awaiting-approval permission prompt by
+                        // prefixing its OSC 0 title with "⚠ Action Required" (e.g.
+                        // "⚠ Action Required - ⠙ - Running: echo … - Execute Shell …").
+                        // The title repaints every spinner tick, so edge-detect the
+                        // false→true transition and fire the question exactly once.
+                        // DEFERRED (2026-06-11) — grok 0.2.45 in always-approve mode
+                        // emits titles like "Run Shell Command echo … - grok" with NO
+                        // "Action Required" prefix (verified live). The prefix may be
+                        // version/permission-mode specific; the on-screen "◆ …?" prompt
+                        // (cliclack path in output_parser) covers real approvals. Re-verify
+                        // grok's title in default (non-always-approve) mode before removing.
+                        let title_awaiting = title.contains("Action Required");
+                        if title_awaiting && !self.grok_title_awaiting {
+                            tuic_events.push(ParsedEvent::Question {
+                                prompt_text: clean_action_required_title(&title),
+                                confident: true,
+                            });
+                        }
+                        self.grok_title_awaiting = title_awaiting;
                     }
                     TermEvent::ResetTitle =>
                     {
@@ -1926,6 +1966,7 @@ impl ChunkProcessor {
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), "");
                         }
+                        self.grok_title_awaiting = false;
                     }
                     TermEvent::ClipboardStore(text) => {
                         #[cfg(feature = "desktop")]
@@ -2171,14 +2212,19 @@ impl ChunkProcessor {
 
         // Emit events with dedup, grace filtering, and PlanFile resolution.
         for event in &events {
-            if suppress_notifications
-                && matches!(
-                    event,
-                    ParsedEvent::Question { .. }
-                        | ParsedEvent::RateLimit { .. }
-                        | ParsedEvent::ApiError { .. }
-                )
-            {
+            // During startup/resize grace, suppress low-confidence notifications to
+            // avoid boot-noise false positives — but let CONFIDENT questions through.
+            // grok signals an approval prompt via its "Action Required" title
+            // (confident), yet its continuous animation keeps resetting last_output,
+            // so the startup grace never settles by silence and would otherwise
+            // suppress the approval prompt for the full 120s safety cap.
+            let suppress_this = suppress_notifications
+                && match event {
+                    ParsedEvent::Question { confident, .. } => !*confident,
+                    ParsedEvent::RateLimit { .. } | ParsedEvent::ApiError { .. } => true,
+                    _ => false,
+                };
+            if suppress_this {
                 continue;
             }
 
@@ -3002,13 +3048,24 @@ pub(crate) fn spawn_reader_thread(
         // behind, so persistent saturation still gets cumulative backpressure.
         const MAX_STUCK_BEFORE_PAUSE: u32 = 3;
         const STUCK_PAUSE_MS: u64 = 1_000;
+        // Adaptive frame-rate floor (see throttle check below). A TUI that
+        // animates continuously keeps the grid dirty for this many consecutive
+        // ticks (~96 ms); once we're past that, cap sends to SUSTAINED_MIN_INTERVAL.
+        const SUSTAINED_DIRTY_TICKS: u32 = 6;
+        const SUSTAINED_MIN_INTERVAL_MS: u64 = 33; // ~30 fps while animating
         let mut stuck_since: Option<std::time::Instant> = None;
         let mut stuck_count: u32 = 0;
+        let mut dirty_run: u32 = 0;
+        let mut last_sent: Option<std::time::Instant> = None;
         while ticker_running.load(Ordering::Relaxed) {
             std::thread::sleep(TICK);
             if !ticker_dirty.swap(false, Ordering::Relaxed) {
+                // Idle tick: leave sustained-animation mode so the next burst
+                // (keystroke, fresh output) gets full 60 fps low-latency response.
+                dirty_run = 0;
                 continue;
             }
+            dirty_run = dirty_run.saturating_add(1);
             let in_flight = ticker_state
                 .grid_frame_in_flight
                 .get(&ticker_sid)
@@ -3052,6 +3109,22 @@ pub(crate) fn spawn_reader_thread(
                 stuck_since = None;
                 stuck_count = 0;
             }
+            // Adaptive frame-rate floor: a TUI that animates continuously (e.g.
+            // grok's spinner repaints its whole bordered UI and walks the cursor
+            // around every tick) keeps the grid dirty 100% of the time, so the
+            // ticker would emit ~50 multi-KB frames/s. The in_flight gate prevents
+            // queue overflow but NOT WebView main-thread starvation — it paints
+            // flat-out and never yields to input/console, so the UI looks frozen.
+            // Once dirtiness is sustained, cap the send rate to ~30 fps to give the
+            // JS thread breathing room. Short bursts stay at the full 60 fps tick.
+            let now = std::time::Instant::now();
+            if dirty_run >= SUSTAINED_DIRTY_TICKS
+                && let Some(last) = last_sent
+                && (now.duration_since(last).as_millis() as u64) < SUSTAINED_MIN_INTERVAL_MS
+            {
+                ticker_dirty.store(true, Ordering::Relaxed); // keep pending for a later tick
+                continue;
+            }
             if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
                 let mut g = vt.lock();
                 if let Some(p) = ticker_state.pending_scroll.get(&ticker_sid) {
@@ -3063,6 +3136,7 @@ pub(crate) fn spawn_reader_thread(
                 let frame = g.serialize_dirty_rows();
                 drop(g);
                 send_grid_frame(&ticker_state, &ticker_sid, frame);
+                last_sent = Some(now);
             }
         }
         // Final flush after reader exits
@@ -4523,6 +4597,7 @@ pub(crate) fn classify_agent(process_name: &str) -> Option<&'static str> {
         "amp" => Some("amp"),
         "cursor-agent" => Some("cursor"),
         "goose" => Some("goose"),
+        "grok" => Some("grok"),
         _ => None,
     }
 }
@@ -5477,6 +5552,36 @@ pub(crate) async fn set_session_visible(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clean_action_required_title_strips_marker_spinner_and_separators() {
+        // Real grok permission-prompt title (captured live).
+        assert_eq!(
+            clean_action_required_title(
+                "⚠ Action Required - ⠙ - Running: echo hello - Execute Shell Command"
+            ),
+            "Running: echo hello - Execute Shell Command"
+        );
+    }
+
+    #[test]
+    fn clean_action_required_title_handles_each_spinner_frame() {
+        // Title repaints with a different braille frame each tick; cleaned output is stable.
+        for frame in ["⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇"] {
+            assert_eq!(
+                clean_action_required_title(&format!("⚠ Action Required - {frame} - Running: ls")),
+                "Running: ls"
+            );
+        }
+    }
+
+    #[test]
+    fn clean_action_required_title_fallback_when_empty() {
+        assert_eq!(
+            clean_action_required_title("⚠ Action Required - ⠙ - "),
+            "grok is awaiting approval"
+        );
+    }
 
     #[test]
     fn test_parse_signal_number_killed() {

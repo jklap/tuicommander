@@ -22,6 +22,20 @@ export function effectiveMergeMethod(pr: BranchPrStatus, preferred: MergeStrateg
 	return preferred; // all false shouldn't happen — send preferred anyway
 }
 
+/** Whether the Approve button should be shown for a PR.
+ *  Hidden when: not open, draft, already approved overall, the viewer is the PR
+ *  author (GitHub rejects self-approval with 422), or the viewer already approved
+ *  (overall review_decision may still be REVIEW_REQUIRED for other reviewers). */
+export function canApprovePr(pr: BranchPrStatus, viewerLogin: string | null): boolean {
+	return (
+		pr.state?.toUpperCase() === "OPEN" &&
+		!pr.is_draft &&
+		pr.review_decision !== "APPROVED" &&
+		!pr.viewer_did_approve &&
+		pr.author !== viewerLogin
+	);
+}
+
 /** Whether a GitHub merge error is a 405 method-not-allowed response. */
 export function isMergeMethodNotAllowed(error: unknown): boolean {
 	return String(error).includes("405");

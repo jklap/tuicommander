@@ -11,7 +11,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { toastsStore } from "../../stores/toasts";
 import type { BranchPrStatus } from "../../types";
 import { cx } from "../../utils";
-import { effectiveMergeMethod, mergeWithFallback } from "../../utils/prMerge";
+import { canApprovePr, effectiveMergeMethod, mergeWithFallback } from "../../utils/prMerge";
 import {
 	type CleanupStep,
 	PostMergeCleanupDialog,
@@ -321,11 +321,7 @@ export const RemoteOnlyPrPopover: Component<{
 															{t("sidebar.worktree", "Worktree")}
 														</button>
 													</Show>
-													<Show
-														when={
-															pr.state?.toUpperCase() === "OPEN" && !pr.is_draft && pr.review_decision !== "APPROVED"
-														}
-													>
+													<Show when={canApprovePr(pr, githubStore.state.viewerLogin)}>
 														<button
 															class={s.remoteOnlyApprove}
 															onClick={() => handleApprove(pr)}

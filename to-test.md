@@ -1316,3 +1316,26 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [VISUAL] Live (needs rebuild): expand an issue while the active terminal's agent is BUSY → the "Review Issue" button is ENABLED (not greyed) and clicking it fills the Compose box (does not send).
 - [VISUAL] Live (needs rebuild): Settings → Smart Prompts → edit an inject prompt → a "Target" dropdown shows (Compose box / Terminal). Selecting "Terminal" reveals the "Auto-execute" checkbox; "Compose box" hides it.
 - [HUMAN] Live (needs rebuild): set a prompt's Target=Terminal, make the agent busy → its SmartButtonStrip button is disabled ("Agent is busy"); when idle it sends straight to the agent (Auto-execute on = immediate Enter, off = text awaiting review).
+
+## grok onboarding: storm fix + first-class agent + no-alt-screen wheel scroll (2026-06-11)
+- [x] Notification storm: grok's decorative `◆` timeline bullets ("Thought for 1.3s", "user_prompt_submit") no longer fire confident Question events — cliclack `◆` match now requires the text to end with `?` (Goose prompts do, grok labels don't) _(verified: output_parser.rs:1131-1140; test_grok_decorative_bullet_not_a_question + 3 cliclack tests green)_
+- [x] grok registered as first-class agent: agents.ts (AgentType/AGENTS/MCP_SUPPORT/AGENT_DISPLAY), useAgentDetection binary map, classify_agent (pty.rs), discover_grok_session/verify_grok_session (agent_session.rs, `~/.grok/sessions/<%-encoded-cwd>/<UUIDv7>/`) _(verified: tsc clean; 33 agent_session + 4 grok/cliclack rust tests green; grok_path_encode matches live on-disk layout)_
+- [HUMAN] Live (needs rebuild): launch grok by typing `grok` in a shell tab (not via spawn) → TUIC detects agent_type=grok (icon/badge), and after app restart the session resumes via `grok --resume <id>` (discovery picks the newest UUIDv7 dir).
+- [VISUAL] Live (needs rebuild): run `grok --no-alt-screen`, produce enough output for a scrollbar, then **two-finger trackpad / wheel scroll** → the scrollback scrolls (previously dead because grok enables mouse mode `?1000h/?1002h/?1003h/?1006h` without alt-screen, so the wheel was forwarded to grok). Confirm vim/lazygit (real alt-screen) wheel still reaches the app, and **Shift+wheel** scrolls the scrollback in any mode (never sent to the app).
+
+## Search/UI consistency: unified SearchBar + scrollbar overview + file-browser tracking (2026-06-11)
+- [x] Shared `SearchBar` gains optional VS Code-style expandable Replace (chevron) — only shown when the consumer passes `onReplace`/`onReplaceAll` (editor yes; terminal/diff no) _(verified: code inspection SearchBar.tsx; tsc clean)_
+- [x] Match counter ("1 of N"/"No results") moved INSIDE the input (absolute, masking bg) instead of a fixed-width flex slot → no dead space / layout shift _(verified: SearchBar.module.css .inputWrap/.counter; tsc clean)_
+- [x] Code editor uses the shared `SearchBar` overlay instead of CodeMirror's built-in panel (Cmd+F / Cmd+Alt+F / Esc); `EditorSearch` drives `@codemirror/search` _(verified: 6 vitest cases editorSearchEngine.test.ts; searchOverview 5; tsc clean)_
+- [x] Editor scrollbar search ticks: full-width 12px marks (`--attention`) that cover the scrollbar; git-change overview hidden while searching (`.cm-searching`) → only orange marks, like the terminal _(verified: searchOverview.ts; tsc clean)_
+- [x] Git-change overview ruler coalesces contiguous same-type runs → a whole-new file shows ONE tick, not a solid bar _(verified: 5 vitest cases gitGutterRuns.test.ts)_
+- [x] Diff panel search ticks on the scrollbar via `DomSearchEngine.matchFractions` + shared `DomSearchOverview` _(verified: code inspection; tsc clean)_
+- [x] Active search match no longer bright yellow: `.cm-selectionMatch` themed to a subtle accent tint _(verified: theme.ts; tsc clean)_
+- [x] File browser highlights the file open in the active editor (accent bar + tint), flat + tree, worktree-aware _(verified: FileBrowserPanel/TreeNode entryActive; tsc clean)_
+- [x] File browser reveals the active file: tree auto-expands ancestor dirs then scrolls the row into view _(verified: FileBrowserPanel.revealActiveFile + effect; tsc clean; full suite 4167 green)_
+- [VISUAL] Live (needs rebuild): open Cmd+F in the code editor → compact SearchBar pill (counter inside input); typing shows orange full-width ticks covering the scrollbar and hides the green git ticks; closing search brings the git overview back. Replace row expands via the chevron.
+- [VISUAL] Live (needs rebuild): open a brand-new (untracked) file → the git-change overview shows a SINGLE tick at the top, not a solid green bar.
+- [VISUAL] Live (needs rebuild): search inside a diff tab → orange match ticks appear on the diff scrollbar and track scroll.
+- [VISUAL] Live (needs rebuild): editor scrollbar visually matches the terminal's (14px track, rounded inset thumb).
+- [VISUAL] Live (needs rebuild): open a file deep in a subtree → the file browser (tree view) auto-expands its parents and scrolls it into view, highlighted with the accent bar. Switching the active editor tab moves the highlight.
+- [ ] DEFERRED (story 041-cd15): HTML Preview search → shared SearchBar (in-iframe search needs a postMessage bridge); shared sidebar-filter component for Error Log / Knowledge History / Branch Switcher etc. ("consistency of a different kind" for narrow sidebars).

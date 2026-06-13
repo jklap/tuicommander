@@ -1109,7 +1109,14 @@ fn parse_question(clean: &str) -> Option<ParsedEvent> {
         static ref INK_FOOTER_RE: regex::Regex =
             regex::Regex::new(r"Enter to select").unwrap();
         // cliclack interactive prompt: "◆  Do you allow this tool call?"
-        // ◆ (U+25C6) is the cliclack prompt marker — ultra-specific, no false positives.
+        // ◆ (U+25C6) is Goose's cliclack active-prompt marker. It is NOT unique to
+        // interactive prompts, though: grok reuses ◆ as a decorative timeline bullet
+        // ("◆ Thought for 1.3s", "◆ user_prompt_submit", tool-call labels). Those
+        // repaint every frame with a changing duration, so matching them emits an
+        // endless stream of (confident) Question events that never dedup — a
+        // notification storm. Goose's real prompts are all questions, so the match
+        // also requires the captured text to end with '?'. grok's decorative labels
+        // never do, so this cleanly separates the two.
         static ref CLICLACK_PROMPT_RE: regex::Regex =
             regex::Regex::new(r"^\s*\u{25C6}\s+(.+)").unwrap();
     }
@@ -1123,7 +1130,11 @@ fn parse_question(clean: &str) -> Option<ParsedEvent> {
         }
         if let Some(caps) = CLICLACK_PROMPT_RE.captures(line) {
             let text = caps[1].trim();
-            if text.len() >= 5 {
+            // Require a question mark: Goose's cliclack prompts are all questions
+            // ("…do you allow?", "Are you sure…?"). grok's decorative ◆ timeline
+            // bullets ("Thought for 1.3s", "user_prompt_submit") never end in '?',
+            // so this excludes them and kills the notification storm.
+            if text.len() >= 5 && text.ends_with('?') {
                 return Some(ParsedEvent::Question {
                     prompt_text: text.to_string(),
                     confident: true,
@@ -5146,6 +5157,25 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         let input = "\u{25C6}  hi";
         let evt = parse_question(input);
         assert!(evt.is_none(), "Short cliclack text should be ignored");
+    }
+
+    #[test]
+    fn test_grok_decorative_bullet_not_a_question() {
+        // grok reuses ◆ as a decorative timeline bullet, NOT a cliclack prompt.
+        // Its text repaints every frame with a changing duration, so detecting it
+        // emits an endless stream of confident Questions that never dedup — the
+        // notification storm. Only ◆ lines ending in '?' are real prompts.
+        for input in [
+            "\u{25C6} Thought for 1.3s",
+            "\u{25C6} Thought for 12.7s",
+            "\u{25C6} user_prompt_submit",
+            "\u{25C6} Run Shell Command echo hello",
+        ] {
+            assert!(
+                parse_question(input).is_none(),
+                "grok decorative bullet must not be a question: {input:?}"
+            );
+        }
     }
 
     // --- parse_choice_prompt fixture-driven golden tests ---

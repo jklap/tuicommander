@@ -21,7 +21,7 @@ use std::time::SystemTime;
 /// unclaimed session, or `None` if none can be found.
 ///
 /// # Parameters
-/// - `agent_type`: one of `"claude"`, `"gemini"`, `"codex"`, `"goose"`
+/// - `agent_type`: one of `"claude"`, `"gemini"`, `"codex"`, `"goose"`, `"grok"`
 /// - `cwd`: the terminal's working directory (used to compute project-scoped paths)
 /// - `claimed_ids`: session IDs already assigned to other terminals — excluded from results
 /// - `agent_pid`: PID of the running agent process. When provided, env vars that affect
@@ -53,6 +53,7 @@ pub(crate) fn discover_agent_session(
         // Goose stores sessions in SQLite — no filesystem discovery.
         // Shell wrapper injects --name $TUIC_SESSION for deterministic binding.
         "goose" => None,
+        "grok" => discover_grok_session(&cwd, &claimed_ids),
         _ => None,
     }
 }
@@ -358,6 +359,7 @@ pub(crate) fn verify_agent_session(
         ),
         "codex" => verify_codex_session(&session_id, env.get("CODEX_HOME").map(|s| s.as_str())),
         "goose" => verify_goose_session(),
+        "grok" => verify_grok_session(&session_id, &cwd),
         _ => false,
     }
 }
@@ -461,6 +463,55 @@ fn goose_db_path() -> Option<PathBuf> {
     })
 }
 
+// ─── Grok ─────────────────────────────────────────────────────────────────────
+
+/// Base directory for grok session storage: `~/.grok/sessions/`.
+fn grok_sessions_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".grok").join("sessions"))
+}
+
+/// Encode a filesystem path the way grok names its per-CWD session directory:
+/// RFC-3986 percent-encoding of the absolute path, preserving the unreserved set
+/// (ALPHA / DIGIT / `-` / `.` / `_` / `~`) and escaping everything else as `%XX`
+/// (uppercase hex). E.g. `/Users/foo.bar/proj` → `%2FUsers%2Ffoo.bar%2Fproj`.
+fn grok_path_encode(path: &str) -> String {
+    let normalised = path.replace('\\', "/");
+    let mut out = String::with_capacity(normalised.len());
+    for b in normalised.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{b:02X}"));
+        }
+    }
+    out
+}
+
+/// grok stores sessions under `~/.grok/sessions/<percent-encoded-cwd>/<UUIDv7>/`.
+/// Each session is a *directory* named with its UUIDv7 id (usable with
+/// `grok --resume <id>`); the newest such directory is the active session.
+fn discover_grok_session(cwd: &str, claimed_ids: &[String]) -> Option<String> {
+    let dir = grok_sessions_dir()?.join(grok_path_encode(cwd));
+    newest_unclaimed_file(
+        &dir,
+        |name| is_uuid(name).then(|| name.to_string()),
+        claimed_ids,
+        Some(std::time::Duration::from_secs(300)),
+    )
+}
+
+/// Check if `~/.grok/sessions/<percent-encoded-cwd>/<session_id>/` exists.
+fn verify_grok_session(session_id: &str, cwd: &str) -> bool {
+    if !is_uuid(session_id) {
+        return false;
+    }
+    let Some(dir) = grok_sessions_dir().map(|d| d.join(grok_path_encode(cwd))) else {
+        return false;
+    };
+    dir.join(session_id).is_dir()
+}
+
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
 /// Return true if `s` matches the UUID format: 8-4-4-4-12 lowercase hex with dashes.
@@ -554,6 +605,30 @@ mod tests {
         assert!(!is_uuid("af467730-5e79-49d9-8a17")); // too short
         assert!(!is_uuid("af467730-5e79-49d9-8a17-ebd94c99f262X")); // too long
         assert!(!is_uuid("zf467730-5e79-49d9-8a17-ebd94c99f262")); // non-hex
+    }
+
+    // ── grok ──
+
+    #[test]
+    fn test_grok_path_encode_matches_on_disk_layout() {
+        // Captured live: grok names its per-CWD session dir by percent-encoding
+        // the absolute path — '/' → %2F, '.' preserved.
+        assert_eq!(
+            grok_path_encode("/Users/stefano.straus/Gits/personal/tuicommander"),
+            "%2FUsers%2Fstefano.straus%2FGits%2Fpersonal%2Ftuicommander"
+        );
+        // Unreserved set is preserved; spaces and other reserved chars escape.
+        assert_eq!(grok_path_encode("/a b/c-d_e~f"), "%2Fa%20b%2Fc-d_e~f");
+    }
+
+    #[test]
+    fn test_grok_path_encode_windows_separators() {
+        assert_eq!(grok_path_encode(r"C:\Users\foo"), "C%3A%2FUsers%2Ffoo");
+    }
+
+    #[test]
+    fn test_verify_grok_session_rejects_non_uuid() {
+        assert!(!verify_grok_session("not-a-uuid", "/tmp/x"));
     }
 
     // ── path_to_claude_slug ──

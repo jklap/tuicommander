@@ -697,6 +697,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					appLogger.info("terminal", `initSession(${props.id}) — reconnected to ${sessionId}`);
 					detectAgentForTerminal(props.id, "idle").catch(() => {});
 				} catch {
+					// If we unmounted during the resize await, onCleanup already tore
+					// down listeners; setCurrentSessionId below would recompute a
+					// disposed <Show> and crash the SolidJS root (UI freeze). Bail.
+					if (disposed) return;
 					appLogger.warn(
 						"terminal",
 						`initSession(${props.id}) — resize failed for ${sessionId}, creating FRESH session`,
@@ -753,12 +757,29 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					env: agentConfigsStore.getEnvFlags("claude"),
 					agent_type: termData?.pendingInitCommand ? (termData.agentType ?? null) : null,
 				});
+				// The component can unmount during the await above (tab churn while
+				// an agent like grok rapidly toggles visibility). setCurrentSessionId
+				// then recomputes the now-disposed <Show when={_currentSessionId()}>
+				// and throws "stale value from <Show>" — unhandled, it kills the
+				// SolidJS root and the whole UI freezes while the backend stays alive.
+				// Persist the new id (plain store write) so a remount reconnects
+				// instead of leaking a duplicate PTY, then bail before any reactive write.
+				if (disposed) {
+					if (sessionId && terminalsStore.get(props.id)) {
+						terminalsStore.setSessionId(props.id, sessionId);
+					}
+					return;
+				}
 				setCurrentSessionId(sessionId);
 				if (sessionId) {
 					if (!isTauri()) {
 						browserCreatedSessions.add(sessionId);
 					}
 					await attachSessionListeners(sessionId);
+					if (disposed) {
+						terminalsStore.setSessionId(props.id, sessionId);
+						return;
+					}
 				}
 			}
 

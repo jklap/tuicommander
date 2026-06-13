@@ -51,7 +51,7 @@ export interface GridRenderer {
 	buildFontStyle(a: number, fontSize: number, fontFamily: string): string;
 }
 
-type GridContext2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
+export type GridContext2D = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D;
 
 export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): GridRenderer {
 	// Theme colors (re-read on remeasure / posted to worker on theme change).
@@ -1197,9 +1197,16 @@ export function createGridRenderer(ctx: GridContext2D, deps: GridRendererDeps): 
 		// Pass 1: backgrounds
 		for (let c = 0; c < row.count; c++) {
 			const cp = row.codepoints[c];
-			if (cp === 0 || (cp === 0x20 && c > lastVisibleCol)) continue;
 			const a = row.attrs[c];
-			if (!(a & ATTR_DEFAULT_BG) || a & ATTR_INVERSE) {
+			const hasExplicitBg = !(a & ATTR_DEFAULT_BG) || (a & ATTR_INVERSE) !== 0;
+			// Skip only cells with nothing to paint: empty cells and trailing
+			// spaces that ALSO carry the default background. A trailing space with
+			// an explicit bg (e.g. grok's dark tool-block bands, or any full-width
+			// colored bar, extending past the last glyph) MUST still be filled —
+			// otherwise the colored rectangle is truncated at the last visible
+			// glyph, producing dark bands misaligned to the text rows.
+			if (!hasExplicitBg && (cp === 0 || (cp === 0x20 && c > lastVisibleCol))) continue;
+			if (hasExplicitBg) {
 				ctx.fillStyle = resolveBg(row.fg[c], row.bg[c], a, cachedBgDefault);
 				ctx.fillRect(c * m.cellWidth, y, m.cellWidth, m.cellHeight);
 			}

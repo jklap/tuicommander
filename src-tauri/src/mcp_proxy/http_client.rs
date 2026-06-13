@@ -340,12 +340,6 @@ impl HttpMcpClient {
             .rpc("tools/list", serde_json::json!({}), auth_token)
             .await?;
 
-        tracing::debug!(
-            upstream = %self.name,
-            "tools/list raw response: {}",
-            serde_json::to_string(&resp_value).unwrap_or_default()
-        );
-
         let tools_arr = match resp_value["result"]["tools"].as_array() {
             Some(arr) => arr.clone(),
             None => {

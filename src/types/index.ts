@@ -128,6 +128,8 @@ export interface BranchPrStatus {
 	mergeable: MergeableState;
 	merge_state_status: MergeStateStatus;
 	review_decision: ReviewDecision;
+	/** True if the authenticated viewer's latest review on this PR is APPROVED. */
+	viewer_did_approve: boolean;
 	labels: PrLabel[];
 	is_draft: boolean;
 	base_ref_name: string;

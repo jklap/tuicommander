@@ -2392,7 +2392,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// While dragging the scrollbar thumb, ignore wheel input — otherwise it would
 			// re-enter smooth-scroll (scrollPosF != null) and re-freeze repaints mid-drag.
 			if (scrollDragging) return;
-			if (currentFrame && currentFrame.mouseMode > 0) {
+			// Forward the wheel to the app ONLY when it owns the viewport with no
+			// scrollback to scroll — i.e. the alternate screen (vim, lazygit, htop).
+			// alacritty's alt buffer has no history, so historySize === 0 is the
+			// reliable "alt-screen" proxy. A main-screen app that enables mouse
+			// reporting WITHOUT alt-screen (e.g. `grok --no-alt-screen`) still has
+			// real scrollback, so the wheel must scroll history — forwarding it to
+			// the app left trackpad/wheel scroll dead while the scrollbar worked.
+			// Shift+wheel always scrolls the scrollback, never the app — matching the
+			// click/motion handlers' `!e.shiftKey` bypass and standard terminal UX.
+			if (currentFrame && currentFrame.mouseMode > 0 && currentFrame.historySize === 0 && !e.shiftKey) {
 				const pos = canvasToGrid(e as unknown as MouseEvent);
 				const btn = e.deltaY < 0 ? 64 : 65;
 				writePtyNoScroll(sgrMouseSequence(btn, pos.col, pos.row, true, e as unknown as MouseEvent));

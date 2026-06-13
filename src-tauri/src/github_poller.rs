@@ -842,6 +842,7 @@ mod tests {
             mergeable: mergeable.to_string(),
             merge_state_status: String::new(),
             review_decision: review.to_string(),
+            viewer_did_approve: false,
             labels: vec![],
             is_draft: false,
             base_ref_name: "main".to_string(),

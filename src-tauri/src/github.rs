@@ -601,6 +601,10 @@ pub(crate) struct BranchPrStatus {
     pub(crate) mergeable: String,
     pub(crate) merge_state_status: String,
     pub(crate) review_decision: String,
+    /// Whether the authenticated viewer's latest review on this PR is APPROVED.
+    /// Used to hide the Approve button once the current user has already approved,
+    /// even when the overall `review_decision` is still REVIEW_REQUIRED.
+    pub(crate) viewer_did_approve: bool,
     pub(crate) labels: Vec<PrLabel>,
     pub(crate) is_draft: bool,
     pub(crate) base_ref_name: String,
@@ -671,6 +675,7 @@ fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
         .unwrap_or("UNKNOWN")
         .to_string();
     let review_decision = v["reviewDecision"].as_str().unwrap_or("").to_string();
+    let viewer_did_approve = v["viewerLatestReview"]["state"].as_str() == Some("APPROVED");
     let is_draft = v["isDraft"].as_bool().unwrap_or(false);
 
     let labels = v["labels"]["nodes"]
@@ -733,6 +738,7 @@ fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
         mergeable,
         merge_state_status,
         review_decision,
+        viewer_did_approve,
         labels,
         is_draft,
         base_ref_name,
@@ -988,6 +994,7 @@ fn build_unified_batch_query(
     let pr_first = if hide_drafts { 40 } else { 20 };
     let pr_node_fields = r#"number title state url headRefName headRefOid baseRefName isDraft
         additions deletions mergeable mergeStateStatus reviewDecision
+        viewerLatestReview { state }
         createdAt updatedAt
         author { login }
         labels(first: 10) { nodes { name color } }
@@ -1358,6 +1365,7 @@ query RepoPRs($owner: String!, $repo: String!, $first: Int!) {
       nodes {
         number title state url headRefName baseRefName isDraft
         additions deletions mergeable mergeStateStatus reviewDecision
+        viewerLatestReview { state }
         createdAt updatedAt
         author { login }
         labels(first: 10) { nodes { name color } }
@@ -1514,6 +1522,7 @@ fn build_multi_repo_pr_query(
     };
     let node_fields = r#"number title state url headRefName headRefOid baseRefName isDraft
         additions deletions mergeable mergeStateStatus reviewDecision
+        viewerLatestReview { state }
         createdAt updatedAt
         author { login }
         labels(first: 10) { nodes { name color } }
@@ -1882,8 +1891,31 @@ pub(crate) async fn approve_pr_impl(
             .json()
             .await
             .unwrap_or_else(|_| serde_json::json!({"message": "Unknown error"}));
-        let msg = json["message"].as_str().unwrap_or("Unknown error");
-        Err(format!("GitHub approve failed ({status}): {msg}"))
+        let raw = json["message"].as_str().unwrap_or("Unknown error");
+        Err(friendly_approve_error(status.as_u16(), raw))
+    }
+}
+
+/// Map a GitHub approve-review API failure to a short, human-friendly message.
+/// GitHub's raw responses ("Unprocessable Entity") are opaque to users; the most
+/// common 422 is self-approval, which we surface explicitly.
+fn friendly_approve_error(status: u16, raw: &str) -> String {
+    match status {
+        422 => {
+            // 422 on a review POST is almost always "can't approve your own PR".
+            // GitHub doesn't give a machine-readable code, so match on the message.
+            if raw.to_lowercase().contains("can not approve")
+                || raw.to_lowercase().contains("cannot approve")
+                || raw.to_lowercase().contains("own pull request")
+            {
+                "You can't approve your own pull request.".to_string()
+            } else {
+                "GitHub couldn't process this approval (it may already be approved or not reviewable).".to_string()
+            }
+        }
+        401 | 403 => "You don't have permission to approve this pull request.".to_string(),
+        404 => "Pull request not found.".to_string(),
+        _ => format!("Approve failed: {raw}"),
     }
 }
 
@@ -2302,6 +2334,7 @@ mod tests {
         mergeable: &str,
         merge_state_status: &str,
         review_decision: Option<&str>,
+        viewer_review_state: Option<&str>,
         is_draft: bool,
         labels: &[(&str, &str)],
         base_ref_name: &str,
@@ -2333,6 +2366,7 @@ mod tests {
             "mergeable": mergeable,
             "mergeStateStatus": merge_state_status,
             "reviewDecision": review_decision,
+            "viewerLatestReview": viewer_review_state.map(|s| serde_json::json!({"state": s})),
             "createdAt": "2025-01-01T00:00:00Z",
             "updatedAt": "2025-01-02T00:00:00Z",
             "author": {"login": author},
@@ -2384,6 +2418,7 @@ mod tests {
                 "MERGEABLE",
                 "BLOCKED",
                 Some("CHANGES_REQUESTED"),
+                None,
                 false,
                 &[],
                 "main",
@@ -2402,6 +2437,7 @@ mod tests {
                 "MERGEABLE",
                 "CLEAN",
                 Some("APPROVED"),
+                None,
                 false,
                 &[],
                 "main",
@@ -2436,6 +2472,106 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_graphql_prs_viewer_did_approve() {
+        // viewerLatestReview.state == APPROVED => viewer_did_approve true,
+        // even when overall reviewDecision is still REVIEW_REQUIRED.
+        let approved = graphql_pr_node(
+            1,
+            "Already approved by me",
+            "OPEN",
+            "mine/approved",
+            1,
+            0,
+            "alice",
+            1,
+            &[],
+            &[],
+            "MERGEABLE",
+            "BLOCKED",
+            Some("REVIEW_REQUIRED"),
+            Some("APPROVED"),
+            false,
+            &[],
+            "main",
+        );
+        // No viewer review => viewer_did_approve false.
+        let not_reviewed = graphql_pr_node(
+            2,
+            "Not reviewed by me",
+            "OPEN",
+            "other/pr",
+            1,
+            0,
+            "bob",
+            1,
+            &[],
+            &[],
+            "MERGEABLE",
+            "BLOCKED",
+            Some("REVIEW_REQUIRED"),
+            None,
+            false,
+            &[],
+            "main",
+        );
+        // Viewer left a non-approving review => viewer_did_approve false.
+        let commented = graphql_pr_node(
+            3,
+            "Commented only",
+            "OPEN",
+            "other/pr2",
+            1,
+            0,
+            "carol",
+            1,
+            &[],
+            &[],
+            "MERGEABLE",
+            "BLOCKED",
+            Some("REVIEW_REQUIRED"),
+            Some("COMMENTED"),
+            false,
+            &[],
+            "main",
+        );
+        let result =
+            parse_graphql_prs(&graphql_response(vec![approved, not_reviewed, commented]));
+        assert_eq!(result.len(), 3);
+        assert!(result[0].viewer_did_approve);
+        assert!(!result[1].viewer_did_approve);
+        assert!(!result[2].viewer_did_approve);
+    }
+
+    #[test]
+    fn test_friendly_approve_error_self_approve() {
+        let msg = friendly_approve_error(
+            422,
+            "Unprocessable Entity: Can not approve your own pull request",
+        );
+        assert!(msg.contains("your own pull request"));
+        assert!(!msg.contains("Unprocessable"));
+    }
+
+    #[test]
+    fn test_friendly_approve_error_generic_422() {
+        let msg = friendly_approve_error(422, "Validation Failed");
+        assert!(!msg.contains("Validation Failed"));
+        assert!(msg.to_lowercase().contains("approval"));
+    }
+
+    #[test]
+    fn test_friendly_approve_error_forbidden() {
+        let msg = friendly_approve_error(403, "Resource not accessible");
+        assert!(msg.to_lowercase().contains("permission"));
+    }
+
+    #[test]
+    fn test_friendly_approve_error_other_passthrough() {
+        let msg = friendly_approve_error(500, "Internal Server Error");
+        assert!(msg.contains("Internal Server Error"));
+    }
+
+    #[test]
     fn test_parse_graphql_prs_empty_nodes() {
         let response = graphql_response(vec![]);
         let result = parse_graphql_prs(&response);
@@ -2465,6 +2601,7 @@ mod tests {
             "UNKNOWN",
             "UNKNOWN",
             None,
+            None,
             false,
             &[],
             "main",
@@ -2492,6 +2629,7 @@ mod tests {
             "UNKNOWN",
             "DRAFT",
             None,
+            None,
             true,
             &[],
             "main",
@@ -2518,6 +2656,7 @@ mod tests {
             &[],
             "UNKNOWN",
             "UNKNOWN",
+            None,
             None,
             false,
             &[("bug", "d73a4a"), ("enhancement", "a2eeef")],
@@ -2556,6 +2695,7 @@ mod tests {
                 "MERGEABLE",
                 "CLEAN",
                 Some("APPROVED"),
+                None,
                 false,
                 &[],
                 "main",
@@ -2574,6 +2714,7 @@ mod tests {
                 "CONFLICTING",
                 "DIRTY",
                 Some("CHANGES_REQUESTED"),
+                None,
                 false,
                 &[],
                 "main",
@@ -2623,6 +2764,7 @@ mod tests {
             "UNKNOWN",
             "UNKNOWN",
             None,
+            None,
             false,
             &[],
             "main",
@@ -2650,6 +2792,7 @@ mod tests {
                 "UNKNOWN",
                 "UNKNOWN",
                 None,
+                None,
                 false,
                 &[],
                 "main",
@@ -2667,6 +2810,7 @@ mod tests {
                 &[],
                 "UNKNOWN",
                 "UNKNOWN",
+                None,
                 None,
                 false,
                 &[],
@@ -2695,6 +2839,7 @@ mod tests {
             &[],
             "UNKNOWN",
             "UNKNOWN",
+            None,
             None,
             false,
             &[],

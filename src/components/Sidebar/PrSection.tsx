@@ -12,7 +12,7 @@ import { toastsStore } from "../../stores/toasts";
 import type { BranchPrStatus } from "../../types";
 import { cx } from "../../utils";
 import { handleOpenUrl } from "../../utils/openUrl";
-import { effectiveMergeMethod, mergeWithFallback } from "../../utils/prMerge";
+import { canApprovePr, effectiveMergeMethod, mergeWithFallback } from "../../utils/prMerge";
 import { prContextVariables } from "../../utils/promptContext";
 import { PrDetailContent } from "../PrDetailPopover/PrDetailContent";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
@@ -217,11 +217,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 															{t("sidebar.worktree", "Worktree")}
 														</button>
 													</Show>
-													<Show
-														when={
-															pr.state?.toUpperCase() === "OPEN" && !pr.is_draft && pr.review_decision !== "APPROVED"
-														}
-													>
+													<Show when={canApprovePr(pr, githubStore.state.viewerLogin)}>
 														<button
 															class={cx(s.ghActionBtn, s.ghApproveBtn)}
 															onClick={() => handleApprove(pr)}

@@ -1736,24 +1736,35 @@ impl AppState {
                         s.last_activity_ms = now_ms;
                         match event_type {
                             "question" => {
-                                s.awaiting_input = true;
-                                s.question_text = parsed
-                                    .get("prompt_text")
-                                    .and_then(|t| t.as_str())
-                                    .map(|t| t.to_string());
-                                s.question_confident = parsed
+                                let new_confident = parsed
                                     .get("confident")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
+                                // Don't let a low-confidence (silence-heuristic) question
+                                // overwrite an already-active high-confidence one — e.g. grok
+                                // signals an approval prompt via its "Action Required" title
+                                // (confident) while its on-screen status line is also parsed as
+                                // a low-confidence question. Downgrading question_confident here
+                                // would let the next busy status-line clear awaiting_input,
+                                // making the approval state flicker. The confident question
+                                // clears on user-input instead.
+                                if !(s.awaiting_input && s.question_confident && !new_confident) {
+                                    s.awaiting_input = true;
+                                    s.question_text = parsed
+                                        .get("prompt_text")
+                                        .and_then(|t| t.as_str())
+                                        .map(|t| t.to_string());
+                                    s.question_confident = new_confident;
 
-                                // Rate limit: skip if last push for this session was < 30s ago
-                                let should_push = !state.push_store.is_empty()
-                                    && s.last_push_ms
-                                        .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000);
-                                if should_push {
-                                    s.last_push_ms = Some(now_ms);
-                                    let prompt = s.question_text.clone().unwrap_or_default();
-                                    push_data = Some((session_id.clone(), prompt));
+                                    // Rate limit: skip if last push for this session was < 30s ago
+                                    let should_push = !state.push_store.is_empty()
+                                        && s.last_push_ms
+                                            .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000);
+                                    if should_push {
+                                        s.last_push_ms = Some(now_ms);
+                                        let prompt = s.question_text.clone().unwrap_or_default();
+                                        push_data = Some((session_id.clone(), prompt));
+                                    }
                                 }
                             }
                             "user-input" => {
@@ -1794,9 +1805,18 @@ impl AppState {
                                 // Keep slash_menu_items — the agent's status line can tick
                                 // while the user is still interacting with the slash menu, and
                                 // wiping it here causes the PWA overlay to flash off.
-                                s.awaiting_input = false;
-                                s.question_text = None;
-                                s.question_confident = false;
+                                //
+                                // A *confident* question stays sticky across status-line ticks.
+                                // grok keeps its spinner animating (emitting status-line) WHILE
+                                // awaiting approval ("⚠ Action Required" title → confident
+                                // question), so a busy tick must not clobber it — otherwise
+                                // awaiting_input flickers. It clears on user-input (the user
+                                // answered, state.rs user-input arm). Low-confidence
+                                // silence-heuristic questions still yield to the busy signal.
+                                if !s.question_confident {
+                                    s.awaiting_input = false;
+                                    s.question_text = None;
+                                }
                                 s.rate_limited = false;
                                 s.retry_after_ms = None;
                                 s.rate_limit_set_ms = 0;
@@ -3877,6 +3897,65 @@ mod tests {
             s.question_text.is_none(),
             "status-line should clear question_text"
         );
+    }
+
+    #[test]
+    fn test_session_state_status_line_keeps_confident_question() {
+        let state = fresh_state();
+        // Confident question — e.g. grok's "⚠ Action Required" approval prompt.
+        let q = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "Run echo x", "confident": true }),
+        );
+        apply(&state, &q);
+        // grok keeps its spinner animating (emitting status-line) WHILE awaiting
+        // approval. A confident question must survive the busy tick — otherwise
+        // awaiting_input flickers and the approval notification is lost.
+        let status =
+            make_parsed("status-line", serde_json::json!({ "task_name": "Running" }));
+        let s = apply(&state, &status);
+        assert!(
+            s.awaiting_input,
+            "confident question must survive a status-line tick"
+        );
+        assert_eq!(s.question_text.as_deref(), Some("Run echo x"));
+        // The user answering (user-input) clears it.
+        let ui = make_parsed("user-input", serde_json::json!({ "content": "yes" }));
+        let s2 = apply(&state, &ui);
+        assert!(
+            !s2.awaiting_input,
+            "user-input clears the confident question"
+        );
+    }
+
+    #[test]
+    fn test_session_state_low_confidence_question_does_not_downgrade_confident() {
+        let state = fresh_state();
+        // Confident approval prompt active (grok's "Action Required" title).
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "Run echo x", "confident": true }),
+            ),
+        );
+        // grok's on-screen status line is also parsed as a low-confidence question
+        // with a different text — it must NOT downgrade the active confident one,
+        // or the next status-line would clear awaiting (flicker).
+        let s = apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "Run echo x 12s", "confident": false }),
+            ),
+        );
+        assert!(s.question_confident, "confident flag must not be downgraded");
+        assert_eq!(
+            s.question_text.as_deref(),
+            Some("Run echo x"),
+            "confident question text must be preserved"
+        );
+        assert!(s.awaiting_input);
     }
 
     #[test]

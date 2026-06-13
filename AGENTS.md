@@ -64,7 +64,7 @@ NEVER write text + `\r` directly to a PTY. Always use `sendCommand()` from `src/
 
 TUIC tracks each agent's session ID for resume-after-restart. Two strategies coexist:
 
-**Discovery-based (Claude, Gemini, Codex).** TUIC does NOT inject `--session-id` at launch — the agent creates its own UUID. TUIC discovers the active session by scanning the agent's session directory for the newest file, re-checking every 30s poll. This survives `/clear` (all three agents have it: Claude `/clear`, Gemini `/clear`+`/new`, Codex `/clear`+`/new`+`/fork`) because re-discovery picks up the new session file. Resume uses `agentSessionId` (disk-discovered), not `tuicSession`.
+**Discovery-based (Claude, Gemini, Codex, Grok).** TUIC does NOT inject `--session-id` at launch — the agent creates its own UUID. TUIC discovers the active session by scanning the agent's session directory for the newest file, re-checking every 30s poll. This survives `/clear` (all three agents have it: Claude `/clear`, Gemini `/clear`+`/new`, Codex `/clear`+`/new`+`/fork`) because re-discovery picks up the new session file. Resume uses `agentSessionId` (disk-discovered), not `tuicSession`. Grok stores each session as a UUIDv7-named directory under `~/.grok/sessions/<percent-encoded-cwd>/`; the newest dir is the active session (`grok --resume <id>`).
 
 **Forced injection (Goose).** Shell wrapper injects `--name $TUIC_SESSION` into `goose session/run` commands. The TUIC tab UUID IS the goose session name. Discovery returns `None` (SQLite storage, no filesystem scan). Resume uses `tuicSession`.
 

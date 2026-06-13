@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { canMergePr, effectiveMergeMethod } from "../../components/Sidebar/RepoSection";
 import type { BranchPrStatus } from "../../types";
+import { canApprovePr } from "../../utils/prMerge";
 
 /** Build a BranchPrStatus with sensible defaults for a merge-eligible PR */
 function makePr(overrides: Partial<BranchPrStatus> = {}): BranchPrStatus {
@@ -19,6 +20,7 @@ function makePr(overrides: Partial<BranchPrStatus> = {}): BranchPrStatus {
 		mergeable: "MERGEABLE",
 		merge_state_status: "CLEAN",
 		review_decision: "APPROVED",
+		viewer_did_approve: false,
 		labels: [],
 		is_draft: false,
 		base_ref_name: "main",
@@ -127,5 +129,41 @@ describe("effectiveMergeMethod", () => {
 			rebase_merge_allowed: false,
 		});
 		expect(effectiveMergeMethod(pr, "squash")).toBe("squash");
+	});
+});
+
+describe("canApprovePr", () => {
+	/** A PR that needs review from "me" (not author, not yet approved). */
+	const reviewable = (overrides: Partial<BranchPrStatus> = {}) =>
+		makePr({ author: "alice", review_decision: "REVIEW_REQUIRED", ...overrides });
+
+	it("shows Approve for a normal open PR the viewer did not author or approve", () => {
+		expect(canApprovePr(reviewable(), "bob")).toBe(true);
+	});
+
+	it("hides Approve on the viewer's own PR (self-approve would 422)", () => {
+		expect(canApprovePr(reviewable({ author: "bob" }), "bob")).toBe(false);
+	});
+
+	it("hides Approve once the viewer already approved (review_decision still REVIEW_REQUIRED)", () => {
+		expect(canApprovePr(reviewable({ viewer_did_approve: true }), "bob")).toBe(false);
+	});
+
+	it("hides Approve when the PR is already approved overall", () => {
+		expect(canApprovePr(reviewable({ review_decision: "APPROVED" }), "bob")).toBe(false);
+	});
+
+	it("hides Approve on draft PRs", () => {
+		expect(canApprovePr(reviewable({ is_draft: true }), "bob")).toBe(false);
+	});
+
+	it("hides Approve on closed/merged PRs", () => {
+		expect(canApprovePr(reviewable({ state: "CLOSED" }), "bob")).toBe(false);
+		expect(canApprovePr(reviewable({ state: "MERGED" }), "bob")).toBe(false);
+	});
+
+	it("shows Approve when viewerLogin is unknown but viewer is clearly not author", () => {
+		// viewerLogin null => author !== null is true; gate still respects approve state.
+		expect(canApprovePr(reviewable(), null)).toBe(true);
 	});
 });

@@ -864,6 +864,7 @@ describe("useGitOperations", () => {
 			mergeable: "MERGEABLE",
 			merge_state_status: "CLEAN",
 			review_decision: "APPROVED",
+			viewer_did_approve: false,
 			labels: [],
 			is_draft: false,
 			base_ref_name: "main",

@@ -338,6 +338,30 @@ fn is_new_watchable_dir(kind: &notify::EventKind, category: EventCategory) -> bo
     ) && category == EventCategory::WorkingTree
 }
 
+/// Whether an event is a read-only access event that carries no state change and
+/// must be ignored before any classification (issue #84).
+///
+/// On Linux, inotify reports `IN_ACCESS`/`IN_OPEN`/`IN_CLOSE_NOWRITE` for every
+/// file *read*. Any process reading the working tree — TUIC's own periodic
+/// `git status`, the user's editor, language-server indexing — sprays thousands
+/// of these per second per repo (verified: a `git status` every 200 ms produced
+/// ~3000 events/s, 99.7% of them `Access`). `recommended_watcher` runs the
+/// callback on notify's event thread, so classifying + gitignore-matching each
+/// one pinned a core per repo and ultimately SIGABRTed — the emit-dedup fix
+/// (#82) silenced the downstream emit but not this per-event work.
+///
+/// `Access(Close(Write))` is kept: it signals a *completed write*. Real
+/// modifications also arrive as `Modify`/`Create`/`Remove`, which are never
+/// dropped, so no change is missed.
+fn is_ignorable_access(kind: &notify::EventKind) -> bool {
+    use notify::event::{AccessKind, AccessMode};
+    match kind {
+        notify::EventKind::Access(AccessKind::Close(AccessMode::Write)) => false,
+        notify::EventKind::Access(_) => true,
+        _ => false,
+    }
+}
+
 /// Start a watcher for a repository using raw `notify::RecommendedWatcher`.
 ///
 /// On macOS/Windows, FSEvents/ReadDirectoryChangesW handle recursive watching
@@ -392,6 +416,13 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                     return;
                 }
             };
+
+            // Drop read-only access events (open/read/close-nowrite) before any
+            // work: file reads spray thousands per second per repo and pinned a
+            // core processing them on this (notify event) thread (issue #84).
+            if is_ignorable_access(&event.kind) {
+                return;
+            }
 
             // Check if .gitignore itself changed — rebuild matcher if so
             let gitignore_changed = event.paths.iter().any(|p| {
@@ -1093,6 +1124,29 @@ mod tests {
             &EventKind::Modify(ModifyKind::Any),
             EventCategory::WorkingTree
         ));
+    }
+
+    #[test]
+    fn test_is_ignorable_access() {
+        use notify::event::{AccessKind, AccessMode, CreateKind, ModifyKind, RemoveKind};
+        use notify::EventKind;
+        // Read-only access noise — git status / editors / LSPs reading files.
+        assert!(is_ignorable_access(&EventKind::Access(AccessKind::Read)));
+        assert!(is_ignorable_access(&EventKind::Access(AccessKind::Open(
+            AccessMode::Read
+        ))));
+        assert!(is_ignorable_access(&EventKind::Access(AccessKind::Close(
+            AccessMode::Read
+        ))));
+        assert!(is_ignorable_access(&EventKind::Access(AccessKind::Any)));
+        // Close(Write) is a real completed write — kept.
+        assert!(!is_ignorable_access(&EventKind::Access(AccessKind::Close(
+            AccessMode::Write
+        ))));
+        // Modify / Create / Remove are never access-ignored.
+        assert!(!is_ignorable_access(&EventKind::Modify(ModifyKind::Any)));
+        assert!(!is_ignorable_access(&EventKind::Create(CreateKind::File)));
+        assert!(!is_ignorable_access(&EventKind::Remove(RemoveKind::File)));
     }
 
     #[test]
