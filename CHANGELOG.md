@@ -6,11 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-06-13
+
 ### Added
 - **Nested terminal tabs** (#85) — Optional setting (Appearance ▸ Tabs, default off) that shows a branch's open terminals as a collapsible list under its sidebar row when the branch has more than one terminal, each with a status dot; clicking a sub-item switches to that terminal.
 
 ### Changed
 - **Consistent HTML-preview search** — Find-in-page in the Preview tab's HTML view now uses the same SearchBar pill as the editor, diff, terminal and markdown views (with case/regex/whole-word toggles and a match counter), instead of a bespoke in-iframe overlay. The parent drives the iframe over a postMessage bridge; plugin panels keep their own overlay search.
+
+### Fixed
+- **Markdown search scrollbar ticks** — Find-in-page in the markdown view now shows the same match ticks on the scrollbar as the diff and editor views.
+- **Approve button on your own PR** — The PR Approve button no longer briefly appears on your own pull requests before your GitHub identity has loaded (which GitHub rejects with a 422).
+- **Branch indicator after fetch/rebase** — A momentarily-unreadable `.git/HEAD` (during a fetch, rebase or gc) no longer suppresses the next real branch-change refresh in the sidebar.
+- **MCP upstream reconnection** — Fixed a rare crash when an OAuth upstream finished authenticating while being disconnected; upstreams added at runtime now reliably appear in the tool list, and a failed auto-connect no longer stalls the first tool listing.
+- **Audio output device errors** are now logged instead of silently showing an empty device list.
+- **Accessibility** — Terminal tab lists in the sidebar expose correct ARIA roles to screen readers.
 
 ## [1.4.0] - 2026-06-09
 
