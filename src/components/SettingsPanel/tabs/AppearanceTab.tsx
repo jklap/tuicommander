@@ -444,6 +444,16 @@ export const AppearanceTab: Component = () => {
 				)}
 			/>
 
+			<SettingToggle
+				checked={settingsStore.state.tabTreeEnabled}
+				onChange={(v) => settingsStore.setTabTreeEnabled(v)}
+				label={t("appearance.label.tabTreeEnabled", "Nested Terminal Tabs")}
+				hint={t(
+					"appearance.hint.tabTreeEnabled",
+					"Show a branch's open terminals as a collapsible list under its sidebar row — only when the branch has more than one terminal",
+				)}
+			/>
+
 			<SettingSlider
 				label={t("appearance.label.maxTabNameLength", "Max Tab Name Length")}
 				value={settingsStore.state.maxTabNameLength}

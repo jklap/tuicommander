@@ -497,6 +497,10 @@ pub(crate) struct AppConfig {
     /// Cycle through all tab types (terminals + diff/md/editor) with prev/next, not just terminals
     #[serde(default)]
     pub(crate) tab_cycling_all_types: bool,
+    /// Show a branch's open terminals as a nested list under its sidebar row
+    /// (only when a branch has more than one terminal). Opt-in, off by default.
+    #[serde(default)]
+    pub(crate) tab_tree_enabled: bool,
     /// Auto-show PR detail popover when a branch has PR data
     #[serde(default = "default_true")]
     pub(crate) auto_show_pr_popover: bool,
@@ -693,6 +697,7 @@ impl Default for AppConfig {
             split_tab_mode: SplitTabMode::default(),
             tab_ordering_mode: TabOrderingMode::default(),
             tab_cycling_all_types: false,
+            tab_tree_enabled: false,
             auto_show_pr_popover: true,
             prevent_sleep_when_busy: false,
             auto_update_enabled: true,
@@ -1803,6 +1808,7 @@ mod tests {
             split_tab_mode: SplitTabMode::Unified,
             tab_ordering_mode: TabOrderingMode::TerminalsFirst,
             tab_cycling_all_types: true,
+            tab_tree_enabled: true,
             auto_show_pr_popover: true,
             prevent_sleep_when_busy: true,
             auto_update_enabled: false,

@@ -28,6 +28,7 @@ Open settings with `Cmd+,`. Settings are organized into tabs.
 | **Default font size** | — | — | 8–32px slider. Applies to new terminals; existing terminals keep their zoom level. |
 | **Split tab mode** | — | — | Separate or unified tab appearance |
 | **Cycle All Tab Types** | — | Off | When on, next/prev-tab shortcuts also cycle file/diff/markdown/editor tabs (ordered like the tab bar). Off cycles terminals only. |
+| **Nested Terminal Tabs** | — | Off | When on, a branch with more than one terminal shows a collapsible list of its terminals under its sidebar row, each with a status dot. Off by default. |
 | **Max tab name length** | — | — | 10–60 slider |
 | **Repository groups** | — | — | Create, rename, delete, and color-code groups |
 | **Reset panel sizes** | — | — | Restore sidebar and panel widths to defaults |

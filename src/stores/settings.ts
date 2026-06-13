@@ -39,6 +39,7 @@ interface RustAppConfig {
 	split_tab_mode: string;
 	tab_ordering_mode: string;
 	tab_cycling_all_types: boolean;
+	tab_tree_enabled: boolean;
 	auto_show_pr_popover: boolean;
 	prevent_sleep_when_busy: boolean;
 	auto_update_enabled: boolean;
@@ -347,6 +348,7 @@ interface SettingsStoreState {
 	splitTabMode: SplitTabMode;
 	tabOrderingMode: TabOrderingMode;
 	tabCyclingAllTypes: boolean;
+	tabTreeEnabled: boolean;
 	autoShowPrPopover: boolean;
 	preventSleepWhenBusy: boolean;
 	autoUpdateEnabled: boolean;
@@ -396,6 +398,7 @@ function createSettingsStore() {
 		splitTabMode: "separate",
 		tabOrderingMode: "grouped-by-type",
 		tabCyclingAllTypes: false,
+		tabTreeEnabled: false,
 		autoShowPrPopover: true,
 		preventSleepWhenBusy: false,
 		autoUpdateEnabled: true,
@@ -450,6 +453,7 @@ function createSettingsStore() {
 			split_tab_mode: state.splitTabMode,
 			tab_ordering_mode: state.tabOrderingMode,
 			tab_cycling_all_types: state.tabCyclingAllTypes,
+			tab_tree_enabled: state.tabTreeEnabled,
 			auto_show_pr_popover: state.autoShowPrPopover,
 			prevent_sleep_when_busy: state.preventSleepWhenBusy,
 			auto_update_enabled: state.autoUpdateEnabled,
@@ -530,6 +534,7 @@ function createSettingsStore() {
 				const tom = config.tab_ordering_mode;
 				setState("tabOrderingMode", tom === "terminals-first" || tom === "free" ? tom : "grouped-by-type");
 				setState("tabCyclingAllTypes", config.tab_cycling_all_types ?? false);
+				setState("tabTreeEnabled", config.tab_tree_enabled ?? false);
 				setState("autoShowPrPopover", config.auto_show_pr_popover ?? true);
 				setState("preventSleepWhenBusy", config.prevent_sleep_when_busy ?? false);
 				setState("autoUpdateEnabled", config.auto_update_enabled ?? true);
@@ -632,6 +637,11 @@ function createSettingsStore() {
 
 		setTabCyclingAllTypes(enabled: boolean): void {
 			setState("tabCyclingAllTypes", enabled);
+			save();
+		},
+
+		setTabTreeEnabled(enabled: boolean): void {
+			setState("tabTreeEnabled", enabled);
 			save();
 		},
 
@@ -867,6 +877,7 @@ registerDebugSnapshot("settings", () => {
 		splitTabMode: s.splitTabMode,
 		tabOrderingMode: s.tabOrderingMode,
 		tabCyclingAllTypes: s.tabCyclingAllTypes,
+		tabTreeEnabled: s.tabTreeEnabled,
 		bellStyle: s.bellStyle,
 		updateChannel: s.updateChannel,
 		intentTabTitle: s.intentTabTitle,

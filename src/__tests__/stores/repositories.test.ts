@@ -554,6 +554,82 @@ describe("repositoriesStore", () => {
 		});
 	});
 
+	describe("toggleBranchTabsExpanded()", () => {
+		it("toggles tabsExpanded from falsy to true", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "My Repo" });
+				store.setBranch("/repo", "feat/foo");
+				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBeFalsy();
+				store.toggleBranchTabsExpanded("/repo", "feat/foo");
+				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBe(true);
+			});
+		});
+
+		it("toggles tabsExpanded from true to false", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "My Repo" });
+				store.setBranch("/repo", "feat/foo");
+				store.toggleBranchTabsExpanded("/repo", "feat/foo");
+				store.toggleBranchTabsExpanded("/repo", "feat/foo");
+				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBe(false);
+			});
+		});
+
+		it("no-ops on unknown repo/branch", () => {
+			testInScope(() => {
+				expect(() => store.toggleBranchTabsExpanded("/nonexistent", "main")).not.toThrow();
+			});
+		});
+
+		it("persists via save_repositories (debounced)", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "My Repo" });
+				store.setBranch("/repo", "feat/foo");
+				store.toggleBranchTabsExpanded("/repo", "feat/foo");
+				vi.advanceTimersByTime(500);
+				const calls = mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_repositories");
+				expect(calls.length).toBeGreaterThan(0);
+			});
+		});
+	});
+
+	describe("setBranchTabsExpanded()", () => {
+		it("sets tabsExpanded to true", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "My Repo" });
+				store.setBranch("/repo", "feat/foo");
+				store.setBranchTabsExpanded("/repo", "feat/foo", true);
+				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBe(true);
+			});
+		});
+
+		it("keeps tabsExpanded true when set true again (idempotent open)", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "My Repo" });
+				store.setBranch("/repo", "feat/foo");
+				store.setBranchTabsExpanded("/repo", "feat/foo", true);
+				store.setBranchTabsExpanded("/repo", "feat/foo", true);
+				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBe(true);
+			});
+		});
+
+		it("sets tabsExpanded to false", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "My Repo" });
+				store.setBranch("/repo", "feat/foo");
+				store.setBranchTabsExpanded("/repo", "feat/foo", true);
+				store.setBranchTabsExpanded("/repo", "feat/foo", false);
+				expect(store.state.repositories["/repo"].branches["feat/foo"].tabsExpanded).toBe(false);
+			});
+		});
+
+		it("no-ops on unknown repo/branch", () => {
+			testInScope(() => {
+				expect(() => store.setBranchTabsExpanded("/nonexistent", "main", true)).not.toThrow();
+			});
+		});
+	});
+
 	describe("isEmpty()", () => {
 		it("returns true when empty", () => {
 			testInScope(() => {
