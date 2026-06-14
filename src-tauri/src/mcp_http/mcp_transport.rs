@@ -1770,6 +1770,7 @@ fn handle_agent(
                     shell: binary_path.clone(),
                 }),
             );
+            state.assign_term_alias(&session_id);
             state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
             state
                 .metrics
@@ -1786,6 +1787,10 @@ fn handle_agent(
             state
                 .last_output_ms
                 .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
+            // Register grid_watch so format=grid WebSocket streams work for
+            // MCP-spawned agent sessions (mirrors session.rs spawn_pty_session).
+            let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+            state.grid_watch.insert(session_id.clone(), grid_watch_tx);
 
             // Broadcast session-created to SSE/WebSocket consumers
             let cwd_str = args["cwd"].as_str().map(|s| s.to_string());
