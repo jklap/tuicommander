@@ -1885,6 +1885,12 @@ impl ChunkProcessor {
             (Vec::new(), None, None, Vec::new(), None, 0, false, 0)
         };
 
+        // Did this chunk grow the scrollback (genuine new output) or merely
+        // repaint existing rows (SIGWINCH reflow, cursor blink, statusline)?
+        // Captured BEFORE `last_vt_log_total` is updated below. A pure reflow
+        // never grows the buffer; real agent work scrolls in new lines.
+        let vt_log_grew = vt_log_total.map(|t| t > self.last_vt_log_total).unwrap_or(false);
+
         // Emit scrollback-overlay growth/rotation event (throttled to 100ms).
         // Frontend listens to `pty-vt-log-total-{session_id}` and updates
         // cache.total and cache.oldest for the scrollback overlay.
@@ -2426,6 +2432,20 @@ impl ChunkProcessor {
                 .unwrap_or_default()
                 .as_millis() as u64;
             ts.store(now, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        // SIGWINCH reflow repaints content rows for longer than the initial 1s
+        // resize grace, but a reflow never grows the buffer — it only repaints
+        // existing rows. While such pure-repaint chunks keep arriving within the
+        // grace window, re-arm the grace so a resize never flips an idle agent to
+        // busy. A growing chunk (genuine new output) is NOT extended, so real work
+        // started right after a resize still registers as busy. An already-busy
+        // session is unaffected (idle transitions are silence-timer only).
+        if !vt_log_grew {
+            let mut sl = silence.lock();
+            if sl.is_resize_grace() {
+                sl.on_resize();
+            }
         }
 
         // Shell state: reader transitions → BUSY on real output OR active spinner.
