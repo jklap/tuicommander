@@ -413,4 +413,10 @@ export const TIPS: Tip[] = [
 			"Generate passwords, UUIDs, JWTs, TOTP secrets, and more from the command palette. All values are generated with cryptographic randomness.",
 		shortcut: null,
 	},
+	{
+		feature: "Native Agent Hooks",
+		description:
+			"Let Claude or Gemini report status through their own hooks for precise busy/idle/waiting state — enable per agent in Settings → Agents. TUIC installs and removes the hooks cleanly and never touches your own.",
+		shortcut: null,
+	},
 ];

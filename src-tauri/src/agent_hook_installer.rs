@@ -116,7 +116,12 @@ pub(crate) fn install(settings: &Path, map: &[HookEntry]) -> Result<(), String> 
             .or_insert_with(|| Value::Object(Map::new()))
         {
             Value::Object(m) => m,
-            _ => return Err(format!("{} `hooks` is not a JSON object", settings.display())),
+            _ => {
+                return Err(format!(
+                    "{} `hooks` is not a JSON object",
+                    settings.display()
+                ));
+            }
         };
         prune_managed(hooks); // idempotency: drop any prior install first
         for (event, matcher, cmd) in map {
@@ -135,7 +140,12 @@ pub(crate) fn uninstall(settings: &Path) -> Result<(), String> {
     let mut root = load_root(settings)?;
     match root.get_mut("hooks") {
         Some(Value::Object(hooks)) => prune_managed(hooks),
-        Some(_) => return Err(format!("{} `hooks` is not a JSON object", settings.display())),
+        Some(_) => {
+            return Err(format!(
+                "{} `hooks` is not a JSON object",
+                settings.display()
+            ));
+        }
         None => return Ok(()),
     }
     // Drop an emptied `hooks` key so the file is left pristine.
@@ -160,7 +170,9 @@ pub(crate) fn install_state(settings: &Path, map: &[HookEntry]) -> InstallState 
     };
     let mut present: Vec<String> = Vec::new();
     for groups in hooks.values() {
-        let Some(arr) = groups.as_array() else { continue };
+        let Some(arr) = groups.as_array() else {
+            continue;
+        };
         for group in arr {
             let Some(inner) = group.get("hooks").and_then(Value::as_array) else {
                 continue;
@@ -214,9 +226,13 @@ mod tests {
         let mut n = 0;
         if let Some(h) = v.get("hooks").and_then(|h| h.as_object()) {
             for groups in h.values() {
-                let Some(arr) = groups.as_array() else { continue };
+                let Some(arr) = groups.as_array() else {
+                    continue;
+                };
                 for g in arr {
-                    let Some(inner) = g.get("hooks").and_then(|x| x.as_array()) else { continue };
+                    let Some(inner) = g.get("hooks").and_then(|x| x.as_array()) else {
+                        continue;
+                    };
                     for hk in inner {
                         if hk
                             .get("command")
@@ -243,7 +259,8 @@ mod tests {
         let v = read(&path);
         let pre = v["hooks"]["PreToolUse"].as_array().unwrap();
         assert!(
-            pre.iter().any(|g| g["hooks"][0]["command"] == "wiz-guard.sh"),
+            pre.iter()
+                .any(|g| g["hooks"][0]["command"] == "wiz-guard.sh"),
             "user hook must survive install"
         );
         assert_eq!(v["otherKey"], 42, "unrelated keys preserved");

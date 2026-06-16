@@ -122,14 +122,17 @@ mod tests {
         let awaiting = map
             .iter()
             .find(|(e, m, _)| *e == "PreToolUse" && m.contains("AskUserQuestion"));
-        let (_, _, cmd) = awaiting.expect("claude map must have a PreToolUse AskUserQuestion awaiting entry");
+        let (_, _, cmd) =
+            awaiting.expect("claude map must have a PreToolUse AskUserQuestion awaiting entry");
         assert!(cmd.contains("state=awaiting"));
         assert!(
-            map.iter().any(|(e, _, c)| *e == "Stop" && c.contains("state=idle")),
+            map.iter()
+                .any(|(e, _, c)| *e == "Stop" && c.contains("state=idle")),
             "Stop must drive idle"
         );
         assert!(
-            map.iter().any(|(e, m, c)| *e == "PreToolUse" && m.is_empty() && c.contains("state=busy")),
+            map.iter()
+                .any(|(e, m, c)| *e == "PreToolUse" && m.is_empty() && c.contains("state=busy")),
             "broad PreToolUse must drive busy"
         );
     }
@@ -137,8 +140,17 @@ mod tests {
     #[test]
     fn gemini_map_has_notification_awaiting_and_afteragent_idle() {
         let map = gemini_hook_map();
-        assert!(map.iter().any(|(e, _, c)| *e == "Notification" && c.contains("state=awaiting")));
-        assert!(map.iter().any(|(e, _, c)| *e == "AfterAgent" && c.contains("state=idle")));
-        assert!(map.iter().any(|(e, _, c)| *e == "BeforeTool" && c.contains("state=busy")));
+        assert!(
+            map.iter()
+                .any(|(e, _, c)| *e == "Notification" && c.contains("state=awaiting"))
+        );
+        assert!(
+            map.iter()
+                .any(|(e, _, c)| *e == "AfterAgent" && c.contains("state=idle"))
+        );
+        assert!(
+            map.iter()
+                .any(|(e, _, c)| *e == "BeforeTool" && c.contains("state=busy"))
+        );
     }
 }

@@ -34,7 +34,11 @@ fn hook_settings_path(agent_type: &str) -> Option<PathBuf> {
 }
 
 /// Install/uninstall the hooks at an explicit path. Path-injected for testing.
-pub(crate) fn apply_at(agent_type: &str, settings_path: &Path, enabled: bool) -> Result<(), String> {
+pub(crate) fn apply_at(
+    agent_type: &str,
+    settings_path: &Path,
+    enabled: bool,
+) -> Result<(), String> {
     let Some(map) = hook_map_for(agent_type) else {
         return Ok(()); // unsupported agent: flag persists, nothing to install
     };
@@ -108,7 +112,10 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("settings.json");
         apply_at("aider", &path, true).unwrap();
-        assert!(!path.exists(), "unsupported agent must not write a settings file");
+        assert!(
+            !path.exists(),
+            "unsupported agent must not write a settings file"
+        );
         assert_eq!(state_at("aider", &path), InstallState::NotInstalled);
     }
 

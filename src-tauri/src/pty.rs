@@ -1477,10 +1477,7 @@ fn tuic_state_awaiting_event(payload: &str) -> Option<ParsedEvent> {
 /// Whether `agent_type`'s config enables native-hook instrumentation. Resolved
 /// once when the session's agent type becomes known (config changes apply on the
 /// next agent launch, matching when the hooks themselves take effect).
-fn hook_instrumented_for(
-    agents: &crate::config::AgentsConfig,
-    agent_type: Option<&str>,
-) -> bool {
+fn hook_instrumented_for(agents: &crate::config::AgentsConfig, agent_type: Option<&str>) -> bool {
     agent_type
         .and_then(|at| agents.agents.get(at))
         .and_then(|s| s.hook_instrumentation)
@@ -3572,8 +3569,10 @@ pub(crate) async fn create_pty(
     let mut ss = crate::state::SessionState::default();
     if config.agent_type.is_some() {
         ss.agent_type = config.agent_type;
-        ss.hook_instrumented =
-            hook_instrumented_for(&crate::config::load_agents_config(), ss.agent_type.as_deref());
+        ss.hook_instrumented = hook_instrumented_for(
+            &crate::config::load_agents_config(),
+            ss.agent_type.as_deref(),
+        );
     }
     state.session_states.insert(session_id.clone(), ss);
 
@@ -3842,8 +3841,10 @@ pub(crate) async fn create_pty_with_worktree(
     let mut ss = crate::state::SessionState::default();
     if pty_config.agent_type.is_some() {
         ss.agent_type = pty_config.agent_type;
-        ss.hook_instrumented =
-            hook_instrumented_for(&crate::config::load_agents_config(), ss.agent_type.as_deref());
+        ss.hook_instrumented = hook_instrumented_for(
+            &crate::config::load_agents_config(),
+            ss.agent_type.as_deref(),
+        );
     }
     state.session_states.insert(session_id.clone(), ss);
 
@@ -4816,8 +4817,10 @@ pub(crate) fn get_session_foreground_process(
         && entry.agent_type != effective
     {
         entry.agent_type = effective.clone();
-        entry.hook_instrumented =
-            hook_instrumented_for(&crate::config::load_agents_config(), entry.agent_type.as_deref());
+        entry.hook_instrumented = hook_instrumented_for(
+            &crate::config::load_agents_config(),
+            entry.agent_type.as_deref(),
+        );
     }
 
     effective
@@ -9542,8 +9545,14 @@ mod tests {
         agents.agents.insert("codex".into(), disabled);
 
         assert!(hook_instrumented_for(&agents, Some("claude")));
-        assert!(!hook_instrumented_for(&agents, Some("codex")), "explicit false");
-        assert!(!hook_instrumented_for(&agents, Some("gemini")), "no override");
+        assert!(
+            !hook_instrumented_for(&agents, Some("codex")),
+            "explicit false"
+        );
+        assert!(
+            !hook_instrumented_for(&agents, Some("gemini")),
+            "no override"
+        );
         assert!(!hook_instrumented_for(&agents, None), "no agent type");
     }
 

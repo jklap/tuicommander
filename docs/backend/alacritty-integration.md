@@ -36,7 +36,7 @@ In-band signalling via the PTY stream. Never written to the grid (consumed by VT
 
 | Verb | Payload | Effect |
 |------|---------|--------|
-| `state` | `idle` or `busy` | Immediate shell state transition (bypasses silence timer). |
+| `state` | `idle`, `busy`, or `awaiting` | `idle`/`busy`: immediate shell state transition (bypasses silence timer). `awaiting`: emits a confident `Question` (sets `awaiting_input`); `busy` also clears a prior `awaiting`. Driven by native agent hooks (see AI Agents → Native Hook Instrumentation). Unknown payloads are ignored. |
 | `suggest` | `A\|B\|C` (pipe-separated) | Emits `ParsedEvent::Suggest` — never hits the grid, no conceal needed. |
 | `intent` | `text` or `text (Title)` | Emits `ParsedEvent::Intent` with optional tab title. |
 

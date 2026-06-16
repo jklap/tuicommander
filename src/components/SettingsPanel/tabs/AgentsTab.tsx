@@ -790,8 +790,8 @@ const AgentRow: Component<{
 								</Show>
 							</label>
 							<p class={s.hint}>
-								Drive busy/idle/waiting from {agent().name}'s own hooks instead of output heuristics. TUIC installs
-								and removes the hooks cleanly and never touches your own. Applies on next launch.
+								Drive busy/idle/waiting from {agent().name}'s own hooks instead of output heuristics. TUIC installs and
+								removes the hooks cleanly and never touches your own. Applies on next launch.
 							</p>
 						</div>
 					</Show>
