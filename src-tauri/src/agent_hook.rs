@@ -92,7 +92,6 @@ pub(crate) fn grok_hook_map() -> Vec<HookEntry> {
 /// Codex doesn't expose PreToolUse/PostToolUse usefully (Bash-only) and has no
 /// SessionEnd — the badge clears via the idle/Stop event. SessionStart fires on
 /// the first turn (not session open), so busy appears once the user submits.
-#[allow(dead_code)] // Incremental build: consumed by the Codex adapter (story 050)
 pub(crate) fn codex_hook_map() -> Vec<HookEntry> {
     vec![
         ("SessionStart", "", hook_command("busy")),

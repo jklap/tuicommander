@@ -30,8 +30,14 @@ fn hook_settings_path(agent_type: &str) -> Option<PathBuf> {
         "claude" => Some(home.join(".claude/settings.json")),
         "gemini" => Some(home.join(".gemini/settings.json")),
         "grok" => Some(home.join(".grok/hooks/tuic.json")),
+        "codex" => Some(home.join(".codex/hooks.json")),
         _ => None,
     }
+}
+
+/// Codex stores its enable flag in a `config.toml` sibling of the hooks file.
+fn codex_config_toml(hooks_path: &Path) -> Option<PathBuf> {
+    hooks_path.parent().map(|d| d.join("config.toml"))
 }
 
 /// Install/uninstall the hooks at an explicit path. Path-injected for testing.
@@ -58,6 +64,25 @@ pub(crate) fn apply_at(
                 agent_hook_installer::uninstall_own_file(settings_path)
             }
         }
+        "codex" => {
+            // Codex merges hooks into hooks.json AND needs `[features] hooks = true`
+            // in config.toml. Toggle both symmetrically (enable flag first on
+            // install; clear it after uninstall) so install_state never strands.
+            let map = crate::agent_hook::codex_hook_map();
+            let cfg = codex_config_toml(settings_path);
+            if enabled {
+                if let Some(cfg) = &cfg {
+                    crate::agent_hook_codex::set_features_hooks_flag(cfg, true)?;
+                }
+                agent_hook_installer::install(settings_path, &map)?;
+            } else {
+                agent_hook_installer::uninstall(settings_path)?;
+                if let Some(cfg) = &cfg {
+                    crate::agent_hook_codex::set_features_hooks_flag(cfg, false)?;
+                }
+            }
+            Ok(())
+        }
         _ => Ok(()), // unsupported agent: flag persists, nothing to install
     }
 }
@@ -66,6 +91,19 @@ pub(crate) fn apply_at(
 /// `install_state` works for both merge and own-file files — it scans hook
 /// commands for the sentinel regardless of how they were written.
 pub(crate) fn state_at(agent_type: &str, settings_path: &Path) -> InstallState {
+    // Codex state combines the hooks file AND the config.toml enable flag — both
+    // present = installed, both absent = notInstalled, a mismatch = outdated.
+    if agent_type == "codex" {
+        let hooks = agent_hook_installer::install_state(settings_path, &crate::agent_hook::codex_hook_map());
+        let flag = codex_config_toml(settings_path)
+            .map(|c| crate::agent_hook_codex::features_hooks_present(&c))
+            .unwrap_or(false);
+        return match (hooks, flag) {
+            (InstallState::Installed, true) => InstallState::Installed,
+            (InstallState::NotInstalled, false) => InstallState::NotInstalled,
+            _ => InstallState::Outdated,
+        };
+    }
     let map = match agent_type {
         "claude" | "gemini" => hook_map_for(agent_type),
         "grok" => Some(crate::agent_hook::grok_hook_map()),
@@ -202,5 +240,49 @@ mod tests {
             v["hooks"]["Stop"][0].get("matcher").is_none(),
             "lifecycle events must omit the matcher field (Grok rejects it)"
         );
+    }
+
+    #[test]
+    fn agent_hook_codex_install_merges_hooks_and_sets_flag_preserving_user_hook() {
+        let dir = TempDir::new().unwrap();
+        let hooks = dir.path().join("hooks.json");
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(
+            &hooks,
+            br#"{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"user-codex.sh"}]}]}}"#,
+        )
+        .unwrap();
+        std::fs::write(&cfg, b"[features]\nweb_search = true\n").unwrap();
+
+        apply_at("codex", &hooks, true).unwrap();
+
+        assert_eq!(state_at("codex", &hooks), InstallState::Installed);
+        let h = std::fs::read_to_string(&hooks).unwrap();
+        assert!(h.contains("user-codex.sh"), "user Codex hook preserved");
+        assert!(h.contains(r"7770;state=busy"));
+        assert!(crate::agent_hook_codex::features_hooks_present(&cfg));
+        assert!(
+            std::fs::read_to_string(&cfg).unwrap().contains("web_search = true"),
+            "sibling feature flag preserved"
+        );
+    }
+
+    #[test]
+    fn agent_hook_codex_uninstall_clears_both_hooks_and_flag() {
+        let dir = TempDir::new().unwrap();
+        let hooks = dir.path().join("hooks.json");
+        let cfg = dir.path().join("config.toml");
+        std::fs::write(&cfg, b"[features]\n").unwrap();
+
+        apply_at("codex", &hooks, true).unwrap();
+        assert_eq!(state_at("codex", &hooks), InstallState::Installed);
+
+        apply_at("codex", &hooks, false).unwrap();
+        assert_eq!(
+            state_at("codex", &hooks),
+            InstallState::NotInstalled,
+            "flag must clear too, else state stays Outdated forever"
+        );
+        assert!(!crate::agent_hook_codex::features_hooks_present(&cfg));
     }
 }

@@ -382,7 +382,7 @@ export const HOOK_SUPPORT: Record<AgentType, boolean> = {
 	gemini: true,
 	opencode: false,
 	aider: false,
-	codex: false,
+	codex: true,
 	amp: false,
 	cursor: false,
 	goose: false,
