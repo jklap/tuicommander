@@ -4,6 +4,8 @@
 )]
 
 pub(crate) mod agent;
+#[allow(dead_code)] // Incremental build: hook_command/maps consumed by the installer (story 045)
+pub(crate) mod agent_hook;
 pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
 pub(crate) mod ai_agent;
