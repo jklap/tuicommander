@@ -1439,6 +1439,29 @@ fn clean_action_required_title(title: &str) -> String {
     }
 }
 
+/// Map a TUIC `state=` verb to the awaiting-input `ParsedEvent` it implies.
+///
+/// busy/idle shell transitions are handled by `handle_tuic_state`; this covers
+/// only the separate `awaiting_input` field, which is driven by Question /
+/// UserInput events in `state.rs`:
+/// - `awaiting` → confident `Question` (sets `awaiting_input` + `question_confident`)
+/// - `busy`     → `UserInput` clear (hook busy is authoritative — clears an awaiting
+///   set by a prior `PreToolUse(AskUserQuestion)`; empty content never overwrites
+///   `last_prompt`)
+/// - anything else (incl. `idle`, unknown) → `None`
+fn tuic_state_awaiting_event(payload: &str) -> Option<ParsedEvent> {
+    match payload {
+        "awaiting" => Some(ParsedEvent::Question {
+            prompt_text: String::new(),
+            confident: true,
+        }),
+        "busy" => Some(ParsedEvent::UserInput {
+            content: String::new(),
+        }),
+        _ => None,
+    }
+}
+
 /// Per-session mutable state for processing PTY output chunks.
 /// Holds dedup state, parser, and session CWD for PlanFile resolution.
 /// Used by `spawn_reader_thread`.
@@ -2022,7 +2045,13 @@ impl ChunkProcessor {
                         line,
                     } => match verb.as_str() {
                         "state" => {
+                            // idle/busy drive the shell-state machine; awaiting is
+                            // ignored here (it's a separate field). The awaiting_input
+                            // field is driven by Question/UserInput events instead.
                             self.handle_tuic_state(&payload, session_id, state);
+                            if let Some(evt) = tuic_state_awaiting_event(&payload) {
+                                tuic_events.push(evt);
+                            }
                         }
                         "suggest" => {
                             // Tolerate an optional `[ … ]` wrapper so this OSC
@@ -9386,6 +9415,46 @@ mod tests {
         assert_eq!(
             current, SHELL_IDLE,
             "unknown state should not change shell_states"
+        );
+    }
+
+    #[test]
+    fn tuic_state_awaiting_yields_confident_question() {
+        match tuic_state_awaiting_event("awaiting") {
+            Some(ParsedEvent::Question {
+                confident,
+                prompt_text,
+            }) => {
+                assert!(confident, "hook awaiting must be a confident question");
+                assert_eq!(prompt_text, "", "hook awaiting carries no prompt text");
+            }
+            other => panic!("expected confident Question, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tuic_state_busy_yields_userinput_clear() {
+        match tuic_state_awaiting_event("busy") {
+            Some(ParsedEvent::UserInput { content }) => {
+                assert_eq!(content, "", "busy clear must not overwrite last_prompt");
+            }
+            other => panic!("expected UserInput clear, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tuic_state_idle_yields_no_awaiting_event() {
+        assert!(
+            tuic_state_awaiting_event("idle").is_none(),
+            "idle only transitions shell_state; it pushes no awaiting event"
+        );
+    }
+
+    #[test]
+    fn tuic_state_unknown_yields_no_awaiting_event() {
+        assert!(
+            tuic_state_awaiting_event("thinking").is_none(),
+            "unknown verb must push no awaiting event"
         );
     }
 
