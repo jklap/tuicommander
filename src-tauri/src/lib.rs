@@ -1716,6 +1716,18 @@ pub fn run() {
                         ensure_window_visible(&window);
                     }
                 }
+                // Dock-icon click (applicationShouldHandleReopen). macOS suppresses
+                // the default un-minimize when ANY window is visible — and a detached
+                // panel counts as visible, so the minimized main window would stay
+                // hidden. Explicitly restore main on every reopen.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
+                }
                 // Forward file-open events (macOS file associations) to the frontend
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Opened { urls } => {
