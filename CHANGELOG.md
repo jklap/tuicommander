@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Inline git blame in the code editor** — A dim italic "author · relative time · summary" annotation at the end of the editor's active line (GitLens-style), following the cursor over already-loaded blame data. Uncommitted lines show "You · Uncommitted changes". On by default; toggle via the `inline_blame_enabled` config field. External (non-repo) files show no annotation.
+- **One-click delete-merged branch cleanup** — The Git Panel's Branches tab shows a broom button (with a count badge) that bulk-deletes local branches already merged into main, behind a confirm dialog listing the targets. Uses safe `git branch -d`, so a stale merged flag can never cause data loss.
+- **"Active only" repo filter** — A filter icon in the toolbar (next to the sidebar toggle) hides repositories that have no open terminals. An accent banner at the top of the sidebar shows the shown/total count and offers "Show all". Session-only.
+- **Context-menu shortcut keys** — While a context menu is open, pressing an item's shortcut chord (e.g. the branch menu's `M`/`R`/`d`) now fires that item's action directly instead of just closing the menu.
+
+### Changed
+- **Branch merge feedback** — Merging a branch from the Branches tab now surfaces the result explicitly: a conflict error toast on failure, an "Already up to date" toast on a no-op, and a success toast with a one-click "Delete branch" action for the now-merged branch.
+
+### Fixed
+- **Git Panel header alignment** — The Branches/Changes/Log/Stashes tab strip no longer reserves a horizontal scrollbar that misaligned the detach/close icons and left dead space; overflowing tabs scroll via vertical wheel/trackpad, and the close button is now an SVG icon matching the detach/reattach controls.
+- **macOS dock-icon reopen** — Clicking the dock icon while the main window is minimized now restores it, even when a detached panel window is open (which previously suppressed the default un-minimize).
+
 ## [1.4.3] - 2026-06-14
 
 ### Added

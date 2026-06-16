@@ -110,6 +110,12 @@ A button in the sidebar footer shows all parked repos with a count badge. Click 
 
 Click **Unpark** on any repo in the parked repos popover. It returns to the main sidebar list.
 
+## Active-Only Filter
+
+When you have many repos open, hide the ones you aren't using right now.
+
+Click the **filter icon** in the toolbar (next to the sidebar collapse button) to show only repositories that have at least one open terminal. The icon turns accent-colored while the filter is on, and a banner at the top of the sidebar shows how many repos are shown out of the total — click it (or "Show all") to clear the filter. The filter is session-only and resets when you restart.
+
 ## Quick Branch Switcher
 
 Switch branches by number without the mouse:

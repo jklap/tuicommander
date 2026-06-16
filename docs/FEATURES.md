@@ -232,6 +232,13 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Sidebar footer button opens a popover showing all parked repos
 - Unpark a repo from the popover to restore it to the main list
 
+### 2.8 Active-Only Filter
+- Toggled from the filter icon in the toolbar (next to the sidebar collapse button); the icon turns accent-colored while engaged
+- When on, the sidebar shows only repositories that have at least one open terminal — empty groups are dropped entirely (no orphaned headers)
+- An accent banner at the top of the sidebar makes it unmistakable that repos are hidden, shows a `shown / total` count, and offers "Show all" to clear the filter
+- If the filter hides every repo, a dedicated empty state offers "Show all"
+- Session-only (not persisted across restarts)
+
 ---
 
 ## 3. Panels
@@ -303,6 +310,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Drop cursor: ghost cursor shown when dragging text over the editor
 - Special character highlighting: invisible chars (zero-width spaces, control chars) rendered as placeholders
 - CSS color preview: inline color swatches next to hex/rgb/rgba/hsl values
+- **Inline git blame** (GitLens-style): a dim italic `author · relative time · summary` annotation at the end of the active line, following the cursor over already-loaded blame data (fetched on load/save/repo-revision via `get_file_blame`, never per keystroke). Lines with uncommitted edits show `You · Uncommitted changes`. On by default (`inline_blame_enabled` config field); no annotation for external (non-repo) files
 
 ### 3.6 Ideas Panel (`Cmd+Alt+N`)
 - Quick notes / idea capture with send-to-terminal
@@ -365,12 +373,13 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - **n** — Create new branch (inline form, optional checkout)
 - **d** — Delete branch (safe + force options; refuses main branch and current branch)
 - **R** — Rename branch (inline edit)
-- **M** — Merge selected branch into current
+- **M** — Merge selected branch into current. Result is surfaced as a toast: conflict error on failure, "Already up to date" on a no-op, or a success toast with a one-click "Delete branch" action for the now-merged branch
 - **r** — Rebase current onto selected branch
 - **P** — Push branch (auto-detects missing upstream and sets tracking)
 - **p** — Pull current branch
 - **f** — Fetch all remotes
 - Context menu (right-click): Checkout, Create Branch from Here, Delete, Rename, Merge into Current, Rebase Current onto This, Push, Pull, Fetch, Compare (shows `diff --name-status`)
+- **Delete merged**: a broom button (with a count badge of how many qualify) bulk-deletes all local branches already merged into main, behind a confirm dialog listing the targets. Uses safe `git branch -d` per branch, so a stale merged flag can never delete unmerged work
 - Backend: `get_branches_detail`, `delete_branch`, `create_branch`, `get_recent_branches`
 - Click on sidebar "GIT" vertical label also opens Git Panel on the Branches tab
 
@@ -469,6 +478,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 ### 4.1 Sidebar Toggle
 - `◧` button (left side) — same as `Cmd+[`
 - Hotkey hint visible during quick switcher
+- Adjacent **filter icon** (shown while the sidebar is visible) toggles the "Active only" repo filter — see section 2.8
 
 ### 4.2 Branch Display
 - Center: shows `repo / branch` name
