@@ -529,6 +529,10 @@ export const BranchItem: Component<{
 						props.onShowChanges
 							? (e) => {
 									e.stopPropagation();
+									// Select this branch/worktree first so the Git panel targets it
+									// (it follows activeWorktreePath), then open the changes tab —
+									// otherwise the badge always shows the active branch's diff.
+									props.onSelect();
 									props.onShowChanges?.();
 								}
 							: undefined
