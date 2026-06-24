@@ -20,8 +20,9 @@ import {
 	scrollPastEnd,
 } from "@codemirror/view";
 import { colorPicker } from "@replit/codemirror-css-color-picker";
+import { openPath } from "@tauri-apps/plugin-opener";
 import { createCodeMirror, createEditorControlledValue, createEditorReadonly } from "solid-codemirror";
-import { type Component, createEffect, createSignal, on, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createSignal, Match, on, onCleanup, Show, Switch } from "solid-js";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
@@ -33,6 +34,7 @@ import { referencesStore } from "../../stores/references";
 import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { uiStore } from "../../stores/ui";
+import { isTauri } from "../../transport";
 import { openFileAction } from "../../utils/filePreview";
 import { isAbsolutePath } from "../../utils/pathUtils";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
@@ -166,6 +168,9 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	const [error, setError] = createSignal<string | null>(null);
 	/** True when the read failed because the file isn't valid UTF-8 text (binary/non-text file) */
 	const [notDisplayable, setNotDisplayable] = createSignal(false);
+	/** True when the backend refused the read because the file exceeds the editor size limit.
+	 *  The whole file would otherwise cross IPC as one string and freeze the webview. */
+	const [tooLarge, setTooLarge] = createSignal(false);
 	const [isReadOnly, setIsReadOnly] = createSignal(false);
 	/** True when the file changed on disk while editor has unsaved changes */
 	const [diskConflict, setDiskConflict] = createSignal(false);
@@ -218,6 +223,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 				setLoading(true);
 				setError(null);
 				setNotDisplayable(false);
+				setTooLarge(false);
 				if (isExternal() && !props.externalEditable) setIsReadOnly(true);
 
 				try {
@@ -242,6 +248,8 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 					const msg = String(err);
 					// A non-UTF-8 read means the file is binary or otherwise not text.
 					setNotDisplayable(/valid UTF-8/i.test(msg));
+					// The backend refused an oversized file before reading (size guard).
+					setTooLarge(/too large/i.test(msg));
 					setError(msg);
 					currentCode = "";
 					setCode("");
@@ -750,24 +758,45 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 			</Show>
 
 			<Show when={error()}>
-				<Show
-					when={notDisplayable()}
+				<Switch
 					fallback={
 						<div class={s.empty} style={{ color: "var(--error)" }}>
 							{t("codeEditor.error", "Error:")} {error()}
 						</div>
 					}
 				>
-					<div class={s.notice}>
-						<svg class={s.noticeIcon} width="48" height="48" viewBox="0 0 16 16" fill="currentColor">
-							<path d="M9.5 1H4a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5V5L9.5 1zM9 2.5 12.5 6H9.5A.5.5 0 0 1 9 5.5V2.5zM5 8.5h6v1H5v-1zm0 2.5h6v1H5v-1zm0-5h2v1H5v-1z" />
-						</svg>
-						<div class={s.noticeTitle}>{t("codeEditor.notDisplayableTitle", "This file can't be displayed")}</div>
-						<div class={s.noticeSub}>
-							{t("codeEditor.notDisplayableSub", "It looks like a binary or non-text file.")}
+					<Match when={tooLarge()}>
+						<div class={s.notice}>
+							<svg class={s.noticeIcon} width="48" height="48" viewBox="0 0 16 16" fill="currentColor">
+								<path d="M9.5 1H4a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5V5L9.5 1zM9 2.5 12.5 6H9.5A.5.5 0 0 1 9 5.5V2.5zM5 8.5h6v1H5v-1zm0 2.5h6v1H5v-1zm0-5h2v1H5v-1z" />
+							</svg>
+							<div class={s.noticeTitle}>{t("codeEditor.tooLargeTitle", "File too large to open")}</div>
+							<div class={s.noticeSub}>{error()}</div>
+							<Show when={isTauri()}>
+								<button
+									class={e.btn}
+									style={{ "margin-top": "12px" }}
+									onClick={() =>
+										openPath(absPath()).catch((err) => appLogger.error("app", "Failed to open file externally", err))
+									}
+								>
+									{t("codeEditor.openExternally", "Open in external editor")}
+								</button>
+							</Show>
 						</div>
-					</div>
-				</Show>
+					</Match>
+					<Match when={notDisplayable()}>
+						<div class={s.notice}>
+							<svg class={s.noticeIcon} width="48" height="48" viewBox="0 0 16 16" fill="currentColor">
+								<path d="M9.5 1H4a1.5 1.5 0 0 0-1.5 1.5v11A1.5 1.5 0 0 0 4 15h8a1.5 1.5 0 0 0 1.5-1.5V5L9.5 1zM9 2.5 12.5 6H9.5A.5.5 0 0 1 9 5.5V2.5zM5 8.5h6v1H5v-1zm0 2.5h6v1H5v-1zm0-5h2v1H5v-1z" />
+							</svg>
+							<div class={s.noticeTitle}>{t("codeEditor.notDisplayableTitle", "This file can't be displayed")}</div>
+							<div class={s.noticeSub}>
+								{t("codeEditor.notDisplayableSub", "It looks like a binary or non-text file.")}
+							</div>
+						</div>
+					</Match>
+				</Switch>
 			</Show>
 
 			{/* Always mount the editor div so solid-codemirror's ref callback fires during

@@ -586,6 +586,30 @@ fn list_markdown_files(path: String) -> Result<Vec<MarkdownFileEntry>, String> {
     list_markdown_files_impl(path)
 }
 
+/// Max file size openable in the in-app editor/preview. A larger file would
+/// freeze the UI: the whole file crosses the IPC boundary as one string and
+/// CodeMirror ingests it on the JS main thread (no streaming). Guarded at the
+/// source — via `metadata().len()` before reading — so the payload never even
+/// crosses the boundary. (AI-agent reads have their own limit in ai_agent/tools.rs.)
+pub(crate) const MAX_EDITOR_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Read a UTF-8 text file, refusing files over `MAX_EDITOR_FILE_SIZE` before
+/// reading so a huge file can't freeze the webview. The "too large" message is
+/// matched by the editor frontend to show a friendly notice with an
+/// open-externally action, so keep that phrase stable.
+fn read_text_file_guarded(path: &std::path::Path) -> Result<String, String> {
+    if let Ok(meta) = std::fs::metadata(path)
+        && meta.len() > MAX_EDITOR_FILE_SIZE
+    {
+        return Err(format!(
+            "File too large to open in editor: {:.1} MB (limit {} MB)",
+            meta.len() as f64 / (1024.0 * 1024.0),
+            MAX_EDITOR_FILE_SIZE / (1024 * 1024)
+        ));
+    }
+    std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {e}"))
+}
+
 /// Read file content (shared logic)
 pub(crate) fn read_file_impl(path: String, file: String) -> Result<String, String> {
     let repo_path = PathBuf::from(&path);
@@ -604,7 +628,7 @@ pub(crate) fn read_file_impl(path: String, file: String) -> Result<String, Strin
         return Err("Access denied: file is outside repository".to_string());
     }
 
-    std::fs::read_to_string(&file_path).map_err(|e| format!("Failed to read file: {e}"))
+    read_text_file_guarded(&file_path)
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -624,7 +648,7 @@ fn read_external_file(path: String) -> Result<String, String> {
     if !p.is_absolute() {
         return Err("read_external_file requires an absolute path".to_string());
     }
-    std::fs::read_to_string(p).map_err(|e| format!("Failed to read file: {e}"))
+    read_text_file_guarded(p)
 }
 
 /// Write a file at an absolute path (used by the UI for files outside any registered repo,
@@ -2111,6 +2135,37 @@ mod tests {
             build_connect_url("http", "fe80::1", 9443, "tok"),
             "http://[fe80::1]:9443/?token=tok"
         );
+    }
+
+    #[test]
+    fn read_text_file_guarded_reads_small_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("small.txt");
+        std::fs::write(&f, "hello world").unwrap();
+        assert_eq!(read_text_file_guarded(&f).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn read_text_file_guarded_refuses_oversized_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("huge.txt");
+        // One byte over the limit must be refused BEFORE reading, with a stable
+        // "too large" phrase the editor frontend matches.
+        std::fs::write(&f, vec![b'a'; (MAX_EDITOR_FILE_SIZE + 1) as usize]).unwrap();
+        let err = read_text_file_guarded(&f).unwrap_err();
+        assert!(
+            err.to_lowercase().contains("too large"),
+            "expected a 'too large' message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn read_text_file_guarded_allows_file_at_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("atlimit.bin");
+        // Exactly at the limit (not over) is allowed; content is valid UTF-8.
+        std::fs::write(&f, vec![b'a'; MAX_EDITOR_FILE_SIZE as usize]).unwrap();
+        assert!(read_text_file_guarded(&f).is_ok());
     }
 
     #[test]
