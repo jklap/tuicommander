@@ -88,6 +88,30 @@ export function decideFrameGrid(prev: FrameGridPrev, frame: DecodedFrame, fallba
 	return { geomChanged, scrollChanged, fullReplace, scrollWait };
 }
 
+/** Inputs to the reconcile-fire gate (see shouldFireReconcile). */
+export interface ReconcileGate {
+	alive: boolean;
+	isScrolling: boolean;
+	/** Smooth-scroll fractional position; null when at rest on a line. */
+	scrollPosF: number | null;
+	/** Backend display offset of the current frame (0 = following output, <0 = no frame). */
+	displayOffset: number;
+}
+
+/**
+ * Whether a debounced full-frame reconciliation should actually fire.
+ *
+ * Partial frames merge into the rowMap by index, so a grid content shift can
+ * strand stale rows (duplicate/vanished blocks) on the canvas while the grid
+ * itself stays correct. scheduleReconcile() requests a full frame to self-heal,
+ * but ONLY when the terminal is at rest and following output (offset 0). Firing
+ * mid-gesture or while scrolled back would fight the active render or yank the
+ * view. Pure, so the gate is unit-testable away from the CanvasTerminal closure.
+ */
+export function shouldFireReconcile(g: ReconcileGate): boolean {
+	return g.alive && !g.isScrolling && g.scrollPosF == null && g.displayOffset === 0;
+}
+
 export interface CellMetrics {
 	cellWidth: number;
 	cellHeight: number;

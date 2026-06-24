@@ -23,6 +23,7 @@ import {
 	decodeStyledRange,
 	GUTTER_PX,
 	SCROLLBAR_PX,
+	shouldFireReconcile,
 	snapLineHeight,
 } from "./canvasTerminalUtils";
 import { installFrameTimingDebugHook, isFrameTimingEnabled, recordFrameTiming, resetFrameTiming } from "./frameTiming";
@@ -35,6 +36,41 @@ import { altSequenceFromCode, createCompositionState, keyToSequence } from "./te
 
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame };
+
+// TEMP black-screen diagnostic (split case, 2026-06-24). Remove after root-cause.
+// Query live via debug invoke_js: `return window.__BLACKDIAG__()`.
+interface BlackDiag {
+	show: number;
+	frame: number;
+	lastFrameOffset: number;
+	paint: number;
+	lastPaintOffset: number;
+	bailScrollPosF: number;
+	bailHidden: number;
+	hiddenSkipFrame: number;
+}
+const __blackDiag = new Map<string, BlackDiag>();
+function __bd(sid: string): BlackDiag {
+	let d = __blackDiag.get(sid);
+	if (!d) {
+		d = {
+			show: 0,
+			frame: 0,
+			lastFrameOffset: -1,
+			paint: 0,
+			lastPaintOffset: -1,
+			bailScrollPosF: 0,
+			bailHidden: 0,
+			hiddenSkipFrame: 0,
+		};
+		__blackDiag.set(sid, d);
+	}
+	return d;
+}
+if (typeof window !== "undefined") {
+	(window as unknown as { __BLACKDIAG__: () => unknown }).__BLACKDIAG__ = () => Object.fromEntries(__blackDiag);
+	(window as unknown as { __BLACKDIAG_RESET__: () => void }).__BLACKDIAG_RESET__ = () => __blackDiag.clear();
+}
 
 export interface CanvasTerminalRef {
 	focus: () => void;
@@ -221,8 +257,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function scheduleRepaint() {
 		// A smooth-scroll gesture owns the base canvas (rendered locally from cache);
 		// don't let backend-frame repaints fight it until the gesture settles.
-		if (scrollPosF != null) return;
-		if (rafId !== undefined || hidden || !alive) return;
+		if (scrollPosF != null) {
+			__bd(props.sessionId).bailScrollPosF++;
+			return;
+		}
+		if (rafId !== undefined) return;
+		if (hidden) {
+			__bd(props.sessionId).bailHidden++;
+			return;
+		}
+		if (!alive) return;
 		// Stamp the first repaint request of this cycle ("sched" — see decl).
 		if (mainDirtySince === 0 && isFrameTimingEnabled()) {
 			mainDirtySince = performance.now();
@@ -309,6 +353,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	function remeasure() {
 		if (!ctx) return;
+		canvasRef.dataset.sid = props.sessionId; // TEMP black-screen diagnostic
 		const rect = containerRef.getBoundingClientRect();
 		if (rect.width <= 0 || rect.height <= 0) return;
 
@@ -327,12 +372,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const cols = Math.floor((rect.width - GUTTER_PX - SCROLLBAR_PX) / m.cellWidth);
 		const rows = Math.floor(rect.height / m.cellHeight);
 		if (cols <= 0 || rows <= 0) return;
-		// A resize invalidates the smooth-scroll geometry. Crucially, if the terminal is
-		// at a "fractional rest" (scrollPosF non-null, not actively scrolling), every
-		// scheduleRepaint() bails on the `scrollPosF != null` guard — so after we blank
-		// the canvas below, incoming frames refill rowMap but never repaint, leaving the
-		// viewport stuck black until a click (which exits the fractional rest). Reset the
-		// scroll state here so repaints resume. Cheap no-op when scrollPosF is already null.
+		// A resize invalidates the smooth-scroll geometry (cell metrics, overscan,
+		// row cache). Cancel any in-flight gesture so the new geometry takes over
+		// cleanly. Cheap no-op when no gesture is active (scrollPosF already null).
 		resetSmoothScroll();
 		const logicalW = cols * m.cellWidth + GUTTER_PX;
 		const logicalH = rows * m.cellHeight;
@@ -405,6 +447,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	function paintFrame(frame: DecodedFrame, m: CellMetrics, dirtyIndices?: Set<number>) {
+		const __d = __bd(props.sessionId);
+		__d.paint++;
+		__d.lastPaintOffset = frame.displayOffset;
 		gridRenderer.paintGrid(rowMap, m, { fullRepaint: fullRepaintNeeded, dirtyIndices });
 		fullRepaintNeeded = false;
 
@@ -1000,6 +1045,24 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let settlePending: number | null = null;
 	let settleTimer = 0;
 
+	// Full-frame reconciliation: partial frames (only the rows alacritty marked
+	// dirty) merge into rowMap by index, so if the grid shifts content the canvas
+	// can strand stale rows (duplicate/triplicate or vanished blocks) while the grid
+	// itself stays correct. After an output burst settles, request one full frame so
+	// the next onFrame does a fullReplace and rebuilds rowMap from the grid — a
+	// self-heal that can't drift. Gated to at-rest, following-output (offset 0).
+	let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+	function scheduleReconcile() {
+		if (reconcileTimer) clearTimeout(reconcileTimer);
+		reconcileTimer = setTimeout(() => {
+			reconcileTimer = undefined;
+			if (!shouldFireReconcile({ alive, isScrolling, scrollPosF, displayOffset: currentFrame?.displayOffset ?? -1 })) {
+				return;
+			}
+			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
+		}, 250);
+	}
+
 	function finishSettle() {
 		settleTimer = 0;
 		// A settle timer can fire after unmount; the row cache is released by then,
@@ -1222,16 +1285,35 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		scheduleSmoothRender();
 	}
 
-	// Gesture ended. NO snap-to-line — the momentum decelerated to this point, so we
-	// rest exactly here (sub-row), which is what feels native. The fractional position
-	// keeps being cache-rendered; we just stop driving it. Backend stays at the floor.
+	// Gesture ended. Snap to the nearest line and hand off to normal (backend-frame)
+	// rendering so the resting state always has scrollPosF === null. The old no-snap
+	// behavior left scrollPosF at a fractional rest indefinitely; scheduleRepaint()
+	// bails while scrollPosF != null, so the base canvas would never repaint again →
+	// BLACK on the next resize / repo-switch / split-move (only on terminals that had
+	// been scrolled, hence the history-size correlation). Snapping settles scrollPosF
+	// back to null so repaints resume by construction.
 	function resetScrollGesture() {
 		isScrolling = false;
 		scrollGestureDistPx = 0;
-		if (scrollPosF != null) {
-			pendingScrollOffset = Math.floor(scrollPosF);
-			scheduleScrollFlush();
+		if (scrollPosF == null) return;
+		const target = Math.round(scrollPosF);
+		scrollPosF = target;
+		pendingScrollOffset = target;
+		scheduleScrollFlush();
+		if (currentFrame && currentFrame.displayOffset === target) {
+			// Backend already sits on the snapped line — no new frame will arrive to
+			// trigger the onFrame handoff, so commit to normal rendering right now.
+			clearSettlePending();
+			scrollPosF = null;
+			endSmoothScroll();
+			return;
 		}
+		// Otherwise keep cache-rendering the snapped line until the backend frame
+		// reaches `target` (onFrame settle handler), with a timer as the safety net.
+		settlePending = target;
+		if (settleTimer) clearTimeout(settleTimer);
+		settleTimer = window.setTimeout(finishSettle, 400);
+		scheduleSmoothRender();
 	}
 
 	// Apply one wheel/touch delta (raw pixels) with gesture acceleration → smooth
@@ -1261,6 +1343,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const frame = decodeBinaryFrame(buffer);
 		if (timing) recordFrameTiming(props.sessionId, "decode", performance.now() - decodeT0);
 		if (!frame) return;
+		{
+			const __d = __bd(props.sessionId);
+			__d.frame++;
+			__d.lastFrameOffset = frame.displayOffset;
+		}
 
 		if (frame.bell) props.onBell?.();
 
@@ -1319,6 +1406,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		currentFrame = frame;
 
+		// Partial frames merge by index and can strand stale rows (grid stays correct,
+		// canvas drifts → duplicate/vanished blocks). A full frame already rebuilt the
+		// rowMap, so only reconcile after partial frames; the debounce coalesces bursts.
+		if (!decision.fullReplace) scheduleReconcile();
+
 		// Smooth scroll: seed the client-side row cache from each frame's rows, keyed
 		// by the eviction-stable absolute index `historyBase + historySize -
 		// displayOffset + index`. `historyBase` (lines evicted from the history top)
@@ -1337,7 +1429,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 		}
 		if (settlePending != null && frame.displayOffset === settlePending) {
-			// Backend reached the bottom (offset 0) — hand off to normal rendering
+			// Backend reached the snapped line — hand off to normal rendering
 			// seamlessly (the cache render already shows this exact frame).
 			clearSettlePending();
 			scrollPosF = null;
@@ -1346,8 +1438,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// Active gesture: re-render against the freshly seeded cache.
 			scheduleSmoothRender();
 		} else if (scrollPosF == null && stageRef?.style.transform) {
-			// Truly at rest on a line: clear any stray transform. (A fractional rest
-			// keeps its transform and stays static — output below doesn't move it.)
+			// At rest on a line: clear any stray transform. (Gesture end always
+			// snaps to a line and settles scrollPosF → null, so there is no
+			// lingering fractional rest to keep a transform alive.)
 			stageRef.style.transform = "";
 			clearOverscan();
 		}
@@ -1363,7 +1456,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 		}
 
-		if (hidden) return;
+		if (hidden) {
+			__bd(props.sessionId).hiddenSkipFrame++;
+			return;
+		}
 		scheduleRepaint();
 		scheduleFileLinkVerification();
 	}
@@ -1805,6 +1901,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const isVisible = entries[0]?.isIntersecting ?? false;
 				if (isVisible && hidden) {
 					hidden = false;
+					__bd(props.sessionId).show++;
 					fullRepaintNeeded = true;
 					lastDisplayOffset = -1;
 					// Freeze-investigation: hidden→visible is the repo-switch show path.
@@ -2473,9 +2570,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (e.target === scrollThumbRef) return; // thumb has its own handler
 			if (!currentFrame || currentFrame.historySize === 0) return;
 			e.preventDefault();
-			// A lingering fractional-rest (no-snap) gesture keeps scrollPosF non-null,
-			// which suppresses normal repaints (scheduleRepaint bails). Exit smooth-scroll
-			// (also cancels the wheel gesture-end timer) so the terminal_scroll jump below
+			// Cancel any in-flight/settling smooth gesture (scrollPosF non-null
+			// suppresses normal repaints, and the wheel gesture-end timer would
+			// otherwise re-settle over this jump) so the terminal_scroll jump below
 			// actually repaints the view.
 			resetSmoothScroll();
 			const rect = scrollbarRef.getBoundingClientRect();
@@ -2489,9 +2586,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		scrollThumbRef.addEventListener("mousedown", (e: MouseEvent) => {
 			e.preventDefault();
 			e.stopPropagation();
-			// Exit any lingering fractional-rest gesture first; otherwise scrollPosF stays
-			// non-null and scheduleRepaint bails, freezing the view while we drag the thumb.
-			// (resetSmoothScroll also cancels the wheel gesture-end timer.)
+			// Cancel any in-flight/settling smooth gesture first; otherwise scrollPosF
+			// stays non-null and scheduleRepaint bails, freezing the view while we drag
+			// the thumb. (resetSmoothScroll also cancels the wheel gesture-end timer.)
 			resetSmoothScroll();
 			scrollDragging = true;
 			scrollDragStartY = e.clientY;
@@ -2748,6 +2845,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			smoothRafId = 0;
 		}
 		clearSettlePending();
+		if (reconcileTimer) clearTimeout(reconcileTimer);
 		clearTimeout(resizeDebounce);
 		resizeObserver?.disconnect();
 		visibilityObserver?.disconnect();
