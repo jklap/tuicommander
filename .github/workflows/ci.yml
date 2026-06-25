@@ -173,8 +173,8 @@ jobs:
   # Push to main only: verify build on macOS and Windows.
   # GPU notes:
   # - macOS: whisper-rs compiled with Metal (target-specific dep) — always GPU.
-  # - Windows: whisper-rs compiled with Vulkan (target-specific dep).
-  #   Vulkan SDK installed via jakoch/install-vulkan-sdk-action.
+  # - Windows: whisper-rs is CPU-only. The Vulkan backend's vulkan-shaders-gen
+  #   sub-build is chronically broken on the runner, so dictation runs on CPU.
   #   CUDA support is optional (add Jimver/cuda-toolkit + --features cuda if needed).
   rust-cross:
     name: Rust (${{ matrix.label }})
@@ -194,21 +194,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Vulkan SDK (Windows)
-        if: matrix.platform == 'windows-latest'
-        # Pinned to v1.5.4 (Node20). v1.5.5 moved to Node24, which crashes
-        # instantly with no output on windows-latest runners mid-migration to
-        # windows-2025 — the source of intermittent "Install Vulkan SDK" failures.
-        uses: jakoch/install-vulkan-sdk-action@655818d26aa39d663e587b5620dd26519358981f # v1.5.4
-        with:
-          vulkan_version: 1.4.309.0
-          cache: true
-          stripdown: true
-
-      # Windows MAX_PATH workaround: whisper.cpp's vulkan-shaders-gen sub-build
-      # creates deeply nested TryCompile paths that exceed 260 chars. MSBuild's
-      # FileTracker uses legacy Win32 APIs that ignore LongPathsEnabled, so the
-      # only fix is to keep the target dir short.
+      # Keep the Windows build/target dir short (C:/t): whisper.cpp's nested
+      # CMake TryCompile paths can exceed the 260-char MAX_PATH that MSBuild's
+      # FileTracker enforces (it ignores LongPathsEnabled).
       - name: Short CARGO_TARGET_DIR (Windows)
         if: matrix.platform == 'windows-latest'
         shell: bash

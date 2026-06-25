@@ -94,22 +94,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev mold
 
-      - name: Install Vulkan SDK (Windows)
-        if: matrix.platform == 'windows-latest'
-        # Pinned to v1.5.4 (Node20). v1.5.5 moved to Node24, which crashes
-        # instantly with no output on windows-latest runners mid-migration to
-        # windows-2025 — the source of intermittent "Install Vulkan SDK" failures.
-        uses: jakoch/install-vulkan-sdk-action@655818d26aa39d663e587b5620dd26519358981f # v1.5.4
-        with:
-          vulkan_version: 1.4.309.0
-          cache: true
-          stripdown: true
-
-      # Windows MAX_PATH workaround: whisper.cpp's vulkan-shaders-gen sub-build
-      # creates deeply nested TryCompile paths that exceed 260 chars. MSBuild's
-      # FileTracker uses legacy Win32 APIs that ignore LongPathsEnabled, so the
-      # only fix is to keep the target dir short. tauri-action honours
-      # CARGO_TARGET_DIR for artifact discovery (see tauri-action/src/utils.ts).
+      # Keep the Windows build/target dir short (C:/t): whisper.cpp's nested
+      # CMake TryCompile paths can exceed the 260-char MAX_PATH that MSBuild's
+      # FileTracker enforces. tauri-action honours CARGO_TARGET_DIR for artifact
+      # discovery (see tauri-action/src/utils.ts).
       - name: Short CARGO_TARGET_DIR (Windows)
         if: matrix.platform == 'windows-latest'
         shell: bash
