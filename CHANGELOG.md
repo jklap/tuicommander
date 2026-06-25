@@ -6,34 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-06-25
+
 ### Added
-- **Native agent hooks for status (Claude, Gemini)** — Opt in per agent in Settings → Agents to drive busy/idle/waiting state from the agent's own hook system instead of output heuristics. Enabling installs small `OSC 7770`-emitting hooks into the agent's settings file; disabling removes only TUIC's entries (sentinel-owned, so your own/wiz hooks are never touched). Instrumented agents report question/approval prompts precisely and suppress heuristic question-detection (the silence-idle crash backstop stays on). macOS/Linux only; Windows keeps heuristics. Default off — byte-for-byte current behavior.
+- **Native agent hooks for status (Claude, Gemini, Grok, Codex, OpenCode)** — Opt in per agent in Settings → Agents to drive busy/idle/waiting state from the agent's own hook system instead of output heuristics. Enabling installs small `OSC 7770`-emitting hooks into the agent's native settings format (Claude/Gemini/Codex JSON settings-hooks, Grok own-file, OpenCode plugin); disabling removes only TUIC's entries (sentinel-owned, so your own/wiz hooks are never touched). Instrumented agents report question/approval prompts precisely and suppress heuristic question-detection (the silence-idle crash backstop stays on). macOS/Linux only; Windows keeps heuristics. Default off — byte-for-byte current behavior.
 - **Inline git blame in the code editor** — A dim italic "author · relative time · summary" annotation at the end of the editor's active line (GitLens-style), following the cursor over already-loaded blame data. Uncommitted lines show "You · Uncommitted changes". On by default; toggle via the `inline_blame_enabled` config field. External (non-repo) files show no annotation.
 - **One-click delete-merged branch cleanup** — The Git Panel's Branches tab shows a broom button (with a count badge) that bulk-deletes local branches already merged into main, behind a confirm dialog listing the targets. Uses safe `git branch -d`, so a stale merged flag can never cause data loss.
 - **"Active only" repo filter** — A filter icon in the toolbar (next to the sidebar toggle) hides repositories that have no open terminals. An accent banner at the top of the sidebar shows the shown/total count and offers "Show all". Session-only.
 - **Context-menu shortcut keys** — While a context menu is open, pressing an item's shortcut chord (e.g. the branch menu's `M`/`R`/`d`) now fires that item's action directly instead of just closing the menu.
+- **Two new built-in themes** — deep-black and minimal-kiwi.
+- **Cmd/Ctrl+R reloads a web/preview tab** — When a web or HTML-preview tab is active, the Run shortcut reloads it instead of opening the Run Command dialog.
+- **User-prompt markers on the terminal scrollbar** — Green ticks on the scrollbar mark the lines where you entered a command, so you can jump back to an earlier prompt at a glance.
+- **Large files up to 250 MB in the code editor** — A dedicated read path raises the editor's file-size ceiling to 250 MB; files beyond the cap are refused up front with a notice instead of freezing the UI while loading.
 
 ### Changed
 - **Branch merge feedback** — Merging a branch from the Branches tab now surfaces the result explicitly: a conflict error toast on failure, an "Already up to date" toast on a no-op, and a success toast with a one-click "Delete branch" action for the now-merged branch.
-
-### Fixed
-- **Git Panel header alignment** — The Branches/Changes/Log/Stashes tab strip no longer reserves a horizontal scrollbar that misaligned the detach/close icons and left dead space; overflowing tabs scroll via vertical wheel/trackpad, and the close button is now an SVG icon matching the detach/reattach controls.
-- **macOS dock-icon reopen** — Clicking the dock icon while the main window is minimized now restores it, even when a detached panel window is open (which previously suppressed the default un-minimize).
-
-## [1.4.3] - 2026-06-14
-
-### Added
-- **Two new built-in themes** — deep-black and minimal-kiwi.
-- **Cmd/Ctrl+R reloads a web/preview tab** — When a web or HTML-preview tab is active, the Run shortcut reloads it instead of opening the Run Command dialog.
-
-### Changed
 - **Readable theme contrast** — Raised muted / bright-black tones across catppuccin-mocha, darksun, delicate-one, nord, solarized-dark, tokyo-night and vscode-light so muted text clears a readable floor. The Appearance terminal preview now picks powerline segment text color by WCAG contrast against the fill instead of the literal ANSI token.
-- **Unified PTY command injection** — The Notes "Send to Terminal" action (attached and detached), the mobile command/ideas widgets, agent auto-retry, and the git terminal fallback all route through the canonical `sendCommand` helper, so the Enter keypress registers correctly even for Ink-based agents in raw mode.
+- **Unified PTY command injection** — The Notes "Send to Terminal" action (attached and detached), the mobile command/ideas widgets, agent auto-retry, the git terminal fallback, the CI auto-heal conflict prompt, and the terminal `writeln` API all route through the canonical `sendCommand` helper, so the Enter keypress registers correctly even for Ink-based agents in raw mode.
+- **Responsive typing under heavy load (macOS)** — The PTY reader, frame ticker, and keystroke-write threads now run at `USER_INTERACTIVE` QoS, so typing and echo stay fluid while a saturating `cargo build`/compile runs in another pane. Complements the existing renice of PTY child processes.
+
+### Security
+- **Deep-link command gating** — `tuic://cmd/{tool}/{action}` deep links now default-deny: only read-only/notify actions run silently, while every other (destructive or unknown) action requires a confirmation dialog — closing previously un-gated paths such as `agent/send` and `session/pause`. A Rust-side backstop rejects `config/save` and `debug/invoke_js` regardless of the frontend. The `session pause`/`resume` MCP actions are now restricted to loopback clients like the other destructive session actions, and remote (TCP) clients get the standard 10 MB cap on the editor file-read routes instead of the 250 MB local cap.
 
 ### Fixed
 - **No false completion sounds on sleep/wake** — Busy→idle transitions in the grace window after a system wake, and shell-integrated terminals that went busy without a command actually running (OSC 133), no longer fire spurious completion notifications.
 - **Terminal stability** — Fixed a stale-read crash when a PTY auto-closes mid-frame, a document-listener leak when a terminal unmounts while subscribing, a layout-forcing read on every scrollbar drag, and a ghost-terminal resurrection from a late OSC 133 flush after removal.
+- **Terminal interaction fixes** — Cmd+C no longer copies duplicated text and now unwraps soft-wrapped selections; a stale "awaiting input" badge is cleared when an agent exits back to the shell; and smooth-scroll self-heals canvas drift, snapping to the line when a scroll gesture ends.
+- **Git Panel header alignment** — The Branches/Changes/Log/Stashes tab strip no longer reserves a horizontal scrollbar that misaligned the detach/close icons and left dead space; overflowing tabs scroll via vertical wheel/trackpad, and the close button is now an SVG icon matching the detach/reattach controls.
+- **macOS dock-icon reopen** — Clicking the dock icon while the main window is minimized now restores it, even when a detached panel window is open (which previously suppressed the default un-minimize).
 - **Resilient git operations** — Stale `.git/index.lock` files left by crashed processes are reclaimed on size+age thresholds; branch-switch failures show the full git output and offer Retry on recoverable lock contention; concurrent confirmation dialogs queue instead of being silently dropped; rapid branch selection is serialized so it can't duplicate terminals.
+- **PR check status accuracy** — The PR detail popover no longer lists duplicate checks when a workflow re-runs (deduped to the newest run per name, matching the summary counts); `ACTION_REQUIRED` checks now count as failed so a PR blocked by a gate no longer renders as all-green; and the detail query fetches up to 100 checks to stay consistent with the summary tally.
 - **MCP agent grid streaming** — Agent sessions spawned over MCP now register their grid watch channel and a terminal alias, so `format=grid` WebSocket streaming works.
 - **MCP OAuth refresh tokens** — Authorization requests now include `offline_access`, so upstreams issue a refresh token instead of silently dropping to a re-auth prompt after the access token expires.
 - **Binary terminal output** — The UTF-8 read buffer decodes iteratively (no reader-thread stack overflow on large binary reads), and absolute scrollback line reads return the correct rows.

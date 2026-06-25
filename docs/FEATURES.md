@@ -31,6 +31,7 @@
 - Remote PTY sessions (created via HTTP/MCP) show "PTY:" prefix and amber styling
 - Progress bar (OSC 9;4)
 - Context menu (right-click): Close Tab, Close Other Tabs, Close Tabs to the Right, Detach to Window, Copy Path (on diff/editor/markdown file tabs)
+- **Context menu shortcut chords** — while a context menu is open, pressing a menu item's keyboard shortcut chord (modifier + key, or Enter) fires that action directly without needing to click. Modifier-only keystrokes (Cmd, Shift, etc.) do not close the menu so multi-key chords can form; any other non-matching key closes the menu normally
 - Detach to Window: right-click a tab to open it in a floating OS window
   - PTY session stays alive in Rust — floating window reconnects to the same session
   - Closing the floating window automatically returns the tab to the main window
@@ -148,6 +149,7 @@
 Terminal output is segmented into command blocks — one per prompt+output cycle. Blocks are detected via OSC 133 shell integration markers (A/C/D sequences) or OSC 7770;block= agent-emitted markers. For Claude Code, heuristic detection synthesizes blocks from tool call headers (`⏺ ToolName(args)`).
 
 - **Scrollbar marks** — Color-coded indicators on the scrollbar for each command block boundary. Provides a visual map of command history at a glance
+- **User-prompt scrollbar markers** — A distinct green tick on the scrollbar marks each line where the user submitted a prompt to the agent (recorded from the OSC 7770 `state=busy` transition via `userPromptLines`). These are separate from command-block boundary marks and help you quickly locate your own prompts in long sessions
 - **Timestamp overlay** — Hold `Ctrl+Cmd` to reveal timestamps showing when each block started, displayed as relative time (e.g. "2m ago")
 - **Gutter click** — Click the gutter area to select the entire block output for easy copying
 - **Block folding** — Collapse/expand block output with `Cmd+Shift+.` toggle. Folded blocks show a summary line. Backend stores fold state per session via `set_block_fold` Tauri command
@@ -310,6 +312,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Drop cursor: ghost cursor shown when dragging text over the editor
 - Special character highlighting: invisible chars (zero-width spaces, control chars) rendered as placeholders
 - CSS color preview: inline color swatches next to hex/rgb/rgba/hsl values
+- **Large-file support**: files up to 250 MB open via a dedicated read path (`read_file_editor` / `MAX_EDITOR_LARGE_FILE_SIZE`). Files that exceed this cap are refused up front with an informational notice instead of hanging the UI. Standard syntax highlighting is disabled above 500 KB, but the file still opens and is fully editable
 - **Inline git blame** (GitLens-style): a dim italic `author · relative time · summary` annotation at the end of the active line, following the cursor over already-loaded blame data (fetched on load/save/repo-revision via `get_file_blame`, never per keystroke). Lines with uncommitted edits show `You · Uncommitted changes`. On by default (`inline_blame_enabled` config field); no annotation for external (non-repo) files
 
 ### 3.6 Ideas Panel (`Cmd+Alt+N`)
@@ -1098,7 +1101,7 @@ Variables are resolved from the Rust backend (`resolve_context_variables`) and f
 - Repository defaults: base branch, file handling, setup/run scripts, worktree defaults (storage strategy, prompt on create, etc.)
 
 ### 11.2 Appearance
-- Terminal theme: multiple themes, color swatches
+- Terminal theme: multiple themes, color swatches. Bundled themes include **Deep Black** (near-true-black background with GitHub-style ANSI accents) and **Minimal Kiwi** (dark green-tinted background with muted warm accents)
 - Terminal font: 11 bundled monospace fonts (JetBrains Mono default)
 - Default font size: 8-32px slider
 - Split tab mode: separate / unified
@@ -1469,6 +1472,11 @@ All data persisted to platform config directory via Rust:
 - `tuic://settings?tab=plugins` — Open Settings to specific tab
 - `tuic://open/<path>` — Open markdown file in tab (iframe SDK only, path validated against repos)
 - `tuic://terminal?repo=<path>` — Open terminal in repo (iframe SDK only)
+- **`tuic://cmd/{tool}/{action}?{params}`** — MCP gateway for external automation (scripts, Shortcuts, browser pages). Routes to the same tool/action handlers as the MCP server. Gating is default-deny:
+  - **Read-only / notify actions** (e.g. `session/list`, `session/status`, `repo/list`, `agent/inbox`, `ui/toast`) run silently without a dialog
+  - **Destructive or unknown actions** (anything not in the safe list) require a confirmation dialog before executing — prevents a malicious page from acting unattended
+  - **`config/save` and `debug/invoke_js`** are blocked entirely and never execute even with user confirmation
+  Source: `src/deep-link-handler.ts` (`SAFE_COMMANDS`, `BLOCKED_COMMANDS`); Rust backstop: `deep_link_mcp_call` in `src-tauri/src/lib.rs`
 
 ### 17.4.1 TUIC SDK (`window.tuic`)
 - Injected automatically into every plugin iframe (inline and same-origin URL mode)
@@ -1760,7 +1768,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 ### 20.11 Runtime Diagnostics (CPU watchdog + diagnostic mode)
 - **Always-on CPU watchdog** (zero overhead when idle): polls `getrusage(RUSAGE_SELF)` every 5s and logs a full snapshot when TUIC's own CPU stays above 80% for 10+ consecutive seconds. PTY children (cargo, rustc, …) are separate OS processes and don't count toward the measurement
 - **Sleep/wake aware**: inter-tick gaps over 30s are treated as the machine having been asleep (lid closed) and skipped, so stale tokio-timer ticks after wake don't trigger false spikes or idle cascades
-- **Diagnostic mode** (toggleable at runtime, off by default): emits a health snapshot every 30s and alerts on FD/thread growth trends. Each snapshot includes CPU%, thread count, FD count, PTY session count, content-index build state, semaphore permits, stuck `grid_frame_in_flight` sessions, and event-bus subscriber count
+- **Diagnostic mode** (toggleable at runtime, off by default): emits a health snapshot every 30s and alerts on FD/thread growth trends. Each snapshot includes: `cpu_pct` (TUIC self only, via `RUSAGE_SELF`), `children_cpu` (aggregate %cpu of all PTY child process trees + the hottest individual child — note the CPU watchdog spike trigger intentionally ignores children, so a hot `cargo`/agent only surfaces here), thread count, FD count, PTY session count, content-index build state, semaphore permits, stuck `grid_frame_in_flight` sessions, event-bus subscriber count, and `head_emits_suppressed` (repo-watcher `head-changed` emits skipped by the resolved-HEAD-target guard — a climbing value signals a filesystem-event storm)
 - Control via HTTP: `POST /diagnostics {"enabled":true}` to toggle, `GET /diagnostics` for status, `GET /logs?source=diagnostics` to read the snapshots
 - Catches known failure patterns: IPC flush loops, content-index CPU saturation, blocked WebView JS thread (`grid_frame_in_flight` stuck), FD/thread leaks, and sleep/wake false-idle cascades
 - Backend: `src-tauri/src/cpu_watchdog.rs`

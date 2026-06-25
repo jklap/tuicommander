@@ -240,6 +240,10 @@ Validated on an M4 Max under 14-core saturation: TUIC's UI goes from frozen
 the Windows analog — `IDLE` only runs when the whole system is idle, the
 equivalent of macOS QoS-background, which would make builds crawl.
 
+### macOS Thread QoS Elevation
+
+On macOS, the PTY **reader thread**, the **frame ticker**, and the **keystroke-write thread** are all raised to `QOS_CLASS_USER_INTERACTIVE` via `pthread_set_qos_class_self_np` (`raise_thread_for_interactive_io()` in `src-tauri/src/pty.rs`, `thread_qos` module). This is complementary to the child-process renice: on Apple Silicon the scheduler is QoS-band driven — `nice` only reorders threads within a band. Without this elevation, TUIC's interactive-path threads ran in the default QoS band alongside compiler worker threads, causing input latency under heavy builds. Raising to `USER_INTERACTIVE` puts the interactive path in a higher scheduler band. macOS-only; a no-op on Linux/Windows.
+
 ## Session Conflict Flag File
 
 When an agent reports a session conflict (session already in use or not found), TUICommander handles it via a flag-file mechanism instead of writing directly to the PTY.

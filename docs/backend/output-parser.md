@@ -305,3 +305,7 @@ The `strip_ansi()` function pre-processes CUF (Cursor Forward, `\x1b[nC`) escape
 | Amazon Q | Braille spinner + task + ASCII dots | `⠹ Thinking...` |
 | Cline | Braille spinner + mode + optional timer | `⠙ Planning (45s · esc to interrupt)` |
 | Generic | `[Running]` prefix | `[Running] npm test` |
+
+### Hook-Instrumented Session Suppression
+
+When an agent session has native hook instrumentation enabled (OSC 7770-driven state transitions via the agent's own hook system), heuristic `Question` events are suppressed for that session. Hook-instrumented agents report awaiting state directly via `OSC 7770;state=awaiting`, so the silence/regex question heuristics would only double-fire. Only `Question` detection is suppressed — idle/busy transitions and all other events pass through unchanged. The silence-idle backstop remains active so a crashed or stalled agent still recovers from "busy". See `suppress_heuristic_question()` in `src-tauri/src/pty.rs`.

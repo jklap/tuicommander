@@ -179,6 +179,7 @@ Each frame: 26-byte header + variable row data. The header ends with a `historyB
 | OSC 7 cwd tracking | OK | `pty-cwd-{sessionId}` event |
 | OSC 133 command blocks | OK | `pty-osc133-{sessionId}` event |
 | OSC 133 gutter decoration | OK | `paintGutterMarkers` on overlay canvas |
+| User-prompt scrollbar markers | OK | Green ticks at `userPromptLines` — distinct from command-block marks, drawn in `paintGutterMarkers` |
 | Cmd+Up/Down block navigation | OK | Reads `commandBlocks` + `activeBlock` |
 | OSC 9 progress bar | OK | `terminal()?.progress` → 2px green bottom-edge fill on tab |
 

@@ -67,7 +67,9 @@ When enabled, TUIC writes small shell hooks into the agent's settings file that 
 |-------|-------|--------|
 | Claude | `~/.claude/settings.json` | Supported |
 | Gemini | `~/.gemini/settings.json` | Supported |
-| Codex / Grok / OpenCode | own settings/plugin | Planned |
+| Codex | `~/.codex/hooks.json` + `~/.codex/config.toml` (`[features] hooks = true`) | Supported |
+| Grok | `~/.grok/hooks/tuic.json` (own file) | Supported |
+| OpenCode | `~/.config/opencode/plugin/tuic.ts` (Bun/TS plugin) | Supported |
 | Others (Aider, Amp, Cursor, Goose, Droid) | — | No hook system — stays heuristic |
 
 > **Platform note:** Hook instrumentation is **macOS/Linux only** — it resolves the controlling tty via `ps`/`/dev/tty`, which has no Windows equivalent. On Windows the toggle is hidden and agents keep heuristic detection (no regression).

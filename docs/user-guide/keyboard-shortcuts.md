@@ -206,6 +206,8 @@ Hold to record, release to transcribe and inject text into active terminal.
 | Rename Tab | (double-click tab name) |
 | Detach to Window | — |
 
+While a context menu is open, pressing a menu item's shortcut chord (modifier + key, or Enter) fires that action immediately — no click needed. Modifier-only keys (Cmd, Shift, Ctrl, Alt) do not close the menu so multi-key chords can form; any other non-matching key closes the menu.
+
 ## Mouse Actions
 
 | Action | Where | Effect |
