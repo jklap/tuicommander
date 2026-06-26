@@ -50,62 +50,8 @@
   color: var(--error);
 }
 
-/* File section */
-.fileSection {
-  border-bottom: 1px solid var(--border);
-}
-
-.fileHeader {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
-  background: var(--bg-highlight);
-  cursor: pointer;
-  user-select: none;
-  border-bottom: 1px solid var(--border);
-  border-top: 1px solid var(--border);
-  position: sticky;
-  top: var(--diff-header-height);
-  z-index: 2;
-}
-
-.fileHeader:hover {
-  background: var(--bg-highlight);
-}
-
-.chevron {
-  color: var(--fg-muted);
-  transition: transform 0.15s ease;
-  flex-shrink: 0;
-}
-
-.chevronCollapsed {
-  transform: rotate(-90deg);
-}
-
-.filePath {
-  color: var(--fg-primary);
-  font-weight: 600;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.filePath:hover {
-  text-decoration: underline;
-  color: var(--accent);
-}
-
-.fileStats {
-  flex-shrink: 0;
-  display: flex;
-  gap: 6px;
-  font-size: var(--font-xs);
-}
+/* File-section / chevron / filePath / fileStats / fileDiff styles moved to
+ * shared/diffFileList.module.css (owned by the shared DiffFileList component). */
 
 /* Diff lines table */
 .diffTable {
@@ -166,11 +112,6 @@
 
 .lineContext {
   /* default styling */
-}
-
-/* Per-file diff content (wraps DiffViewer) */
-.fileDiff {
-  border-bottom: 1px solid var(--border);
 }
 
 /* Mode toggle in header */

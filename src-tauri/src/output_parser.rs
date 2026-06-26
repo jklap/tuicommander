@@ -52,9 +52,15 @@ pub enum ParsedEvent {
     /// Plan file detected in terminal output (e.g. plans/foo.md, .claude/plans/bar.md)
     #[serde(rename = "plan-file")]
     PlanFile { path: String },
-    /// User submitted a line of input via the PTY (reconstructed from keystrokes)
+    /// User submitted a line of input via the PTY.
+    ///
+    /// `line` is the absolute prompt row (`history_size + cursor row`, the same
+    /// coordinate space as AgentBlock/OSC133) captured at the OSC 7770
+    /// `state=busy` transition — i.e. the row the cursor sat on when the agent
+    /// resumed work after the user submitted, which is the user's prompt line.
+    /// `-1` when the event has no grid context (keystroke-reconstructed path).
     #[serde(rename = "user-input")]
-    UserInput { content: String },
+    UserInput { content: String, line: i64 },
     /// API error from an agent (5xx server error, auth failure, etc.)
     #[serde(rename = "api-error")]
     ApiError {
@@ -438,6 +444,8 @@ impl OutputParser {
             && !text.contains("RateLimit") && !text.contains("429")
             && !text.contains("RESOURCE_EXHAUSTED") && !text.contains("etry") // Retry/retry
             && !text.contains("Rate Limit") && !text.contains("per minute")
+            // Claude Code friendly overload message ("temporarily limiting requests")
+            && !text.contains("limiting requests")
         {
             return None;
         }
@@ -586,6 +594,16 @@ fn build_rate_limit_patterns() -> Vec<RateLimitPattern> {
         rl(
             "claude-overloaded",
             r"(?i)overloaded_error",
+            Some(30000),
+            false,
+        ),
+        // Claude Code: user-facing friendly overload message (Claude auto-retries
+        // internally; we only record the rate-limit, never inject — see AGENTS.md).
+        // Full UI string: "API Error: Server is temporarily limiting requests
+        // (not your usage limit) · Rate limited".
+        rl(
+            "claude-overloaded-friendly",
+            r"temporarily limiting requests",
             Some(30000),
             false,
         ),
@@ -1109,7 +1127,14 @@ fn parse_question(clean: &str) -> Option<ParsedEvent> {
         static ref INK_FOOTER_RE: regex::Regex =
             regex::Regex::new(r"Enter to select").unwrap();
         // cliclack interactive prompt: "◆  Do you allow this tool call?"
-        // ◆ (U+25C6) is the cliclack prompt marker — ultra-specific, no false positives.
+        // ◆ (U+25C6) is Goose's cliclack active-prompt marker. It is NOT unique to
+        // interactive prompts, though: grok reuses ◆ as a decorative timeline bullet
+        // ("◆ Thought for 1.3s", "◆ user_prompt_submit", tool-call labels). Those
+        // repaint every frame with a changing duration, so matching them emits an
+        // endless stream of (confident) Question events that never dedup — a
+        // notification storm. Goose's real prompts are all questions, so the match
+        // also requires the captured text to end with '?'. grok's decorative labels
+        // never do, so this cleanly separates the two.
         static ref CLICLACK_PROMPT_RE: regex::Regex =
             regex::Regex::new(r"^\s*\u{25C6}\s+(.+)").unwrap();
     }
@@ -1123,7 +1148,11 @@ fn parse_question(clean: &str) -> Option<ParsedEvent> {
         }
         if let Some(caps) = CLICLACK_PROMPT_RE.captures(line) {
             let text = caps[1].trim();
-            if text.len() >= 5 {
+            // Require a question mark: Goose's cliclack prompts are all questions
+            // ("…do you allow?", "Are you sure…?"). grok's decorative ◆ timeline
+            // bullets ("Thought for 1.3s", "user_prompt_submit") never end in '?',
+            // so this excludes them and kills the notification storm.
+            if text.len() >= 5 && text.ends_with('?') {
                 return Some(ParsedEvent::Question {
                     prompt_text: text.to_string(),
                     confident: true,
@@ -1315,11 +1344,14 @@ lazy_static::lazy_static! {
     /// Bracketed suggest token, anchored at column 0 (optional leading
     /// whitespace and an Ink bullet glyph ● U+25CF / ⏺ U+23FA). Two constraints
     /// make a false capture impossible:
-    ///   1. the whole `[ … ]` sits on ONE row — the capture excludes `\r`/`\n`,
+    ///   1. the capture excludes `\r`/`\n`, so it matches a single logical row,
     ///   2. the content contains NO nested `[`/`]`.
-    /// So a mermaid edge (`EP["…"] -->|x|`), a markdown table, or any wrapped
-    /// line simply fails to match — it either lacks the column-0 `suggest: [`
-    /// anchor or carries a nested `[`. Capture group 1 is the item list.
+    /// A token wider than the terminal wraps across physical rows; that case is
+    /// rejoined upstream by [`dewrap_suggest_brackets`] (bounded by the closing
+    /// `]`, a small row window, and the same nested-bracket rejection) before
+    /// this regex runs. A mermaid edge (`EP["…"] -->|x|`) or markdown table
+    /// still fails to match — it lacks the column-0 `suggest: [` anchor or
+    /// carries a nested `[`. Capture group 1 is the item list.
     static ref SUGGEST_RE: regex::Regex = regex::Regex::new(
         r"(?m)^[\t ]*(?:[\x{25CF}\x{23FA}][\t ]+)?suggest:[\t ]*\[([^\[\]\r\n]*)\]"
     ).unwrap();
@@ -1352,7 +1384,14 @@ fn parse_suggest_with_line(clean: &str, agent_active: bool) -> Option<(ParsedEve
     // entirely (≤9 cols for a plain prefix), the content lands on the next
     // physical row.  Remove the stray newline so SUGGEST_START_RE can see it.
     let content_cow = dewrap_suggest_content(kw_cow.as_ref());
-    let clean = content_cow.as_ref();
+    // Pass 3: the bracketed list itself wrapped across physical rows because the
+    // token is wider than the terminal (e.g. a ~78-col `suggest: [ … ]` on a
+    // 76-col window). Rejoin the newlines inside the first `[ … ]` so the
+    // single-row SUGGEST_RE can match. Bounded by the closing `]`, a small row
+    // window, and nested-bracket rejection so surrounding output is never
+    // absorbed.
+    let bracket_cow = dewrap_suggest_brackets(content_cow.as_ref());
+    let clean = bracket_cow.as_ref();
     if !clean.contains("suggest:") {
         return None;
     }
@@ -1405,6 +1444,88 @@ fn dewrap_suggest_content(text: &str) -> std::borrow::Cow<'_, str> {
     // Replace `suggest: <trailing spaces>\n` with `suggest: ` so the next
     // physical row's content is treated as the first item line.
     std::borrow::Cow::Owned(SUGGEST_TRAILING_RE.replace_all(text, "$1").to_string())
+}
+
+/// Rejoin a `suggest: [ … ]` token whose bracketed content wrapped across
+/// physical terminal rows. The single-row [`SUGGEST_RE`] cannot match once the
+/// VT buffer has split the list with `\n` (a token wider than the terminal,
+/// e.g. ~78 cols of items on a 76-col window), so the overlay never fires.
+/// We reconstruct the logical line by collapsing newlines (and the horizontal
+/// whitespace the wrap leaves behind) inside the first `[ … ]` into single
+/// spaces.
+///
+/// Because a terminal hard-wrap is column-based, it may break mid-word; the
+/// space-collapse is therefore a best-effort rejoin (correct when the break
+/// lands on a separator, slightly off mid-word). That is strictly better than
+/// the prior behaviour of not rendering the overlay at all.
+///
+/// The same safety invariants the single-row regex relies on are preserved:
+///   - we only act on a column-0 `suggest: [` anchor,
+///   - we bail if a nested `[` appears before the closing `]` (mermaid/table),
+///   - we scan at most [`MAX_WRAP_ROWS`] rows after the anchor, so a stray
+///     `suggest: [` with no closing `]` cannot swallow unbounded output.
+///
+/// Returns `Cow::Borrowed` when no wrapped suggest is detected.
+fn dewrap_suggest_brackets(text: &str) -> std::borrow::Cow<'_, str> {
+    if !text.contains("suggest:") || !text.contains('\n') {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    lazy_static::lazy_static! {
+        // Column-0 `suggest:` anchor up to and including the opening `[`.
+        static ref SUGGEST_OPEN_RE: regex::Regex = regex::Regex::new(
+            r"(?m)^[\t ]*(?:[\x{25CF}\x{23FA}][\t ]+)?suggest:[\t ]*\["
+        )
+        .unwrap();
+        // A newline plus the horizontal whitespace surrounding it.
+        static ref WRAP_WS_RE: regex::Regex = regex::Regex::new(r"[\t ]*\n[\t ]*").unwrap();
+    }
+    // 4 physical rows comfortably hold a max-size token (4 items × ≤40 chars +
+    // separators + brackets ≈ 170 cols ≈ 3 wraps at a typical narrow width).
+    const MAX_WRAP_ROWS: usize = 4;
+
+    let Some(m) = SUGGEST_OPEN_RE.find(text) else {
+        return std::borrow::Cow::Borrowed(text);
+    };
+    let content_start = m.end(); // byte index just after the opening `[`
+
+    // Scan forward for the closing `]`, bailing on a nested `[` (preserve the
+    // mermaid/table rejection) or after the row window is exhausted.
+    let mut newline_count = 0usize;
+    let mut close_idx = None;
+    for (off, ch) in text[content_start..].char_indices() {
+        match ch {
+            ']' => {
+                close_idx = Some(content_start + off);
+                break;
+            }
+            '[' => return std::borrow::Cow::Borrowed(text),
+            '\n' => {
+                newline_count += 1;
+                if newline_count > MAX_WRAP_ROWS {
+                    return std::borrow::Cow::Borrowed(text);
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(close_idx) = close_idx else {
+        // No closing `]` within reach — leave untouched so an incomplete token
+        // does not parse.
+        return std::borrow::Cow::Borrowed(text);
+    };
+
+    let content = &text[content_start..close_idx];
+    if !content.contains('\n') {
+        // Already single-row; the regex handles it without a rewrite.
+        return std::borrow::Cow::Borrowed(text);
+    }
+
+    let collapsed = WRAP_WS_RE.replace_all(content, " ");
+    let mut out = String::with_capacity(text.len());
+    out.push_str(&text[..content_start]);
+    out.push_str(&collapsed);
+    out.push_str(&text[close_idx..]);
+    std::borrow::Cow::Owned(out)
 }
 
 /// Rejoin a `suggest:` keyword that got split across a newline by terminal
@@ -3041,6 +3162,29 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         assert!(has_rate_limit(&parser.parse("Retry-After: 60")));
     }
 
+    #[test]
+    fn test_claude_friendly_overload_message_detected() {
+        let mut parser = OutputParser::new();
+        // Claude Code's user-facing transient-overload message (Claude auto-retries
+        // internally). Must be classified as rate-limit so TUIC records it without
+        // injecting a competing retry.
+        assert!(has_rate_limit(&parser.parse(
+            "API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited"
+        )));
+    }
+
+    #[test]
+    fn test_no_false_positive_friendly_overload_in_code() {
+        let mut parser = OutputParser::new();
+        // Same phrase inside source/markdown context must NOT fire.
+        assert!(!has_rate_limit(&parser.parse(
+            r#"        rl("claude-overloaded-friendly", r"temporarily limiting requests", Some(30000), false),"#
+        )));
+        assert!(!has_rate_limit(&parser.parse(
+            "// handles \"temporarily limiting requests\" from Claude"
+        )));
+    }
+
     // --- Source code false-positive guard tests ---
 
     #[test]
@@ -3790,15 +3934,68 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     }
 
     #[test]
-    fn test_suggest_rejects_multiline_content() {
-        // Condition 1: the whole `[ … ]` must sit on ONE row. A suggest whose
-        // content wraps across physical rows must NOT parse — this is what makes
-        // it impossible for a wrapped token to run into surrounding output.
+    fn test_suggest_dewraps_multiline_content() {
+        // A token wider than the terminal wraps its `[ … ]` across physical
+        // rows. `dewrap_suggest_brackets` rejoins the newline (plus the wrap's
+        // leading whitespace) so the four items parse. The closing `]` still
+        // bounds the token, so it cannot run into surrounding output.
         let input = "suggest: [ 1) Screenshot overview panel | 2) Fix scroll flicker | 3) Fix\n\
                       Cmd+Shift+M collision | 4) Manual test ]";
+        let items = match parse_suggest(input, true) {
+            Some(ParsedEvent::Suggest { items }) => items,
+            _ => panic!("wrapped suggest content must dewrap and parse"),
+        };
+        assert_eq!(
+            items,
+            vec![
+                "1) Screenshot overview panel",
+                "2) Fix scroll flicker",
+                "3) Fix Cmd+Shift+M collision",
+                "4) Manual test"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_suggest_dewraps_realistic_wrap() {
+        // The exact shape that failed in practice: a ~78-col token on a ~76-col
+        // terminal, wrapping between (here) the second and third item.
+        let input =
+            "suggest: [ Crea v1.3.1-nightly | Lascia solo\nrolling | Indaga il gap versionato ]";
+        let items = match parse_suggest(input, true) {
+            Some(ParsedEvent::Suggest { items }) => items,
+            _ => panic!("realistic wrapped suggest must parse"),
+        };
+        assert_eq!(
+            items,
+            vec![
+                "Crea v1.3.1-nightly",
+                "Lascia solo rolling",
+                "Indaga il gap versionato"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_suggest_wrapped_without_closing_bracket_no_match() {
+        // An opening `suggest: [` whose `]` never arrives (truncated/streaming)
+        // must NOT parse — the dewrap bails without a closing bracket, so it
+        // cannot absorb the unbounded output that follows.
+        let input = "suggest: [ A | B\nthis is just more terminal output, not a list";
         assert!(
             parse_suggest(input, true).is_none(),
-            "multi-row suggest content must not parse"
+            "wrapped suggest with no closing `]` must not parse"
+        );
+    }
+
+    #[test]
+    fn test_suggest_wrapped_nested_bracket_no_match() {
+        // A nested `[` before the closing `]` invalidates the match even when
+        // wrapped, so a mermaid label split across rows can never be captured.
+        let input = "suggest: [ A | EP[\"node\"\n] | C ]";
+        assert!(
+            parse_suggest(input, true).is_none(),
+            "a nested bracket must invalidate the wrapped suggest match"
         );
     }
 
@@ -5001,6 +5198,25 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         let input = "\u{25C6}  hi";
         let evt = parse_question(input);
         assert!(evt.is_none(), "Short cliclack text should be ignored");
+    }
+
+    #[test]
+    fn test_grok_decorative_bullet_not_a_question() {
+        // grok reuses ◆ as a decorative timeline bullet, NOT a cliclack prompt.
+        // Its text repaints every frame with a changing duration, so detecting it
+        // emits an endless stream of confident Questions that never dedup — the
+        // notification storm. Only ◆ lines ending in '?' are real prompts.
+        for input in [
+            "\u{25C6} Thought for 1.3s",
+            "\u{25C6} Thought for 12.7s",
+            "\u{25C6} user_prompt_submit",
+            "\u{25C6} Run Shell Command echo hello",
+        ] {
+            assert!(
+                parse_question(input).is_none(),
+                "grok decorative bullet must not be a question: {input:?}"
+            );
+        }
     }
 
     // --- parse_choice_prompt fixture-driven golden tests ---

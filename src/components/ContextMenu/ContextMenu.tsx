@@ -9,6 +9,8 @@ export interface ContextMenuItem {
 	separator?: boolean;
 	disabled?: boolean;
 	children?: ContextMenuItem[];
+	/** Native tooltip shown on hover — e.g. the full path behind a "Copy Path" item */
+	title?: string;
 }
 
 export interface ContextMenuProps {
@@ -17,6 +19,22 @@ export interface ContextMenuProps {
 	y: number;
 	visible: boolean;
 	onClose: () => void;
+}
+
+/** True when a keyboard event matches a menu item's shortcut hint (e.g. "⇧M",
+ *  "↵", "r"). Modifier glyphs: ⇧ shift, ⌘ meta, ⌃ ctrl, ⌥ alt. */
+function matchesShortcut(e: KeyboardEvent, shortcut: string): boolean {
+	const wantShift = shortcut.includes("⇧");
+	const wantMeta = shortcut.includes("⌘");
+	const wantCtrl = shortcut.includes("⌃");
+	const wantAlt = shortcut.includes("⌥");
+	const key = shortcut.replace(/[⇧⌘⌃⌥]/g, "");
+	if (e.shiftKey !== wantShift || e.metaKey !== wantMeta || e.ctrlKey !== wantCtrl || e.altKey !== wantAlt) {
+		return false;
+	}
+	if (key === "⏎") return e.key === "Enter"; // ↵
+	if (key.length !== 1) return false;
+	return e.key.toLowerCase() === key.toLowerCase();
 }
 
 /** Clamp a submenu position so it stays within the viewport (8px margin). */
@@ -72,6 +90,7 @@ const MenuItem: Component<{
 			<div ref={wrapRef} class={s.itemWrap} onMouseEnter={openSubmenu} onMouseLeave={() => setSubmenuOpen(false)}>
 				<button
 					class={cx(s.item, props.item.disabled && s.disabled)}
+					title={props.item.title}
 					onClick={() => {
 						if (props.item.disabled) return;
 						if (hasChildren()) {
@@ -113,10 +132,25 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
 		if (!props.visible) return;
 
 		const handleKeydown = (e: KeyboardEvent) => {
-			// Close on any keyboard input — not just Escape.
-			// Modifier-only keys (Shift, Control, etc.) are ignored.
+			// Modifier-only keys (Shift, Control, etc.) are ignored so chords can form.
 			if (e.key === "Shift" || e.key === "Control" || e.key === "Alt" || e.key === "Meta") return;
-			if (e.key === "Escape") e.preventDefault();
+			if (e.key === "Escape") {
+				e.preventDefault();
+				props.onClose();
+				return;
+			}
+			// Trigger a matching item's action while the menu is open (the shortcut
+			// hints shown next to each item). Top-level items only.
+			const hit = props.items.find(
+				(it) => !it.separator && !it.disabled && it.shortcut && matchesShortcut(e, it.shortcut),
+			);
+			if (hit) {
+				e.preventDefault();
+				props.onClose();
+				hit.action();
+				return;
+			}
+			// Any other key closes the menu (existing behavior).
 			props.onClose();
 		};
 

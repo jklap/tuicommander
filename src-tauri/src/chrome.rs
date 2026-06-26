@@ -92,6 +92,12 @@ pub fn is_chrome_row(text: &str) -> bool {
 /// (⏵ ⏸ ›), box borders (▀ ▄), and interrupt markers (■) are static chrome
 /// and return false here.
 pub fn is_spinner_row(text: &str) -> bool {
+    // junie's idle status-bar effort icon (◐◑◒◓) is static chrome, not an animated
+    // spinner — suppress it here so junie's idle state is detected (otherwise the
+    // silence/idle path treats junie as perpetually busy). See is_junie_status_bar.
+    if is_junie_status_bar(text) {
+        return false;
+    }
     if is_codex_chrome_bullet(text) {
         return true;
     }
@@ -132,6 +138,20 @@ fn is_codex_chrome_bullet(text: &str) -> bool {
         || after.starts_with("Boot")
         || after.contains("esc to")
         || after.contains("interrupt")
+}
+
+/// junie (JetBrains) renders a persistent idle status bar whose "effort"
+/// indicator uses a partial-circle glyph (◐◑◒◓, U+25D0–U+25D3) — the SAME glyphs
+/// Claude Code uses for its animated tool-progress spinner. Without
+/// disambiguation, junie's *static* bar reads as a live spinner, so junie is
+/// treated as perpetually busy and the idle notification never fires.
+///
+/// The junie status bar has a distinctive signature, e.g.:
+///   `~ tuicommander   ⚑ Brave off ctrl + b   ⌘ Grok 4.3 OpenRouter   ◐ Medium effort`
+/// Detect it by the command/flag markers (⌘ U+2318 / ⚑ U+2691) plus the effort
+/// label so the circle glyph in this row is not classified as an animated spinner.
+fn is_junie_status_bar(text: &str) -> bool {
+    text.contains("effort") && (text.contains('\u{2318}') || text.contains('\u{2691}'))
 }
 
 /// Returns true if a row is part of Claude Code's Ink-rendered task list.
@@ -831,6 +851,27 @@ mod tests {
     fn not_spinner_plain_text() {
         assert!(!is_spinner_row("Hello world"));
         assert!(!is_spinner_row(""));
+    }
+
+    #[test]
+    fn not_spinner_junie_status_bar() {
+        // junie's idle effort icon (◐◑◒◓) is static chrome, not a live spinner.
+        assert!(!is_spinner_row(
+            "~ tuicommander   ⚑ Brave off ctrl + b   ⌘ Grok 4.3 OpenRouter   ◐ Medium effort"
+        ));
+        assert!(!is_spinner_row("⌘ Grok 4.3   ◑ High effort"));
+        assert!(!is_spinner_row("⚑ Brave on   ◓ Low effort"));
+    }
+
+    #[test]
+    fn junie_disambiguation_preserves_claude_spinner() {
+        // A Claude tool-progress row uses the same ◐ glyph but lacks junie's
+        // status-bar signature (⌘/⚑ + "effort"), so it stays a spinner.
+        assert!(is_spinner_row("◐ Bash: running tests"));
+        assert!(!is_junie_status_bar("◐ Bash: running tests"));
+        assert!(is_junie_status_bar(
+            "~ tuicommander   ⚑ Brave off   ⌘ Grok 4.3   ◐ Medium effort"
+        ));
     }
 
     // --- is_task_list_row ---

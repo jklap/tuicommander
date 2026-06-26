@@ -4,6 +4,11 @@
 )]
 
 pub(crate) mod agent;
+pub(crate) mod agent_hook;
+pub(crate) mod agent_hook_codex;
+pub(crate) mod agent_hook_commands;
+pub(crate) mod agent_hook_installer;
+pub(crate) mod agent_hook_opencode;
 pub(crate) mod agent_mcp;
 pub(crate) mod agent_session;
 pub(crate) mod ai_agent;
@@ -27,6 +32,7 @@ pub(crate) mod generators;
 pub(crate) mod git;
 pub(crate) mod git_cli;
 pub(crate) mod git_graph;
+pub(crate) mod git_reads;
 pub(crate) mod github;
 pub(crate) mod github_account;
 pub(crate) mod github_auth;
@@ -583,8 +589,51 @@ fn list_markdown_files(path: String) -> Result<Vec<MarkdownFileEntry>, String> {
     list_markdown_files_impl(path)
 }
 
-/// Read file content (shared logic)
-pub(crate) fn read_file_impl(path: String, file: String) -> Result<String, String> {
+/// Max file size for the generic readers used by the markdown/html-preview/plugin
+/// panels. Those panels render the whole payload eagerly (markdown → HTML, etc.),
+/// so a large file would freeze them — guarded at the source via `metadata().len()`
+/// before reading. (AI-agent reads have their own limit in ai_agent/tools.rs.)
+pub(crate) const MAX_EDITOR_FILE_SIZE: u64 = 10 * 1024 * 1024;
+
+/// Larger cap for the CodeMirror code editor specifically (`read_editor_file*`).
+/// The editor keeps the doc in a CM6 rope and renders only the viewport, so it
+/// tolerates far larger files than the eager panels above.
+///
+/// Hard ceiling for the editor: files above this are refused before reading so a
+/// huge payload can't freeze the webview crossing IPC as one string. The 100 MB
+/// Tier-1 measurement (`plans/large-file-editor.md` T1.4) showed sub-100 ms JS cost
+/// with heap ~1.2× the file; 250 MB trades some headroom for opening bigger files,
+/// with the frontend showing a non-blocking "may be slow" warning past 100 MB.
+pub(crate) const MAX_EDITOR_LARGE_FILE_SIZE: u64 = 250 * 1024 * 1024;
+
+/// Read a UTF-8 text file, refusing files over `limit` before reading so a huge
+/// file can't freeze the webview. The "too large" message is matched by the editor
+/// frontend (regex /too large/i) to show a friendly blocking notice, so keep that
+/// phrase stable.
+fn read_text_file_guarded_with_limit(path: &std::path::Path, limit: u64) -> Result<String, String> {
+    if let Ok(meta) = std::fs::metadata(path)
+        && meta.len() > limit
+    {
+        return Err(format!(
+            "File too large to open in editor: {:.1} MB (limit {} MB)",
+            meta.len() as f64 / (1024.0 * 1024.0),
+            limit / (1024 * 1024)
+        ));
+    }
+    std::fs::read_to_string(path).map_err(|e| format!("Failed to read file: {e}"))
+}
+
+/// Guarded read at the generic [`MAX_EDITOR_FILE_SIZE`] cap (markdown/html/plugin panels).
+fn read_text_file_guarded(path: &std::path::Path) -> Result<String, String> {
+    read_text_file_guarded_with_limit(path, MAX_EDITOR_FILE_SIZE)
+}
+
+/// Read file content within a repo (shared logic), guarded at `limit`.
+pub(crate) fn read_file_impl_with_limit(
+    path: String,
+    file: String,
+    limit: u64,
+) -> Result<String, String> {
     let repo_path = PathBuf::from(&path);
     let file_path = repo_path.join(&file);
 
@@ -601,12 +650,24 @@ pub(crate) fn read_file_impl(path: String, file: String) -> Result<String, Strin
         return Err("Access denied: file is outside repository".to_string());
     }
 
-    std::fs::read_to_string(&file_path).map_err(|e| format!("Failed to read file: {e}"))
+    read_text_file_guarded_with_limit(&file_path, limit)
+}
+
+/// Read file content (shared logic) at the generic [`MAX_EDITOR_FILE_SIZE`] cap.
+pub(crate) fn read_file_impl(path: String, file: String) -> Result<String, String> {
+    read_file_impl_with_limit(path, file, MAX_EDITOR_FILE_SIZE)
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 fn read_file(path: String, file: String) -> Result<String, String> {
     read_file_impl(path, file)
+}
+
+/// Read a repo file for the CodeMirror editor, at the larger
+/// [`MAX_EDITOR_LARGE_FILE_SIZE`] cap. Same repo-containment check as `read_file`.
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn read_editor_file(repo_path: String, file: String) -> Result<String, String> {
+    read_file_impl_with_limit(repo_path, file, MAX_EDITOR_LARGE_FILE_SIZE)
 }
 
 /// Read a file by absolute path (read-only, no repo constraint).
@@ -621,7 +682,24 @@ fn read_external_file(path: String) -> Result<String, String> {
     if !p.is_absolute() {
         return Err("read_external_file requires an absolute path".to_string());
     }
-    std::fs::read_to_string(p).map_err(|e| format!("Failed to read file: {e}"))
+    read_text_file_guarded(p)
+}
+
+/// Read an absolute-path file (read-only) guarded at `limit`. Shared by the
+/// `read_editor_file_external` command and its HTTP route.
+pub(crate) fn read_external_file_with_limit(path: &str, limit: u64) -> Result<String, String> {
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return Err("read_editor_file_external requires an absolute path".to_string());
+    }
+    read_text_file_guarded_with_limit(p, limit)
+}
+
+/// Read an absolute-path file for the CodeMirror editor, at the larger
+/// [`MAX_EDITOR_LARGE_FILE_SIZE`] cap. The HTTP endpoint has its own repo-root check.
+#[cfg_attr(feature = "desktop", tauri::command)]
+fn read_editor_file_external(path: String) -> Result<String, String> {
+    read_external_file_with_limit(&path, MAX_EDITOR_LARGE_FILE_SIZE)
 }
 
 /// Write a file at an absolute path (used by the UI for files outside any registered repo,
@@ -718,6 +796,19 @@ async fn deep_link_mcp_call(
         serde_json::Value::Object(map) => map,
         _ => serde_json::Map::new(),
     };
+    // Defense-in-depth backstop: deep-link-handler.ts is the enforcement boundary
+    // (default-deny + confirm dialog), but mirror its hard BLOCKED set here so these
+    // can never run via a tuic:// URL even if the frontend allowlist regresses.
+    // config/save mutates app config; debug/invoke_js is arbitrary JS execution.
+    if matches!(
+        (tool.as_str(), action.as_str()),
+        ("config", "save") | ("debug", "invoke_js")
+    ) {
+        return Ok(serde_json::json!({
+            "error": "This command is not permitted via deep link"
+        }));
+    }
+
     args.insert("action".to_string(), serde_json::Value::String(action));
 
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], 0).into();
@@ -1030,15 +1121,39 @@ pub fn run() {
                     None
                 };
 
-                // Bind the IPC socket BEFORE upstream auto-connect so the MCP
-                // bridge is reachable as soon as possible. Upstream connections
-                // can be slow (network timeouts, OAuth) and must not delay socket
-                // availability — that causes "MCP disconnected" in Claude Code.
+                // `start_server` binds the IPC socket and then parks on the
+                // shutdown signal — it only returns on save_config/restart, so
+                // it must be the call that owns this boot thread's runtime for
+                // the process lifetime. Auto-connect therefore CANNOT run after
+                // it (that line would be dead code, leaving every upstream
+                // unconnected until the user touches the UI). Spawn auto-connect
+                // to run concurrently: it registers upstreams + spawns their
+                // async init (it does not await slow network/OAuth), so it never
+                // delays socket binding — keeping the MCP bridge reachable for
+                // Claude Code while still connecting saved upstreams at boot.
+                let auto_state = server_state.clone();
+                let settle_guard = auto_state.clone();
+                let auto_handle = tokio::spawn(async move {
+                    crate::mcp_upstream_config::auto_connect_saved_upstreams(&auto_state).await;
+                });
+                // If the auto-connect task panics it would never call
+                // mark_initial_connect_complete(), leaving every tools/list to
+                // block for the full settle timeout with no log. Watch the handle
+                // and recover the latch on failure.
+                tokio::spawn(async move {
+                    if let Err(e) = auto_handle.await {
+                        tracing::error!(
+                            source = "mcp_upstream",
+                            "auto_connect_saved_upstreams task failed: {e}"
+                        );
+                        settle_guard
+                            .mcp_upstream_registry
+                            .mark_initial_connect_complete();
+                    }
+                });
+
                 let srv_state = server_state.clone();
                 mcp_http::start_server(srv_state, true, remote_enabled, tls_config).await;
-
-                // Auto-connect saved upstream MCP servers (after socket is live)
-                crate::mcp_upstream_config::auto_connect_saved_upstreams(&server_state).await;
             });
         });
     }
@@ -1245,7 +1360,9 @@ pub fn run() {
 
             // Auto-start repo watchers for known repositories.
             // Uses raw notify::RecommendedWatcher — registration is instant on
-            // macOS (FSEvents) and Windows (ReadDirectoryChangesW), no walkdir scan.
+            // macOS (FSEvents) and Windows (ReadDirectoryChangesW). On Linux
+            // (inotify) notify emulates recursion with a per-directory walk, so
+            // registration is not free there (see issue #82 / repo_watcher.rs).
             let repos_json = config::load_repositories();
             let mut known_repo_paths: Vec<String> = Vec::new();
             if let Some(repos) = repos_json.get("repos").and_then(|r| r.as_object()) {
@@ -1352,11 +1469,14 @@ pub fn run() {
             git::get_diff_stats,
             git::get_changed_files,
             git::get_file_diff,
+            git::get_gutter_changes,
             diff_triage::run_diff_triage,
             git::get_recent_commits,
             list_markdown_files,
             read_file,
+            read_editor_file,
             read_external_file,
+            read_editor_file_external,
             write_external_file,
             github::get_github_status,
             pty::get_orchestrator_stats,
@@ -1371,6 +1491,8 @@ pub fn run() {
             pty::ack_terminal_frame,
             pty::terminal_exit_alt_screen,
             pty::terminal_scroll,
+            pty::terminal_scroll_to_offset,
+            pty::terminal_styled_rows,
             pty::terminal_scroll_to,
             pty::terminal_get_block_rows,
             pty::terminal_scroll_info,
@@ -1402,6 +1524,7 @@ pub fn run() {
             mdkb_commands::uninstall_mdkb,
             hash_password,
             agent::open_in_app,
+            agent::open_in_custom,
             agent::detect_claude_binary,
             agent::detect_agent_binary,
             agent::detect_all_agent_binaries,
@@ -1560,6 +1683,8 @@ pub fn run() {
             config::save_keybindings,
             config::load_agents_config,
             config::save_agents_config,
+            agent_hook_commands::set_agent_hook_instrumentation,
+            agent_hook_commands::get_agent_hook_state,
             agent_mcp::get_agent_mcp_status,
             agent_mcp::install_agent_mcp,
             agent_mcp::remove_agent_mcp,
@@ -1694,6 +1819,18 @@ pub fn run() {
                 tauri::RunEvent::Ready => {
                     if let Some(window) = app_handle.get_webview_window("main") {
                         ensure_window_visible(&window);
+                    }
+                }
+                // Dock-icon click (applicationShouldHandleReopen). macOS suppresses
+                // the default un-minimize when ANY window is visible — and a detached
+                // panel counts as visible, so the minimized main window would stay
+                // hidden. Explicitly restore main on every reopen.
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Reopen { .. } => {
+                    if let Some(window) = app_handle.get_webview_window("main") {
+                        let _ = window.unminimize();
+                        let _ = window.show();
+                        let _ = window.set_focus();
                     }
                 }
                 // Forward file-open events (macOS file associations) to the frontend
@@ -1899,6 +2036,29 @@ pub async fn run_headless(port: u16) -> anyhow::Result<()> {
         "Starting tuic-remote"
     );
 
+    // Auto-connect saved upstream MCP servers. Spawned (not awaited) for the
+    // same reason as the desktop boot path: `start_server` below parks on the
+    // shutdown signal and never returns, so any auto-connect after it would be
+    // dead code. Registration is fast (async init is spawned), so it does not
+    // delay socket binding.
+    let auto_state = state.clone();
+    let settle_guard = auto_state.clone();
+    let auto_handle = tokio::spawn(async move {
+        crate::mcp_upstream_config::auto_connect_saved_upstreams(&auto_state).await;
+    });
+    // Recover the settle latch if the auto-connect task panics (see desktop path).
+    tokio::spawn(async move {
+        if let Err(e) = auto_handle.await {
+            tracing::error!(
+                source = "mcp_upstream",
+                "auto_connect_saved_upstreams task failed: {e}"
+            );
+            settle_guard
+                .mcp_upstream_registry
+                .mark_initial_connect_complete();
+        }
+    });
+
     // Run server until SIGINT/SIGTERM, then shut down gracefully.
     tokio::select! {
         tcp_bound = mcp_http::start_server(state.clone(), true, true, tls_config) => {
@@ -2048,6 +2208,68 @@ mod tests {
         assert_eq!(
             build_connect_url("http", "fe80::1", 9443, "tok"),
             "http://[fe80::1]:9443/?token=tok"
+        );
+    }
+
+    #[test]
+    fn read_text_file_guarded_reads_small_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("small.txt");
+        std::fs::write(&f, "hello world").unwrap();
+        assert_eq!(read_text_file_guarded(&f).unwrap(), "hello world");
+    }
+
+    #[test]
+    fn read_text_file_guarded_refuses_oversized_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("huge.txt");
+        // One byte over the limit must be refused BEFORE reading, with a stable
+        // "too large" phrase the editor frontend matches.
+        std::fs::write(&f, vec![b'a'; (MAX_EDITOR_FILE_SIZE + 1) as usize]).unwrap();
+        let err = read_text_file_guarded(&f).unwrap_err();
+        assert!(
+            err.to_lowercase().contains("too large"),
+            "expected a 'too large' message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn read_text_file_guarded_allows_file_at_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("atlimit.bin");
+        // Exactly at the limit (not over) is allowed; content is valid UTF-8.
+        std::fs::write(&f, vec![b'a'; MAX_EDITOR_FILE_SIZE as usize]).unwrap();
+        assert!(read_text_file_guarded(&f).is_ok());
+    }
+
+    #[test]
+    fn read_text_file_guarded_with_limit_respects_custom_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("sized.txt");
+        std::fs::write(&f, vec![b'a'; 50]).unwrap();
+        // Under a generous limit → read; over a tight limit → refused "too large".
+        assert!(read_text_file_guarded_with_limit(&f, 100).is_ok());
+        let err = read_text_file_guarded_with_limit(&f, 10).unwrap_err();
+        assert!(
+            err.to_lowercase().contains("too large"),
+            "expected a 'too large' message, got: {err}"
+        );
+    }
+
+    #[test]
+    fn editor_large_cap_exceeds_generic_cap() {
+        // The editor reader must allow strictly larger files than the generic one,
+        // otherwise the dedicated command is pointless.
+        assert!(MAX_EDITOR_LARGE_FILE_SIZE > MAX_EDITOR_FILE_SIZE);
+    }
+
+    #[test]
+    fn read_editor_file_external_requires_absolute_path() {
+        let err = read_external_file_with_limit("relative/path.txt", MAX_EDITOR_LARGE_FILE_SIZE)
+            .unwrap_err();
+        assert!(
+            err.contains("absolute path"),
+            "expected an absolute-path error, got: {err}"
         );
     }
 

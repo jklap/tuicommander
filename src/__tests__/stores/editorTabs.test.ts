@@ -163,6 +163,33 @@ describe("editorTabsStore", () => {
 		});
 	});
 
+	describe("setCursor()", () => {
+		it("records cursor line and column on the tab", () => {
+			testInScope(() => {
+				const id = editorTabsStore.add("/repo", "file.ts");
+				editorTabsStore.setCursor(id, 42, 7);
+				expect(editorTabsStore.get(id)?.cursorLine).toBe(42);
+				expect(editorTabsStore.get(id)?.cursorCol).toBe(7);
+			});
+		});
+
+		it("getActive() reflects the recorded cursor", () => {
+			testInScope(() => {
+				const id = editorTabsStore.add("/repo", "file.ts");
+				editorTabsStore.setCursor(id, 3, 1);
+				const active = editorTabsStore.getActive();
+				expect(active?.cursorLine).toBe(3);
+				expect(active?.cursorCol).toBe(1);
+			});
+		});
+
+		it("ignores unknown tab id", () => {
+			testInScope(() => {
+				expect(() => editorTabsStore.setCursor("nonexistent", 1, 1)).not.toThrow();
+			});
+		});
+	});
+
 	describe("worktree fsRoot support", () => {
 		const REPO = "/Users/dev/myrepo";
 		const WORKTREE = "/Users/dev/myrepo/.claude/worktrees/feat-x";

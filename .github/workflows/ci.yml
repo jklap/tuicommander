@@ -33,14 +33,16 @@ jobs:
         with:
           mode: firewall-free
 
+      - uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
 
-      - name: Scan npm install through Socket Firewall
-        run: sfw npm ci
+      - name: Scan pnpm install through Socket Firewall
+        run: sfw pnpm install --frozen-lockfile
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -53,20 +55,22 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: pnpm exec tsc --noEmit
 
       - name: Tests
-        run: npx vitest run --reporter=verbose
+        run: pnpm exec vitest run --reporter=verbose
 
   # Always runs: clippy + tests on Linux (fastest, catches most issues)
   rust:
@@ -169,8 +173,8 @@ jobs:
   # Push to main only: verify build on macOS and Windows.
   # GPU notes:
   # - macOS: whisper-rs compiled with Metal (target-specific dep) — always GPU.
-  # - Windows: whisper-rs compiled with Vulkan (target-specific dep).
-  #   Vulkan SDK installed via jakoch/install-vulkan-sdk-action.
+  # - Windows: whisper-rs is CPU-only. The Vulkan backend's vulkan-shaders-gen
+  #   sub-build is chronically broken on the runner, so dictation runs on CPU.
   #   CUDA support is optional (add Jimver/cuda-toolkit + --features cuda if needed).
   rust-cross:
     name: Rust (${{ matrix.label }})
@@ -190,21 +194,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install Vulkan SDK (Windows)
-        if: matrix.platform == 'windows-latest'
-        # Pinned to v1.5.4 (Node20). v1.5.5 moved to Node24, which crashes
-        # instantly with no output on windows-latest runners mid-migration to
-        # windows-2025 — the source of intermittent "Install Vulkan SDK" failures.
-        uses: jakoch/install-vulkan-sdk-action@655818d26aa39d663e587b5620dd26519358981f # v1.5.4
-        with:
-          vulkan_version: 1.4.309.0
-          cache: true
-          stripdown: true
-
-      # Windows MAX_PATH workaround: whisper.cpp's vulkan-shaders-gen sub-build
-      # creates deeply nested TryCompile paths that exceed 260 chars. MSBuild's
-      # FileTracker uses legacy Win32 APIs that ignore LongPathsEnabled, so the
-      # only fix is to keep the target dir short.
+      # Keep the Windows build/target dir short (C:/t): whisper.cpp's nested
+      # CMake TryCompile paths can exceed the 260-char MAX_PATH that MSBuild's
+      # FileTracker enforces (it ignores LongPathsEnabled).
       - name: Short CARGO_TARGET_DIR (Windows)
         if: matrix.platform == 'windows-latest'
         shell: bash
@@ -226,6 +218,22 @@ jobs:
           # rust-cache's `workspaces` input joins target with root, so it can't point at
           # an absolute path — use `cache-directories` instead.
           cache-directories: ${{ matrix.platform == 'windows-latest' && 'C:/t' || '' }}
+
+      # A restored Windows build cache (C:/t) may hold a CMakeCache.txt from an
+      # older VS generator (e.g. VS 17 2022). When the runner image moves to a
+      # newer VS (18 2026), CMake aborts: "generator does not match the generator
+      # used previously". Drop the stale CMake config so whisper-rs-sys
+      # reconfigures against the current toolchain (sccache still caches the
+      # actual compiles, so the rebuild cost is minimal).
+      - name: Clear stale CMake cache (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (Test-Path C:/t) {
+            Get-ChildItem -Path C:/t -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -eq 'CMakeCache.txt' -or $_.Name -eq 'CMakeFiles' } |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          }
 
       - name: Create dist stub for include_dir
         shell: bash

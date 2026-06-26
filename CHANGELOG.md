@@ -6,17 +6,93 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [1.3.1] - 2026-06-06
+## [1.5.0] - 2026-06-25
 
 ### Added
-- **Inline review comments on markdown ("tweaks")** — Select any passage in a rendered markdown file and attach a review comment from a floating button + inline popover. Comments are highlighted in place (hover to read, click to edit/delete) and stored *inside* the `.md` source as HTML-comment markers that are invisible to standard renderers but readable by humans and LLMs — the first comment prepends a convention header so an AI agent can apply the feedback and remove the markers. Highlights are wrapped in the DOM after parsing, so selections that straddle inline formatting render intact. Shared by the Markdown panel and the PR detail popover.
-- **Cmd/Ctrl+hover link affordance in the code editor** — Holding Cmd (macOS) / Ctrl underlines the symbol under the cursor as a Cmd+Click go-to-definition affordance; the underline tracks document edits and clears on release.
-- **Cycle All Tab Types setting** (#58) — Optional setting (Appearance, default off) that lets next/prev-tab shortcuts cycle file/diff/markdown/editor tabs in addition to terminals, ordered like the tab bar.
-- **Right-click menu on terminal links** (#57) — Right-clicking a detected file path or URL in the terminal offers **Open** and **Copy link** (copy the resolved target without opening). Single left-click still opens instantly.
-- **JetBrains IDE family in the IDE launcher** (#70) — IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, and Fleet are now selectable as the default IDE and in the "Open in…" launcher (new "JetBrains" category). They launch via their CLI launcher with `--line`/`--column` goto and fall back to `open -a` on macOS when the Toolbox shell scripts aren't on PATH. Official brand icons.
+- **Native agent hooks for status (Claude, Gemini, Grok, Codex, OpenCode)** — Opt in per agent in Settings → Agents to drive busy/idle/waiting state from the agent's own hook system instead of output heuristics. Enabling installs small `OSC 7770`-emitting hooks into the agent's native settings format (Claude/Gemini/Codex JSON settings-hooks, Grok own-file, OpenCode plugin); disabling removes only TUIC's entries (sentinel-owned, so your own/wiz hooks are never touched). Instrumented agents report question/approval prompts precisely and suppress heuristic question-detection (the silence-idle crash backstop stays on). macOS/Linux only; Windows keeps heuristics. Default off — byte-for-byte current behavior.
+- **Inline git blame in the code editor** — A dim italic "author · relative time · summary" annotation at the end of the editor's active line (GitLens-style), following the cursor over already-loaded blame data. Uncommitted lines show "You · Uncommitted changes". On by default; toggle via the `inline_blame_enabled` config field. External (non-repo) files show no annotation.
+- **One-click delete-merged branch cleanup** — The Git Panel's Branches tab shows a broom button (with a count badge) that bulk-deletes local branches already merged into main, behind a confirm dialog listing the targets. Uses safe `git branch -d`, so a stale merged flag can never cause data loss.
+- **"Active only" repo filter** — A filter icon in the toolbar (next to the sidebar toggle) hides repositories that have no open terminals. An accent banner at the top of the sidebar shows the shown/total count and offers "Show all". Session-only.
+- **Context-menu shortcut keys** — While a context menu is open, pressing an item's shortcut chord (e.g. the branch menu's `M`/`R`/`d`) now fires that item's action directly instead of just closing the menu.
+- **Two new built-in themes** — deep-black and minimal-kiwi.
+- **Cmd/Ctrl+R reloads a web/preview tab** — When a web or HTML-preview tab is active, the Run shortcut reloads it instead of opening the Run Command dialog.
+- **User-prompt markers on the terminal scrollbar** — Green ticks on the scrollbar mark the lines where you entered a command, so you can jump back to an earlier prompt at a glance.
+- **Large files up to 250 MB in the code editor** — A dedicated read path raises the editor's file-size ceiling to 250 MB; files beyond the cap are refused up front with a notice instead of freezing the UI while loading.
 
 ### Changed
-- **Error Log level filter is now a severity threshold** (#69) — Selecting a level shows that level and everything more severe (e.g. Warn shows Warn + Error), with a tooltip on each tab describing what it includes.
+- **Branch merge feedback** — Merging a branch from the Branches tab now surfaces the result explicitly: a conflict error toast on failure, an "Already up to date" toast on a no-op, and a success toast with a one-click "Delete branch" action for the now-merged branch.
+- **Readable theme contrast** — Raised muted / bright-black tones across catppuccin-mocha, darksun, delicate-one, nord, solarized-dark, tokyo-night and vscode-light so muted text clears a readable floor. The Appearance terminal preview now picks powerline segment text color by WCAG contrast against the fill instead of the literal ANSI token.
+- **Unified PTY command injection** — The Notes "Send to Terminal" action (attached and detached), the mobile command/ideas widgets, agent auto-retry, the git terminal fallback, the CI auto-heal conflict prompt, and the terminal `writeln` API all route through the canonical `sendCommand` helper, so the Enter keypress registers correctly even for Ink-based agents in raw mode.
+- **Responsive typing under heavy load (macOS)** — The PTY reader, frame ticker, and keystroke-write threads now run at `USER_INTERACTIVE` QoS, so typing and echo stay fluid while a saturating `cargo build`/compile runs in another pane. Complements the existing renice of PTY child processes.
+
+### Security
+- **Deep-link command gating** — `tuic://cmd/{tool}/{action}` deep links now default-deny: only read-only/notify actions run silently, while every other (destructive or unknown) action requires a confirmation dialog — closing previously un-gated paths such as `agent/send` and `session/pause`. A Rust-side backstop rejects `config/save` and `debug/invoke_js` regardless of the frontend. The `session pause`/`resume` MCP actions are now restricted to loopback clients like the other destructive session actions, and remote (TCP) clients get the standard 10 MB cap on the editor file-read routes instead of the 250 MB local cap.
+
+### Fixed
+- **No false completion sounds on sleep/wake** — Busy→idle transitions in the grace window after a system wake, and shell-integrated terminals that went busy without a command actually running (OSC 133), no longer fire spurious completion notifications.
+- **Terminal stability** — Fixed a stale-read crash when a PTY auto-closes mid-frame, a document-listener leak when a terminal unmounts while subscribing, a layout-forcing read on every scrollbar drag, and a ghost-terminal resurrection from a late OSC 133 flush after removal.
+- **Terminal interaction fixes** — Cmd+C no longer copies duplicated text and now unwraps soft-wrapped selections; a stale "awaiting input" badge is cleared when an agent exits back to the shell; and smooth-scroll self-heals canvas drift, snapping to the line when a scroll gesture ends.
+- **Git Panel header alignment** — The Branches/Changes/Log/Stashes tab strip no longer reserves a horizontal scrollbar that misaligned the detach/close icons and left dead space; overflowing tabs scroll via vertical wheel/trackpad, and the close button is now an SVG icon matching the detach/reattach controls.
+- **macOS dock-icon reopen** — Clicking the dock icon while the main window is minimized now restores it, even when a detached panel window is open (which previously suppressed the default un-minimize).
+- **Resilient git operations** — Stale `.git/index.lock` files left by crashed processes are reclaimed on size+age thresholds; branch-switch failures show the full git output and offer Retry on recoverable lock contention; concurrent confirmation dialogs queue instead of being silently dropped; rapid branch selection is serialized so it can't duplicate terminals.
+- **PR check status accuracy** — The PR detail popover no longer lists duplicate checks when a workflow re-runs (deduped to the newest run per name, matching the summary counts); `ACTION_REQUIRED` checks now count as failed so a PR blocked by a gate no longer renders as all-green; and the detail query fetches up to 100 checks to stay consistent with the summary tally.
+- **MCP agent grid streaming** — Agent sessions spawned over MCP now register their grid watch channel and a terminal alias, so `format=grid` WebSocket streaming works.
+- **MCP OAuth refresh tokens** — Authorization requests now include `offline_access`, so upstreams issue a refresh token instead of silently dropping to a re-auth prompt after the access token expires.
+- **Binary terminal output** — The UTF-8 read buffer decodes iteratively (no reader-thread stack overflow on large binary reads), and absolute scrollback line reads return the correct rows.
+- **AI Chat** — A lagging event stream no longer wedges the chat spinner; completion and error events still arrive.
+
+## [1.4.2] - 2026-06-13
+
+### Added
+- **Nested terminal tabs** (#85) — Optional setting (Appearance ▸ Tabs, default off) that shows a branch's open terminals as a collapsible list under its sidebar row when the branch has more than one terminal, each with a status dot; clicking a sub-item switches to that terminal.
+
+### Changed
+- **Consistent HTML-preview search** — Find-in-page in the Preview tab's HTML view now uses the same SearchBar pill as the editor, diff, terminal and markdown views (with case/regex/whole-word toggles and a match counter), instead of a bespoke in-iframe overlay. The parent drives the iframe over a postMessage bridge; plugin panels keep their own overlay search.
+
+### Fixed
+- **Markdown search scrollbar ticks** — Find-in-page in the markdown view now shows the same match ticks on the scrollbar as the diff and editor views.
+- **Approve button on your own PR** — The PR Approve button no longer briefly appears on your own pull requests before your GitHub identity has loaded (which GitHub rejects with a 422).
+- **Branch indicator after fetch/rebase** — A momentarily-unreadable `.git/HEAD` (during a fetch, rebase or gc) no longer suppresses the next real branch-change refresh in the sidebar.
+- **MCP upstream reconnection** — Fixed a rare crash when an OAuth upstream finished authenticating while being disconnected; upstreams added at runtime now reliably appear in the tool list, and a failed auto-connect no longer stalls the first tool listing.
+- **Audio output device errors** are now logged instead of silently showing an empty device list.
+- **Accessibility** — Terminal tab lists in the sidebar expose correct ARIA roles to screen readers.
+
+## [1.4.0] - 2026-06-09
+
+### Added
+- **Native-feel smooth scrolling** — The terminal now scrolls with momentum and a draggable scrollbar, with selection highlight preserved across the animation.
+- **Editor change-overview ruler** — VS Code-style colored ticks on the editor's scrollbar mark added/modified/deleted lines, fed by the same git-gutter data (no second diff parse).
+- **Extended thinking in AI Chat** — Claude Opus 4.7+ reasoning is surfaced live in the chat panel.
+- **Custom "Open in…" launchers** (#71) — Define your own editor/tool launch commands; iTerm2 and Tower are added as built-in launchers.
+- **Event-driven smart prompts** — Repo watchers fire smart prompts on PR-pushed / PR-opened events behind an idle gate, instead of polling.
+- **Markdown panel** — A dedicated markdown panel with refreshed keyboard shortcuts.
+- **Sidebar "Create Branch"** — A Create Branch action with a condensed "Branch ›" submenu.
+- **Faster terminal navigation** — Keybindings to return to the last terminal and jump to the next terminal awaiting input; the shortcuts panel now lists every canonical action.
+- **Inline review comments on markdown ("tweaks")** — Attach review comments to any passage in a rendered markdown file; they're highlighted in place and stored inside the `.md` source as invisible HTML-comment markers that AI agents can read and apply.
+- **Cmd/Ctrl+hover go-to-definition affordance** — Holding Cmd (macOS) / Ctrl underlines the symbol under the cursor in the code editor as a Cmd+Click affordance.
+- **Cycle All Tab Types** (#58) — Optional setting (Appearance, default off) to let next/prev-tab cycle file/diff/markdown/editor tabs alongside terminals.
+- **Right-click menu on terminal links** (#57) — Right-clicking a detected file path or URL offers Open and Copy link; single left-click still opens instantly.
+- **JetBrains IDE family in the launcher** (#70) — IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio and Fleet are selectable as the default IDE and in "Open in…", launched with `--line`/`--column` goto.
+
+### Changed
+- **In-process git reads (gix)** — Branch detail, commit log/graph, ahead/behind, worktree paths, status counts, diff stats and blame now run through an in-process `gix` backend behind a GitReads port with a coalescing TTL cache, cutting git subprocesses and file-descriptor pressure. Narrow edge cases (sparse-checkout/submodule status, staged/commit diffs, renamed-file blame) fall back to the git CLI inside the adapter.
+- **Diff & editor performance** (#020) — The diff parser moved to Rust; multi-file diffs and PR views are virtualized (only on-screen sections mount) and the editor's disk poll stat-gates before re-reading, keeping large diffs and long sessions responsive.
+- **Commit graph** — Lane starts are marked and per-frame canvas reallocation was removed.
+- **Error Log severity threshold** (#69) — Selecting a level shows that level and everything more severe (e.g. Warn shows Warn + Error), with a tooltip describing the range.
+
+### Fixed
+- **Readable terminal text on light themes** (#80) — The default foreground read an undefined CSS variable and fell back to gray; it now reads the theme's foreground color.
+- **Consistent New Tab** (#81) — Cmd+T, the command palette, and File ▸ New Tab now route through the same handler.
+- **macOS press-and-hold** (#79) — The accent-picker popup no longer hijacks key-repeat in the terminal.
+- **Terminal interaction** — Right-click link menu works under mouse reporting, Cmd/Ctrl+C copies, and menu-bar Copy/Paste route to the focused terminal.
+- **Freeze detection** — The freeze detector no longer reports paint jank or system sleep as UI freezes.
+- **File browser** — Cross-repo copy/paste and keyboard focus fixed.
+- **Shell & CLI** — The `tuic` sidecar resolves next to the executable (closes #52); zsh `compinit` runs correctly when the ZDOTDIR trick is skipped.
+- **Worktrees** — Worktree-add failures are classified and fail loudly instead of creating phantom entries.
+
+### Community
+- [@jajugoguma](https://github.com/jajugoguma) — fixed terminal text being unreadable on light themes (#80)
+- [@jklap](https://github.com/jklap) — added release-version checking to the macOS `install.sh` (#75)
 
 ## [1.2.11-nightly] - 2026-06-02
 
@@ -907,7 +983,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Plugin panel CSS theme injection** — CSS custom properties (`--bg-*`, `--fg-*`, `--border*`, etc.) are automatically injected into plugin panel iframes, so plugins inherit the app theme without manual color copying
 - **Auto-delete branch on PR close** — Per-repo setting (off/ask/auto) to automatically delete local branches when their GitHub PR is merged or closed. Handles worktree cleanup, dirty-state escalation, and main-branch protection
 - **Worktree system overhaul** — Configurable storage strategies (sibling, app dir, inside-repo), three creation flows (dialog with base ref, instant, right-click quick-clone), hybrid branch naming (`{source}--{random}`), merge & archive workflow, external worktree detection via `.git/worktrees/` monitoring, per-repo worktree settings with global defaults
-- **Centralized error log panel** — Ring-buffer logger captures all errors, warnings, and info from app, plugins, git, network, and terminal subsystems. Filterable overlay panel with level tabs, source dropdown, and text search. Status bar badge shows unseen error count. Keyboard shortcut: `Cmd+Shift+E` ([solution doc](docs/solutions/integration-issues/centralized-error-logging.md))
+- **Centralized error log panel** — Ring-buffer logger captures all errors, warnings, and info from app, plugins, git, network, and terminal subsystems. Filterable overlay panel with level tabs, source dropdown, and text search. Status bar badge shows unseen error count. Keyboard shortcut: `Cmd+Shift+E`
 - **Plugin log forwarding** — Plugin `host.log()` calls now appear in the centralized error log panel alongside app-wide logs
 - **Agent-scoped plugins** — `agentTypes` manifest field restricts plugin output watchers and structured event handlers to terminals running specific agents (e.g. `["claude"]`). Universal plugins (empty array) continue to receive all events
 - **File browser → Markdown viewer routing** — `.md`/`.mdx` files opened from the file browser now open in the Markdown panel instead of the code editor

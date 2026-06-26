@@ -12,6 +12,7 @@ const { mockPollRepo } = vi.hoisted(() => ({
 
 vi.mock("../../stores/github", () => ({
 	githubStore: {
+		state: { viewerLogin: null },
 		pollRepo: mockPollRepo,
 		getCheckSummary: vi.fn(() => null),
 		getCheckDetails: vi.fn(() => []),
@@ -53,6 +54,7 @@ const mergeablePr: BranchPrStatus = {
 	merge_state_label: null,
 	review_state_label: null,
 	review_decision: "APPROVED",
+	viewer_did_approve: false,
 	mergeable: "MERGEABLE",
 	merge_state_status: "CLEAN",
 	merge_commit_allowed: true,

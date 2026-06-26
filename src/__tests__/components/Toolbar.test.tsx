@@ -5,7 +5,12 @@ import { getModifierSymbol } from "../../platform";
 // Mock IdeLauncher to avoid Tauri invoke calls from that component
 vi.mock("../../components/IdeLauncher", () => ({
 	IdeLauncher: (props: Record<string, unknown>) => (
-		<div data-testid="ide-launcher" data-repo-path={(props.repoPath as string) || ""} />
+		<div
+			data-testid="ide-launcher"
+			data-repo-path={(props.repoPath as string) || ""}
+			data-cursor-line={props.cursorLine === undefined ? "" : String(props.cursorLine)}
+			data-cursor-col={props.cursorCol === undefined ? "" : String(props.cursorCol)}
+		/>
 	),
 }));
 
@@ -39,6 +44,7 @@ vi.mock("@tauri-apps/plugin-opener", () => ({
 
 import { Toolbar } from "../../components/Toolbar/Toolbar";
 import { activityStore } from "../../stores/activityStore";
+import { editorTabsStore } from "../../stores/editorTabs";
 import { prNotificationsStore } from "../../stores/prNotifications";
 import { repositoriesStore } from "../../stores/repositories";
 import { uiStore } from "../../stores/ui";
@@ -53,6 +59,7 @@ describe("Toolbar", () => {
 		uiStore.setSidebarVisible(true);
 		prNotificationsStore.clearAll();
 		activityStore.clearAll();
+		editorTabsStore.clearAll();
 	});
 
 	afterEach(() => {
@@ -246,6 +253,20 @@ describe("Toolbar", () => {
 		const { container } = render(() => <Toolbar repoPath={repoPath} />);
 		const launcher = container.querySelector("[data-testid='ide-launcher']")!;
 		expect(launcher.getAttribute("data-repo-path")).toBe(repoPath);
+	});
+
+	it("IdeLauncher receives the active editor tab's cursor position", () => {
+		const repoPath = "/test/repo";
+		repositoriesStore.add({ path: repoPath, displayName: "Test Repo" });
+		repositoriesStore.setActive(repoPath);
+		const id = editorTabsStore.add(repoPath, "src/main.ts");
+		editorTabsStore.setActive(id);
+		editorTabsStore.setCursor(id, 42, 7);
+
+		const { container } = render(() => <Toolbar repoPath={repoPath} />);
+		const launcher = container.querySelector("[data-testid='ide-launcher']")!;
+		expect(launcher.getAttribute("data-cursor-line")).toBe("42");
+		expect(launcher.getAttribute("data-cursor-col")).toBe("7");
 	});
 
 	// -------------------------------------------------------------------------

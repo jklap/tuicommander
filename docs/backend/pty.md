@@ -77,7 +77,7 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 6. Write to `OutputRingBuffer` (64KB circular buffer for MCP access)
 7. Serialize parsed events once with `serde_json::to_value` — reused for both Tauri IPC and event bus (avoids double serialization)
 8. Broadcast to WebSocket clients (if any connected)
-9. Emit Tauri event `pty-output` with `{session_id, data}`
+9. Emit Tauri event `pty-output` with `{session_id, data}` — **throttled to ~10/s** (≥100ms between emits). The desktop canvas renders from grid frames and discards this text (it only drives the frontend activity dot / `lastDataAt`); emitting per-chunk flooded the WebView main thread under output storms (`yes`), starving keydown so Ctrl+C never reached `write_pty`. Dropping intermediate chunks is safe — only a periodic "output happened" pulse is needed.
 
 **Cursor-up clamping** — The `clamp_cursor_up()` function limits `ESC[nA` (cursor up) and `ESC[nF` (cursor previous line) sequences to prevent them from moving the cursor beyond the visible viewport. This replaced the previous DiffRenderer approach for simpler escape sequence handling.
 
@@ -220,6 +220,29 @@ Shells that emit OSC 7 (`\x1b]7;file://hostname/path\x07`) report the current wo
 | `TERM_PROGRAM_VERSION` | `3.0.0` | Passes Claude Code's version gate (rejects `^[0-2]\.`) |
 
 Additionally, `CLAUDECODE` is removed from the environment (`env_remove`) to prevent nested-session detection when TUICommander itself runs inside a Claude Code session.
+
+## Child Process Priority
+
+Each spawned shell is given a lower scheduling priority right after spawn
+(`lower_pty_child_priority()`), so heavy workloads run inside a pane (`cargo
+build`, bundlers, test runners) yield CPU to TUIC's own render loop and the rest
+of the system. A child inherits the parent's priority **at fork time**, so every
+process the shell later spawns is deprioritized too. The effect only bites under
+contention — an idle machine still runs the build at full speed.
+
+| Platform | Mechanism | Default |
+|----------|-----------|---------|
+| macOS / Linux | `setpriority(PRIO_PROCESS, …)` | nice **+10**, override via `TUIC_PTY_NICE` |
+| Windows | `SetPriorityClass(BELOW_NORMAL_PRIORITY_CLASS)` | fixed |
+
+Validated on an M4 Max under 14-core saturation: TUIC's UI goes from frozen
+(nice 0) to responsive (nice +10). `BELOW_NORMAL` (not `IDLE_PRIORITY_CLASS`) is
+the Windows analog — `IDLE` only runs when the whole system is idle, the
+equivalent of macOS QoS-background, which would make builds crawl.
+
+### macOS Thread QoS Elevation
+
+On macOS, the PTY **reader thread**, the **frame ticker**, and the **keystroke-write thread** are all raised to `QOS_CLASS_USER_INTERACTIVE` via `pthread_set_qos_class_self_np` (`raise_thread_for_interactive_io()` in `src-tauri/src/pty.rs`, `thread_qos` module). This is complementary to the child-process renice: on Apple Silicon the scheduler is QoS-band driven — `nice` only reorders threads within a band. Without this elevation, TUIC's interactive-path threads ran in the default QoS band alongside compiler worker threads, causing input latency under heavy builds. Raising to `USER_INTERACTIVE` puts the interactive path in a higher scheduler band. macOS-only; a no-op on Linux/Windows.
 
 ## Session Conflict Flag File
 

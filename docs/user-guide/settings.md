@@ -7,7 +7,8 @@ Open settings with `Cmd+,`. Settings are organized into tabs.
 | Setting | Description |
 |---------|-------------|
 | **Language** | UI language |
-| **Default IDE** | IDE for "Open in..." actions. Only installed apps are offered, grouped by category: Code Editors (VS Code, Cursor, Zed, Windsurf, Neovim, Xcode, `$EDITOR`), JetBrains (IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet), Terminals (Ghostty, WezTerm, Alacritty, Kitty, Warp), Git Tools (Sourcetree, GitHub Desktop, Fork, GitKraken, Sublime Merge), System (Terminal, Finder) |
+| **Default IDE** | IDE for "Open in..." actions. Only installed apps are offered, grouped by category: Code Editors (VS Code, Cursor, Zed, Windsurf, Neovim, Xcode, `$EDITOR`), JetBrains (IntelliJ IDEA, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet), Terminals (Ghostty, WezTerm, Alacritty, Kitty, Warp, iTerm2), Git Tools (Sourcetree, GitHub Desktop, Fork, GitKraken, Sublime Merge, Tower), System (Terminal, Finder) |
+| **Custom Launchers** | Define your own tools for the "Open in" menu. Each launcher has a name, an executable (bare name resolved on `PATH`, or absolute path), and arguments (one per line). Arguments may use placeholders, expanded at launch: `{path}`/`{file}` (focused file, else repo root), `{fileDir}` (directory of the focused file), `{repo}` (repo/worktree root), `{cwd}` (focused terminal's working directory), `{home}` (your home directory), `{line}`/`{column}` (1-based editor cursor position). Args are passed verbatim (no shell parsing), so paths with spaces are safe. |
 | **Shell** | Custom shell path (e.g., `/bin/zsh`, `/usr/local/bin/fish`). Leave empty for system default. |
 | **Confirm before quitting** | Show dialog when closing app with active terminals |
 | **Confirm before closing tab** | Ask before closing terminal tab |
@@ -27,6 +28,7 @@ Open settings with `Cmd+,`. Settings are organized into tabs.
 | **Default font size** | — | — | 8–32px slider. Applies to new terminals; existing terminals keep their zoom level. |
 | **Split tab mode** | — | — | Separate or unified tab appearance |
 | **Cycle All Tab Types** | — | Off | When on, next/prev-tab shortcuts also cycle file/diff/markdown/editor tabs (ordered like the tab bar). Off cycles terminals only. |
+| **Nested Terminal Tabs** | — | Off | When on, a branch with more than one terminal shows a collapsible list of its terminals under its sidebar row, each with a status dot. Off by default. |
 | **Max tab name length** | — | — | 10–60 slider |
 | **Repository groups** | — | — | Create, rename, delete, and color-code groups |
 | **Reset panel sizes** | — | — | Restore sidebar and panel widths to defaults |
@@ -42,6 +44,7 @@ Each supported agent has an expandable row showing detection status, version, an
 | **Agent Detection** | Auto-detects running agents from terminal output patterns. Shows "Available" or "Not found" for each agent. |
 | **Run Configurations** | Custom launch configs (binary path, args, model, prompt) per agent. Add, set default, edit, or delete configurations (Edit / Delete live under the `···` menu on each row). A config named **"review"** enables the Review button in the PR Detail Popover — its args are interpolated with `{pr_number}`, `{branch}`, `{base_branch}`, `{repo}`, `{pr_url}`. The agent's **default run config** also drives resume: launching / resuming the agent swaps the agent's default binary (e.g. `claude`) for `command` and appends `args` after the resume flag. |
 | **MCP Integration** | Install/remove TUICommander as MCP server for supported agents. Shows install status with a dot indicator. |
+| **Native agent hooks for status** | (Claude, Gemini, Codex, Grok, OpenCode) Toggle under each supported agent's expanded row. When enabled, TUIC writes lifecycle hooks into the agent's settings file / plugin directory so that busy/idle/awaiting state is driven directly by the agent's own hook events (OSC 7770) rather than inferred from terminal output. An install-state badge next to the toggle shows **"Hooks installed"** (current), **"Hooks: re-enable"** (outdated — TUIC version changed), or nothing (not installed). The effect takes place on the agent's **next launch**. See [AI Agents — Native Hook Instrumentation](ai-agents.md#native-hook-instrumentation) for details. |
 | **Claude Usage Dashboard** | (Claude Code only) Toggle under Features when the Claude row is expanded. Enables rate limit monitoring, session analytics, token usage charts, activity heatmap, and per-project breakdowns. Usage data appears in the status bar agent badge and in a dedicated dashboard tab. |
 | **Agent Model Overrides** | Per-task-phase model routing for the AI Agent loop. Four phases: `plan`, `search`, `read`, `write`. Each phase can use a different model (e.g. a cheaper model for search, a stronger model for write). Configure in Settings > AI Chat. |
 | **Unsafe Mode** | When enabled, the agent skips all approval prompts and operates without sandbox restrictions (`TrustLevel::Unrestricted`). Toggle via the lock icon in the AI Chat panel header. A confirmation dialog warns before activating. The header turns red to indicate unrestricted operation. |
@@ -109,9 +112,9 @@ Enable HTTP/WebSocket access from other devices on your network. See [Remote Acc
 
 See [Voice Dictation](dictation.md) for full details.
 
-## Keyboard Shortcuts Tab
+## Keyboard Shortcuts (Help panel)
 
-Browse and rebind all app actions:
+The keybinding UI lives in the **Help panel** (Help > Keyboard Shortcuts), not the Settings panel. Browse and rebind all app actions there:
 
 - Every registered action is listed with its current keybinding
 - Click any action row and press a new key combination to rebind it
@@ -157,11 +160,12 @@ User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`) are intent
 ## Notification Settings
 
 - **Enable Audio Notifications** — Master toggle
-- **Volume** — 0-100%
+- **Volume** — 0-100% (applied natively by the Rust playback path). Releasing the slider plays a short preview at the new level.
+- **Audio Output Device** — defaults to the system output. Click **Choose output device…** to enumerate available outputs and pick a specific one. Enumeration is deferred until you click, because on macOS the audio device scan triggers the microphone-permission prompt — notifications never record audio.
 - **Per-event toggles:**
   - Agent asks question
   - Error occurred
   - Task completed
   - Warning
-- **Test buttons** — Test each sound individually
+- **Test buttons** — Test each sound individually. The Test button bypasses the anti-spam rate limit, so rapid A/B volume comparisons always play.
 - **Reset to Defaults** — Restore default notification settings

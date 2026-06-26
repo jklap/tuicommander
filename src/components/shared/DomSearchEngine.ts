@@ -18,6 +18,23 @@ export interface SearchEngine {
 /** Maximum number of matches to highlight (performance cap) */
 const MAX_HIGHLIGHTS = 1000;
 
+/**
+ * Compile a search term + options into a global RegExp, or `null` if the term is
+ * empty or an invalid regex. Shared by DomSearchEngine and the HtmlPreviewTab
+ * iframe search bridge so literal-escaping, whole-word, case and regex semantics
+ * are identical app-wide.
+ */
+export function buildSearchPattern(term: string, opts: SearchOptions): RegExp | null {
+	if (!term) return null;
+	try {
+		let src = opts.regex ? term : term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		if (opts.wholeWord) src = `\\b${src}\\b`;
+		return new RegExp(src, opts.caseSensitive ? "g" : "gi");
+	} catch {
+		return null;
+	}
+}
+
 const MATCH_CLASS = "search-match";
 const ACTIVE_CLASS = "search-match-active";
 
@@ -172,17 +189,8 @@ export class DomSearchEngine implements SearchEngine {
 	search(term: string, opts: SearchOptions): number {
 		this.clear();
 
-		if (!term) return 0;
-
-		let pattern: RegExp;
-		try {
-			let src = opts.regex ? term : term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-			if (opts.wholeWord) src = `\\b${src}\\b`;
-			const flags = opts.caseSensitive ? "g" : "gi";
-			pattern = new RegExp(src, flags);
-		} catch {
-			return 0;
-		}
+		const pattern = buildSearchPattern(term, opts);
+		if (!pattern) return 0;
 
 		const runs = collectTextRuns(this.container);
 
@@ -275,6 +283,31 @@ export class DomSearchEngine implements SearchEngine {
 	/** Get all mark elements in document order */
 	private getOrderedMarks(): HTMLElement[] {
 		return Array.from(this.container.querySelectorAll(`mark.${MATCH_CLASS}`));
+	}
+
+	/**
+	 * Vertical center of each highlighted match as a fraction (0..1) of the scroll
+	 * container's total content height — for painting scrollbar overview ticks,
+	 * consistent with the terminal and CodeMirror editor. Deduped per ~permille so
+	 * many matches on one line collapse to a single tick. `scrollEl` is the actual
+	 * overflow container (which may be an ancestor of the highlighted content).
+	 */
+	matchFractions(scrollEl: HTMLElement): number[] {
+		const total = scrollEl.scrollHeight;
+		if (total <= 0) return [];
+		const top = scrollEl.getBoundingClientRect().top;
+		const seen = new Set<number>();
+		const out: number[] = [];
+		for (const mark of this.getOrderedMarks()) {
+			const rect = mark.getBoundingClientRect();
+			const y = rect.top - top + scrollEl.scrollTop + rect.height / 2;
+			const frac = Math.min(Math.max(y / total, 0), 1);
+			const key = Math.round(frac * 1000);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			out.push(frac);
+		}
+		return out;
 	}
 
 	private setActive(index: number, active: boolean): void {

@@ -1134,6 +1134,7 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
         // to instructions) and runs it in session_id. Fire-and-forget: visibility
         // and execution are the frontend's responsibility (chat-ai), not a backend
         // headless loop.
+        #[cfg(feature = "desktop")]
         self.emit_watcher_fire(&payload);
         self.last_fire.insert(rule_id.to_string(), Instant::now());
         self.record_fire(rule_id);
@@ -1141,7 +1142,10 @@ going, DONE if it finished, WAITING if it is waiting for user input.",
     }
 
     /// Emit the `watcher-fire` Tauri event to the frontend. No-op when no app
-    /// handle is registered (headless), mirroring `notify_status`.
+    /// handle is registered (headless), mirroring `notify_status`. Gated to the
+    /// `desktop` feature: the no-default-features `tuic-remote` daemon has no
+    /// `app_handle` field and no frontend to receive the event.
+    #[cfg(feature = "desktop")]
     fn emit_watcher_fire(&self, payload: &WatcherFirePayload) {
         if let Some(app) = self.state.app_handle.read().as_ref() {
             let _ = app.emit("watcher-fire", payload);

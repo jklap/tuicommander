@@ -55,6 +55,25 @@ When an agent asks an interactive question (Y/N, multiple choice, numbered optio
 
 For unrecognized agents, silence-based detection kicks in — if the terminal stops producing output for 10 seconds after a line ending with `?`, it's treated as a potential prompt. User-typed lines ending with `?` are suppressed from question detection for 500ms (echo window) to avoid false positives from PTY echo.
 
+## Native Hook Instrumentation
+
+Instead of inferring busy/idle/waiting from terminal output, TUICommander can drive an agent's status directly from the agent's **own hook system**. Enable it per agent in **Settings → Agents → (expand an agent) → "Use native agent hooks for status"**.
+
+When enabled, TUIC writes small shell hooks into the agent's settings file that emit `OSC 7770;state=…` on each lifecycle event (busy on prompt/tool start, `awaiting` on an approval/question prompt, idle on stop). The session state then follows the hooks precisely, and the heuristic question-detection above is suppressed for that agent (the silence-idle backstop stays on, so a crashed agent still recovers from "busy").
+
+**Ownership is safe and reversible.** Each managed hook carries a `# tuic-managed-hook` sentinel; enabling installs only TUIC's entries and disabling removes only them — your own (and wiz/mdkb) hooks in the same file are never touched. The toggle is the source of truth; the effect applies on the agent's **next launch** (hooks are read at startup).
+
+| Agent | Hooks | Status |
+|-------|-------|--------|
+| Claude | `~/.claude/settings.json` | Supported |
+| Gemini | `~/.gemini/settings.json` | Supported |
+| Codex | `~/.codex/hooks.json` + `~/.codex/config.toml` (`[features] hooks = true`) | Supported |
+| Grok | `~/.grok/hooks/tuic.json` (own file) | Supported |
+| OpenCode | `~/.config/opencode/plugin/tuic.ts` (Bun/TS plugin) | Supported |
+| Others (Aider, Amp, Cursor, Goose, Droid) | — | No hook system — stays heuristic |
+
+> **Platform note:** Hook instrumentation is **macOS/Linux only** — it resolves the controlling tty via `ps`/`/dev/tty`, which has no Windows equivalent. On Windows the toggle is hidden and agents keep heuristic detection (no regression).
+
 ## Usage Limit Tracking
 
 For Claude Code, TUICommander detects weekly and session usage limit messages from terminal output:

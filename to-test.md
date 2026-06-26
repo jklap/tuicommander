@@ -10,6 +10,29 @@
 
 Features to test when TUICommander is more usable.
 
+## Perf pass + light-theme fix — visual checks (2026-06-09)
+
+_Code-verified + `make check` green; these need Boss's eyes on the live dev app (canvas/editor not HTTP/MCP-observable)._
+
+### #80 — Terminal text color on light themes (`da16e711`, local only — not pushed)
+- [ ] On a light theme (e.g. `vscode-light`), terminal default text is clearly readable, not faint gray _(reads `--fg-primary`, was undefined `--text-primary`; CanvasTerminal.tsx:323)_
+- [ ] Scrollbar thumb is visible on light themes _(CanvasTerminal.tsx:2850)_
+- [ ] Dark themes unchanged (no regression)
+
+### 020-abfe — Editor + diff viewer performance pass
+- [ ] Multi-file diff (scroll + PR): only on-screen file sections mount — DOM-count or screenshot on a large diff _(DiffFileList.tsx, @tanstack/solid-virtual overscan=3)_
+- [ ] Sticky file headers render; drag-select stays smooth during scroll _(DiffTab.tsx)_
+- [ ] Large single-file diff (>3000 lines) shows the "render anyway" guard _(DiffTab.tsx:570-582)_
+
+### 022-dc94 — Scrollbar track-height cache
+- [ ] Smooth-scroll gesture: scrollbar thumb position/size stays visually correct (no jump/drift) _(CanvasTerminal.tsx:333,749)_
+
+### 027-deb3 — rowCache lagging-frame guard
+- [ ] Fast scroll gesture: no flicker or wrong overscan content _(lagging backend frame no longer poisons rowCache; CanvasTerminal.tsx:1300)_
+
+### 032-ce2d — Editor scrollbar overview ruler
+- [ ] Editor with git changes: colored ticks on the right-edge scrollbar strip at correct relative positions; tick colors match the gutter markers _(gitGutter.ts:122,148)_
+
 ## #79 — vim & repeating key (macOS press-and-hold) (2026-06-06)
 - [ ] [HUMAN] In a release `.app`, open vim and hold `j`/`l`/`i` → cursor repeats, NO accent picker popup _(needs release build: dev build lacks proper bundle domain; fix registers `ApplePressAndHoldEnabled=NO` in `press_and_hold.rs`, called from `lib.rs` setup)_
 - [ ] [HUMAN] Typing accented chars still works where intended (Option-key composition path unaffected — only the hold-for-accent picker is suppressed)
@@ -1181,3 +1204,163 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [x] Call sites onMouseDown→onPointerDown + param MouseEvent→PointerEvent: RepoSection, GroupSection, TabBar (8 bindings), PaneTree _(verified: grep initMouseDrag callers all converted; tsc green)_
 - [HUMAN] Live macOS WKWebView: drag a repo in the Sidebar, a tab in the TabBar, and a pane in a split → the ghost releases on mouseup and the drop-line clears (previously the ghost stayed glued to the cursor). Root cause was native NSDragging swallowing mouseup; needs a real pointer gesture to confirm.
 - [HUMAN] Regression: plain click on a repo header (toggle expand), on inner repo buttons (GitHub badge, menu, collapse initials), and on a tab (activate) still works — capture only engages past the drag threshold.
+
+## genai extended thinking (Opus 4.7+) + worker renderer freeze fix (2026-06-06)
+- [x] Backend: `ConversationConfig.reasoning` (ReasoningLevel Auto/Off/Low/Medium/High), `supports_extended_thinking` gates Opus 4.7+, `resolve_reasoning` maps to genai `ReasoningEffort`; ChatOptions rebuilt per-iteration with `with_reasoning_effort`+`with_capture_reasoning_content` _(verified: conversation_engine.rs; 26 module tests pass incl resolve_reasoning/supports_extended_thinking)_
+- [x] Backend: streaming handles `ReasoningChunk` → `ConversationEvent::ReasoningChunk`; assistant turn appended from full `captured_content` to preserve thinking block + ThoughtSignature for the tool-use continuation (Anthropic requirement) _(verified: conversation_engine.rs append path; reasoning_chunk serialization test)_
+- [x] Backend: `commands.rs` threads `reasoning_effort` param, falls back to persisted `AiChatConfig.reasoning_effort`; 50ms bridge batches ReasoningChunk like TextChunk _(verified: cargo build green; ai_chat 56 tests pass)_
+- [x] Frontend: `conversationStore` accumulates `reasoning_chunk` into `reasoningChunks()`, reset on new turn + reset() _(verified: aiAgentStore.test.ts reasoning_chunk accumulation + reset)_
+- [VISUAL] AIChatPanel shows a collapsible "Thinking" disclosure above the answer; auto-open while thinking; muted styling per STYLE_GUIDE — screenshot after rebuild
+- [VISUAL] SettingsPanel → AI Chat: "Extended thinking" dropdown (Auto/Off/Low/Medium/High) below Temperature — screenshot
+- [HUMAN] Live with Claude Opus 4.7+: send a chat message → reasoning streams into the Thinking disclosure; a multi-tool autonomous run continues without an Anthropic thinking/signature rejection; setting Off disables it
+- [x] Worker renderer freeze: `createRepaintScheduler` now races rAF with a 100ms setTimeout fallback (WebKit suspends worker rAF under CPU pressure → glyphs froze while input worked) _(verified: workerGridState.test.ts 17 tests incl timer-fallback/race/stop)_
+- [HUMAN] Live: under heavy CPU load (e.g. a Rust release build at 100%), the terminal keeps painting Ink animations and typed glyphs appear within ~100ms (previously froze "completely immobile" with cursor moving but characters delayed 1s+)
+
+## worktree switch prompt auto-cancel countdown (2026-06-06)
+- [x] `ConfirmDialog` gains opt-in `autoCancelMs`: a per-second countdown signal appended to the cancel-button label that auto-clicks cancel (onClose) at 0; interval cleaned up on hide/interaction _(verified: ConfirmDialog.tsx:23-42; tsc green)_
+- [x] `autoCancelMs` threaded through `ConfirmOptions`→`ConfirmDialogState`→App.tsx ConfirmDialog binding; absent on all other confirm dialogs (remove worktree, folder-drop) _(verified: useConfirmDialog.test.ts 11 pass incl threads/undefined cases)_
+- [x] Worktree-created switch prompt sets `autoCancelMs: 10_000` so "Stay" shows a 10s countdown and is auto-clicked if untouched _(verified: useWorktreeSwitchPrompt.ts:64)_
+- [VISUAL] Create a worktree via TUIC/MCP → switch prompt shows "Stay (10)" counting down; left untouched for 10s it auto-dismisses (stays put); clicking Switch/Stay or pressing Enter/Esc before 0 still works
+
+## focus-last-terminal — return to last terminal (#77) (2026-06-06)
+- [x] `terminalsStore.previousActiveId` tracks the terminal left behind on `setActive`; `getPreviousActiveId()` returns it only if still alive; cleared on `remove` _(verified: terminals.test.ts "previousActiveId (return to last terminal)" 5 cases — toggle, no-op on re-activate, cleared on removal)_
+- [x] Action `focus-last-terminal` wired: ACTION_NAMES + unbound default, ACTION_META (Navigation), keyboard dispatch case, App.tsx handler calls `navigateToTerminal(prevId)` (switches repo/branch/tab/pane + focus) _(verified: tsc green; actionRegistry + useKeyboardShortcuts mocks updated and passing)_
+- [HUMAN] Live: bind `focus-last-terminal` in Settings → Keyboard, open terminals across 2+ repos, switch to a terminal in another repo, press the hotkey → jumps back to the prior terminal (and its repo/branch); press again → toggles forward. Closing the previous terminal makes the hotkey a no-op.
+
+## Jump to waiting terminal (#78) + Cmd+? help binding fix (2026-06-06)
+- [x] New action `jump-waiting-terminal` (Cmd+U): cycles to the next terminal with `awaitingInput != null` across all repos/branches in tab order, skips detached, no-op when none waiting; uses `navigateToTerminal` for full repo/branch/pane context switch _(verified: App.tsx jumpWaitingTerminal + utils/nextWaitingTerminal.ts; nextWaitingTerminal.test.ts 6 cases incl wrap/empty/active-not-waiting; useKeyboardShortcuts.test.ts "Cmd+U" dispatch)_
+- [x] Wired through canonical path: ACTION_NAMES + DEFAULT_BINDINGS (Cmd+U), ShortcutHandlers + dispatch case, ACTION_META + handlerMap (shows in Command Palette + Settings→Keyboard Shortcuts) _(verified: tsc + biome green; actionRegistry.test.ts passes with new mock)_
+- [x] Bug fix: `toggle-help` default was `"Cmd+?"` which normalizes to `cmd+?` but a real `?` keypress holds Shift → event combo `cmd+shift+/`, so Help (Cmd+?) was dead. Changed default to `Cmd+Shift+/` (JS) + native menu `CmdOrCtrl+Shift+/` (menu.rs). Test that hid the bug fixed to fire a realistic shifted `?` _(verified: useKeyboardShortcuts.test.ts "Cmd+? toggles help" now fires shiftKey:true; cargo check green)_
+- [HUMAN] Live: with 2+ agent terminals in different branches awaiting input, press Cmd+U repeatedly → focus jumps to each waiting terminal in turn (switching branch/repo), wraps around; does nothing when none waiting. Press Cmd+? → Help panel toggles (was dead before).
+
+## Fix: "Investigate" toast button did nothing (2026-06-06)
+- [x] Root cause: `ai-suggestion` toast (Command failed/timed out) fires for any agent terminal (state.rs:1337, gated on ai_suggestions_enabled default=agent present). Its Investigate onClick only called `startAgent(session_id, goal)` — which runs on `activeConversation()` (the focused terminal, not the failed session) and never opened the AI Chat panel, so nothing visible happened (and silently no-op'd if the active conv's agent was already running) _(verified: App.tsx:559-575; conversationStore.startAgent uses activeConversation/activeKey)_
+- [x] Fix: onClick now mirrors the working "Fix this error" action — `setAiChatPanelVisible(true)` + `switchToTerminalBySession(session_id)` + `startAgent`. Extracted `switchToTerminalBySession` from contextMenuActions.ts to `src/utils/switchToTerminalBySession.ts` (DRY) _(verified: tsc + biome green; AIChatPanel/contextMenu tests 22 pass)_
+- [x] Guard: if AI Chat is disabled, Investigate shows "Enable AI Chat in Settings to investigate" instead of invoking an invisible agent _(verified: App.tsx onClick isAiChatEnabled gate)_
+- [HUMAN] Live: run an agent terminal, make a command fail (e.g. `false` or a bad git cmd) → "Command failed" toast appears → click Investigate → AI Chat panel opens, switches to that terminal's conversation, and an autonomous investigation starts on the correct session
+
+## D&D pointer-migration tests + engine audit (2026-06-06)
+- [x] Fixed 4 failing D&D tests: Sidebar.test.tsx + TabBar.test.tsx dispatched mouse* events while production migrated to pointer* — converted to fireEvent.pointerDown/pointerMove/pointerUp with explicit pointerId (handlers filter ev.pointerId); renamed "(mouse-based)" describe → "(pointer-based)" _(verified: 135/135 in both files; full suite 4135/4135 green)_
+- [x] useMouseDrag engine audit (Boss: "è efficace?"): sound overall (pointer capture + threshold + ghost + cleanup + pointercancel/Escape). I initially "optimized" two things then REVERTED both — Boss flagged that the early preventDefault was the stuck-ghost fix: (1) deferring getBoundingClientRect and (2) deferring preventDefault past the threshold. The `ev.preventDefault()` at the TOP of handleMove (every move, incl sub-threshold) is LOAD-BEARING on WKWebView — it stops native NSDragging from starting and swallowing pointerup (ghost glued to cursor). Reverted to baseline + added an inline warning comment + mdkb entry usemousedrag-preventdefault-load-bearing _(verified: useMouseDrag.ts:47-53 preventDefault at top; tsc green; 135 drag tests green)_
+- [HUMAN] Live macOS WKWebView: drag a tab, a repo, a group, a split-pane → ghost follows + releases on pointerup; plain click still selects text / activates; Escape and native-drag-cancel both abort cleanly
+
+## Editor + diff viewer performance pass (#020-abfe) (2026-06-07)
+- [x] `stat_path` extended with `modified_at` (ms) + `size`; editor 5s poll stat-gates before reading file content via `diskStatUnchanged` _(verified: fs.rs cargo test stat_path 5 pass + editorDiskStat.test.ts 4 cases incl truncate-rewrite same-mtime)_
+- [x] Shared `DiffFileList` virtualizes multi-file diffs with @tanstack/solid-virtual; FileSection/sectionToRawDiff duplication removed from BranchDiffScrollView + PrDiffTab _(verified: tsc + biome + DiffFileList.test.tsx 3 + PrDiffTab/DiffViewer 19 pass; full suite 4157 green)_
+- [x] DiffTab: extractHunks memoized; row→hunk/line cache built once per diff (no querySelectorAll per mousemove); HunkRevertOverlay positions memoized on diff+ResizeObserver (not hover) _(verified: code DiffTab.tsx getRowCache/findLineInfo/applyLineSelectionStyles; diffPatch 47 pass)_
+- [VISUAL] Open a PR diff or working-tree scroll-mode diff with MANY files (50+) → only on-screen file sections are in the DOM; scroll is smooth; sticky per-file headers still stick; file paths still open on click (working-tree)
+- [HUMAN] Single-file diff: hover a hunk → revert button appears at the correct row; drag-select lines across a hunk → correct lines highlight; Discard/Unstage selected still applies the right git patch (git-patch path unchanged)
+- [VISUAL] Open a >3000-line single-file diff → "This diff is large (N lines) / Render anyway" guard shows; clicking Render anyway renders it
+- [NOTE] DEFERRED: Cmd+F in virtualized scroll-mode only matches mounted (on-screen) sections — see DiffFileList.tsx DEFERRED comment. Needs data-level search for full coverage.
+
+## Fix: MCP worktree create now refreshes the sidebar immediately (2026-06-08)
+- [x] Root cause: MCP `worktree_create` emits the `worktree-created` Tauri event but never registers the branch in `repositoriesStore`; the listener (`useWorktreeSwitchPrompt.ts:28`) only added it via `handleBranchSelect` IF the user accepted the switch prompt. Dismiss → sidebar stale until the debounced file-watcher refresh. In-app create registers immediately via `setupNewWorktree`→`setBranch` (`useGitOperations.ts:1292`) _(verified: code inspection mcp_transport.rs:1449-1466 emits event only; RepoSection.tsx:554 renders Object.values(repo.branches))_
+- [x] Fix: `worktree-created` listener now calls `repositoriesStore.setBranch(repo_path, branch, {worktreePath})` on arrival, guarded on repo existence, so the sidebar shows the new worktree instantly regardless of the switch prompt _(verified: tsc clean; useWorktreeSwitchPrompt.ts:30-38)_
+- [HUMAN] Live (needs rebuild): from an MCP client run `repo action=worktree_create path=<open-repo>` → the new branch row appears in the sidebar under that repo IMMEDIATELY, before/without accepting the switch prompt
+
+## Remove off-main-thread terminal renderer (2026-06-08)
+- [x] Deleted worker-only modules: `renderer.worker.ts`, `workerProtocol.ts`, `fontAssets.ts` + their tests. `gridRenderer.ts` (the canvas2d renderer) stays — it was never worker-exclusive. `decideFrameGrid` (+ `FrameGridPrev`/`FrameGridDecision`) relocated from `workerGridState.ts` into `canvasTerminalUtils.ts` (still used by main `onFrame`); coverage preserved in `__tests__/decideFrameGrid.test.ts` _(verified: vitest 4112 pass; tsc + biome clean)_
+- [x] `CanvasTerminal.tsx`: removed `rendererMode`/`renderWorker`/`workerRenderer`, the `chooseRenderer` mount branch, worker `postResize`/`postFrame`/`postFonts`, worker teardown, and the worker-only guards in `remeasure`/`paintFrame`/hidden-resize. `onFrame` now inlines ack→decode (was `receiveFrame`) _(verified: rg CLEAN — no stray worker refs; cargo check + clippy -D warnings clean)_
+- [x] Removed `offscreenRenderer` setting end-to-end: `settings.ts` (state/default/save/hydrate/setter), `config.rs` (`offscreen_renderer` field + 2 defaults), AppearanceTab toggle, settings.test.ts block; dropped the stale `plans/terminal-worker-renderer.md` row from `docs/sync-matrix.md` _(verified: settings.test.ts pass; config.rs cargo check clean)_
+- [VISUAL] Live (needs rebuild): open several terminals, type/scroll, resize panes, hide/show tabs, switch themes/fonts → glyphs render correctly, cursor/selection/links/scrollbar work, no blank canvas. (Off-thread path is gone; main-thread canvas2d is now the only renderer, as it was by default.)
+
+## Crash fix: github-transition pushed/opened → undefined.cls (2026-06-08)
+- [x] Root cause: Rust poller emits `github-transition` for ALL `PrTransition` variants incl. watcher-only `pushed`/`opened` (PR-opened/commit-pushed triggers carrying author/head_ref_oid). Frontend `handleTransition` blindly added every type as a PR notification; the popover render then did `NOTIFICATION_LABELS["pushed"]` → undefined → `info.cls` → `undefined is not an object (evaluating 't.cls')` whole-app crash _(verified: github_poller.rs:587/608 emit, github.ts handleTransition, Toolbar.tsx:545-548)_
+- [x] Fix: `PrNotificationType` now derives from runtime `PR_NOTIFICATION_TYPES` allowlist + `isNotificationType()` guard; `handleTransition` skips any transition not in the allowlist (pushed/opened and any future watcher-only variant ignored by default, no crash) _(verified: prNotifications.test.ts isNotificationType 3 cases; 23 file tests + tsc + biome green)_
+- [HUMAN] Live: open a brand-new PR on a watched branch (fires `opened`) and push a commit to an open PR (fires `pushed`) → app does NOT crash, no bogus popover notification appears for those
+
+## Fix: agent intent title no longer overwrites a renamed tab (2026-06-10)
+- [x] Root cause: `intent` event handler (`Terminal.tsx:417`) overwrote tab `name` from `parsed.title` whenever `intentTabTitle`/per-agent allowed — without the `nameIsCustom` guard the OSC 0/2 path already has. After "Rename Tab" set `nameIsCustom:true`, the next prompt's `intent:` token clobbered the custom name with the agent's intent title _(verified: code inspection Terminal.tsx:607 OSC guard vs 417 missing guard)_
+- [x] Fix: extracted pure `shouldApplyIntentTitle()` (`intentTitle.ts`) that also checks `!nameIsCustom`; intent handler now routes through it _(verified: tsc clean; intentTitle.test.ts 5 pass)_
+- [HUMAN] Live (needs rebuild): rename a terminal tab via "Rename Tab" → run a prompt that emits an `intent:` token → tab keeps the custom name (does NOT revert to the agent's intent title)
+
+## #71 Phase 1: custom launcher cursor + base placeholder tokens (2026-06-09)
+- [x] Rust `expand_placeholders` resolves `{path}`/`{file}` (focused file, else repo), `{repo}`, `{fileDir}` (file parent, else repo), `{cwd}` (else repo), `{home}` (dirs::home_dir), `{line}`/`{column}` (cursor, default 1); `open_in_custom` takes `LaunchContext` _(verified: agent.rs expand_placeholders/open_in_custom; 8 cargo tests green incl. no-file & cwd fallbacks)_
+- [x] Cursor surfaced: `editorTabsStore.setCursor` + `cursorLine/cursorCol`; `CodeEditorTab` separate ungated updateListener pushes `(line.number, head-line.from+1)`; `Toolbar` passes cwd (`terminalsStore.getActive().cwd`) + cursor (`editorTabsStore.getActive()`) to `IdeLauncher`; `handleOpenCustom` sends real `ctx` (was `line/col=null`) _(verified: editorTabs setCursor tests + Toolbar cursor-wiring test green; make check exit 0)_
+- [HUMAN] Live (needs rebuild): add a custom launcher with args `--file {file} --pos {line}:{column} --repo {repo} --cwd {cwd} --home {home} --dir {fileDir}` (exec e.g. `echo` into a logging wrapper), open a code file, move the cursor to a known line/col, focus a terminal in a known cwd → launch it → the spawned process receives the EXPANDED values (real cursor line/col, not 1), correct file/repo/cwd/home/fileDir
+
+## Notification fixes: mic-prompt on settings open + Test rate-limit masking volume (2026-06-09)
+- [x] Root cause (mic prompt): `NotificationsTab` enumerated audio devices eagerly via `createResource` at tab mount → `list_audio_output_devices` → cpal CoreAudio output scan, which triggers the macOS microphone TCC prompt (app declares `NSMicrophoneUsageDescription` + `audio-input` entitlement for dictation) _(verified: code inspection NotificationsTab.tsx old createResource:89; notification_sound.rs:253 list_output_devices uses rodio::cpal::default_host().output_devices(); live invoke returned 3 devices)_
+- [x] Fix (mic prompt): enumeration is now LAZY — `null` until the user clicks **Choose output device…**. Opening the tab no longer touches cpal, so no mic prompt. Added a hint explaining the prompt + that notifications never record _(verified: tsc + biome clean; NotificationsTab.tsx:92-105,135-193)_
+- [x] Root cause (volume "nothing changes"): the volume chain is correct end-to-end — slider→`setVolume`→manager+disk (`load_notification_config`=0.17 confirmed persistence), Rust scales amplitude linearly (`notification_sound.rs:217`), Boss confirmed audible 1.0-vs-0.1 difference. The masking was the Test button: `NotificationManager.play` rate-limits to 1/500ms per sound, silently dropping rapid A/B clicks _(verified: notifications.ts:56-58 rate limit; Boss A/B ear test = clear difference)_
+- [x] Fix (volume): `play(sound, {force})` bypasses enabled/per-sound/backoff/rate-limit; `testSound` uses `force:true` (removed the old enabled-toggle hack). Agent notifications stay rate-limited _(verified: vitest 75 pass incl. 4 new force scenarios + rewritten testSound contract)_
+- [VISUAL] Live (needs rebuild): open Settings > Notifications → NO microphone prompt appears. Click "Choose output device…" → device dropdown loads (prompt may appear here, once). Section renders cleanly per STYLE_GUIDE.
+- [x] Preview on Master Volume: `SettingSlider` gained optional `onCommit` (DOM `change`/release); Master Volume wires it to `testSound("info")` so releasing the slider plays a short preview at the committed volume _(verified: SettingFields.tsx onChange→onCommit; NotificationsTab.tsx:129; tsc + biome clean)_
+- [HUMAN] Live (needs rebuild): set Master Volume low, click a Test button repeatedly while changing volume → each click plays at the current volume (no dropped/identical-sounding plays). Drag the Master Volume slider and release → hear a short "info" preview at the new level each time.
+
+## Help menu links + What's New star CTA (2026-06-11)
+- [x] Help menu (`menu.rs:223`) gained **Online Guide** + **Changelog** items; `menu-action` handler routes them via `handleOpenUrl` to `https://tuicommander.com/docs/` and the CHANGELOG on GitHub _(verified: tsc + cargo check clean; App.tsx:2289 cases, menu.rs items)_
+- [x] `WhatsNewDialog` gained a discreet star CTA (inline star SVG per STYLE_GUIDE, links to repo) below "View full changelog" — one-shot since the dialog is already per-version _(verified: tsc clean)_
+- [VISUAL] Live (needs rebuild): native Help menu shows Online Guide + Changelog → each opens the right URL in the browser. After an update, the What's New dialog shows the "Star us on GitHub" row with a star icon, rendering cleanly per STYLE_GUIDE.
+
+## Fix: PluginPanel same-origin guard no longer loops on its own about:blank reset (2026-06-11)
+- [x] Root cause: `guardSameOriginNav` reset an app-origin iframe to `about:blank`, which is itself same-origin → the guard re-fired on the reset's own load event → infinite log spam ("navigated to app origin — blocked" every 1-2s) _(verified: code inspection PluginPanel.tsx:213; observed live spam from md-21 panel)_
+- [x] Fix: early-return when `contentDocument.location.href === "about:blank"` (our own reset target, not an escape) _(verified: tsc clean)_
+- [HUMAN] Live (needs rebuild): open a plugin panel whose URL reaches the app origin → exactly ONE "blocked" log, no repeating spam; the panel resets to blank and stays quiet.
+
+## OAuth upstream re-auth prompt on expired token (2026-06-09)
+- [x] `classify_refresh_error` maps fatal refresh failures (`invalid_grant` / no refresh token / HTTP 400 / HTTP 401) to `UpstreamError::AuthFailed`; transient/5xx/network errors stay `Other` (retryable) _(verified: 2 unit tests in http_client.rs green; `refresh_token_if_needed` now routes through it)_
+- [x] `initialize_entry_with_oauth` adds an `AuthFailed` + OAuth-config arm → deletes the dead keyring token + `mark_entry_needs_auth` (→ `NeedsAuth`, "Authorize") instead of red `Failed`/`CircuitOpen`; non-OAuth upstreams with a bad static token still go red (guard `matches! OAuth2`). Health-check skips `NeedsAuth` (registry.rs:1150) so no delete/init loop _(verified: code inspection; 146 mcp_proxy+mcp_oauth tests green)_
+- [HUMAN] Live (needs rebuild): with an OAuth upstream (e.g. publishwith-ai) whose access AND refresh tokens are expired/revoked → on connect/refresh the upstream goes to **NeedsAuth (yellow + "Authorize")**, NOT silent red. Clicking Authorize opens the browser and re-authorizes to fresh tokens → green/ready. (Auto-test impossible: needs real keyring-seeded expired token; codebase marks keyring write tests `#[ignore]`.)
+
+## tools/list upstream-readiness race (bridge serves before upstreams connect) (2026-06-09)
+- [x] `await_initial_settle(timeout)` + `mark_initial_connect_complete()` on the registry: the first `tools/list` blocks (≤3s) until boot auto-connect registered every upstream AND none is still `Connecting`, then serves; a global latch makes later calls no-ops; timeout serves a partial list rather than hanging _(verified: 2 unit tests — fast-path + timeout-then-latch — green; 402 mcp_http+mcp_proxy tests green)_
+- [x] Wired: `auto_connect_saved_upstreams` marks complete at both exits (incl. empty-config); `tools/list` handler awaits before `merged_tool_definitions` _(verified: code inspection mcp_transport.rs tools/list arm; mcp_upstream_config.rs)_
+- [HUMAN] Live (needs rebuild): cold-start the app with quill enabled → quill's proxied tools (`quill__*`) are present in Claude Code's tool list WITHOUT a manual refresh/reconnect (root cause was CC fetching tools/list before async upstream init finished + ignoring tools/list_changed).
+
+## Smart Prompts: inject Target (Compose vs Terminal) + idle gate fix (2026-06-10)
+- [x] New per-prompt `injectTarget: "terminal" | "compose"` (defaults to "compose"); `canExecuteInject` only applies the idle gate when target=="terminal" (so a busy agent no longer disables compose-bound prompts like Review Issue) _(verified: useSmartPrompts.ts:148-156; 5 new vitest cases in useSmartPrompts.test.ts green — compose-not-gated, terminal-busy-blocked, terminal-idle-allowed, requiresIdle=false, no-active-terminal)_
+- [x] `executeInject` routes by target on ALL platforms (removed the 2026-04-23 desktop-always-compose hack + isTauri gate): compose→`openComposeWithText` (fallback write-without-Enter when no compose panel), terminal→`sendCommand` (autoExecute) or write-without-Enter for review _(verified: useSmartPrompts.ts executeInject; tsc + biome clean)_
+- [x] User's per-prompt target survives relaunch (added `injectTarget` to the built-in merge preserve list) + invalid values reset on hydrate _(verified: promptLibrary.ts merge + validation)_
+- [x] PromptDrawer.doInject honors injectTarget for consistency _(verified: PromptDrawer.tsx doInject)_
+- [VISUAL] Live (needs rebuild): expand an issue while the active terminal's agent is BUSY → the "Review Issue" button is ENABLED (not greyed) and clicking it fills the Compose box (does not send).
+- [VISUAL] Live (needs rebuild): Settings → Smart Prompts → edit an inject prompt → a "Target" dropdown shows (Compose box / Terminal). Selecting "Terminal" reveals the "Auto-execute" checkbox; "Compose box" hides it.
+- [HUMAN] Live (needs rebuild): set a prompt's Target=Terminal, make the agent busy → its SmartButtonStrip button is disabled ("Agent is busy"); when idle it sends straight to the agent (Auto-execute on = immediate Enter, off = text awaiting review).
+
+## grok onboarding: storm fix + first-class agent + no-alt-screen wheel scroll (2026-06-11)
+- [x] Notification storm: grok's decorative `◆` timeline bullets ("Thought for 1.3s", "user_prompt_submit") no longer fire confident Question events — cliclack `◆` match now requires the text to end with `?` (Goose prompts do, grok labels don't) _(verified: output_parser.rs:1131-1140; test_grok_decorative_bullet_not_a_question + 3 cliclack tests green)_
+- [x] grok registered as first-class agent: agents.ts (AgentType/AGENTS/MCP_SUPPORT/AGENT_DISPLAY), useAgentDetection binary map, classify_agent (pty.rs), discover_grok_session/verify_grok_session (agent_session.rs, `~/.grok/sessions/<%-encoded-cwd>/<UUIDv7>/`) _(verified: tsc clean; 33 agent_session + 4 grok/cliclack rust tests green; grok_path_encode matches live on-disk layout)_
+- [HUMAN] Live (needs rebuild): launch grok by typing `grok` in a shell tab (not via spawn) → TUIC detects agent_type=grok (icon/badge), and after app restart the session resumes via `grok --resume <id>` (discovery picks the newest UUIDv7 dir).
+- [VISUAL] Live (needs rebuild): run `grok --no-alt-screen`, produce enough output for a scrollbar, then **two-finger trackpad / wheel scroll** → the scrollback scrolls (previously dead because grok enables mouse mode `?1000h/?1002h/?1003h/?1006h` without alt-screen, so the wheel was forwarded to grok). Confirm vim/lazygit (real alt-screen) wheel still reaches the app, and **Shift+wheel** scrolls the scrollback in any mode (never sent to the app).
+
+## Search/UI consistency: unified SearchBar + scrollbar overview + file-browser tracking (2026-06-11)
+- [x] Shared `SearchBar` gains optional VS Code-style expandable Replace (chevron) — only shown when the consumer passes `onReplace`/`onReplaceAll` (editor yes; terminal/diff no) _(verified: code inspection SearchBar.tsx; tsc clean)_
+- [x] Match counter ("1 of N"/"No results") moved INSIDE the input (absolute, masking bg) instead of a fixed-width flex slot → no dead space / layout shift _(verified: SearchBar.module.css .inputWrap/.counter; tsc clean)_
+- [x] Code editor uses the shared `SearchBar` overlay instead of CodeMirror's built-in panel (Cmd+F / Cmd+Alt+F / Esc); `EditorSearch` drives `@codemirror/search` _(verified: 6 vitest cases editorSearchEngine.test.ts; searchOverview 5; tsc clean)_
+- [x] Editor scrollbar search ticks: full-width 12px marks (`--attention`) that cover the scrollbar; git-change overview hidden while searching (`.cm-searching`) → only orange marks, like the terminal _(verified: searchOverview.ts; tsc clean)_
+- [x] Git-change overview ruler coalesces contiguous same-type runs → a whole-new file shows ONE tick, not a solid bar _(verified: 5 vitest cases gitGutterRuns.test.ts)_
+- [x] Diff panel search ticks on the scrollbar via `DomSearchEngine.matchFractions` + shared `DomSearchOverview` _(verified: code inspection; tsc clean)_
+- [x] Active search match no longer bright yellow: `.cm-selectionMatch` themed to a subtle accent tint _(verified: theme.ts; tsc clean)_
+- [x] File browser highlights the file open in the active editor (accent bar + tint), flat + tree, worktree-aware _(verified: FileBrowserPanel/TreeNode entryActive; tsc clean)_
+- [x] File browser reveals the active file: tree auto-expands ancestor dirs then scrolls the row into view _(verified: FileBrowserPanel.revealActiveFile + effect; tsc clean; full suite 4167 green)_
+- [VISUAL] Live (needs rebuild): open Cmd+F in the code editor → compact SearchBar pill (counter inside input); typing shows orange full-width ticks covering the scrollbar and hides the green git ticks; closing search brings the git overview back. Replace row expands via the chevron.
+- [VISUAL] Live (needs rebuild): open a brand-new (untracked) file → the git-change overview shows a SINGLE tick at the top, not a solid green bar.
+- [VISUAL] Live (needs rebuild): search inside a diff tab → orange match ticks appear on the diff scrollbar and track scroll.
+- [VISUAL] Live (needs rebuild): editor scrollbar visually matches the terminal's (14px track, rounded inset thumb).
+- [VISUAL] Live (needs rebuild): open a file deep in a subtree → the file browser (tree view) auto-expands its parents and scrolls it into view, highlighted with the accent bar. Switching the active editor tab moves the highlight.
+- [ ] DEFERRED (story 041-cd15): HTML Preview search → shared SearchBar (in-iframe search needs a postMessage bridge); shared sidebar-filter component for Error Log / Knowledge History / Branch Switcher etc. ("consistency of a different kind" for narrow sidebars).
+- [VISUAL] Live (story 040-29e1): open a tracked file in the code editor → a dim italic annotation "Author · relative time · summary" appears at the end of the active line and follows the cursor (no flicker, no fetch per keystroke). Edit a line → it shows "You · Uncommitted changes". Toggle `settingsStore.setInlineBlameEnabled(false)` → annotation disappears. External (absolute-path) files show no annotation.
+
+## Native Agent Hooks — adapter live verification (Phase 1)
+
+- [HUMAN] Grok hooks: enable "Use native agent hooks for status" for Grok in Settings → Agents, launch a `grok` session, confirm the badge flips busy on prompt-submit / tool-use and idle on Stop (hooks at `~/.grok/hooks/tuic.json`). Verify a co-existing user hook file in `~/.grok/hooks/` is untouched, and disabling deletes only `tuic.json`. (Event names verified against `~/.grok/docs/user-guide/10-hooks.md`; the install/uninstall/file-isolation is covered by `agent_hook_grok` unit tests — this confirms the events actually fire live.)
+- [HUMAN] Grok awaiting: Grok has no dedicated "awaiting approval" hook event, so approval prompts still rely on the OSC-0 title heuristic (not suppressed under instrumentation). Trigger a permission prompt in an instrumented Grok session and confirm the awaiting badge still appears.
+- [HUMAN] Codex hooks: enable instrumentation for Codex in Settings → Agents. Confirm `~/.codex/config.toml` gains `[features] hooks = true` (preserving other config) and `~/.codex/hooks.json` gains our SessionStart/UserPromptSubmit→busy, Stop→idle hooks (preserving any user Codex hook). Launch `codex`, submit a prompt → badge busy; on turn end → idle. Disable → both the flag AND our hooks removed, user config/hooks intact. (Merge/flag/state covered by `agent_hook_codex` unit tests — this confirms live event firing + that Codex actually honors the flag.)
+- [HUMAN] OpenCode plugin: with OpenCode installed, enable instrumentation for OpenCode in Settings → Agents. Confirm `~/.config/opencode/plugin/tuic.ts` is written (carrying the `/* tuic-managed */` marker) and that a pre-existing UNmarked user plugin at that path is never overwritten. **Verify the plugin API shape against the installed OpenCode version** — the generated callbacks (`tool.execute.before`/`after`→busy, `permission.asked`→awaiting, `event` `session.idle`→idle) and the `/dev/tty` write must match OpenCode's actual plugin contract; adjust `opencode_plugin_source()` if the API differs. Launch OpenCode → badge busy/idle/awaiting flips. Disable → the marked file is deleted (unmarked files left). (File-management — clobber-guard, delete-only-marked, marker/OSC/guard in source — is covered by `agent_hook_opencode` unit tests; the runtime plugin contract is the open item.)
+
+## Terminal scroll: duplication / disappearing / zoom-black (2026-06-18)
+
+- [VISUAL] Live (needs rebuild): zoom a terminal (Cmd +/-) while an idle agent's static output fills the screen → it must repaint immediately, NOT go black until you scroll. (`resize_pty` now flushes a full frame after resizing the grid; backend covered by serialize tests.)
+- [VISUAL] Live (needs rebuild): scroll a terminal up a little so it rests at a fractional (sub-line) scroll position, then resize the pane (close the file browser / MD sidebar, Cmd+E). The terminal MUST repaint — it must NOT go black until you click. Root cause: `scheduleRepaint()` bails while `scrollPosF != null` (fractional rest), and `remeasure` never reset it, so after the resize blanked the canvas every incoming frame refilled rowMap but never painted (stuck black; a click healed it only because mousedown exits the fractional rest). `remeasure` now calls `resetSmoothScroll()` first. This is the FRONTEND half of the resize-black bug — the `resize_pty` flush above was necessary but not sufficient.
+- [VISUAL] Live (needs rebuild): after a smooth-scroll gesture comes to rest, there must be NO ghost/duplicate line peeking below the viewport (below the prompt/status). (`clearOverscan()` now wipes the overscan canvas on every return to rest.)
+- [VISUAL] Live (needs rebuild): in a session that has streamed well over 10 000 lines (GRID_SCROLLBACK cap), scroll up through old output → no line is duplicated or shows the wrong content as the scrollback cap evicts. (Row cache now keyed by the eviction-stable absolute index `historyBase + grid-relative`; invariant covered by `styled_abs_is_eviction_stable_and_never_aliases`.)
+
+## v1.5.0 manual verification items
+
+- [VISUAL] Green scrollbar user-prompt marker: run an agent, submit a few prompts, then scroll up — a distinct green tick should appear on the scrollbar at each prompt-submission row (separate from the command-block marks). Verify each tick disappears if you clear scrollback.
+- [HUMAN] Cmd+C dedup + soft-wrap unwrap: in a terminal with long wrapped lines, select across a wrap boundary and press Cmd+C → the copied text must join the physical line (no extra newline at the soft-wrap point). Also verify the "Copied to clipboard" status-bar confirmation appears.
+- [VISUAL] Awaiting-input badge clear on agent exit: start an agent, let it emit a question (badge shows `?`), then kill the agent process (not just Ctrl+C inside the shell — kill the PTY process). Verify the `?` badge on the tab clears and reverts to idle, not stuck.
+- [VISUAL] Themes Deep Black and Minimal Kiwi: open Settings → Appearance → Terminal theme → confirm both "Deep Black" and "Minimal Kiwi" appear in the picker and produce visually distinct terminal backgrounds when selected.
+- [HUMAN] Cmd+R web/preview reload: with a Preview tab (HTML/Markdown/image) open, press Cmd+R — the preview must reload its content. Confirm the shortcut does not fire when focus is inside the terminal.
+- [HUMAN] Dock-icon reopen (macOS): quit the app via Cmd+Q so it hides to the dock (or close the last window). Click the dock icon → the main window re-opens. Verify no duplicate windows appear.
+- [VISUAL] Context-menu shortcut chord: right-click a tab to open its context menu, then press the shortcut chord shown for one of the items (e.g. Cmd+W for "Close Tab"). The menu must close and the action must fire without a mouse click. Verify modifier-only keys (Cmd, Shift) do not close the menu prematurely.

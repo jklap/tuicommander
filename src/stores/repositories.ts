@@ -40,6 +40,8 @@ export interface BranchState {
 	savedTerminals?: SavedTerminal[]; // Persisted terminal metadata for session restore
 	/** CI auto-heal: when enabled, CI failures trigger automatic agent fix cycles */
 	ciAutoHeal?: { enabled: boolean; attempts: number; lastRunId?: number; healing?: boolean };
+	/** Whether the terminal tab list is expanded under this branch row */
+	tabsExpanded?: boolean;
 }
 
 /** Repository with branches */
@@ -346,6 +348,20 @@ function createRepositoriesStore() {
 			save();
 		},
 
+		/** Toggle branch terminal tab list expanded state */
+		toggleBranchTabsExpanded(repoPath: string, branchName: string): void {
+			if (!state.repositories[repoPath]?.branches[branchName]) return;
+			setState("repositories", repoPath, "branches", branchName, "tabsExpanded", (e) => !e);
+			save();
+		},
+
+		/** Set branch terminal tab list expanded state explicitly */
+		setBranchTabsExpanded(repoPath: string, branchName: string, expanded: boolean): void {
+			if (!state.repositories[repoPath]?.branches[branchName]) return;
+			setState("repositories", repoPath, "branches", branchName, "tabsExpanded", expanded);
+			save();
+		},
+
 		/** Update git repo status (used when a directory gains or loses .git) */
 		setIsGitRepo(path: string, isGitRepo: boolean): void {
 			setState("repositories", path, "isGitRepo", isGitRepo);
@@ -367,6 +383,7 @@ function createRepositoriesStore() {
 					worktreePath: null,
 					terminals: [],
 					hadTerminals: false,
+					tabsExpanded: false,
 					lastActiveTerminal: null,
 					additions: 0,
 					deletions: 0,

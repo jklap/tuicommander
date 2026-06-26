@@ -722,6 +722,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(config_routes::get_agents_config).put(config_routes::put_agents_config),
         )
         .route(
+            "/config/agents/{agent}/hook-instrumentation",
+            get(config_routes::get_agent_hook_state)
+                .put(config_routes::put_agent_hook_instrumentation),
+        )
+        .route(
             "/config/provider-registry",
             get(config_routes::get_provider_registry).put(config_routes::put_provider_registry),
         )
@@ -745,6 +750,9 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/diagnostics",
             get(log_routes::diagnostics_get).post(log_routes::diagnostics_set),
         )
+        // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
+        // Local router only — never the remote router (this is an RCE surface).
+        .route("/debug/invoke_js", post(log_routes::invoke_js_http))
         // Worktrees
         .route(
             "/worktrees",
@@ -849,7 +857,12 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(fs_routes::search_content_all_http),
         )
         .route("/fs/read", get(fs_routes::fs_read_file_http))
+        .route("/fs/read-editor", get(fs_routes::read_editor_file_http))
         .route("/fs/read-external", get(fs_routes::read_external_file_http))
+        .route(
+            "/fs/read-editor-external",
+            get(fs_routes::read_editor_file_external_http),
+        )
         .route("/fs/write", post(fs_routes::write_file_http))
         .route("/fs/mkdir", post(fs_routes::create_directory_http))
         .route("/fs/delete", post(fs_routes::delete_path_http))
@@ -1186,7 +1199,17 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
             get(fs_routes::search_content_all_http),
         )
         .route("/fs/read", get(fs_routes::fs_read_file_http))
+        // SECURITY: remote clients get the standard (10 MB) cap, NOT the large
+        // editor cap. The 250 MB editor read is a desktop-local feature; serving
+        // it over a (possibly metered/slow) remote link risks OOM/latency since
+        // the whole file is read into a String→JSON with no streaming. Route the
+        // editor paths through the standard-cap handlers remotely.
+        .route("/fs/read-editor", get(fs_routes::fs_read_file_http))
         .route("/fs/read-external", get(fs_routes::read_external_file_http))
+        .route(
+            "/fs/read-editor-external",
+            get(fs_routes::read_external_file_http),
+        )
         .route("/fs/write", post(fs_routes::write_file_http))
         .route("/fs/mkdir", post(fs_routes::create_directory_http))
         .route("/fs/delete", post(fs_routes::delete_path_http))
@@ -1627,6 +1650,8 @@ mod tests {
             git_cache: crate::state::GitCacheState::new(),
             repo_watchers: DashMap::new(),
             repo_git_fingerprints: DashMap::new(),
+            repo_head_targets: DashMap::new(),
+            repo_head_emits_suppressed: std::sync::atomic::AtomicU64::new(0),
             dir_watchers: DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
             mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
@@ -1651,6 +1676,7 @@ mod tests {
             grid_channels: DashMap::new(),
             grid_watch: DashMap::new(),
             grid_frame_in_flight: DashMap::new(),
+            pending_scroll: DashMap::new(),
             kitty_states: DashMap::new(),
             input_buffers: DashMap::new(),
             last_prompts: DashMap::new(),
@@ -1682,6 +1708,7 @@ mod tests {
             indexer_throttle: std::sync::Arc::new(crate::content_index::IndexerThrottle::default()),
             slash_mode: DashMap::new(),
             last_output_ms: DashMap::new(),
+            last_input_ms: DashMap::new(),
             shell_states: DashMap::new(),
             terminal_rows: DashMap::new(),
             exit_codes: DashMap::new(),

@@ -45,7 +45,6 @@ When modifying PTY behavior, output parsing, shell state, or terminal UI:
 | `docs/user-guide/terminals.md` | User-facing terminal features |
 | `docs/api/tauri-commands.md` | PTY commands (create_pty, write_pty, resize_pty, etc.) |
 | `docs/backend/alacritty-integration.md` | Alacritty patch inventory, upstream API usage, update procedure |
-| `plans/terminal-worker-renderer.md` | Off-thread worker renderer (`offscreenRenderer`, default OFF). Keep the frame→grid decision shared via `decideFrameGrid` and the ack→decode→transfer order in `receiveFrame` in sync between the main `onFrame` and the worker (`renderer.worker.ts` / `workerGridState.ts` / `workerProtocol.ts`). Worker mode = main decodes+overlays, worker paints the base. |
 
 ### Keyboard Shortcuts & Actions
 When adding or changing shortcuts:
@@ -75,6 +74,7 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | `session-standby` | `{ session_id: string, standby: bool }` | `pty.rs emit_standby_event()` | `useAppInit.ts` → `terminalsStore.update(termId, { standby })` |
 | `worktree-created` | `{ repo_path: string, branch: string, worktree_path: string }` | `mcp_transport.rs`, `session.rs`, `worktree_routes.rs` | TBD — frontend switch prompt |
 | `repo-changed` (git-state) | `{ repo_path: string }` | `repo_watcher.rs` — **only when the git-state fingerprint changed** (index size + resolved HEAD + porcelain status; skips no-op `.git` touches). Last fingerprint in `AppState.repo_git_fingerprints`. | `useAppInit.ts` → coalesced one bump/repo/frame via `revisionCoalescer` → `repositoriesStore.bumpRevision` |
+| `head-changed` | `{ repo_path: string, branch: string }` | `repo_watcher.rs` — **only when the resolved HEAD target changed** (`resolve_head_target`); skips the Linux inotify storm where `.git/HEAD` events recur without HEAD moving (issue #82). Last target in `AppState.repo_head_targets`; suppressed-emit count in `AppState.repo_head_emits_suppressed`. | `useAppInit.ts` → branch rename/activate (also dedupes on `activeBranch === branch`) |
 
 ### HTTP & MCP Server
 When adding routes or changing server behavior:
@@ -160,6 +160,18 @@ When modifying AI Chat panel, settings, context menu actions, or streaming backe
 | `docs/FEATURES.md` | AI Chat feature section |
 | `docs/user-guide/ai-chat.md` | User-facing AI Chat guide |
 | `docs/api/tauri-commands.md` | Chat Registry + `open_panel_window` / `close_panel_window` / `focus_main_window` commands |
+
+### Extended thinking (Opus 4.7+ reasoning)
+When modifying reasoning effort, the thinking stream, or its gating:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/ai_agent/conversation_engine.rs` | `ReasoningLevel`, `supports_extended_thinking`, `resolve_reasoning`, `ConversationEvent::ReasoningChunk`, ChatOptions build + `captured_content` (thinking+signature) append |
+| `src-tauri/src/ai_agent/commands.rs` | `reasoning_effort` param + persisted-config fallback + 50ms ReasoningChunk batching |
+| `src-tauri/src/ai_chat.rs` | `AiChatConfig.reasoning_effort` field |
+| `src/stores/conversationStore.ts` | `reasoning_chunk` event + `reasoningChunks` signal + reset on new turn |
+| `src/components/AIChatPanel/AIChatPanel.tsx` | "Thinking" disclosure render |
+| `src/components/SettingsPanel/tabs/AiChatTab.tsx` | Extended-thinking effort dropdown |
 
 ### AI Agent (ReAct loop, knowledge store, MCP terminal tools)
 When modifying the AI agent loop engine, tool dispatch, session knowledge store,
@@ -257,7 +269,8 @@ When modifying git operations, worktree logic, or GitHub API:
 
 | File | What to update |
 |------|----------------|
-| `docs/backend/git.md` | Git command lifecycle, diff parsing |
+| `docs/backend/git.md` | Git command lifecycle, diff parsing, **GitReads port (gix vs CLI op split)**, moka cache |
+| `src-tauri/src/git_reads.rs` | **GitReads port**: flipping an op to gix requires a green byte-parity shootout test first |
 | `docs/backend/github.md` | PR fetching, CI checks, GraphQL |
 | `docs/user-guide/worktrees.md` | Worktree workflow, configuration |
 | `docs/user-guide/github-integration.md` | PR monitoring, CI rings |
@@ -359,8 +372,8 @@ When adding or changing `tuic://` schemes:
 | `docs/frontend/transport.md` | Tauri/HTTP dual-mode transport |
 | `docs/frontend/utilities.md` | Utility function reference |
 | `docs/features/ssh-tunnels.md` | SSH tunnel architecture and module map |
-| `docs/user-guide/*.md` | User-facing guides (14 files) |
+| `docs/user-guide/*.md` | User-facing guides (20 files) |
 | **Code-embedded docs** | |
 | `src-tauri/src/mcp_http/plugin_docs.rs` | AI-optimized plugin reference (`PLUGIN_DOCS` const) |
 | `src/actions/actionRegistry.ts` | ACTION_META → auto-populates HelpPanel + Command Palette |
-| `examples/plugins/` | Reference plugin implementations (6 examples) |
+| `examples/plugins/` | Reference plugin implementations (7 examples) |

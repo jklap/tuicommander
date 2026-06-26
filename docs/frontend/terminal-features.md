@@ -35,6 +35,18 @@ Consolidated reference for all terminal behaviors, keyboard shortcuts, and confi
 | Cmd+End | Scroll to bottom |
 | Shift+PageUp | Scroll one page up |
 | Shift+PageDown | Scroll one page down |
+| Wheel / two-finger | Scroll the scrollback (smooth) |
+| Shift+Wheel | Force scrollback scroll, never sent to the app |
+
+**Wheel vs. mouse-reporting apps.** When an app enables mouse tracking, the wheel
+is forwarded to it as SGR mouse codes **only in the alternate screen** (vim,
+lazygit, htop — they own the viewport and have no scrollback). In the *main*
+screen the wheel always scrolls TUIC's scrollback, even if the app enabled mouse
+mode — that history belongs to the terminal, not the app, so only the terminal
+can scroll it. This is why an inline app that turns on mouse reporting without
+switching to the alt screen (e.g. `grok --no-alt-screen`) still scrolls normally.
+Hold **Shift** to force scrollback scrolling regardless of mouse mode (consistent
+with Shift bypassing mouse reporting for clicks/selection).
 
 ### Split Panes
 

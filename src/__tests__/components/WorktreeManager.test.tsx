@@ -48,6 +48,7 @@ function mockPr(
 		mergeable: "UNKNOWN",
 		merge_state_status: "UNKNOWN",
 		review_decision: "",
+		viewer_did_approve: false,
 		labels: [],
 		is_draft: false,
 		base_ref_name: "main",

@@ -94,32 +94,30 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libasound2-dev mold
 
-      - name: Install Vulkan SDK (Windows)
-        if: matrix.platform == 'windows-latest'
-        # Pinned to v1.5.4 (Node20). v1.5.5 moved to Node24, which crashes
-        # instantly with no output on windows-latest runners mid-migration to
-        # windows-2025 — the source of intermittent "Install Vulkan SDK" failures.
-        uses: jakoch/install-vulkan-sdk-action@655818d26aa39d663e587b5620dd26519358981f # v1.5.4
-        with:
-          vulkan_version: 1.4.309.0
-          cache: true
-          stripdown: true
-
-      # Windows MAX_PATH workaround: whisper.cpp's vulkan-shaders-gen sub-build
-      # creates deeply nested TryCompile paths that exceed 260 chars. MSBuild's
-      # FileTracker uses legacy Win32 APIs that ignore LongPathsEnabled, so the
-      # only fix is to keep the target dir short. tauri-action honours
-      # CARGO_TARGET_DIR for artifact discovery (see tauri-action/src/utils.ts).
+      # Keep the Windows build/target dir short (C:/t): whisper.cpp's nested
+      # CMake TryCompile paths can exceed the 260-char MAX_PATH that MSBuild's
+      # FileTracker enforces. tauri-action honours CARGO_TARGET_DIR for artifact
+      # discovery (see tauri-action/src/utils.ts).
       - name: Short CARGO_TARGET_DIR (Windows)
         if: matrix.platform == 'windows-latest'
         shell: bash
         run: echo "CARGO_TARGET_DIR=C:/t" >> $GITHUB_ENV
 
+      # The windows-latest image (mid windows-2025/2026 migration) ships VS 18
+      # 2026, but the preinstalled CMake is too old to know that generator —
+      # whisper-rs-sys's build fails with "CMake Error: generator: Visual
+      # Studio 18 2026". Install the latest CMake, which recognises it.
+      - name: Upgrade CMake (Windows)
+        if: matrix.platform == 'windows-latest'
+        uses: lukka/get-cmake@latest
+
+      - uses: pnpm/action-setup@v4
+
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: 24
-          cache: npm
+          cache: pnpm
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -133,8 +131,24 @@ jobs:
           workspaces: './src-tauri -> target'
           cache-directories: ${{ matrix.platform == 'windows-latest' && 'C:/t' || '' }}
 
+      # A restored Windows build cache (C:/t) may hold a CMakeCache.txt from an
+      # older VS generator (e.g. VS 17 2022). When the runner image moves to a
+      # newer VS (18 2026), CMake aborts: "generator does not match the generator
+      # used previously". Drop the stale CMake config so whisper-rs-sys
+      # reconfigures against the current toolchain (sccache still caches the
+      # actual compiles, so the rebuild cost is minimal).
+      - name: Clear stale CMake cache (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: |
+          if (Test-Path C:/t) {
+            Get-ChildItem -Path C:/t -Recurse -Force -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -eq 'CMakeCache.txt' -or $_.Name -eq 'CMakeFiles' } |
+              Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Install frontend dependencies
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Import macOS signing certificate
         if: startsWith(matrix.platform, 'macos-')
@@ -200,7 +214,7 @@ jobs:
           CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Linux-x64' && '-fPIC' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
           CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || matrix.label == 'Linux-x64' && '-fPIC' || matrix.label == 'Windows-x64' && '/Z7' || '' }}
         with:
-          tauriScript: npx tauri
+          tauriScript: pnpm tauri
           tagName: nightly
           releaseName: 'TUICommander Nightly'
           releaseBody: |

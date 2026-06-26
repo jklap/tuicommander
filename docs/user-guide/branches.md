@@ -83,13 +83,17 @@ Right-click a branch → **Delete**.
 - A confirmation prompt lets you switch to force-delete (`git branch -D`) if needed
 - Deleting the current branch or the default branch (`main`, `master`, `develop`) is blocked
 
+### Delete merged branches (bulk)
+
+When one or more local branches are already merged into the default branch, a **broom button** (with a count badge) appears in the Branches tab header. Click it to delete them all at once, after confirming a dialog that lists the targets. Each deletion uses safe `git branch -d`, so a branch that isn't truly merged is kept rather than force-deleted.
+
 ## Rename Branch
 
 Right-click a branch → **Rename** to edit the branch name inline. The current name is pre-filled. Press `Enter` to confirm or `Escape` to cancel.
 
 ## Merge
 
-Right-click a branch → **Merge into Current** to merge it into the current branch. The merge runs in the background. Conflicts are reported in the Git Panel header.
+Right-click a branch → **Merge into Current** to merge it into the current branch. The merge runs in the background, and the result is shown as a toast: a conflict error on failure, "Already up to date" when there was nothing to merge, or a success toast with a one-click **Delete branch** action to clean up the branch you just merged.
 
 ## Rebase
 

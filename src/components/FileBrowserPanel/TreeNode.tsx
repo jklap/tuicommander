@@ -7,13 +7,15 @@ import { isAbsolutePath, joinPath } from "../../utils/pathUtils";
 import g from "../shared/git-status.module.css";
 import s from "./FileBrowserPanel.module.css";
 import { FileIcon } from "./FileIcon";
-import { formatSize, getStatusClass } from "./fileUtils";
+import { fileTooltip, formatSize, getStatusClass } from "./fileUtils";
 
 export interface TreeNodeProps {
 	entry: DirEntry;
 	depth: number;
 	repoPath: string;
 	fsRoot: string;
+	/** Relative path of the file open in the active editor, for highlighting. */
+	activePath: string | null;
 	expandedDirs: Set<string>;
 	onToggleExpand: (path: string) => void;
 	onFileOpen: (repoPath: string, filePath: string) => void;
@@ -59,7 +61,12 @@ export const TreeNode: Component<TreeNodeProps> = (props) => {
 	return (
 		<>
 			<div
-				class={cx(s.entry, props.entry.is_dir && s.entryDir, props.entry.is_ignored && s.entryIgnored)}
+				class={cx(
+					s.entry,
+					props.entry.is_dir && s.entryDir,
+					!props.entry.is_dir && props.entry.path === props.activePath && s.entryActive,
+					props.entry.is_ignored && s.entryIgnored,
+				)}
 				style={{ "padding-left": `${8 + props.depth * 16}px` }}
 				onClick={handleClick}
 				onContextMenu={(e) => props.onContextMenu(e, props.entry)}
@@ -82,7 +89,9 @@ export const TreeNode: Component<TreeNodeProps> = (props) => {
 					<span class={s.treeLeafSpacer} />
 				</Show>
 				<FileIcon name={props.entry.name} isDir={props.entry.is_dir} class={s.entryIcon} />
-				<span class={s.entryName}>{props.entry.name}</span>
+				<span class={s.entryName} title={fileTooltip(props.entry)}>
+					{props.entry.name}
+				</span>
 				<Show when={props.entry.git_status}>
 					<span class={cx(g.dot, getStatusClass(props.entry.git_status))} title={props.entry.git_status} />
 				</Show>
@@ -104,6 +113,7 @@ export const TreeNode: Component<TreeNodeProps> = (props) => {
 							depth={props.depth + 1}
 							repoPath={props.repoPath}
 							fsRoot={props.fsRoot}
+							activePath={props.activePath}
 							expandedDirs={props.expandedDirs}
 							onToggleExpand={props.onToggleExpand}
 							onFileOpen={props.onFileOpen}

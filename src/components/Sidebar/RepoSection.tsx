@@ -14,10 +14,12 @@ import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { contextMenuActionsStore } from "../../stores/contextMenuActionsStore";
 import { repoSettingsStore } from "../../stores/repoSettings";
+import { settingsStore } from "../../stores/settings";
 import { sidebarPluginStore } from "../../stores/sidebarPluginStore";
 import { cx } from "../../utils";
 import { compareBranches } from "../../utils/branchSort";
 import { keyFor } from "../../utils/hotkey";
+import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { handleOpenUrl } from "../../utils/openUrl";
 import type { ContextMenuItem } from "../ContextMenu";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
@@ -193,6 +195,55 @@ export const PrStateBadge: Component<{
 
 export { _resetMergedActivityAccum };
 
+/**
+ * Whether a branch shows its nested terminal-tab list. Single source of truth for
+ * the feature: gated by the `tabTreeEnabled` setting and only when the branch has
+ * more than one terminal. When off, the chevron, aria state, row-click toggle and
+ * the list itself are all inert.
+ */
+function getBranchTabsAvailable(branch: BranchState): boolean {
+	return settingsStore.state.tabTreeEnabled && branch.terminals.length > 1;
+}
+
+/** Collapsible list of terminal tabs under a branch row */
+const BranchTabList: Component<{ terminalIds: string[] }> = (props) => {
+	return (
+		<div class={s.branchTabList} role="group" aria-label="Terminal tabs">
+			<For each={props.terminalIds}>
+				{(id) => {
+					const term = () => terminalsStore.get(id);
+					const isActive = () => terminalsStore.state.activeId === id;
+					const dotClass = () => {
+						const t = term();
+						if (!t) return s.branchTabDot;
+						if (t.awaitingInput === "error") return cx(s.branchTabDot, s.branchTabDotError);
+						if (t.awaitingInput === "question") return cx(s.branchTabDot, s.branchTabDotQuestion);
+						if (terminalsStore.isBusy(id)) return cx(s.branchTabDot, s.branchTabDotBusy);
+						if (t.unseen) return cx(s.branchTabDot, s.branchTabDotUnseen);
+						if (t.shellState === "idle") return cx(s.branchTabDot, s.branchTabDotIdle);
+						return s.branchTabDot;
+					};
+
+					return (
+						<Show when={term()}>
+							{(t) => (
+								<button
+									class={cx(s.branchTabItem, isActive() && s.active)}
+									onClick={() => navigateToTerminal(id)}
+									title={t().name}
+								>
+									<span class={dotClass()} aria-hidden="true" />
+									<span class={s.branchTabName}>{t().name}</span>
+								</button>
+							)}
+						</Show>
+					);
+				}}
+			</For>
+		</div>
+	);
+};
+
 /** Branch item component */
 export const BranchItem: Component<{
 	branch: BranchState;
@@ -246,6 +297,25 @@ export const BranchItem: Component<{
 		}
 	};
 
+	// Clicking the row selects the branch and manages its tab list:
+	//  - Returning focus from elsewhere (branch was NOT active) → expand (open
+	//    stays open, never collapses on a focus-switch).
+	//  - Re-clicking the already-focused branch → toggle (so it can be closed).
+	// We read isActive BEFORE onSelect(), since onSelect synchronously flips the
+	// branch to active. Tabs only exist when a branch has more than one terminal.
+	// Child controls that own an action (PR badge, diff stats, add-terminal,
+	// remove) stopPropagation, so they never reach here.
+	const handleRowClick = () => {
+		const wasActive = props.isActive;
+		props.onSelect();
+		if (!getBranchTabsAvailable(props.branch)) return;
+		if (wasActive) {
+			repositoriesStore.toggleBranchTabsExpanded(props.repoPath, props.branch.name);
+		} else if (!props.branch.tabsExpanded) {
+			repositoriesStore.setBranchTabsExpanded(props.repoPath, props.branch.name, true);
+		}
+	};
+
 	const handleCopyPath = async () => {
 		const path = props.branch.worktreePath;
 		if (path) {
@@ -259,7 +329,12 @@ export const BranchItem: Component<{
 
 	const contextMenuItems = (): ContextMenuItem[] => {
 		const items: ContextMenuItem[] = [
-			{ label: "Copy Path", action: handleCopyPath, disabled: !props.branch.worktreePath },
+			{
+				label: "Copy Path",
+				title: props.branch.worktreePath ? shortenHomePath(props.branch.worktreePath) : undefined,
+				action: handleCopyPath,
+				disabled: !props.branch.worktreePath,
+			},
 			{ label: "Add Terminal", action: props.onAddTerminal },
 		];
 		if (!props.branch.isShell && props.branch.name) {
@@ -386,7 +461,12 @@ export const BranchItem: Component<{
 				</div>
 			}
 		>
-			<div class={cx(s.branchItem, props.isActive && s.active)} onClick={props.onSelect} onContextMenu={ctxMenu.open}>
+			<div
+				class={cx(s.branchItem, props.isActive && s.active)}
+				onClick={handleRowClick}
+				onContextMenu={ctxMenu.open}
+				aria-expanded={getBranchTabsAvailable(props.branch) ? (props.branch.tabsExpanded ?? false) : undefined}
+			>
 				<BranchIcon
 					isMainBranch={props.branch.isMain}
 					isMainWorktree={props.branch.worktreePath === props.repoPath}
@@ -449,6 +529,10 @@ export const BranchItem: Component<{
 						props.onShowChanges
 							? (e) => {
 									e.stopPropagation();
+									// Select this branch/worktree first so the Git panel targets it
+									// (it follows activeWorktreePath), then open the changes tab —
+									// otherwise the badge always shows the active branch's diff.
+									props.onSelect();
 									props.onShowChanges?.();
 								}
 							: undefined
@@ -493,6 +577,11 @@ export const BranchItem: Component<{
 					visible={ctxMenu.visible()}
 					onClose={ctxMenu.close}
 				/>
+				<Show when={getBranchTabsAvailable(props.branch)}>
+					<span class={cx(s.branchTabsChevron, props.branch.tabsExpanded && s.expanded)} aria-hidden="true">
+						›
+					</span>
+				</Show>
 			</div>
 		</Show>
 	);
@@ -531,7 +620,7 @@ export const RepoSection: Component<{
 	onSwitchBranch: (branchName: string) => void;
 	switchBranchList: () => string[];
 	currentBranch: () => string;
-	onMouseDrag: (e: MouseEvent) => void;
+	onMouseDrag: (e: PointerEvent) => void;
 }> = (props) => {
 	const repoMenu = createContextMenu();
 	const [labelDialogBranch, setLabelDialogBranch] = createSignal<{ name: string; current: string | undefined } | null>(
@@ -661,7 +750,7 @@ export const RepoSection: Component<{
 				props.dragOverClass,
 			)}
 			data-sidebar-repo={props.repo.path}
-			onMouseDown={(e) => props.onMouseDrag(e)}
+			onPointerDown={(e) => props.onMouseDrag(e)}
 		>
 			{/* Repo header */}
 			<div class={s.repoHeader} onClick={props.onToggle} onContextMenu={repoMenu.open}>
@@ -743,36 +832,47 @@ export const RepoSection: Component<{
 				<div class={s.repoBranches}>
 					<For each={sortedBranches()}>
 						{(branch, index) => (
-							<BranchItem
-								branch={branch}
-								repoPath={props.repo.path}
-								isActive={
-									repositoriesStore.state.activeRepoPath === props.repo.path && props.repo.activeBranch === branch.name
-								}
-								canRemove={canRemoveAny()}
-								shortcutIndex={props.quickSwitcherActive ? props.branchShortcutStart + index() : undefined}
-								agentMenuItems={props.buildAgentMenuItems ? () => props.buildAgentMenuItems!(branch.name) : undefined}
-								onSelect={() => props.onBranchSelect(branch.name)}
-								onAddTerminal={() => props.onAddTerminal(branch.name)}
-								isRemoving={props.removingBranches?.has(`${props.repo.path}::${branch.name}`)}
-								onRemove={() => props.onRemoveBranch(branch.name)}
-								onRename={() => props.onRenameBranch(branch.name)}
-								onCreateBranch={props.onCreateBranch ? () => props.onCreateBranch!(branch.name) : undefined}
-								onSetLabel={(current) => setLabelDialogBranch({ name: branch.name, current })}
-								onShowPrDetail={() => props.onShowPrDetail(branch.name)}
-								onShowChanges={props.onShowChanges}
-								onCreateWorktreeFromBranch={
-									props.onCreateWorktreeFromBranch ? () => props.onCreateWorktreeFromBranch!(branch.name) : undefined
-								}
-								onMergeAndArchive={props.onMergeAndArchive ? () => props.onMergeAndArchive!(branch.name) : undefined}
-								onSwitchBranch={
-									branch.worktreePath === props.repo.path ? (name) => props.onSwitchBranch(name) : undefined
-								}
-								switchBranchList={branch.worktreePath === props.repo.path ? props.switchBranchList : undefined}
-								currentBranch={branch.worktreePath === props.repo.path ? props.currentBranch : undefined}
-								githubBaseUrl={githubBaseUrl()}
-								repoHasTerminals={repoHasTerminals()}
-							/>
+							<div
+								class={cx(
+									s.branchGroup,
+									branch.tabsExpanded && getBranchTabsAvailable(branch) && s.branchGroupExpanded,
+								)}
+							>
+								<BranchItem
+									branch={branch}
+									repoPath={props.repo.path}
+									isActive={
+										repositoriesStore.state.activeRepoPath === props.repo.path &&
+										props.repo.activeBranch === branch.name
+									}
+									canRemove={canRemoveAny()}
+									shortcutIndex={props.quickSwitcherActive ? props.branchShortcutStart + index() : undefined}
+									agentMenuItems={props.buildAgentMenuItems ? () => props.buildAgentMenuItems!(branch.name) : undefined}
+									onSelect={() => props.onBranchSelect(branch.name)}
+									onAddTerminal={() => props.onAddTerminal(branch.name)}
+									isRemoving={props.removingBranches?.has(`${props.repo.path}::${branch.name}`)}
+									onRemove={() => props.onRemoveBranch(branch.name)}
+									onRename={() => props.onRenameBranch(branch.name)}
+									onCreateBranch={props.onCreateBranch ? () => props.onCreateBranch!(branch.name) : undefined}
+									onSetLabel={(current) => setLabelDialogBranch({ name: branch.name, current })}
+									onShowPrDetail={() => props.onShowPrDetail(branch.name)}
+									onShowChanges={props.onShowChanges}
+									onCreateWorktreeFromBranch={
+										props.onCreateWorktreeFromBranch ? () => props.onCreateWorktreeFromBranch!(branch.name) : undefined
+									}
+									onMergeAndArchive={props.onMergeAndArchive ? () => props.onMergeAndArchive!(branch.name) : undefined}
+									onSwitchBranch={
+										branch.worktreePath === props.repo.path ? (name) => props.onSwitchBranch(name) : undefined
+									}
+									switchBranchList={branch.worktreePath === props.repo.path ? props.switchBranchList : undefined}
+									currentBranch={branch.worktreePath === props.repo.path ? props.currentBranch : undefined}
+									githubBaseUrl={githubBaseUrl()}
+									repoHasTerminals={repoHasTerminals()}
+								/>
+								<Show when={branch.tabsExpanded && getBranchTabsAvailable(branch)}>
+									<BranchTabList terminalIds={branch.terminals} />
+								</Show>
+							</div>
 						)}
 					</For>
 					<Show when={sortedBranches().length === 0}>

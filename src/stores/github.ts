@@ -2,7 +2,7 @@ import { createStore, produce } from "solid-js/store";
 import { invoke, listen } from "../invoke";
 import type { BranchPrStatus, CheckDetail, CheckSummary, GitHubIssue, GitHubStatus } from "../types";
 import { appLogger } from "./appLogger";
-import { type PrNotificationType, prNotificationsStore } from "./prNotifications";
+import { isNotificationType, prNotificationsStore } from "./prNotifications";
 import { repositoriesStore } from "./repositories";
 import { settingsStore } from "./settings";
 
@@ -49,6 +49,8 @@ function createGitHubStore() {
 	let ciFailedCallback: ((repoPath: string, branch: string, prNumber: number) => void) | null = null;
 	/** Callback fired when CI checks recover (failed → all passing) for a PR */
 	let ciRecoveredCallback: ((repoPath: string, branch: string, prNumber: number) => void) | null = null;
+	/** Callback fired when a PR becomes blocked by merge conflicts (mergeable → CONFLICTING) */
+	let conflictCallback: ((repoPath: string, branch: string, prNumber: number) => void) | null = null;
 
 	/** Update repo data from Rust poller event (transitions handled by separate event) */
 	function updateRepoData(repoPath: string, prStatuses: BranchPrStatus[]): void {
@@ -250,14 +252,19 @@ function createGitHubStore() {
 		);
 	}
 
-	/** Handle transition events from Rust poller */
+	/** Handle transition events from Rust poller. `type` is the raw poller tag — a
+	 *  superset of the renderable notification types (it also carries watcher-only
+	 *  `pushed`/`opened`), so gate the notification add behind `isNotificationType`. */
 	function handleTransition(t: {
-		type: PrNotificationType;
+		type: string;
 		repo_path: string;
 		branch: string;
 		pr_number: number;
 		title: string;
 	}): void {
+		// Watcher-only transitions (pushed/opened) have no popover label — skip them.
+		if (!isNotificationType(t.type)) return;
+
 		prNotificationsStore.add({
 			repoPath: t.repo_path,
 			branch: t.branch,
@@ -274,6 +281,9 @@ function createGitHubStore() {
 		}
 		if (t.type === "ci_recovered" && ciRecoveredCallback) {
 			ciRecoveredCallback(t.repo_path, t.branch, t.pr_number);
+		}
+		if (t.type === "blocked" && conflictCallback) {
+			conflictCallback(t.repo_path, t.branch, t.pr_number);
 		}
 	}
 
@@ -299,7 +309,7 @@ function createGitHubStore() {
 			pollRemoteStatus(event.payload.repo_path);
 		}).then((unsub) => unlisteners.push(unsub));
 
-		listen<{ type: PrNotificationType; repo_path: string; branch: string; pr_number: number; title: string }>(
+		listen<{ type: string; repo_path: string; branch: string; pr_number: number; title: string }>(
 			"github-transition",
 			(event) => handleTransition(event.payload),
 		).then((unsub) => unlisteners.push(unsub));
@@ -370,10 +380,19 @@ function createGitHubStore() {
 		setOnCiRecovered(cb: ((repoPath: string, branch: string, prNumber: number) => void) | null): void {
 			ciRecoveredCallback = cb;
 		},
+		/** Register a callback for merge-conflict blocks (mergeable → CONFLICTING) */
+		setOnConflict(cb: ((repoPath: string, branch: string, prNumber: number) => void) | null): void {
+			conflictCallback = cb;
+		},
 		/** Fire the CI-failed handler on demand (e.g. when auto-heal is enabled while CI
 		 *  is already red) — the transition event only fires once on green→red. */
 		triggerCiHeal(repoPath: string, branch: string, prNumber: number): void {
 			ciFailedCallback?.(repoPath, branch, prNumber);
+		},
+		/** Fire the conflict handler on demand (e.g. when auto-heal is enabled while the
+		 *  PR is already conflicting) — the transition event only fires once on the edge. */
+		triggerConflictHeal(repoPath: string, branch: string, prNumber: number): void {
+			conflictCallback?.(repoPath, branch, prNumber);
 		},
 	};
 }

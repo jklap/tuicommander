@@ -1,6 +1,6 @@
 # TUICommander Specification
 
-**Version:** 1.3.1
+**Version:** 1.5.0
 **Last Updated:** 2026-05-04
 
 ## Overview
@@ -154,7 +154,7 @@ See `src/hooks/` for full signatures — the above is a representative summary.
 ## Agent Types
 
 ```typescript
-type AgentType = "claude" | "gemini" | "opencode" | "aider" | "codex" | "amp" | "cursor" | "droid" | "git";
+type AgentType = "claude" | "gemini" | "opencode" | "aider" | "codex" | "amp" | "cursor" | "goose" | "droid" | "git" | "api";
 ```
 
 Full agent configuration (binary, resume command, session discovery, detection patterns) lives in `src/agents.ts`.
@@ -307,9 +307,9 @@ All stores persist to localStorage:
 - [x] Notes/Ideas: mark as used, badge count in status bar
 - [x] Notes/Ideas: image paste support (Ctrl+V), thumbnails, send absolute paths to terminal
 - [x] Inter-Agent Messaging (`messaging` MCP tool: register, list_peers, send, inbox with channel push + polling fallback)
-- [x] Smart Prompts (24 built-in AI prompts with context variable resolution, inject/headless/API execution, toolbar dropdown, SmartButtonStrip, Command Palette integration, direct LLM API mode via genai crate)
+- [x] Smart Prompts (29 built-in AI prompts with context variable resolution, inject/headless/API execution, toolbar dropdown, SmartButtonStrip, Command Palette integration, direct LLM API mode via genai crate)
 - [x] AI Chat panel (`Cmd+Alt+A`) — streaming conversational AI with terminal context injection, multi-provider (Ollama/Anthropic/OpenAI/OpenRouter), conversation persistence, OS-keyring API keys
-- [x] AI Agent loop (ReAct) — 6 tools (read_screen/send_input/send_key/wait_for/get_state/get_context), pause/resume, destructive-command approval gate, tool-call cards
+- [x] AI Agent loop (ReAct) — terminal observe/act, filesystem, search, drive_agent, and reactive watch tools; pause/resume, destructive-command approval gate, tool-call cards
 - [x] Session knowledge store — per-session command outcomes, error→fix pairs, CWD history, TUI apps seen; fed by OSC 133 with silence-timer fallback; persisted with 2s debounce
 - [x] TUI app detection — alternate-screen tracking classifies terminal as Shell or FullscreenTui with app hint (vim/htop/lazygit/…)
 - [x] `ai_terminal_*` MCP tools — external agent surface (Claude Code, Cursor) driving TUICommander terminals with user-confirmation gates
@@ -369,4 +369,3 @@ For web deployment without Tauri:
 - [SolidJS Documentation](https://www.solidjs.com/docs/latest)
 - [alacritty_terminal crate](https://crates.io/crates/alacritty_terminal)
 - [Tauri Documentation](https://tauri.app/v1/guides/)
-- [Feasibility Analysis](docs/FEASIBILITY-ANALYSIS.md)

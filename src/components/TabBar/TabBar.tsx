@@ -6,6 +6,7 @@ import {
 	createSignal,
 	For,
 	Match,
+	on,
 	onCleanup,
 	onMount,
 	Show,
@@ -468,21 +469,32 @@ export const TabBar: Component<TabBarProps> = (props) => {
 		return tabOrderingStore.getOrdered(allIds);
 	};
 
-	// Deactivate non-terminal tabs that become invisible after branch switch
-	createEffect(() => {
-		const diffActive = diffTabsStore.state.activeId;
-		if (diffActive && !visibleDiffIds().includes(diffActive)) {
-			diffTabsStore.setActive(null);
-		}
-		const mdActive = mdTabsStore.state.activeId;
-		if (mdActive && !visibleMdIds().includes(mdActive)) {
-			mdTabsStore.setActive(null);
-		}
-		const editActive = editorTabsStore.state.activeId;
-		if (editActive && !visibleEditIds().includes(editActive)) {
-			editorTabsStore.setActive(null);
-		}
-	});
+	// Deactivate non-terminal tabs that become invisible after a BRANCH SWITCH.
+	// Gated on activeBranchKey (with defer) so it fires only on an actual branch
+	// change — NOT on every tab open. A plain createEffect here re-ran whenever a
+	// tab was added (activeId change) and nuked a just-opened diff/md/editor whose
+	// branchKey didn't yet match the active branch (e.g. opening a diff from a
+	// worktree's Git panel), so the click appeared to do nothing.
+	createEffect(
+		on(
+			activeBranchKey,
+			() => {
+				const diffActive = diffTabsStore.state.activeId;
+				if (diffActive && !visibleDiffIds().includes(diffActive)) {
+					diffTabsStore.setActive(null);
+				}
+				const mdActive = mdTabsStore.state.activeId;
+				if (mdActive && !visibleMdIds().includes(mdActive)) {
+					mdTabsStore.setActive(null);
+				}
+				const editActive = editorTabsStore.state.activeId;
+				if (editActive && !visibleEditIds().includes(editActive)) {
+					editorTabsStore.setActive(null);
+				}
+			},
+			{ defer: true },
+		),
+	);
 
 	// Evict non-pinned plugin-panel tabs from other repos on repo switch — they
 	// would otherwise pile up forever, invisible but still holding HTML in memory.
@@ -501,7 +513,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 
 	// Mouse-based drag — replaces HTML5 DnD which conflicts with Tauri dragDropEnabled=true
 	const handleMouseDrag = (
-		e: MouseEvent,
+		e: PointerEvent,
 		id: string,
 		_tabType: "terminal" | "markdown" | "diff" | "editor" = "terminal",
 	) => {
@@ -847,7 +859,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 											}}
 											onContextMenu={(e) => openTabContextMenu(e, id)}
 											title={`${terminal()?.alias ?? `Terminal ${index() + 1}`}${index() < 9 ? ` (${keyFor(`switch-tab-${index() + 1}`)})` : ""}`}
-											onMouseDown={(e) => !isEditing() && handleMouseDrag(e, id)}
+											onPointerDown={(e) => !isEditing() && handleMouseDrag(e, id)}
 											onMouseEnter={() => setHovered(true)}
 											onMouseLeave={() => setHovered(false)}
 											onDblClick={(e) => {
@@ -973,7 +985,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 											}}
 											onContextMenu={(e) => openTabContextMenu(e, id)}
 											title={diffTab()?.filePath}
-											onMouseDown={(e) => handleMouseDrag(e, id, "diff")}
+											onPointerDown={(e) => handleMouseDrag(e, id, "diff")}
 										>
 											<span class={s.tabIcon}>
 												{diffTab()?.filePath ? (
@@ -1058,7 +1070,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 														? `PR #${tab.prNumber}: ${tab.prTitle}`
 														: tab?.title;
 											})()}
-											onMouseDown={(e) => handleMouseDrag(e, id, "markdown")}
+											onPointerDown={(e) => handleMouseDrag(e, id, "markdown")}
 										>
 											<span class={s.tabIcon}>
 												{mdTab()?.type === "pr-diff" ? (
@@ -1140,7 +1152,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 											}}
 											onContextMenu={(e) => openTabContextMenu(e, id)}
 											title={editTab()?.filePath}
-											onMouseDown={(e) => handleMouseDrag(e, id, "editor")}
+											onPointerDown={(e) => handleMouseDrag(e, id, "editor")}
 										>
 											<span class={s.tabIcon}>
 												{editTab()?.isDirty ? (
@@ -1249,7 +1261,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 															}}
 															onContextMenu={(e) => openTabContextMenu(e, id)}
 															title={`${terminal()?.alias ?? `Terminal ${termIndex() + 1}`}${termIndex() < 9 ? ` (${keyFor(`switch-tab-${termIndex() + 1}`)})` : ""}`}
-															onMouseDown={(e) => !isEditing() && handleMouseDrag(e, id)}
+															onPointerDown={(e) => !isEditing() && handleMouseDrag(e, id)}
 															onDblClick={(e) => {
 																e.stopPropagation();
 																setEditingId(id);
@@ -1357,7 +1369,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 															}}
 															onContextMenu={(e) => openTabContextMenu(e, id)}
 															title={diffTab()?.filePath}
-															onMouseDown={(e) => handleMouseDrag(e, id, "diff")}
+															onPointerDown={(e) => handleMouseDrag(e, id, "diff")}
 														>
 															<span class={s.tabIcon}>
 																<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
@@ -1435,7 +1447,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 																		? `PR #${tab.prNumber}: ${tab.prTitle}`
 																		: tab?.title;
 															})()}
-															onMouseDown={(e) => handleMouseDrag(e, id, "markdown")}
+															onPointerDown={(e) => handleMouseDrag(e, id, "markdown")}
 														>
 															<span class={s.tabIcon}>
 																<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
@@ -1503,7 +1515,7 @@ export const TabBar: Component<TabBarProps> = (props) => {
 															}}
 															onContextMenu={(e) => openTabContextMenu(e, id)}
 															title={editTab()?.filePath}
-															onMouseDown={(e) => handleMouseDrag(e, id, "editor")}
+															onPointerDown={(e) => handleMouseDrag(e, id, "editor")}
 														>
 															<span class={s.tabIcon}>
 																{editTab()?.isDirty ? (

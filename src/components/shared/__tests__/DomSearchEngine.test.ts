@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { SearchOptions } from "../DomSearchEngine";
-import { DomSearchEngine } from "../DomSearchEngine";
+import { buildSearchPattern, DomSearchEngine } from "../DomSearchEngine";
 
 const DEFAULT_OPTS: SearchOptions = { caseSensitive: false, regex: false, wholeWord: false };
 
@@ -53,6 +53,56 @@ describe("DomSearchEngine", () => {
 			const marks = container.querySelectorAll("mark.search-match");
 			expect(marks.length).toBe(1);
 			expect(marks[0].textContent).toBe("world");
+		});
+	});
+
+	describe("matchFractions()", () => {
+		const asRect = (top: number, height: number): DOMRect =>
+			({ top, height, left: 0, right: 0, bottom: top + height, width: 0, x: 0, y: top, toJSON() {} }) as DOMRect;
+
+		/** Build a scroll container with a given scrollHeight and top offset 0. */
+		const makeScrollEl = (scrollHeight: number, scrollTop = 0): HTMLElement => {
+			const el = document.createElement("div");
+			Object.defineProperty(el, "scrollHeight", { value: scrollHeight, configurable: true });
+			Object.defineProperty(el, "scrollTop", { value: scrollTop, configurable: true });
+			el.getBoundingClientRect = () => asRect(0, 0);
+			return el;
+		};
+
+		/** Override each rendered <mark>'s rect (in DOM order). */
+		const stubMarkRects = (...rects: DOMRect[]) => {
+			const marks = container.querySelectorAll<HTMLElement>("mark.search-match");
+			marks.forEach((m, i) => {
+				m.getBoundingClientRect = () => rects[i];
+			});
+		};
+
+		it("returns [] when the scroll container has no height", () => {
+			engine.search("hello", DEFAULT_OPTS);
+			expect(engine.matchFractions(makeScrollEl(0))).toEqual([]);
+		});
+
+		it("maps each match to the fraction of its center down the scroll height", () => {
+			engine.search("hello", DEFAULT_OPTS); // two marks
+			stubMarkRects(asRect(100, 10), asRect(600, 10));
+			const fr = engine.matchFractions(makeScrollEl(1000));
+			expect(fr).toHaveLength(2);
+			expect(fr[0]).toBeCloseTo(0.105); // (100 + 5) / 1000
+			expect(fr[1]).toBeCloseTo(0.605); // (600 + 5) / 1000
+		});
+
+		it("deduplicates matches that land in the same permille bucket", () => {
+			engine.search("hello", DEFAULT_OPTS);
+			stubMarkRects(asRect(300, 10), asRect(300, 10));
+			expect(engine.matchFractions(makeScrollEl(1000))).toHaveLength(1);
+		});
+
+		it("clamps fractions to [0, 1]", () => {
+			engine.search("hello", DEFAULT_OPTS);
+			stubMarkRects(asRect(-50, 10), asRect(5000, 10));
+			const fr = engine.matchFractions(makeScrollEl(1000));
+			expect(fr[0]).toBe(0);
+			expect(fr[1]).toBe(1);
 		});
 	});
 
@@ -178,5 +228,38 @@ describe("DomSearchEngine", () => {
 			const marks = container.querySelectorAll("mark.search-match");
 			expect(marks.length).toBeLessThanOrEqual(1000);
 		});
+	});
+});
+
+describe("buildSearchPattern", () => {
+	it("returns null for an empty term", () => {
+		expect(buildSearchPattern("", DEFAULT_OPTS)).toBeNull();
+	});
+
+	it("escapes regex metacharacters in literal mode", () => {
+		const re = buildSearchPattern("a.b(c)", DEFAULT_OPTS);
+		expect(re).not.toBeNull();
+		expect("a.b(c)".match(re as RegExp)).toHaveLength(1);
+		expect("aXbYc".match(re as RegExp)).toBeNull();
+	});
+
+	it("honors caseSensitive flag", () => {
+		expect(buildSearchPattern("Hi", { ...DEFAULT_OPTS, caseSensitive: true })?.flags).toBe("g");
+		expect(buildSearchPattern("Hi", DEFAULT_OPTS)?.flags).toBe("gi");
+	});
+
+	it("wraps with word boundaries for wholeWord", () => {
+		const re = buildSearchPattern("cat", { ...DEFAULT_OPTS, wholeWord: true });
+		expect("a cat sat".match(re as RegExp)).toHaveLength(1);
+		expect("category".match(re as RegExp)).toBeNull();
+	});
+
+	it("treats the term as a pattern in regex mode", () => {
+		const re = buildSearchPattern("ab+", { ...DEFAULT_OPTS, regex: true });
+		expect("abbb".match(re as RegExp)).toHaveLength(1);
+	});
+
+	it("returns null for an invalid regex", () => {
+		expect(buildSearchPattern("a(", { ...DEFAULT_OPTS, regex: true })).toBeNull();
 	});
 });

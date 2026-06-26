@@ -59,6 +59,85 @@ describe("terminalsStore", () => {
 				expect(store.state.activeId).toBeNull();
 			});
 		});
+
+		it("cancels a pending OSC 133 rAF flush so it can't resurrect a ghost entry", () => {
+			const rafCallbacks = new Map<number, FrameRequestCallback>();
+			let nextHandle = 0;
+			const raf = vi.fn((cb: FrameRequestCallback) => {
+				nextHandle += 1;
+				rafCallbacks.set(nextHandle, cb);
+				return nextHandle;
+			});
+			const caf = vi.fn((handle: number) => {
+				rafCallbacks.delete(handle);
+			});
+			vi.stubGlobal("requestAnimationFrame", raf);
+			vi.stubGlobal("cancelAnimationFrame", caf);
+
+			try {
+				testInScope(() => {
+					const id = store.add(makeTerminal());
+					// Enqueue a completed command block → schedules an OSC 133 flush rAF.
+					store.handleOsc133(id, "A", 1);
+					store.handleOsc133(id, "D", 5, 0);
+					expect(raf).toHaveBeenCalledTimes(1);
+					const pendingFlush = rafCallbacks.get(1);
+					expect(pendingFlush).toBeDefined();
+
+					// Remove the terminal while the flush is still pending.
+					store.remove(id);
+					expect(store.get(id)).toBeUndefined();
+					expect(caf).toHaveBeenCalledWith(1);
+
+					// Even if a stale callback fires, the has(id) guard must keep the
+					// terminal dead — a setState on a missing key would create a ghost.
+					pendingFlush?.(0);
+					expect(store.get(id)).toBeUndefined();
+				});
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+	});
+
+	describe("addUserPromptLine()", () => {
+		it("appends user-prompt lines in order", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.addUserPromptLine(id, 10);
+				store.addUserPromptLine(id, 42);
+				expect(store.get(id)!.userPromptLines).toEqual([10, 42]);
+			});
+		});
+
+		it("ignores negative lines (keystroke-reconstructed UserInput has no grid row)", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.addUserPromptLine(id, -1);
+				expect(store.get(id)!.userPromptLines).toEqual([]);
+			});
+		});
+
+		it("dedups a consecutive repeat of the same line (prompt redraw re-fires busy)", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.addUserPromptLine(id, 7);
+				store.addUserPromptLine(id, 7);
+				expect(store.get(id)!.userPromptLines).toEqual([7]);
+			});
+		});
+
+		it("evicts the oldest lines past the cap (mirrors commandBlocks)", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				// MAX_BLOCKS is 500; push 501 distinct lines and assert the oldest dropped.
+				for (let i = 0; i < 501; i++) store.addUserPromptLine(id, i);
+				const lines = store.get(id)!.userPromptLines;
+				expect(lines.length).toBe(500);
+				expect(lines[0]).toBe(1);
+				expect(lines[lines.length - 1]).toBe(500);
+			});
+		});
 	});
 
 	describe("setActive()", () => {
@@ -195,6 +274,39 @@ describe("terminalsStore", () => {
 				expect(store.get(id)!.awaitingInput).toBe("question");
 				// And going back to idle also must not clear it
 				store.update(id, { shellState: "idle" });
+				expect(store.get(id)!.awaitingInput).toBe("question");
+			});
+		});
+
+		it("agentType set→null clears awaitingInput (agent exited to a plain shell)", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal({ agentType: "claude" }));
+				// Confident question: deliberately survives idle↔busy, so only an
+				// explicit signal (user-input, process exit, or agent→shell) may clear it.
+				store.setAwaitingInput(id, "question", true);
+				// Agent process exits; detection flips agentType to null (shell prompt returned).
+				store.update(id, { agentType: null });
+				expect(store.get(id)!.awaitingInput).toBeNull();
+				expect(store.get(id)!.awaitingInputConfident).toBe(false);
+			});
+		});
+
+		it("agentType null→null does not clear awaitingInput (no agent transition)", () => {
+			testInScope(() => {
+				// A plain shell that legitimately detected a question (e.g. a script's
+				// "Continue? " prompt). No agent→shell transition occurs, so it must survive.
+				const id = store.add(makeTerminal({ agentType: null }));
+				store.setAwaitingInput(id, "question", true);
+				store.update(id, { agentType: null });
+				expect(store.get(id)!.awaitingInput).toBe("question");
+			});
+		});
+
+		it("agentType claude→codex does not clear awaitingInput (still an agent)", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal({ agentType: "claude" }));
+				store.setAwaitingInput(id, "question", true);
+				store.update(id, { agentType: "codex" });
 				expect(store.get(id)!.awaitingInput).toBe("question");
 			});
 		});
@@ -417,6 +529,21 @@ describe("terminalsStore", () => {
 			});
 		});
 
+		it("preserves a CONFIDENT awaitingInput across idle→busy oscillation", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.update(id, { shellState: "idle" });
+				// Confident prompt (e.g. Ink "Enter to select" menu)
+				store.setAwaitingInput(id, "question", true);
+				expect(store.get(id)!.awaitingInput).toBe("question");
+				// A fullscreen TUI repaint oscillates idle→busy; the confident prompt
+				// must survive (it clears only on real user-input or process exit).
+				store.update(id, { shellState: "busy" });
+				expect(store.get(id)!.awaitingInput).toBe("question");
+				expect(store.get(id)!.awaitingInputConfident).toBe(true);
+			});
+		});
+
 		it("does not clear awaitingInput on null→busy transition", () => {
 			testInScope(() => {
 				const id = store.add(makeTerminal());
@@ -491,6 +618,63 @@ describe("terminalsStore", () => {
 			testInScope(() => {
 				store.setActive(null);
 				expect(store.state.lastActiveId).toBeNull();
+			});
+		});
+	});
+
+	describe("previousActiveId (return to last terminal)", () => {
+		it("is null with no prior active terminal", () => {
+			testInScope(() => {
+				const id = store.add(makeTerminal());
+				store.setActive(id);
+				expect(store.getPreviousActiveId()).toBeNull();
+			});
+		});
+
+		it("remembers the terminal left behind when switching", () => {
+			testInScope(() => {
+				const id1 = store.add(makeTerminal({ name: "T1" }));
+				const id2 = store.add(makeTerminal({ name: "T2" }));
+				store.setActive(id1);
+				store.setActive(id2);
+				expect(store.getPreviousActiveId()).toBe(id1);
+			});
+		});
+
+		it("toggles between two terminals on repeated switches", () => {
+			testInScope(() => {
+				const id1 = store.add(makeTerminal({ name: "T1" }));
+				const id2 = store.add(makeTerminal({ name: "T2" }));
+				store.setActive(id1);
+				store.setActive(id2);
+				// Return to T1: previous becomes T2.
+				store.setActive(id1);
+				expect(store.getPreviousActiveId()).toBe(id2);
+				// Return to T2: previous becomes T1 again.
+				store.setActive(id2);
+				expect(store.getPreviousActiveId()).toBe(id1);
+			});
+		});
+
+		it("does not update when re-activating the already-active terminal", () => {
+			testInScope(() => {
+				const id1 = store.add(makeTerminal({ name: "T1" }));
+				const id2 = store.add(makeTerminal({ name: "T2" }));
+				store.setActive(id1);
+				store.setActive(id2);
+				store.setActive(id2);
+				expect(store.getPreviousActiveId()).toBe(id1);
+			});
+		});
+
+		it("getPreviousActiveId returns null once the previous terminal is removed", () => {
+			testInScope(() => {
+				const id1 = store.add(makeTerminal({ name: "T1" }));
+				const id2 = store.add(makeTerminal({ name: "T2" }));
+				store.setActive(id1);
+				store.setActive(id2);
+				store.remove(id1);
+				expect(store.getPreviousActiveId()).toBeNull();
 			});
 		});
 	});

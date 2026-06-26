@@ -44,6 +44,35 @@
   /* container for repo sections */
 }
 
+/* ── Repo filter status banner (shown only while "active only" is engaged) ── */
+.filterStatus {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: calc(100% - 16px);
+  margin: 0 8px 6px;
+  padding: 4px 8px;
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border: none;
+  border-left: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  color: var(--accent);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.filterStatus:hover {
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+}
+
+.filterStatusClear {
+  margin-left: auto;
+  text-decoration: underline;
+  opacity: 0.85;
+}
+
 .footer {
   height: var(--status-height);
   min-height: var(--status-height);
@@ -195,7 +224,7 @@
 }
 
 .repoChevron {
-  font-size: var(--font-lg);
+  font-size: var(--font-2xl);
   color: var(--fg-secondary);
   transition: transform 150ms ease;
   transform: rotate(0deg);
@@ -496,6 +525,135 @@
   color: var(--fg-muted);
   margin-left: 4px;
   flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Branch group — wraps a branch row + its collapsible terminal tab list.
+   When expanded, hovering anywhere over the block lifts the whole group as a
+   unified card (DIA-style), while individual items keep their own stronger hover. */
+.branchGroup {
+  border-radius: var(--radius-lg);
+  transition: background 0.15s ease;
+}
+
+.branchGroupExpanded {
+  padding-bottom: 3px;
+}
+
+@media (hover: hover) {
+  .branchGroupExpanded:hover {
+    background: rgba(255, 255, 255, 0.035);
+  }
+}
+
+/* Branch tab list — collapsible terminal tab list under branch row */
+.branchTabsChevron {
+  background: none;
+  border: none;
+  color: var(--fg-secondary);
+  font-size: var(--font-xl);
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: transform 150ms ease, color 0.1s;
+  transform: rotate(0deg);
+  opacity: 0.8;
+}
+
+.branchTabsChevron:hover {
+  color: var(--fg-primary);
+  opacity: 1;
+}
+
+.branchTabsChevron.expanded {
+  transform: rotate(90deg);
+  color: var(--fg-primary);
+  opacity: 1;
+}
+
+.branchTabList {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 2px 0 4px 0;
+  margin: 0 2px 0 8px;
+}
+
+.branchTabItem {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 16px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-size: var(--font-sm);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: background 0.15s, color 0.15s;
+  background: none;
+  border: none;
+  font-family: inherit;
+  text-align: left;
+  width: 100%;
+}
+
+.branchTabItem.active {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg-primary);
+}
+
+@media (hover: hover) {
+  .branchTabItem:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--fg-primary);
+  }
+
+  .branchTabItem.active:hover {
+    background: rgba(255, 255, 255, 0.11);
+  }
+}
+
+.branchTabDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--fg-muted);
+  opacity: 0.4;
+}
+
+.branchTabDotBusy {
+  background: var(--activity);
+  opacity: 1;
+  animation: pulse-opacity 1.5s ease-in-out infinite;
+}
+
+.branchTabDotIdle {
+  background: var(--success);
+  opacity: 1;
+}
+
+.branchTabDotUnseen {
+  background: var(--unseen);
+  opacity: 1;
+}
+
+.branchTabDotError {
+  background: var(--error);
+  opacity: 1;
+}
+
+.branchTabDotQuestion {
+  background: var(--attention);
+  opacity: 1;
+}
+
+.branchTabName {
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

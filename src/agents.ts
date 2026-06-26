@@ -8,6 +8,7 @@ export type AgentType =
 	| "amp"
 	| "cursor"
 	| "goose"
+	| "grok"
 	| "droid"
 	| "git"
 	| "api";
@@ -22,6 +23,7 @@ export const AGENT_TYPES: readonly AgentType[] = [
 	"amp",
 	"cursor",
 	"goose",
+	"grok",
 	"droid",
 	"git",
 	"api",
@@ -241,6 +243,28 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 			prompt: [/\[y\/n\]/i],
 		},
 	},
+	grok: {
+		type: "grok",
+		name: "Grok",
+		binary: "grok",
+		description: "xAI's Grok coding CLI (Grok Build)",
+		defaultHeadlessTemplate: 'grok --single "{prompt}"',
+		resumeCommand: "grok --continue",
+		sessionDiscovery: { resumeWithId: (id) => `grok --resume ${id}` },
+		spawnArgs: (prompt, options = {}) => {
+			const args: string[] = [];
+			if (options.model) args.push("--model", options.model);
+			args.push(prompt);
+			return args;
+		},
+		outputFormat: "text",
+		detectPatterns: {
+			rateLimit: [/rate.?limit/i, /429/, /too many requests/i, /overloaded/i],
+			completion: [],
+			error: [/error:/i, /failed:/i],
+			prompt: [/\[y\/n\]/i],
+		},
+	},
 	droid: {
 		type: "droid",
 		name: "Droid",
@@ -315,7 +339,16 @@ export interface AgentSettingsConfig {
 	intent_tab_title?: boolean;
 	/** Per-agent override: show suggested follow-ups. Undefined = use global default. */
 	suggest_followups?: boolean;
+	/**
+	 * Opt-in: drive busy/idle/awaiting from the agent's native hooks instead of
+	 * output heuristics. Enabling installs hooks into the agent's settings file;
+	 * disabling removes only TUIC's entries. Undefined/false = heuristics (default).
+	 */
+	hook_instrumentation?: boolean;
 }
+
+/** Install state of an agent's TUIC hooks (mirrors Rust `InstallState::as_str`). */
+export type AgentHookState = "installed" | "outdated" | "notInstalled" | "unsupported";
 
 /** Full agents config (matches Rust AgentsConfig) */
 export interface AgentsConfig {
@@ -334,6 +367,26 @@ export const MCP_SUPPORT: Record<AgentType, boolean> = {
 	amp: true,
 	cursor: true,
 	goose: true,
+	grok: false,
+	droid: false,
+	git: false,
+	api: false,
+};
+
+/**
+ * Which agents support native-hook state instrumentation (settings-hook shape).
+ * Claude/Gemini/Grok/Codex use settings-hooks; OpenCode uses a code-extension plugin.
+ */
+export const HOOK_SUPPORT: Record<AgentType, boolean> = {
+	claude: true,
+	gemini: true,
+	opencode: true,
+	aider: false,
+	codex: true,
+	amp: false,
+	cursor: false,
+	goose: false,
+	grok: true,
 	droid: false,
 	git: false,
 	api: false,
@@ -349,6 +402,7 @@ export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string }> =
 	amp: { icon: "A", color: "#ff5543" },
 	cursor: { icon: "C", color: "#000000" },
 	goose: { icon: "G", color: "#f59e0b" },
+	grok: { icon: "G", color: "#1a1a1a" },
 	droid: { icon: "D", color: "#f97316" },
 	git: { icon: "G", color: "#f05032" },
 	api: { icon: "⚡", color: "#06b6d4" },

@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { usePty } from "../../hooks/usePty";
 import { useRepository } from "../../hooks/useRepository";
 import { t } from "../../i18n";
@@ -14,11 +14,13 @@ import { cx } from "../../utils";
 import { ConfirmDialog } from "../ConfirmDialog";
 import type { SearchOptions } from "../shared/DomSearchEngine";
 import { DomSearchEngine } from "../shared/DomSearchEngine";
+import { DomSearchOverview } from "../shared/DomSearchOverview";
 import { SearchBar } from "../shared/SearchBar";
 import { DiffViewer } from "../ui";
 import { BranchDiffScrollView } from "./BranchDiffScrollView";
 import s from "./DiffTab.module.css";
 import { buildPartialPatch, extractHunks, extractSelectedLines } from "./diffPatch";
+import { diffLineCount, isDiffTooLarge } from "./diffSize";
 
 export interface DiffTabProps {
 	tabId: string;
@@ -49,6 +51,10 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	const [searchVisible, setSearchVisible] = createSignal(false);
 	const [matchIndex, setMatchIndex] = createSignal(-1);
 	const [matchCount, setMatchCount] = createSignal(0);
+	/** Match-center fractions for the scrollbar overview ticks. */
+	const [overviewFractions, setOverviewFractions] = createSignal<number[]>([]);
+	/** The overflow scroll container (the diff wrapper) the matches live in. */
+	const [scrollEl, setScrollEl] = createSignal<HTMLElement>();
 
 	// Hunk restore state
 	const [confirmVisible, setConfirmVisible] = createSignal(false);
@@ -59,14 +65,58 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	const [selectedLines, setSelectedLines] = createSignal<Set<number>>(new Set<number>());
 	const [selectedHunkIdx, setSelectedHunkIdx] = createSignal<number | null>(null);
 
-	// Clear selection when diff changes
+	/** Parsed hunks, memoized — re-parsing the whole diff per revert/select op was wasteful */
+	const hunks = createMemo(() => extractHunks(diff()));
+
+	// Pathological single-file diffs (full-file rewrites) would render thousands
+	// of DOM rows — @git-diff-view has no virtualization. Guard above this line
+	// count and let the user opt in. (perf pass 2026-06-07)
+	const diffLines = createMemo(() => diffLineCount(diff()));
+	const tooLarge = createMemo(() => isDiffTooLarge(diff()));
+	const [forceRenderLarge, setForceRenderLarge] = createSignal(false);
+
+	// Clear selection when diff changes (and drop the DOM row-mapping cache —
+	// the DiffViewer rebuilds its rows on diff/mode change)
 	createEffect(() => {
 		diff();
+		uiStore.state.diffViewMode;
 		setSelectedLines(new Set<number>());
 		setSelectedHunkIdx(null);
+		setForceRenderLarge(false);
+		rowCache = null;
 	});
 
 	let contentRef: HTMLElement | undefined;
+
+	/**
+	 * Cached map from each rendered <tr> to its hunk/line position. Built once per
+	 * diff render and reused across every drag mousemove + selection restyle, so
+	 * those handlers don't re-run querySelectorAll("tr") + a full O(rows) walk on
+	 * every pointer event. Invalidated when the diff/mode changes (rows rebuilt).
+	 */
+	type RowInfo = { hunkIdx: number; lineIdx: number; isChange: boolean };
+	let rowCache: { rows: HTMLTableRowElement[]; info: Map<HTMLTableRowElement, RowInfo> } | null = null;
+
+	function getRowCache() {
+		if (rowCache) return rowCache;
+		if (!contentRef) return null;
+		const rows = Array.from(contentRef.querySelectorAll("tr")) as HTMLTableRowElement[];
+		const info = new Map<HTMLTableRowElement, RowInfo>();
+		let hunkIdx = -1;
+		let lineCount = 0;
+		for (const r of rows) {
+			if (r.querySelector("[class*='diff-line-hunk']")) {
+				hunkIdx++;
+				lineCount = 0;
+				info.set(r, { hunkIdx, lineIdx: -1, isChange: false });
+			} else {
+				info.set(r, { hunkIdx, lineIdx: lineCount, isChange: isChangeLine(r) });
+				lineCount++;
+			}
+		}
+		rowCache = { rows, info };
+		return rowCache;
+	}
 	let engine: DomSearchEngine | undefined;
 	let lastSearchTerm = "";
 	let lastSearchOpts: SearchOptions = { caseSensitive: false, regex: false, wholeWord: false };
@@ -79,6 +129,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	});
 
 	// Load file diff when props change or the repo revision bumps (git index/HEAD changed)
+	let diffGen = 0;
 	createEffect(() => {
 		const repoPath = props.repoPath;
 		const filePath = props.filePath;
@@ -93,15 +144,20 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		if (!diff()) setLoading(true);
 		setError(null);
 
+		// A revision-bump burst can fire several loads; only the newest may settle
+		// state, so stale awaits don't overwrite the current diff.
+		const gen = ++diffGen;
 		(async () => {
 			try {
 				const diffContent = await repo.getFileDiff(repoPath, filePath, scope, props.untracked);
+				if (gen !== diffGen) return;
 				setDiff(diffContent);
 			} catch (err) {
+				if (gen !== diffGen) return;
 				setError(String(err));
 				setDiff("");
 			} finally {
-				setLoading(false);
+				if (gen === diffGen) setLoading(false);
 			}
 		})();
 	});
@@ -111,7 +167,10 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		diff();
 		uiStore.state.diffViewMode;
 		if (!searchVisible() || !lastSearchTerm) return;
-		requestAnimationFrame(() => rerunSearch());
+		// Cancel a still-pending RAF on re-run and on unmount (Solid runs this
+		// onCleanup before each re-execution and on disposal).
+		const raf = requestAnimationFrame(() => rerunSearch());
+		onCleanup(() => cancelAnimationFrame(raf));
 	});
 
 	function rerunSearch() {
@@ -120,6 +179,8 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		const count = engine.search(lastSearchTerm, lastSearchOpts);
 		setMatchCount(count);
 		setMatchIndex(count > 0 ? 0 : -1);
+		const el = scrollEl();
+		setOverviewFractions(el && count > 0 ? engine.matchFractions(el) : []);
 	}
 
 	const handleSearch = (term: string, opts: SearchOptions) => {
@@ -131,6 +192,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 			engine?.clear();
 			setMatchCount(0);
 			setMatchIndex(-1);
+			setOverviewFractions([]);
 			return;
 		}
 
@@ -154,6 +216,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		setSearchVisible(false);
 		setMatchCount(0);
 		setMatchIndex(-1);
+		setOverviewFractions([]);
 	};
 
 	/** One-sided diffs (new/deleted files) only support unified view */
@@ -184,9 +247,9 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	}
 
 	function handleRevertClick(hunkIdx: number) {
-		const hunks = extractHunks(diff());
-		if (hunkIdx < 0 || hunkIdx >= hunks.length) return;
-		setPendingHunkPatch(hunks[hunkIdx]);
+		const h = hunks();
+		if (hunkIdx < 0 || hunkIdx >= h.length) return;
+		setPendingHunkPatch(h[hunkIdx]);
 		setConfirmVisible(true);
 	}
 
@@ -227,33 +290,14 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		return !!hasNew !== !!hasOld;
 	}
 
-	/** Find which hunk and line index a DOM element belongs to. */
+	/** Find which hunk and line index a DOM element belongs to (via the row cache). */
 	function findLineInfo(el: HTMLElement): { hunkIdx: number; lineIdx: number; isChange: boolean } | null {
-		const row = el.closest("tr");
-		if (!row || !contentRef) return null;
-
-		if (!isChangeLine(row)) return null;
-
-		const allRows = Array.from(contentRef.querySelectorAll("tr"));
-		const rowIdx = allRows.indexOf(row);
-		if (rowIdx < 0) return null;
-
-		let hunkIdx = -1;
-		let lineIdx = -1;
-		let lineCount = 0;
-		for (let i = 0; i <= rowIdx; i++) {
-			const r = allRows[i];
-			if (r.querySelector("[class*='diff-line-hunk']")) {
-				hunkIdx++;
-				lineCount = 0;
-			} else if (i === rowIdx) {
-				lineIdx = lineCount;
-			} else {
-				lineCount++;
-			}
-		}
-
-		return hunkIdx >= 0 ? { hunkIdx, lineIdx, isChange: true } : null;
+		const row = el.closest("tr") as HTMLTableRowElement | null;
+		if (!row) return null;
+		const cache = getRowCache();
+		const ri = cache?.info.get(row);
+		if (!ri?.isChange || ri.hunkIdx < 0) return null;
+		return { hunkIdx: ri.hunkIdx, lineIdx: ri.lineIdx, isChange: true };
 	}
 
 	// --- Drag-to-select ---
@@ -265,9 +309,9 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 		const start = Math.min(from, to);
 		const end = Math.max(from, to);
 		const next = new Set<number>();
-		const hunks = extractHunks(diff());
-		if (hunkIdx < hunks.length) {
-			const hunkLines = hunks[hunkIdx].split("\n");
+		const h = hunks();
+		if (hunkIdx < h.length) {
+			const hunkLines = h[hunkIdx].split("\n");
 			const bodyStart = hunkLines.findIndex((l) => l.startsWith("@@"));
 			if (bodyStart >= 0) {
 				const body = hunkLines.slice(bodyStart + 1);
@@ -323,35 +367,30 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 	document.addEventListener("mouseup", globalMouseUp);
 	onCleanup(() => document.removeEventListener("mouseup", globalMouseUp));
 
-	/** Apply/remove CSS class on selected rows */
+	/** Apply/remove CSS class on selected rows (via the row cache) */
 	function applyLineSelectionStyles() {
-		if (!contentRef) return;
-		const allRows = contentRef.querySelectorAll("tr");
+		const cache = getRowCache();
+		if (!cache) return;
 		const sel = selectedLines();
 		const hIdx = selectedHunkIdx();
-		let currentHunk = -1;
-		let lineCount = 0;
 
-		allRows.forEach((row) => {
-			if (row.querySelector("[class*='diff-line-hunk']")) {
-				currentHunk++;
-				lineCount = 0;
+		for (const [row, ri] of cache.info) {
+			if (ri.lineIdx < 0) continue; // hunk header row
+			if (ri.hunkIdx === hIdx && sel.has(ri.lineIdx)) {
+				row.classList.add(s.lineSelected);
 			} else {
-				if (currentHunk === hIdx && sel.has(lineCount)) {
-					row.classList.add(s.lineSelected);
-				} else {
-					row.classList.remove(s.lineSelected);
-				}
-				lineCount++;
+				row.classList.remove(s.lineSelected);
 			}
-		});
+		}
 	}
 
 	// Re-apply styles when selection changes
 	createEffect(() => {
 		selectedLines();
 		selectedHunkIdx();
-		requestAnimationFrame(() => applyLineSelectionStyles());
+		// Cancel a still-pending RAF on re-run and on unmount.
+		const raf = requestAnimationFrame(() => applyLineSelectionStyles());
+		onCleanup(() => cancelAnimationFrame(raf));
 	});
 
 	function handleRestoreSelected() {
@@ -520,6 +559,7 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 			<Show when={mode() !== "scroll"}>
 				<div
 					class={s.diffWrapper}
+					ref={(el) => setScrollEl(el)}
 					onMouseOver={(e) => {
 						if (!canRestore(props.scope, props.untracked)) return;
 						const idx = findHunkIndex(e.target as HTMLElement);
@@ -537,23 +577,43 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 					onMouseMove={handleLineMouseMove}
 					onMouseUp={handleLineMouseUp}
 				>
-					<DiffViewer
-						diff={diff()}
-						mode={mode()}
-						contentRef={(el: HTMLElement) => {
-							contentRef = el;
-						}}
-						emptyMessage={
-							loading()
-								? t("diffTab.loading", "Loading diff...")
-								: error()
-									? `${t("diffTab.error", "Error:")} ${error()}`
-									: t("diffTab.noChanges", "No changes")
+					<Show
+						when={!tooLarge() || forceRenderLarge()}
+						fallback={
+							<div class={s.largeDiffNotice}>
+								<div>
+									{t("diffTab.largeDiffTitle", "This diff is large")} ({diffLines().toLocaleString()}{" "}
+									{t("diffTab.lines", "lines")})
+								</div>
+								<button class={s.largeDiffBtn} onClick={() => setForceRenderLarge(true)}>
+									{t("diffTab.renderAnyway", "Render anyway")}
+								</button>
+							</div>
 						}
-					/>
-					{/* Floating revert buttons — rendered after diff, positioned via CSS */}
-					<Show when={canRestore(props.scope, props.untracked) && diff().trim()}>
-						<HunkRevertOverlay diff={diff()} contentRef={contentRef} hoverIdx={hoverHunkIdx()} isStaged={isStaged()} />
+					>
+						<DiffViewer
+							diff={diff()}
+							mode={mode()}
+							contentRef={(el: HTMLElement) => {
+								contentRef = el;
+							}}
+							emptyMessage={
+								loading()
+									? t("diffTab.loading", "Loading diff...")
+									: error()
+										? `${t("diffTab.error", "Error:")} ${error()}`
+										: t("diffTab.noChanges", "No changes")
+							}
+						/>
+						{/* Floating revert buttons — rendered after diff, positioned via CSS */}
+						<Show when={canRestore(props.scope, props.untracked) && diff().trim()}>
+							<HunkRevertOverlay
+								diff={diff()}
+								contentRef={contentRef}
+								hoverIdx={hoverHunkIdx()}
+								isStaged={isStaged()}
+							/>
+						</Show>
 					</Show>
 					<Show when={selectedCount() > 0}>
 						<div class={s.selectionFloater}>
@@ -609,6 +669,9 @@ export const DiffTab: Component<DiffTabProps> = (props) => {
 							</div>
 						</div>
 					</Show>
+					<Show when={searchVisible()}>
+						<DomSearchOverview scrollEl={scrollEl} fractions={overviewFractions} />
+					</Show>
 				</div>
 				<ConfirmDialog
 					visible={confirmVisible()}
@@ -631,8 +694,21 @@ const HunkRevertOverlay: Component<{
 	hoverIdx: number | null;
 	isStaged: boolean;
 }> = (props) => {
-	// Position revert buttons on hunk header rows using the DOM
-	const buttons = () => {
+	// Button positions depend on the rendered rows, not on hover. Recompute only
+	// when the diff changes or the content reflows (ResizeObserver) — NOT on every
+	// hoverIdx change, which previously re-ran getBoundingClientRect for every hunk.
+	const [reflowTick, setReflowTick] = createSignal(0);
+	createEffect(() => {
+		const el = props.contentRef;
+		if (!el) return;
+		const ro = new ResizeObserver(() => setReflowTick((n) => n + 1));
+		ro.observe(el);
+		onCleanup(() => ro.disconnect());
+	});
+
+	const buttons = createMemo<Array<{ top: number; idx: number }>>(() => {
+		props.diff; // track: rows rebuilt on diff change
+		reflowTick(); // track: content finished rendering / reflowed
 		if (!props.contentRef) return [];
 		const hunkEls = props.contentRef.querySelectorAll("[class*='diff-line-hunk-content']");
 		const result: Array<{ top: number; idx: number }> = [];
@@ -644,11 +720,11 @@ const HunkRevertOverlay: Component<{
 			result.push({ top: rect.top - containerRect.top + props.contentRef!.scrollTop, idx: i });
 		});
 		return result;
-	};
+	});
 
 	return (
-		<>
-			{buttons().map((b) => (
+		<For each={buttons()}>
+			{(b) => (
 				<button
 					class={cx(s.revertBtn, props.hoverIdx === b.idx && s.revertBtnVisible)}
 					style={{ top: `${b.top}px` }}
@@ -664,8 +740,8 @@ const HunkRevertOverlay: Component<{
 						<path d="M2 8a6 6 0 1 1 12 0A6 6 0 0 1 2 8zm6-4a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM6.5 7.5l3-2v4l-3-2z" />
 					</svg>
 				</button>
-			))}
-		</>
+			)}
+		</For>
 	);
 };
 

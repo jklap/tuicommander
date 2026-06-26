@@ -2,8 +2,12 @@
 //!
 //! ## Always on (zero-cost when idle)
 //! - **CPU spike detection**: polls `getrusage(RUSAGE_SELF)` every 5s. PTY children
-//!   (cargo, rustc, etc.) are separate OS processes and don't affect RUSAGE_SELF.
-//!   Logs a diagnostic snapshot when CPU > 80% for 10+ consecutive seconds.
+//!   (cargo, rustc, etc.) are separate OS processes and don't affect RUSAGE_SELF —
+//!   this is intentional: the trigger watches TUIC's own runaway loops, not
+//!   legitimate child load. Logs a diagnostic snapshot when CPU > 80% for 10+
+//!   consecutive seconds; that snapshot lists per-child %cpu (`child_process_summary`).
+//! - The periodic HEALTH log (diagnostic mode) also reports aggregate child CPU
+//!   (`child_cpu_summary`) so a hot PTY child is visible even when TUIC itself is calm.
 //!
 //! ## Diagnostic mode (toggle at runtime)
 //! When enabled via `set_diagnostic_mode(true)`, emits periodic health snapshots
@@ -171,6 +175,46 @@ fn child_process_summary() -> String {
     }
 }
 
+/// Compact aggregate %CPU of direct PTY children, for the periodic HEALTH log.
+///
+/// The spike trigger uses `getrusage(RUSAGE_SELF)`, which by design excludes
+/// children (it watches TUIC's own runaway loops, not legitimate `cargo`/agent
+/// load). So this is the only place child CPU surfaces during a diagnostic
+/// session that ISN'T already a TUIC-process spike. `%cpu` from `ps` is the
+/// process-lifetime average, not instantaneous — good enough for visibility.
+fn child_cpu_summary() -> String {
+    let pid = std::process::id();
+    let output = std::process::Command::new("sh")
+        .args(["-c", &format!("ps -eo ppid,comm,%cpu | awk '$1 == {pid}'")])
+        .output();
+    let Ok(o) = output else {
+        return "children_cpu=(failed)".to_string();
+    };
+    let text = String::from_utf8_lossy(&o.stdout);
+    let mut total = 0.0_f64;
+    let mut top_comm = String::new();
+    let mut top_pct = 0.0_f64;
+    for line in text.lines() {
+        // Columns: ppid comm %cpu. `comm` may contain spaces, so ppid is the
+        // first token and %cpu the last; everything between is the name.
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        if tokens.len() < 3 {
+            continue;
+        }
+        let pct: f64 = tokens[tokens.len() - 1].parse().unwrap_or(0.0);
+        total += pct;
+        if pct > top_pct {
+            top_pct = pct;
+            top_comm = tokens[1..tokens.len() - 1].join(" ");
+        }
+    }
+    if top_comm.is_empty() {
+        "children_cpu=0.0%".to_string()
+    } else {
+        format!("children_cpu={total:.1}% (top: {top_comm} {top_pct:.1}%)")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Snapshot: emitted on CPU spike or periodic diagnostic
 // ---------------------------------------------------------------------------
@@ -184,6 +228,8 @@ struct HealthSnapshot {
     index_sem_permits: usize,
     in_flight_stuck: Vec<String>,
     event_bus_subscribers: usize,
+    git_cache_ttl_fallbacks: u64,
+    head_emits_suppressed: u64,
 }
 
 fn collect_snapshot(state: &Arc<AppState>, cpu_pct: f64) -> HealthSnapshot {
@@ -203,6 +249,8 @@ fn collect_snapshot(state: &Arc<AppState>, cpu_pct: f64) -> HealthSnapshot {
         index_sem_permits: state.index_build_sem.available_permits(),
         in_flight_stuck,
         event_bus_subscribers: state.event_bus.receiver_count(),
+        git_cache_ttl_fallbacks: state.git_cache.ttl_fallbacks.load(Ordering::Relaxed),
+        head_emits_suppressed: state.repo_head_emits_suppressed.load(Ordering::Relaxed),
     }
 }
 
@@ -214,7 +262,7 @@ fn log_spike(state: &Arc<AppState>, cpu_pct: f64) {
         source = "diagnostics",
         "CPU SPIKE {:.1}% | threads={} fds={} sessions={} \
          index_building={:?} sem_permits={} in_flight_stuck={:?} \
-         bus_subs={}\n  children: {}",
+         bus_subs={} git_cache_ttl_fallbacks={} head_emits_suppressed={}\n  children: {}",
         s.cpu_pct,
         s.threads,
         s.open_fds,
@@ -223,6 +271,8 @@ fn log_spike(state: &Arc<AppState>, cpu_pct: f64) {
         s.index_sem_permits,
         s.in_flight_stuck,
         s.event_bus_subscribers,
+        s.git_cache_ttl_fallbacks,
+        s.head_emits_suppressed,
         children,
     );
 }
@@ -235,18 +285,24 @@ fn log_periodic(state: &Arc<AppState>, cpu_pct: f64) {
     } else {
         format!(" ⚠ in_flight_stuck={:?}", s.in_flight_stuck)
     };
+    // `cpu` is TUIC-self only (RUSAGE_SELF); `children_cpu` covers PTY children
+    // (cargo/agents) which the spike trigger deliberately ignores.
+    let children = child_cpu_summary();
 
     tracing::info!(
         source = "diagnostics",
-        "HEALTH cpu={:.1}% threads={} fds={} sessions={} \
-         index={:?} sem={} bus_subs={}{}",
+        "HEALTH cpu={:.1}% {} threads={} fds={} sessions={} \
+         index={:?} sem={} bus_subs={} git_cache_ttl_fallbacks={} head_emits_suppressed={}{}",
         s.cpu_pct,
+        children,
         s.threads,
         s.open_fds,
         s.pty_sessions,
         s.index_building,
         s.index_sem_permits,
         s.event_bus_subscribers,
+        s.git_cache_ttl_fallbacks,
+        s.head_emits_suppressed,
         stuck_note,
     );
 }
@@ -304,6 +360,17 @@ fn run(state: Arc<AppState>) {
                 gap_secs = wall_gap.as_secs(),
                 "Sleep/wake detected — skipping tick"
             );
+            // Tell the frontend a wake just happened so it can suppress the
+            // false-busy completion cascade: on wake, idle shells/agents get
+            // nudged busy→idle and would otherwise fire spurious completion
+            // notifications (purple "unseen" dot + sound) for work that never ran.
+            #[cfg(feature = "desktop")]
+            {
+                use tauri::Emitter;
+                if let Some(ref app) = *state.app_handle.read() {
+                    let _ = app.emit("system-wake", wall_gap.as_secs());
+                }
+            }
             prev = CpuSample::now().unwrap_or(prev);
             consecutive_high = 0;
             continue;

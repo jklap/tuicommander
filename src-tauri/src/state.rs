@@ -7,7 +7,7 @@ use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU64, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU16, AtomicU64, AtomicUsize};
 use std::time::{Duration, Instant};
 #[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter};
@@ -166,6 +166,11 @@ pub(crate) struct SessionState {
     /// Detected agent type, if known
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_type: Option<String>,
+    /// True when this agent has native-hook instrumentation enabled, so heuristic
+    /// question-detection is suppressed (awaiting comes from OSC 7770 instead).
+    /// Resolved from config when `agent_type` is set; internal, not serialized.
+    #[serde(skip)]
+    pub hook_instrumented: bool,
     /// Last API error, if any
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
@@ -257,40 +262,39 @@ impl Utf8ReadBuffer {
         combined.extend_from_slice(new_bytes);
         self.remainder.clear();
 
-        // Find the last valid UTF-8 boundary
-        let valid_up_to = match std::str::from_utf8(&combined) {
-            Ok(_) => combined.len(),
-            Err(e) => {
-                let valid = e.valid_up_to();
-                // Check if the error is due to incomplete sequence at the end
-                if e.error_len().is_none() {
-                    // Incomplete sequence — save trailing bytes for next read
-                    valid
-                } else {
-                    // Invalid byte sequence — skip the bad byte(s) and keep going
-                    // Replace the invalid portion with U+FFFD and continue
-                    let error_len = e.error_len().unwrap();
-                    let mut result =
-                        String::from_utf8_lossy(&combined[..valid + error_len]).to_string();
-                    // Process any remaining bytes after the error
-                    if valid + error_len < combined.len() {
-                        let rest = self.push(&combined[valid + error_len..]);
-                        result.push_str(&rest);
+        // Walk the buffer iteratively, emitting valid runs and one U+FFFD per invalid
+        // sequence. Iterative (not recursive) on purpose: a fully-binary chunk is one
+        // invalid run per byte, and the old recursive version blew the reader thread's
+        // stack on ~thousands of consecutive invalid bytes (4 KB binary read).
+        let mut result = String::with_capacity(combined.len());
+        let mut pos = 0;
+        loop {
+            let slice = &combined[pos..];
+            match std::str::from_utf8(slice) {
+                Ok(s) => {
+                    result.push_str(s);
+                    break;
+                }
+                Err(e) => {
+                    let valid = e.valid_up_to();
+                    // SAFETY: slice[..valid] verified valid UTF-8 by valid_up_to().
+                    result.push_str(unsafe { std::str::from_utf8_unchecked(&slice[..valid]) });
+                    match e.error_len() {
+                        // Incomplete trailing sequence — save for the next read and stop.
+                        None => {
+                            self.remainder.extend_from_slice(&slice[valid..]);
+                            break;
+                        }
+                        // Invalid byte(s) — emit one replacement char, skip them, continue.
+                        Some(error_len) => {
+                            result.push('\u{FFFD}');
+                            pos += valid + error_len;
+                        }
                     }
-                    return result;
                 }
             }
-        };
-
-        // Save incomplete trailing bytes
-        if valid_up_to < combined.len() {
-            self.remainder.extend_from_slice(&combined[valid_up_to..]);
         }
-
-        // SAFETY: `combined[..valid_up_to]` was verified as valid UTF-8 above via
-        // `std::str::from_utf8` / `Utf8Error::valid_up_to`, so `from_utf8_unchecked` is sound.
-        combined.truncate(valid_up_to);
-        unsafe { String::from_utf8_unchecked(combined) }
+        result
     }
 
     /// Flush any remaining bytes (at EOF). Incomplete sequences are dropped.
@@ -841,15 +845,27 @@ pub struct AppState {
     pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
     /// TTL caches for git and GitHub query results
     pub(crate) git_cache: GitCacheState,
-    /// Raw file watchers per repo — one recursive watcher covering
-    /// .git/ and working tree, with per-category debounce (keyed by repo path).
-    /// Uses raw notify::RecommendedWatcher (no debouncer-full walkdir overhead).
-    pub(crate) repo_watchers: DashMap<String, crate::repo_watcher::WatchHandle>,
+    /// Raw file watchers per repo (keyed by repo path), with per-category
+    /// debounce. macOS/Windows: one recursive `notify::RecommendedWatcher` over
+    /// the repo root. Linux: pruned non-recursive working-tree watches + targeted
+    /// `.git` watches (issue #82). Stored behind `Arc` so the Linux event callback
+    /// can clone a stable handle and add watches for newly created dirs without
+    /// holding a `DashMap` ref across the blocking `watch()` call.
+    pub(crate) repo_watchers: DashMap<String, Arc<crate::repo_watcher::RepoWatchHandle>>,
     /// Last emitted git-state fingerprint per repo path. The repo watcher skips
     /// the `repo-changed` (git-state) emit when the fingerprint is unchanged, so a
     /// no-op `.git` touch (e.g. a `--no-optional-locks` status refreshing the index
     /// stat cache) doesn't trigger the full ~20-panel frontend re-render cascade.
     pub(crate) repo_git_fingerprints: DashMap<String, u64>,
+    /// Last emitted resolved-HEAD target per repo path (`resolve_head_target`
+    /// output). The repo watcher skips the `head-changed` emit when this is
+    /// unchanged, suppressing the Linux inotify storm where `.git/HEAD` events
+    /// recur without HEAD actually moving (issue #82).
+    pub(crate) repo_head_targets: DashMap<String, String>,
+    /// Count of `head-changed` emits suppressed by the `repo_head_targets`
+    /// guard — surfaced in diagnostic snapshots to quantify watcher storm
+    /// volume in production (issue #82).
+    pub(crate) repo_head_emits_suppressed: AtomicU64,
     /// File watchers for directory contents (keyed by absolute dir path)
     pub(crate) dir_watchers: DashMap<String, crate::repo_watcher::WatchHandle>,
     /// File watcher for the themes/ directory — kept alive for the app lifetime.
@@ -914,6 +930,11 @@ pub struct AppState {
     /// Dirty flag: set by PTY reader when new data is processed, cleared by frame ticker.
     /// Decouples read() from frame serialization to coalesce rapid writes (spinners).
     pub(crate) grid_frame_dirty: DashMap<String, Arc<AtomicBool>>,
+    /// Pending coalesced scroll target (absolute display offset, -1 = none).
+    /// Set by `terminal_scroll_to_offset` without taking the vt lock; applied by the
+    /// frame ticker under the lock it already holds, so scroll never blocks on the
+    /// PTY output processor.
+    pub(crate) pending_scroll: DashMap<String, Arc<AtomicI64>>,
     /// Per-session kitty keyboard protocol state (session_id → state).
     /// Separate DashMap (not inside PtySession) to avoid writer contention.
     pub(crate) kitty_states: DashMap<String, Mutex<KittyKeyboardState>>,
@@ -985,6 +1006,12 @@ pub struct AppState {
     /// Updated by PTY reader on every non-empty chunk. Used to derive shell_state:
     /// "busy" when now - last < 500ms, "idle" otherwise (matches desktop model).
     pub(crate) last_output_ms: DashMap<String, AtomicU64>,
+    /// Per-session timestamp of last user input written to the PTY (epoch ms).
+    /// Stamped by `write_pty`. The grid ticker reads it to throttle frame sends
+    /// while the user is actively typing AND the system CPU is saturated, so the
+    /// WebView main thread stays free to dispatch keystrokes instead of churning
+    /// through agent output. Absent until the first keystroke.
+    pub(crate) last_input_ms: DashMap<String, AtomicU64>,
     /// Per-session shell activity state (AtomicU8: 0=null, 1=busy, 2=idle).
     /// Updated by the reader thread and silence timer via compare_exchange.
     /// The single source of truth for busy/idle — the frontend consumes events,
@@ -1144,6 +1171,8 @@ impl AppState {
             git_cache: GitCacheState::new(),
             repo_watchers: DashMap::new(),
             repo_git_fingerprints: DashMap::new(),
+            repo_head_targets: DashMap::new(),
+            repo_head_emits_suppressed: AtomicU64::new(0),
             dir_watchers: DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
             mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
@@ -1169,6 +1198,7 @@ impl AppState {
             grid_watch: DashMap::new(),
             grid_frame_in_flight: DashMap::new(),
             grid_frame_dirty: DashMap::new(),
+            pending_scroll: DashMap::new(),
             kitty_states: DashMap::new(),
             input_buffers: DashMap::new(),
             last_prompts: DashMap::new(),
@@ -1194,6 +1224,7 @@ impl AppState {
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             slash_mode: DashMap::new(),
             last_output_ms: DashMap::new(),
+            last_input_ms: DashMap::new(),
             shell_states: DashMap::new(),
             terminal_rows: DashMap::new(),
             exit_codes: DashMap::new(),
@@ -1481,33 +1512,76 @@ impl RelayState {
     }
 }
 
+/// A TTL + bounded + coalescing cache keyed by repo path.
+///
+/// `moka::sync::Cache` is used (not `future::Cache`) because every loader is
+/// blocking work (git subprocess / in-process gix). `get_with`/`try_get_with`
+/// coalesce concurrent identical loads to a single computation — this is what
+/// collapses the `repo-changed` fan-out. Values are wrapped in `Arc` so cache
+/// hits and the coalesced result are cheap to share.
+pub(crate) type GitCache<T> = moka::sync::Cache<String, Arc<T>>;
+
+/// Max entries per git cache. Repo count is small; this is a safety bound.
+const GIT_CACHE_CAPACITY: u64 = 256;
+
+/// Build a git cache with the standard capacity and the given TTL.
+///
+/// `ttl_fallbacks` counts entries evicted by TTL expiry (`RemovalCause::Expired`).
+/// This is NOT a reliable "watcher missed an event" signal: an idle repo with no
+/// file changes produces no watcher event, so its entry is never invalidated and
+/// always lives out the full TTL before expiring — the normal, correct end of a
+/// cached entry's life. Because expiry is keyed on write time, a single fan-out
+/// load of N repos makes all N entries expire together one TTL later. The counter
+/// is therefore dominated by benign idle expiry; it's surfaced in the watchdog
+/// snapshot only as a coarse aggregate eviction trend, never logged per entry
+/// (that produced one DEBUG line per repo every TTL — pure noise).
+pub(crate) fn build_git_cache<T: Send + Sync + 'static>(
+    ttl: Duration,
+    ttl_fallbacks: Arc<AtomicU64>,
+) -> GitCache<T> {
+    moka::sync::Cache::builder()
+        .max_capacity(GIT_CACHE_CAPACITY)
+        .time_to_live(ttl)
+        .eviction_listener(move |_key, _v, cause| {
+            if cause == moka::notification::RemovalCause::Expired {
+                ttl_fallbacks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        })
+        .build()
+}
+
 /// TTL caches for git and GitHub query results, keyed by repo path.
 pub(crate) struct GitCacheState {
-    pub(crate) repo_info: DashMap<String, (crate::git::RepoInfo, Instant)>,
-    pub(crate) merged_branches: DashMap<String, (Vec<String>, Instant)>,
-    pub(crate) branches_detail: DashMap<String, (Vec<crate::git::BranchDetail>, Instant)>,
-    pub(crate) github_status: DashMap<String, (Vec<crate::github::BranchPrStatus>, Instant)>,
-    pub(crate) git_status: DashMap<String, (crate::github::GitHubStatus, Instant)>,
-    pub(crate) git_panel_context: DashMap<String, (crate::git::GitPanelContext, Instant)>,
-    pub(crate) worktree_paths:
-        DashMap<String, (std::collections::HashMap<String, String>, Instant)>,
+    pub(crate) repo_info: GitCache<crate::git::RepoInfo>,
+    pub(crate) merged_branches: GitCache<Vec<String>>,
+    pub(crate) branches_detail: GitCache<Vec<crate::git::BranchDetail>>,
+    pub(crate) github_status: GitCache<Vec<crate::github::BranchPrStatus>>,
+    pub(crate) git_status: GitCache<crate::github::GitHubStatus>,
+    pub(crate) git_panel_context: GitCache<crate::git::GitPanelContext>,
+    pub(crate) worktree_paths: GitCache<std::collections::HashMap<String, String>>,
     /// Repos that returned null from GitHub GraphQL (not found / no access).
     /// Keyed by "owner/name", value is the cooldown expiry time.
     /// Excluded from batch queries until the cooldown expires (1 hour).
+    /// NOT a TTL value cache — kept as a plain `DashMap` set with custom expiry.
     pub(crate) github_repo_cooldown: DashMap<String, Instant>,
+    /// Count of entries evicted by TTL expiry (watcher-miss observability).
+    /// Shared across all git caches; surfaced in the cpu_watchdog snapshot.
+    pub(crate) ttl_fallbacks: Arc<AtomicU64>,
 }
 
 impl GitCacheState {
     pub(crate) fn new() -> Self {
+        let ttl_fallbacks = Arc::new(AtomicU64::new(0));
         Self {
-            repo_info: DashMap::new(),
-            merged_branches: DashMap::new(),
-            branches_detail: DashMap::new(),
-            github_status: DashMap::new(),
-            git_status: DashMap::new(),
-            git_panel_context: DashMap::new(),
-            worktree_paths: DashMap::new(),
+            repo_info: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
+            merged_branches: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
+            branches_detail: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
+            github_status: build_git_cache(GITHUB_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
+            git_status: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
+            git_panel_context: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
+            worktree_paths: build_git_cache(GIT_CACHE_TTL, Arc::clone(&ttl_fallbacks)),
             github_repo_cooldown: DashMap::new(),
+            ttl_fallbacks,
         }
     }
 
@@ -1517,26 +1591,26 @@ impl GitCacheState {
     /// don't exist on GitHub.  Only explicit user actions (OAuth login, full reset)
     /// should clear cooldowns.
     pub(crate) fn clear_all(&self) {
-        self.repo_info.clear();
-        self.merged_branches.clear();
-        self.branches_detail.clear();
-        self.github_status.clear();
-        self.git_status.clear();
-        self.git_panel_context.clear();
-        self.worktree_paths.clear();
+        self.repo_info.invalidate_all();
+        self.merged_branches.invalidate_all();
+        self.branches_detail.invalidate_all();
+        self.github_status.invalidate_all();
+        self.git_status.invalidate_all();
+        self.git_panel_context.invalidate_all();
+        self.worktree_paths.invalidate_all();
     }
 
     /// Invalidate caches for a specific repo path.
     pub(crate) fn invalidate_repo(&self, path: &str) {
-        self.repo_info.remove(path);
-        self.merged_branches.remove(path);
-        self.branches_detail.remove(path);
+        self.repo_info.invalidate(path);
+        self.merged_branches.invalidate(path);
+        self.branches_detail.invalidate(path);
         // github_status (remote PR/CI data) is NOT invalidated here — local git
         // changes don't affect remote PRs. The poller and head-changed → pollRepo
         // handle remote refreshes on their own cadence.
-        self.git_status.remove(path);
-        self.git_panel_context.remove(path);
-        self.worktree_paths.remove(path);
+        self.git_status.invalidate(path);
+        self.git_panel_context.invalidate(path);
+        self.worktree_paths.invalidate(path);
     }
 }
 
@@ -1555,27 +1629,6 @@ pub(crate) fn purge_dead_ws_clients(
 }
 
 impl AppState {
-    /// Look up a cached value if it exists and hasn't expired.
-    pub(crate) fn get_cached<T: Clone>(
-        map: &DashMap<String, (T, Instant)>,
-        key: &str,
-        ttl: Duration,
-    ) -> Option<T> {
-        map.get(key).and_then(|entry| {
-            let (value, stored_at) = entry.value();
-            if stored_at.elapsed() < ttl {
-                Some(value.clone())
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Store a value in a TTL cache.
-    pub(crate) fn set_cached<T>(map: &DashMap<String, (T, Instant)>, key: String, value: T) {
-        map.insert(key, (value, Instant::now()));
-    }
-
     /// Invalidate all operation caches (git + GitHub).
     pub(crate) fn clear_caches(&self) {
         self.git_cache.clear_all();
@@ -1700,24 +1753,35 @@ impl AppState {
                         s.last_activity_ms = now_ms;
                         match event_type {
                             "question" => {
-                                s.awaiting_input = true;
-                                s.question_text = parsed
-                                    .get("prompt_text")
-                                    .and_then(|t| t.as_str())
-                                    .map(|t| t.to_string());
-                                s.question_confident = parsed
+                                let new_confident = parsed
                                     .get("confident")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false);
+                                // Don't let a low-confidence (silence-heuristic) question
+                                // overwrite an already-active high-confidence one — e.g. grok
+                                // signals an approval prompt via its "Action Required" title
+                                // (confident) while its on-screen status line is also parsed as
+                                // a low-confidence question. Downgrading question_confident here
+                                // would let the next busy status-line clear awaiting_input,
+                                // making the approval state flicker. The confident question
+                                // clears on user-input instead.
+                                if !(s.awaiting_input && s.question_confident && !new_confident) {
+                                    s.awaiting_input = true;
+                                    s.question_text = parsed
+                                        .get("prompt_text")
+                                        .and_then(|t| t.as_str())
+                                        .map(|t| t.to_string());
+                                    s.question_confident = new_confident;
 
-                                // Rate limit: skip if last push for this session was < 30s ago
-                                let should_push = !state.push_store.is_empty()
-                                    && s.last_push_ms
-                                        .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000);
-                                if should_push {
-                                    s.last_push_ms = Some(now_ms);
-                                    let prompt = s.question_text.clone().unwrap_or_default();
-                                    push_data = Some((session_id.clone(), prompt));
+                                    // Rate limit: skip if last push for this session was < 30s ago
+                                    let should_push = !state.push_store.is_empty()
+                                        && s.last_push_ms
+                                            .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000);
+                                    if should_push {
+                                        s.last_push_ms = Some(now_ms);
+                                        let prompt = s.question_text.clone().unwrap_or_default();
+                                        push_data = Some((session_id.clone(), prompt));
+                                    }
                                 }
                             }
                             "user-input" => {
@@ -1758,9 +1822,18 @@ impl AppState {
                                 // Keep slash_menu_items — the agent's status line can tick
                                 // while the user is still interacting with the slash menu, and
                                 // wiping it here causes the PWA overlay to flash off.
-                                s.awaiting_input = false;
-                                s.question_text = None;
-                                s.question_confident = false;
+                                //
+                                // A *confident* question stays sticky across status-line ticks.
+                                // grok keeps its spinner animating (emitting status-line) WHILE
+                                // awaiting approval ("⚠ Action Required" title → confident
+                                // question), so a busy tick must not clobber it — otherwise
+                                // awaiting_input flickers. It clears on user-input (the user
+                                // answered, state.rs user-input arm). Low-confidence
+                                // silence-heuristic questions still yield to the busy signal.
+                                if !s.question_confident {
+                                    s.awaiting_input = false;
+                                    s.question_text = None;
+                                }
                                 s.rate_limited = false;
                                 s.retry_after_ms = None;
                                 s.rate_limit_set_ms = 0;
@@ -2364,8 +2437,16 @@ impl VtLogBuffer {
         self.grid.scroll_to_line(line);
     }
 
+    pub(crate) fn grid_scroll_to_offset(&mut self, offset: usize) {
+        self.grid.scroll_to_offset(offset);
+    }
+
     pub(crate) fn grid_display_offset(&self) -> usize {
         self.grid.display_offset()
+    }
+
+    pub(crate) fn grid_serialize_styled_range(&self, start_abs: usize, count: usize) -> Vec<u8> {
+        self.grid.serialize_styled_range(start_abs, count)
     }
 
     pub(crate) fn grid_total_lines(&self) -> usize {
@@ -2435,11 +2516,16 @@ impl VtLogBuffer {
     }
 
     pub(crate) fn grid_get_lines(&self, start: usize, end: usize) -> Vec<String> {
+        // `start`/`end` are ABSOLUTE row indices (0 = oldest scrollback line),
+        // end-exclusive. get_row_text() treats its arg as a viewport-relative
+        // screen row, so it returned the wrong lines whenever scrollback existed.
+        // read_rows_in_range does the correct absolute→grid conversion (inclusive end).
         let total = self.grid.total_lines();
         let clamped_end = end.min(total);
-        (start..clamped_end)
-            .map(|i| self.grid.get_row_text(i))
-            .collect()
+        if start >= clamped_end {
+            return Vec::new();
+        }
+        self.grid.read_rows_in_range(start, clamped_end - 1)
     }
 
     pub(crate) fn grid_hyperlink_at(&self, row: usize, col: usize) -> Option<String> {
@@ -2499,7 +2585,16 @@ pub(crate) mod tests_support {
     use super::*;
 
     pub fn make_test_app_state() -> AppState {
-        let data_dir = std::env::temp_dir().join("test-tuic-data");
+        // Unique data dir per call: AppState::new eagerly opens
+        // `data_dir/tunnel_audit.db`, so a shared path makes parallel tests
+        // collide on the SQLite file (concurrent opens → SQLITE_BUSY
+        // "database is locked"). The pid + monotonic seq keeps each test's
+        // on-disk DB isolated.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let data_dir =
+            std::env::temp_dir().join(format!("test-tuic-data-{}-{}", std::process::id(), seq));
         let _ = std::fs::create_dir_all(&data_dir);
         let log_buffer = Arc::new(parking_lot::Mutex::new(
             crate::app_logger::LogRingBuffer::new(crate::app_logger::LOG_RING_CAPACITY),
@@ -2527,7 +2622,19 @@ mod tests {
     #[test]
     fn test_state_has_data_dir() {
         let state = tests_support::make_test_app_state();
-        assert_eq!(state.data_dir, std::env::temp_dir().join("test-tuic-data"));
+        // make_test_app_state assigns a unique per-call dir under temp (named
+        // `test-tuic-data-<pid>-<seq>`) so parallel tests don't share the
+        // tunnel_audit.db SQLite file.
+        assert!(state.data_dir.starts_with(std::env::temp_dir()));
+        assert!(
+            state
+                .data_dir
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("test-tuic-data")),
+            "unexpected data_dir: {:?}",
+            state.data_dir
+        );
     }
 
     // ── split_name_segments ──────────────────────────────────
@@ -2800,6 +2907,30 @@ mod tests {
         assert_eq!(result1, "漢");
         let result2 = buf.push(&bytes[split..]);
         assert_eq!(result2, "字");
+    }
+
+    #[test]
+    fn test_utf8_buffer_invalid_bytes_replaced() {
+        let mut buf = Utf8ReadBuffer::new();
+        // Single invalid byte between valid ASCII → one U+FFFD, surrounding text kept.
+        assert_eq!(buf.push(b"a\xffb"), "a\u{FFFD}b");
+        // Consecutive invalid bytes → one U+FFFD each (matches from_utf8_lossy).
+        assert_eq!(buf.push(b"x\xff\xffy"), "x\u{FFFD}\u{FFFD}y");
+        // Invalid byte immediately before a valid multibyte char.
+        assert_eq!(buf.push("\u{FF}".as_bytes()), "\u{FF}"); // 0xC3 0xBF is valid UTF-8 (ÿ)
+    }
+
+    #[test]
+    fn test_utf8_buffer_large_binary_no_stack_overflow() {
+        // Regression: the old recursive push() recursed once per invalid byte, so a
+        // large all-invalid (binary) chunk overflowed the reader thread's stack. The
+        // iterative version must process it flat. 64 KB of 0xFF → 64 K replacement chars.
+        let mut buf = Utf8ReadBuffer::new();
+        let binary = vec![0xffu8; 64 * 1024];
+        let out = buf.push(&binary);
+        assert_eq!(out.chars().count(), 64 * 1024);
+        assert!(out.chars().all(|c| c == '\u{FFFD}'));
+        assert!(buf.remainder.is_empty());
     }
 
     #[test]
@@ -3103,6 +3234,8 @@ mod tests {
             git_cache: GitCacheState::new(),
             repo_watchers: dashmap::DashMap::new(),
             repo_git_fingerprints: dashmap::DashMap::new(),
+            repo_head_targets: dashmap::DashMap::new(),
+            repo_head_emits_suppressed: AtomicU64::new(0),
             dir_watchers: dashmap::DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
             mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
@@ -3128,6 +3261,7 @@ mod tests {
             grid_watch: dashmap::DashMap::new(),
             grid_frame_in_flight: dashmap::DashMap::new(),
             grid_frame_dirty: dashmap::DashMap::new(),
+            pending_scroll: dashmap::DashMap::new(),
             kitty_states: dashmap::DashMap::new(),
             input_buffers: dashmap::DashMap::new(),
             last_prompts: dashmap::DashMap::new(),
@@ -3158,6 +3292,7 @@ mod tests {
             monitoring_git_sem: Arc::new(tokio::sync::Semaphore::new(MONITORING_GIT_CONCURRENCY)),
             slash_mode: DashMap::new(),
             last_output_ms: DashMap::new(),
+            last_input_ms: DashMap::new(),
             shell_states: DashMap::new(),
             terminal_rows: DashMap::new(),
             exit_codes: DashMap::new(),
@@ -3250,54 +3385,107 @@ mod tests {
         assert_eq!(config.font_family, "Fira Code");
     }
 
-    // --- TTL cache tests ---
+    // --- moka git cache tests (Step 1) ---
 
-    #[test]
-    fn test_cache_hit_within_ttl() {
-        let map: DashMap<String, (String, Instant)> = DashMap::new();
-        AppState::set_cached(&map, "key1".to_string(), "value1".to_string());
-
-        let result = AppState::get_cached(&map, "key1", Duration::from_secs(60));
-        assert_eq!(result, Some("value1".to_string()));
+    fn sample_repo_info(path: &str, name: &str) -> crate::git::RepoInfo {
+        crate::git::RepoInfo {
+            path: path.to_string(),
+            name: name.to_string(),
+            initials: name[..1].to_uppercase(),
+            branch: "main".to_string(),
+            status: "clean".to_string(),
+            is_git_repo: true,
+        }
     }
 
+    /// MANDATORY Step 1 behavior: 50 concurrent `get_with` on one missing key
+    /// invoke the loader exactly once (coalescing collapses the fan-out).
     #[test]
-    fn test_cache_miss_nonexistent_key() {
-        let map: DashMap<String, (String, Instant)> = DashMap::new();
+    fn git_cache_get_with_coalesces_concurrent_loads() {
+        let cache: GitCache<String> = build_git_cache(GIT_CACHE_TTL, Arc::new(AtomicU64::new(0)));
+        let calls = Arc::new(AtomicUsize::new(0));
 
-        let result = AppState::get_cached(&map, "missing", Duration::from_secs(60));
-        assert_eq!(result, None);
+        let handles: Vec<_> = (0..50)
+            .map(|_| {
+                let cache = cache.clone();
+                let calls = Arc::clone(&calls);
+                std::thread::spawn(move || {
+                    cache.get_with("k".to_string(), || {
+                        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        // Hold the load long enough that the other 49 threads pile
+                        // up on the same key and must wait for this single compute.
+                        std::thread::sleep(Duration::from_millis(50));
+                        Arc::new("value".to_string())
+                    })
+                })
+            })
+            .collect();
+
+        for h in handles {
+            assert_eq!(&*h.join().unwrap(), "value");
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "loader must run exactly once for 50 concurrent get_with on a cold key"
+        );
     }
 
+    /// After the TTL elapses the entry expires and the next `get_with` recomputes.
     #[test]
-    fn test_cache_miss_expired_ttl() {
-        let map: DashMap<String, (String, Instant)> = DashMap::new();
-        // Insert with a timestamp in the past
-        map.insert(
-            "expired".to_string(),
-            (
-                "old_value".to_string(),
-                Instant::now() - Duration::from_secs(10),
-            ),
+    fn git_cache_ttl_expiry_recomputes() {
+        let cache: moka::sync::Cache<String, Arc<u32>> = moka::sync::Cache::builder()
+            .max_capacity(8)
+            .time_to_live(Duration::from_millis(80))
+            .build();
+        let calls = Arc::new(AtomicUsize::new(0));
+
+        let load = |n: u32| {
+            let calls = Arc::clone(&calls);
+            move || {
+                calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Arc::new(n)
+            }
+        };
+
+        let _ = cache.get_with("k".to_string(), load(1));
+        let _ = cache.get_with("k".to_string(), load(1)); // hit — no recompute
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        std::thread::sleep(Duration::from_millis(120));
+        cache.run_pending_tasks();
+        let v = cache.get_with("k".to_string(), load(2)); // expired — recompute
+        assert_eq!(*v, 2);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    /// Step 4: only TTL-expiry evictions (`RemovalCause::Expired`) bump the
+    /// watcher-miss counter; explicit invalidations do not.
+    #[test]
+    fn eviction_observability_counts_only_ttl_expiry() {
+        let counter = Arc::new(AtomicU64::new(0));
+        let cache: GitCache<u32> = build_git_cache(Duration::from_millis(60), Arc::clone(&counter));
+
+        // Expired path: insert, let it age out, force maintenance.
+        cache.insert("expired".to_string(), Arc::new(1));
+        std::thread::sleep(Duration::from_millis(120));
+        cache.run_pending_tasks();
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "TTL expiry must increment the watcher-miss counter"
         );
 
-        let result = AppState::get_cached(&map, "expired", Duration::from_secs(5));
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_cache_overwrite_resets_ttl() {
-        let map: DashMap<String, (String, Instant)> = DashMap::new();
-        // Insert old entry
-        map.insert(
-            "key".to_string(),
-            ("old".to_string(), Instant::now() - Duration::from_secs(10)),
+        // Explicit path: insert then invalidate — must NOT increment.
+        cache.insert("explicit".to_string(), Arc::new(2));
+        cache.run_pending_tasks();
+        cache.invalidate("explicit");
+        cache.run_pending_tasks();
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "explicit invalidation must NOT increment the watcher-miss counter"
         );
-        // Overwrite with fresh value
-        AppState::set_cached(&map, "key".to_string(), "new".to_string());
-
-        let result = AppState::get_cached(&map, "key", Duration::from_secs(5));
-        assert_eq!(result, Some("new".to_string()));
     }
 
     #[test]
@@ -3305,30 +3493,20 @@ mod tests {
         let state = make_test_app_state();
         state.git_cache.repo_info.insert(
             "/some/path".to_string(),
-            (
-                crate::git::RepoInfo {
-                    path: "/some/path".to_string(),
-                    name: "test".to_string(),
-                    initials: "TE".to_string(),
-                    branch: "main".to_string(),
-                    status: "clean".to_string(),
-                    is_git_repo: true,
-                },
-                Instant::now(),
-            ),
+            Arc::new(sample_repo_info("/some/path", "test")),
         );
         state
             .git_cache
             .github_status
-            .insert("/some/path".to_string(), (vec![], Instant::now()));
+            .insert("/some/path".to_string(), Arc::new(vec![]));
 
-        assert!(!state.git_cache.repo_info.is_empty());
-        assert!(!state.git_cache.github_status.is_empty());
+        assert!(state.git_cache.repo_info.get("/some/path").is_some());
+        assert!(state.git_cache.github_status.get("/some/path").is_some());
 
         state.clear_caches();
 
-        assert!(state.git_cache.repo_info.is_empty());
-        assert!(state.git_cache.github_status.is_empty());
+        assert!(state.git_cache.repo_info.get("/some/path").is_none());
+        assert!(state.git_cache.github_status.get("/some/path").is_none());
     }
 
     #[test]
@@ -3336,31 +3514,11 @@ mod tests {
         let state = make_test_app_state();
         state.git_cache.repo_info.insert(
             "/repo/a".to_string(),
-            (
-                crate::git::RepoInfo {
-                    path: "/repo/a".to_string(),
-                    name: "a".to_string(),
-                    initials: "A".to_string(),
-                    branch: "main".to_string(),
-                    status: "clean".to_string(),
-                    is_git_repo: true,
-                },
-                Instant::now(),
-            ),
+            Arc::new(sample_repo_info("/repo/a", "a")),
         );
         state.git_cache.repo_info.insert(
             "/repo/b".to_string(),
-            (
-                crate::git::RepoInfo {
-                    path: "/repo/b".to_string(),
-                    name: "b".to_string(),
-                    initials: "B".to_string(),
-                    branch: "main".to_string(),
-                    status: "clean".to_string(),
-                    is_git_repo: true,
-                },
-                Instant::now(),
-            ),
+            Arc::new(sample_repo_info("/repo/b", "b")),
         );
 
         state.invalidate_repo_caches("/repo/a");
@@ -3790,6 +3948,67 @@ mod tests {
     }
 
     #[test]
+    fn test_session_state_status_line_keeps_confident_question() {
+        let state = fresh_state();
+        // Confident question — e.g. grok's "⚠ Action Required" approval prompt.
+        let q = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "Run echo x", "confident": true }),
+        );
+        apply(&state, &q);
+        // grok keeps its spinner animating (emitting status-line) WHILE awaiting
+        // approval. A confident question must survive the busy tick — otherwise
+        // awaiting_input flickers and the approval notification is lost.
+        let status = make_parsed("status-line", serde_json::json!({ "task_name": "Running" }));
+        let s = apply(&state, &status);
+        assert!(
+            s.awaiting_input,
+            "confident question must survive a status-line tick"
+        );
+        assert_eq!(s.question_text.as_deref(), Some("Run echo x"));
+        // The user answering (user-input) clears it.
+        let ui = make_parsed("user-input", serde_json::json!({ "content": "yes" }));
+        let s2 = apply(&state, &ui);
+        assert!(
+            !s2.awaiting_input,
+            "user-input clears the confident question"
+        );
+    }
+
+    #[test]
+    fn test_session_state_low_confidence_question_does_not_downgrade_confident() {
+        let state = fresh_state();
+        // Confident approval prompt active (grok's "Action Required" title).
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "Run echo x", "confident": true }),
+            ),
+        );
+        // grok's on-screen status line is also parsed as a low-confidence question
+        // with a different text — it must NOT downgrade the active confident one,
+        // or the next status-line would clear awaiting (flicker).
+        let s = apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "Run echo x 12s", "confident": false }),
+            ),
+        );
+        assert!(
+            s.question_confident,
+            "confident flag must not be downgraded"
+        );
+        assert_eq!(
+            s.question_text.as_deref(),
+            Some("Run echo x"),
+            "confident question text must be preserved"
+        );
+        assert!(s.awaiting_input);
+    }
+
+    #[test]
     fn test_session_state_with_shell_reads_shell_states_not_output_timing() {
         let state = fresh_state();
         // Set shell_states to BUSY (1) — this is the source of truth from PTY reader
@@ -4047,6 +4266,38 @@ mod tests {
         let (batch2, off2) = buf.lines_since_owned(off1, usize::MAX);
         assert!(batch2.is_empty());
         assert_eq!(off2, total);
+    }
+
+    /// grid_get_lines uses ABSOLUTE row coords (0 = oldest scrollback line), not
+    /// viewport-relative. Regression: it previously called get_row_text, which
+    /// returned visible screen rows whenever scrollback was non-empty — so reading
+    /// abs 0 gave the top of the screen instead of the oldest history line.
+    #[test]
+    fn test_grid_get_lines_absolute_coords_with_scrollback() {
+        let mut buf = VtLogBuffer::new(3, 80, 1000); // 3 visible rows → forces scrollback
+        for i in 0..9 {
+            buf.process(format!("line {i}\r\n").as_bytes());
+        }
+        buf.process(b"line 9"); // no trailing newline → bottom visible row is "line 9"
+
+        // NOTE: pass a large `end` so grid_get_lines clamps to the GRID's total
+        // (history + visible screen). Do NOT use buf.total_lines() here — that is
+        // VtLogBuffer::total_pushed (finalized log lines only, excludes the live
+        // visible screen) and is a different quantity than grid.total_lines().
+        let lines = buf.grid_get_lines(0, usize::MAX);
+        // Absolute row 0 is the OLDEST line; the bottom of the visible screen is the
+        // NEWEST. The old viewport-relative get_row_text path returned the top VISIBLE
+        // row (≈ "line 7") for index 0 and dropped the real history entirely.
+        assert_eq!(lines.first().map(String::as_str), Some("line 0"));
+        assert_eq!(lines.last().map(String::as_str), Some("line 9"));
+        assert_eq!(buf.grid_get_lines(0, 1), vec!["line 0".to_string()]);
+        // Rows come back contiguous oldest→newest — history AND visible screen,
+        // no gaps and no out-of-range empties.
+        for w in lines.windows(2) {
+            let a: usize = w[0].trim_start_matches("line ").parse().expect("line N");
+            let b: usize = w[1].trim_start_matches("line ").parse().expect("line N");
+            assert_eq!(b, a + 1, "rows must be contiguous ascending: {a} -> {b}");
+        }
     }
 
     /// lines_since_owned returns correct results after buffer rotation

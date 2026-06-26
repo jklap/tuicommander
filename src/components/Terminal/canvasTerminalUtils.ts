@@ -5,7 +5,7 @@ export const GUTTER_PX = 6;
 export const SCROLLBAR_PX = 14;
 
 // Wire format constants (must match terminal_grid.rs)
-const HEADER_SIZE = 22;
+const HEADER_SIZE = 26;
 const CELL_SIZE = 11; // 4 (char u32) + 3 (fg) + 3 (bg) + 1 (attrs)
 export const ATTR_BOLD = 0x01;
 export const ATTR_ITALIC = 0x02;
@@ -36,6 +36,10 @@ export interface DecodedFrame {
 	cursorShape: "block" | "underline" | "beam";
 	displayOffset: number;
 	historySize: number;
+	/** Lines evicted from the history top so far (monotonic within a resize era).
+	 *  `historyBase + (historySize - displayOffset + screenRow)` is an
+	 *  eviction-stable absolute row index — the key space for the scroll row cache. */
+	historyBase: number;
 	hasSelection: boolean;
 	keyboardFlags: number;
 	bell: boolean;
@@ -46,6 +50,66 @@ export interface DecodedFrame {
 	screenRows: number;
 	screenCols: number;
 	rows: DecodedRow[];
+}
+
+/** Previous frame geometry/scroll state needed to decide what a new frame implies. */
+export interface FrameGridPrev {
+	lastScreenRows: number;
+	lastScreenCols: number;
+	lastDisplayOffset: number;
+	lastHistorySize: number;
+}
+
+/** What a newly-decoded frame means for the rowMap. */
+export interface FrameGridDecision {
+	geomChanged: boolean;
+	scrollChanged: boolean;
+	/** The frame carries a full screen of rows → replace the rowMap wholesale. */
+	fullReplace: boolean;
+	/** Partial frame after a scroll → clear and wait for a full frame; do NOT merge. */
+	scrollWait: boolean;
+}
+
+/**
+ * Decide what a decoded frame implies for the rowMap (geom/scroll/full-replace/
+ * scroll-wait). Pure, so onFrame's grid bookkeeping is unit-testable away from the
+ * CanvasTerminal closure.
+ *
+ * `fallbackRows` is the screen-row count to assume when the frame omits its own
+ * (frame.screenRows === 0): onFrame passes lastResizeRows. The backend always sets
+ * frame.screenRows in practice, so the fallback only differs on degenerate frames.
+ */
+export function decideFrameGrid(prev: FrameGridPrev, frame: DecodedFrame, fallbackRows: number): FrameGridDecision {
+	const geomChanged = frame.screenRows !== prev.lastScreenRows || frame.screenCols !== prev.lastScreenCols;
+	const scrollChanged = frame.displayOffset !== prev.lastDisplayOffset || frame.historySize !== prev.lastHistorySize;
+	const screenRowCount = frame.screenRows || fallbackRows || 24;
+	const fullReplace = frame.rows.length >= screenRowCount;
+	const scrollWait = !fullReplace && scrollChanged && !geomChanged;
+	return { geomChanged, scrollChanged, fullReplace, scrollWait };
+}
+
+/** Inputs to the reconcile-fire gate (see shouldFireReconcile). */
+export interface ReconcileGate {
+	alive: boolean;
+	isScrolling: boolean;
+	/** Smooth-scroll fractional position; null when at rest on a line. */
+	scrollPosF: number | null;
+	/** Backend display offset of the current frame (0 = following output, <0 = no frame). */
+	displayOffset: number;
+}
+
+/**
+ * Whether a debounced full-frame reconciliation should actually fire.
+ *
+ * Partial frames merge into the rowMap by index, so a grid content shift can
+ * strand stale rows (duplicate/vanished blocks) on the canvas while the grid
+ * itself stays correct. scheduleReconcile() requests a full frame to self-heal,
+ * but ONLY when the terminal is at rest and following output (offset 0). Firing
+ * mid-gesture or while scrolled back would fight the active render or yank the
+ * view. Pure, so the gate is unit-testable away from the CanvasTerminal closure.
+ */
+export function shouldFireReconcile(g: ReconcileGate): boolean {
+	return g.alive && !g.isScrolling && g.scrollPosF == null && g.displayOffset === 0;
 }
 
 export interface CellMetrics {
@@ -87,6 +151,8 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 	offset += 2;
 	const screenCols = view.getUint16(offset, true);
 	offset += 2;
+	const historyBase = view.getUint32(offset, true);
+	offset += 4;
 	const bell = (frameFlags & 0x01) !== 0;
 	const cursorShapeRaw = (frameFlags >> 1) & 0x03;
 	const cursorShape: "block" | "underline" | "beam" =
@@ -134,6 +200,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 		cursorShape,
 		displayOffset,
 		historySize,
+		historyBase,
 		hasSelection,
 		keyboardFlags,
 		bell,
@@ -145,6 +212,69 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 		screenCols,
 		rows,
 	};
+}
+
+/** A styled row tagged with its absolute index (0 = oldest scrollback line). */
+export interface StyledRangeRow {
+	abs: number;
+	row: DecodedRow;
+}
+
+/** A decoded range of styled rows, feeding the client-side scroll row cache. */
+export interface StyledRange {
+	startAbs: number;
+	historySize: number;
+	cols: number;
+	rows: StyledRangeRow[];
+}
+
+/**
+ * Decode the styled-row-range payload from `terminal_styled_rows`.
+ * Layout mirrors the Rust `serialize_styled_range`: start_abs u32,
+ * history_size u32, cols u16, row_count u16, then per row abs u32 + colCount u16
+ * + cells (colCount × CELL_SIZE).
+ */
+export function decodeStyledRange(buffer: ArrayBuffer): StyledRange | null {
+	if (buffer.byteLength < 12) return null;
+	const view = new DataView(buffer);
+	let offset = 0;
+	const startAbs = view.getUint32(offset, true);
+	offset += 4;
+	const historySize = view.getUint32(offset, true);
+	offset += 4;
+	const cols = view.getUint16(offset, true);
+	offset += 2;
+	const rowCount = view.getUint16(offset, true);
+	offset += 2;
+
+	const rows: StyledRangeRow[] = [];
+	for (let r = 0; r < rowCount; r++) {
+		if (offset + 6 > buffer.byteLength) break;
+		const abs = view.getUint32(offset, true);
+		offset += 4;
+		const colCount = view.getUint16(offset, true);
+		offset += 2;
+		const codepoints = new Uint32Array(colCount);
+		const fg = new Uint32Array(colCount);
+		const bg = new Uint32Array(colCount);
+		const attrs = new Uint8Array(colCount);
+		for (let c = 0; c < colCount; c++) {
+			if (offset + CELL_SIZE > buffer.byteLength) break;
+			codepoints[c] = view.getUint32(offset, true);
+			offset += 4;
+			const fgR = view.getUint8(offset++);
+			const fgG = view.getUint8(offset++);
+			const fgB = view.getUint8(offset++);
+			const bgR = view.getUint8(offset++);
+			const bgG = view.getUint8(offset++);
+			const bgB = view.getUint8(offset++);
+			attrs[c] = view.getUint8(offset++);
+			fg[c] = (fgR << 16) | (fgG << 8) | fgB;
+			bg[c] = (bgR << 16) | (bgG << 8) | bgB;
+		}
+		rows.push({ abs, row: { index: 0, count: colCount, codepoints, fg, bg, attrs } });
+	}
+	return { startAbs, historySize, cols, rows };
 }
 
 /** Measure natural character height via DOM span — matches xterm.js CharSizeService. */

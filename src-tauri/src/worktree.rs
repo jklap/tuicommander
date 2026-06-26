@@ -211,7 +211,9 @@ pub(crate) fn create_worktree_internal(
     // Build git worktree add command
     let base_repo_path = PathBuf::from(&config.base_repo);
     let wt_path_str = worktree_path.to_string_lossy().to_string();
-    let mut args: Vec<String> = vec!["worktree".into(), "add".into()];
+    // --quiet suppresses git's own checkout progress lines ("Updating files: X% (N/M)")
+    // that would otherwise appear in the controlling terminal. Hooks still run normally.
+    let mut args: Vec<String> = vec!["worktree".into(), "add".into(), "--quiet".into()];
 
     if config.create_branch
         && let Some(ref branch) = config.branch
@@ -256,6 +258,7 @@ pub(crate) fn create_worktree_internal(
                     let retry_args = [
                         "worktree",
                         "add",
+                        "--quiet",
                         &worktree_path.to_string_lossy(),
                         branch.as_str(),
                     ];
@@ -1054,20 +1057,18 @@ pub(crate) fn get_worktree_paths_cached(
     state: &crate::state::AppState,
     repo_path: &str,
 ) -> HashMap<String, String> {
-    if let Some(cached) = crate::state::AppState::get_cached(
-        &state.git_cache.worktree_paths,
-        repo_path,
-        crate::state::GIT_CACHE_TTL,
-    ) {
-        return cached;
-    }
-    let paths = get_worktree_paths(repo_path.to_string()).unwrap_or_default();
-    crate::state::AppState::set_cached(
-        &state.git_cache.worktree_paths,
-        repo_path.to_string(),
-        paths.clone(),
-    );
-    paths
+    let p = repo_path.to_string();
+    (*state
+        .git_cache
+        .worktree_paths
+        .get_with(repo_path.to_string(), || {
+            std::sync::Arc::new(
+                crate::git_reads::git_reads()
+                    .worktree_paths(std::path::Path::new(&p))
+                    .unwrap_or_default(),
+            )
+        }))
+    .clone()
 }
 
 /// Get worktree paths for a repo: maps branch name -> worktree directory
@@ -3026,6 +3027,37 @@ branch refs/heads/feat
 
         let base = get_branch_base(&repo.path().to_string_lossy(), "persist-base-test");
         assert_eq!(base, Some(default_branch));
+    }
+
+    // Verify that post-checkout hooks still run after `git worktree add --quiet`.
+    // --quiet only suppresses git's own checkout progress lines, not hooks.
+    #[test]
+    #[cfg(unix)]
+    fn test_create_worktree_runs_post_checkout_hook() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+
+        let hooks_dir = repo.path().join(".git/hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+        let hook_path = hooks_dir.join("post-checkout");
+        fs::write(&hook_path, "#!/bin/sh\ntouch .hook-ran\n").unwrap();
+        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let config = WorktreeConfig {
+            task_name: "hook-run-test".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("hook-run-test".to_string()),
+            create_branch: true,
+        };
+        create_worktree_internal(&worktrees_dir, &config, None).unwrap();
+
+        let worktree_path = worktrees_dir.join("hook-run-test");
+        assert!(
+            worktree_path.join(".hook-ran").exists(),
+            "post-checkout hook did not run — --quiet must not suppress hooks"
+        );
     }
 
     #[test]

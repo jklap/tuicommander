@@ -3,7 +3,7 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use serde::Serialize;
 use std::io::{Read, Write};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 #[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
@@ -134,6 +134,160 @@ pub(crate) fn build_shell_command(shell: &str) -> CommandBuilder {
 
     cmd
 }
+
+/// Niceness applied to every PTY child process. A child inherits the parent's
+/// nice value at fork time, so deprioritizing the shell deprioritizes every
+/// process it later spawns — compilers, bundlers, test runners. The intent is
+/// that a heavy `cargo build` yields CPU to TUIC's own render thread and the
+/// rest of the system *under contention*, while still running at full speed on
+/// an idle machine (`nice` only bites when something else wants the core).
+///
+/// +10 was chosen over macOS QoS-background (`taskpolicy -b`), which pins the
+/// workload to the E-cores on Apple Silicon and makes builds crawl even when
+/// the P-cores are idle.
+///
+/// Overridable at launch via `TUIC_PTY_NICE` so the right value can be tuned on
+/// the real app without recompiling (nice 0..19; values outside that range are
+/// clamped by the kernel).
+#[cfg(unix)]
+const PTY_CHILD_NICE_DEFAULT: i32 = 10;
+
+/// Resolve the nice value to apply to PTY children: `TUIC_PTY_NICE` env override
+/// if set and parseable, else [`PTY_CHILD_NICE_DEFAULT`].
+#[cfg(unix)]
+fn pty_child_nice() -> i32 {
+    std::env::var("TUIC_PTY_NICE")
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(PTY_CHILD_NICE_DEFAULT)
+}
+
+/// Lower the scheduling priority of a freshly-spawned PTY child so the workloads
+/// it spawns don't starve TUIC and the system.
+///
+/// Failure is logged and ignored: a build at the default priority is a degraded
+/// experience, not a broken one. Lowering priority on a process owned by the
+/// same user is always permitted, so a non-zero return here is unexpected.
+///
+/// Unix (macOS, Linux): `setpriority` to nice +10.
+#[cfg(unix)]
+fn lower_pty_child_priority(pid: Option<u32>) {
+    let Some(pid) = pid else { return };
+    let nice = pty_child_nice();
+    // SAFETY: setpriority takes scalar args and is async-signal-safe; `pid` is
+    // the id of the child we just spawned.
+    let rc = unsafe { libc::setpriority(libc::PRIO_PROCESS, pid as libc::id_t, nice) };
+    if rc != 0 {
+        tracing::warn!(
+            pid,
+            nice,
+            error = %std::io::Error::last_os_error(),
+            "failed to lower PTY child priority"
+        );
+    }
+}
+
+/// Windows: `BELOW_NORMAL_PRIORITY_CLASS` — the priority-class analog of nice
+/// +10. NOT `IDLE_PRIORITY_CLASS`, which only runs the process when the system
+/// is otherwise idle (the Windows equivalent of macOS QoS-background) and would
+/// make builds crawl. macOS/Windows lack hard CPU affinity that works on the
+/// primary target, so priority lowering is the one strategy portable to all
+/// three platforms.
+#[cfg(windows)]
+fn lower_pty_child_priority(pid: Option<u32>) {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{
+        BELOW_NORMAL_PRIORITY_CLASS, OpenProcess, PROCESS_SET_INFORMATION, SetPriorityClass,
+    };
+    let Some(pid) = pid else { return };
+    // SAFETY: Win32 calls with scalar/handle args; `pid` is the id of the child
+    // we just spawned. The handle is closed on every path once obtained.
+    unsafe {
+        let handle = OpenProcess(PROCESS_SET_INFORMATION, 0, pid);
+        if handle.is_null() {
+            tracing::warn!(
+                pid,
+                error = %std::io::Error::last_os_error(),
+                "failed to open PTY child to lower priority"
+            );
+            return;
+        }
+        if SetPriorityClass(handle, BELOW_NORMAL_PRIORITY_CLASS) == 0 {
+            tracing::warn!(
+                pid,
+                error = %std::io::Error::last_os_error(),
+                "failed to lower PTY child priority"
+            );
+        }
+        CloseHandle(handle);
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn lower_pty_child_priority(_pid: Option<u32>) {}
+
+/// macOS thread QoS for the interactive terminal path.
+///
+/// `lower_pty_child_priority` nices compiler/test workloads *down*, but on
+/// Apple Silicon the scheduler is QoS-band driven: nice only reorders threads
+/// *within* a band, so under a saturating `cargo build` our PTY reader, frame
+/// ticker, and keystroke-write threads — all at default QoS — still waited
+/// behind the compiler's many default-QoS worker threads. Raising our own
+/// threads to USER_INTERACTIVE puts the interactive path in a higher band, the
+/// lever that keeps typing/echo responsive under load (the native trick AppKit
+/// apps get for free on the foreground GUI thread).
+///
+/// macOS-only: Linux/Windows have no per-thread QoS equivalent that helps here
+/// (raising priority needs privilege); there we rely on lowering children.
+#[cfg(target_os = "macos")]
+mod thread_qos {
+    use std::os::raw::{c_int, c_uint};
+
+    /// `QOS_CLASS_USER_INTERACTIVE` from `<sys/qos.h>`.
+    const QOS_CLASS_USER_INTERACTIVE: c_uint = 0x21;
+
+    unsafe extern "C" {
+        fn pthread_set_qos_class_self_np(qos_class: c_uint, relative_priority: c_int) -> c_int;
+        #[cfg(test)]
+        fn pthread_get_qos_class_np(
+            thread: libc::pthread_t,
+            qos_class: *mut c_uint,
+            relative_priority: *mut c_int,
+        ) -> c_int;
+    }
+
+    /// Raise the calling thread to USER_INTERACTIVE QoS. Best-effort: a failure
+    /// leaves the thread at its current QoS (degraded latency, not broken), so
+    /// the non-zero return is intentionally ignored.
+    pub(super) fn raise_self_to_user_interactive() {
+        // SAFETY: extern "C" call with scalar args; affects only the calling thread.
+        unsafe {
+            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+        }
+    }
+
+    /// Read back the calling thread's QoS class. Test-only verification helper.
+    #[cfg(test)]
+    pub(super) fn current_qos_class() -> c_uint {
+        let mut class: c_uint = 0;
+        let mut rel: c_int = 0;
+        // SAFETY: out-params point to valid stack locals; pthread_self is always valid.
+        unsafe {
+            pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut rel);
+        }
+        class
+    }
+}
+
+/// Raise the calling thread's scheduling QoS for the interactive terminal I/O
+/// path. macOS-only (see [`thread_qos`]); a no-op on other platforms.
+#[cfg(target_os = "macos")]
+fn raise_thread_for_interactive_io() {
+    thread_qos::raise_self_to_user_interactive();
+}
+
+#[cfg(not(target_os = "macos"))]
+fn raise_thread_for_interactive_io() {}
 
 /// Resolve the shell to use: explicit override > env default > platform default.
 pub(crate) fn resolve_shell(override_shell: Option<String>) -> String {
@@ -310,9 +464,13 @@ pub(crate) fn extract_question_line(changed_rows: &[ChangedRow]) -> Option<Strin
 }
 
 /// Returns false for lines that are clearly not questions: code comments, diff context,
-/// markdown headers, and lines containing code-specific syntax.
+/// markdown headers, prompt-echoed user input, and lines containing code-specific syntax.
 fn is_plausible_question(line: &str) -> bool {
     let trimmed = line.trim_start();
+    // Prompt-prefixed lines are user input echoed in the conversation, not agent questions.
+    if is_prompt_line(trimmed) {
+        return false;
+    }
     // Comment/diff/markdown prefixes
     if trimmed.starts_with("//")
         || trimmed.starts_with('#')
@@ -1397,6 +1555,18 @@ fn spawn_silence_timer(
                 }
             };
 
+            // Hook-instrumented sessions report awaiting via OSC 7770; suppress the
+            // silence-based question heuristic (the silence-idle backstop is untouched).
+            if state
+                .session_states
+                .get(&session_id)
+                .map(|s| s.hook_instrumented)
+                .unwrap_or(false)
+            {
+                silence.lock().clear_stale_question();
+                continue;
+            }
+
             // Emit question event.
             silence.lock().mark_emitted(&prompt_text);
             let parsed = ParsedEvent::Question {
@@ -1420,6 +1590,69 @@ fn spawn_silence_timer(
 // ---------------------------------------------------------------------------
 // ChunkProcessor: shared output processing logic for desktop & headless readers
 // ---------------------------------------------------------------------------
+
+/// Extract a clean prompt from grok's "⚠ Action Required" OSC 0 title.
+/// Strips the leading warning / "Action Required" marker, the spinner braille
+/// frame, and separators, leaving the human-readable action description.
+/// `"⚠ Action Required - ⠙ - Running: echo x - Execute Shell …"` → `"Running: echo x - Execute Shell …"`.
+fn clean_action_required_title(title: &str) -> String {
+    let after = title.split("Action Required").nth(1).unwrap_or(title);
+    let cleaned = after
+        .trim_start_matches(|c: char| {
+            c == '-' || c == ' ' || ('\u{2800}'..='\u{28FF}').contains(&c)
+        })
+        .trim();
+    if cleaned.is_empty() {
+        "grok is awaiting approval".to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+/// Map a TUIC `state=` verb to the awaiting-input `ParsedEvent` it implies.
+///
+/// busy/idle shell transitions are handled by `handle_tuic_state`; this covers
+/// only the separate `awaiting_input` field, which is driven by Question /
+/// UserInput events in `state.rs`:
+/// - `awaiting` → confident `Question` (sets `awaiting_input` + `question_confident`)
+/// - `busy`     → `UserInput` clear (hook busy is authoritative — clears an awaiting
+///   set by a prior `PreToolUse(AskUserQuestion)`; empty content never overwrites
+///   `last_prompt`)
+/// - anything else (incl. `idle`, unknown) → `None`
+fn tuic_state_awaiting_event(payload: &str, line: i64) -> Option<ParsedEvent> {
+    match payload {
+        "awaiting" => Some(ParsedEvent::Question {
+            prompt_text: String::new(),
+            confident: true,
+        }),
+        // `line` is the absolute prompt row (history_size + cursor row) at the
+        // busy transition — the row the user's submitted prompt sits on. Carried
+        // so the frontend can mark user-prompt lines on the scrollbar.
+        "busy" => Some(ParsedEvent::UserInput {
+            content: String::new(),
+            line,
+        }),
+        _ => None,
+    }
+}
+
+/// Whether `agent_type`'s config enables native-hook instrumentation. Resolved
+/// once when the session's agent type becomes known (config changes apply on the
+/// next agent launch, matching when the hooks themselves take effect).
+fn hook_instrumented_for(agents: &crate::config::AgentsConfig, agent_type: Option<&str>) -> bool {
+    agent_type
+        .and_then(|at| agents.agents.get(at))
+        .and_then(|s| s.hook_instrumentation)
+        .unwrap_or(false)
+}
+
+/// Whether a heuristic `Question` event should be suppressed for this session.
+/// Hook-instrumented agents report awaiting via OSC 7770 (`state=awaiting`), so
+/// the silence/regex question heuristics would only double-fire. Only `Question`
+/// is suppressed — idle/busy transitions and every other event pass through.
+fn suppress_heuristic_question(hook_instrumented: bool, event: &ParsedEvent) -> bool {
+    hook_instrumented && matches!(event, ParsedEvent::Question { .. })
+}
 
 /// Per-session mutable state for processing PTY output chunks.
 /// Holds dedup state, parser, and session CWD for PlanFile resolution.
@@ -1482,6 +1715,10 @@ struct ChunkProcessor {
     /// Absolute buffer line of the last heuristic agent-block start.
     /// Used to emit AgentBlock end when the next block starts or agent exits.
     last_agent_block_line: Option<usize>,
+    /// Edge-detect grok's OSC 0 "Action Required" approval title so a permission
+    /// prompt fires the question notification exactly once (the title repaints
+    /// every spinner tick). True while the last title signalled awaiting-approval.
+    grok_title_awaiting: bool,
 }
 
 impl ChunkProcessor {
@@ -1507,6 +1744,7 @@ impl ChunkProcessor {
             tuic_session,
             last_session_conflict_mark: None,
             last_agent_block_line: None,
+            grok_title_awaiting: false,
         }
     }
 
@@ -1805,7 +2043,6 @@ impl ChunkProcessor {
             term_events,
             screen_cache,
             cursor_row,
-            pre_filter_has_spinner,
             history_size,
         ) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
@@ -1823,9 +2060,6 @@ impl ChunkProcessor {
             // Use screen_rows_ref() to avoid cloning prev_rows for the chrome cutoff
             // check. The owned snapshot is captured once below for slash-menu/choice-prompt
             // parsing that happens after the lock is released.
-            let pre_filter_has_spinner = changed
-                .iter()
-                .any(|r| crate::chrome::is_spinner_row(&r.text));
             let changed = if !changed.is_empty() {
                 if let Some(screen) = vt.screen_rows_ref() {
                     let refs: Vec<&str> = screen.iter().map(|s| s.as_str()).collect();
@@ -1855,12 +2089,19 @@ impl ChunkProcessor {
                 tevts,
                 Some(screen),
                 cursor_row,
-                pre_filter_has_spinner,
                 hist,
             )
         } else {
-            (Vec::new(), None, None, Vec::new(), None, 0, false, 0)
+            (Vec::new(), None, None, Vec::new(), None, 0, 0)
         };
+
+        // Did this chunk grow the scrollback (genuine new output) or merely
+        // repaint existing rows (SIGWINCH reflow, cursor blink, statusline)?
+        // Captured BEFORE `last_vt_log_total` is updated below. A pure reflow
+        // never grows the buffer; real agent work scrolls in new lines.
+        let vt_log_grew = vt_log_total
+            .map(|t| t > self.last_vt_log_total)
+            .unwrap_or(false);
 
         // Emit scrollback-overlay growth/rotation event (throttled to 100ms).
         // Frontend listens to `pty-vt-log-total-{session_id}` and updates
@@ -1913,19 +2154,37 @@ impl ChunkProcessor {
                             }
                         }
                     }
-                    TermEvent::Title(title) =>
-                    {
+                    TermEvent::Title(title) => {
                         #[cfg(feature = "desktop")]
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), &title);
                         }
+                        // grok signals an awaiting-approval permission prompt by
+                        // prefixing its OSC 0 title with "⚠ Action Required" (e.g.
+                        // "⚠ Action Required - ⠙ - Running: echo … - Execute Shell …").
+                        // The title repaints every spinner tick, so edge-detect the
+                        // false→true transition and fire the question exactly once.
+                        // DEFERRED (2026-06-11) — grok 0.2.45 in always-approve mode
+                        // emits titles like "Run Shell Command echo … - grok" with NO
+                        // "Action Required" prefix (verified live). The prefix may be
+                        // version/permission-mode specific; the on-screen "◆ …?" prompt
+                        // (cliclack path in output_parser) covers real approvals. Re-verify
+                        // grok's title in default (non-always-approve) mode before removing.
+                        let title_awaiting = title.contains("Action Required");
+                        if title_awaiting && !self.grok_title_awaiting {
+                            tuic_events.push(ParsedEvent::Question {
+                                prompt_text: clean_action_required_title(&title),
+                                confident: true,
+                            });
+                        }
+                        self.grok_title_awaiting = title_awaiting;
                     }
-                    TermEvent::ResetTitle =>
-                    {
+                    TermEvent::ResetTitle => {
                         #[cfg(feature = "desktop")]
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), "");
                         }
+                        self.grok_title_awaiting = false;
                     }
                     TermEvent::ClipboardStore(text) => {
                         #[cfg(feature = "desktop")]
@@ -1973,7 +2232,13 @@ impl ChunkProcessor {
                         line,
                     } => match verb.as_str() {
                         "state" => {
+                            // idle/busy drive the shell-state machine; awaiting is
+                            // ignored here (it's a separate field). The awaiting_input
+                            // field is driven by Question/UserInput events instead.
                             self.handle_tuic_state(&payload, session_id, state);
+                            if let Some(evt) = tuic_state_awaiting_event(&payload, line as i64) {
+                                tuic_events.push(evt);
+                            }
                         }
                         "suggest" => {
                             // Tolerate an optional `[ … ]` wrapper so this OSC
@@ -2050,6 +2315,13 @@ impl ChunkProcessor {
         };
         let suppress_notifications = in_resize_grace || in_startup_grace;
         let mut events = tuic_events;
+        // Hook-instrumented sessions get awaiting from OSC 7770; drop heuristic
+        // (regex) Question events from the parser so they don't double-fire.
+        let hook_instrumented = state
+            .session_states
+            .get(session_id)
+            .map(|s| s.hook_instrumented)
+            .unwrap_or(false);
         if let Some(evt) = crate::output_parser::parse_osc94(data) {
             events.push(evt);
         }
@@ -2081,12 +2353,16 @@ impl ChunkProcessor {
                 .collect();
             events.extend(
                 self.parser
-                    .parse_clean_lines(&filtered, agent_active_for_parse),
+                    .parse_clean_lines(&filtered, agent_active_for_parse)
+                    .into_iter()
+                    .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
             );
         } else {
             events.extend(
                 self.parser
-                    .parse_clean_lines(&changed_rows, agent_active_for_parse),
+                    .parse_clean_lines(&changed_rows, agent_active_for_parse)
+                    .into_iter()
+                    .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
             );
         }
 
@@ -2171,14 +2447,19 @@ impl ChunkProcessor {
 
         // Emit events with dedup, grace filtering, and PlanFile resolution.
         for event in &events {
-            if suppress_notifications
-                && matches!(
-                    event,
-                    ParsedEvent::Question { .. }
-                        | ParsedEvent::RateLimit { .. }
-                        | ParsedEvent::ApiError { .. }
-                )
-            {
+            // During startup/resize grace, suppress low-confidence notifications to
+            // avoid boot-noise false positives — but let CONFIDENT questions through.
+            // grok signals an approval prompt via its "Action Required" title
+            // (confident), yet its continuous animation keeps resetting last_output,
+            // so the startup grace never settles by silence and would otherwise
+            // suppress the approval prompt for the full 120s safety cap.
+            let suppress_this = suppress_notifications
+                && match event {
+                    ParsedEvent::Question { confident, .. } => !*confident,
+                    ParsedEvent::RateLimit { .. } | ParsedEvent::ApiError { .. } => true,
+                    _ => false,
+                };
+            if suppress_this {
                 continue;
             }
 
@@ -2367,11 +2648,18 @@ impl ChunkProcessor {
         // Spinner rows (dingbats ✻, braille ⠋, Aider ░█) prove the agent is
         // alive even though they are chrome-only — keeping the timestamp fresh
         // prevents should_transition_idle from firing mid-think.
+        //
+        // Spinner detection runs on the SAME post-cutoff `changed_rows` as
+        // everything else. Real spinners (Gemini braille, Aider Knight Rider,
+        // Claude `✻ Thinking…`) all render ABOVE the input separator, so they
+        // survive the chrome cutoff and still keep the agent alive here. Footer
+        // chrome below the separator (the periodic statusline repaint whose
+        // `█░·` glyphs look like spinner runs) sits past the cutoff and is
+        // dropped — agnostic to whatever the user puts in their status bar.
         let has_spinner = chrome_only
-            && (pre_filter_has_spinner
-                || changed_rows
-                    .iter()
-                    .any(|r| crate::chrome::is_spinner_row(&r.text)));
+            && changed_rows
+                .iter()
+                .any(|r| crate::chrome::is_spinner_row(&r.text));
         if (!chrome_only || has_spinner)
             && let Some(ts) = state.last_output_ms.get(session_id)
         {
@@ -2380,6 +2668,20 @@ impl ChunkProcessor {
                 .unwrap_or_default()
                 .as_millis() as u64;
             ts.store(now, std::sync::atomic::Ordering::Relaxed);
+        }
+
+        // SIGWINCH reflow repaints content rows for longer than the initial 1s
+        // resize grace, but a reflow never grows the buffer — it only repaints
+        // existing rows. While such pure-repaint chunks keep arriving within the
+        // grace window, re-arm the grace so a resize never flips an idle agent to
+        // busy. A growing chunk (genuine new output) is NOT extended, so real work
+        // started right after a resize still registers as busy. An already-busy
+        // session is unaffected (idle transitions are silence-timer only).
+        if !vt_log_grew {
+            let mut sl = silence.lock();
+            if sl.is_resize_grace() {
+                sl.on_resize();
+            }
         }
 
         // Shell state: reader transitions → BUSY on real output OR active spinner.
@@ -2507,6 +2809,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     state.grid_channels.remove(session_id);
     state.grid_watch.remove(session_id);
     state.grid_frame_in_flight.remove(session_id);
+    state.pending_scroll.remove(session_id);
     state.ws_clients.remove(session_id);
     state.kitty_states.remove(session_id);
     state.input_buffers.remove(session_id);
@@ -2537,6 +2840,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     state.grid_channels.remove(session_id);
     state.grid_watch.remove(session_id);
     state.grid_frame_in_flight.remove(session_id);
+    state.pending_scroll.remove(session_id);
     state.kitty_states.remove(session_id);
     state.input_buffers.remove(session_id);
     state.silence_states.remove(session_id);
@@ -2949,6 +3253,68 @@ fn clamp_cursor_up(data: &str, max_rows: u16) -> String {
 
 /// Spawn a reader thread that reads from a PTY, processes output, and emits events.
 /// Unified for both desktop (Tauri IPC) and headless (event_bus only) modes.
+/// 1-minute system load average divided by the online CPU count — a measure of
+/// machine-wide CPU oversubscription (NOT this process's own usage, which the
+/// cpu_watchdog covers via getrusage). >= 1.0 means the run queue is as long as
+/// there are cores: things are queueing and the WebView main thread gets starved.
+/// Used to gate the typing frame-throttle so it only kicks in under real load.
+/// Returns 0.0 where unavailable (Windows) — throttle stays off, behaviour unchanged.
+#[cfg(unix)]
+fn system_load_per_core() -> f64 {
+    let mut avg = [0f64; 3];
+    let n = unsafe { libc::getloadavg(avg.as_mut_ptr(), 3) };
+    if n < 1 {
+        return 0.0;
+    }
+    let ncpu = unsafe { libc::sysconf(libc::_SC_NPROCESSORS_ONLN) };
+    let ncpu = if ncpu < 1 { 1.0 } else { ncpu as f64 };
+    avg[0] / ncpu
+}
+
+#[cfg(not(unix))]
+fn system_load_per_core() -> f64 {
+    0.0
+}
+
+/// Minimum interval (ms) the grid ticker must wait between frame sends.
+/// `0` = no floor (send at the full 16 ms tick / ~60 fps), for short bursts so
+/// latency stays low. The two floors give the WebView main thread breathing room:
+///  - `input_recent` (user typing under CPU saturation) → ~20 fps, the most
+///    aggressive floor, so keystroke dispatch + echo aren't stuck behind output.
+///  - sustained animation (grid dirty ≥ 6 consecutive ticks, e.g. a spinner TUI)
+///    → ~30 fps.
+///
+/// Typing wins over sustained because it's the latency-critical case.
+fn grid_send_min_interval_ms(input_recent: bool, dirty_run: u32) -> u64 {
+    const SUSTAINED_DIRTY_TICKS: u32 = 6;
+    const SUSTAINED_MIN_INTERVAL_MS: u64 = 33; // ~30 fps while animating
+    const INPUT_MIN_INTERVAL_MS: u64 = 50; // ~20 fps while typing under load
+    if input_recent {
+        INPUT_MIN_INTERVAL_MS
+    } else if dirty_run >= SUSTAINED_DIRTY_TICKS {
+        SUSTAINED_MIN_INTERVAL_MS
+    } else {
+        0
+    }
+}
+
+/// Stamp the per-session last-input timestamp (epoch ms). Read by the grid
+/// ticker to throttle frame sends while the user types under CPU saturation,
+/// keeping the WebView/browser main thread free for keystroke dispatch + echo.
+/// Called from every interactive input entry point (desktop `write_pty` +
+/// HTTP/PWA `write_to_session`).
+pub(crate) fn stamp_input_ms(state: &AppState, session_id: &str) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    state
+        .last_input_ms
+        .entry(session_id.to_string())
+        .or_insert_with(|| std::sync::atomic::AtomicU64::new(0))
+        .store(now_ms, std::sync::atomic::Ordering::Relaxed);
+}
+
 pub(crate) fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
     paused: Arc<AtomicBool>,
@@ -2986,6 +3352,9 @@ pub(crate) fn spawn_reader_thread(
     let ticker_state = state.clone();
     let ticker_sid = session_id.clone();
     std::thread::spawn(move || {
+        // Frame serialize+emit is the Rust side of the echo→render path; keep it
+        // in the high QoS band so output stays live under a saturating build.
+        raise_thread_for_interactive_io();
         const TICK: std::time::Duration = std::time::Duration::from_millis(16);
         // Safety net: if in_flight stays true for this long (~500 ms),
         // force-reset it so frame delivery resumes. Prevents permanent blank
@@ -3000,13 +3369,26 @@ pub(crate) fn spawn_reader_thread(
         // behind, so persistent saturation still gets cumulative backpressure.
         const MAX_STUCK_BEFORE_PAUSE: u32 = 3;
         const STUCK_PAUSE_MS: u64 = 1_000;
+        // Send-rate floors live in grid_send_min_interval_ms() (unit-tested).
+        // How long after a keystroke the typing-throttle stays armed.
+        const INPUT_THROTTLE_WINDOW_MS: u64 = 150;
+        const LOAD_SATURATION_RATIO: f64 = 1.0; // 1-min load >= cores
+        const LOAD_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
         let mut stuck_since: Option<std::time::Instant> = None;
         let mut stuck_count: u32 = 0;
+        let mut dirty_run: u32 = 0;
+        let mut last_sent: Option<std::time::Instant> = None;
+        let mut last_load_check: Option<std::time::Instant> = None;
+        let mut system_saturated = false;
         while ticker_running.load(Ordering::Relaxed) {
             std::thread::sleep(TICK);
             if !ticker_dirty.swap(false, Ordering::Relaxed) {
+                // Idle tick: leave sustained-animation mode so the next burst
+                // (keystroke, fresh output) gets full 60 fps low-latency response.
+                dirty_run = 0;
                 continue;
             }
+            dirty_run = dirty_run.saturating_add(1);
             let in_flight = ticker_state
                 .grid_frame_in_flight
                 .get(&ticker_sid)
@@ -3050,9 +3432,57 @@ pub(crate) fn spawn_reader_thread(
                 stuck_since = None;
                 stuck_count = 0;
             }
+            // Adaptive frame-rate floor: a TUI that animates continuously (e.g.
+            // grok's spinner repaints its whole bordered UI and walks the cursor
+            // around every tick) keeps the grid dirty 100% of the time, so the
+            // ticker would emit ~50 multi-KB frames/s. The in_flight gate prevents
+            // queue overflow but NOT WebView main-thread starvation — it paints
+            // flat-out and never yields to input/console, so the UI looks frozen.
+            // Once dirtiness is sustained, cap the send rate to ~30 fps to give the
+            // JS thread breathing room. Short bursts stay at the full 60 fps tick.
+            let now = std::time::Instant::now();
+            // Refresh the machine-saturation gate ~once/sec (cheap getloadavg).
+            if last_load_check.is_none_or(|t| now.duration_since(t) >= LOAD_SAMPLE_INTERVAL) {
+                system_saturated = system_load_per_core() >= LOAD_SATURATION_RATIO;
+                last_load_check = Some(now);
+            }
+            // Typing-under-load throttle: only when saturated AND the user typed
+            // recently. now_epoch_ms() is computed only on the saturated path.
+            let input_recent = system_saturated && {
+                let now_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64;
+                ticker_state
+                    .last_input_ms
+                    .get(&ticker_sid)
+                    .map(|ts| {
+                        now_ms.saturating_sub(ts.load(Ordering::Relaxed)) < INPUT_THROTTLE_WINDOW_MS
+                    })
+                    .unwrap_or(false)
+            };
+            // Pick the send-rate floor: typing-under-load (~20 fps) wins, else the
+            // sustained-animation floor (~30 fps), else full 60 fps for short bursts.
+            let min_interval = grid_send_min_interval_ms(input_recent, dirty_run);
+            if min_interval > 0
+                && let Some(last) = last_sent
+                && (now.duration_since(last).as_millis() as u64) < min_interval
+            {
+                ticker_dirty.store(true, Ordering::Relaxed); // keep pending for a later tick
+                continue;
+            }
             if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
-                let frame = vt.lock().serialize_dirty_rows();
+                let mut g = vt.lock();
+                if let Some(p) = ticker_state.pending_scroll.get(&ticker_sid) {
+                    let target = p.swap(-1, Ordering::Relaxed);
+                    if target >= 0 {
+                        g.grid_scroll_to_offset(target as usize);
+                    }
+                }
+                let frame = g.serialize_dirty_rows();
+                drop(g);
                 send_grid_frame(&ticker_state, &ticker_sid, frame);
+                last_sent = Some(now);
             }
         }
         // Final flush after reader exits
@@ -3064,6 +3494,8 @@ pub(crate) fn spawn_reader_thread(
     });
 
     std::thread::spawn(move || {
+        // PTY reader drives byte intake → echo; keep it above default-QoS builds.
+        raise_thread_for_interactive_io();
         let sid_for_panic = session_id.clone();
         let state_for_panic = state.clone();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -3075,6 +3507,15 @@ pub(crate) fn spawn_reader_thread(
                 .get(&session_id)
                 .and_then(|s| s.lock().cwd.clone());
             let mut processor = ChunkProcessor::new(session_cwd, tuic_session);
+            // pty-output is emitted only for frontend activity detection (the canvas
+            // renders from grid frames and discards the text). Emitting it per-chunk
+            // flooded the WebView main thread under output storms (`yes`), starving
+            // keydown so Ctrl+C never reached write_pty. Throttle to ~10/s — enough for
+            // the activity dot / lastDataAt, no flood.
+            // DEFERRED (2026-06-16) — cleaner: compute activity fully in Rust and drop
+            // pty-output in desktop entirely (frontend-only-renders rule). Needs moving
+            // Terminal.tsx activity/lastDataAt onto an existing throttled signal.
+            let mut last_pty_output_emit: Option<std::time::Instant> = None;
             loop {
                 while paused.load(Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -3119,15 +3560,32 @@ pub(crate) fn spawn_reader_thread(
                                 }
                             }
 
+                            // Emit pty-output for frontend activity detection, THROTTLED.
+                            // Root cause of the `yes`-flood Ctrl+C wedge (2026-06-16):
+                            // this event fired per read() chunk (thousands/s under a flood).
+                            // Each one is a Tauri event the WebView main thread must
+                            // deserialize+dispatch; the storm of short tasks starved the
+                            // event loop so keydown never ran → Ctrl+C never reached
+                            // write_pty (verified: 0 write_pty calls during flood, normal
+                            // when throttled). The canvas renders from grid frames and
+                            // discards this text (handlePtyData ignores `data`), so dropping
+                            // intermediate chunks is safe — we only need a periodic "output
+                            // happened" pulse for the activity dot / lastDataAt.
                             #[cfg(feature = "desktop")]
-                            if let Some(app) = state.app_handle.read().as_ref() {
-                                let _ = app.emit(
-                                    &format!("pty-output-{session_id}"),
-                                    PtyOutput {
-                                        session_id: session_id.clone(),
-                                        data: clamped_data,
-                                    },
-                                );
+                            {
+                                let should_emit = last_pty_output_emit
+                                    .map(|t| t.elapsed() >= std::time::Duration::from_millis(100))
+                                    .unwrap_or(true);
+                                if should_emit && let Some(app) = state.app_handle.read().as_ref() {
+                                    let _ = app.emit(
+                                        &format!("pty-output-{session_id}"),
+                                        PtyOutput {
+                                            session_id: session_id.clone(),
+                                            data: clamped_data,
+                                        },
+                                    );
+                                    last_pty_output_emit = Some(std::time::Instant::now());
+                                }
                             }
                         }
 
@@ -3309,6 +3767,7 @@ pub(crate) async fn create_pty(
     }
 
     let (pair, child) = pair_and_child.ok_or(last_err)?;
+    lower_pty_child_priority(child.process_id());
 
     let tuic_session = config.tuic_session.clone();
 
@@ -3367,6 +3826,10 @@ pub(crate) async fn create_pty(
     let mut ss = crate::state::SessionState::default();
     if config.agent_type.is_some() {
         ss.agent_type = config.agent_type;
+        ss.hook_instrumented = hook_instrumented_for(
+            &crate::config::load_agents_config(),
+            ss.agent_type.as_deref(),
+        );
     }
     state.session_states.insert(session_id.clone(), ss);
 
@@ -3416,6 +3879,7 @@ pub(crate) async fn spawn_session_for_agent(
         .slave
         .spawn_command(cmd)
         .map_err(|e| format!("Failed to spawn shell: {e}"))?;
+    lower_pty_child_priority(child.process_id());
 
     let writer = pair
         .master
@@ -3561,6 +4025,7 @@ pub(crate) async fn create_pty_with_worktree(
             .slave
             .spawn_command(cmd)
             .map_err(|e| format!("Failed to spawn shell: {e}"))?;
+        lower_pty_child_priority(child.process_id());
 
         let writer = pair
             .master
@@ -3635,6 +4100,10 @@ pub(crate) async fn create_pty_with_worktree(
     let mut ss = crate::state::SessionState::default();
     if pty_config.agent_type.is_some() {
         ss.agent_type = pty_config.agent_type;
+        ss.hook_instrumented = hook_instrumented_for(
+            &crate::config::load_agents_config(),
+            ss.agent_type.as_deref(),
+        );
     }
     state.session_states.insert(session_id.clone(), ss);
 
@@ -3687,13 +4156,22 @@ pub(crate) async fn write_pty(
     let state = Arc::clone(&state);
     let app = app.clone();
     tokio::task::spawn_blocking(move || {
+    // Keystroke delivery to the PTY: run on the high QoS band so the write (and
+    // thus the echo round-trip) isn't starved by a saturating build. Idempotent
+    // per call; bumps whichever blocking-pool thread serves this keystroke.
+    raise_thread_for_interactive_io();
     // Restore cursor if hidden — Ink-based agents send DECTCEM hide for
     // spinners but may not send CNORM when returning to the prompt.
-    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
-        let mut vt = vt.lock();
-        if !vt.is_cursor_visible() {
-            vt.process(b"\x1b[?25h");
-        }
+    // Best-effort try_lock: this is cosmetic (touches the local grid, not the PTY)
+    // and MUST NOT block input delivery. Under an output flood the ticker
+    // (serialize_dirty_rows) and reader thrash this same vt lock; a blocking lock
+    // here would starve input. If contended, skip — the next frame restores the
+    // cursor anyway.
+    if let Some(vt) = state.vt_log_buffers.get(&session_id)
+        && let Some(mut vt) = vt.try_lock()
+        && !vt.is_cursor_visible()
+    {
+        vt.process(b"\x1b[?25h");
     }
 
     if let Some(entry) = state.sessions.get(&session_id) {
@@ -3722,6 +4200,11 @@ pub(crate) async fn write_pty(
             }
         }
 
+        // Stamp last-input time so the grid ticker can throttle frame sends while
+        // the user types under CPU saturation (keeps the WebView thread free for
+        // keystroke dispatch + echo).
+        stamp_input_ms(&state, &session_id);
+
         // Feed input through the line buffer to reconstruct user-typed lines
         let input_entry = state
             .input_buffers
@@ -3740,7 +4223,10 @@ pub(crate) async fn write_pty(
                         if word_count >= 10 {
                             state.last_prompts.insert(session_id.clone(), content.clone());
                         }
-                        let parsed = ParsedEvent::UserInput { content };
+                        // Keystroke-reconstructed: no grid context, so no prompt
+                        // row (line = -1). The scrollbar marker uses the OSC 7770
+                        // state=busy path's absolute line instead.
+                        let parsed = ParsedEvent::UserInput { content, line: -1 };
                         // Broadcast to SSE/WebSocket consumers
                         if let Ok(json) = serde_json::to_value(&parsed) {
                             let _ = state.event_bus.send(crate::state::AppEvent::PtyParsed {
@@ -3894,11 +4380,17 @@ pub(crate) fn resize_pty(
         .get(&session_id)
         .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
         .unwrap_or(SHELL_NULL);
-    if let Some(vt_log) = state.vt_log_buffers.get(&session_id) {
-        vt_log
-            .lock()
-            .resize_with_shell_state(rows, cols, shell_state);
-    }
+    // Resize the grid and capture a fresh full frame. `resize_with_mode` marks the
+    // grid fully damaged, so `serialize_dirty_rows` yields the whole viewport. We must
+    // flush it ourselves: the reader thread only sends frames on PTY data or the ticker,
+    // so a resize/zoom over idle or static content (e.g. an agent's printed output)
+    // would otherwise leave the viewport blank until a scroll forces
+    // `terminal_request_frame`. Emitting here makes zoom repaint immediately.
+    let resize_frame = state.vt_log_buffers.get(&session_id).map(|vt_log| {
+        let mut vt = vt_log.lock();
+        vt.resize_with_shell_state(rows, cols, shell_state);
+        vt.serialize_dirty_rows()
+    });
     // Update terminal rows for cursor-up clamping in the reader thread.
     if let Some(r) = state.terminal_rows.get(&session_id) {
         r.store(rows, Ordering::Relaxed);
@@ -3907,6 +4399,11 @@ pub(crate) fn resize_pty(
     // from the shell's prompt redraw triggered by SIGWINCH.
     if let Some(ss) = state.silence_states.get(&session_id) {
         ss.lock().on_resize();
+    }
+    // Flush the post-resize frame so the viewport repaints without waiting for the
+    // next PTY data event (fixes blank screen after zoom on static content).
+    if let Some(frame) = resize_frame {
+        send_grid_frame(&state, &session_id, frame);
     }
     Ok(())
 }
@@ -4513,6 +5010,7 @@ pub(crate) fn classify_agent(process_name: &str) -> Option<&'static str> {
         "amp" => Some("amp"),
         "cursor-agent" => Some("cursor"),
         "goose" => Some("goose"),
+        "grok" => Some("grok"),
         _ => None,
     }
 }
@@ -4601,6 +5099,10 @@ pub(crate) fn get_session_foreground_process(
         && entry.agent_type != effective
     {
         entry.agent_type = effective.clone();
+        entry.hook_instrumented = hook_instrumented_for(
+            &crate::config::load_agents_config(),
+            entry.agent_type.as_deref(),
+        );
     }
 
     effective
@@ -5129,6 +5631,9 @@ pub(crate) fn subscribe_terminal_grid(
     state
         .grid_frame_in_flight
         .insert(session_id.clone(), Arc::new(AtomicBool::new(false)));
+    state
+        .pending_scroll
+        .insert(session_id.clone(), Arc::new(AtomicI64::new(-1)));
     state.grid_channels.insert(session_id, channel);
 }
 
@@ -5165,6 +5670,7 @@ pub(crate) fn terminal_request_frame(state: State<'_, Arc<AppState>>, session_id
 pub(crate) fn unsubscribe_terminal_grid(state: State<'_, Arc<AppState>>, session_id: String) {
     state.grid_channels.remove(&session_id);
     state.grid_frame_in_flight.remove(&session_id);
+    state.pending_scroll.remove(&session_id);
 }
 
 /// Exit alternate screen via the terminal grid (display side only, never touches PTY stdin).
@@ -5207,6 +5713,42 @@ pub(crate) fn terminal_scroll(state: State<'_, Arc<AppState>>, session_id: Strin
         };
         send_grid_frame(&state, &session_id, frame);
     }
+}
+
+/// Coalesced scroll: record the target absolute display offset and mark the grid
+/// dirty so the frame ticker applies it under the lock it already holds. Crucially
+/// takes NO vt lock here, so scrolling never contends with the PTY output processor.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn terminal_scroll_to_offset(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    offset: usize,
+) {
+    if let Some(p) = state.pending_scroll.get(&session_id) {
+        p.store(offset as i64, std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Some(d) = state.grid_frame_dirty.get(&session_id) {
+        d.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Fetch a range of styled rows by absolute index, to fill the frontend's
+/// client-side row cache for smooth local scroll rendering. Read-only; called in
+/// background chunks as the viewport approaches uncached rows, not per frame.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn terminal_styled_rows(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    start: usize,
+    count: usize,
+) -> Vec<u8> {
+    state
+        .vt_log_buffers
+        .get(&session_id)
+        .map(|vt| vt.lock().grid_serialize_styled_range(start, count))
+        .unwrap_or_default()
 }
 
 #[cfg(feature = "desktop")]
@@ -5427,6 +5969,82 @@ pub(crate) async fn set_session_visible(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The interactive-path threads raise their QoS to USER_INTERACTIVE. Verify
+    /// the syscall actually takes effect by reading the class back on the same
+    /// thread (default QoS for a fresh test thread is *not* USER_INTERACTIVE).
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn raises_thread_to_user_interactive_qos() {
+        // Run on a dedicated thread so we don't leave the test runner's worker
+        // permanently bumped.
+        let observed = std::thread::spawn(|| {
+            raise_thread_for_interactive_io();
+            thread_qos::current_qos_class()
+        })
+        .join()
+        .expect("qos probe thread panicked");
+        // QOS_CLASS_USER_INTERACTIVE == 0x21.
+        assert_eq!(
+            observed, 0x21,
+            "thread QoS was not raised to USER_INTERACTIVE"
+        );
+    }
+
+    #[test]
+    fn grid_send_min_interval_policy() {
+        // Short burst, no typing → no floor: full-speed for low latency.
+        assert_eq!(grid_send_min_interval_ms(false, 0), 0);
+        assert_eq!(grid_send_min_interval_ms(false, 5), 0);
+        // Sustained animation (dirty ≥ 6 ticks), no typing → ~30 fps floor.
+        assert_eq!(grid_send_min_interval_ms(false, 6), 33);
+        assert_eq!(grid_send_min_interval_ms(false, 1000), 33);
+        // Typing under load → ~20 fps floor, regardless of dirty_run (even a
+        // short burst), because keystroke latency is what we protect.
+        assert_eq!(grid_send_min_interval_ms(true, 0), 50);
+        assert_eq!(grid_send_min_interval_ms(true, 1000), 50);
+        // Typing floor must be the more aggressive (larger interval) of the two.
+        assert!(grid_send_min_interval_ms(true, 1000) > grid_send_min_interval_ms(false, 1000));
+    }
+
+    #[test]
+    fn system_load_per_core_is_non_negative_and_finite() {
+        // Links libc getloadavg/sysconf on Unix; returns 0.0 elsewhere. Either
+        // way it must be a sane, non-negative, finite ratio.
+        let v = system_load_per_core();
+        assert!(v.is_finite());
+        assert!(v >= 0.0);
+    }
+
+    #[test]
+    fn clean_action_required_title_strips_marker_spinner_and_separators() {
+        // Real grok permission-prompt title (captured live).
+        assert_eq!(
+            clean_action_required_title(
+                "⚠ Action Required - ⠙ - Running: echo hello - Execute Shell Command"
+            ),
+            "Running: echo hello - Execute Shell Command"
+        );
+    }
+
+    #[test]
+    fn clean_action_required_title_handles_each_spinner_frame() {
+        // Title repaints with a different braille frame each tick; cleaned output is stable.
+        for frame in ["⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇"] {
+            assert_eq!(
+                clean_action_required_title(&format!("⚠ Action Required - {frame} - Running: ls")),
+                "Running: ls"
+            );
+        }
+    }
+
+    #[test]
+    fn clean_action_required_title_fallback_when_empty() {
+        assert_eq!(
+            clean_action_required_title("⚠ Action Required - ⠙ - "),
+            "grok is awaiting approval"
+        );
+    }
 
     #[test]
     fn test_parse_signal_number_killed() {
@@ -6491,6 +7109,178 @@ mod tests {
         );
     }
 
+    /// Build ChangedRows for a subset of a full screen, mirroring how the VT
+    /// reader reports only the rows a chunk actually repainted (`row_index`
+    /// preserved against the full screen).
+    fn changed_at(screen: &[&str], indices: &[usize]) -> Vec<ChangedRow> {
+        indices
+            .iter()
+            .map(|&i| ChangedRow {
+                row_index: i,
+                text: screen[i].to_string(),
+            })
+            .collect()
+    }
+
+    /// Mirror process_chunk's chrome-cutoff filter (pty.rs ~1996): drop changed
+    /// rows at or below the footer cutoff, keeping only the content zone.
+    fn filter_below_cutoff(screen: &[&str], changed: Vec<ChangedRow>) -> Vec<ChangedRow> {
+        if changed.is_empty() {
+            return changed;
+        }
+        match crate::chrome::find_chrome_cutoff(screen) {
+            Some(cutoff) => changed
+                .into_iter()
+                .filter(|r| r.row_index < cutoff)
+                .collect(),
+            None => changed,
+        }
+    }
+
+    /// Regression for the false-busy "flap" (root cause + agnostic fix,
+    /// 2026-06-17). Claude Code repaints its whole input area periodically.
+    /// Positionally, EVERYTHING below the second separator of the input box is
+    /// chrome — status bar, mode line, usage gauge — regardless of its glyphs.
+    /// The user's custom HUD renders a context gauge (`█░`) and a mode line
+    /// (`·`) there; `is_spinner_row` reads those glyphs as a live spinner.
+    ///
+    /// The fix is positional, not glyph-based: spinner keepalive runs on the
+    /// SAME post-cutoff `changed_rows` as everything else. A repaint that only
+    /// touches footer rows below the cutoff yields an EMPTY post-filter set →
+    /// chrome_only with no spinner → no busy transition. Agnostic to whatever
+    /// the user puts in their status bar. These are the exact rows captured
+    /// from the live flapping instance.
+    #[test]
+    fn test_statusbar_repaint_below_cutoff_does_not_flap_busy() {
+        let sep = "────────────────────────────────────────────────────────────────────────";
+        let screen: Vec<&str> = vec![
+            "Here is the answer to your question.",
+            "",
+            sep,
+            "❯",
+            sep,
+            "[Opus 4.8 (1M) | Team] █░░░░░░░░░ 6% | gh-metrics git:(master)",
+            "5h: 21% (50m) | 7d: 23% | $31.00 | 📅 $199.70 | 13h",
+            "⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents",
+        ];
+        // The periodic repaint re-emits only the footer rows (indices 5-7).
+        let changed = changed_at(&screen, &[5, 6, 7]);
+        let filtered = filter_below_cutoff(&screen, changed);
+        assert!(
+            filtered.is_empty(),
+            "all-footer repaint must yield an empty post-cutoff set"
+        );
+        let chrome_only = compute_chrome_only(&filtered, true, false, false);
+        let has_spinner = chrome_only
+            && filtered
+                .iter()
+                .any(|r| crate::chrome::is_spinner_row(&r.text));
+        assert!(chrome_only, "empty post-cutoff set is chrome_only");
+        assert!(
+            !(!chrome_only || has_spinner),
+            "statusbar repaint must NOT pass the busy transition gate (no flap)"
+        );
+    }
+
+    /// Companion to the flap regression: a REAL working spinner renders ABOVE
+    /// the input separator (in the content zone), so it survives the chrome
+    /// cutoff and the post-filter spinner check fires — keeping the agent alive.
+    /// Otherwise the agent false-idles mid-think (the dangerous direction the
+    /// single-path design prevents). This is what makes the positional fix safe:
+    /// no supported agent renders a genuine working spinner below the separator.
+    #[test]
+    fn test_content_zone_spinner_still_keeps_alive() {
+        let cc_sep = "────────────────────────────────────────────────────────────────────────";
+        let gem_sep =
+            "─────────────────────────────────────────────────────────────────────────────────";
+        let gem_top =
+            "▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀";
+        let gem_bot =
+            "▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▀▀";
+        // (full screen, index of the working spinner row). Spinner is ABOVE the
+        // input separator in every case — verified against the cutoff tests.
+        let cases: Vec<(Vec<&str>, usize)> = vec![
+            // Claude Code: dingbat thinking spinner in the transcript zone.
+            (
+                vec![
+                    "✻ Cogitating… (3m 47s · ↓ 2.2k tokens)",
+                    "",
+                    cc_sep,
+                    "❯",
+                    cc_sep,
+                    "[Opus 4.8 (1M) | Team] █░░░░░░░░░ 6% | gh-metrics git:(master)",
+                ],
+                0,
+            ),
+            // Gemini CLI: braille spinner above the separator (live layout).
+            (
+                vec![
+                    "✦ I will read the package.json file.",
+                    " ⠴ Check tool-specific usage stats… (esc to cancel, 14s)",
+                    gem_sep,
+                    " Shift+Tab to accept edits",
+                    gem_top,
+                    " >   Type your message or @path/to/file",
+                    gem_bot,
+                    " workspace (/directory)          branch          sandbox",
+                ],
+                1,
+            ),
+        ];
+        for (screen, spinner_idx) in &cases {
+            let changed = changed_at(screen, &[*spinner_idx]);
+            let filtered = filter_below_cutoff(screen, changed);
+            assert!(
+                filtered.iter().any(|r| r.row_index == *spinner_idx),
+                "content-zone spinner at row {spinner_idx} must survive the cutoff: {:?}",
+                screen[*spinner_idx]
+            );
+            let chrome_only = compute_chrome_only(&filtered, false, false, false);
+            let has_spinner = chrome_only
+                && filtered
+                    .iter()
+                    .any(|r| crate::chrome::is_spinner_row(&r.text));
+            assert!(
+                !chrome_only || has_spinner,
+                "content-zone spinner {:?} must pass the busy transition gate",
+                screen[*spinner_idx]
+            );
+        }
+    }
+
+    /// Aider during generation has NO bottom input box (prompt_toolkit has
+    /// returned), so `find_chrome_cutoff` finds no separator/prompt and returns
+    /// None → nothing is filtered → the Knight Rider spinner survives and keeps
+    /// the agent alive. This is why the positional fix does not false-idle Aider
+    /// even though its spinner is a bare block run.
+    #[test]
+    fn test_aider_generation_spinner_keeps_alive() {
+        let screen: Vec<&str> = vec![
+            "Applied edit to src/main.rs",
+            "█░  Waiting for openrouter/anthropic/claude-sonnet-4.5",
+        ];
+        assert_eq!(
+            crate::chrome::find_chrome_cutoff(&screen),
+            None,
+            "Aider generation view has no input box → no cutoff"
+        );
+        let changed = changed_at(&screen, &[1]);
+        let filtered = filter_below_cutoff(&screen, changed);
+        assert!(
+            filtered.iter().any(|r| r.row_index == 1),
+            "Knight Rider spinner must survive (no cutoff to drop it)"
+        );
+        let chrome_only = !filtered.is_empty() && filtered.iter().all(|r| is_chrome_row(&r.text));
+        let has_spinner = chrome_only
+            && filtered
+                .iter()
+                .any(|r| crate::chrome::is_spinner_row(&r.text));
+        assert!(
+            !chrome_only || has_spinner,
+            "Aider Knight Rider spinner must pass the busy transition gate"
+        );
+    }
+
     // --- Staleness counter tests ---
 
     #[test]
@@ -7080,6 +7870,55 @@ mod tests {
         assert_eq!(
             extract_question_line(&make_rows(&["iter().map(|x| x)?"])),
             None
+        );
+    }
+
+    // --- Prompt-prefixed user input rejection ---
+
+    #[test]
+    fn test_extract_question_line_rejects_claude_prompt() {
+        assert_eq!(extract_question_line(&make_rows(&["❯ tutto ok?"])), None);
+    }
+
+    #[test]
+    fn test_extract_question_line_rejects_codex_prompt() {
+        assert_eq!(
+            extract_question_line(&make_rows(&["› is this done?"])),
+            None
+        );
+    }
+
+    #[test]
+    fn test_extract_question_line_rejects_gemini_prompt() {
+        assert_eq!(
+            extract_question_line(&make_rows(&["> are you sure?"])),
+            None
+        );
+    }
+
+    #[test]
+    fn test_find_last_chat_question_rejects_user_prompt_line() {
+        let rows: Vec<String> = vec![
+            "❯ hai cambiato qualcosa?".into(),
+            "────────────────────────────────────────────────".into(),
+            "❯".into(),
+            "────────────────────────────────────────────────".into(),
+        ];
+        assert_eq!(find_last_chat_question(&rows), None);
+    }
+
+    #[test]
+    fn test_find_last_chat_question_agent_question_after_user_input() {
+        let rows: Vec<String> = vec![
+            "❯ tell me about this".into(),
+            "Would you like me to continue?".into(),
+            "────────────────────────────────────────────────".into(),
+            "❯".into(),
+            "────────────────────────────────────────────────".into(),
+        ];
+        assert_eq!(
+            find_last_chat_question(&rows),
+            Some("Would you like me to continue?".to_string())
         );
     }
 
@@ -9179,6 +10018,96 @@ mod tests {
             current, SHELL_IDLE,
             "unknown state should not change shell_states"
         );
+    }
+
+    #[test]
+    fn tuic_state_awaiting_yields_confident_question() {
+        match tuic_state_awaiting_event("awaiting", 0) {
+            Some(ParsedEvent::Question {
+                confident,
+                prompt_text,
+            }) => {
+                assert!(confident, "hook awaiting must be a confident question");
+                assert_eq!(prompt_text, "", "hook awaiting carries no prompt text");
+            }
+            other => panic!("expected confident Question, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tuic_state_busy_yields_userinput_clear_with_prompt_line() {
+        // The busy transition's absolute prompt row (history_size + cursor row,
+        // here 42) must reach the UserInput event so the frontend can mark the
+        // user-prompt line on the scrollbar.
+        match tuic_state_awaiting_event("busy", 42) {
+            Some(ParsedEvent::UserInput { content, line }) => {
+                assert_eq!(content, "", "busy clear must not overwrite last_prompt");
+                assert_eq!(line, 42, "busy UserInput must carry the prompt row");
+            }
+            other => panic!("expected UserInput clear, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tuic_state_idle_yields_no_awaiting_event() {
+        assert!(
+            tuic_state_awaiting_event("idle", 0).is_none(),
+            "idle only transitions shell_state; it pushes no awaiting event"
+        );
+    }
+
+    #[test]
+    fn tuic_state_unknown_yields_no_awaiting_event() {
+        assert!(
+            tuic_state_awaiting_event("thinking", 0).is_none(),
+            "unknown verb must push no awaiting event"
+        );
+    }
+
+    #[test]
+    fn question_suppress_filters_only_questions_when_instrumented() {
+        let q_low = ParsedEvent::Question {
+            prompt_text: "?".into(),
+            confident: false,
+        };
+        let q_high = ParsedEvent::Question {
+            prompt_text: "Proceed?".into(),
+            confident: true,
+        };
+        let other = ParsedEvent::UserInput {
+            content: "hi".into(),
+            line: -1,
+        };
+        // Instrumented: every Question (silence + regex) is suppressed.
+        assert!(suppress_heuristic_question(true, &q_low));
+        assert!(suppress_heuristic_question(true, &q_high));
+        // Non-questions are never suppressed (idle/busy/etc. pass through).
+        assert!(!suppress_heuristic_question(true, &other));
+        // Not instrumented: nothing is suppressed.
+        assert!(!suppress_heuristic_question(false, &q_low));
+    }
+
+    #[test]
+    fn question_suppress_resolves_from_agent_config() {
+        use crate::config::{AgentSettings, AgentsConfig};
+        let mut agents = AgentsConfig::default();
+        let mut enabled = AgentSettings::default();
+        enabled.hook_instrumentation = Some(true);
+        agents.agents.insert("claude".into(), enabled);
+        let mut disabled = AgentSettings::default();
+        disabled.hook_instrumentation = Some(false);
+        agents.agents.insert("codex".into(), disabled);
+
+        assert!(hook_instrumented_for(&agents, Some("claude")));
+        assert!(
+            !hook_instrumented_for(&agents, Some("codex")),
+            "explicit false"
+        );
+        assert!(
+            !hook_instrumented_for(&agents, Some("gemini")),
+            "no override"
+        );
+        assert!(!hook_instrumented_for(&agents, None), "no agent type");
     }
 
     #[test]

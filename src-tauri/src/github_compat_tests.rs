@@ -225,10 +225,13 @@ fn diagnostics_reports_cooldown_and_monitored_repos() {
         std::time::Instant::now() - std::time::Duration::from_secs(1),
     );
     // A cached status counts as a monitored repo.
-    state.git_cache.github_status.insert(
-        "/path/zero".to_string(),
-        (vec![], std::time::Instant::now()),
-    );
+    state
+        .git_cache
+        .github_status
+        .insert("/path/zero".to_string(), std::sync::Arc::new(vec![]));
+    // moka's entry_count() is eventually consistent; flush pending tasks so the
+    // insert is counted before compute_diagnostics reads it.
+    state.git_cache.github_status.run_pending_tasks();
 
     let diag = github_auth::compute_diagnostics(&state);
     assert_eq!(diag.repos_not_found, vec!["octocat/hello".to_string()]);

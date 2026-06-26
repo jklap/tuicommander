@@ -84,6 +84,7 @@ export type ConversationMeta = BackendConversationMeta;
 type ConversationEvent =
 	| { type: "thinking"; iteration: number }
 	| { type: "text_chunk"; text: string }
+	| { type: "reasoning_chunk"; text: string }
 	| { type: "tool_call"; tool_name: string; args: Record<string, unknown> }
 	| { type: "tool_result"; tool_name: string; success: boolean; output: string }
 	| { type: "needs_approval"; tool_name: string; command: string; reason: string }
@@ -91,6 +92,8 @@ type ConversationEvent =
 	| { type: "paused" }
 	| { type: "resumed" }
 	| { type: "rate_limited"; wait_ms: number }
+	| { type: "retrying"; attempt: number; wait_ms: number; reason: string }
+	| { type: "compacted"; elided: number; before_tokens: number }
 	| { type: "error"; message: string }
 	| { type: "completed"; reason: string; usage: { input_tokens: number; output_tokens: number } | null };
 
@@ -99,6 +102,7 @@ type LegacyAgentEvent =
 	| { type: "started"; session_id: string }
 	| { type: "thinking"; session_id: string; iteration: number }
 	| { type: "text_chunk"; session_id: string; text: string }
+	| { type: "reasoning_chunk"; session_id: string; text: string }
 	| { type: "tool_call"; session_id: string; tool_name: string; args: Record<string, unknown> }
 	| { type: "tool_result"; session_id: string; tool_name: string; success: boolean; output: string }
 	| { type: "needs_approval"; session_id: string; tool_name: string; command: string; reason: string }
@@ -155,6 +159,8 @@ export interface PerTerminalConversationState {
 	setToolCalls: Setter<ToolCallEntry[]>;
 	textChunks: Accessor<string>;
 	setTextChunks: Setter<string>;
+	reasoningChunks: Accessor<string>;
+	setReasoningChunks: Setter<string>;
 	pendingApproval: Accessor<PendingApproval | null>;
 	setPendingApproval: Setter<PendingApproval | null>;
 	agentError: Accessor<string | null>;
@@ -204,6 +210,7 @@ function createState(): PerTerminalConversationState {
 	const [currentIteration, setCurrentIteration] = createSignal(0);
 	const [toolCalls, setToolCalls] = createSignal<ToolCallEntry[]>([]);
 	const [textChunks, setTextChunks] = createSignal("");
+	const [reasoningChunks, setReasoningChunks] = createSignal("");
 	const [pendingApproval, setPendingApproval] = createSignal<PendingApproval | null>(null);
 	const [agentError, setAgentError] = createSignal<string | null>(null);
 	const [completionReason, setCompletionReason] = createSignal<string | null>(null);
@@ -230,6 +237,8 @@ function createState(): PerTerminalConversationState {
 		setToolCalls,
 		textChunks,
 		setTextChunks,
+		reasoningChunks,
+		setReasoningChunks,
 		pendingApproval,
 		setPendingApproval,
 		agentError,
@@ -298,6 +307,9 @@ function toolCalls(): ToolCallEntry[] {
 }
 function textChunks(): string {
 	return activeConversation().textChunks();
+}
+function reasoningChunks(): string {
+	return activeConversation().reasoningChunks();
 }
 function pendingApproval(): PendingApproval | null {
 	return activeConversation().pendingApproval();
@@ -515,6 +527,12 @@ function applyConversationEvent(s: PerTerminalConversationState, event: Conversa
 			}
 			break;
 
+		case "reasoning_chunk":
+			// Extended-thinking stream (Opus 4.7+). Accumulate for the disclosure;
+			// reset happens at the start of each new user turn (see sendMessage).
+			s.setReasoningChunks((prev) => prev + event.text);
+			break;
+
 		case "tool_call": {
 			s.setIsThinking(false);
 			const entry: ToolCallEntry = {
@@ -572,6 +590,20 @@ function applyConversationEvent(s: PerTerminalConversationState, event: Conversa
 
 		case "rate_limited":
 			appLogger.info("conversation", `Rate limited, waiting ${event.wait_ms}ms`);
+			break;
+
+		case "retrying":
+			appLogger.info(
+				"conversation",
+				`Retrying LLM call (attempt ${event.attempt}) in ${event.wait_ms}ms: ${event.reason}`,
+			);
+			break;
+
+		case "compacted":
+			appLogger.info(
+				"conversation",
+				`History compacted: elided ${event.elided} old tool result(s) at ${event.before_tokens} tokens`,
+			);
 			break;
 
 		case "error":
@@ -653,6 +685,7 @@ async function sendMessage(text: string, sessionId: string | null): Promise<void
 		s.setError(null);
 		s.setIsStreaming(true);
 		s.setStreamingText("");
+		s.setReasoningChunks("");
 	});
 	s.currentMode = "assisted";
 	s.activeSessionId = sessionId;
@@ -694,6 +727,7 @@ async function startAgent(sessionId: string, goal: string, isUnrestricted?: bool
 		s.setAgentState("running");
 		s.setToolCalls([]);
 		s.setTextChunks("");
+		s.setReasoningChunks("");
 		s.setAgentError(null);
 		s.setCompletionReason(null);
 		s.setCurrentIteration(0);
@@ -787,6 +821,7 @@ function resetAgent(): void {
 		s.setAgentState("idle");
 		s.setToolCalls([]);
 		s.setTextChunks("");
+		s.setReasoningChunks("");
 		s.setAgentError(null);
 		s.setCompletionReason(null);
 		s.setCurrentIteration(0);
@@ -816,6 +851,9 @@ function processEvent(raw: unknown): void {
 			break;
 		case "text_chunk":
 			s.setTextChunks((prev) => prev + event.text);
+			break;
+		case "reasoning_chunk":
+			s.setReasoningChunks((prev) => prev + event.text);
 			break;
 		case "tool_call": {
 			const entry: ToolCallEntry = {
@@ -1108,6 +1146,7 @@ export const conversationStore = {
 	currentIteration,
 	toolCalls,
 	textChunks,
+	reasoningChunks,
 	pendingApproval,
 	agentError,
 	completionReason,

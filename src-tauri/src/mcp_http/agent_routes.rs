@@ -384,6 +384,7 @@ pub(super) async fn spawn_agent_session(
             shell: binary_path.clone(),
         }),
     );
+    state.assign_term_alias(&session_id);
     state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
     state
         .metrics
@@ -401,6 +402,11 @@ pub(super) async fn spawn_agent_session(
     state
         .last_output_ms
         .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
+    // Register the grid_watch channel so `GET /sessions/{id}/stream?format=grid`
+    // works for agent sessions — without it handle_ws_grid_session finds no entry
+    // and silently closes the socket. Mirrors session.rs spawn_pty_session.
+    let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+    state.grid_watch.insert(session_id.clone(), grid_watch_tx);
 
     // Broadcast to SSE/WebSocket consumers (before state is moved to reader thread)
     let _ = state

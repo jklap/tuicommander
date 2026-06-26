@@ -12,7 +12,7 @@
 ## Install Dependencies
 
 ```bash
-npm install
+pnpm install
 ```
 
 ## Development
@@ -20,7 +20,7 @@ npm install
 ### Native Tauri App
 
 ```bash
-npm run tauri dev
+pnpm tauri dev
 ```
 
 Starts Vite dev server + Tauri app with hot reload.
@@ -30,7 +30,7 @@ Starts Vite dev server + Tauri app with hot reload.
 When the MCP server is enabled in settings, the frontend can run standalone:
 
 ```bash
-npm run dev
+pnpm dev
 ```
 
 Connects to the Rust HTTP server via WebSocket/REST.
@@ -38,7 +38,7 @@ Connects to the Rust HTTP server via WebSocket/REST.
 ## Build
 
 ```bash
-npm run tauri build
+pnpm tauri build
 ```
 
 Produces platform-specific installers:
@@ -54,9 +54,8 @@ Produces platform-specific installers:
 ## Testing
 
 ```bash
-npm test              # Run all tests
-npm run test:watch    # Watch mode
-npm run test:coverage # Coverage report
+pnpm test              # Run all tests
+pnpm test:coverage     # Coverage report
 ```
 
 **Test tiers:**
@@ -67,7 +66,7 @@ npm run test:coverage # Coverage report
 
 **Framework:** Vitest + SolidJS Testing Library + happy-dom
 
-**Coverage:** ~80%+ (830 tests)
+**Coverage:** ~80%+
 
 ## Project Structure
 
@@ -77,7 +76,7 @@ See [Architecture Overview](../architecture/overview.md) for full directory stru
 
 | File | Purpose |
 |------|---------|
-| `src/App.tsx` | Central orchestrator (829 lines) |
+| `src/App.tsx` | Central orchestrator |
 | `src-tauri/src/lib.rs` | Rust app setup, command registration |
 | `src-tauri/src/pty.rs` | PTY session management |
 | `src/hooks/useAppInit.ts` | App initialization |

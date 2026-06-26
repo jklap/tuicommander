@@ -82,6 +82,14 @@ pub(crate) enum UpstreamAuth {
     /// Static bearer token.
     Bearer { token: String },
     /// OAuth 2.1 with PKCE (RFC 9449 / RFC 8707).
+    ///
+    /// Wire tag is `oauth2` (matches the frontend `UpstreamAuth` type and the
+    /// Authorize-button gate). The `o_auth2` alias keeps reading config files
+    /// written before this rename — they migrate to `oauth2` on the next save.
+    /// Without the explicit rename, `rename_all = "snake_case"` would derive
+    /// `o_auth2`, which never matched the frontend's `"oauth2"` comparison and
+    /// left OAuth upstreams (e.g. publishwith-ai) with no Authorize action.
+    #[serde(rename = "oauth2", alias = "o_auth2")]
     OAuth2 {
         client_id: String,
         /// Confidential clients (e.g. from DCR) have a secret; public clients omit it.
@@ -230,6 +238,8 @@ pub(crate) fn is_self_referential(url: &str, self_port: u16) -> bool {
 pub(crate) async fn auto_connect_saved_upstreams(state: &crate::state::AppState) {
     let config: UpstreamMcpConfig = load_json_config(UPSTREAMS_FILE);
     if config.servers.is_empty() {
+        // No upstreams to wait for — let tools/list serve immediately.
+        state.mcp_upstream_registry.mark_initial_connect_complete();
         return;
     }
 
@@ -257,6 +267,11 @@ pub(crate) async fn auto_connect_saved_upstreams(state: &crate::state::AppState)
             tracing::warn!(source = "mcp_upstream", name = %server.name, "Boot-time connect failed: {e}");
         }
     }
+    // All upstreams registered (async initialize may still be in flight). This
+    // unblocks `await_initial_settle`, which then waits only for the in-flight
+    // initializations to settle before serving the first tools/list.
+    registry.mark_initial_connect_complete();
+
     tracing::info!(
         source = "mcp_upstream",
         "Boot-time upstream auto-connect complete"
@@ -559,6 +574,47 @@ mod tests {
         } else {
             panic!("Expected OAuth2 auth variant");
         }
+    }
+
+    #[test]
+    fn oauth2_serializes_with_oauth2_tag() {
+        // The wire tag MUST be `oauth2` — the frontend's UpstreamAuth type and the
+        // Authorize-button gate compare against this exact string. Regressing to the
+        // snake_case-derived `o_auth2` silently hides the Authorize action.
+        let mut server = http_server("oauth", "https://remote:443/mcp");
+        server.auth = Some(UpstreamAuth::OAuth2 {
+            client_id: "my-app".to_string(),
+            client_secret: None,
+            scopes: vec![],
+            authorization_endpoint: None,
+            token_endpoint: None,
+        });
+        let json = serde_json::to_string(&server).unwrap();
+        assert!(
+            json.contains(r#""type":"oauth2""#),
+            "expected oauth2 tag, got: {json}"
+        );
+        assert!(
+            !json.contains("o_auth2"),
+            "must not emit legacy o_auth2 tag: {json}"
+        );
+    }
+
+    #[test]
+    fn oauth2_reads_legacy_o_auth2_tag() {
+        // Config files written before the rename use `o_auth2`; the serde alias keeps
+        // them loadable (they migrate to `oauth2` on the next save).
+        let json = r#"{
+            "id": "abc",
+            "name": "legacy",
+            "transport": { "type": "http", "url": "https://remote:443/mcp" },
+            "auth": { "type": "o_auth2", "client_id": "my-app" }
+        }"#;
+        let server: UpstreamMcpServer = serde_json::from_str(json).unwrap();
+        assert!(matches!(
+            server.auth,
+            Some(UpstreamAuth::OAuth2 { ref client_id, .. }) if client_id == "my-app"
+        ));
     }
 
     #[test]

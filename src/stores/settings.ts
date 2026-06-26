@@ -11,6 +11,19 @@ const LEGACY_KEYS = {
 } as const;
 
 /** Rust AppConfig shape (subset needed for font/ide read/write) */
+/** A user-defined launcher for the "Open in" menu (GH #71). */
+export interface CustomLauncher {
+	id: string;
+	name: string;
+	/** Executable: bare name (resolved on PATH) or absolute path. */
+	executable: string;
+	/** Args; each may contain {path}/{file}/{line}/{column} placeholders. */
+	args: string[];
+	enabled: boolean;
+	/** Optional platform filter: "macos" | "windows" | "linux". undefined = all. */
+	platform?: "macos" | "windows" | "linux";
+}
+
 interface RustAppConfig {
 	shell: string | null;
 	font_family: string;
@@ -26,6 +39,7 @@ interface RustAppConfig {
 	split_tab_mode: string;
 	tab_ordering_mode: string;
 	tab_cycling_all_types: boolean;
+	tab_tree_enabled: boolean;
 	auto_show_pr_popover: boolean;
 	prevent_sleep_when_busy: boolean;
 	auto_update_enabled: boolean;
@@ -51,7 +65,6 @@ interface RustAppConfig {
 	ai_triage_enabled?: boolean;
 	ai_watchers_enabled?: boolean;
 	scrollback_reflow?: boolean;
-	offscreen_renderer?: boolean;
 	cursor_style?: string;
 	terminal_renderer?: string;
 	show_block_timestamps?: boolean;
@@ -59,6 +72,8 @@ interface RustAppConfig {
 	block_folding_enabled?: boolean;
 	index_strategy?: string;
 	standby_timeout_minutes?: number;
+	custom_launchers?: CustomLauncher[];
+	inline_blame_enabled?: boolean;
 }
 
 // Default values
@@ -82,11 +97,13 @@ export type IdeType =
 	| "alacritty"
 	| "kitty"
 	| "warp"
+	| "iterm2"
 	| "sourcetree"
 	| "github-desktop"
 	| "fork"
 	| "gitkraken"
 	| "smerge"
+	| "tower"
 	| "intellij"
 	| "pycharm"
 	| "webstorm"
@@ -130,11 +147,13 @@ export const IDE_NAMES: Record<IdeType, string> = {
 	alacritty: "Alacritty",
 	kitty: "Kitty",
 	warp: "Warp",
+	iterm2: "iTerm2",
 	sourcetree: "Sourcetree",
 	"github-desktop": "GitHub Desktop",
 	fork: "Fork",
 	gitkraken: "GitKraken",
 	smerge: "Sublime Merge",
+	tower: "Tower",
 	intellij: "IntelliJ IDEA",
 	pycharm: "PyCharm",
 	webstorm: "WebStorm",
@@ -166,6 +185,7 @@ import githubDesktopSvg from "../assets/icons/github-desktop.svg";
 import gitkrakenSvg from "../assets/icons/gitkraken.svg";
 import golandSvg from "../assets/icons/goland.svg";
 import intellijSvg from "../assets/icons/intellij.svg";
+import iterm2Svg from "../assets/icons/iterm2.svg";
 import kittySvg from "../assets/icons/kitty.svg";
 import neovimSvg from "../assets/icons/neovim.svg";
 import phpstormSvg from "../assets/icons/phpstorm.svg";
@@ -176,6 +196,7 @@ import rustroverSvg from "../assets/icons/rustrover.svg";
 import smergeSvg from "../assets/icons/smerge.svg";
 import sourcetreeSvg from "../assets/icons/sourcetree.svg";
 import terminalSvg from "../assets/icons/terminal.svg";
+import towerSvg from "../assets/icons/tower.svg";
 /** IDE icon SVG imports */
 import vscodeSvg from "../assets/icons/vscode.svg";
 import warpSvg from "../assets/icons/warp.svg";
@@ -198,11 +219,13 @@ export const IDE_ICON_PATHS: Record<IdeType, string> = {
 	alacritty: alacritySvg,
 	kitty: kittySvg,
 	warp: warpSvg,
+	iterm2: iterm2Svg,
 	sourcetree: sourcetreeSvg,
 	"github-desktop": githubDesktopSvg,
 	fork: forkSvg,
 	gitkraken: gitkrakenSvg,
 	smerge: smergeSvg,
+	tower: towerSvg,
 	intellij: intellijSvg,
 	pycharm: pycharmSvg,
 	webstorm: webstormSvg,
@@ -218,41 +241,6 @@ export const IDE_ICON_PATHS: Record<IdeType, string> = {
 	terminal: terminalSvg,
 	finder: finderSvg,
 	editor: editorSvg,
-};
-
-/** IDE icons (emoji fallbacks for text-only contexts) */
-export const IDE_ICONS: Record<IdeType, string> = {
-	vscode: "🔵",
-	cursor: "🟣",
-	zed: "⚡",
-	windsurf: "🌊",
-	neovim: "🟢",
-	xcode: "🔨",
-	ghostty: "👻",
-	wezterm: "🟪",
-	alacritty: "🔳",
-	kitty: "🐱",
-	warp: "🔷",
-	sourcetree: "🌳",
-	"github-desktop": "🐙",
-	fork: "🔱",
-	gitkraken: "🦑",
-	smerge: "🔀",
-	intellij: "IJ",
-	pycharm: "PC",
-	webstorm: "WS",
-	goland: "GO",
-	clion: "CL",
-	phpstorm: "PS",
-	rubymine: "RM",
-	rider: "RD",
-	datagrip: "DG",
-	rustrover: "RR",
-	"android-studio": "AS",
-	fleet: "FL",
-	terminal: ">_",
-	finder: "📁",
-	editor: "$_",
 };
 
 /** IDE categories */
@@ -272,8 +260,8 @@ export const IDE_CATEGORIES: Record<string, IdeType[]> = {
 		"android-studio",
 		"fleet",
 	],
-	terminals: ["ghostty", "wezterm", "alacritty", "kitty", "warp"],
-	git: ["sourcetree", "github-desktop", "fork", "gitkraken", "smerge"],
+	terminals: ["ghostty", "wezterm", "alacritty", "kitty", "warp", "iterm2"],
+	git: ["sourcetree", "github-desktop", "fork", "gitkraken", "smerge", "tower"],
 	utilities: ["terminal", "finder"],
 };
 
@@ -361,6 +349,7 @@ interface SettingsStoreState {
 	splitTabMode: SplitTabMode;
 	tabOrderingMode: TabOrderingMode;
 	tabCyclingAllTypes: boolean;
+	tabTreeEnabled: boolean;
 	autoShowPrPopover: boolean;
 	preventSleepWhenBusy: boolean;
 	autoUpdateEnabled: boolean;
@@ -383,7 +372,6 @@ interface SettingsStoreState {
 	aiTriageEnabled: boolean;
 	aiWatchersEnabled: boolean;
 	scrollbackReflow: boolean;
-	offscreenRenderer: boolean;
 	cursorStyle: "bar" | "block" | "underline";
 	terminalRenderer: TerminalRenderer;
 	showBlockTimestamps: boolean;
@@ -391,6 +379,8 @@ interface SettingsStoreState {
 	blockFoldingEnabled: boolean;
 	indexStrategy: "disabled" | "active_only" | "active_and_switch" | "all_sequential";
 	standbyTimeoutMinutes: number;
+	customLaunchers: CustomLauncher[];
+	inlineBlameEnabled: boolean;
 }
 
 const SAVE_DEBOUNCE_MS = 500;
@@ -410,6 +400,7 @@ function createSettingsStore() {
 		splitTabMode: "separate",
 		tabOrderingMode: "grouped-by-type",
 		tabCyclingAllTypes: false,
+		tabTreeEnabled: false,
 		autoShowPrPopover: true,
 		preventSleepWhenBusy: false,
 		autoUpdateEnabled: true,
@@ -432,7 +423,6 @@ function createSettingsStore() {
 		aiTriageEnabled: false,
 		aiWatchersEnabled: false,
 		scrollbackReflow: false,
-		offscreenRenderer: false,
 		cursorStyle: "bar" as SettingsStoreState["cursorStyle"],
 		terminalRenderer: "webgl",
 		showBlockTimestamps: true,
@@ -440,6 +430,8 @@ function createSettingsStore() {
 		blockFoldingEnabled: true,
 		indexStrategy: "active_and_switch",
 		standbyTimeoutMinutes: 5,
+		customLaunchers: [],
+		inlineBlameEnabled: true,
 	});
 
 	// Shadow copy of the last loaded config — preserves fields not tracked in SolidJS store
@@ -464,6 +456,7 @@ function createSettingsStore() {
 			split_tab_mode: state.splitTabMode,
 			tab_ordering_mode: state.tabOrderingMode,
 			tab_cycling_all_types: state.tabCyclingAllTypes,
+			tab_tree_enabled: state.tabTreeEnabled,
 			auto_show_pr_popover: state.autoShowPrPopover,
 			prevent_sleep_when_busy: state.preventSleepWhenBusy,
 			auto_update_enabled: state.autoUpdateEnabled,
@@ -486,7 +479,6 @@ function createSettingsStore() {
 			ai_triage_enabled: state.aiTriageEnabled,
 			ai_watchers_enabled: state.aiWatchersEnabled,
 			scrollback_reflow: state.scrollbackReflow,
-			offscreen_renderer: state.offscreenRenderer,
 			cursor_style: state.cursorStyle,
 			terminal_renderer: state.terminalRenderer,
 			show_block_timestamps: state.showBlockTimestamps,
@@ -494,6 +486,8 @@ function createSettingsStore() {
 			block_folding_enabled: state.blockFoldingEnabled,
 			index_strategy: state.indexStrategy,
 			standby_timeout_minutes: state.standbyTimeoutMinutes,
+			custom_launchers: [...state.customLaunchers],
+			inline_blame_enabled: state.inlineBlameEnabled,
 			services: baseConfig?.services ?? { auth: { session_token_duration_secs: 86400 } },
 			mcp_server_enabled: baseConfig?.mcp_server_enabled ?? true,
 		};
@@ -544,6 +538,7 @@ function createSettingsStore() {
 				const tom = config.tab_ordering_mode;
 				setState("tabOrderingMode", tom === "terminals-first" || tom === "free" ? tom : "grouped-by-type");
 				setState("tabCyclingAllTypes", config.tab_cycling_all_types ?? false);
+				setState("tabTreeEnabled", config.tab_tree_enabled ?? false);
 				setState("autoShowPrPopover", config.auto_show_pr_popover ?? true);
 				setState("preventSleepWhenBusy", config.prevent_sleep_when_busy ?? false);
 				setState("autoUpdateEnabled", config.auto_update_enabled ?? true);
@@ -568,7 +563,6 @@ function createSettingsStore() {
 				setState("aiTriageEnabled", config.ai_triage_enabled ?? false);
 				setState("aiWatchersEnabled", config.ai_watchers_enabled ?? false);
 				setState("scrollbackReflow", config.scrollback_reflow ?? false);
-				setState("offscreenRenderer", config.offscreen_renderer ?? false);
 				const cs = config.cursor_style;
 				setState("cursorStyle", cs === "block" || cs === "underline" ? cs : "bar");
 				setState("terminalRenderer", validateTerminalRenderer(config.terminal_renderer || null));
@@ -580,6 +574,8 @@ function createSettingsStore() {
 					(config.index_strategy as SettingsStoreState["indexStrategy"]) ?? "active_and_switch",
 				);
 				setState("standbyTimeoutMinutes", config.standby_timeout_minutes ?? 5);
+				setState("customLaunchers", config.custom_launchers ?? []);
+				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
 			} catch (err) {
 				appLogger.error("config", "Failed to hydrate settings", err);
 			}
@@ -649,6 +645,11 @@ function createSettingsStore() {
 			save();
 		},
 
+		setTabTreeEnabled(enabled: boolean): void {
+			setState("tabTreeEnabled", enabled);
+			save();
+		},
+
 		/** Set auto-show PR popover preference */
 		setAutoShowPrPopover(enabled: boolean): void {
 			setState("autoShowPrPopover", enabled);
@@ -715,6 +716,12 @@ function createSettingsStore() {
 		/** Check if an agent type is enabled */
 		isAgentEnabled(agentType: string): boolean {
 			return !state.disabledAgents.includes(agentType);
+		},
+
+		/** Replace the full list of custom launchers (add/edit/remove all go through here) */
+		setCustomLaunchers(launchers: CustomLauncher[]): void {
+			setState("customLaunchers", launchers);
+			save();
 		},
 
 		/** Set intent-as-tab-title preference */
@@ -792,8 +799,9 @@ function createSettingsStore() {
 			save();
 		},
 
-		setOffscreenRenderer(enabled: boolean): void {
-			setState("offscreenRenderer", enabled);
+		/** Toggle GitLens-style inline git blame on the editor's active line */
+		setInlineBlameEnabled(enabled: boolean): void {
+			setState("inlineBlameEnabled", enabled);
 			save();
 		},
 
@@ -880,6 +888,7 @@ registerDebugSnapshot("settings", () => {
 		splitTabMode: s.splitTabMode,
 		tabOrderingMode: s.tabOrderingMode,
 		tabCyclingAllTypes: s.tabCyclingAllTypes,
+		tabTreeEnabled: s.tabTreeEnabled,
 		bellStyle: s.bellStyle,
 		updateChannel: s.updateChannel,
 		intentTabTitle: s.intentTabTitle,

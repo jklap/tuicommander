@@ -12,7 +12,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "desktop")]
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 use uuid::Uuid;
 
 /// Serialize a value to JSON, returning a structured error on failure instead of silent null.
@@ -804,7 +804,30 @@ pub(crate) async fn handle_mcp_tool_call(
         .map(|meta| meta.is_claude_code)
         .unwrap_or(false);
     match name {
-        "session" => handle_session(state, args, mcp_session_id),
+        "session" => {
+            // Executing / destructive session actions carry the same loopback
+            // restriction as `agent spawn`: `input` writes raw bytes to a PTY's stdin
+            // (arbitrary command execution on a shell session, unfiltered context
+            // injection on an agent session), `create`/`kill`/`close` spawn or
+            // destroy sessions, and `pause`/`resume` halt/resume output buffering
+            // (a remote `pause` on any session is a DoS). A non-loopback MCP client
+            // (authenticated remote, or admitted via lan_auth_bypass) must not reach
+            // them — remote terminal control is served separately by the auth-gated
+            // POST /sessions/{id}/write route. Read-only actions (list/output/status/…)
+            // stay open for monitoring.
+            let action = args["action"].as_str().unwrap_or("");
+            if matches!(
+                action,
+                "create" | "input" | "kill" | "close" | "pause" | "resume"
+            ) && !addr.ip().is_loopback()
+            {
+                serde_json::json!({
+                    "error": "This session action is restricted to localhost connections"
+                })
+            } else {
+                handle_session(state, args, mcp_session_id)
+            }
+        }
         "agent" => handle_agent_unified(state, addr, args, mcp_session_id),
         "repo" => handle_repo(state, args, is_claude_code).await,
         "ui" => handle_ui_unified(state, addr, args, mcp_session_id).await,
@@ -1241,12 +1264,8 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
             if let Err(e) = validate_mcp_repo_path(&path) {
                 return e;
             }
-            let statuses = if let Some(cached) = crate::state::AppState::get_cached(
-                &state.git_cache.github_status,
-                &path,
-                crate::state::GITHUB_CACHE_TTL,
-            ) {
-                Ok(cached)
+            let statuses = if let Some(cached) = state.git_cache.github_status.get(&path) {
+                Ok((*cached).clone())
             } else {
                 crate::github::get_repo_pr_statuses_impl(&path, false, state).await
             };
@@ -1271,12 +1290,11 @@ async fn handle_github(state: &Arc<AppState>, args: &serde_json::Value) -> serde
                     continue;
                 }
                 let gh = crate::github::get_github_status_cached(state, path);
-                let cached_prs: Vec<crate::github::BranchPrStatus> =
-                    crate::state::AppState::get_cached(
-                        &state.git_cache.github_status,
-                        path,
-                        crate::state::GITHUB_CACHE_TTL,
-                    )
+                let cached_prs: Vec<crate::github::BranchPrStatus> = state
+                    .git_cache
+                    .github_status
+                    .get(path)
+                    .map(|a| (*a).clone())
                     .unwrap_or_default();
                 let open_prs = cached_prs.len();
                 let failing_ci = cached_prs.iter().filter(|p| p.checks.failed > 0).count();
@@ -1775,6 +1793,7 @@ fn handle_agent(
                     shell: binary_path.clone(),
                 }),
             );
+            state.assign_term_alias(&session_id);
             state.metrics.total_spawned.fetch_add(1, Ordering::Relaxed);
             state
                 .metrics
@@ -1791,6 +1810,10 @@ fn handle_agent(
             state
                 .last_output_ms
                 .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
+            // Register grid_watch so format=grid WebSocket streams work for
+            // MCP-spawned agent sessions (mirrors session.rs spawn_pty_session).
+            let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+            state.grid_watch.insert(session_id.clone(), grid_watch_tx);
 
             // Broadcast session-created to SSE/WebSocket consumers
             let cwd_str = args["cwd"].as_str().map(|s| s.to_string());
@@ -1912,6 +1935,21 @@ fn handle_messaging(
                     return serde_json::json!({"error": "No MCP session — send an initialize request first"});
                 }
             };
+            // Don't let one MCP session claim a tuic_session that another, still-live
+            // session already owns — that would silently re-route the victim's inbox to
+            // the claimant. Re-registering from the same session (reconnect/rename) and
+            // taking over a stale binding whose session is gone are both still allowed.
+            if let Some(existing) = state.peer_agents.get(tuic_session) {
+                let prior_mcp = existing.mcp_session_id.clone();
+                if prior_mcp != mcp_sid
+                    && !prior_mcp.is_empty()
+                    && state.mcp_sessions.contains_key(&prior_mcp)
+                {
+                    return serde_json::json!({
+                        "error": "tuic_session is already registered to another active MCP session"
+                    });
+                }
+            }
             let name = args["name"].as_str().unwrap_or("agent").to_string();
             let project = args["project"].as_str().map(|s| s.to_string());
             let now_ms = std::time::SystemTime::now()
@@ -1936,7 +1974,16 @@ fn handle_messaging(
                 .session_to_mcp
                 .entry(tuic_session.to_string())
                 .or_default()
-                .push(mcp_sid);
+                .push(mcp_sid.clone());
+            // Identity bindings are security-relevant; record them (no message content).
+            tracing::info!(
+                source = "agent_msg",
+                event = "register",
+                tuic_session = %tuic_session,
+                mcp_session = %mcp_sid,
+                name = %name,
+                "Peer registered"
+            );
             let _ = state
                 .event_bus
                 .send(crate::state::AppEvent::PeerRegistered {
@@ -2083,6 +2130,19 @@ fn handle_messaging(
             if let Err(e) = crate::pty::wake_session(state, to) {
                 tracing::debug!(session = %to, error = %e, "Wake on message delivery failed");
             }
+            // Forensic trail: sender, recipient, size, and delivery path — but never the
+            // content (it can be up to 64 KB and may carry sensitive coordination text).
+            tracing::info!(
+                source = "agent_msg",
+                event = "send",
+                from = %sender_tuic,
+                from_name = %sender_name,
+                to = %to,
+                bytes = message.len(),
+                delivered_via_channel = pushed,
+                message_id = %msg_id,
+                "Peer message delivered"
+            );
             serde_json::json!({"ok": true, "message_id": msg_id, "delivered_via_channel": pushed})
         }
         "inbox" => {
@@ -2840,6 +2900,15 @@ pub(super) async fn mcp_post(
             {
                 meta.last_activity = std::time::Instant::now();
             }
+            // On the first list after boot, wait (bounded) for upstream MCP
+            // servers to finish connecting so their proxied tools are included.
+            // CC fetches tools/list during the handshake — before async upstream
+            // init completes — and never refetches on tools/list_changed
+            // (anthropics/claude-code#4118), so a stale list would otherwise stick.
+            state
+                .mcp_upstream_registry
+                .await_initial_settle(std::time::Duration::from_secs(3))
+                .await;
             let tools = merged_tool_definitions(&state, list_session_id);
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -3159,6 +3228,17 @@ fn handle_agent_unified(
             handle_agent(state, addr, &remap_action(args, action), mcp_session_id)
         }
         "register" | "list_peers" | "send" | "inbox" => {
+            // Inter-agent messaging is same-machine coordination only, so it carries
+            // the same loopback restriction as `spawn`. Without this, a non-loopback
+            // MCP client — whether Basic-Auth'd remotely or admitted via lan_auth_bypass —
+            // could register a peer identity, enumerate peers, or inject a message that
+            // lands verbatim in another agent's context. Loopback (incl. the local
+            // Unix socket, injected as 127.0.0.1 upstream) is the trust boundary here.
+            if !addr.ip().is_loopback() {
+                return serde_json::json!({
+                    "error": "Inter-agent messaging is restricted to localhost connections"
+                });
+            }
             handle_messaging(state, &remap_action(args, action), mcp_session_id)
         }
         other => serde_json::json!({"error": format!(
@@ -3199,7 +3279,7 @@ async fn handle_screenshot(
     #[cfg(not(feature = "desktop"))]
     {
         let _ = (state, addr, args);
-        return serde_json::json!({"error": "Action 'screenshot' requires desktop feature"});
+        serde_json::json!({"error": "Action 'screenshot' requires desktop feature"})
     }
     #[cfg(feature = "desktop")]
     {
@@ -3284,64 +3364,15 @@ fn handle_debug_unified(
     };
     match action {
         "invoke_js" => {
-            #[cfg(not(feature = "desktop"))]
-            {
-                serde_json::json!({"error": "invoke_js requires desktop feature"})
+            if !addr.ip().is_loopback() {
+                return serde_json::json!({"error": "invoke_js is restricted to localhost connections"});
             }
-            #[cfg(feature = "desktop")]
-            {
-                if !addr.ip().is_loopback() {
-                    return serde_json::json!({"error": "invoke_js is restricted to localhost connections"});
-                }
-                let script = match args["script"].as_str() {
-                    Some(s) => s,
-                    None => return serde_json::json!({"error": "script required (string)"}),
-                };
-                let app_handle = state.app_handle.read().clone();
-                let Some(handle) = app_handle else {
-                    return serde_json::json!({"error": "AppHandle not initialized"});
-                };
-                let Some(window) = handle.get_webview_window("main") else {
-                    return serde_json::json!({"error": "main window not found"});
-                };
-                let wrapped = format!(
-                    r#"(async () => {{
-  const __src = "eval_js";
-  const __logs = [];
-  const __origLog = console.log;
-  const __origWarn = console.warn;
-  const __origError = console.error;
-  const __origInfo = console.info;
-  const __fmt = (a) => typeof a === "string" ? a : JSON.stringify(a);
-  console.log = (...a) => {{ __logs.push(a.map(__fmt).join(" ")); __origLog(...a); }};
-  console.info = (...a) => {{ __logs.push(a.map(__fmt).join(" ")); __origInfo(...a); }};
-  console.warn = (...a) => {{ __logs.push("[WARN] " + a.map(__fmt).join(" ")); __origWarn(...a); }};
-  console.error = (...a) => {{ __logs.push("[ERROR] " + a.map(__fmt).join(" ")); __origError(...a); }};
-  try {{
-    const __result = await (async () => {{ {script} }})();
-    const __val = __result === undefined ? "(undefined)" : JSON.stringify(__result, null, 2);
-    const __msg = __logs.length > 0 ? __logs.join("\n") + "\n---\n" + __val : __val;
-    window.__TAURI__.core.invoke("push_log", {{ level: "info", source: __src, message: __msg, dataJson: null }});
-  }} catch (__e) {{
-    const __val = __e instanceof Error ? `${{__e.name}}: ${{__e.message}}\n${{__e.stack}}` : String(__e);
-    const __msg = __logs.length > 0 ? __logs.join("\n") + "\n---\n" + __val : __val;
-    window.__TAURI__.core.invoke("push_log", {{ level: "error", source: __src, message: __msg, dataJson: null }});
-  }} finally {{
-    console.log = __origLog;
-    console.info = __origInfo;
-    console.warn = __origWarn;
-    console.error = __origError;
-  }}
-}})()"#
-                );
-                match window.eval(&wrapped) {
-                    Ok(()) => serde_json::json!({
-                        "ok": true,
-                        "hint": "Result logged with source='eval_js'. Read via: debug(action='logs', source='eval_js', limit=1)"
-                    }),
-                    Err(e) => serde_json::json!({"error": format!("eval failed: {e}")}),
-                }
-            }
+            let script = match args["script"].as_str() {
+                Some(s) => s,
+                None => return serde_json::json!({"error": "script required (string)"}),
+            };
+            // Shared with the HTTP /debug/invoke_js route (see log_routes::eval_debug_script).
+            super::log_routes::eval_debug_script(state, script)
         }
         "agent_detection" | "logs" | "sessions" => handle_debug(state, args),
         "help" => serde_json::json!({
@@ -3524,6 +3555,8 @@ mod tests {
             git_cache: crate::state::GitCacheState::new(),
             repo_watchers: dashmap::DashMap::new(),
             repo_git_fingerprints: dashmap::DashMap::new(),
+            repo_head_targets: dashmap::DashMap::new(),
+            repo_head_emits_suppressed: std::sync::atomic::AtomicU64::new(0),
             dir_watchers: dashmap::DashMap::new(),
             theme_watcher: parking_lot::Mutex::new(None),
             mdkb_daemon: crate::mdkb_daemon::create_shared_daemon(),
@@ -3548,6 +3581,7 @@ mod tests {
             grid_channels: dashmap::DashMap::new(),
             grid_watch: dashmap::DashMap::new(),
             grid_frame_in_flight: dashmap::DashMap::new(),
+            pending_scroll: dashmap::DashMap::new(),
             kitty_states: dashmap::DashMap::new(),
             input_buffers: dashmap::DashMap::new(),
             last_prompts: dashmap::DashMap::new(),
@@ -3579,6 +3613,7 @@ mod tests {
             indexer_throttle: std::sync::Arc::new(crate::content_index::IndexerThrottle::default()),
             slash_mode: dashmap::DashMap::new(),
             last_output_ms: dashmap::DashMap::new(),
+            last_input_ms: dashmap::DashMap::new(),
             shell_states: dashmap::DashMap::new(),
             terminal_rows: dashmap::DashMap::new(),
             exit_codes: dashmap::DashMap::new(),
@@ -3802,6 +3837,121 @@ mod tests {
                 .mcp_session_id,
             "mcp-2"
         );
+    }
+
+    /// Mark an MCP session as live so the anti-hijack guard sees it as occupied.
+    fn live_mcp_session(state: &Arc<AppState>, sid: &str) {
+        state.mcp_sessions.insert(
+            sid.to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
+    }
+
+    #[test]
+    fn messaging_rejects_non_loopback_caller() {
+        // A non-loopback caller (remote/LAN, even if it cleared auth via lan_auth_bypass)
+        // must not reach any messaging action — it could otherwise register an identity
+        // or inject a message into a local agent's context.
+        let state = test_state();
+        let lan: SocketAddr = "192.168.1.50:4000".parse().unwrap();
+        let args = serde_json::json!({
+            "action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01"
+        });
+        let rejected = handle_agent_unified(&state, lan, &args, Some("mcp-lan"));
+        assert!(
+            rejected["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("localhost"),
+            "expected localhost-only rejection, got {rejected}"
+        );
+        assert_eq!(
+            state.peer_agents.len(),
+            0,
+            "LAN register must create no peer"
+        );
+
+        // Loopback caller passes the gate and registers normally.
+        let loop_addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let ok = handle_agent_unified(&state, loop_addr, &args, Some("mcp-local"));
+        assert_eq!(ok["ok"], true);
+        assert_eq!(state.peer_agents.len(), 1);
+    }
+
+    #[test]
+    fn messaging_register_rejects_hijack_of_live_session() {
+        // A second MCP session must not steal a tuic_session whose original session is
+        // still live (that would re-route the victim's inbox to the claimant).
+        let state = test_state();
+        let tuic = "550e8400-e29b-41d4-a716-446655440a01";
+        let r1 = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": tuic, "name": "victim"}),
+            Some("mcp-1"),
+        );
+        assert_eq!(r1["ok"], true);
+        live_mcp_session(&state, "mcp-1");
+
+        let hijack = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": tuic, "name": "attacker"}),
+            Some("mcp-2"),
+        );
+        assert!(
+            hijack["error"]
+                .as_str()
+                .unwrap_or("")
+                .contains("another active"),
+            "expected hijack rejection, got {hijack}"
+        );
+        let peer = state.peer_agents.get(tuic).unwrap();
+        assert_eq!(peer.name, "victim");
+        assert_eq!(peer.mcp_session_id, "mcp-1");
+    }
+
+    #[test]
+    fn messaging_register_same_live_session_can_rename() {
+        // Reconnect/rename from the SAME session must still succeed even when live.
+        let state = test_state();
+        let tuic = "550e8400-e29b-41d4-a716-446655440a01";
+        handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": tuic, "name": "old"}),
+            Some("mcp-1"),
+        );
+        live_mcp_session(&state, "mcp-1");
+        let r = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": tuic, "name": "new"}),
+            Some("mcp-1"),
+        );
+        assert_eq!(r["ok"], true);
+        assert_eq!(state.peer_agents.get(tuic).unwrap().name, "new");
+    }
+
+    #[test]
+    fn messaging_register_takeover_of_dead_session_allowed() {
+        // A stale binding (prior session gone) is the normal post-crash/reconnect case
+        // and must be takeable — mcp-1 is never marked live here.
+        let state = test_state();
+        let tuic = "550e8400-e29b-41d4-a716-446655440a01";
+        handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": tuic, "name": "old"}),
+            Some("mcp-1"),
+        );
+        let r = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": tuic, "name": "new"}),
+            Some("mcp-2"),
+        );
+        assert_eq!(r["ok"], true);
+        assert_eq!(state.peer_agents.get(tuic).unwrap().mcp_session_id, "mcp-2");
     }
 
     #[test]

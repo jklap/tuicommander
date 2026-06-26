@@ -77,6 +77,7 @@ describe("githubStore", () => {
 			mergeable: "MERGEABLE",
 			merge_state_status: "CLEAN",
 			review_decision: "",
+			viewer_did_approve: false,
 			labels: [],
 			is_draft: false,
 			base_ref_name: "main",
@@ -363,6 +364,44 @@ describe("githubStore", () => {
 				expect(cb).toHaveBeenCalledWith("/repo1", "feature/x", 42);
 				store.setOnCiRecovered(null);
 				store.stopPolling();
+			});
+		});
+
+		it("fires conflict callback on blocked transition event", async () => {
+			await testInScopeAsync(async () => {
+				const cb = vi.fn();
+				store.setOnConflict(cb);
+				store.startPolling();
+				await vi.advanceTimersByTimeAsync(0);
+
+				emitEvent("github-transition", {
+					type: "blocked",
+					repo_path: "/repo1",
+					branch: "feature/x",
+					pr_number: 42,
+					title: "Add feature",
+				});
+
+				expect(cb).toHaveBeenCalledWith("/repo1", "feature/x", 42);
+				store.setOnConflict(null);
+				store.stopPolling();
+			});
+		});
+
+		it("triggerConflictHeal fires the registered conflict callback on demand", () => {
+			testInScope(() => {
+				const cb = vi.fn();
+				store.setOnConflict(cb);
+				store.triggerConflictHeal("/repo1", "feature/x", 42);
+				expect(cb).toHaveBeenCalledWith("/repo1", "feature/x", 42);
+				store.setOnConflict(null);
+			});
+		});
+
+		it("triggerConflictHeal is a no-op when no conflict callback is registered", () => {
+			testInScope(() => {
+				store.setOnConflict(null);
+				expect(() => store.triggerConflictHeal("/repo1", "feature/x", 42)).not.toThrow();
 			});
 		});
 

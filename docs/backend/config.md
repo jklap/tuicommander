@@ -32,16 +32,14 @@ pub fn save_json_config<T: Serialize>(filename: &str, config: &T) -> Result<(), 
 |-------|------|---------|-------------|
 | `shell` | `Option<String>` | `None` | Shell override (platform default if None) |
 | `font_family` | `String` | `"JetBrains Mono"` | Terminal font family |
-| `font_size` | `u16` | `12` | Terminal font size |
-| `theme` | `String` | `"dark"` | Terminal theme |
-| `ide` | `String` | `"cursor"` | IDE for "Open in..." |
-| `default_font_size` | `u16` | `12` | Default font size for reset |
-| `mcp_server_enabled` | `bool` | `false` | Enable MCP HTTP server |
+| `font_size` | `u16` | `14` | Terminal font size |
+| `theme` | `String` | `"vscode-dark"` | Terminal theme |
+| `ide` | `String` | `""` | IDE for "Open in..." |
+| `default_font_size` | `u16` | `13` | Default font size for reset |
+| `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
+| `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
 | `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`) — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools) |
-| `remote_access_enabled` | `bool` | `false` | Enable remote access |
-| `remote_access_port` | `u16` | `3100` | Remote access port |
-| `remote_access_username` | `String` | `""` | Basic auth username |
-| `remote_access_password_hash` | `String` | `""` | Bcrypt password hash |
+| `services` | `ServicesConfig` | `{}` | Nested remote-access config: `server`, `auth`, `tls`, `relay`, `push` (replaces the former flat `remote_access_*`/`push_enabled`/`relay_enabled` fields) |
 | `confirm_before_quit` | `bool` | `true` | Show quit confirmation |
 | `confirm_before_closing_tab` | `bool` | `true` | Show tab close confirmation |
 | `copy_on_select` | `bool` | `true` | Auto-copy terminal selection to clipboard |
@@ -49,13 +47,11 @@ pub fn save_json_config<T: Serialize>(filename: &str, config: &T) -> Result<(), 
 | `disabled_agents` | `Vec<String>` | `[]` | Agent IDs hidden from the Add menu |
 | `global_hotkey` | `Option<String>` | `null` | OS-level window toggle hotkey combo |
 | `intent_tab_title` | `bool` | `true` | Show agent intent as tab title |
-| `ipv6_enabled` | `bool` | `false` | IPv6 dual-stack binding |
 | `language` | `String` | `"en"` | UI language code |
-| `max_tab_name_length` | `u32` | `20` | Max tab name display length |
+| `max_tab_name_length` | `u32` | `25` | Max tab name display length |
 | `tab_cycling_all_types` | `bool` | `false` | When true, next/prev-tab shortcuts cycle file/diff/markdown/editor tabs too (default cycles terminals only) |
+| `tab_tree_enabled` | `bool` | `false` | When true, a branch with >1 terminal shows a collapsible nested list of its terminals under the branch row in the sidebar |
 | `prevent_sleep_when_busy` | `bool` | `false` | Prevent macOS sleep when terminal is busy |
-| `push_enabled` | `bool` | `false` | Enable push notifications to PWA clients |
-| `relay_enabled` | `bool` | `false` | Cloud relay for mobile access |
 | `suggest_followups` | `bool` | `true` | Show `suggest:` follow-up actions |
 | `issue_filter` | `Option<String>` | `"assigned"` | GitHub Issues filter: "assigned", "created", "mentioned", "all", "disabled" |
 | `experimental_features_enabled` | `bool` | `false` | Master toggle for experimental features |
@@ -64,6 +60,7 @@ pub fn save_json_config<T: Serialize>(filename: &str, config: &T) -> Result<(), 
 | `ai_terminal_mcp_enabled` | `bool` | `false` | Expose `ai_terminal_*` tools to external MCP clients. Off by default — see [`mcp-http.md`](mcp-http.md#mcp-tools-ai_terminal_-external-agent-surface) |
 | `auto_show_pr_popover` | `bool` | `false` | Auto-show PR popover when switching to a branch with a PR |
 | `update_channel` | `String` | `"stable"` | Update channel: "stable" or "nightly" |
+| `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
 
 **Commands:** `load_app_config()`, `save_app_config(config)`
 

@@ -16,6 +16,17 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
   5. **MCP invoke/JS** — call Tauri commands, inspect store state, trigger actions programmatically
   Only use `[HUMAN]` when the item genuinely requires real hardware (audio, IME, touch), multi-app interaction (drag to Finder, global hotkey from another app), or timing-sensitive observation that none of the above can capture. When code-verifying, change `[HUMAN]` to `[x]` with a `_(verified: file:line explanation)_` annotation. When code reveals the description is wrong, change to `[ ]` with a `_(NOTE: ...)_` correction.
 
+## Test instance vs orchestrator instance — READ BEFORE TESTING
+
+There are TWO running TUICommander instances; do not confuse them:
+
+- **Orchestrator instance** — the one this agent is embedded in. The `tuicommander` MCP tools and `debug invoke_js` target THIS instance (Mission Control on `:14319`, app logs on `:9876`). It does **NOT** run your worktree build, so testing it proves nothing about your changes.
+- **Test instance** — the worktree dev build you start with `make dev`. Test your changes against it **only via its HTTP API on `http://127.0.0.1:9877`**. MCP/`invoke_js` cannot reach it.
+
+9877 endpoints (see `src-tauri/src/mcp_http/mod.rs`): `GET/POST /sessions`, `DELETE /sessions/{id}`, `POST /sessions/{id}/write`, `GET /sessions/{id}/output`, and terminal grid ops (all session-scoped) `POST /sessions/{id}/terminal/scroll {delta}`, `POST /sessions/{id}/terminal/scroll-to {line}` (absolute; `line`=top row, 0=oldest), `GET /sessions/{id}/terminal/scroll-info`, `GET /sessions/{id}/terminal/lines?start&end`, `GET /sessions/{id}/terminal/row-text?row`, `POST /sessions/{id}/terminal/search-buffer {query}`. Create a throwaway session, exercise it, then `DELETE` it — never test against Boss's live sessions.
+
+Canvas rendering (selection highlight, smooth-scroll visuals, cursor) is **not observable over HTTP** — those still need a visual check with Boss.
+
 ## Visual
 
 - All UI work MUST follow [`docs/frontend/STYLE_GUIDE.md`](docs/frontend/STYLE_GUIDE.md).
@@ -27,9 +38,16 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
 
 NEVER create branches autonomously — Boss works with multiple windows.
 
+## Commits
+
+When a commit resolves a **GitHub issue**, use a closing keyword so GitHub auto-closes it: `Fixes #N` / `Closes #N` / `Resolves #N` (anywhere in the message — `fix(scope): desc (closes #N)` in the subject is fine). A bare `(#N)` only *links* the issue, it does NOT close it. This repo pushes directly to `main` (the default branch), where closing keywords take effect on push — no PR merge required.
+
+- Use the GitHub-issue keyword only for the commit that actually fixes it; reference-only commits keep `(#N)`.
+- This is distinct from **mdkb story ids** (7-char hex like `#abc1234`): those follow the wiz convention — `(#abc1234)` for traceability, `(closes #abc1234)` on story completion — and are unrelated to GitHub issue auto-close.
+
 ## Building
 
-**NEVER use `cargo build --release` directly.** It produces a binary that points to the Vite dev server (`localhost:1420`) instead of embedding frontend assets — result: white screen. Always use `make build` or `npx tauri build`, which runs `beforeBuildCommand` (frontend build + sidecar) and embeds the dist/ into the binary.
+**NEVER use `cargo build --release` directly.** It produces a binary that points to the Vite dev server (`localhost:1420`) instead of embedding frontend assets — result: white screen. Always use `make build` or `pnpm tauri build`, which runs `beforeBuildCommand` (frontend build + sidecar) and embeds the dist/ into the binary.
 
 To debug the WebView in a release build, temporarily add `"devtools"` to the tauri features in `Cargo.toml`, add `w.open_devtools()` in the `setup` closure (after getting the main webview window), and rebuild with `make build`. Remove both before committing.
 
@@ -53,7 +71,7 @@ NEVER write text + `\r` directly to a PTY. Always use `sendCommand()` from `src/
 
 TUIC tracks each agent's session ID for resume-after-restart. Two strategies coexist:
 
-**Discovery-based (Claude, Gemini, Codex).** TUIC does NOT inject `--session-id` at launch — the agent creates its own UUID. TUIC discovers the active session by scanning the agent's session directory for the newest file, re-checking every 30s poll. This survives `/clear` (all three agents have it: Claude `/clear`, Gemini `/clear`+`/new`, Codex `/clear`+`/new`+`/fork`) because re-discovery picks up the new session file. Resume uses `agentSessionId` (disk-discovered), not `tuicSession`.
+**Discovery-based (Claude, Gemini, Codex, Grok).** TUIC does NOT inject `--session-id` at launch — the agent creates its own UUID. TUIC discovers the active session by scanning the agent's session directory for the newest file, re-checking every 30s poll. This survives `/clear` (all three agents have it: Claude `/clear`, Gemini `/clear`+`/new`, Codex `/clear`+`/new`+`/fork`) because re-discovery picks up the new session file. Resume uses `agentSessionId` (disk-discovered), not `tuicSession`. Grok stores each session as a UUIDv7-named directory under `~/.grok/sessions/<percent-encoded-cwd>/`; the newest dir is the active session (`grok --resume <id>`).
 
 **Forced injection (Goose).** Shell wrapper injects `--name $TUIC_SESSION` into `goose session/run` commands. The TUIC tab UUID IS the goose session name. Discovery returns `None` (SQLite storage, no filesystem scan). Resume uses `tuicSession`.
 
@@ -87,7 +105,7 @@ curl http://localhost:9876/diagnostics
 curl 'http://localhost:9876/logs?source=diagnostics'
 ```
 
-When enabled, emits health snapshots every 30s and alerts on FD/thread growth trends. Each snapshot includes: CPU%, thread count, FD count, PTY session count, content index build state, semaphore permits, `grid_frame_in_flight` stuck sessions, event bus subscriber count.
+When enabled, emits health snapshots every 30s and alerts on FD/thread growth trends. Each snapshot includes: CPU% (TUIC-self only, via `RUSAGE_SELF`), `children_cpu` (aggregate %cpu of PTY children + hottest child — the spike trigger deliberately ignores children, so this is the only place a hot `cargo`/agent surfaces when TUIC itself is calm), thread count, FD count, PTY session count, content index build state, semaphore permits, `grid_frame_in_flight` stuck sessions, event bus subscriber count, `head_emits_suppressed` (repo-watcher `head-changed` emits skipped by the resolved-HEAD-target guard — a high/climbing value signals a filesystem-event storm, issue #82).
 
 **When to enable:** Boss reports sluggishness, CPU spikes, or UI freezes. Enable it, reproduce the issue, then check the logs. The snapshot at the time of the spike tells you what subsystem is overloaded.
 

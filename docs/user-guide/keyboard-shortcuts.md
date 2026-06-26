@@ -36,7 +36,7 @@ See the action table below for all available action names.
 
 A configurable OS-level shortcut to toggle TUICommander's visibility from any application.
 
-- **Configure:** Settings > Keyboard Shortcuts > Global Hotkey (top of the tab)
+- **Configure:** Help > Keyboard Shortcuts > Global Hotkey (top of the tab)
 - **No default** — you must set it yourself (e.g., `Ctrl+Space`, `Cmd+\``)
 - **Toggle behavior:** hidden/minimized → show+focus, visible but unfocused → focus, focused → instant hide
 - `Cmd` and `Ctrl` are treated as distinct modifiers
@@ -116,13 +116,14 @@ Font size range: 8px to 32px, step 2px per action.
 | `Cmd+O` | Open file… (picker) |
 | `Cmd+N` | New file… (picker for name + location) |
 | `Cmd+,` | Open settings |
+| `Cmd+U` | Jump to next waiting terminal |
 | `Cmd+?` | Toggle help panel |
 | `Cmd+Shift+K` | Prompt library |
 | `Cmd+K` | Clear scrollback |
 | `Cmd+Shift+W` | Worktree Manager |
 | `Cmd+J` | Task queue |
 | `Cmd+Shift+E` | Toggle error log |
-| `Cmd+Shift+M` | MCP servers popup (per-repo) |
+| `Cmd+Shift+I` | MCP servers popup (per-repo) |
 
 Note: File browser and Markdown panels are mutually exclusive — opening one closes the other.
 
@@ -205,6 +206,8 @@ Hold to record, release to transcribe and inject text into active terminal.
 | Rename Tab | (double-click tab name) |
 | Detach to Window | — |
 
+While a context menu is open, pressing a menu item's shortcut chord (modifier + key, or Enter) fires that action immediately — no click needed. Modifier-only keys (Cmd, Shift, Ctrl, Alt) do not close the menu so multi-key chords can form; any other non-matching key closes the menu.
+
 ## Mouse Actions
 
 | Action | Where | Effect |
@@ -244,6 +247,8 @@ Hold to record, release to transcribe and inject text into active terminal.
 | `split-horizontal` | `Cmd+Alt+\` | Split horizontally |
 | `prev-tab` | `Ctrl+Shift+Tab` | Previous tab |
 | `next-tab` | `Ctrl+Tab` | Next tab |
+| `focus-last-terminal` | `Cmd+Ctrl+Backspace` | Return to last terminal (toggle, across repos) |
+| `jump-waiting-terminal` | `Cmd+U` | Jump to the next terminal awaiting input (cycles, across repos) |
 | `switch-tab-1..9` | `Cmd+1..9` | Switch to tab N |
 | `toggle-sidebar` | `Cmd+[` | Toggle sidebar |
 | `toggle-markdown` | `Cmd+Shift+M` | Toggle markdown panel |
@@ -256,14 +261,14 @@ Hold to record, release to transcribe and inject text into active terminal.
 | `toggle-task-queue` | `Cmd+J` | Task queue |
 | `toggle-help` | `Cmd+?` | Toggle help panel |
 | `toggle-git-ops` | `Cmd+Shift+D` | Git Panel |
-| `toggle-git-branches` | `Cmd+G` | Git Panel — Branches tab |
+| `toggle-branches-tab` | `Cmd+G` | Git Panel — Branches tab |
 | `worktree-manager` | `Cmd+Shift+W` | Worktree Manager panel |
 | `quick-branch-switch` | `Cmd+B` | Quick branch switch |
 | `find-in-terminal` | `Cmd+F` | Find in terminal |
 | `command-palette` | `Cmd+P` | Command palette |
 | `activity-dashboard` | `Cmd+Shift+A` | Activity dashboard |
 | `toggle-error-log` | `Cmd+Shift+E` | Toggle error log |
-| `toggle-mcp-popup` | `Cmd+Shift+M` | MCP servers popup (per-repo) |
+| `toggle-mcp-popup` | `Cmd+Shift+I` | MCP servers popup (per-repo) |
 | `switch-branch-1..9` | `Cmd+Ctrl+1..9` | Switch to branch N |
 | `scroll-to-top` | `Cmd+Home` | Scroll to top |
 | `scroll-to-bottom` | `Cmd+End` | Scroll to bottom |
@@ -275,3 +280,19 @@ Hold to record, release to transcribe and inject text into active terminal.
 | `toggle-diff-scroll` | `Cmd+Shift+G` | Diff scroll view |
 | `toggle-global-workspace` | `Cmd+Shift+X` | Toggle global workspace |
 | `toggle-ai-chat` | `Cmd+Alt+A` | Toggle AI Chat panel |
+| `clear-scrollback` | `Cmd+K` | Clear scrollback |
+| `open-folder` | `Cmd+Shift+O` | Open folder picker |
+| `open-path` | `Cmd+Alt+O` | Open path… |
+| `open-secondary-window` | — | Open secondary window |
+| `command-overview` | — | Command overview |
+| `ai-triage` | — | AI Triage |
+| `toggle-outline` | `Cmd+Alt+L` | Toggle outline panel |
+| `toggle-compose-panel` | `Cmd+I` | Toggle compose panel |
+| `detach-activity-dashboard` | — | Open Activity Dashboard in separate window |
+| `toggle-tunnels` | — | SSH Tunnels panel |
+| `process-manager` | — | Process Manager |
+| `open-generators` | — | Open generators |
+| `block-fold-toggle` | `Cmd+Shift+.` | Toggle block fold |
+| `block-prev` | `Cmd+Shift+Up` | Previous command block |
+| `block-next` | `Cmd+Shift+Down` | Next command block |
+| `block-search-toggle` | `Cmd+Shift+B` | Search in block |

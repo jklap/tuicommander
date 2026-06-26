@@ -33,14 +33,14 @@ export function isTauri(): boolean
 
 ### Command Mapping
 
-Maps every Tauri command name to an HTTP method + path via a declarative `COMMAND_TABLE`. Each entry is a `CommandTableEntry` — either a mapper function that returns `{ method, path, body? }`, or a `{ browserUnsupported: true }` marker for desktop-only commands.
+Maps every Tauri command name to an HTTP method + path via a declarative `COMMAND_TABLE`. Each entry is a `CommandTableEntry` — an object `{ map }` whose `map(args, p)` returns `{ method, path, body?, transform? }`.
 
 ```typescript
 // Table-driven: each command maps to an HTTP request
 const COMMAND_TABLE: Record<string, CommandTableEntry> = {
-  create_pty: (args) => ({ method: "POST", path: "/sessions", body: args.config }),
-  get_repo_info: (args) => ({ method: "GET", path: `/repo/info?path=${enc(args.path)}` }),
-  write_pty: (args) => ({ method: "POST", path: `/sessions/${args.session_id}/write`, body: { data: args.data } }),
+  create_pty: { map: (args) => ({ method: "POST", path: "/sessions", body: args.config }) },
+  get_repo_info: { map: (args) => ({ method: "GET", path: `/repo/info?path=${enc(args.path)}` }) },
+  write_pty: { map: (args) => ({ method: "POST", path: `/sessions/${args.sessionId}/write`, body: { data: args.data } }) },
   // ... ~80 commands
 };
 ```
@@ -71,7 +71,7 @@ export function buildHttpUrl(path: string): string
 
 The transport abstraction enables:
 
-1. **Development:** Run frontend with `npm run dev` against the Rust HTTP server
+1. **Development:** Run frontend with `pnpm dev` against the Rust HTTP server
 2. **Browser mode:** Access TUICommander from a browser on another device
 3. **Testing:** Frontend tests can mock at the invoke level
 4. **MCP integration:** External tools use the same HTTP API

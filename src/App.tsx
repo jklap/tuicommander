@@ -153,10 +153,13 @@ import { buildAgentLaunchCommand } from "./utils/agentSession";
 import { openFileAction } from "./utils/filePreview";
 import { keyFor } from "./utils/hotkey";
 import { navigateToTerminal } from "./utils/navigateToTerminal";
+import { nextWaitingTerminal } from "./utils/nextWaitingTerminal";
+import { handleOpenUrl } from "./utils/openUrl";
 import { createPanelSyncProvider, type PanelAction } from "./utils/panelSync";
 import { initPaneTabAssignment } from "./utils/paneTabAssign";
 import { pathBasename, pathStartsWith, pathStripPrefix } from "./utils/pathUtils";
 import { getShellFamily, sendCommand } from "./utils/sendCommand";
+import { switchToTerminalBySession } from "./utils/switchToTerminalBySession";
 
 const getDefaultFontSize = () => settingsStore.state.defaultFontSize;
 const getMaxTabNameLength = () => settingsStore.state.maxTabNameLength;
@@ -560,6 +563,15 @@ const App: Component = () => {
 			toastsStore.add(trigger_reason, "", "warn", false, {
 				label: "Investigate",
 				onClick: () => {
+					// Reveal the panel and point the chat context at the failed session
+					// before starting — otherwise startAgent runs on the active terminal's
+					// conversation (the wrong one) and nothing visible happens.
+					if (!settingsStore.isAiChatEnabled()) {
+						toastsStore.add("Enable AI Chat in Settings to investigate", "", "warn", false);
+						return;
+					}
+					uiStore.setAiChatPanelVisible(true);
+					switchToTerminalBySession(session_id);
 					conversationStore.startAgent(session_id, proposed_goal);
 				},
 			});
@@ -908,11 +920,37 @@ const App: Component = () => {
 	// Deferred when the agent has active sub-tasks or is an agent process (sub-agents may still be running).
 	const BUSY_COMPLETION_THRESHOLD_MS = 5000;
 	const DEFERRED_COMPLETION_MS = 10_000;
+	// Grace window after a system wake during which busy→idle transitions are
+	// treated as false-busy (sleep/wake nudges idle shells/agents busy→idle in a
+	// synchronized cascade) and never fire a completion. Covers the post-wake
+	// settling of all terminals; real long-running work transitions far outside it.
+	const WAKE_GRACE_MS = 15_000;
+	let lastWakeAt = 0;
 	const deferredCompletionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	// OSC 133 "C" timestamp captured at idle→busy, used to tell whether a real
+	// command ran during the busy window (vs prompt-redraw / sleep-wake false-busy).
+	const busyStartExecAt = new Map<string, number | null | undefined>();
+
+	{
+		let unlistenWake: (() => void) | undefined;
+		listen<number>("system-wake", () => {
+			lastWakeAt = Date.now();
+			appLogger.debug("terminal", "[Notify] system-wake — suppressing completions for grace window");
+		}).then((fn) => {
+			unlistenWake = fn;
+		});
+		onCleanup(() => unlistenWake?.());
+	}
 
 	const unsubBusyToIdle = terminalsStore.onBusyToIdle((id, durationMs) => {
 		if (durationMs < BUSY_COMPLETION_THRESHOLD_MS) return;
 		if (terminalsStore.state.activeId === id) return;
+		// Sleep/wake false-busy cascade: the busy→idle transition landed within the
+		// grace window after a system wake — not real completed work. Suppress.
+		if (Date.now() - lastWakeAt < WAKE_GRACE_MS) {
+			appLogger.debug("terminal", `[Notify] ${id} completion SUPPRESSED — within wake grace window`);
+			return;
+		}
 
 		const fireCompletion = () => {
 			deferredCompletionTimers.delete(id);
@@ -920,6 +958,7 @@ const App: Component = () => {
 			const terminal = terminalsStore.get(id);
 			if (!terminal) return;
 
+			const startExec = busyStartExecAt.get(id);
 			const reason = getCompletionSuppression({
 				isActiveTerminal: terminalsStore.state.activeId === id,
 				isDebouncedBusy: !!terminalsStore.state.debouncedBusy[id],
@@ -927,6 +966,13 @@ const App: Component = () => {
 				awaitingInput: terminal.awaitingInput,
 				durationMs,
 				thresholdMs: BUSY_COMPLETION_THRESHOLD_MS,
+				// Gate ONLY plain shells: agent TUIs (claude, …) don't run shell commands
+				// during their lifetime, so their OSC 133 "C" never advances — gating them
+				// would suppress every legitimate agent completion. Agents keep legacy behaviour.
+				usesShellIntegration: !terminal.agentType && terminal.lastCommandExecAt != null,
+				// Unknown busy-start (snapshot missing) → don't gate; otherwise a real
+				// command ran iff the OSC 133 "C" timestamp advanced during the window.
+				ranCommandDuringBusy: startExec === undefined || terminal.lastCommandExecAt !== startExec,
 			});
 			if (reason) {
 				appLogger.debug("terminal", `[Notify] ${id} completion SUPPRESSED — ${reason}`);
@@ -978,6 +1024,9 @@ const App: Component = () => {
 		}
 	});
 	const unsubIdleToBusy = terminalsStore.onIdleToBusy((id) => {
+		// Snapshot the last-command-exec timestamp at busy-start so onBusyToIdle can
+		// detect whether a real command ran during this busy window.
+		busyStartExecAt.set(id, terminalsStore.get(id)?.lastCommandExecAt ?? null);
 		const timer = deferredCompletionTimers.get(id);
 		if (timer) {
 			clearTimeout(timer);
@@ -994,9 +1043,12 @@ const App: Component = () => {
 	});
 
 	// Auto-trigger AI diff triage when an agent terminal goes idle after meaningful work.
+	// Only while the triage panel is open — otherwise it burns LLM credits in the background
+	// with no UI to surface the result.
 	const TRIAGE_BUSY_THRESHOLD_MS = 5000;
 	const unsubTriageOnIdle = terminalsStore.onBusyToIdle((id, durationMs) => {
 		if (!settingsStore.isAiTriageEnabled()) return;
+		if (!uiStore.state.aiTriagePanelVisible) return;
 		if (durationMs < TRIAGE_BUSY_THRESHOLD_MS) return;
 		const t = terminalsStore.get(id);
 		if (!t?.agentType) return;
@@ -1390,12 +1442,23 @@ const App: Component = () => {
 	];
 
 	/** Fall back to running a git command in the active terminal */
-	const fallbackToTerminal = (repoPath: string, args: string[]) => {
+	const fallbackToTerminal = async (repoPath: string, args: string[]) => {
 		const active = terminalsStore.getActive();
-		if (active?.ref) {
-			const cmd = `cd ${JSON.stringify(repoPath)} && git ${args.join(" ")}`;
-			active.ref.write(`${cmd}\r`);
+		const sessionId = active?.sessionId;
+		if (!sessionId) return;
+		const cmd = `cd ${JSON.stringify(repoPath)} && git ${args.join(" ")}`;
+		// Route through sendCommand (never raw text+\r) so the Enter registers
+		// even when the active terminal is an Ink-based agent in raw mode.
+		const agentType = terminalsStore.getAgentTypeForSession(sessionId);
+		const shellFamily = await getShellFamily(sessionId);
+		try {
+			await sendCommand((data) => invoke("write_pty", { sessionId, data }), cmd, agentType, shellFamily);
 			setStatusInfo(`git ${args[0]} requires auth — running in terminal`);
+		} catch (err) {
+			appLogger.error(
+				"network",
+				`git fallback to terminal failed: ${err instanceof Error ? err.message : String(err)}`,
+			);
 		}
 	};
 
@@ -1439,13 +1502,14 @@ const App: Component = () => {
 					title: `git ${op}`,
 					subtitle: output || "completed",
 					icon: '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.78 5.97l-4.5 4.5a.75.75 0 0 1-1.06 0l-2-2a.75.75 0 1 1 1.06-1.06L6.75 8.88l3.97-3.97a.75.75 0 1 1 1.06 1.06z"/></svg>',
+					severity: "success",
 					repoPath,
 					dismissible: true,
 				});
 			} else if (NEEDS_TERMINAL_PATTERNS.some((p) => p.test(stderr))) {
 				// Auth or interactive prompt needed — cancel background task, run in terminal
 				tasksStore.cancel(taskId);
-				fallbackToTerminal(repoPath, args);
+				void fallbackToTerminal(repoPath, args);
 			} else {
 				const errMsg = stderr.trim() || `git ${op} failed`;
 				tasksStore.fail(taskId, errMsg);
@@ -1459,6 +1523,7 @@ const App: Component = () => {
 					title: `git ${op} failed`,
 					subtitle: errMsg,
 					icon: '<svg viewBox="0 0 16 16" width="14" height="14" fill="#f85149"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.36 10.3a.75.75 0 0 1-1.06 1.06L8 9.06l-2.3 2.3a.75.75 0 0 1-1.06-1.06L6.94 8 4.64 5.7a.75.75 0 0 1 1.06-1.06L8 6.94l2.3-2.3a.75.75 0 0 1 1.06 1.06L9.06 8l2.3 2.3z"/></svg>',
+					severity: "error",
 					repoPath,
 					dismissible: true,
 				});
@@ -1632,10 +1697,28 @@ const App: Component = () => {
 		zoomInAll: terminalLifecycle.zoomInAll,
 		zoomOutAll: terminalLifecycle.zoomOutAll,
 		zoomResetAll: terminalLifecycle.zoomResetAll,
-		createNewTerminal: terminalLifecycle.createNewTerminal,
+		// Route Cmd+T / command palette through handleNewTab (the + button's path) so
+		// the new terminal is registered in the active branch.terminals and the tab
+		// appears immediately — not only after a worktree switch re-syncs orphans (#81).
+		// handleNewTab falls back to createNewTerminal for the no-repo case.
+		createNewTerminal: gitOps.handleNewTab,
 		closeTerminal: terminalLifecycle.closeTerminal,
 		reopenClosedTab: terminalLifecycle.reopenClosedTab,
 		navigateTab: terminalLifecycle.navigateTab,
+		focusLastTerminal: () => {
+			const prevId = terminalsStore.getPreviousActiveId();
+			if (prevId) navigateToTerminal(prevId);
+		},
+		jumpWaitingTerminal: () => {
+			// Cycle through terminals awaiting input (agent asked a question / hit an
+			// error), across all repos/branches, in tab order. Repeat presses advance
+			// to the next one; does nothing when none are waiting.
+			const waiting = terminalsStore
+				.getIds()
+				.filter((id) => terminalsStore.get(id)?.awaitingInput != null && !terminalsStore.isDetached(id));
+			const next = nextWaitingTerminal(waiting, terminalsStore.state.activeId);
+			if (next) navigateToTerminal(next);
+		},
 		clearTerminal: terminalLifecycle.clearTerminal,
 		refreshTerminal: terminalLifecycle.refreshTerminal,
 		clearScrollback: terminalLifecycle.clearScrollback,
@@ -1649,8 +1732,21 @@ const App: Component = () => {
 		terminalIds: terminalLifecycle.terminalIds,
 		handleTerminalSelect: terminalLifecycle.handleTerminalSelect,
 		handleSplit: splitPanes.handleSplit,
-		handleRunCommand: (forceDialog: boolean) =>
-			gitOps.handleRunCommand(forceDialog, () => setRunCommandDialogVisible(true)),
+		handleRunCommand: (forceDialog: boolean) => {
+			// Context-aware Cmd+R: when a web/preview tab is active, reload it instead
+			// of opening the Run Command dialog (a terminal/worktree operation). Cross-
+			// origin URL iframes can't receive the in-iframe reload-request, so the
+			// parent triggers reload via the tab's imperative handle.
+			const mdActiveId = mdTabsStore.state.activeId;
+			if (mdActiveId) {
+				const handle = mdTabsStore.getHandle<{ reload?: () => void }>(mdActiveId);
+				if (handle?.reload) {
+					handle.reload();
+					return;
+				}
+			}
+			gitOps.handleRunCommand(forceDialog, () => setRunCommandDialogVisible(true));
+		},
 		switchToBranchByIndex: quickSwitcher.switchToBranchByIndex,
 		isQuickSwitcherOpen: quickSwitcherVisible,
 		toggleMarkdownPanel: uiStore.toggleMarkdownPanel,
@@ -1675,6 +1771,15 @@ const App: Component = () => {
 			const mdActiveId = mdTabsStore.state.activeId;
 			if (mdActiveId) {
 				const handle = mdTabsStore.getHandle<{ openSearch: () => void }>(mdActiveId);
+				handle?.openSearch();
+				return;
+			}
+			// Editor: routes Cmd+F at the document level so it works regardless of
+			// focus (CodeMirror's Mod-f keymap only fires with focus in the content,
+			// so dragging the scrollbar away from it would otherwise swallow Cmd+F).
+			const editorActiveId = editorTabsStore.state.activeId;
+			if (editorActiveId) {
+				const handle = editorTabsStore.getHandle<{ openSearch: () => void }>(editorActiveId);
 				handle?.openSearch();
 				return;
 			}
@@ -2051,7 +2156,9 @@ const App: Component = () => {
 			switch (action) {
 				// File
 				case "new-tab":
-					terminalLifecycle.createNewTerminal();
+					// Same as Cmd+T / + button: register in active branch so the tab
+					// shows immediately (#81).
+					gitOps.handleNewTab();
 					break;
 				case "close-tab": {
 					if (paneLayoutStore.isSplit()) {
@@ -2096,9 +2203,9 @@ const App: Component = () => {
 				case "copy":
 					terminalLifecycle.copyFromTerminal();
 					break;
-				case "paste":
-					terminalLifecycle.pasteToTerminal();
-					break;
+				// No "paste" case: the Edit > Paste menu item is the native PredefinedMenuItem,
+				// which pastes via NSPasteboard into the focused keyInputRef without a JS
+				// clipboard read (avoids the macOS Sequoia paste-permission popup).
 				case "clear-terminal":
 					terminalLifecycle.clearTerminal();
 					break;
@@ -2254,6 +2361,12 @@ const App: Component = () => {
 					break;
 				case "check-for-updates":
 					updaterStore.checkForUpdate().catch((err) => appLogger.warn("app", "Updater manual check failed", err));
+					break;
+				case "online-guide":
+					handleOpenUrl("https://tuicommander.com/docs/");
+					break;
+				case "changelog":
+					handleOpenUrl("https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md");
 					break;
 				case "about":
 					setHelpPanelVisible(true);
@@ -2742,6 +2855,7 @@ const App: Component = () => {
 				confirmLabel={dialogs.dialogState()?.confirmLabel}
 				cancelLabel={dialogs.dialogState()?.cancelLabel}
 				kind={dialogs.dialogState()?.kind}
+				autoCancelMs={dialogs.dialogState()?.autoCancelMs}
 				onClose={dialogs.handleClose}
 				onConfirm={dialogs.handleConfirm}
 			/>

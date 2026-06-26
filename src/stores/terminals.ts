@@ -68,7 +68,9 @@ export interface TerminalData {
 	suggestDismissed: boolean; // true after user dismissed/selected/typed — resets on shell-state:idle
 	commandBlocks: CommandBlock[]; // Completed command blocks from OSC 133
 	activeBlock: CommandBlock | null; // Current in-progress block (A received, D not yet)
+	lastCommandExecAt: number | null; // Timestamp of last OSC 133 "C" (real command execution); monotonic, never evicted — used to gate completion against prompt-redraw/wake false-busy
 	foldedBlocks: Set<number>; // promptLine values of folded blocks
+	userPromptLines: number[]; // Absolute lines where the user submitted a prompt (UserInput.line), for the green scrollbar marker
 	alias: string | null; // Human-friendly alias from Rust (e.g. "tc-1")
 	standby: boolean; // Session is SIGSTOP'd (auto-standby)
 }
@@ -101,7 +103,9 @@ type TerminalCreateData = Omit<
 	| "awaitingInputConfident"
 	| "commandBlocks"
 	| "activeBlock"
+	| "lastCommandExecAt"
 	| "foldedBlocks"
+	| "userPromptLines"
 	| "alias"
 	| "standby"
 > & {
@@ -151,6 +155,8 @@ interface TerminalsStoreState {
 	activeId: string | null;
 	/** Last non-null activeId — survives tab switches so non-terminal UI can find the right terminal. */
 	lastActiveId: string | null;
+	/** The terminal that was active before the current one — powers "return to last terminal" toggle. */
+	previousActiveId: string | null;
 	counter: number;
 	/** Tabs currently detached to floating windows: tabId → window label */
 	detachedWindows: Record<string, string>;
@@ -167,6 +173,7 @@ function createTerminalsStore() {
 		terminals: {},
 		activeId: null,
 		lastActiveId: null,
+		previousActiveId: null,
 		counter: 0,
 		detachedWindows: {},
 		debouncedBusy: {},
@@ -204,6 +211,9 @@ function createTerminalsStore() {
 				const pending = _osc133Pending.get(id);
 				if (!pending?.length) return;
 				_osc133Pending.delete(id);
+				// Defence-in-depth: never write to a removed terminal — setState on a
+				// missing key would resurrect it as a ghost entry.
+				if (!(id in state.terminals)) return;
 				batch(() => {
 					setState("terminals", id, "commandBlocks", (prev) => {
 						const next = [...prev, ...pending];
@@ -255,10 +265,14 @@ function createTerminalsStore() {
 			busyDurationMap.delete(id);
 			// Error state is NOT cleared here: API errors are persistent and should only
 			// be cleared by explicit agent activity (status-line, user-input) or process exit.
-			// Question state IS cleared: idle→busy means the agent resumed work, so any
-			// pending question notification is stale. False-positive idle→busy oscillations
-			// from spinner ticks are suppressed upstream in Rust (spinner suppression).
-			if (prev === "idle" && state.terminals[id]?.awaitingInput) {
+			// Low-confidence question state IS cleared: idle→busy means the agent resumed
+			// work, so any pending (heuristic) question notification is stale.
+			// CONFIDENT questions are preserved (awaitingInputConfident): a confident prompt
+			// like an Ink "Enter to select" menu stays awaiting even while the TUI repaints
+			// (cursor blink, animation, scrollbar) — those repaints oscillate idle→busy and
+			// would otherwise wrongly clear a genuine interactive prompt. Confident questions
+			// instead clear on real user-input (Terminal.tsx) or process exit (below).
+			if (prev === "idle" && state.terminals[id]?.awaitingInput && !state.terminals[id]?.awaitingInputConfident) {
 				setState("terminals", id, "awaitingInput", null);
 				setState("terminals", id, "awaitingInputConfident", false);
 			}
@@ -364,7 +378,9 @@ function createTerminalsStore() {
 				awaitingInputConfident: false,
 				commandBlocks: [],
 				activeBlock: null,
+				lastCommandExecAt: null,
 				foldedBlocks: new Set<number>(),
+				userPromptLines: [],
 				alias: null,
 				standby: false,
 				...data,
@@ -401,7 +417,9 @@ function createTerminalsStore() {
 				awaitingInputConfident: false,
 				commandBlocks: [],
 				activeBlock: null,
+				lastCommandExecAt: null,
 				foldedBlocks: new Set<number>(),
+				userPromptLines: [],
 				alias: null,
 				standby: false,
 				...data,
@@ -419,6 +437,12 @@ function createTerminalsStore() {
 			if (sessionId) sessionToTerminal.delete(sessionId);
 			cleanupBusyState(id);
 			lastDataAtMap.delete(id);
+			// Cancel any pending OSC 133 flush so its rAF callback can't fire after
+			// removal and resurrect a ghost terminal entry via setState("terminals", id, ...).
+			const osc133Raf = _osc133FlushTimers.get(id);
+			if (osc133Raf != null) cancelAnimationFrame(osc133Raf);
+			_osc133FlushTimers.delete(id);
+			_osc133Pending.delete(id);
 			for (const cb of onRemoveCallbacks) cb(id);
 			setState(
 				produce((s) => {
@@ -429,6 +453,9 @@ function createTerminalsStore() {
 					}
 					if (s.lastActiveId === id) {
 						s.lastActiveId = null;
+					}
+					if (s.previousActiveId === id) {
+						s.previousActiveId = null;
 					}
 				}),
 			);
@@ -448,6 +475,11 @@ function createTerminalsStore() {
 					setState("terminals", id, "activity", false);
 					setState("terminals", id, "unseen", false);
 					setState("lastActiveId", id);
+					// Remember the terminal we're leaving so "return to last terminal"
+					// can toggle back to it (and back again on the next press).
+					if (prevId && prevId !== id) {
+						setState("previousActiveId", prevId);
+					}
 				}
 				setState("activeId", id);
 			});
@@ -470,6 +502,21 @@ function createTerminalsStore() {
 					const prev = state.terminals[id]?.shellState ?? null;
 					const next = data.shellState ?? null;
 					if (prev !== next) handleShellStateChange(id, prev, next);
+				}
+				// Agent exited back to a plain shell (agentType set→null). Any pending
+				// question/error was the agent's — a shell can't be "awaiting input" on
+				// its behalf, and nothing else clears it: Ctrl+C emits no UserInput, the
+				// PTY shell never "exits" (so the shellState→null clear never fires), and
+				// confident questions deliberately survive idle→busy. A stale badge would
+				// otherwise stick forever and hijack repo-switch routing (useGitOperations
+				// prefers a tab with awaitingInput). Parallels the process-exit clear above.
+				if ("agentType" in data) {
+					const prevAgent = state.terminals[id]?.agentType ?? null;
+					const nextAgent = data.agentType ?? null;
+					if (prevAgent !== null && nextAgent === null && state.terminals[id]?.awaitingInput) {
+						setState("terminals", id, "awaitingInput", null);
+						setState("terminals", id, "awaitingInputConfident", false);
+					}
 				}
 				// Keep sessionToTerminal reverse map in sync: callers that pass sessionId
 				// via update() would otherwise desync the map and break plugin filtering
@@ -557,6 +604,10 @@ function createTerminalsStore() {
 					if (term.activeBlock) {
 						setState("terminals", id, "activeBlock", { ...term.activeBlock, executionLine: line });
 					}
+					// Record that a real command executed (not a bare prompt redraw).
+					// Monotonic and never evicted, so onBusyToIdle can tell genuine work
+					// apart from sleep/wake / prompt-redraw false-busy.
+					setState("terminals", id, "lastCommandExecAt", now);
 					break;
 				}
 				case "D": {
@@ -574,6 +625,20 @@ function createTerminalsStore() {
 					break;
 				}
 			}
+		},
+
+		/** Record an absolute line where the user submitted a prompt (UserInput.line
+		 *  from the OSC 7770 state=busy transition). Drives the green scrollbar marker.
+		 *  Ignores negative lines (keystroke-reconstructed UserInput has no grid row)
+		 *  and dedups consecutive repeats (a prompt redraw can re-fire busy on the same
+		 *  row). Capped at MAX_BLOCKS, mirroring commandBlocks eviction. */
+		addUserPromptLine(id: string, line: number): void {
+			if (!has(id) || line < 0) return;
+			setState("terminals", id, "userPromptLines", (prev) => {
+				if (prev[prev.length - 1] === line) return prev;
+				const next = [...prev, line];
+				return next.length > MAX_BLOCKS ? next.slice(-MAX_BLOCKS) : next;
+			});
 		},
 
 		toggleBlockFold(id: string, promptLine: number): void {
@@ -650,6 +715,12 @@ function createTerminalsStore() {
 		/** Get active terminal */
 		getActive(): TerminalState | undefined {
 			return state.activeId ? state.terminals[state.activeId] : undefined;
+		},
+
+		/** The terminal that was active before the current one, if it still exists. */
+		getPreviousActiveId(): string | null {
+			const id = state.previousActiveId;
+			return id && state.terminals[id] ? id : null;
 		},
 
 		/** Find the best terminal with an active PTY session: active > lastActive > any. */

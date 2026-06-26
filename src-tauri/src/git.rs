@@ -8,7 +8,41 @@ use std::sync::Arc;
 use tauri::State;
 
 use crate::git_cli::git_cmd;
-use crate::state::{AppState, GIT_CACHE_TTL};
+use crate::git_reads::git_reads;
+use crate::state::{AppState, GitCache};
+
+// --- Coalesced git-cache load helpers (Step 1) ---
+//
+// `moka` collapses concurrent identical loads for one key to a single
+// computation (the headline fix for the `repo-changed` fan-out). Loaders are
+// blocking git work, so they run on the blocking pool; the cache TTL/bound is
+// configured on the cache itself. Values are `Arc`-wrapped in the cache and
+// cloned out at the boundary to preserve the existing by-value return shapes.
+
+/// Coalesced + cached blocking load for an infallible compute.
+async fn cached_get<T, F>(cache: GitCache<T>, key: String, f: F) -> Result<T, String>
+where
+    T: Clone + Send + Sync + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let v = tokio::task::spawn_blocking(move || cache.get_with(key, || Arc::new(f())))
+        .await
+        .map_err(|e| format!("spawn_blocking error: {e}"))?;
+    Ok((*v).clone())
+}
+
+/// Coalesced + cached blocking load for a fallible compute. Only `Ok` is cached.
+async fn cached_try<T, F>(cache: GitCache<T>, key: String, f: F) -> Result<T, String>
+where
+    T: Clone + Send + Sync + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    let v = tokio::task::spawn_blocking(move || cache.try_get_with(key, || f().map(Arc::new)))
+        .await
+        .map_err(|e| format!("spawn_blocking error: {e}"))?
+        .map_err(|e: Arc<String>| (*e).clone())?;
+    Ok((*v).clone())
+}
 
 // --- File-based git helpers (no subprocess) ---
 
@@ -218,6 +252,16 @@ pub(crate) struct DiffStats {
     deletions: i32,
 }
 
+impl DiffStats {
+    /// Construct from line counts (used by the gix diff-stats adapter).
+    pub(crate) fn from_counts(additions: i32, deletions: i32) -> Self {
+        Self {
+            additions,
+            deletions,
+        }
+    }
+}
+
 /// Changed file information (for diff browser)
 #[derive(Clone, Serialize)]
 pub(crate) struct ChangedFile {
@@ -284,12 +328,12 @@ pub(crate) fn get_repo_info_impl(path: &str) -> RepoInfo {
 
 /// Cached repo info for synchronous callers (MCP handlers, etc.).
 pub(crate) fn get_repo_info_cached(state: &AppState, path: &str) -> RepoInfo {
-    if let Some(cached) = AppState::get_cached(&state.git_cache.repo_info, path, GIT_CACHE_TTL) {
-        return cached;
-    }
-    let info = get_repo_info_impl(path);
-    AppState::set_cached(&state.git_cache.repo_info, path.to_string(), info.clone());
-    info
+    let p = path.to_string();
+    (*state
+        .git_cache
+        .repo_info
+        .get_with(path.to_string(), || Arc::new(get_repo_info_impl(&p))))
+    .clone()
 }
 
 /// Get git repository info for a path (cached, 5s TTL)
@@ -299,17 +343,11 @@ pub(crate) async fn get_repo_info(
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<RepoInfo, String> {
-    if let Some(cached) = AppState::get_cached(&state.git_cache.repo_info, &path, GIT_CACHE_TTL) {
-        return Ok(cached);
-    }
-
-    let state_arc = state.inner().clone();
-    let path_clone = path.clone();
-    let info = tokio::task::spawn_blocking(move || get_repo_info_impl(&path_clone))
-        .await
-        .map_err(|e| format!("spawn_blocking join error: {e}"))?;
-    AppState::set_cached(&state_arc.git_cache.repo_info, path, info.clone());
-    Ok(info)
+    let p = path.clone();
+    cached_get(state.git_cache.repo_info.clone(), path, move || {
+        get_repo_info_impl(&p)
+    })
+    .await
 }
 
 /// Get the origin remote URL for a repository (returns None if not a git repo or no remote).
@@ -656,6 +694,9 @@ pub(crate) async fn get_recent_commits(
 fn diff_base_args(scope: &Option<String>) -> Result<Vec<String>, String> {
     match scope.as_deref() {
         Some("staged") => Ok(vec!["diff".into(), "--cached".into()]),
+        // "head" compares the working tree against the last commit (staged +
+        // unstaged), i.e. the editor gutter's "vs committed version" view.
+        Some("head") => Ok(vec!["diff".into(), "HEAD".into()]),
         Some(hash) if !hash.is_empty() => {
             validate_git_hash(hash)?;
             Ok(vec!["diff".into(), format!("{hash}^"), hash.into()])
@@ -808,7 +849,7 @@ pub(crate) async fn get_diff_stats(
     path: String,
     scope: Option<String>,
 ) -> Result<DiffStats, String> {
-    tokio::task::spawn_blocking(move || get_diff_stats_impl(&path, scope.as_deref()))
+    tokio::task::spawn_blocking(move || git_reads().diff_stats(Path::new(&path), scope.as_deref()))
         .await
         .map_err(|e| format!("spawn_blocking join error: {e}"))
 }
@@ -955,7 +996,11 @@ pub(crate) async fn get_file_diff(
         // For untracked files, use --no-index to generate a diff against the null device.
         // Deleted files don't exist on disk — skip this block entirely and fall
         // through to the regular `git diff` which reads from the index.
-        if scope.is_none() && repo_path.join(&file).exists() {
+        // Also handle the "head" scope (editor gutter): an untracked file has no
+        // HEAD entry, so `git diff HEAD` would be empty — fall back to the
+        // all-added --no-index diff so new files show every line as added.
+        let scope_uses_worktree = scope.is_none() || scope.as_deref() == Some("head");
+        if scope_uses_worktree && repo_path.join(&file).exists() {
             let full_path = repo_path.join(&file);
 
             // Security: prevent path traversal (e.g. "../../etc/passwd")
@@ -1024,6 +1069,180 @@ pub(crate) async fn get_file_diff(
     })
     .await
     .map_err(|e| format!("spawn_blocking join error: {e}"))?
+}
+
+/// Per-line git change status for the editor gutter / scrollbar overview ruler.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum GutterChangeType {
+    Added,
+    Modified,
+    Deleted,
+}
+
+/// A single gutter marker: a 1-based line in the *new* file and its status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct GutterChange {
+    /// 1-based line number in the new (current) file.
+    pub line: u32,
+    #[serde(rename = "type")]
+    pub change_type: GutterChangeType,
+}
+
+/// Parse the `+NNN` new-file start line from a unified-diff hunk header
+/// (`@@ -a,b +c,d @@`). Returns `0` when the header is malformed (mirrors the
+/// frontend's prior regex, which left `newLine` at 0 on no match).
+fn hunk_new_start(header: &str) -> u32 {
+    let Some(plus) = header.find('+') else {
+        return 0;
+    };
+    let rest = &header[plus + 1..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().unwrap_or(0)
+}
+
+/// Parse a unified diff (`git diff` output) into per-line gutter markers for the
+/// new file. Classification per contiguous change block (a run of `-`/`+` lines
+/// between context lines), matching the common gitgutter convention:
+///   - only additions        → Added    (each new line)
+///   - additions + deletions → Modified (the new lines that replaced old ones)
+///   - only deletions        → Deleted  (one marker on the line that now sits
+///     where the removed content was)
+///
+/// This is the Rust home of the parser that used to live in `gitGutter.ts`
+/// (all business logic in Rust); the frontend only renders the returned markers.
+pub(crate) fn parse_diff_to_changes(diff: &str) -> Vec<GutterChange> {
+    let mut changes = Vec::new();
+    if diff.is_empty() {
+        return changes;
+    }
+
+    let mut new_line: u32 = 0; // 1-based line in the new file at the cursor
+    let mut in_hunk = false;
+    let mut del_count: u32 = 0; // consecutive deletions in the current block
+    let mut add_count: u32 = 0; // consecutive additions in the current block
+    let mut add_start: u32 = 0; // new_line where the current addition run began
+
+    let flush = |changes: &mut Vec<GutterChange>,
+                 add_count: &mut u32,
+                 del_count: &mut u32,
+                 add_start: u32,
+                 new_line: u32| {
+        if *add_count > 0 {
+            let change_type = if *del_count > 0 {
+                GutterChangeType::Modified
+            } else {
+                GutterChangeType::Added
+            };
+            for i in 0..*add_count {
+                changes.push(GutterChange {
+                    line: add_start + i,
+                    change_type: change_type.clone(),
+                });
+            }
+        } else if *del_count > 0 {
+            // Pure deletion: mark the line now sitting where content was removed.
+            changes.push(GutterChange {
+                line: new_line,
+                change_type: GutterChangeType::Deleted,
+            });
+        }
+        *del_count = 0;
+        *add_count = 0;
+    };
+
+    for raw in diff.split('\n') {
+        // A new file section resets hunk tracking (multi-file diffs).
+        if raw.starts_with("diff --git") {
+            flush(
+                &mut changes,
+                &mut add_count,
+                &mut del_count,
+                add_start,
+                new_line,
+            );
+            in_hunk = false;
+            continue;
+        }
+        if raw.starts_with("@@") {
+            flush(
+                &mut changes,
+                &mut add_count,
+                &mut del_count,
+                add_start,
+                new_line,
+            );
+            new_line = hunk_new_start(raw);
+            in_hunk = true;
+            continue;
+        }
+        if !in_hunk {
+            continue;
+        }
+
+        match raw.as_bytes().first() {
+            Some(b' ') => {
+                flush(
+                    &mut changes,
+                    &mut add_count,
+                    &mut del_count,
+                    add_start,
+                    new_line,
+                );
+                new_line += 1;
+            }
+            Some(b'+') => {
+                if add_count == 0 {
+                    add_start = new_line;
+                }
+                add_count += 1;
+                new_line += 1;
+            }
+            Some(b'-') => {
+                // An addition run ending in a deletion means two separate blocks.
+                if add_count > 0 {
+                    flush(
+                        &mut changes,
+                        &mut add_count,
+                        &mut del_count,
+                        add_start,
+                        new_line,
+                    );
+                }
+                del_count += 1;
+            }
+            // "\ No newline at end of file" — not a content line.
+            Some(b'\\') => {}
+            _ => flush(
+                &mut changes,
+                &mut add_count,
+                &mut del_count,
+                add_start,
+                new_line,
+            ),
+        }
+    }
+    flush(
+        &mut changes,
+        &mut add_count,
+        &mut del_count,
+        add_start,
+        new_line,
+    );
+    changes
+}
+
+/// Editor gutter / scrollbar-overview change markers for a single file vs a git
+/// scope (default "head"). Returns structured per-line markers — the unified
+/// diff is produced and parsed entirely in Rust; the frontend only renders.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn get_gutter_changes(
+    path: String,
+    file: String,
+    scope: Option<String>,
+) -> Result<Vec<GutterChange>, String> {
+    let diff = get_file_diff(path, file, scope, None).await?;
+    Ok(parse_diff_to_changes(&diff))
 }
 
 /// Generate 2-character initials from a repository name
@@ -1204,20 +1423,11 @@ pub(crate) async fn get_merged_branches(
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<Vec<String>, String> {
-    if let Some(cached) =
-        AppState::get_cached(&state.git_cache.merged_branches, &path, GIT_CACHE_TTL)
-    {
-        return Ok(cached);
-    }
-
-    let state_arc = state.inner().clone();
-    let path_clone = path.clone();
-    let result =
-        tokio::task::spawn_blocking(move || get_merged_branches_impl(Path::new(&path_clone)))
-            .await
-            .map_err(|e| format!("spawn_blocking join error: {e}"))??;
-    AppState::set_cached(&state_arc.git_cache.merged_branches, path, result.clone());
-    Ok(result)
+    let p = path.clone();
+    cached_try(state.git_cache.merged_branches.clone(), path, move || {
+        get_merged_branches_impl(Path::new(&p))
+    })
+    .await
 }
 
 /// Lightweight structural snapshot: worktree paths + merged branches.
@@ -1295,25 +1505,15 @@ pub(crate) async fn get_repo_summary_impl(
     // Spawn worktree_paths concurrently while we fetch/check merged_branches cache.
     let wt_path = repo_path.clone();
     let worktree_handle =
-        tokio::task::spawn_blocking(move || crate::worktree::get_worktree_paths(wt_path));
+        tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)));
 
-    let merged_branches = if let Some(cached) =
-        AppState::get_cached(&state.git_cache.merged_branches, &repo_path, GIT_CACHE_TTL)
-    {
-        cached
-    } else {
-        let mb_path = repo_path.clone();
-        let branches =
-            tokio::task::spawn_blocking(move || get_merged_branches_impl(Path::new(&mb_path)))
-                .await
-                .map_err(|e| format!("spawn_blocking error: {e}"))??;
-        AppState::set_cached(
-            &state.git_cache.merged_branches,
-            repo_path.clone(),
-            branches.clone(),
-        );
-        branches
-    };
+    let mb_path = repo_path.clone();
+    let merged_branches = cached_try(
+        state.git_cache.merged_branches.clone(),
+        repo_path.clone(),
+        move || get_merged_branches_impl(Path::new(&mb_path)),
+    )
+    .await?;
 
     let worktree_paths = worktree_handle
         .await
@@ -1329,7 +1529,7 @@ pub(crate) async fn get_repo_summary_impl(
     let mut diff_handles = Vec::with_capacity(paths.len());
     for path in paths {
         diff_handles.push(tokio::task::spawn_blocking(move || {
-            let stats = get_diff_stats_impl(&path, None);
+            let stats = git_reads().diff_stats(Path::new(&path), None);
             (path, stats)
         }));
     }
@@ -1380,25 +1580,15 @@ pub(crate) async fn get_repo_structure_impl(
     let _permit = state.monitoring_git_permit().await;
     let wt_path = repo_path.clone();
     let worktree_handle =
-        tokio::task::spawn_blocking(move || crate::worktree::get_worktree_paths(wt_path));
+        tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)));
 
-    let merged_branches = if let Some(cached) =
-        AppState::get_cached(&state.git_cache.merged_branches, &repo_path, GIT_CACHE_TTL)
-    {
-        cached
-    } else {
-        let mb_path = repo_path.clone();
-        let branches =
-            tokio::task::spawn_blocking(move || get_merged_branches_impl(Path::new(&mb_path)))
-                .await
-                .map_err(|e| format!("spawn_blocking error: {e}"))??;
-        AppState::set_cached(
-            &state.git_cache.merged_branches,
-            repo_path.clone(),
-            branches.clone(),
-        );
-        branches
-    };
+    let mb_path = repo_path.clone();
+    let merged_branches = cached_try(
+        state.git_cache.merged_branches.clone(),
+        repo_path.clone(),
+        move || get_merged_branches_impl(Path::new(&mb_path)),
+    )
+    .await?;
 
     let worktree_paths = worktree_handle
         .await
@@ -1431,7 +1621,7 @@ pub(crate) async fn get_repo_diff_stats_impl(
     // Need worktree paths to know which directories to diff
     let wt_path = repo_path.clone();
     let worktree_paths =
-        tokio::task::spawn_blocking(move || crate::worktree::get_worktree_paths(wt_path))
+        tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)))
             .await
             .map_err(|e| format!("spawn_blocking error: {e}"))?
             .map_err(|e| format!("get_worktree_paths failed: {e}"))?;
@@ -1440,7 +1630,7 @@ pub(crate) async fn get_repo_diff_stats_impl(
     let mut diff_handles = Vec::with_capacity(paths.len());
     for path in paths {
         diff_handles.push(tokio::task::spawn_blocking(move || {
-            let stats = get_diff_stats_impl(&path, None);
+            let stats = git_reads().diff_stats(Path::new(&path), None);
             (path, stats)
         }));
     }
@@ -1564,13 +1754,7 @@ pub(crate) fn get_branches_detail_impl(path: &Path) -> Result<Vec<BranchDetail>,
         .map_err(|e| format!("git for-each-ref failed: {e}"))?;
 
     // Collect merged branch names once so we can do O(1) lookups.
-    let merged_set: std::collections::HashSet<String> = match get_merged_branches_impl(path) {
-        Ok(names) => names.into_iter().collect(),
-        Err(e) => {
-            eprintln!("[warn] Failed to determine merged branches: {e}");
-            std::collections::HashSet::new()
-        }
-    };
+    let merged_set = merged_branch_set(path);
 
     let mut branches: Vec<BranchDetail> = out
         .stdout
@@ -1649,37 +1833,48 @@ pub(crate) fn get_branches_detail_impl(path: &Path) -> Result<Vec<BranchDetail>,
         })
         .collect();
 
-    // Compute base ahead/behind for local branches with tuicommander-base set.
-    // Uses --left-right to get both counts in a single subprocess per branch.
+    apply_base_ahead_behind_and_sort(path, &mut branches);
+    Ok(branches)
+}
+
+/// Set of branch names merged into the main branch (CLI), used for `is_merged`.
+/// Empty (with a warning) if the merge check fails. Shared by both adapters.
+pub(crate) fn merged_branch_set(path: &Path) -> std::collections::HashSet<String> {
+    match get_merged_branches_impl(path) {
+        Ok(names) => names.into_iter().collect(),
+        Err(e) => {
+            eprintln!("[warn] Failed to determine merged branches: {e}");
+            std::collections::HashSet::new()
+        }
+    }
+}
+
+/// Backend-agnostic tail for `branches_detail`: fill base ahead/behind for local
+/// branches that have a `tuicommander-base` set, then sort (main first, then
+/// alphabetical). Routed through the GitReads port so it auto-upgrades with the
+/// ahead/behind backend. Shared by the CLI and gix adapters for byte parity.
+pub(crate) fn apply_base_ahead_behind_and_sort(path: &Path, branches: &mut [BranchDetail]) {
     let path_str = path.to_string_lossy();
-    for branch in &mut branches {
+    for branch in branches.iter_mut() {
         if branch.is_remote {
             continue;
         }
         if let Some(base) = crate::worktree::get_branch_base(&path_str, &branch.name) {
-            let range = format!("{base}...{}", branch.name);
-            if let Ok(out) = git_cmd(path)
-                .args(["rev-list", "--count", "--left-right", &range])
-                .run()
-            {
-                let parts: Vec<&str> = out.stdout.trim().split('\t').collect();
-                if parts.len() == 2 {
-                    branch.base_behind = parts[0].trim().parse().ok();
-                    branch.base_ahead = parts[1].trim().parse().ok();
-                }
+            // left=base, right=branch, so (left-not-right, right-not-left) =
+            // (base_behind, base_ahead).
+            if let Ok((behind, ahead)) = git_reads().ahead_behind(path, &base, &branch.name) {
+                branch.base_behind = Some(behind);
+                branch.base_ahead = Some(ahead);
             }
             branch.base_branch = Some(base);
         }
     }
 
-    // Sort: main/primary branches first, then alphabetical
     branches.sort_by(|a, b| match (a.is_main, b.is_main) {
         (true, false) => std::cmp::Ordering::Less,
         (false, true) => std::cmp::Ordering::Greater,
         _ => a.name.cmp(&b.name),
     });
-
-    Ok(branches)
 }
 
 /// Parse `ahead` or `behind` count from a `%(upstream:track)` string.
@@ -1704,20 +1899,11 @@ pub(crate) async fn get_branches_detail(
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<Vec<BranchDetail>, String> {
-    if let Some(cached) =
-        AppState::get_cached(&state.git_cache.branches_detail, &path, GIT_CACHE_TTL)
-    {
-        return Ok(cached);
-    }
-
-    let state_arc = state.inner().clone();
-    let path_clone = path.clone();
-    let result =
-        tokio::task::spawn_blocking(move || get_branches_detail_impl(Path::new(&path_clone)))
-            .await
-            .map_err(|e| format!("spawn_blocking join error: {e}"))??;
-    AppState::set_cached(&state_arc.git_cache.branches_detail, path, result.clone());
-    Ok(result)
+    let p = path.clone();
+    cached_try(state.git_cache.branches_detail.clone(), path, move || {
+        git_reads().branches_detail(Path::new(&p))
+    })
+    .await
 }
 
 /// Core logic for fetching recently checked-out branch names from the reflog.
@@ -1783,6 +1969,77 @@ pub(crate) struct GitPanelContext {
 }
 
 /// Core logic for fetching git panel context (no caching, no Tauri state).
+/// CLI status counts via `git status --porcelain=v2` (staged/changed/conflict).
+/// Untracked entries count toward `changed` (matches the panel's prior behavior).
+pub(crate) fn status_counts_cli(path: &Path) -> crate::git_reads::StatusCounts {
+    let porcelain = git_cmd(path)
+        // `--untracked-files=all` recurses untracked directories so the badge
+        // count matches the per-file expansion in get_working_tree_status (a
+        // collapsed `? dir/` would otherwise count as 1 while the panel lists N).
+        .args(["status", "--porcelain=v2", "--untracked-files=all"])
+        .run_silent()
+        .map(|o| o.stdout)
+        .unwrap_or_default();
+
+    let mut staged = 0u32;
+    let mut changed = 0u32;
+    let mut has_conflict = false;
+
+    for line in porcelain.lines() {
+        if let Some(rest) = line.strip_prefix("1 ").or_else(|| line.strip_prefix("2 ")) {
+            // Ordinary ("1 XY ...") or rename/copy ("2 XY ...") entry.
+            let xy: Vec<char> = rest.chars().take(2).collect();
+            if xy.len() == 2 {
+                if xy[0] != '.' {
+                    staged += 1;
+                }
+                if xy[1] != '.' {
+                    changed += 1;
+                }
+            }
+        } else if line.starts_with("u ") {
+            // Unmerged entry
+            has_conflict = true;
+            changed += 1;
+        } else if line.starts_with("? ") {
+            // Untracked
+            changed += 1;
+        }
+    }
+
+    let status = if has_conflict {
+        "conflict"
+    } else if staged > 0 || changed > 0 {
+        "dirty"
+    } else {
+        "clean"
+    }
+    .to_string();
+
+    crate::git_reads::StatusCounts {
+        status,
+        staged,
+        changed,
+    }
+}
+
+/// CLI ahead/behind via `git rev-list --left-right --count <left>...<right>`.
+/// Returns `(ahead, behind)` = (commits in left not right, in right not left).
+pub(crate) fn ahead_behind_cli(repo: &Path, left: &str, right: &str) -> Result<(u32, u32), String> {
+    let range = format!("{left}...{right}");
+    let out = git_cmd(repo)
+        .args(["rev-list", "--left-right", "--count", &range])
+        .run()
+        .map_err(|e| e.to_string())?;
+    let parts: Vec<&str> = out.stdout.trim().split('\t').collect();
+    if parts.len() == 2
+        && let (Ok(a), Ok(b)) = (parts[0].parse::<u32>(), parts[1].parse::<u32>())
+    {
+        return Ok((a, b));
+    }
+    Err(format!("unexpected rev-list output: {:?}", out.stdout))
+}
+
 pub(crate) fn get_git_panel_context_impl(path: &Path) -> GitPanelContext {
     let git_dir = resolve_git_dir(path);
 
@@ -1798,60 +2055,9 @@ pub(crate) fn get_git_panel_context_impl(path: &Path) -> GitPanelContext {
             .unwrap_or_default()
     });
 
-    // Status (porcelain v2 for staged vs unstaged)
-    let (status, staged_count, changed_count) = {
-        let porcelain = git_cmd(path)
-            .args(["status", "--porcelain=v2"])
-            .run_silent()
-            .map(|o| o.stdout)
-            .unwrap_or_default();
-
-        let mut staged = 0u32;
-        let mut changed = 0u32;
-        let mut has_conflict = false;
-
-        for line in porcelain.lines() {
-            if let Some(rest) = line.strip_prefix("1 ") {
-                // Ordinary entry: "1 XY ..."
-                let xy: Vec<char> = rest.chars().take(2).collect();
-                if xy.len() == 2 {
-                    if xy[0] != '.' {
-                        staged += 1;
-                    }
-                    if xy[1] != '.' {
-                        changed += 1;
-                    }
-                }
-            } else if let Some(rest) = line.strip_prefix("2 ") {
-                // Rename/copy entry: "2 XY ..."
-                let xy: Vec<char> = rest.chars().take(2).collect();
-                if xy.len() == 2 {
-                    if xy[0] != '.' {
-                        staged += 1;
-                    }
-                    if xy[1] != '.' {
-                        changed += 1;
-                    }
-                }
-            } else if line.starts_with("u ") {
-                // Unmerged entry
-                has_conflict = true;
-                changed += 1;
-            } else if line.starts_with("? ") {
-                // Untracked
-                changed += 1;
-            }
-        }
-
-        let status_str = if has_conflict {
-            "conflict"
-        } else if staged > 0 || changed > 0 {
-            "dirty"
-        } else {
-            "clean"
-        };
-        (status_str.to_string(), staged, changed)
-    };
+    // Status (porcelain v2 for staged vs unstaged), routed through the port.
+    let counts = git_reads().status_counts(path);
+    let (status, staged_count, changed_count) = (counts.status, counts.staged, counts.changed);
 
     // Ahead/behind (only when there's an upstream)
     let (ahead, behind) = if !is_detached {
@@ -1931,20 +2137,11 @@ pub(crate) async fn get_git_panel_context(
     state: State<'_, Arc<AppState>>,
     path: String,
 ) -> Result<GitPanelContext, String> {
-    if let Some(cached) =
-        AppState::get_cached(&state.git_cache.git_panel_context, &path, GIT_CACHE_TTL)
-    {
-        return Ok(cached);
-    }
-
-    let state_arc = state.inner().clone();
-    let path_clone = path.clone();
-    let ctx =
-        tokio::task::spawn_blocking(move || get_git_panel_context_impl(Path::new(&path_clone)))
-            .await
-            .map_err(|e| format!("spawn_blocking join error: {e}"))?;
-    AppState::set_cached(&state_arc.git_cache.git_panel_context, path, ctx.clone());
-    Ok(ctx)
+    let p = path.clone();
+    cached_get(state.git_cache.git_panel_context.clone(), path, move || {
+        get_git_panel_context_impl(Path::new(&p))
+    })
+    .await
 }
 
 /// Result of a background git command execution
@@ -2280,7 +2477,16 @@ pub(crate) async fn get_working_tree_status(path: String) -> Result<WorkingTreeS
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
         let out = git_cmd(&repo_path)
-            .args(["status", "--porcelain=v2", "--branch", "--show-stash"])
+            // `--untracked-files=all` expands a wholly-untracked directory into its
+            // individual files (`? dir/a`, `? dir/b`) instead of one collapsed
+            // `? dir/` entry that ChangesTab can't open a diff for.
+            .args([
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "--show-stash",
+                "--untracked-files=all",
+            ])
             .run()
             .map_err(|e| format!("git status failed: {e}"))?;
         let mut status = parse_porcelain_v2(&out.stdout);
@@ -2568,8 +2774,8 @@ fn parse_commit_log_line(line: &str) -> Option<CommitLogEntry> {
 }
 
 const COMMIT_LOG_FORMAT: &str = "%x1e%H%x00%P%x00%D%x00%an%x00%aI%x00%s%x00%b";
-const COMMIT_LOG_MAX_COUNT: u32 = 500;
-const COMMIT_LOG_DEFAULT_COUNT: u32 = 50;
+pub(crate) const COMMIT_LOG_MAX_COUNT: u32 = 500;
+pub(crate) const COMMIT_LOG_DEFAULT_COUNT: u32 = 50;
 
 /// Validate a git object hash (4-40 hex chars). Prevents injection via `after` parameters.
 fn validate_git_hash(hash: &str) -> Result<(), String> {
@@ -2626,7 +2832,7 @@ pub(crate) async fn get_commit_log(
     count: Option<u32>,
     after: Option<String>,
 ) -> Result<Vec<CommitLogEntry>, String> {
-    tokio::task::spawn_blocking(move || get_commit_log_impl(path, count, after))
+    tokio::task::spawn_blocking(move || git_reads().commit_log(Path::new(&path), count, after))
         .await
         .map_err(|e| format!("spawn_blocking join error: {e}"))?
 }
@@ -2821,6 +3027,9 @@ pub(crate) struct BlameLine {
     pub hash: String,
     pub author: String,
     pub author_time: i64,
+    /// First line of the commit message (the subject). Shown in the editor's
+    /// inline-blame annotation; empty for commits with no message.
+    pub summary: String,
     pub line_number: u32,
     pub content: String,
 }
@@ -2831,24 +3040,27 @@ fn parse_blame_porcelain(output: &str) -> Vec<BlameLine> {
     let mut current_hash = String::new();
     let mut current_line_number: u32 = 0;
 
-    // Cache commit metadata to avoid re-parsing for consecutive lines from same commit
-    let mut commit_cache: HashMap<String, (String, i64)> = HashMap::new();
+    // Cache commit metadata (author, author-time, summary) to avoid re-parsing for
+    // consecutive lines from the same commit.
+    let mut commit_cache: HashMap<String, (String, i64, String)> = HashMap::new();
 
     let mut author = String::new();
     let mut author_time: i64 = 0;
+    let mut summary = String::new();
     let mut expecting_hash = true; // true when the next non-header line should be a commit hash
 
     for line in output.lines() {
         if let Some(content) = line.strip_prefix('\t') {
             // Content line — finalize this blame entry
-            let (cached_author, cached_time) = commit_cache
+            let (cached_author, cached_time, cached_summary) = commit_cache
                 .entry(current_hash.clone())
-                .or_insert_with(|| (author.clone(), author_time));
+                .or_insert_with(|| (author.clone(), author_time, summary.clone()));
 
             lines.push(BlameLine {
                 hash: current_hash.clone(),
                 author: cached_author.clone(),
                 author_time: *cached_time,
+                summary: cached_summary.clone(),
                 line_number: current_line_number,
                 content: content.to_string(),
             });
@@ -2877,12 +3089,15 @@ fn parse_blame_porcelain(output: &str) -> Vec<BlameLine> {
                 // Need to parse headers
                 author.clear();
                 author_time = 0;
+                summary.clear();
                 expecting_hash = false;
             }
         } else if let Some(rest) = line.strip_prefix("author ") {
             author = rest.to_string();
         } else if let Some(rest) = line.strip_prefix("author-time ") {
             author_time = rest.parse().unwrap_or(0);
+        } else if let Some(rest) = line.strip_prefix("summary ") {
+            summary = rest.to_string();
         }
     }
 
@@ -2890,29 +3105,60 @@ fn parse_blame_porcelain(output: &str) -> Vec<BlameLine> {
 }
 
 /// Get per-line blame information for a file.
+/// True if `file`'s history contains a rename. `git blame` (and gix blame)
+/// without -C/-M stop at the rename boundary, but git follows the path's rename
+/// in history while gix does not — so a renamed file must use the CLI blame for
+/// matching per-line attribution. Detected via `git log --follow --diff-filter=R`.
+pub(crate) fn file_history_has_rename(repo: &Path, file: &str) -> bool {
+    git_cmd(repo)
+        .args([
+            "log",
+            "--follow",
+            "--diff-filter=R",
+            "--format=%H",
+            "--",
+            file,
+        ])
+        .run_silent()
+        .map(|o| !o.stdout.trim().is_empty())
+        .unwrap_or(false)
+}
+
+/// Verify `file` is tracked, returning a friendly error if not (instead of
+/// git's cryptic "no such path in HEAD"). Shared by both blame adapters.
+pub(crate) fn ensure_file_tracked(repo: &Path, file: &str) -> Result<(), String> {
+    if git_cmd(repo)
+        .args(["ls-files", "--error-unmatch", file])
+        .run()
+        .is_err()
+    {
+        return Err(format!(
+            "File is not tracked by git — blame unavailable: {file}"
+        ));
+    }
+    Ok(())
+}
+
+/// CLI blame via `git blame --porcelain`. Verifies the file is tracked first so
+/// callers get a clear error instead of git's cryptic "no such path in HEAD".
+pub(crate) fn blame_cli(repo: &Path, file: &str) -> Result<Vec<BlameLine>, String> {
+    ensure_file_tracked(repo, file)?;
+
+    let out = git_cmd(repo)
+        .args(["blame", "--porcelain", file])
+        .run()
+        .map_err(|e| format!("git blame failed: {e}"))?;
+
+    Ok(parse_blame_porcelain(&out.stdout))
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn get_file_blame(path: String, file: String) -> Result<Vec<BlameLine>, String> {
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
         validate_paths_within_repo(&repo_path, std::slice::from_ref(&file))?;
-
-        // Check if file is tracked before running blame — gives a clear error
-        // instead of the cryptic "fatal: no such path ... in HEAD" from git.
-        let tracked = git_cmd(&repo_path)
-            .args(["ls-files", "--error-unmatch", &file])
-            .run();
-        if tracked.is_err() {
-            return Err(format!(
-                "File is not tracked by git — blame unavailable: {file}"
-            ));
-        }
-
-        let out = git_cmd(&repo_path)
-            .args(["blame", "--porcelain", &file])
-            .run()
-            .map_err(|e| format!("git blame failed: {e}"))?;
-
-        Ok(parse_blame_porcelain(&out.stdout))
+        // Routed through the GitReads port (Step 13 may flip to gix).
+        git_reads().blame(&repo_path, &file)
     })
     .await
     .map_err(|e| format!("spawn_blocking join error: {e}"))?
@@ -3408,6 +3654,67 @@ mod tests {
         );
     }
 
+    /// Story 001-92d0: in a LINKED worktree, `.git` is a file and shared data
+    /// (config, refs) lives in the common dir. A self-contained regression that
+    /// builds a real worktree and asserts `read_remote_url` + `detect_default_branch`
+    /// resolve via `common_git_dir` (would return None on pre-fix code).
+    #[test]
+    fn worktree_common_dir_resolves_remote_and_default_branch() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let main = dir.path().join("main");
+        std::fs::create_dir(&main).unwrap();
+        let git = |cwd: &std::path::Path, args: &[&str]| {
+            let out = Command::new("git")
+                .current_dir(cwd)
+                .args(args)
+                .env("GIT_AUTHOR_NAME", "T")
+                .env("GIT_AUTHOR_EMAIL", "t@t")
+                .env("GIT_COMMITTER_NAME", "T")
+                .env("GIT_COMMITTER_EMAIL", "t@t")
+                .output()
+                .unwrap_or_else(|e| panic!("git {args:?}: {e}"));
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&main, &["init", "-b", "main"]);
+        git(&main, &["config", "core.hooksPath", "/dev/null"]);
+        git(
+            &main,
+            &["remote", "add", "origin", "git@github.com:acme/widget.git"],
+        );
+        std::fs::write(main.join("a.txt"), "a\n").unwrap();
+        git(&main, &["add", "a.txt"]);
+        git(&main, &["commit", "-m", "init", "--no-verify"]);
+
+        // Linked worktree: its `.git` is a FILE pointing at the per-worktree gitdir.
+        let wt = dir.path().join("wt");
+        git(
+            &main,
+            &["worktree", "add", "-b", "feature", wt.to_str().unwrap()],
+        );
+        assert!(
+            wt.join(".git").is_file(),
+            "linked worktree .git should be a file"
+        );
+
+        // Pre-fix these would read the per-worktree gitdir (no config/refs) → None.
+        assert_eq!(
+            read_remote_url(&wt).as_deref(),
+            Some("git@github.com:acme/widget.git"),
+            "origin URL must resolve from inside a worktree (common dir)"
+        );
+        let gitdir = resolve_git_dir(&wt).expect("worktree gitdir");
+        assert_eq!(
+            detect_default_branch(&gitdir).as_deref(),
+            Some("main"),
+            "default branch must resolve from inside a worktree (common dir)"
+        );
+    }
+
     #[test]
     fn test_detect_default_branch_returns_none_for_non_git() {
         let tmp = std::env::temp_dir();
@@ -3432,6 +3739,80 @@ mod tests {
             err.contains("outside repository") || err.contains("Failed to resolve"),
             "unexpected error: {err}"
         );
+    }
+
+    // --- parse_diff_to_changes unit tests (ported from gitGutter.test.ts) ---
+
+    /// Collect, sorted, the 1-based new-file lines of a given change type.
+    fn lines_of(changes: &[GutterChange], ty: GutterChangeType) -> Vec<u32> {
+        let mut v: Vec<u32> = changes
+            .iter()
+            .filter(|c| c.change_type == ty)
+            .map(|c| c.line)
+            .collect();
+        v.sort_unstable();
+        v
+    }
+
+    #[test]
+    fn gutter_empty_diff_is_empty() {
+        assert_eq!(parse_diff_to_changes(""), vec![]);
+    }
+
+    #[test]
+    fn gutter_pure_insertions_are_added() {
+        let diff = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -2,1 +2,3 @@\n context\n+new one\n+new two";
+        let c = parse_diff_to_changes(diff);
+        assert_eq!(lines_of(&c, GutterChangeType::Added), vec![3, 4]);
+        assert_eq!(lines_of(&c, GutterChangeType::Modified), Vec::<u32>::new());
+        assert_eq!(lines_of(&c, GutterChangeType::Deleted), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn gutter_replaced_lines_are_modified() {
+        let diff = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -5,1 +5,1 @@\n-old text\n+new text";
+        let c = parse_diff_to_changes(diff);
+        assert_eq!(lines_of(&c, GutterChangeType::Modified), vec![5]);
+        assert_eq!(lines_of(&c, GutterChangeType::Added), Vec::<u32>::new());
+        assert_eq!(lines_of(&c, GutterChangeType::Deleted), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn gutter_add_heavy_replacement_is_modified() {
+        let diff = "@@ -3,1 +3,3 @@\n-old\n+a\n+b\n+c";
+        let c = parse_diff_to_changes(diff);
+        assert_eq!(lines_of(&c, GutterChangeType::Modified), vec![3, 4, 5]);
+    }
+
+    #[test]
+    fn gutter_pure_deletion_marks_following_line() {
+        let diff = "@@ -3,3 +3,1 @@\n keep\n-gone one\n-gone two";
+        let c = parse_diff_to_changes(diff);
+        assert_eq!(lines_of(&c, GutterChangeType::Deleted), vec![4]);
+        assert_eq!(lines_of(&c, GutterChangeType::Added), Vec::<u32>::new());
+        assert_eq!(lines_of(&c, GutterChangeType::Modified), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn gutter_new_untracked_file_all_added() {
+        let diff = "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1,3 @@\n+line1\n+line2\n+line3";
+        let c = parse_diff_to_changes(diff);
+        assert_eq!(lines_of(&c, GutterChangeType::Added), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn gutter_multiple_hunks_classified_independently() {
+        let diff = "diff --git a/f.txt b/f.txt\n--- a/f.txt\n+++ b/f.txt\n@@ -1,2 +1,2 @@\n-first old\n+first new\n second\n@@ -10,2 +10,3 @@\n ctx\n+inserted\n tail";
+        let c = parse_diff_to_changes(diff);
+        assert_eq!(lines_of(&c, GutterChangeType::Modified), vec![1]);
+        assert_eq!(lines_of(&c, GutterChangeType::Added), vec![11]);
+    }
+
+    #[test]
+    fn gutter_ignores_no_newline_marker() {
+        let diff = "@@ -1,1 +1,1 @@\n-a\n+b\n\\ No newline at end of file";
+        let c = parse_diff_to_changes(diff);
+        assert_eq!(lines_of(&c, GutterChangeType::Modified), vec![1]);
     }
 
     #[test]
@@ -3600,6 +3981,38 @@ mod tests {
     async fn get_working_tree_status_nonexistent_path() {
         let result = get_working_tree_status("/nonexistent/repo/xyz".to_string()).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_working_tree_status_expands_untracked_dir() {
+        // A wholly-untracked directory with multiple files must surface as
+        // individual file paths (`--untracked-files=all`), not a single
+        // collapsed `providers/` entry that has no diff to open.
+        let (dir, path) = setup_test_repo_with_commit();
+        std::fs::create_dir(path.join("providers")).expect("mkdir providers");
+        std::fs::write(path.join("providers/a.txt"), "a").expect("write a");
+        std::fs::write(path.join("providers/b.txt"), "b").expect("write b");
+
+        let status = get_working_tree_status(path.to_string_lossy().to_string())
+            .await
+            .unwrap();
+
+        assert!(
+            status.untracked.contains(&"providers/a.txt".to_string()),
+            "providers/a.txt should be listed individually, got {:?}",
+            status.untracked
+        );
+        assert!(
+            status.untracked.contains(&"providers/b.txt".to_string()),
+            "providers/b.txt should be listed individually, got {:?}",
+            status.untracked
+        );
+        assert!(
+            !status.untracked.iter().any(|p| p == "providers/"),
+            "collapsed providers/ entry must not appear, got {:?}",
+            status.untracked
+        );
+        drop(dir);
     }
 
     // --- validate_paths_within_repo tests ---
@@ -4142,6 +4555,7 @@ filename test.txt
         assert_eq!(lines[0].hash, "abc1234567890123456789012345678901234abcd");
         assert_eq!(lines[0].author, "Alice");
         assert_eq!(lines[0].author_time, 1700000000);
+        assert_eq!(lines[0].summary, "Initial commit");
         assert_eq!(lines[0].line_number, 1);
         assert_eq!(lines[0].content, "Hello, world!");
     }
@@ -4237,8 +4651,30 @@ filename test.txt
         assert_eq!(lines.len(), 2);
         assert_eq!(lines[0].author, "Alice");
         assert_eq!(lines[0].hash, "aaaa234567890123456789012345678901234aaaa");
+        assert_eq!(lines[0].summary, "First");
         assert_eq!(lines[1].author, "Bob");
         assert_eq!(lines[1].hash, "bbbb234567890123456789012345678901234bbbb");
+        assert_eq!(lines[1].summary, "Second");
+    }
+
+    #[test]
+    fn parse_blame_porcelain_summary_cached_across_group_lines() {
+        // The `summary` header appears only on the first line of a commit group;
+        // subsequent lines of the same commit must inherit it from the cache.
+        let output = "\
+aaaa234567890123456789012345678901234aaaa 1 1 2
+author Bob
+author-time 1700000001
+summary Add two lines
+filename test.txt
+\tLine one
+aaaa234567890123456789012345678901234aaaa 2 2
+\tLine two
+";
+        let lines = parse_blame_porcelain(output);
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].summary, "Add two lines");
+        assert_eq!(lines[1].summary, "Add two lines");
     }
 
     #[test]
@@ -4271,11 +4707,15 @@ filename test.txt
         .await;
         let lines = result.expect("should succeed for a file in the repo");
         assert!(!lines.is_empty(), "git.rs should have blame lines");
-        // Every line should have a 40-char hex hash
+        // Every line should have a 40-char hex hash. This test exercises the gix
+        // blame path (get_file_blame → git_reads().blame()), so the non-empty
+        // `summary` assertion covers gix's commit-summary population — every real
+        // commit in this repo's history has a non-empty subject line.
         for bl in &lines {
             assert_eq!(bl.hash.len(), 40, "hash should be 40 chars: {}", bl.hash);
             assert!(!bl.author.is_empty(), "author should not be empty");
             assert!(bl.author_time > 0, "author_time should be positive");
+            assert!(!bl.summary.is_empty(), "summary should not be empty");
             assert!(bl.line_number > 0, "line_number should be positive");
         }
         // Line numbers should be sequential

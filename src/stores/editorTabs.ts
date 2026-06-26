@@ -13,10 +13,16 @@ export interface EditorTabData extends BaseTab {
 	isDirty: boolean;
 	initialLine?: number; // Line to scroll to on first mount
 	externalEditable?: boolean; // Allow editing external (absolute-path) files
+	cursorLine?: number; // 1-based cursor line, surfaced for custom-launcher {line}
+	cursorCol?: number; // 1-based cursor column, surfaced for custom-launcher {column}
 }
 
 function createEditorTabsStore() {
 	const base = createTabManager<EditorTabData>("editor");
+	// Imperative per-tab handles (e.g. openSearch) so the global Cmd+F router can
+	// drive the active editor tab even when focus left the CodeMirror content
+	// (e.g. while dragging the scrollbar). Mirrors diffTabsStore / mdTabsStore.
+	const handles = new Map<string, unknown>();
 
 	return {
 		state: base.state,
@@ -30,6 +36,21 @@ function createEditorTabsStore() {
 		getCount: base.getCount,
 		setPinned: base.setPinned,
 		reorderByIds: base.reorderByIds,
+
+		/** Register an imperative handle for a tab (e.g. openSearch) */
+		setHandle(tabId: string, handle: unknown): void {
+			handles.set(tabId, handle);
+		},
+
+		/** Remove the imperative handle when a tab component unmounts */
+		clearHandle(tabId: string): void {
+			handles.delete(tabId);
+		},
+
+		/** Retrieve the imperative handle for a tab */
+		getHandle<T = unknown>(tabId: string): T | undefined {
+			return handles.get(tabId) as T | undefined;
+		},
 
 		/** Add a new editor tab (or activate existing if same file already open).
 		 *  Pass `fsRoot` via opts when the file lives in a worktree that differs from the canonical repo path. */
@@ -68,6 +89,17 @@ function createEditorTabsStore() {
 			if (base.state.tabs[id]) {
 				base._setState("tabs", id, "isDirty", isDirty);
 			}
+		},
+
+		/** Record the editor cursor position (1-based) for custom-launcher placeholders.
+		 *  This fires on every CodeMirror selection change (i.e. every keystroke); skip
+		 *  the reactive writes when the position is unchanged so idle re-selections and
+		 *  no-op transactions don't churn the store and its Toolbar subscribers. */
+		setCursor(id: string, line: number, col: number): void {
+			const tab = base.state.tabs[id];
+			if (!tab || (tab.cursorLine === line && tab.cursorCol === col)) return;
+			base._setState("tabs", id, "cursorLine", line);
+			base._setState("tabs", id, "cursorCol", col);
 		},
 
 		/** Clear all editor tabs for a repository */

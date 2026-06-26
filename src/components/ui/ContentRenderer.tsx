@@ -1,5 +1,10 @@
 import { convertFileSrc } from "@tauri-apps/api/core";
 import AnsiToHtml from "ansi-to-html";
+// dompurify pinned to 3.4.7 (exact) in package.json: 3.4.8 switched template
+// scrubbing to a NodeIterator walk that happy-dom implements incompletely, so under
+// the test env DOMPurify strips ALL tags (h1 gone) while letting <script> through.
+// Real webviews are unaffected; 3.4.7 works in both. Re-evaluate when happy-dom's
+// NodeIterator is complete.
 import DOMPurify from "dompurify";
 import { marked, type Tokens } from "marked";
 import "./markdown-content.css";
@@ -8,6 +13,14 @@ import { appLogger } from "../../stores/appLogger";
 import { stripAnsi } from "../../utils/stripAnsi";
 import { injectTweakSentinels, parseTweakComments } from "../../utils/tweakComments";
 import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
+
+/** DOMPurify's default allowed-URI schemes plus Tauri's local asset protocols
+ *  (`asset:`, `tauri:`). Without these, DOMPurify strips the rewritten image
+ *  `src` (convertFileSrc yields `asset://localhost/…` on macOS/Linux), leaving
+ *  `src=""` and a broken-image box. `http(s):` is already covered, so Windows'
+ *  `http://asset.localhost` form keeps working. */
+const ALLOWED_URI_REGEXP =
+	/^(?:(?:(?:f|ht)tps?|mailto|tel|callto|sms|cid|xmpp|asset|tauri):|[^a-z]|[a-z+.-]+(?:[^a-z+.\-:]|$))/i;
 
 /** File extensions that can be previewed inline when clicked as relative links.
  *  .md files open in a markdown tab; all others open in the file preview tab. */
@@ -138,7 +151,7 @@ async function renderMermaidBlocks(container: HTMLElement): Promise<void> {
 		}
 		for (const codeEl of codeEls) {
 			const pre = codeEl.parentElement;
-			if (!pre || pre.tagName !== "PRE" || pre.dataset.mermaidRendered) continue;
+			if (pre?.tagName !== "PRE" || pre.dataset.mermaidRendered) continue;
 			const source = codeEl.textContent?.trim();
 			if (!source) continue;
 			const id = `mermaid-${++mermaidIdCounter}`;
@@ -205,6 +218,7 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 
 			return DOMPurify.sanitize(stripEventHandlers(html), {
 				ADD_ATTR: ["data-tweak-id", "data-tweak-at", "data-tweak-comment", "data-source-line", TILDE_SENTINEL, "style"],
+				ALLOWED_URI_REGEXP,
 			});
 		} catch (err) {
 			appLogger.error("app", "Markdown parsing error", err);

@@ -38,11 +38,14 @@ vi.mock("../../stores/github", () => ({
 }));
 
 vi.mock("../../stores/repositories", () => ({
-	repositoriesStore: { getActive: vi.fn(), getRevision: vi.fn() },
+	repositoriesStore: { getActive: vi.fn(), getRevision: vi.fn(), get: vi.fn() },
 }));
 
 vi.mock("../../stores/promptLibrary", () => ({
-	promptLibraryStore: {},
+	promptLibraryStore: {
+		processContent: vi.fn(),
+		markAsUsed: vi.fn(),
+	},
 }));
 
 vi.mock("../../utils/promptContext", () => ({
@@ -55,7 +58,12 @@ vi.mock("../../transport", () => ({
 }));
 
 vi.mock("../../platform", () => ({
-	isWindows: false,
+	isWindows: () => false,
+}));
+
+const ptyMocks = vi.hoisted(() => ({
+	sendCommand: vi.fn(),
+	write: vi.fn(),
 }));
 
 vi.mock("../usePty", () => ({
@@ -63,19 +71,25 @@ vi.mock("../usePty", () => ({
 		createSession: vi.fn(),
 		closeSession: vi.fn(),
 		sendInput: vi.fn(),
+		sendCommand: ptyMocks.sendCommand,
+		write: ptyMocks.write,
 	})),
 }));
 
+import { invoke } from "../../invoke";
 import { agentConfigsStore } from "../../stores/agentConfigs";
 import { appLogger } from "../../stores/appLogger";
-import type { SavedPrompt } from "../../stores/promptLibrary";
+import { promptLibraryStore, type SavedPrompt } from "../../stores/promptLibrary";
 import { providerRegistryStore } from "../../stores/providerRegistry";
+import { terminalsStore } from "../../stores/terminals";
 import { useSmartPrompts } from "../useSmartPrompts";
 
 const mockedGetHeadlessAgent = vi.mocked(agentConfigsStore.getHeadlessAgent);
 const mockedGetHeadlessTemplate = vi.mocked(agentConfigsStore.getHeadlessTemplate);
 const mockedResolveSlot = vi.mocked(providerRegistryStore.resolveSlot);
 const mockedWarn = vi.mocked(appLogger.warn);
+const mockedGetActive = vi.mocked(terminalsStore.getActive);
+const mockedIsBusy = vi.mocked(terminalsStore.isBusy);
 
 /** Build a minimal SavedPrompt fixture with headless executionMode */
 function makePrompt(overrides: Partial<SavedPrompt> = {}): SavedPrompt {
@@ -199,5 +213,126 @@ describe("resolveHeadlessAgent — no preferred agent", () => {
 		const result = canExecute(makePrompt({ preferredAgent: undefined }));
 		expect(result.ok).toBe(false);
 		expect(result.reason).toMatch(/Headless provider not configured/);
+	});
+});
+
+describe("canExecuteInject — idle gate by inject target", () => {
+	const ACTIVE = { id: "t1", sessionId: "s1", agentType: "claude" } as unknown as ReturnType<
+		typeof terminalsStore.getActive
+	>;
+
+	beforeEach(() => {
+		mockedGetActive.mockReturnValue(ACTIVE);
+	});
+
+	it("compose target (default) is not gated by a busy agent", () => {
+		mockedIsBusy.mockReturnValue(true);
+		const { canExecute } = useSmartPrompts();
+		// injectTarget unset → defaults to "compose"
+		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: undefined }));
+		expect(result.ok).toBe(true);
+		// Idle was never consulted for compose
+		expect(mockedIsBusy).not.toHaveBeenCalled();
+	});
+
+	it("terminal target is blocked while the agent is busy", () => {
+		mockedIsBusy.mockReturnValue(true);
+		const { canExecute } = useSmartPrompts();
+		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal" }));
+		expect(result.ok).toBe(false);
+		expect(result.reason).toBe("Agent is busy");
+	});
+
+	it("terminal target is allowed when the agent is idle", () => {
+		mockedIsBusy.mockReturnValue(false);
+		const { canExecute } = useSmartPrompts();
+		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal" }));
+		expect(result.ok).toBe(true);
+	});
+
+	it("terminal target with requiresIdle=false is allowed even while busy", () => {
+		mockedIsBusy.mockReturnValue(true);
+		const { canExecute } = useSmartPrompts();
+		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "terminal", requiresIdle: false }));
+		expect(result.ok).toBe(true);
+	});
+
+	it("requires an active terminal with a detected agent regardless of target", () => {
+		mockedGetActive.mockReturnValue(undefined);
+		const { canExecute } = useSmartPrompts();
+		const result = canExecute(makePrompt({ executionMode: "inject", injectTarget: "compose" }));
+		expect(result.ok).toBe(false);
+		expect(result.reason).toBe("No active terminal");
+	});
+});
+
+describe("executeInject — routing by inject target", () => {
+	const mockedInvoke = vi.mocked(invoke);
+	const mockedProcess = vi.mocked(promptLibraryStore.processContent);
+	const PROCESSED = "PROCESSED CONTENT";
+
+	/** Active terminal with an optional compose-box ref. */
+	const activeWith = (openComposeWithText?: (t: string) => void) =>
+		({
+			id: "t1",
+			sessionId: "s1",
+			agentType: "claude",
+			ref: openComposeWithText ? { openComposeWithText } : undefined,
+		}) as unknown as ReturnType<typeof terminalsStore.getActive>;
+
+	beforeEach(() => {
+		mockedIsBusy.mockReturnValue(false);
+		// resolve_prompt_variables → no variables needed.
+		mockedInvoke.mockResolvedValue({ vars: {}, needed: [] });
+		mockedProcess.mockResolvedValue(PROCESSED);
+	});
+
+	it("compose target fills the compose box and never touches the PTY", async () => {
+		const openCompose = vi.fn();
+		mockedGetActive.mockReturnValue(activeWith(openCompose));
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(makePrompt({ executionMode: "inject", injectTarget: "compose" }));
+
+		expect(res.ok).toBe(true);
+		expect(openCompose).toHaveBeenCalledWith(PROCESSED);
+		expect(ptyMocks.sendCommand).not.toHaveBeenCalled();
+		expect(ptyMocks.write).not.toHaveBeenCalled();
+	});
+
+	it("terminal target sends straight to the agent via sendCommand", async () => {
+		mockedGetActive.mockReturnValue(activeWith());
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(makePrompt({ executionMode: "inject", injectTarget: "terminal" }));
+
+		expect(res.ok).toBe(true);
+		expect(ptyMocks.sendCommand).toHaveBeenCalledWith("s1", PROCESSED, "claude");
+		expect(ptyMocks.write).not.toHaveBeenCalled();
+	});
+
+	it("terminal target with autoExecute=false writes for review (no Enter), not sendCommand", async () => {
+		mockedGetActive.mockReturnValue(activeWith());
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(
+			makePrompt({ executionMode: "inject", injectTarget: "terminal", autoExecute: false }),
+		);
+
+		expect(res.ok).toBe(true);
+		expect(ptyMocks.sendCommand).not.toHaveBeenCalled();
+		// \x15 (NAK) clears the line before writing the reviewable text.
+		expect(ptyMocks.write).toHaveBeenCalledWith("s1", `\x15${PROCESSED}`);
+	});
+
+	it("compose target with no compose panel (web/PWA) falls back to a reviewable write", async () => {
+		mockedGetActive.mockReturnValue(activeWith()); // no openComposeWithText
+		const { executeSmartPrompt } = useSmartPrompts();
+
+		const res = await executeSmartPrompt(makePrompt({ executionMode: "inject", injectTarget: "compose" }));
+
+		expect(res.ok).toBe(true);
+		expect(ptyMocks.sendCommand).not.toHaveBeenCalled();
+		expect(ptyMocks.write).toHaveBeenCalledWith("s1", `\x15${PROCESSED}`);
 	});
 });

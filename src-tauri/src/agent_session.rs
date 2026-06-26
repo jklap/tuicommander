@@ -14,14 +14,14 @@
 //! | goose  | SQLite `~/Library/Application Support/Block/goose/sessions/sessions.db` | name field (TUIC_SESSION) |
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 /// Scan a directory for agent session files and return the ID of the newest
 /// unclaimed session, or `None` if none can be found.
 ///
 /// # Parameters
-/// - `agent_type`: one of `"claude"`, `"gemini"`, `"codex"`, `"goose"`
+/// - `agent_type`: one of `"claude"`, `"gemini"`, `"codex"`, `"goose"`, `"grok"`
 /// - `cwd`: the terminal's working directory (used to compute project-scoped paths)
 /// - `claimed_ids`: session IDs already assigned to other terminals — excluded from results
 /// - `agent_pid`: PID of the running agent process. When provided, env vars that affect
@@ -53,6 +53,7 @@ pub(crate) fn discover_agent_session(
         // Goose stores sessions in SQLite — no filesystem discovery.
         // Shell wrapper injects --name $TUIC_SESSION for deterministic binding.
         "goose" => None,
+        "grok" => discover_grok_session(&cwd, &claimed_ids),
         _ => None,
     }
 }
@@ -358,6 +359,7 @@ pub(crate) fn verify_agent_session(
         ),
         "codex" => verify_codex_session(&session_id, env.get("CODEX_HOME").map(|s| s.as_str())),
         "goose" => verify_goose_session(),
+        "grok" => verify_grok_session(&session_id, &cwd),
         _ => false,
     }
 }
@@ -461,6 +463,60 @@ fn goose_db_path() -> Option<PathBuf> {
     })
 }
 
+// ─── Grok ─────────────────────────────────────────────────────────────────────
+
+/// Base directory for grok session storage: `~/.grok/sessions/`.
+fn grok_sessions_dir() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".grok").join("sessions"))
+}
+
+/// Encode a filesystem path the way grok names its per-CWD session directory:
+/// RFC-3986 percent-encoding of the absolute path, preserving the unreserved set
+/// (ALPHA / DIGIT / `-` / `.` / `_` / `~`) and escaping everything else as `%XX`
+/// (uppercase hex). E.g. `/Users/foo.bar/proj` → `%2FUsers%2Ffoo.bar%2Fproj`.
+fn grok_path_encode(path: &str) -> String {
+    let normalised = path.replace('\\', "/");
+    let mut out = String::with_capacity(normalised.len());
+    for b in normalised.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push_str(&format!("{b:02X}"));
+        }
+    }
+    out
+}
+
+/// grok stores sessions under `~/.grok/sessions/<percent-encoded-cwd>/<UUIDv7>/`.
+/// Each session is a *directory* named with its UUIDv7 id (usable with
+/// `grok --resume <id>`); the newest such directory is the active session.
+fn discover_grok_session(cwd: &str, claimed_ids: &[String]) -> Option<String> {
+    let dir = grok_sessions_dir()?.join(grok_path_encode(cwd));
+    // DEFERRED (2026-06-13) — extractor accepts any UUID-named entry, not only
+    // directories. grok only ever creates session *directories*, and
+    // verify_grok_session() rejects non-dirs before resume, so a phantom
+    // UUID-named file would at worst yield a no-op resume. A real is_dir guard
+    // needs the entry kind threaded through newest_unclaimed_file (8 call sites).
+    newest_unclaimed_file(
+        &dir,
+        |name| is_uuid(name).then(|| name.to_string()),
+        claimed_ids,
+        Some(std::time::Duration::from_secs(300)),
+    )
+}
+
+/// Check if `~/.grok/sessions/<percent-encoded-cwd>/<session_id>/` exists.
+fn verify_grok_session(session_id: &str, cwd: &str) -> bool {
+    if !is_uuid(session_id) {
+        return false;
+    }
+    let Some(dir) = grok_sessions_dir().map(|d| d.join(grok_path_encode(cwd))) else {
+        return false;
+    };
+    dir.join(session_id).is_dir()
+}
+
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
 /// Return true if `s` matches the UUID format: 8-4-4-4-12 lowercase hex with dashes.
@@ -480,6 +536,28 @@ fn is_uuid(s: &str) -> bool {
             b.is_ascii_hexdigit()
         }
     })
+}
+
+/// Recency of a session entry. For a *file* (Claude/Gemini/Codex `.jsonl`),
+/// its own mtime. For a session *directory* (grok stores each session as a dir),
+/// the newest of the directory's own mtime and its immediate children's — a
+/// directory's own mtime only tracks entry creation/removal, not writes into
+/// existing files, so an actively-written grok session would otherwise be aged
+/// out of discovery by the `max_age` cap once it's 5 min old.
+fn entry_recency(path: &Path, meta: &std::fs::Metadata) -> SystemTime {
+    let own = meta.modified().ok();
+    if !meta.is_dir() {
+        return own.unwrap_or(SystemTime::UNIX_EPOCH);
+    }
+    let newest_child = std::fs::read_dir(path)
+        .into_iter()
+        .flatten()
+        .filter_map(|c| c.ok()?.metadata().ok()?.modified().ok())
+        .max();
+    own.into_iter()
+        .chain(newest_child)
+        .max()
+        .unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
 /// Scan `dir` for files matching `extract_id`, returning the newest unclaimed ID.
@@ -509,7 +587,7 @@ where
             let name = e.file_name().to_string_lossy().to_string();
             let id = extract_id(&name)?;
             let meta = e.metadata().ok()?;
-            let mtime = meta.modified().ok()?;
+            let mtime = entry_recency(&e.path(), &meta);
             if max_age.is_some_and(|max| now.duration_since(mtime).unwrap_or_default() > max) {
                 return None;
             }
@@ -554,6 +632,30 @@ mod tests {
         assert!(!is_uuid("af467730-5e79-49d9-8a17")); // too short
         assert!(!is_uuid("af467730-5e79-49d9-8a17-ebd94c99f262X")); // too long
         assert!(!is_uuid("zf467730-5e79-49d9-8a17-ebd94c99f262")); // non-hex
+    }
+
+    // ── grok ──
+
+    #[test]
+    fn test_grok_path_encode_matches_on_disk_layout() {
+        // Captured live: grok names its per-CWD session dir by percent-encoding
+        // the absolute path — '/' → %2F, '.' preserved.
+        assert_eq!(
+            grok_path_encode("/Users/stefano.straus/Gits/personal/tuicommander"),
+            "%2FUsers%2Fstefano.straus%2FGits%2Fpersonal%2Ftuicommander"
+        );
+        // Unreserved set is preserved; spaces and other reserved chars escape.
+        assert_eq!(grok_path_encode("/a b/c-d_e~f"), "%2Fa%20b%2Fc-d_e~f");
+    }
+
+    #[test]
+    fn test_grok_path_encode_windows_separators() {
+        assert_eq!(grok_path_encode(r"C:\Users\foo"), "C%3A%2FUsers%2Ffoo");
+    }
+
+    #[test]
+    fn test_verify_grok_session_rejects_non_uuid() {
+        assert!(!verify_grok_session("not-a-uuid", "/tmp/x"));
     }
 
     // ── path_to_claude_slug ──

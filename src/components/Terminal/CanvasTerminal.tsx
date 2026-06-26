@@ -1,4 +1,5 @@
 import { type Component, createEffect, createSignal, onCleanup, onMount } from "solid-js";
+import { lastMenuActionTime } from "../../menuDedup";
 import { isMacOS, isWindows } from "../../platform";
 import { pluginRegistry } from "../../plugins/pluginRegistry";
 import { appLogger } from "../../stores/appLogger";
@@ -16,12 +17,15 @@ import {
 	type CursorShape,
 	computeCursorRect,
 	type DecodedFrame,
+	type DecodedRow,
+	decideFrameGrid,
 	decodeBinaryFrame,
+	decodeStyledRange,
 	GUTTER_PX,
 	SCROLLBAR_PX,
+	shouldFireReconcile,
 	snapLineHeight,
 } from "./canvasTerminalUtils";
-import { fetchFontPayloads, resolveWorkerFontFaces } from "./fontAssets";
 import { installFrameTimingDebugHook, isFrameTimingEnabled, recordFrameTiming, resetFrameTiming } from "./frameTiming";
 import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } from "./glyphCache";
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
@@ -29,8 +33,6 @@ import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex } from "./linkProvider";
 import { continuationRowsAfterSuggest, isSuggestBlock } from "./suggestOverlay";
 import { altSequenceFromCode, createCompositionState, keyToSequence } from "./terminalInput";
-import { decideFrameGrid } from "./workerGridState";
-import { chooseRenderer, receiveFrame, WorkerRenderer } from "./workerProtocol";
 
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame };
@@ -76,17 +78,29 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let scrollThumbRef!: HTMLDivElement;
 	let overlayRef!: HTMLDivElement;
 	let containerRef!: HTMLDivElement;
+	// Smooth-scroll stage: wraps base + overlay canvases and gets a transient
+	// translateY during a scroll gesture (snaps back to 0 on a line boundary).
+	let stageRef!: HTMLDivElement;
+	// Behind the base canvas: paints only the one row above and one below the
+	// viewport, revealed as the stage slides. Never used for hit-testing.
+	let overscanCanvasRef!: HTMLCanvasElement;
 	let ctx!: CanvasRenderingContext2D;
 	let octx!: CanvasRenderingContext2D;
-	// Shared base-grid renderer (the single canvas2d paint implementation,
-	// also used by the render worker). Created in onMount once ctx exists.
+	let octxOverscan: CanvasRenderingContext2D | null = null;
+	let overscanRenderer: GridRenderer | null = null;
+	// Client-side styled-row cache for smooth scroll, keyed by the backend's
+	// eviction-stable absolute row index (`historyBase + grid-relative`, where
+	// historyBase counts lines already dropped from the history top). A physical line
+	// keeps its key for life — even once the scrollback cap rotates — so a cached row
+	// can never alias onto a different line and ghost/duplicate during a scroll.
+	// `requestedChunks` dedupes background range prefetches.
+	const rowCache = new Map<number, DecodedRow>();
+	const requestedChunks = new Set<number>();
+	const ROW_CACHE_CHUNK = 64;
+	const ROW_CACHE_MAX = 6000;
+	// Base-grid renderer (the canvas2d paint implementation). Created in onMount
+	// once ctx exists.
 	let gridRenderer!: GridRenderer;
-	// Renderer mode is decided once at mount (chooseRenderer). "worker" transfers
-	// the base canvas to a Web Worker; "main" uses gridRenderer on this thread.
-	// Flipping the setting only affects terminals opened afterwards.
-	let rendererMode: "worker" | "main" = "main";
-	let renderWorker: Worker | null = null;
-	let workerRenderer: WorkerRenderer | null = null;
 
 	const [metrics, setMetrics] = createSignal<CellMetrics | null>(null);
 	const [focused, setFocused] = createSignal(false);
@@ -104,9 +118,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let visibilityObserver: IntersectionObserver | undefined;
 	let lastResizeCols = 0;
 	let lastResizeRows = 0;
+	// Scrollbar track height (= canvas logical height), cached at remeasure so the
+	// per-frame scroll path never reads scrollbarRef.clientHeight (a layout-forcing
+	// read — same class as the documented getBoundingClientRect-per-frame P1).
+	let scrollbarTrackHeight = 0;
 	let transport: TerminalTransport | undefined;
 	let invokeRef: ((cmd: string, args: Record<string, unknown>) => Promise<unknown>) | undefined;
 	let rafId: number | undefined;
+	// Render-scheduling stamp: when a repaint is first requested, the gap to the rAF
+	// callback is the "sched" metric — scheduling latency under CPU load (0 = no
+	// pending request). Gated by isFrameTimingEnabled().
+	let mainDirtySince = 0;
 	let resizeDebounce: ReturnType<typeof setTimeout> | undefined;
 	let dprMediaQuery: MediaQueryList | undefined;
 	let dprChangeHandler: (() => void) | undefined;
@@ -167,9 +189,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let cachedBgDefault = "#1e1e1e";
 	let cachedFgDefault = "#d4d4d4";
 
-	// Pixel scroll accumulator: shared by wheel + touch handlers.
-	// Accumulates raw pixel delta; when it crosses cellHeight, emits a line scroll to backend.
-	let scrollAccumPx = 0;
+	// Tracks cumulative gesture distance (px) to ramp the scroll acceleration factor.
 	let scrollGestureDistPx = 0;
 
 	// Row index → row data lookup (persistent, updated incrementally)
@@ -188,6 +208,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	function writePty(data: string) {
+		// Typing jumps to the bottom — abandon any in-flight smooth scroll gesture so
+		// its transient transform/cache render doesn't fight the programmatic jump.
+		resetSmoothScroll();
 		if (currentFrame && currentFrame.displayOffset > 0) {
 			invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta: -currentFrame.displayOffset }).catch(
 				ipcErr("terminal_scroll"),
@@ -197,7 +220,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	function scheduleRepaint() {
-		if (rafId !== undefined || hidden || !alive) return;
+		// A smooth-scroll gesture owns the base canvas (rendered locally from cache);
+		// don't let backend-frame repaints fight it until the gesture settles.
+		if (scrollPosF != null) {
+			return;
+		}
+		if (rafId !== undefined) return;
+		if (hidden) {
+			return;
+		}
+		if (!alive) return;
+		// Stamp the first repaint request of this cycle ("sched" — see decl).
+		if (mainDirtySince === 0 && isFrameTimingEnabled()) {
+			mainDirtySince = performance.now();
+		}
 		rafId = requestAnimationFrame(() => {
 			rafId = undefined;
 			if (!alive || hidden) return;
@@ -205,15 +241,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (currentFrame && m) {
 				const dirty = pendingDirtyRows.size > 0 ? new Set(pendingDirtyRows) : undefined;
 				pendingDirtyRows.clear();
-				// "paint" timing measures the BASE grid paint, which only happens on main.
-				// In worker mode the worker paints the base, so we don't record it here
-				// (paintFrame paints only the cheap overlay) — keeps paint.count a true
-				// signal that the base is NOT being painted on the main thread.
-				const timing = isFrameTimingEnabled() && rendererMode === "main";
+				const timing = isFrameTimingEnabled();
+				// "sched": request->rAF-callback delay — scheduling latency / vsync rAF priority.
+				if (timing && mainDirtySince) {
+					recordFrameTiming(props.sessionId, "sched", performance.now() - mainDirtySince);
+				}
+				// "paint": the base grid paint cost.
 				const paintT0 = timing ? performance.now() : 0;
 				paintFrame(currentFrame, m, dirty);
 				if (timing) recordFrameTiming(props.sessionId, "paint", performance.now() - paintT0);
 			}
+			mainDirtySince = 0;
 		});
 	}
 
@@ -277,9 +315,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	function remeasure() {
-		// Worker mode owns the base canvas (no main `ctx`); it only needs octx + worker.
-		if (rendererMode === "main" && !ctx) return;
-		if (rendererMode === "worker" && !workerRenderer) return;
+		if (!ctx) return;
 		const rect = containerRef.getBoundingClientRect();
 		if (rect.width <= 0 || rect.height <= 0) return;
 
@@ -292,36 +328,25 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		setMetrics(m);
 
 		cachedBgDefault = getComputedStyle(canvasRef).getPropertyValue("--bg-secondary").trim() || "#1e1e1e";
-		cachedFgDefault = getComputedStyle(canvasRef).getPropertyValue("--text-primary").trim() || "#d4d4d4";
-		if (rendererMode === "main") gridRenderer.setTheme(cachedBgDefault, cachedFgDefault);
+		cachedFgDefault = getComputedStyle(canvasRef).getPropertyValue("--fg-primary").trim() || "#d4d4d4";
+		gridRenderer.setTheme(cachedBgDefault, cachedFgDefault);
 
 		const cols = Math.floor((rect.width - GUTTER_PX - SCROLLBAR_PX) / m.cellWidth);
 		const rows = Math.floor(rect.height / m.cellHeight);
 		if (cols <= 0 || rows <= 0) return;
+		// A resize invalidates the smooth-scroll geometry (cell metrics, overscan,
+		// row cache). Cancel any in-flight gesture so the new geometry takes over
+		// cleanly. Cheap no-op when no gesture is active (scrollPosF already null).
+		resetSmoothScroll();
 		const logicalW = cols * m.cellWidth + GUTTER_PX;
 		const logicalH = rows * m.cellHeight;
-		if (rendererMode === "main") {
-			// Base canvas lives on this thread.
-			canvasRef.width = logicalW * dpr;
-			canvasRef.height = logicalH * dpr;
-			ctx.scale(dpr, dpr);
-			ctx.translate(GUTTER_PX, 0);
-		} else {
-			// Worker owns the base canvas size/transform via postResize below; the
-			// element still needs its CSS box set on this thread.
-			workerRenderer?.postResize({
-				w: logicalW,
-				h: logicalH,
-				dpr,
-				cols,
-				rows,
-				metrics: m,
-				bgDefault: cachedBgDefault,
-				fgDefault: cachedFgDefault,
-				fontFamily,
-				fontWeight,
-			});
-		}
+		// Cache the scrollbar track height here (resize time) so the per-frame path
+		// uses this instead of reading scrollbarRef.clientHeight every frame.
+		scrollbarTrackHeight = logicalH;
+		canvasRef.width = logicalW * dpr;
+		canvasRef.height = logicalH * dpr;
+		ctx.scale(dpr, dpr);
+		ctx.translate(GUTTER_PX, 0);
 		canvasRef.style.width = `${logicalW}px`;
 		canvasRef.style.height = `${logicalH}px`;
 		overlayCanvasRef.width = logicalW * dpr;
@@ -330,6 +355,35 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		overlayCanvasRef.style.height = `${logicalH}px`;
 		octx.scale(dpr, dpr);
 		octx.translate(GUTTER_PX, 0);
+
+		// Overscan canvas (smooth scroll): one extra row above and below the viewport.
+		// Positioned -cellHeight so its drawing y=0 maps to the row just above the
+		// viewport; the row below is drawn at (rows+1)*cellHeight.
+		if (overscanCanvasRef) {
+			const overscanH = logicalH + 2 * m.cellHeight;
+			overscanCanvasRef.width = logicalW * dpr;
+			overscanCanvasRef.height = overscanH * dpr;
+			overscanCanvasRef.style.width = `${logicalW}px`;
+			overscanCanvasRef.style.height = `${overscanH}px`;
+			overscanCanvasRef.style.top = `${-m.cellHeight}px`;
+			if (!octxOverscan) {
+				octxOverscan = overscanCanvasRef.getContext("2d", { alpha: true });
+				if (octxOverscan) {
+					overscanRenderer = createGridRenderer(octxOverscan, {
+						fontWeight: () => settingsStore.state.fontWeight,
+						getFontFamily: () => settingsStore.getFontFamily(),
+					});
+				}
+			}
+			if (octxOverscan && overscanRenderer) {
+				octxOverscan.setTransform(1, 0, 0, 1, 0, 0);
+				octxOverscan.scale(dpr, dpr);
+				octxOverscan.translate(GUTTER_PX, 0);
+				overscanRenderer.setTheme(cachedBgDefault, cachedFgDefault);
+			}
+			rowCache.clear();
+			requestedChunks.clear();
+		}
 		if (
 			cols > 0 &&
 			rows > 0 &&
@@ -355,14 +409,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	}
 
 	function paintFrame(frame: DecodedFrame, m: CellMetrics, dirtyIndices?: Set<number>) {
-		// Base grid: main thread only. In worker mode the base is painted off-thread
-		// (Option A: main decodes + overlays, worker paints the base), so the main
-		// thread paints just the overlay here — that's what makes the cursor/selection/
-		// search/links/scrollbar interactive in worker mode.
-		if (rendererMode === "main") {
-			// Base grid → shared renderer (same impl the worker uses).
-			gridRenderer.paintGrid(rowMap, m, { fullRepaint: fullRepaintNeeded, dirtyIndices });
-		}
+		gridRenderer.paintGrid(rowMap, m, { fullRepaint: fullRepaintNeeded, dirtyIndices });
 		fullRepaintNeeded = false;
 
 		// Overlay (cursor/selection/search/links/scrollbar/suggest) always stays on main.
@@ -457,7 +504,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	function absRowToViewport(absRow: number): number | null {
 		if (!currentFrame) return null;
-		const viewportTop = currentFrame.historySize - currentFrame.displayOffset;
+		// During a smooth-scroll gesture the base is cache-rendered at overlayScrollOffset
+		// (the backend frame lags), so map overlay rows against that same offset.
+		const offset = overlayScrollOffset ?? currentFrame.displayOffset;
+		const viewportTop = currentFrame.historySize - offset;
 		const viewportRow = absRow - viewportTop;
 		if (viewportRow < 0 || viewportRow >= (currentFrame.screenRows || lastResizeRows)) return null;
 		return viewportRow;
@@ -569,7 +619,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		for (let absRi = absStartRow; absRi <= absEndRow; absRi++) {
 			const vpRow = absRowToViewport(absRi);
 			if (vpRow === null) continue;
-			const row = rowMap.get(vpRow);
+			// During a gesture rows come from the cache (keyed by the eviction-stable
+			// all-time index = historyBase + grid-relative abs); at rest from the live
+			// rowMap (keyed by viewport row). `absRi` is the grid-relative selection
+			// coordinate, so bridge it into the cache's space with historyBase.
+			const row =
+				overlayScrollOffset != null ? rowCache.get((currentFrame?.historyBase ?? 0) + absRi) : rowMap.get(vpRow);
 			if (!row) continue;
 			const y = vpRow * m.cellHeight;
 
@@ -695,8 +750,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function updateScrollbar(frame: DecodedFrame) {
 		if (!scrollbarRef || !scrollThumbRef) return;
 		const total = frame.historySize + (frame.screenRows || lastResizeRows || 24);
-		const m = metrics();
-		const visible = m ? lastResizeRows || Math.floor(canvasRef.clientHeight / m.cellHeight) : lastResizeRows || 24;
+		// visible rows = the authoritative resize row count — no per-frame
+		// canvasRef.clientHeight read (layout-forcing).
+		const visible = lastResizeRows || 24;
 
 		if (frame.historySize === 0) {
 			scrollbarRef.style.display = "none";
@@ -704,9 +760,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		scrollbarRef.style.display = "block";
 
+		// Track height comes from the resize-time cache, not scrollbarRef.clientHeight.
+		const trackH = scrollbarTrackHeight;
 		const thumbRatio = Math.min(1, visible / total);
-		const thumbHeight = Math.max(20, scrollbarRef.clientHeight * thumbRatio);
-		const scrollRange = scrollbarRef.clientHeight - thumbHeight;
+		const thumbHeight = Math.max(20, trackH * thumbRatio);
+		const scrollRange = trackH - thumbHeight;
 		const scrollPos = frame.historySize > 0 ? (1 - frame.displayOffset / frame.historySize) * scrollRange : scrollRange;
 
 		scrollThumbRef.style.height = `${thumbHeight}px`;
@@ -729,19 +787,27 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const term = terminalsStore.get(props.terminalId);
 		if (!term) return;
 		const blocks = term.commandBlocks;
+		const promptLines = term.userPromptLines;
 		const searchCount = searchMatches.length;
 		const showBlocks = blockTimestampsVisible;
-		const key = `${showBlocks ? blocks.length : 0}:${totalRows}:${showBlocks ? (blocks[blocks.length - 1]?.exitCode ?? "") : ""}:s${searchCount}:${searchCount > 0 ? searchMatches[0].row : ""}`;
+		const key = `${showBlocks ? blocks.length : 0}:${showBlocks ? promptLines.length : 0}:${totalRows}:${showBlocks ? (blocks[blocks.length - 1]?.exitCode ?? "") : ""}:s${searchCount}:${searchCount > 0 ? searchMatches[0].row : ""}`;
 		if (key === lastScrollbarMarksKey) return;
 		lastScrollbarMarksKey = key;
 
-		const trackH = scrollbarRef.clientHeight;
+		const trackH = scrollbarTrackHeight;
 		let html = "";
 		if (showBlocks) {
 			for (const block of blocks) {
 				const ratio = block.promptLine / totalRows;
 				const color = block.exitCode !== null && block.exitCode !== 0 ? "#f85149" : "rgba(88,166,255,0.5)";
 				html += `<div style="position:absolute;right:0;width:100%;height:2px;top:${ratio * trackH}px;background:${color}"></div>`;
+			}
+			// Dedicated GREEN tick at each line where the USER submitted a prompt
+			// (distinct from the blue/red agent tool-call block ticks above): few,
+			// one per turn. Drawn after the block ticks so it sits on top.
+			for (const line of promptLines) {
+				const ratio = line / totalRows;
+				html += `<div style="position:absolute;right:0;width:100%;height:2px;top:${ratio * trackH}px;background:#3fb950"></div>`;
 			}
 		}
 		if (searchCount > 0) {
@@ -776,11 +842,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// Cached suggest/intent overlay state to avoid full DOM rebuild
 	let lastSuggestOverlayKey = "";
 
-	function updateSuggestOverlay(_frame: DecodedFrame, m: CellMetrics, dirtyIndices?: Set<number>) {
+	function updateSuggestOverlay(
+		_frame: DecodedFrame,
+		m: CellMetrics,
+		dirtyIndices?: Set<number>,
+		snapshotOverride?: (i: number) => { text: string; isWrapped: boolean } | null,
+	) {
 		if (!overlayRef) return;
 
 		// Skip full rescan if no dirty rows touch suggest/intent patterns
-		if (dirtyIndices && !fullRepaintNeeded) {
+		// (skipped entirely when rendering from the cache during a scroll gesture).
+		if (!snapshotOverride && dirtyIndices && !fullRepaintNeeded) {
 			let hasSuggestContent = false;
 			for (const idx of dirtyIndices) {
 				const row = rowMap.get(idx);
@@ -800,11 +872,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const bg = cachedBgDefault;
 		const numRows = lastResizeRows || 24;
 
-		const getRowSnapshot = (i: number) => {
-			const row = rowMap.get(i);
-			if (!row) return null;
-			return { text: rowToText(row), isWrapped: false };
-		};
+		const getRowSnapshot =
+			snapshotOverride ??
+			((i: number) => {
+				const row = rowMap.get(i);
+				if (!row) return null;
+				return { text: rowToText(row), isWrapped: false };
+			});
 
 		// Build new overlay key to detect changes
 		const parts: string[] = [];
@@ -882,38 +956,356 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (currentFrame && m) repaintCursorOnly(currentFrame, m);
 	}
 
+	// Coalesced scroll: handlers compute the next absolute display offset
+	// (latest-wins) and a single rAF flush sends it to the backend, with at most
+	// one IPC in flight. Decouples input rate from IPC and avoids delta desync.
+	let pendingScrollOffset: number | null = null;
+	let scrollRafId = 0;
+	let scrollInFlight = false;
+
+	function scheduleScrollFlush() {
+		if (!scrollRafId) scrollRafId = requestAnimationFrame(flushScroll);
+	}
+	function flushScroll() {
+		scrollRafId = 0;
+		if (pendingScrollOffset == null) return;
+		if (scrollInFlight) {
+			scheduleScrollFlush(); // retry next frame, keep pending
+			return;
+		}
+		const target = pendingScrollOffset;
+		pendingScrollOffset = null;
+		scrollInFlight = true;
+		invokeRef?.("terminal_scroll_to_offset", { sessionId: props.sessionId, offset: target })
+			.catch(ipcErr("terminal_scroll_to_offset"))
+			.finally(() => {
+				scrollInFlight = false;
+			});
+	}
+
+	// --- Smooth (sub-line) scroll, main renderer only ---
+	// `scrollPosF` is the desired fractional display offset (in lines). The
+	// integer part is committed to the backend (above); the fractional remainder
+	// is shown as a transient translateY of the stage, with the adjacent overscan
+	// row sliding into view. On gesture end it animates to the nearest line.
+	// At rest (scrollPosF === null) the transform is identity → geometry unchanged.
+	let scrollPosF: number | null = null;
+	let smoothRafId = 0;
+	let overlaysHiddenForScroll = false;
+	// When non-null, the overlay (selection/cursor/search) is painted against this
+	// integer display offset + the row cache instead of the live backend frame, so
+	// it stays aligned with the cache-rendered base during a smooth-scroll gesture.
+	let overlayScrollOffset: number | null = null;
+	// True only while a gesture is actively producing deltas; false at rest (incl.
+	// a fractional rest where scrollPosF stays non-integer — we never snap to a line).
+	let isScrolling = false;
+	// We only ever hand off to normal rendering at the bottom (offset 0). Until the
+	// backend frame reaches `settlePending` we keep cache-rendering it (no jump).
+	let settlePending: number | null = null;
+	let settleTimer = 0;
+
+	// Full-frame reconciliation: partial frames (only the rows alacritty marked
+	// dirty) merge into rowMap by index, so if the grid shifts content the canvas
+	// can strand stale rows (duplicate/triplicate or vanished blocks) while the grid
+	// itself stays correct. After an output burst settles, request one full frame so
+	// the next onFrame does a fullReplace and rebuilds rowMap from the grid — a
+	// self-heal that can't drift. Gated to at-rest, following-output (offset 0).
+	let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+	function scheduleReconcile() {
+		if (reconcileTimer) clearTimeout(reconcileTimer);
+		reconcileTimer = setTimeout(() => {
+			reconcileTimer = undefined;
+			if (!shouldFireReconcile({ alive, isScrolling, scrollPosF, displayOffset: currentFrame?.displayOffset ?? -1 })) {
+				return;
+			}
+			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
+		}, 250);
+	}
+
+	function finishSettle() {
+		settleTimer = 0;
+		// A settle timer can fire after unmount; the row cache is released by then,
+		// so endSmoothScroll must not run.
+		if (!alive || settlePending == null) return;
+		settlePending = null;
+		scrollPosF = null;
+		endSmoothScroll();
+	}
+	function clearSettlePending() {
+		if (settleTimer) {
+			clearTimeout(settleTimer);
+			settleTimer = 0;
+		}
+		settlePending = null;
+	}
+
+	function scheduleSmoothRender() {
+		if (!smoothRafId)
+			smoothRafId = requestAnimationFrame(() => {
+				smoothRafId = 0;
+				renderSmooth();
+			});
+	}
+
+	// Repaint the base canvas + the partial rows above/below locally from the row
+	// cache for integer display offset `intOffset` — no backend round-trip, so it
+	// keeps up at 60fps regardless of scroll speed.
+	function renderCachedBase(intOffset: number, m: CellMetrics, rows: number, hist: number) {
+		const cacheRow = (abs: number): DecodedRow | null => rowCache.get(abs) ?? null;
+		const tempMap = new Map<number, DecodedRow>();
+		for (let r = 0; r < rows; r++) {
+			const cached = cacheRow(hist - intOffset + r);
+			if (cached) tempMap.set(r, cached.index === r ? cached : { ...cached, index: r });
+		}
+		gridRenderer.paintGrid(tempMap, m, { fullRepaint: true });
+		if (octxOverscan && overscanRenderer) {
+			const ch = m.cellHeight;
+			const w = overscanCanvasRef.width / m.dpr;
+			octxOverscan.clearRect(-GUTTER_PX, 0, w, overscanCanvasRef.height / m.dpr);
+			const above = cacheRow(hist - intOffset - 1);
+			const below = cacheRow(hist - intOffset + rows);
+			if (above) {
+				octxOverscan.fillStyle = cachedBgDefault;
+				octxOverscan.fillRect(-GUTTER_PX, 0, w, ch);
+				overscanRenderer.paintRow(above, 0, m);
+			}
+			if (below) {
+				const y = (rows + 1) * ch;
+				octxOverscan.fillStyle = cachedBgDefault;
+				octxOverscan.fillRect(-GUTTER_PX, y, w, ch);
+				overscanRenderer.paintRow(below, y, m);
+			}
+		}
+		ensureCacheBand(intOffset, rows, hist);
+		// Rebuild suggest/intent masks from the cache at this offset so they track the
+		// scrolling content instead of the lagging backend frame (no flicker, and the
+		// raw suggest line stays masked).
+		if (currentFrame) {
+			updateSuggestOverlay(currentFrame, m, undefined, (i) => {
+				const cached = cacheRow(hist - intOffset + i);
+				if (!cached) return null;
+				return { text: rowToText(cached), isWrapped: false };
+			});
+		}
+	}
+
+	function renderSmooth() {
+		// A queued smooth-render RAF can fire after unmount; the row cache it reads
+		// is released by then, so bail before touching it.
+		if (!alive || scrollPosF == null || !currentFrame) return;
+		const m = metrics();
+		if (!m) return;
+		const ch = m.cellHeight;
+		const rows = lastResizeRows || 24;
+		// All-time top-of-history index: cache keys live in this eviction-stable space.
+		const hist = currentFrame.historyBase + currentFrame.historySize;
+		const intOffset = Math.floor(scrollPosF);
+		const frac = (scrollPosF - intOffset) * ch; // [0, ch): how far past the line
+		renderCachedBase(intOffset, m, rows, hist);
+		// Repaint the selection/cursor/search overlay aligned to the cached offset so the
+		// highlight tracks the content while scrolling (the overlay canvas is inside the
+		// stage, so the fractional translate below keeps it pixel-aligned with the base).
+		overlayScrollOffset = intOffset;
+		repaintOverlay(currentFrame, m);
+		overlayScrollOffset = null;
+		stageRef.style.transform = `translate3d(0, ${frac}px, 0)`;
+		// Track the scrollbar thumb live against the fractional position (paintFrame,
+		// which normally drives it, is suppressed during the gesture).
+		updateScrollbar({ ...currentFrame, displayOffset: scrollPosF });
+	}
+
+	// Background-fetch any missing 64-row chunks in a one-screen band around the
+	// viewport so fast scrolling always has cached rows ready to paint.
+	function ensureCacheBand(intOffset: number, rows: number, hist: number) {
+		if (!invokeRef) return;
+		const lo = Math.max(0, hist - intOffset - rows);
+		const hi = hist - intOffset + 2 * rows;
+		const firstChunk = Math.floor(lo / ROW_CACHE_CHUNK);
+		const lastChunk = Math.floor(hi / ROW_CACHE_CHUNK);
+		for (let chunk = firstChunk; chunk <= lastChunk; chunk++) {
+			if (chunk < 0 || requestedChunks.has(chunk)) continue;
+			requestedChunks.add(chunk);
+			void fetchChunk(chunk);
+		}
+	}
+
+	async function fetchChunk(chunk: number) {
+		if (!invokeRef) return;
+		const start = chunk * ROW_CACHE_CHUNK;
+		try {
+			const res = (await invokeRef("terminal_styled_rows", {
+				sessionId: props.sessionId,
+				start,
+				count: ROW_CACHE_CHUNK,
+			})) as number[] | undefined;
+			// Unmounted during the await: the row cache is released, so don't
+			// repopulate it or schedule a render against it.
+			if (!alive) return;
+			// Guard the shape, not just falsiness: a wrong-typed/object response
+			// would throw in the Uint8Array constructor if the command ever changes.
+			if (!Array.isArray(res)) return;
+			const decoded = decodeStyledRange(new Uint8Array(res).buffer);
+			if (!decoded) return;
+			for (const { abs, row } of decoded.rows) rowCache.set(abs, row);
+			if (rowCache.size > ROW_CACHE_MAX) {
+				rowCache.clear();
+				requestedChunks.clear();
+			}
+			if (scrollPosF != null) scheduleSmoothRender();
+		} catch (e) {
+			requestedChunks.delete(chunk);
+			ipcErr("terminal_styled_rows")(e);
+		}
+	}
+
+	// During a gesture the cursor/selection canvas is hidden (those are anchored to
+	// the backend frame and we're not selecting while scrolling). The suggest/intent
+	// masks (overlayRef) stay visible — they're rebuilt from the cache and scroll
+	// with the content, so they neither flicker nor uncover the raw suggest text.
+	function setScrollOverlaysHidden(hidden: boolean) {
+		if (overlaysHiddenForScroll === hidden) return;
+		overlaysHiddenForScroll = hidden;
+		if (overlayCanvasRef) overlayCanvasRef.style.visibility = hidden ? "hidden" : "";
+	}
+
+	// Wipe the overscan canvas. The above/below rows are only meaningful mid-gesture
+	// while the stage slides; at rest the (opaque) base canvas covers the viewport but
+	// the overscan's below-row strip peeks out beneath it. Leaving the last gesture's
+	// row there shows it as a ghost line below the viewport, so clear on every return
+	// to rest.
+	function clearOverscan() {
+		if (!octxOverscan || !overscanCanvasRef) return;
+		const dpr = metrics()?.dpr ?? window.devicePixelRatio ?? 1;
+		octxOverscan.clearRect(-GUTTER_PX, 0, overscanCanvasRef.width / dpr, overscanCanvasRef.height / dpr);
+	}
+
+	// Leave smooth-scroll mode: restore the overlays and repaint the base from the
+	// real backend frame at its committed offset.
+	function endSmoothScroll() {
+		setScrollOverlaysHidden(false);
+		if (stageRef) stageRef.style.transform = "";
+		clearOverscan();
+		const m = metrics();
+		if (currentFrame && m) {
+			fullRepaintNeeded = true;
+			paintFrame(currentFrame, m);
+		}
+	}
+
+	// Cancel an in-flight smooth gesture and restore the resting state. Self-contained:
+	// also cancels the wheel gesture-end timer so a late resetScrollGesture can't fire
+	// after we've handed control to another scroll path (scrollbar, programmatic jump).
+	function resetSmoothScroll() {
+		clearTimeout(scrollGestureEndTimer);
+		if (smoothRafId) {
+			cancelAnimationFrame(smoothRafId);
+			smoothRafId = 0;
+		}
+		isScrolling = false;
+		clearSettlePending();
+		if (scrollPosF != null) {
+			scrollPosF = null;
+			endSmoothScroll();
+		}
+	}
+
+	// Seed the cache with the current viewport's rows so the first frame of a gesture
+	// has content to paint immediately (the band prefetch fills the rest).
+	function seedCacheFromCurrentFrame() {
+		if (!currentFrame) return;
+		const base = currentFrame.historyBase + currentFrame.historySize - currentFrame.displayOffset;
+		for (const [r, row] of rowMap) rowCache.set(base + r, row);
+	}
+
+	function applySmoothScroll(deltaLines: number) {
+		if (scrollPosF == null) {
+			// Entering a gesture: rebuild the cache from the current era (drops rows
+			// staled by scrollback eviction). The overlay is NOT hidden — renderSmooth
+			// repaints it from the cache so the selection highlight survives the scroll.
+			rowCache.clear();
+			requestedChunks.clear();
+			seedCacheFromCurrentFrame();
+		}
+		clearSettlePending();
+		isScrolling = true;
+		const hist = currentFrame?.historySize ?? 0;
+		const baseF = scrollPosF ?? currentFrame?.displayOffset ?? 0;
+		scrollPosF = Math.max(0, Math.min(hist, baseF - deltaLines));
+		// Commit the integer floor so the backend display tracks the cache base.
+		pendingScrollOffset = Math.floor(scrollPosF);
+		scheduleScrollFlush();
+		// Reached the bottom — hand off to normal rendering (resume following output)
+		// once the backend frame arrives at offset 0. No motion: 0 has no fractional part.
+		if (scrollPosF === 0) {
+			settlePending = 0;
+			if (settleTimer) clearTimeout(settleTimer);
+			settleTimer = window.setTimeout(finishSettle, 400);
+		}
+		scheduleSmoothRender();
+	}
+
+	// Gesture ended. Snap to the nearest line and hand off to normal (backend-frame)
+	// rendering so the resting state always has scrollPosF === null. The old no-snap
+	// behavior left scrollPosF at a fractional rest indefinitely; scheduleRepaint()
+	// bails while scrollPosF != null, so the base canvas would never repaint again →
+	// BLACK on the next resize / repo-switch / split-move (only on terminals that had
+	// been scrolled, hence the history-size correlation). Snapping settles scrollPosF
+	// back to null so repaints resume by construction.
+	function resetScrollGesture() {
+		isScrolling = false;
+		scrollGestureDistPx = 0;
+		if (scrollPosF == null) return;
+		const target = Math.round(scrollPosF);
+		scrollPosF = target;
+		pendingScrollOffset = target;
+		scheduleScrollFlush();
+		if (currentFrame && currentFrame.displayOffset === target) {
+			// Backend already sits on the snapped line — no new frame will arrive to
+			// trigger the onFrame handoff, so commit to normal rendering right now.
+			clearSettlePending();
+			scrollPosF = null;
+			endSmoothScroll();
+			return;
+		}
+		// Otherwise keep cache-rendering the snapped line until the backend frame
+		// reaches `target` (onFrame settle handler), with a timer as the safety net.
+		settlePending = target;
+		if (settleTimer) clearTimeout(settleTimer);
+		settleTimer = window.setTimeout(finishSettle, 400);
+		scheduleSmoothRender();
+	}
+
+	// Apply one wheel/touch delta (raw pixels) with gesture acceleration → smooth
+	// sub-line scroll.
+	function handleScrollDelta(dy: number) {
+		const m = metrics();
+		const ch = m?.cellHeight ?? 20;
+		const screenPx = ch * (lastResizeRows || 24);
+		scrollGestureDistPx += Math.abs(dy);
+		const excess = Math.max(0, scrollGestureDistPx - screenPx);
+		const factor = 0.5 + 0.5 * (excess / screenPx);
+		applySmoothScroll((dy * factor) / ch);
+	}
+
 	function onFrame(data: ArrayBuffer | number[]) {
-		// Freeze-investigation: main-thread frame work (ack+decode) runs here even
-		// in worker mode; a frame storm starving the rAF loop will breadcrumb here.
+		// Freeze-investigation: a frame storm starving the rAF loop breadcrumbs here.
 		markPerf("term.onFrame");
 		const buffer = data instanceof ArrayBuffer ? data : new Uint8Array(data).buffer;
 
-		// Frame receipt ordering (Option A — main decodes + overlays, worker paints):
-		// ack FIRST (the ticker must not starve), then ALWAYS decode on the MAIN thread
-		// — decode is cheap and keeps rowMap + currentFrame alive so the overlay
-		// (cursor/selection/links/search/scrollbar) and currentFrame-driven input work
-		// in worker mode too — then, in worker mode only, transfer the buffer to the
-		// worker for the expensive base-grid paint. Decode runs BEFORE the transfer
-		// neuters the buffer. See receiveFrame for the sacrosanct ordering.
+		// Frame receipt ordering: ack FIRST (the ack only clears the in-flight flag;
+		// the ticker sends the next frame on its own schedule, so ack must never wait
+		// on decode/paint), then decode (cheap) which keeps rowMap + currentFrame alive
+		// for the overlay (cursor/selection/links/search/scrollbar) and input semantics.
+		invokeRef?.("ack_terminal_frame", { sessionId: props.sessionId }).catch(ipcErr("ack_terminal_frame"));
 		const timing = isFrameTimingEnabled();
-		const frame = receiveFrame(buffer, {
-			ack: () => invokeRef?.("ack_terminal_frame", { sessionId: props.sessionId }).catch(ipcErr("ack_terminal_frame")),
-			decode: (buf) => {
-				const decodeT0 = timing ? performance.now() : 0;
-				const f = decodeBinaryFrame(buf);
-				if (timing) recordFrameTiming(props.sessionId, "decode", performance.now() - decodeT0);
-				return f;
-			},
-			transferToWorker:
-				rendererMode === "worker" && workerRenderer ? (buf) => workerRenderer?.postFrame(buf) : undefined,
-		});
+		const decodeT0 = timing ? performance.now() : 0;
+		const frame = decodeBinaryFrame(buffer);
+		if (timing) recordFrameTiming(props.sessionId, "decode", performance.now() - decodeT0);
 		if (!frame) return;
 
 		if (frame.bell) props.onBell?.();
 
-		// Grid decision (geom/scroll/full-replace/scroll-wait) is shared with the
-		// worker's applyFrameToGrid via decideFrameGrid, so the main overlay's rowMap
-		// and the worker's paint rowMap never diverge on what to clear/merge.
+		// Grid decision: geom/scroll/full-replace/scroll-wait for the rowMap.
 		const decision = decideFrameGrid(
 			{ lastScreenRows, lastScreenCols, lastDisplayOffset, lastHistorySize },
 			frame,
@@ -952,8 +1344,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// Scroll changed but only partial rows arrived. Old rowMap entries are keyed
 			// to the previous viewportTop — rendering them with the new displayOffset maps
 			// them to wrong screen positions, producing ghost content.
-			// Clear immediately (brief blank < ~5ms) and request a full frame. The worker
-			// (if any) already got this buffer and clears+waits in lock-step.
+			// Clear immediately (brief blank < ~5ms) and request a full frame.
 			rowMap.clear();
 			detectedLinks.clear();
 			fullRepaintNeeded = true;
@@ -969,6 +1360,45 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		currentFrame = frame;
 
+		// Partial frames merge by index and can strand stale rows (grid stays correct,
+		// canvas drifts → duplicate/vanished blocks). A full frame already rebuilt the
+		// rowMap, so only reconcile after partial frames; the debounce coalesces bursts.
+		if (!decision.fullReplace) scheduleReconcile();
+
+		// Smooth scroll: seed the client-side row cache from each frame's rows, keyed
+		// by the eviction-stable absolute index `historyBase + historySize -
+		// displayOffset + index`. `historyBase` (lines evicted from the history top)
+		// climbs by exactly what the grid-relative coordinate loses on eviction, so a
+		// physical line keeps its key for life — no stale row aliases onto a new one
+		// after the scrollback cap rotates. Also pump a live render if a gesture is active.
+		//
+		// During a fast gesture the backend frame trails the live scroll position by
+		// several lines, so its rows are keyed to a lagging displayOffset. Seeding them
+		// then would overwrite cache entries the smooth renderer is currently painting
+		// (brief flicker / wrong overscan). Only seed when at rest or when the backend
+		// has caught up to our integer offset.
+		if (scrollPosF == null || frame.displayOffset === Math.floor(scrollPosF)) {
+			for (const row of frame.rows) {
+				rowCache.set(frame.historyBase + frame.historySize - frame.displayOffset + row.index, row);
+			}
+		}
+		if (settlePending != null && frame.displayOffset === settlePending) {
+			// Backend reached the snapped line — hand off to normal rendering
+			// seamlessly (the cache render already shows this exact frame).
+			clearSettlePending();
+			scrollPosF = null;
+			endSmoothScroll();
+		} else if (isScrolling) {
+			// Active gesture: re-render against the freshly seeded cache.
+			scheduleSmoothRender();
+		} else if (scrollPosF == null && stageRef?.style.transform) {
+			// At rest on a line: clear any stray transform. (Gesture end always
+			// snaps to a line and settles scrollPosF → null, so there is no
+			// lingering fractional rest to keep a transform alive.)
+			stageRef.style.transform = "";
+			clearOverscan();
+		}
+
 		// Only compare content when the selection is fully on-screen — off-screen rows return empty
 		// strings from getLocalSelectionText() causing spurious mismatches that clear the selection.
 		if (selectionStart && cachedSelectionText && decision.fullReplace && !selectionSpansOffscreen()) {
@@ -980,7 +1410,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 		}
 
-		if (hidden) return;
+		if (hidden) {
+			return;
+		}
 		scheduleRepaint();
 		scheduleFileLinkVerification();
 	}
@@ -1389,42 +1821,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 		octx = overlayCtx;
 
-		rendererMode = chooseRenderer(
-			settingsStore.state.offscreenRenderer,
-			"transferControlToOffscreen" in HTMLCanvasElement.prototype,
-		);
-
-		if (rendererMode === "worker") {
-			// Off-main-thread: transfer the base canvas to the worker (irreversible,
-			// once-per-node) and feed it fonts. Decode + base-grid paint run there.
-			renderWorker = new Worker(new URL("./renderer.worker.ts", import.meta.url), { type: "module" });
-			workerRenderer = new WorkerRenderer(renderWorker);
-			// Worker returns drained frame buffers → recycle into the ping-pong pool.
-			renderWorker.onmessage = (e: MessageEvent) => {
-				if (e.data instanceof ArrayBuffer) workerRenderer?.recycle(e.data);
-			};
-			workerRenderer.init(canvasRef);
-			void (async () => {
-				try {
-					const faces = resolveWorkerFontFaces(settingsStore.state.font);
-					const payloads = await fetchFontPayloads(faces);
-					workerRenderer?.postFonts(payloads);
-				} catch (err) {
-					appLogger.warn("terminal", "worker font prefetch failed", { error: err });
-				}
-			})();
-		} else {
-			const baseCtx = canvasRef.getContext("2d", { alpha: false });
-			if (!baseCtx) {
-				appLogger.error("terminal", "Failed to acquire canvas 2D context");
-				return;
-			}
-			ctx = baseCtx;
-			gridRenderer = createGridRenderer(ctx, {
-				fontWeight: () => settingsStore.state.fontWeight,
-				getFontFamily: () => settingsStore.getFontFamily(),
-			});
+		const baseCtx = canvasRef.getContext("2d", { alpha: false });
+		if (!baseCtx) {
+			appLogger.error("terminal", "Failed to acquire canvas 2D context");
+			return;
 		}
+		ctx = baseCtx;
+		gridRenderer = createGridRenderer(ctx, {
+			fontWeight: () => settingsStore.state.fontWeight,
+			getFontFamily: () => settingsStore.getFontFamily(),
+		});
 		installFrameTimingDebugHook();
 		acquireCache();
 		const fontFamily = settingsStore.getFontFamily();
@@ -1480,17 +1886,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				} else if (!isVisible && !hidden) {
 					hidden = true;
 					stopBlink();
-					// Shrink to free the backing store while hidden. In worker mode the
-					// base canvas was transferred via transferControlToOffscreen(), so
-					// touching canvasRef.width/height from this thread throws
-					// InvalidStateError — only the worker may resize it (see remeasure).
-					// DEFERRED (2026-06-05) — worker-mode offscreen isn't shrunk while
-					// hidden; would need a postResize the worker repaints on. Skipped:
-					// flow control stops frames when hidden, so it just sits idle.
-					if (rendererMode === "main") {
-						canvasRef.width = 1;
-						canvasRef.height = 1;
-					}
+					// Shrink to free the backing store while hidden.
+					canvasRef.width = 1;
+					canvasRef.height = 1;
 					overlayCanvasRef.width = 1;
 					overlayCanvasRef.height = 1;
 					rowMap.clear();
@@ -1710,6 +2108,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (copyModifier && e.key.toLowerCase() === "c" && ((selectionStart && selectionEnd) || cachedSelectionText)) {
 				e.preventDefault();
 				e.stopPropagation();
+				// Skip if the native Edit > Copy accelerator (menu.rs CmdOrCtrl+C) already fired for
+				// this same keypress — otherwise we writeText() twice in <200ms, which macOS DeepL
+				// reads as a double-Cmd+C and pops up its translation overlay. Same guard as
+				// useKeyboardShortcuts.ts. The menu path (copyFromTerminal) handles the copy.
+				if (Date.now() - lastMenuActionTime < 200) return;
 				copySelection();
 				return;
 			}
@@ -2072,39 +2475,36 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		// --- Scroll ---
 
-		function resetScrollGesture() {
-			scrollAccumPx = 0;
-			scrollGestureDistPx = 0;
-		}
-
 		function handleWheel(e: WheelEvent) {
 			e.preventDefault();
 			e.stopPropagation();
-			if (currentFrame && currentFrame.mouseMode > 0) {
+			// While dragging the scrollbar thumb, ignore wheel input — otherwise it would
+			// re-enter smooth-scroll (scrollPosF != null) and re-freeze repaints mid-drag.
+			if (scrollDragging) return;
+			// Forward the wheel to the app ONLY when it owns the viewport with no
+			// scrollback to scroll — i.e. the alternate screen (vim, lazygit, htop).
+			// alacritty's alt buffer has no history, so historySize === 0 is the
+			// reliable "alt-screen" proxy. A main-screen app that enables mouse
+			// reporting WITHOUT alt-screen (e.g. `grok --no-alt-screen`) still has
+			// real scrollback, so the wheel must scroll history — forwarding it to
+			// the app left trackpad/wheel scroll dead while the scrollbar worked.
+			// Shift+wheel always scrolls the scrollback, never the app — matching the
+			// click/motion handlers' `!e.shiftKey` bypass and standard terminal UX.
+			if (currentFrame && currentFrame.mouseMode > 0 && currentFrame.historySize === 0 && !e.shiftKey) {
 				const pos = canvasToGrid(e as unknown as MouseEvent);
 				const btn = e.deltaY < 0 ? 64 : 65;
 				writePtyNoScroll(sgrMouseSequence(btn, pos.col, pos.row, true, e as unknown as MouseEvent));
 				return;
 			}
-			const m = metrics();
-			const ch = m?.cellHeight ?? 20;
-			const screenPx = ch * (lastResizeRows || 24);
-
 			const dy = e.deltaY;
-			const atBottom = currentFrame && currentFrame.displayOffset === 0;
-			const atTop = currentFrame && currentFrame.displayOffset >= currentFrame.historySize;
+			const atBottom = currentFrame && currentFrame.displayOffset === 0 && (scrollPosF == null || scrollPosF <= 0);
+			const atTop =
+				currentFrame &&
+				currentFrame.displayOffset >= currentFrame.historySize &&
+				(scrollPosF == null || scrollPosF >= currentFrame.historySize);
 			if ((atBottom && dy > 0) || (atTop && dy < 0)) return;
 
-			scrollGestureDistPx += Math.abs(dy);
-			const excess = Math.max(0, scrollGestureDistPx - screenPx);
-			const factor = 0.5 + 0.5 * (excess / screenPx);
-			scrollAccumPx += dy * factor;
-
-			const lines = Math.trunc(scrollAccumPx / ch);
-			if (lines !== 0) {
-				scrollAccumPx -= lines * ch;
-				invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta: -lines }).catch(ipcErr("terminal_scroll"));
-			}
+			handleScrollDelta(dy);
 
 			clearTimeout(scrollGestureEndTimer);
 			scrollGestureEndTimer = setTimeout(resetScrollGesture, 200);
@@ -2122,18 +2522,26 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (e.target === scrollThumbRef) return; // thumb has its own handler
 			if (!currentFrame || currentFrame.historySize === 0) return;
 			e.preventDefault();
+			// Cancel any in-flight/settling smooth gesture (scrollPosF non-null
+			// suppresses normal repaints, and the wheel gesture-end timer would
+			// otherwise re-settle over this jump) so the terminal_scroll jump below
+			// actually repaints the view.
+			resetSmoothScroll();
 			const rect = scrollbarRef.getBoundingClientRect();
 			const clickRatio = (e.clientY - rect.top) / rect.height;
 			const targetOffset = Math.round((1 - clickRatio) * currentFrame.historySize);
-			const delta = targetOffset - currentFrame.displayOffset;
-			if (delta !== 0) {
-				invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta }).catch(ipcErr("terminal_scroll"));
-			}
+			// Coalesced absolute jump (latest-wins, back-pressured) — same path as wheel/touch.
+			pendingScrollOffset = Math.max(0, Math.min(currentFrame.historySize, targetOffset));
+			scheduleScrollFlush();
 		});
 
 		scrollThumbRef.addEventListener("mousedown", (e: MouseEvent) => {
 			e.preventDefault();
 			e.stopPropagation();
+			// Cancel any in-flight/settling smooth gesture first; otherwise scrollPosF
+			// stays non-null and scheduleRepaint bails, freezing the view while we drag
+			// the thumb. (resetSmoothScroll also cancels the wheel gesture-end timer.)
+			resetSmoothScroll();
 			scrollDragging = true;
 			scrollDragStartY = e.clientY;
 			scrollDragStartOffset = currentFrame?.displayOffset ?? 0;
@@ -2143,18 +2551,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (!scrollDragging || !currentFrame) return;
 			const historySize = currentFrame.historySize;
 			if (historySize === 0) return;
-			const trackHeight = scrollbarRef.clientHeight;
+			// Use the cached track height (set in remeasure) instead of reading
+			// scrollbarRef.clientHeight — a layout-forcing read on every mousemove.
+			const trackHeight = scrollbarTrackHeight;
 			const thumbHeight = parseFloat(scrollThumbRef.style.height) || 20;
 			const scrollRange = trackHeight - thumbHeight;
 			if (scrollRange <= 0) return;
 
 			const dy = e.clientY - scrollDragStartY;
 			const offsetDelta = Math.round((dy / scrollRange) * historySize);
-			const newOffset = Math.max(0, Math.min(historySize, scrollDragStartOffset - offsetDelta));
-			const delta = newOffset - currentFrame.displayOffset;
-			if (delta !== 0) {
-				invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta }).catch(ipcErr("terminal_scroll"));
-			}
+			// Absolute target anchored to the drag start — NOT a delta vs the (async, often
+			// stale) currentFrame.displayOffset, which would overshoot on fast drags. Routed
+			// through the coalesced latest-wins flush so rapid mousemoves collapse to one IPC.
+			pendingScrollOffset = Math.max(0, Math.min(historySize, scrollDragStartOffset - offsetDelta));
+			scheduleScrollFlush();
 		};
 
 		const onScrollDragUp = () => {
@@ -2164,23 +2574,25 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		document.addEventListener("mousemove", onScrollDragMove);
 		document.addEventListener("mouseup", onScrollDragUp);
 
+		// Assign the DOM-listener cleanup NOW, before the transport.subscribe() await
+		// below. If the component unmounts mid-await, onCleanup runs while `unsubscribe`
+		// would otherwise still be undefined — leaking all four document listeners for
+		// the page lifetime. The success path augments this with transport.unsubscribe().
+		const detachDomListeners = () => {
+			document.removeEventListener("mousemove", onMouseMove);
+			document.removeEventListener("mouseup", onMouseUp);
+			document.removeEventListener("mousemove", onScrollDragMove);
+			document.removeEventListener("mouseup", onScrollDragUp);
+			if (scrollRafId) cancelAnimationFrame(scrollRafId);
+			resetSmoothScroll();
+			stopSelectionScroll();
+		};
+		unsubscribe = detachDomListeners;
+
 		// Touch input (mobile/tablet)
 		cleanupTouch = installTouchHandlers(canvasRef, touchTextareaRef, {
 			onScrollPixels: (dy) => {
-				const m = metrics();
-				const ch = m?.cellHeight ?? 20;
-				const screenPx = ch * (lastResizeRows || 24);
-				scrollGestureDistPx += Math.abs(dy);
-				const excess = Math.max(0, scrollGestureDistPx - screenPx);
-				const factor = 0.5 + 0.5 * (excess / screenPx);
-				scrollAccumPx += dy * factor;
-				const lines = Math.trunc(scrollAccumPx / ch);
-				if (lines !== 0) {
-					scrollAccumPx -= lines * ch;
-					invokeRef?.("terminal_scroll", { sessionId: props.sessionId, delta: -lines }).catch(
-						ipcErr("terminal_scroll"),
-					);
-				}
+				handleScrollDelta(dy);
 			},
 			onScrollEnd: resetScrollGesture,
 			onInput: (data) => writePty(data),
@@ -2204,12 +2616,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			transport = createTransport(props.sessionId);
 			invokeRef = (cmd, args) => transport!.invoke(cmd, args);
 			await transport.subscribe((data) => onFrame(data));
+			if (!alive) {
+				// Unmounted while subscribe() was in flight. onCleanup already ran and
+				// invoked the DOM-only unsubscribe assigned before the await — but the
+				// transport subscription is now live and would leak. Tear it down here.
+				transport.unsubscribe();
+				return;
+			}
 			unsubscribe = () => {
-				document.removeEventListener("mousemove", onMouseMove);
-				document.removeEventListener("mouseup", onMouseUp);
-				document.removeEventListener("mousemove", onScrollDragMove);
-				document.removeEventListener("mouseup", onScrollDragUp);
-				stopSelectionScroll();
+				detachDomListeners();
 				transport?.unsubscribe();
 			};
 		} catch (e) {
@@ -2217,13 +2632,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				sessionId: props.sessionId,
 				error: e,
 			});
-			unsubscribe = () => {
-				document.removeEventListener("mousemove", onMouseMove);
-				document.removeEventListener("mouseup", onMouseUp);
-				document.removeEventListener("mousemove", onScrollDragMove);
-				document.removeEventListener("mouseup", onScrollDragUp);
-				stopSelectionScroll();
-			};
+			// `unsubscribe` is already detachDomListeners (assigned before the await).
 		}
 
 		// Listen for session events via transport
@@ -2332,8 +2741,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (!alive) return;
 		settingsStore.state.theme;
 		invalidateGlyphCache();
-		// Worker mode: caches live in the worker's gridRenderer; remeasure()'s
-		// postResize re-pushes theme/font and the worker invalidates on resize.
 		gridRenderer?.invalidateCaches();
 		fullRepaintNeeded = true;
 		remeasure();
@@ -2345,7 +2752,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			| undefined;
 		try {
 			let text: string;
-			if (selectionSpansOffscreen() && invokeRef && selectionStart && selectionEnd) {
+			// Always prefer the Rust path: it unwraps soft-wrapped logical lines via the
+			// WRAPLINE flag (grid_get_selection_text), so copying a line the terminal merely
+			// wrapped for width doesn't insert a spurious newline. The JS fallback below has
+			// no wrap info (see getLocalSelectionText DEFERRED) and only runs when invoke or
+			// the selection coords are unavailable.
+			if (invokeRef && selectionStart && selectionEnd) {
 				text = (await invokeRef("terminal_get_selection_text", {
 					sessionId: props.sessionId,
 					startRow: selectionStart.row,
@@ -2353,6 +2765,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					endRow: selectionEnd.row,
 					endCol: selectionEnd.col,
 				})) as string;
+				// Fall back to the local read if the IPC path yields nothing (transient error,
+				// grid not ready). Loses wrap-unwrapping, but a wrapped copy beats a silent
+				// no-op — the onscreen path could always satisfy a copy before this routing.
+				if (!text) text = getLocalSelectionText();
 			} else {
 				text = getLocalSelectionText();
 			}
@@ -2374,6 +2790,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			cancelAnimationFrame(rafId);
 			rafId = undefined;
 		}
+		// Smooth-scroll RAF + settle timer also outlive unmount and run against the
+		// released row cache — cancel both.
+		if (smoothRafId) {
+			cancelAnimationFrame(smoothRafId);
+			smoothRafId = 0;
+		}
+		clearSettlePending();
+		if (reconcileTimer) clearTimeout(reconcileTimer);
 		clearTimeout(resizeDebounce);
 		resizeObserver?.disconnect();
 		visibilityObserver?.disconnect();
@@ -2389,11 +2813,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		rowMap.clear();
 		detectedLinks.clear();
 		gridRenderer?.invalidateCaches();
-		// Tear down the render worker (no leak): terminate + null refs. The base
-		// canvas was transferred to it, so this node's worker is single-use.
-		renderWorker?.terminate();
-		renderWorker = null;
-		workerRenderer = null;
 		releaseCache();
 	});
 
@@ -2470,39 +2889,63 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				autocapitalize="off"
 				spellcheck={false}
 			/>
-			<canvas
-				ref={canvasRef!}
-				style={{
-					display: "block",
-					outline: "none",
-					cursor: "text",
-				}}
-				tabIndex={0}
-			/>
-			{/* Overlay canvas: cursor, selection, search highlights — redrawn every frame without touching base canvas */}
-			<canvas
-				ref={overlayCanvasRef!}
-				style={{
-					position: "absolute",
-					top: "0",
-					left: "0",
-					"pointer-events": "none",
-				}}
-			/>
-			{/* Suggest/intent overlay */}
+			{/* Smooth-scroll stage: base + overlay translate together during a gesture.
+			    At rest transform is identity → geometry/coordinates are unchanged. */}
 			<div
-				ref={overlayRef!}
+				ref={stageRef!}
 				style={{
 					position: "absolute",
 					top: "0",
 					left: "0",
-					right: "0",
-					bottom: "0",
-					"pointer-events": "none",
-					"z-index": "10",
-					overflow: "hidden",
+					"will-change": "transform",
 				}}
-			/>
+			>
+				{/* Overscan: the row above/below the viewport, revealed as the stage slides.
+				    Sits behind the (opaque) base canvas; never hit-tested. */}
+				<canvas
+					ref={overscanCanvasRef!}
+					style={{
+						position: "absolute",
+						left: "0",
+						"pointer-events": "none",
+					}}
+				/>
+				<canvas
+					ref={canvasRef!}
+					style={{
+						position: "relative",
+						display: "block",
+						outline: "none",
+						cursor: "text",
+					}}
+					tabIndex={0}
+				/>
+				{/* Overlay canvas: cursor, selection, search highlights — redrawn every frame without touching base canvas */}
+				<canvas
+					ref={overlayCanvasRef!}
+					style={{
+						position: "absolute",
+						top: "0",
+						left: "0",
+						"pointer-events": "none",
+					}}
+				/>
+				{/* Suggest/intent overlay — inside the stage so it scrolls with the content
+				    (rebuilt from the row cache during a smooth-scroll gesture). */}
+				<div
+					ref={overlayRef!}
+					style={{
+						position: "absolute",
+						top: "0",
+						left: "0",
+						right: "0",
+						bottom: "0",
+						"pointer-events": "none",
+						"z-index": "10",
+						overflow: "hidden",
+					}}
+				/>
+			</div>
 			{/* Scrollbar */}
 			<div
 				ref={scrollbarRef!}
@@ -2518,16 +2961,25 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			>
 				<div
 					ref={scrollThumbRef!}
+					onMouseEnter={(e) => {
+						// Darker, subtle hover like the old terminal scrollbar (#cccccc @0.3),
+						// not the bright --fg-muted.
+						e.currentTarget.style.background = "rgba(204, 204, 204, 0.3)";
+					}}
+					onMouseLeave={(e) => {
+						e.currentTarget.style.background = "var(--bg-highlight)";
+					}}
 					style={{
 						width: "10px",
 						"margin-left": "2px",
 						"border-radius": "5px",
-						background: "var(--text-primary, rgba(255,255,255,0.3))",
-						opacity: "var(--scrollbar-opacity, 0.3)",
+						// Harmonized with the editor scrollbar: same --bg-highlight resting
+						// color, --fg-muted on hover, and a hand pointer cursor.
+						background: "var(--bg-highlight)",
 						"min-height": "20px",
 						position: "absolute",
 						top: "0",
-						cursor: "grab",
+						cursor: "pointer",
 					}}
 				/>
 			</div>
