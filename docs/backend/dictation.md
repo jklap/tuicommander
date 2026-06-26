@@ -208,8 +208,8 @@ Stored in dictation config. Applied after transcription, before injecting into t
 ## Platform Notes
 
 - **macOS:** Metal acceleration via whisper-rs (GPU-accelerated, always)
-- **Windows:** Vulkan acceleration via whisper-rs (GPU-accelerated, always — target-specific dep)
 - **Linux:** CPU-only (optional `cuda`/`vulkan` build feature)
+- **Windows:** CPU-only — the whisper.cpp Vulkan backend's `vulkan-shaders-gen` sub-build is chronically broken on the Windows CI runner (MAX_PATH/MSBuild), so we ship CPU; re-enable `vulkan` once stabilized
 - Microphone permissions deferred until first use (avoids startup permission popup)
 
 ## Microphone Permission Detection

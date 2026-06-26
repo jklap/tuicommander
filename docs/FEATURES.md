@@ -3,7 +3,7 @@
 > Canonical feature inventory. Update this file when adding, changing, or removing features.
 > See [AGENTS.md](../AGENTS.md) for the maintenance requirement.
 
-**Version:** 1.1.1 | **Last verified:** 2026-06-02
+**Version:** 1.5.0 | **Last verified:** 2026-06-26
 
 ---
 
@@ -454,6 +454,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
   - **Audio** — MP3, WAV, FLAC, AAC, M4A — rendered as `<audio>` with native controls
   - **Text / data** — TXT, JSON, CSV, LOG, XML, YAML, TOML, INI, CFG, CONF — raw text in a `<pre>` block
 - Header bar shows shortened file path with **Edit** button (pencil icon — opens file in code editor) and **Open externally** button
+- **Reload:** when a web or HTML-preview tab is active, `Cmd/Ctrl+R` reloads its content instead of opening the Run Command dialog
 - File content auto-refreshes on repository revision bumps (git change detection)
 - Uses Tauri's `convertFileSrc()` asset protocol for binary files, `read_external_file` IPC for text content
 - CSP allows `asset:` and `http://asset.localhost` in `frame-src` and `media-src`
@@ -926,8 +927,8 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 ### 9.1 Whisper Inference
 - Local processing via `whisper-rs` (no cloud)
 - macOS: GPU-accelerated via Metal
-- Windows: GPU-accelerated via Vulkan
 - Linux: CPU (optional CUDA/Vulkan build feature)
+- Windows: CPU-only (the whisper.cpp Vulkan backend's shader build is broken on the Windows CI runner; `vulkan` will be re-enabled once stabilized)
 
 ### 9.2 Models
 | Model | Size | Quality |
