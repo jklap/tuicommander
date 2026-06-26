@@ -942,7 +942,6 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 					setSelectedIndex(flatIndex());
 					containerRef?.focus();
 				}}
-				onDblClick={() => handleCheckout(branch)}
 				onContextMenu={(e) => openContextMenu(e, branch)}
 			>
 				<Show when={isLocal && branch.is_current} fallback={<span class={s.branchIconPlaceholder} />}>
