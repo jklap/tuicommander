@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-06-26
+
+### Fixed
+- **Git Log — expanded commit body overlap** — Expanding a commit in the Git Panel's Log tab no longer lets its (wrapped) body and changed-files list overlap the next row. The expanded section's real height is now measured rather than estimated from a line count that ignored wrapping.
+- **Stuck "awaiting input" badge** — A confident interactive prompt (e.g. an agent's "Enter to select" menu) answered via a channel/MCP prompt box instead of a direct keystroke no longer leaves the tab pulsing amber. The badge now also clears once the terminal has been busy (producing output, no re-detection) for a short window; a statically-waiting prompt still keeps the badge.
+- **Boot-time unhandled rejection** — Disposing a Tauri event listener that was already unregistered no longer surfaces an "undefined is not an object (listeners[eventId].handlerId)" rejection at startup; the async unlisten path is now swallowed.
+- **Dictation docs** — Corrected the documented Windows whisper acceleration (CPU-only, not Vulkan/GPU).
+
 ## [1.5.0] - 2026-06-25
 
 ### Added
