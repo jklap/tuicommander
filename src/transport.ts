@@ -132,6 +132,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	},
 	// --- MCP upstream config (proxied through server for keyring access) ---
 	load_mcp_upstreams: { map: () => ({ method: "GET", path: "/mcp/upstreams" }) },
+	get_mcp_upstream_status: { map: () => ({ method: "GET", path: "/mcp/upstream-status" }) },
 	save_mcp_upstreams: {
 		map: (args) => ({ method: "PUT", path: "/mcp/upstreams", body: args.config }),
 	},
@@ -822,6 +823,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	list_directory: {
 		map: (_args, p) => ({ method: "GET", path: `/fs/list?repoPath=${p("repoPath")}&subdir=${p("subdir")}` }),
 	},
+	search_files: {
+		map: (args, p) => {
+			let path = `/fs/search?repoPath=${p("repoPath")}&query=${p("query")}`;
+			if (args.limit != null) path += `&limit=${encodeURIComponent(String(args.limit))}`;
+			return { method: "GET", path };
+		},
+	},
 	fs_read_file: {
 		map: (_args, p) => ({ method: "GET", path: `/fs/read?repoPath=${p("repoPath")}&file=${p("file")}` }),
 	},
@@ -925,7 +933,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	get_tunnel_status: { map: (args) => ({ method: "GET", path: `/tunnels/status/${args.id}` }) },
 	get_tunnel_audit: { map: (args) => ({ method: "GET", path: `/tunnels/audit/${args.id}?limit=${args.limit || 20}` }) },
 	list_ssh_config_hosts: { map: () => ({ method: "GET", path: "/tunnels/ssh-hosts" }) },
-	list_agent_keys: { map: () => ({ method: "GET", path: "/tunnels/agent-keys" }) },
+	list_ssh_agent_keys: { map: () => ({ method: "GET", path: "/tunnels/agent-keys" }) },
 
 	// --- App Logger ---
 	push_log: {
