@@ -571,6 +571,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(session::terminal_get_lines),
         )
         .route(
+            "/sessions/{id}/terminal/styled-rows",
+            get(session::terminal_styled_rows),
+        )
+        .route(
             "/sessions/{id}/terminal/cursor-line",
             get(session::terminal_get_cursor_line),
         )
@@ -1061,6 +1065,10 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
         .route(
             "/sessions/{id}/terminal/lines",
             get(session::terminal_get_lines),
+        )
+        .route(
+            "/sessions/{id}/terminal/styled-rows",
+            get(session::terminal_styled_rows),
         )
         .route(
             "/sessions/{id}/terminal/cursor-line",

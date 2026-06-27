@@ -1402,6 +1402,24 @@ pub(super) async fn terminal_get_lines(
     Json(serde_json::json!({"lines": lines})).into_response()
 }
 
+/// Styled row range as packed bytes (same encoding as the desktop
+/// `terminal_styled_rows` command). Fills the CanvasTerminal client-side row
+/// cache so scrolled-back history renders during smooth scroll in browser mode
+/// instead of showing blank rows. Returns an empty array when the session or
+/// range is gone — the frontend treats that as "nothing to cache".
+pub(super) async fn terminal_styled_rows(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<super::types::TerminalStyledRowsQuery>,
+) -> impl IntoResponse {
+    let bytes = state
+        .vt_log_buffers
+        .get(&session_id)
+        .map(|vt| vt.lock().grid_serialize_styled_range(query.start, query.count))
+        .unwrap_or_default();
+    Json(bytes)
+}
+
 pub(super) async fn terminal_get_cursor_line(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,

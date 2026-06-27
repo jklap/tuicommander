@@ -483,6 +483,12 @@ pub(super) struct TerminalLinesQuery {
 }
 
 #[derive(Deserialize)]
+pub(super) struct TerminalStyledRowsQuery {
+    pub start: usize,
+    pub count: usize,
+}
+
+#[derive(Deserialize)]
 pub(super) struct TerminalCellQuery {
     pub row: usize,
     pub col: usize,

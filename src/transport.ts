@@ -270,6 +270,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => (data as { lines: string[] }).lines,
 		}),
 	},
+	terminal_styled_rows: {
+		map: (args) => ({
+			method: "GET",
+			path: `/sessions/${args.sessionId}/terminal/styled-rows?start=${args.start}&count=${args.count}`,
+		}),
+	},
 	terminal_get_cursor_line: {
 		map: (args) => ({
 			method: "GET",
