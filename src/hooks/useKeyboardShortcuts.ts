@@ -93,6 +93,9 @@ export interface ShortcutHandlers {
 	blockNext: () => void;
 	blockFoldToggle: () => void;
 	blockSearchToggle: () => void;
+	/** Fire a smart prompt whose configured shortcut matches `combo`. Returns
+	 *  true if a prompt was found and triggered. Built-in actions take precedence. */
+	runSmartPromptByCombo: (combo: string) => boolean;
 }
 
 /** Keys that are modifiers only — not real shortcut targets */
@@ -488,6 +491,9 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers): () => void {
 			} else if (dispatchAction(action as ActionName, handlers)) {
 				e.preventDefault();
 			}
+		} else if (handlers.runSmartPromptByCombo(combo)) {
+			// No built-in/plugin action — try a user-configured smart prompt shortcut.
+			e.preventDefault();
 		}
 	};
 

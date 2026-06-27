@@ -97,6 +97,7 @@ import { useSplitPanes } from "./hooks/useSplitPanes";
 import { useTerminalLifecycle } from "./hooks/useTerminalLifecycle";
 import { useWorktreeSwitchPrompt } from "./hooks/useWorktreeSwitchPrompt";
 import { invoke, listen } from "./invoke";
+import { normalizeCombo } from "./keybindingDefaults";
 import { setLastMenuActionTime } from "./menuDedup";
 import { activityPanelAdapter } from "./panelAdapters/activity";
 import { fileBrowserPanelAdapter } from "./panelAdapters/fileBrowser";
@@ -1951,6 +1952,25 @@ const App: Component = () => {
 					appLogger.error("app", "New file creation failed", err);
 				}
 			})();
+		},
+		runSmartPromptByCombo: (combo: string): boolean => {
+			// Any enabled prompt with a configured shortcut fires — not just those
+			// surfaced in a placement (the shortcut is set per-prompt in its editor).
+			const prompt = promptLibraryStore
+				.getAllPrompts()
+				.find((p) => p.enabled !== false && p.shortcut && normalizeCombo(p.shortcut) === combo);
+			if (!prompt) return false;
+			promptLibraryStore.markAsUsed(prompt.id);
+			smartPrompts
+				.executeSmartPrompt(prompt)
+				.then((result) => {
+					if (!result.ok) toastsStore.add(prompt.name, result.reason ?? "Failed", "warn");
+				})
+				.catch((err) => {
+					appLogger.error("prompts", `Failed to run "${prompt.name}" via shortcut`, err);
+					toastsStore.add(prompt.name, String(err), "error");
+				});
+			return true;
 		},
 	};
 

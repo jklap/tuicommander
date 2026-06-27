@@ -69,6 +69,7 @@ function createMockHandlers(): ShortcutHandlers {
 		blockNext: vi.fn(),
 		blockFoldToggle: vi.fn(),
 		blockSearchToggle: vi.fn(),
+		runSmartPromptByCombo: vi.fn(() => false),
 	};
 }
 

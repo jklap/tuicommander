@@ -81,6 +81,7 @@ function createMockHandlers(): ShortcutHandlers {
 		blockNext: vi.fn(),
 		blockFoldToggle: vi.fn(),
 		blockSearchToggle: vi.fn(),
+		runSmartPromptByCombo: vi.fn(() => false),
 	};
 }
 
@@ -135,6 +136,21 @@ describe("useKeyboardShortcuts", () => {
 		it("Cmd+0 resets zoom", () => {
 			fireKeydown("0", { metaKey: true });
 			expect(handlers.zoomReset).toHaveBeenCalled();
+		});
+	});
+
+	describe("smart prompt shortcuts", () => {
+		it("fires runSmartPromptByCombo for a combo with no built-in action", () => {
+			(handlers.runSmartPromptByCombo as ReturnType<typeof vi.fn>).mockReturnValue(true);
+			const event = fireKeydown("y", { metaKey: true, shiftKey: true });
+			expect(handlers.runSmartPromptByCombo).toHaveBeenCalledWith("cmd+shift+y");
+			expect(event.defaultPrevented).toBe(true);
+		});
+
+		it("does not run a smart prompt when a built-in action matches (precedence)", () => {
+			fireKeydown("t", { metaKey: true });
+			expect(handlers.createNewTerminal).toHaveBeenCalled();
+			expect(handlers.runSmartPromptByCombo).not.toHaveBeenCalled();
 		});
 	});
 
