@@ -319,6 +319,17 @@ describe("transport", () => {
 			expect(result.transform?.(null)).toBeNull();
 		});
 
+		it("maps write_plugin_data to POST with content body", () => {
+			const result = mapCommandToHttp("write_plugin_data", {
+				pluginId: "my-plugin",
+				path: "credential-consent-anthropic",
+				content: "allowed",
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/api/plugins/my-plugin/data/credential-consent-anthropic");
+			expect(result.body).toEqual({ content: "allowed" });
+		});
+
 		it("maps resolve_terminal_path to GET with null-passthrough transform", () => {
 			const result = mapCommandToHttp("resolve_terminal_path", { cwd: "/repo", candidate: "src/x.ts" });
 			expect(result.method).toBe("GET");

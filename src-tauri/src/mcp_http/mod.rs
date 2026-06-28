@@ -355,6 +355,24 @@ async fn plugin_data_http(AxumPath((plugin_id, path)): AxumPath<(String, String)
     }
 }
 
+#[derive(serde::Deserialize)]
+struct PluginDataWriteBody {
+    content: String,
+}
+
+/// Persist plugin data over HTTP (browser/PWA parity for the credential-consent flow,
+/// which calls `write_plugin_data`). Reuses the same sandboxed write logic as the Tauri
+/// command. (`delete_plugin_data` has no frontend caller, so no route is added for it.)
+async fn plugin_data_write_http(
+    AxumPath((plugin_id, path)): AxumPath<(String, String)>,
+    Json(body): Json<PluginDataWriteBody>,
+) -> Response {
+    match crate::plugins::write_plugin_data(plugin_id, path, body.content) {
+        Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
 /// Return the VAPID public key so the frontend can call PushManager.subscribe().
 /// No auth required — the public key is not secret.
 async fn push_vapid_key(State(state): State<Arc<AppState>>) -> Response {
@@ -1121,7 +1139,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         // Plugin data (for external HTTP clients)
         .route(
             "/api/plugins/{plugin_id}/data/{*path}",
-            get(plugin_data_http),
+            get(plugin_data_http).post(plugin_data_write_http),
         )
         // Push notification API
         .route("/api/push/vapid-key", get(push_vapid_key))

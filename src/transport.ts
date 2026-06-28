@@ -504,7 +504,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		}),
 	},
 
-	// --- Plugin data (read-only here; write/delete routes are tracked in story 071) ---
+	// --- Plugin data ---
 	// Tauri contract is Option<String>: missing key → null. The route 404s on miss,
 	// which notFoundAsNull bridges back to null. Found content is returned as a string
 	// to match the command's String payload (the route may sniff JSON and parse it).
@@ -514,6 +514,16 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/api/plugins/${p("pluginId")}/data/${p("path")}`,
 			notFoundAsNull: true,
 			transform: (data) => (data == null ? null : typeof data === "string" ? data : JSON.stringify(data)),
+		}),
+	},
+	// write_plugin_data: POST to the same path; content travels in the body. Fixes the
+	// browser-mode credential-consent flow (pluginRegistry.ts) which threw before this.
+	// delete_plugin_data has no frontend caller, so it is intentionally not mapped.
+	write_plugin_data: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/data/${p("path")}`,
+			body: { content: args.content },
 		}),
 	},
 
