@@ -706,6 +706,105 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	github_diagnostics: {
 		map: () => ({ method: "GET", path: "/github/diagnostics" }),
 	},
+	// --- Story 066: config / themes / notes / misc ---
+	load_ai_prompts: {
+		map: () => ({ method: "GET", path: "/config/ai-prompts" }),
+	},
+	save_ai_prompts: {
+		map: (args) => ({ method: "PUT", path: "/config/ai-prompts", body: args.config }),
+	},
+	save_repo_local_config: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/repo-local-config",
+			body: { repoPath: args.repoPath },
+		}),
+	},
+	set_branch_label: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/branch-label",
+			body: { repoPath: args.repoPath, branchName: args.branchName, label: args.label },
+		}),
+	},
+	save_note_image: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/note-image",
+			body: { noteId: args.noteId, dataBase64: args.dataBase64, extension: args.extension },
+		}),
+	},
+	delete_note_assets: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/note-assets/delete",
+			body: { noteId: args.noteId },
+		}),
+	},
+	delete_note_assets_batch: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/note-assets/delete-batch",
+			body: { noteIds: args.noteIds },
+		}),
+	},
+	list_themes: {
+		map: () => ({ method: "GET", path: "/config/themes" }),
+	},
+	set_project_mcp_upstreams: {
+		map: (args) => ({
+			method: "POST",
+			path: "/config/project-mcp-upstreams",
+			body: { repoPath: args.repoPath, upstreamNames: args.upstreamNames },
+		}),
+	},
+	execute_shell_script: {
+		map: (args) => ({
+			method: "POST",
+			path: "/exec/shell-script",
+			body: {
+				scriptContent: args.scriptContent,
+				timeoutMs: args.timeoutMs,
+				repoPath: args.repoPath,
+			},
+		}),
+	},
+	list_audio_output_devices: {
+		map: () => ({ method: "GET", path: "/audio/output-devices" }),
+	},
+	discover_agent_session: {
+		map: (args) => ({
+			method: "POST",
+			path: "/agent/discover-session",
+			body: {
+				agentType: args.agentType,
+				cwd: args.cwd,
+				claimedIds: args.claimedIds,
+				agentPid: args.agentPid,
+				envOverrides: args.envOverrides,
+			},
+		}),
+	},
+	claude_project_dir: {
+		map: (args) => ({
+			method: "POST",
+			path: "/agent/claude-project-dir",
+			body: { cwd: args.cwd, claudeConfigDir: args.claudeConfigDir },
+		}),
+	},
+	open_in_custom: {
+		map: (args) => ({
+			method: "POST",
+			path: "/agent/open-in-custom",
+			body: { executable: args.executable, args: args.args, ctx: args.ctx },
+		}),
+	},
+	generate_value: {
+		map: (args) => ({ method: "POST", path: "/generators/generate", body: { request: args.request } }),
+	},
+	fetch_plugin_registry: {
+		map: () => ({ method: "GET", path: "/registry/plugins" }),
+	},
 	github_start_polling: {
 		map: (args) => ({
 			method: "POST",

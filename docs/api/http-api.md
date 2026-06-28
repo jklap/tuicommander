@@ -745,6 +745,36 @@ PUT /config
 
 Load/save `AppConfig`.
 
+### Config / themes / notes / misc parity (story 066)
+
+Browser/PWA parity for assorted stateless commands. Loopback router only.
+Mutating/action routes carry the `require_local_or_auth` guard; reads do not.
+
+```
+GET  /config/ai-prompts                      -> AiPromptsConfig
+PUT  /config/ai-prompts        (AiPromptsConfig)            -> { ok }
+POST /config/repo-local-config { repoPath }                -> { ok }   (GET = read)
+POST /config/branch-label      { repoPath, branchName, label? } -> { ok }
+POST /config/note-image        { noteId, dataBase64, extension } -> string (path)
+POST /config/note-assets/delete       { noteId }           -> { ok }
+POST /config/note-assets/delete-batch { noteIds }          -> { ok }
+GET  /config/themes                          -> ThemeEntry[]
+POST /config/project-mcp-upstreams { repoPath, upstreamNames? } -> { ok }
+POST /exec/shell-script        { scriptContent, timeoutMs, repoPath } -> string  [guarded]
+GET  /audio/output-devices                   -> AudioOutputDevice[] (empty on remote)
+POST /agent/discover-session   { agentType, cwd, claimedIds, agentPid?, envOverrides } -> string|null
+POST /agent/claude-project-dir { cwd, claudeConfigDir? }   -> string
+POST /agent/open-in-custom     { executable, args, ctx }   -> { ok }   [guarded]
+POST /generators/generate      { request }                 -> GeneratorResult  [guarded]
+GET  /registry/plugins                       -> RegistryEntry[]
+```
+
+Intentionally NOT mapped (no frontend `invoke()` caller — YAGNI): `load_app_config`,
+`save_app_config`, `get_note_images_dir`, `process_prompt_content_shell_safe`,
+`detect_claude_binary`, `mdkb_code_find`. Skipped as integration/stateful (separate
+follow-up): `set_ansi_colors` (PTY ring-buffer state), the `mdkb_*` daemon commands,
+`install_agent_mcp`/`remove_agent_mcp` (config-file writes, also no caller).
+
 ### Hash Password
 
 ```

@@ -665,6 +665,92 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_auth_status", {}).method).toBe("GET");
 			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
 		});
+
+		it("maps ai-prompts load/save", () => {
+			expect(mapCommandToHttp("load_ai_prompts", {}).path).toBe("/config/ai-prompts");
+			expect(mapCommandToHttp("load_ai_prompts", {}).method).toBe("GET");
+			const save = mapCommandToHttp("save_ai_prompts", { config: { a: 1 } });
+			expect(save.method).toBe("PUT");
+			expect(save.path).toBe("/config/ai-prompts");
+			expect(save.body).toEqual({ a: 1 });
+		});
+
+		it("maps note asset commands", () => {
+			const img = mapCommandToHttp("save_note_image", {
+				noteId: "n1",
+				dataBase64: "AAA",
+				extension: "png",
+			});
+			expect(img.path).toBe("/config/note-image");
+			expect(img.body).toEqual({ noteId: "n1", dataBase64: "AAA", extension: "png" });
+			expect(mapCommandToHttp("delete_note_assets", { noteId: "n1" }).path).toBe(
+				"/config/note-assets/delete",
+			);
+			const batch = mapCommandToHttp("delete_note_assets_batch", { noteIds: ["a", "b"] });
+			expect(batch.path).toBe("/config/note-assets/delete-batch");
+			expect(batch.body).toEqual({ noteIds: ["a", "b"] });
+		});
+
+		it("maps config/themes/mcp-upstreams commands", () => {
+			expect(mapCommandToHttp("list_themes", {}).path).toBe("/config/themes");
+			const rlc = mapCommandToHttp("save_repo_local_config", { repoPath: "/r" });
+			expect(rlc.method).toBe("POST");
+			expect(rlc.body).toEqual({ repoPath: "/r" });
+			const bl = mapCommandToHttp("set_branch_label", {
+				repoPath: "/r",
+				branchName: "feat",
+				label: "x",
+			});
+			expect(bl.path).toBe("/config/branch-label");
+			expect(bl.body).toEqual({ repoPath: "/r", branchName: "feat", label: "x" });
+			const up = mapCommandToHttp("set_project_mcp_upstreams", {
+				repoPath: "/r",
+				upstreamNames: ["a"],
+			});
+			expect(up.path).toBe("/config/project-mcp-upstreams");
+			expect(up.body).toEqual({ repoPath: "/r", upstreamNames: ["a"] });
+		});
+
+		it("maps misc command parity (shell/audio/agent/generators/registry)", () => {
+			const sh = mapCommandToHttp("execute_shell_script", {
+				scriptContent: "echo hi",
+				timeoutMs: 5000,
+				repoPath: "/r",
+			});
+			expect(sh.method).toBe("POST");
+			expect(sh.path).toBe("/exec/shell-script");
+			expect(sh.body).toEqual({ scriptContent: "echo hi", timeoutMs: 5000, repoPath: "/r" });
+			expect(mapCommandToHttp("list_audio_output_devices", {}).path).toBe("/audio/output-devices");
+			const disc = mapCommandToHttp("discover_agent_session", {
+				agentType: "claude",
+				cwd: "/r",
+				claimedIds: [],
+				agentPid: 123,
+				envOverrides: {},
+			});
+			expect(disc.path).toBe("/agent/discover-session");
+			expect(disc.body).toEqual({
+				agentType: "claude",
+				cwd: "/r",
+				claimedIds: [],
+				agentPid: 123,
+				envOverrides: {},
+			});
+			expect(mapCommandToHttp("claude_project_dir", { cwd: "/r", claudeConfigDir: null }).path).toBe(
+				"/agent/claude-project-dir",
+			);
+			const oic = mapCommandToHttp("open_in_custom", {
+				executable: "code",
+				args: ["-g"],
+				ctx: { repo: "/r" },
+			});
+			expect(oic.path).toBe("/agent/open-in-custom");
+			expect(oic.body).toEqual({ executable: "code", args: ["-g"], ctx: { repo: "/r" } });
+			const gen = mapCommandToHttp("generate_value", { request: { type: "password" } });
+			expect(gen.path).toBe("/generators/generate");
+			expect(gen.body).toEqual({ request: { type: "password" } });
+			expect(mapCommandToHttp("fetch_plugin_registry", {}).path).toBe("/registry/plugins");
+		});
 	});
 
 	describe("rpc()", () => {

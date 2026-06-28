@@ -767,11 +767,66 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         )
         .route(
             "/config/repo-local-config",
-            get(config_routes::get_repo_local_config),
+            get(config_routes::get_repo_local_config)
+                .post(config_routes::save_repo_local_config_http),
+        )
+        // Story 066: config / themes / notes / misc stateless parity (loopback)
+        .route(
+            "/config/branch-label",
+            post(config_routes::set_branch_label_http),
+        )
+        .route(
+            "/config/note-image",
+            post(config_routes::save_note_image_http),
+        )
+        .route(
+            "/config/note-assets/delete",
+            post(config_routes::delete_note_assets_http),
+        )
+        .route(
+            "/config/note-assets/delete-batch",
+            post(config_routes::delete_note_assets_batch_http),
+        )
+        .route("/config/themes", get(config_routes::list_themes_http))
+        .route(
+            "/config/project-mcp-upstreams",
+            post(config_routes::set_project_mcp_upstreams_http),
+        )
+        .route(
+            "/exec/shell-script",
+            post(config_routes::execute_shell_script_http),
+        )
+        .route(
+            "/audio/output-devices",
+            get(config_routes::list_audio_output_devices_http),
+        )
+        .route(
+            "/agent/discover-session",
+            post(config_routes::discover_agent_session_http),
+        )
+        .route(
+            "/agent/claude-project-dir",
+            post(config_routes::claude_project_dir_http),
+        )
+        .route(
+            "/agent/open-in-custom",
+            post(config_routes::open_in_custom_http),
+        )
+        .route(
+            "/generators/generate",
+            post(config_routes::generate_value_http),
+        )
+        .route(
+            "/registry/plugins",
+            get(config_routes::fetch_plugin_registry_http),
         )
         .route(
             "/config/prompt-library",
             get(config_routes::get_prompt_library).put(config_routes::put_prompt_library),
+        )
+        .route(
+            "/config/ai-prompts",
+            get(config_routes::get_ai_prompts_http).put(config_routes::put_ai_prompts_http),
         )
         .route(
             "/config/activity",

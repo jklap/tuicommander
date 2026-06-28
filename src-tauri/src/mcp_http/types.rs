@@ -445,6 +445,94 @@ pub(super) struct GithubPollLoginRequest {
     pub device_code: String,
 }
 
+// --- Config / themes / notes / misc (story 066) ---
+
+#[derive(Deserialize)]
+pub(super) struct SaveRepoLocalConfigRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SetBranchLabelRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    #[serde(rename = "branchName")]
+    pub branch_name: String,
+    pub label: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SaveNoteImageRequest {
+    #[serde(rename = "noteId")]
+    pub note_id: String,
+    #[serde(rename = "dataBase64")]
+    pub data_base64: String,
+    pub extension: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct DeleteNoteAssetsRequest {
+    #[serde(rename = "noteId")]
+    pub note_id: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct DeleteNoteAssetsBatchRequest {
+    #[serde(rename = "noteIds")]
+    pub note_ids: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ExecuteShellScriptRequest {
+    #[serde(rename = "scriptContent")]
+    pub script_content: String,
+    #[serde(rename = "timeoutMs")]
+    pub timeout_ms: u64,
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct DiscoverAgentSessionRequest {
+    #[serde(rename = "agentType")]
+    pub agent_type: String,
+    pub cwd: String,
+    #[serde(rename = "claimedIds")]
+    pub claimed_ids: Vec<String>,
+    #[serde(rename = "agentPid")]
+    pub agent_pid: Option<u32>,
+    #[serde(rename = "envOverrides")]
+    pub env_overrides: std::collections::HashMap<String, String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ClaudeProjectDirRequest {
+    pub cwd: String,
+    #[serde(rename = "claudeConfigDir")]
+    pub claude_config_dir: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct OpenInCustomRequest {
+    pub executable: String,
+    pub args: Vec<String>,
+    pub ctx: crate::agent::LaunchContext,
+}
+
+#[derive(Deserialize)]
+pub(super) struct GenerateValueRequest {
+    pub request: crate::generators::GeneratorRequest,
+}
+
+#[derive(Deserialize)]
+pub(super) struct SetProjectMcpUpstreamsRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    #[serde(rename = "upstreamNames")]
+    pub upstream_names: Option<Vec<String>>,
+}
+
 // --- GitPanel commands ---
 
 #[derive(Deserialize)]

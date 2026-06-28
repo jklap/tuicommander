@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use super::guards::{Authenticated, require_local_or_auth};
 use super::types::*;
+use super::{err_500, json_result, validate_repo_path};
 
 pub(super) async fn get_config(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -583,6 +584,203 @@ pub(super) async fn delete_remote_connection(
         )
             .into_response(),
     }
+}
+
+// --- Story 066: config / themes / notes / misc stateless parity (loopback router) ---
+//
+// Mutating / action handlers carry the same `require_local_or_auth` guard as the
+// other config writes in this file. Pure reads skip it (matching get_prompt_library
+// / get_repo_local_config). `/exec/shell-script` and `/agent/open-in-custom` run
+// processes, so they are guarded.
+
+pub(super) async fn get_ai_prompts_http() -> impl IntoResponse {
+    Json(crate::config::load_ai_prompts())
+}
+
+pub(super) async fn put_ai_prompts_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(config): Json<crate::config::AiPromptsConfig>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::config::save_ai_prompts(config))
+}
+
+pub(super) async fn save_repo_local_config_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<SaveRepoLocalConfigRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    json_result(crate::config::save_repo_local_config(body.repo_path))
+}
+
+pub(super) async fn set_branch_label_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<SetBranchLabelRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    json_result(crate::config::set_branch_label(
+        body.repo_path,
+        body.branch_name,
+        body.label,
+    ))
+}
+
+pub(super) async fn save_note_image_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<SaveNoteImageRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::config::save_note_image(
+        body.note_id,
+        body.data_base64,
+        body.extension,
+    ))
+}
+
+pub(super) async fn delete_note_assets_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<DeleteNoteAssetsRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::config::delete_note_assets(body.note_id))
+}
+
+pub(super) async fn delete_note_assets_batch_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<DeleteNoteAssetsBatchRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::config::delete_note_assets_batch(body.note_ids))
+}
+
+pub(super) async fn list_themes_http() -> impl IntoResponse {
+    let themes_dir = crate::config::config_dir().join("themes");
+    Json(crate::themes::load_themes(&themes_dir))
+}
+
+pub(super) async fn execute_shell_script_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<ExecuteShellScriptRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    json_result(
+        crate::smart_prompt::execute_shell_script(
+            body.script_content,
+            body.timeout_ms,
+            body.repo_path,
+        )
+        .await,
+    )
+}
+
+pub(super) async fn list_audio_output_devices_http() -> impl IntoResponse {
+    // `notification_sound` is desktop-only; a headless remote daemon has no audio
+    // output context, so it reports an empty device list.
+    #[cfg(feature = "desktop")]
+    let devices = crate::notification_sound::list_output_devices();
+    #[cfg(not(feature = "desktop"))]
+    let devices: Vec<serde_json::Value> = Vec::new();
+    Json(devices)
+}
+
+pub(super) async fn discover_agent_session_http(
+    Json(body): Json<DiscoverAgentSessionRequest>,
+) -> impl IntoResponse {
+    Json(crate::agent_session::discover_agent_session(
+        body.agent_type,
+        body.cwd,
+        body.claimed_ids,
+        body.agent_pid,
+        body.env_overrides,
+    ))
+}
+
+pub(super) async fn claude_project_dir_http(
+    Json(body): Json<ClaudeProjectDirRequest>,
+) -> axum::response::Response {
+    json_result(crate::agent_session::claude_project_dir(
+        body.cwd,
+        body.claude_config_dir,
+    ))
+}
+
+pub(super) async fn open_in_custom_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<OpenInCustomRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::agent::open_in_custom(
+        body.executable,
+        body.args,
+        body.ctx,
+    ))
+}
+
+pub(super) async fn generate_value_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    Json(body): Json<GenerateValueRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    json_result(crate::generators::generate_value(body.request))
+}
+
+pub(super) async fn fetch_plugin_registry_http() -> axum::response::Response {
+    json_result(crate::registry::fetch_plugin_registry().await)
+}
+
+pub(super) async fn set_project_mcp_upstreams_http(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    auth: Option<Extension<Authenticated>>,
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<SetProjectMcpUpstreamsRequest>,
+) -> axum::response::Response {
+    if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
+        return resp.into_response();
+    }
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    json_result(crate::mcp_upstream_config::set_project_mcp_upstreams_inner(
+        &state,
+        &body.repo_path,
+        body.upstream_names,
+    ))
 }
 
 #[cfg(test)]
