@@ -3515,6 +3515,9 @@ pub(crate) fn spawn_reader_thread(
             // DEFERRED (2026-06-16) — cleaner: compute activity fully in Rust and drop
             // pty-output in desktop entirely (frontend-only-renders rule). Needs moving
             // Terminal.tsx activity/lastDataAt onto an existing throttled signal.
+            // Only the desktop build emits (and throttles) pty-output; the headless
+            // remote build never touches this, so gate it to avoid an unused_mut warning.
+            #[cfg(feature = "desktop")]
             let mut last_pty_output_emit: Option<std::time::Instant> = None;
             loop {
                 while paused.load(Ordering::Relaxed) {

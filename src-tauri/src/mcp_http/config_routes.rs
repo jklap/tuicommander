@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use super::guards::{Authenticated, require_local_or_auth};
 use super::types::*;
-use super::{err_500, json_result, validate_repo_path};
+use super::{json_result, validate_repo_path};
 
 pub(super) async fn get_config(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
