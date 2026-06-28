@@ -1390,6 +1390,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		currentFrame = frame;
 
+		// Re-anchor the soft-keyboard lift to the new cursor row (touch + keyboard
+		// open only; a cheap no-op otherwise). currentFrame is a plain ref, so the
+		// keyboard effect can't track cursor moves — this is the cursor-move trigger.
+		updateKeyboardLift();
+
 		// Partial frames merge by index and can strand stale rows (grid stays correct,
 		// canvas drifts → duplicate/vanished blocks). A full frame already rebuilt the
 		// rowMap, so only reconcile after partial frames; the debounce coalesces bursts.
@@ -2825,26 +2830,43 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		});
 	});
 
-	// On-screen keyboard handling (touch only): slide THIS terminal up by the
-	// amount the virtual keyboard occludes so the cursor stays visible, without
-	// resizing the app layout or the PTY (no reflow/SIGWINCH). The lift is a pure
-	// transform on kbLiftRef (wraps the stage) and is clipped by containerRef's
-	// overflow:hidden. Only the focused terminal lifts.
+	// On-screen keyboard handling (touch only): slide THIS terminal up just enough
+	// to reveal the CURSOR ROW above the virtual keyboard, without resizing the app
+	// layout or the PTY (no reflow/SIGWINCH). The lift is anchored to the cursor —
+	// NOT the pane's bottom edge — so a freshly-started agent whose input sits near
+	// the TOP of the grid isn't shifted off-screen (the mirror of the original
+	// occlusion bug). It's a pure transform on kbLiftRef (wraps the stage), clipped
+	// by containerRef's overflow:hidden. Only the focused terminal lifts.
+	function updateKeyboardLift() {
+		const occ = keyboardOcclusion();
+		const isFocused = focused();
+		const m = metrics();
+		if (!isTouchDevice || !kbLiftRef) return;
+		const frame = currentFrame;
+		// Clear when unfocused, keyboard closed, no frame/metrics yet, or scrolled
+		// back into history (frame.displayOffset > 0 → cursor isn't on screen).
+		if (!isFocused || occ <= 0 || !frame || !m || frame.displayOffset > 0) {
+			kbLiftRef.style.transform = "";
+			return;
+		}
+		// containerRef doesn't move (only its child kbLiftRef is transformed), so its
+		// top is the stable viewport origin for the cursor's untransformed Y. Lift by
+		// how far the cursor row's bottom sits below the keyboard's top edge — zero
+		// when the cursor is already above the keyboard, so a top-anchored input never
+		// gets pushed up. Anchoring to the cursor bottom self-clamps: the cursor can't
+		// overshoot above containerRef.top.
+		const keyboardTop = window.innerHeight - occ;
+		const cursorBottomY = containerRef.getBoundingClientRect().top + (frame.cursorRow + 1) * m.cellHeight;
+		const lift = Math.max(0, Math.round(cursorBottomY - keyboardTop));
+		kbLiftRef.style.transform = lift > 0 ? `translateY(${-lift}px)` : "";
+	}
 	if (isTouchDevice) {
 		ensureKeyboardViewportTracking();
+		// React to keyboard open/close, focus, and metrics (font) changes. Cursor
+		// movement is driven separately from the frame-decode path, since currentFrame
+		// is a plain ref, not a signal.
 		createEffect(() => {
-			const occ = keyboardOcclusion();
-			const isFocused = focused();
-			if (!kbLiftRef) return;
-			if (!isFocused || occ <= 0) {
-				kbLiftRef.style.transform = "";
-				return;
-			}
-			// Bring the terminal's bottom edge up to the keyboard's top edge; since
-			// the cursor sits near the bottom this reveals it just above the keyboard.
-			const keyboardTop = window.innerHeight - occ;
-			const lift = Math.max(0, Math.round(containerRef.getBoundingClientRect().bottom - keyboardTop));
-			kbLiftRef.style.transform = lift > 0 ? `translateY(${-lift}px)` : "";
+			updateKeyboardLift();
 		});
 	}
 
