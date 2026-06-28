@@ -206,7 +206,7 @@
 
 @media (hover: hover) {
   .tabClose:hover {
-    color: var(--fg-default);
+    color: var(--fg-primary);
   }
 }
 
@@ -293,7 +293,7 @@
 }
 
 .tab.shellExited .tabIcon {
-  color: var(--text-muted, #666);
+  color: var(--fg-muted, #666);
   opacity: 0.45;
   font-size: var(--font-3xs);
 }
@@ -473,7 +473,7 @@
 
 /* Detached to floating window — dim name but keep status dot colors */
 .tab.detached {
-  border-bottom: 2px dashed var(--text-secondary, #848d97);
+  border-bottom: 2px dashed var(--fg-secondary, #848d97);
 }
 
 .tab.detached .tabName {

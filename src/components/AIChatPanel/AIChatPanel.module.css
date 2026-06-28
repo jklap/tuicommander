@@ -591,7 +591,7 @@
 }
 
 .alwaysAllowBtn {
-  background: var(--fg-tertiary, #888);
+  background: var(--fg-muted, #888);
   color: var(--bg-primary, #fff);
 }
 
@@ -600,7 +600,7 @@
   font-size: var(--font-xs);
   background: var(--bg-secondary);
   color: var(--fg-secondary);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 1px 4px;
   cursor: pointer;
@@ -616,7 +616,7 @@
   font-size: var(--font-xs);
   background: var(--bg-secondary);
   color: var(--fg-secondary);
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 1px 4px;
   width: 48px;
@@ -690,7 +690,7 @@
 }
 
 .historyItem:hover {
-  background: var(--bg-hover);
+  background: var(--bg-highlight);
 }
 
 .historyTitle {

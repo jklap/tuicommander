@@ -14,7 +14,7 @@
   background: var(--bg-primary);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  box-shadow: var(--shadow-lg);
+  box-shadow: var(--shadow-popup);
   display: grid;
   grid-template-rows: auto 1fr auto;
   overflow: hidden;
@@ -109,7 +109,7 @@
 }
 
 .sessionRow:hover {
-  background: var(--bg-hover);
+  background: var(--bg-highlight);
 }
 
 .sessionRowActive {
@@ -129,12 +129,12 @@
   display: flex;
   gap: 8px;
   font-size: 10px;
-  color: var(--fg-tertiary);
+  color: var(--fg-muted);
   margin-top: 3px;
 }
 
 .sessionMetaErr {
-  color: var(--err);
+  color: var(--error);
 }
 
 .detailPane {
@@ -147,7 +147,7 @@
   align-items: center;
   justify-content: center;
   height: 100%;
-  color: var(--fg-tertiary);
+  color: var(--fg-muted);
   font-size: var(--font-sm);
   padding: 24px;
   text-align: center;
@@ -191,8 +191,8 @@
 }
 
 .badgeInferred {
-  background: var(--bg-hover);
-  color: var(--fg-tertiary);
+  background: var(--bg-highlight);
+  color: var(--fg-muted);
 }
 
 .badgeTui {
@@ -221,7 +221,7 @@
 
 .copyBtn:hover {
   color: var(--fg-primary);
-  background: var(--bg-hover);
+  background: var(--bg-highlight);
 }
 
 .intent {
@@ -231,7 +231,7 @@
 }
 
 .meta {
-  color: var(--fg-tertiary);
+  color: var(--fg-muted);
   font-size: 10px;
   display: flex;
   gap: 10px;
@@ -255,7 +255,7 @@
   padding: 8px 14px;
   border-top: 1px solid var(--border);
   font-size: var(--font-xs);
-  color: var(--fg-tertiary);
+  color: var(--fg-muted);
   display: flex;
   justify-content: space-between;
   background: var(--bg-secondary);

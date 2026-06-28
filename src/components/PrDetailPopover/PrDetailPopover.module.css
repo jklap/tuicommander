@@ -478,7 +478,7 @@
 }
 
 .autoHealStatus {
-  color: var(--orange);
+  color: var(--attention);
   font-size: var(--font-xs);
 }
 

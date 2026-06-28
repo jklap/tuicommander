@@ -594,7 +594,7 @@
   border: 1px solid var(--accent);
   border-radius: var(--radius-md);
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--fg-secondary);
 }
 
 .remoteBannerIcon {
@@ -605,7 +605,7 @@
 .remoteLoading {
   padding: 8px 12px;
   margin-bottom: 12px;
-  color: var(--text-muted);
+  color: var(--fg-muted);
   font-size: 13px;
   font-style: italic;
 }
@@ -614,8 +614,8 @@
   padding: 8px 12px;
   margin-bottom: 12px;
   background: var(--bg-tertiary);
-  border: 1px solid var(--danger);
+  border: 1px solid var(--error);
   border-radius: var(--radius-md);
-  color: var(--danger);
+  color: var(--error);
   font-size: 13px;
 }

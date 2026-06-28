@@ -86,7 +86,7 @@
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--fg-tertiary);
+  color: var(--fg-muted);
   cursor: pointer;
   flex-shrink: 0;
   transition: color 0.1s ease, background 0.1s ease;

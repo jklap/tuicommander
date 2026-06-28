@@ -33,11 +33,11 @@
 }
 
 .summaryToggle:hover {
-  background: var(--bg-hover);
+  background: var(--bg-highlight);
 }
 
 .caret {
-  color: var(--fg-tertiary);
+  color: var(--fg-muted);
   font-size: 10px;
   width: 10px;
   text-align: center;
@@ -57,7 +57,7 @@
 }
 
 .errCount {
-  color: var(--err);
+  color: var(--error);
 }
 
 .tuiMode {
@@ -80,7 +80,7 @@
 }
 
 .sectionLabel {
-  color: var(--fg-tertiary);
+  color: var(--fg-muted);
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -114,8 +114,8 @@
 }
 
 .badgeInferred {
-  background: var(--bg-hover);
-  color: var(--fg-tertiary);
+  background: var(--bg-highlight);
+  color: var(--fg-muted);
 }
 
 .badgeTui {
@@ -134,7 +134,7 @@
 }
 
 .exit {
-  color: var(--fg-tertiary);
+  color: var(--fg-muted);
   font-family: var(--font-mono);
 }
 
@@ -154,5 +154,5 @@
 
 .historyBtn:hover {
   color: var(--fg-primary);
-  background: var(--bg-hover);
+  background: var(--bg-highlight);
 }
