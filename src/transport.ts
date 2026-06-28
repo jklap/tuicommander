@@ -1512,6 +1512,90 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({ method: "GET", path: `/logs?limit=${args.limit ?? 0}` }),
 	},
 	clear_logs: { map: () => ({ method: "DELETE", path: "/logs" }) },
+
+	// --- Story 071: Plugin RPC commands ---
+	plugin_read_file: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/api/plugins/${p("pluginId")}/fs/read?path=${p("path")}`,
+		}),
+	},
+	plugin_read_file_tail: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/api/plugins/${p("pluginId")}/fs/tail?path=${p("path")}&maxBytes=${p("maxBytes")}`,
+		}),
+	},
+	plugin_list_directory: {
+		map: (args, p) => {
+			let path = `/api/plugins/${p("pluginId")}/fs/list?path=${p("path")}`;
+			if (args.pattern != null) path += `&pattern=${encodeURIComponent(String(args.pattern))}`;
+			if (args.sortBy != null) path += `&sortBy=${encodeURIComponent(String(args.sortBy))}`;
+			return { method: "GET", path };
+		},
+	},
+	plugin_write_file: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/fs/write`,
+			body: { path: args.path, content: args.content },
+		}),
+	},
+	plugin_rename_path: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/fs/rename`,
+			body: { from: args.from, to: args.to },
+		}),
+	},
+	plugin_exec_cli: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/exec`,
+			body: { binary: args.binary, args: args.args, cwd: args.cwd },
+		}),
+	},
+	plugin_http_fetch: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/http`,
+			body: {
+				url: args.url,
+				method: args.method,
+				headers: args.headers,
+				body: args.body,
+				allowedUrls: args.allowedUrls,
+			},
+		}),
+	},
+	plugin_read_session_output: {
+		map: (args, p) => {
+			let path = `/api/plugins/${p("pluginId")}/pty/output?sessionId=${p("sessionId")}`;
+			if (args.maxLines != null) path += `&maxLines=${encodeURIComponent(String(args.maxLines))}`;
+			return { method: "GET", path };
+		},
+	},
+	register_loaded_plugin: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/register`,
+			body: { capabilities: args.capabilities },
+		}),
+	},
+	unregister_loaded_plugin: {
+		map: (_args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/unregister`,
+		}),
+	},
+	get_plugin_readme_path: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/api/plugins/${p("id")}/readme`,
+			// Option<String>: null means no README; pass null through.
+			transform: (data) => data ?? null,
+		}),
+	},
 };
 
 /**
@@ -1571,6 +1655,18 @@ export const INTENTIONALLY_UNMAPPED: ReadonlySet<string> = new Set<string>([
 	"unsubscribe_terminal_grid",
 	"ack_terminal_frame",
 	"terminal_exit_alt_screen",
+	// Plugin filesystem watch — event delivery to plugins needs AppHandle/WS — out of scope.
+	"plugin_watch_path",
+	"plugin_unwatch",
+	// Plugin credential — OS keychain / native security tool.
+	"plugin_read_credential",
+	// Plugin install/uninstall — take AppHandle; local-FS install/emit.
+	"install_plugin_from_zip",
+	"install_plugin_from_folder",
+	"install_plugin_from_url",
+	"uninstall_plugin",
+	// Plugin data deletion — no frontend caller.
+	"delete_plugin_data",
 ]);
 
 /** Map a Tauri invoke command + args to an HTTP method/path/body */
@@ -1578,9 +1674,7 @@ export function mapCommandToHttp(command: string, args: Record<string, unknown>)
 	const entry = COMMAND_TABLE[command];
 	if (!entry) {
 		if (INTENTIONALLY_UNMAPPED.has(command)) {
-			throw new Error(
-				`Command "${command}" is native/host-only and is not available in browser/remote mode.`,
-			);
+			throw new Error(`Command "${command}" is native/host-only and is not available in browser/remote mode.`);
 		}
 		throw new Error(`No HTTP mapping for command: ${command}`);
 	}

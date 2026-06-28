@@ -12,6 +12,7 @@ mod guards;
 mod log_routes;
 pub(crate) mod mcp_transport;
 mod plugin_docs;
+mod plugin_routes;
 mod session;
 mod sse_routes;
 mod static_files;
@@ -1215,6 +1216,51 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/api/plugins/{plugin_id}/data/{*path}",
             get(plugin_data_http).post(plugin_data_write_http),
+        )
+        // Plugin RPC commands (story 071)
+        .route(
+            "/api/plugins/{plugin_id}/fs/read",
+            get(plugin_routes::plugin_fs_read),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/fs/tail",
+            get(plugin_routes::plugin_fs_tail),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/fs/list",
+            get(plugin_routes::plugin_fs_list),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/fs/write",
+            post(plugin_routes::plugin_fs_write),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/fs/rename",
+            post(plugin_routes::plugin_fs_rename),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/exec",
+            post(plugin_routes::plugin_exec),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/http",
+            post(plugin_routes::plugin_http_fetch),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/pty/output",
+            get(plugin_routes::plugin_pty_output),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/register",
+            post(plugin_routes::plugin_register),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/unregister",
+            post(plugin_routes::plugin_unregister),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/readme",
+            get(plugin_routes::plugin_readme),
         )
         // Push notification API
         .route("/api/push/vapid-key", get(push_vapid_key))

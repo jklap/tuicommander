@@ -420,6 +420,14 @@ pub fn register_loaded_plugin(
     capabilities: Vec<String>,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<(), String> {
+    register_loaded_plugin_impl(&state, plugin_id, capabilities)
+}
+
+pub(crate) fn register_loaded_plugin_impl(
+    state: &crate::AppState,
+    plugin_id: String,
+    capabilities: Vec<String>,
+) -> Result<(), String> {
     // Ground truth is the on-disk manifest, not the frontend-supplied capabilities.
     // Read only the specific plugin's manifest instead of scanning the entire dir.
     let manifest = read_single_manifest(&plugin_id)?;
@@ -458,7 +466,11 @@ pub fn unregister_loaded_plugin(
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) {
-    state.loaded_plugins.remove(&plugin_id);
+    unregister_loaded_plugin_impl(&state, &plugin_id);
+}
+
+pub(crate) fn unregister_loaded_plugin_impl(state: &crate::AppState, plugin_id: &str) {
+    state.loaded_plugins.remove(plugin_id);
 }
 
 // ---------------------------------------------------------------------------
@@ -524,6 +536,7 @@ pub fn write_plugin_data(plugin_id: String, path: String, content: String) -> Re
     std::fs::write(&file_path, &content).map_err(|e| format!("Failed to write plugin data: {e}"))
 }
 
+// DESKTOP-ONLY (HTTP parity): no frontend caller
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn delete_plugin_data(plugin_id: String, path: String) -> Result<(), String> {
     let file_path = resolve_data_path(&plugin_id, &path)?;
@@ -545,6 +558,7 @@ pub fn delete_plugin_data(plugin_id: String, path: String) -> Result<(), String>
 /// the `data/` subdirectory is preserved across the overwrite.
 ///
 /// Returns the validated manifest on success.
+// DESKTOP-ONLY (HTTP parity): takes AppHandle; local-FS install/emit
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn install_plugin_from_zip(
@@ -560,6 +574,7 @@ pub async fn install_plugin_from_zip(
 }
 
 /// Install a plugin from an HTTPS URL: download to a temp file, then extract.
+// DESKTOP-ONLY (HTTP parity): takes AppHandle; local-FS install/emit
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn install_plugin_from_url(
@@ -685,6 +700,7 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), String> {
 
 /// Install a plugin from a local folder. Validates manifest, copies files to
 /// the plugins directory, preserves existing data/, and emits a reload event.
+// DESKTOP-ONLY (HTTP parity): takes AppHandle; local-FS install/emit
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn install_plugin_from_folder(
@@ -839,6 +855,7 @@ fn find_manifest_in_zip(archive: &zip::ZipArchive<std::fs::File>) -> Result<Stri
 // ---------------------------------------------------------------------------
 
 /// Remove a plugin and all its files (including data/).
+// DESKTOP-ONLY (HTTP parity): takes AppHandle; local-FS install/emit
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub fn uninstall_plugin(id: String, app_handle: AppHandle) -> Result<(), String> {

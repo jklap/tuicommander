@@ -172,7 +172,17 @@ pub async fn plugin_exec_cli(
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<String, String> {
-    crate::plugins::check_plugin_capability(&state, &plugin_id, "exec:cli")?;
+    plugin_exec_cli_impl(&state, binary, args, cwd, plugin_id).await
+}
+
+pub(crate) async fn plugin_exec_cli_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    binary: String,
+    args: Vec<String>,
+    cwd: Option<String>,
+    plugin_id: String,
+) -> Result<String, String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "exec:cli")?;
 
     // Read allowed binaries from the on-disk manifest (source of truth)
     let manifest = crate::plugins::read_single_manifest(&plugin_id)?;

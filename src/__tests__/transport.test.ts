@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { INTENTIONALLY_UNMAPPED, buildHttpUrl, isTauri, mapCommandToHttp } from "../transport";
+import { buildHttpUrl, INTENTIONALLY_UNMAPPED, isTauri, mapCommandToHttp } from "../transport";
 
 describe("transport", () => {
 	describe("isTauri()", () => {
@@ -694,9 +694,7 @@ describe("transport", () => {
 			});
 			expect(img.path).toBe("/config/note-image");
 			expect(img.body).toEqual({ noteId: "n1", dataBase64: "AAA", extension: "png" });
-			expect(mapCommandToHttp("delete_note_assets", { noteId: "n1" }).path).toBe(
-				"/config/note-assets/delete",
-			);
+			expect(mapCommandToHttp("delete_note_assets", { noteId: "n1" }).path).toBe("/config/note-assets/delete");
 			const batch = mapCommandToHttp("delete_note_assets_batch", { noteIds: ["a", "b"] });
 			expect(batch.path).toBe("/config/note-assets/delete-batch");
 			expect(batch.body).toEqual({ noteIds: ["a", "b"] });
@@ -808,9 +806,7 @@ describe("transport", () => {
 			expect(save.path).toBe("/ai/chat/config");
 			expect(save.body).toEqual({ temperature: 0.5 });
 			expect(mapCommandToHttp("list_conversations", {}).path).toBe("/ai/chat/conversations");
-			expect(mapCommandToHttp("load_conversation", { id: "abc" }).path).toBe(
-				"/ai/chat/conversation?id=abc",
-			);
+			expect(mapCommandToHttp("load_conversation", { id: "abc" }).path).toBe("/ai/chat/conversation?id=abc");
 			const sc = mapCommandToHttp("save_conversation", { conversation: { meta: { id: "abc" } } });
 			expect(sc.method).toBe("POST");
 			expect(sc.path).toBe("/ai/chat/conversation");
@@ -835,9 +831,7 @@ describe("transport", () => {
 			expect(mapCommandToHttp("get_session_knowledge", { sessionId: "s1" }).path).toBe(
 				"/ai/session-knowledge?sessionId=s1",
 			);
-			expect(mapCommandToHttp("toggle_ai_suggestions", { sessionId: "s1" }).path).toBe(
-				"/ai/suggestions/toggle",
-			);
+			expect(mapCommandToHttp("toggle_ai_suggestions", { sessionId: "s1" }).path).toBe("/ai/suggestions/toggle");
 			const lk = mapCommandToHttp("list_knowledge_sessions", { filter: { text: "x" }, limit: 50 });
 			expect(lk.method).toBe("POST");
 			expect(lk.path).toBe("/ai/knowledge/sessions");
@@ -856,6 +850,120 @@ describe("transport", () => {
 			expect(r.method).toBe("POST");
 			expect(r.path).toBe("/ai/triage/run");
 			expect(r.body).toEqual({ repoPath: "/r", refresh: true });
+		});
+
+		it("maps plugin RPC commands (story 071)", () => {
+			// plugin_read_file
+			const rf = mapCommandToHttp("plugin_read_file", { pluginId: "my-plugin", path: "/home/user/f.txt" });
+			expect(rf.method).toBe("GET");
+			expect(rf.path).toBe("/api/plugins/my-plugin/fs/read?path=%2Fhome%2Fuser%2Ff.txt");
+
+			// plugin_read_file_tail
+			const tail = mapCommandToHttp("plugin_read_file_tail", {
+				pluginId: "my-plugin",
+				path: "/home/user/f.log",
+				maxBytes: 4096,
+			});
+			expect(tail.method).toBe("GET");
+			expect(tail.path).toBe("/api/plugins/my-plugin/fs/tail?path=%2Fhome%2Fuser%2Ff.log&maxBytes=4096");
+
+			// plugin_list_directory — with optional params
+			const listBase = mapCommandToHttp("plugin_list_directory", { pluginId: "my-plugin", path: "/home/user/dir" });
+			expect(listBase.method).toBe("GET");
+			expect(listBase.path).toBe("/api/plugins/my-plugin/fs/list?path=%2Fhome%2Fuser%2Fdir");
+			const listFull = mapCommandToHttp("plugin_list_directory", {
+				pluginId: "my-plugin",
+				path: "/home/user/dir",
+				pattern: "*.log",
+				sortBy: "mtime",
+			});
+			expect(listFull.path).toContain("pattern=*.log");
+			expect(listFull.path).toContain("sortBy=mtime");
+
+			// plugin_write_file
+			const wf = mapCommandToHttp("plugin_write_file", {
+				pluginId: "my-plugin",
+				path: "/home/user/out.txt",
+				content: "hello",
+			});
+			expect(wf.method).toBe("POST");
+			expect(wf.path).toBe("/api/plugins/my-plugin/fs/write");
+			expect(wf.body).toEqual({ path: "/home/user/out.txt", content: "hello" });
+
+			// plugin_rename_path
+			const rn = mapCommandToHttp("plugin_rename_path", {
+				pluginId: "my-plugin",
+				from: "/home/user/a.txt",
+				to: "/home/user/b.txt",
+			});
+			expect(rn.method).toBe("POST");
+			expect(rn.path).toBe("/api/plugins/my-plugin/fs/rename");
+			expect(rn.body).toEqual({ from: "/home/user/a.txt", to: "/home/user/b.txt" });
+
+			// plugin_exec_cli
+			const ex = mapCommandToHttp("plugin_exec_cli", {
+				pluginId: "my-plugin",
+				binary: "mdkb",
+				args: ["--version"],
+				cwd: "/home/user",
+			});
+			expect(ex.method).toBe("POST");
+			expect(ex.path).toBe("/api/plugins/my-plugin/exec");
+			expect(ex.body).toEqual({ binary: "mdkb", args: ["--version"], cwd: "/home/user" });
+
+			// plugin_http_fetch
+			const hf = mapCommandToHttp("plugin_http_fetch", {
+				pluginId: "my-plugin",
+				url: "https://api.example.com/data",
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: "{}",
+				allowedUrls: ["https://api.example.com/*"],
+			});
+			expect(hf.method).toBe("POST");
+			expect(hf.path).toBe("/api/plugins/my-plugin/http");
+			expect(hf.body).toEqual({
+				url: "https://api.example.com/data",
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: "{}",
+				allowedUrls: ["https://api.example.com/*"],
+			});
+
+			// plugin_read_session_output — with and without maxLines
+			const pty = mapCommandToHttp("plugin_read_session_output", {
+				pluginId: "my-plugin",
+				sessionId: "sess-1",
+			});
+			expect(pty.method).toBe("GET");
+			expect(pty.path).toBe("/api/plugins/my-plugin/pty/output?sessionId=sess-1");
+			const ptyLines = mapCommandToHttp("plugin_read_session_output", {
+				pluginId: "my-plugin",
+				sessionId: "sess-1",
+				maxLines: 100,
+			});
+			expect(ptyLines.path).toContain("maxLines=100");
+
+			// register_loaded_plugin
+			const reg = mapCommandToHttp("register_loaded_plugin", {
+				pluginId: "my-plugin",
+				capabilities: ["fs:read", "net:http"],
+			});
+			expect(reg.method).toBe("POST");
+			expect(reg.path).toBe("/api/plugins/my-plugin/register");
+			expect(reg.body).toEqual({ capabilities: ["fs:read", "net:http"] });
+
+			// unregister_loaded_plugin
+			const unreg = mapCommandToHttp("unregister_loaded_plugin", { pluginId: "my-plugin" });
+			expect(unreg.method).toBe("POST");
+			expect(unreg.path).toBe("/api/plugins/my-plugin/unregister");
+
+			// get_plugin_readme_path — null passthrough transform
+			const readme = mapCommandToHttp("get_plugin_readme_path", { id: "my-plugin" });
+			expect(readme.method).toBe("GET");
+			expect(readme.path).toBe("/api/plugins/my-plugin/readme");
+			expect(readme.transform?.("/path/to/README.md")).toBe("/path/to/README.md");
+			expect(readme.transform?.(null)).toBeNull();
 		});
 	});
 
@@ -883,6 +991,15 @@ describe("transport", () => {
 				"install_mdkb",
 				"subscribe_terminal_grid",
 				"ack_terminal_frame",
+				// story 071 desktop-only plugin commands
+				"plugin_watch_path",
+				"plugin_unwatch",
+				"plugin_read_credential",
+				"install_plugin_from_zip",
+				"install_plugin_from_folder",
+				"install_plugin_from_url",
+				"uninstall_plugin",
+				"delete_plugin_data",
 			]) {
 				expect(INTENTIONALLY_UNMAPPED.has(cmd)).toBe(true);
 			}

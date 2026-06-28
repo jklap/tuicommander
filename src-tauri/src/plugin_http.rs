@@ -139,7 +139,19 @@ pub async fn plugin_http_fetch(
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<HttpResponse, String> {
-    crate::plugins::check_plugin_capability(&state, &plugin_id, "net:http")?;
+    plugin_http_fetch_impl(&state, url, method, headers, body, allowed_urls, plugin_id).await
+}
+
+pub(crate) async fn plugin_http_fetch_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    url: String,
+    method: Option<String>,
+    headers: Option<HashMap<String, String>>,
+    body: Option<String>,
+    allowed_urls: Vec<String>,
+    plugin_id: String,
+) -> Result<HttpResponse, String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "net:http")?;
     validate_url(&url, &allowed_urls)?;
 
     let method_str = method.as_deref().unwrap_or("GET");

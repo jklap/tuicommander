@@ -31,7 +31,16 @@ pub async fn plugin_read_session_output(
     plugin_id: String,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<String, String> {
-    crate::plugins::check_plugin_capability(&state, &plugin_id, "pty:read")?;
+    plugin_read_session_output_impl(&state, session_id, max_lines, plugin_id)
+}
+
+pub(crate) fn plugin_read_session_output_impl(
+    state: &Arc<AppState>,
+    session_id: String,
+    max_lines: Option<usize>,
+    plugin_id: String,
+) -> Result<String, String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "pty:read")?;
 
     let vt_log = state
         .vt_log_buffers

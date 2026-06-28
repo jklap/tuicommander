@@ -93,7 +93,15 @@ pub async fn plugin_read_file(
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<String, String> {
-    crate::plugins::check_plugin_capability(&state, &plugin_id, "fs:read")?;
+    plugin_read_file_impl(&state, path, plugin_id).await
+}
+
+pub(crate) async fn plugin_read_file_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    path: String,
+    plugin_id: String,
+) -> Result<String, String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "fs:read")?;
     let canonical = validate_within_home(&path)?;
 
     // Check file size before reading
@@ -126,7 +134,17 @@ pub async fn plugin_list_directory(
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<Vec<String>, String> {
-    crate::plugins::check_plugin_capability(&state, &plugin_id, "fs:list")?;
+    plugin_list_directory_impl(&state, path, pattern, sort_by, plugin_id).await
+}
+
+pub(crate) async fn plugin_list_directory_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    path: String,
+    pattern: Option<String>,
+    sort_by: Option<String>,
+    plugin_id: String,
+) -> Result<Vec<String>, String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "fs:list")?;
     plugin_list_directory_inner(path, pattern, sort_by).await
 }
 
@@ -191,7 +209,16 @@ pub async fn plugin_read_file_tail(
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<String, String> {
-    crate::plugins::check_plugin_capability(&state, &plugin_id, "fs:read")?;
+    plugin_read_file_tail_impl(&state, path, max_bytes, plugin_id).await
+}
+
+pub(crate) async fn plugin_read_file_tail_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    path: String,
+    max_bytes: u64,
+    plugin_id: String,
+) -> Result<String, String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "fs:read")?;
     plugin_read_file_tail_inner(path, max_bytes).await
 }
 
@@ -238,6 +265,7 @@ async fn plugin_read_file_tail_inner(path: String, max_bytes: u64) -> Result<Str
 /// Start watching a path for filesystem changes.
 /// Returns a watch_id (UUID) that can be used with plugin_unwatch.
 /// Emits `plugin-fs-change-{plugin_id}` Tauri events on changes.
+// DESKTOP-ONLY (HTTP parity): event delivery to plugins needs AppHandle/WS — out of scope
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn plugin_watch_path(
@@ -286,6 +314,7 @@ pub async fn plugin_watch_path(
 }
 
 /// Stop watching a previously registered path.
+// DESKTOP-ONLY (HTTP parity): event delivery to plugins needs AppHandle/WS — out of scope
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub async fn plugin_unwatch(
@@ -401,7 +430,16 @@ pub async fn plugin_write_file(
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    crate::plugins::check_plugin_capability(&state, &plugin_id, "fs:write")?;
+    plugin_write_file_impl(&state, path, content, plugin_id).await
+}
+
+pub(crate) async fn plugin_write_file_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    path: String,
+    content: String,
+    plugin_id: String,
+) -> Result<(), String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "fs:write")?;
     plugin_write_file_inner(path, content).await
 }
 
@@ -461,7 +499,16 @@ pub async fn plugin_rename_path(
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    crate::plugins::check_plugin_capability(&state, &plugin_id, "fs:rename")?;
+    plugin_rename_path_impl(&state, from, to, plugin_id).await
+}
+
+pub(crate) async fn plugin_rename_path_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    from: String,
+    to: String,
+    plugin_id: String,
+) -> Result<(), String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "fs:rename")?;
     plugin_rename_path_inner(from, to).await
 }
 
