@@ -2,9 +2,12 @@
 members = [".", "crates/tuic-bridge", "crates/tuic-cli", "patches/alacritty_terminal"]
 resolver = "2"
 
+[workspace.package]
+version = "1.5.1"
+
 [package]
 name = "tuicommander"
-version = "1.5.1"
+version.workspace = true
 description = "TUICommander - Native platform for AI coding agents"
 authors = ["Stefano Straus <github.com/sstraus>"]
 edition = "2024"

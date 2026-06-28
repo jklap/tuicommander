@@ -1,6 +1,6 @@
 [package]
 name = "tuic-cli"
-version = "1.1.0"
+version.workspace = true
 description = "CLI companion for TUICommander — editor opener, session multiplexer, tmux replacement"
 authors = ["Stefano Straus <github.com/sstraus>"]
 edition = "2024"
