@@ -618,6 +618,53 @@ describe("transport", () => {
 				afterMerge: "archive",
 			});
 		});
+
+		it("maps close_issue to POST", () => {
+			const result = mapCommandToHttp("close_issue", { repoPath: "/r", issueNumber: 42 });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/repo/issues/close");
+			expect(result.body).toEqual({ repoPath: "/r", issueNumber: 42 });
+		});
+
+		it("maps reopen_issue to POST", () => {
+			const result = mapCommandToHttp("reopen_issue", { repoPath: "/r", issueNumber: 42 });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/repo/issues/reopen");
+			expect(result.body).toEqual({ repoPath: "/r", issueNumber: 42 });
+		});
+
+		it("maps get_github_viewer_login to GET", () => {
+			const result = mapCommandToHttp("get_github_viewer_login", {});
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/github/viewer-login");
+		});
+
+		it("maps fetch_ci_failure_logs to GET with query", () => {
+			const result = mapCommandToHttp("fetch_ci_failure_logs", { repoPath: "/r", branch: "feat" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/repo/ci-failure-logs?repoPath=%2Fr&branch=feat");
+		});
+
+		it("maps github_set_pr_hide_drafts to POST", () => {
+			const result = mapCommandToHttp("github_set_pr_hide_drafts", { hide: true });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/github/pr-hide-drafts");
+			expect(result.body).toEqual({ hide: true });
+		});
+
+		it("maps github device-code auth flow", () => {
+			expect(mapCommandToHttp("github_start_login", {}).path).toBe("/github/auth/start");
+			expect(mapCommandToHttp("github_start_login", {}).method).toBe("POST");
+			const poll = mapCommandToHttp("github_poll_login", { deviceCode: "abc" });
+			expect(poll.method).toBe("POST");
+			expect(poll.path).toBe("/github/auth/poll");
+			expect(poll.body).toEqual({ deviceCode: "abc" });
+			expect(mapCommandToHttp("github_logout", {}).path).toBe("/github/auth/logout");
+			expect(mapCommandToHttp("github_disconnect", {}).path).toBe("/github/auth/disconnect");
+			expect(mapCommandToHttp("github_auth_status", {}).path).toBe("/github/auth/status");
+			expect(mapCommandToHttp("github_auth_status", {}).method).toBe("GET");
+			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
+		});
 	});
 
 	describe("rpc()", () => {

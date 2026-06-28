@@ -218,6 +218,13 @@ pub(crate) async fn github_poll_login(
     state: State<'_, Arc<AppState>>,
     device_code: String,
 ) -> Result<PollResult, String> {
+    github_poll_login_impl(state.inner(), device_code).await
+}
+
+pub(crate) async fn github_poll_login_impl(
+    state: &Arc<AppState>,
+    device_code: String,
+) -> Result<PollResult, String> {
     let result = poll_device_flow(&state.http_client, &device_code).await?;
 
     if let PollResult::Success {
@@ -251,6 +258,10 @@ pub(crate) async fn github_poll_login(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn github_logout(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    github_logout_impl(state.inner()).await
+}
+
+pub(crate) async fn github_logout_impl(state: &Arc<AppState>) -> Result<(), String> {
     tokio::task::spawn_blocking(delete_github_oauth_token)
         .await
         .map_err(|e| format!("keyring task panicked: {e}"))??;
@@ -276,6 +287,10 @@ pub(crate) async fn github_logout(state: State<'_, Arc<AppState>>) -> Result<(),
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn github_disconnect(state: State<'_, Arc<AppState>>) -> Result<(), String> {
+    github_disconnect_impl(state.inner()).await
+}
+
+pub(crate) async fn github_disconnect_impl(state: &Arc<AppState>) -> Result<(), String> {
     // Delete OAuth token from keyring if present
     if let Err(e) = tokio::task::spawn_blocking(delete_github_oauth_token)
         .await
@@ -313,6 +328,12 @@ pub(crate) struct GitHubDiagnostics {
 pub(crate) async fn github_diagnostics(
     state: State<'_, Arc<AppState>>,
 ) -> Result<GitHubDiagnostics, String> {
+    github_diagnostics_impl(state.inner()).await
+}
+
+pub(crate) async fn github_diagnostics_impl(
+    state: &Arc<AppState>,
+) -> Result<GitHubDiagnostics, String> {
     let circuit_breaker_open = state.github_circuit_breaker.check().is_err();
     let circuit_breaker_status = match state.github_circuit_breaker.check() {
         Ok(()) => "OK".to_string(),
@@ -346,6 +367,12 @@ pub(crate) async fn github_diagnostics(
 #[tauri::command]
 pub(crate) async fn github_auth_status(
     state: State<'_, Arc<AppState>>,
+) -> Result<AuthStatus, String> {
+    github_auth_status_impl(state.inner()).await
+}
+
+pub(crate) async fn github_auth_status_impl(
+    state: &Arc<AppState>,
 ) -> Result<AuthStatus, String> {
     let mut token = state.github_token.read().clone();
     let mut source = *state.github_token_source.read();

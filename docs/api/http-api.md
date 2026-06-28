@@ -438,6 +438,27 @@ Content-Type: application/json
 
 Reopens a closed issue via GitHub GraphQL API.
 
+### GitHub Auth & Diagnostics
+
+Browser/PWA parity for the GitHub settings panel. Registered on the loopback
+router only (the headless `tuic-remote` daemon does not expose GitHub).
+
+```
+GET  /github/viewer-login                       -> string (login)
+GET  /repo/ci-failure-logs?repoPath=&branch=    -> string (logs)
+POST /github/pr-hide-drafts   { hide }          -> null
+POST /github/auth/start                         -> DeviceCodeResponse
+POST /github/auth/poll        { deviceCode }    -> PollResult
+POST /github/auth/logout                        -> null
+POST /github/auth/disconnect                    -> null
+GET  /github/auth/status                        -> AuthStatus
+GET  /github/diagnostics                        -> GitHubDiagnostics
+```
+
+Auth commands share the desktop `*_impl` (device-code flow + OS-keyring token via
+`crate::credentials`). `get_all_issues` is intentionally unmapped — it has no frontend
+`invoke()` caller (the `/repo/issues` route already serves browser issue lists).
+
 ### Merged Branches
 
 ```

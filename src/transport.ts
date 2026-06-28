@@ -658,6 +658,54 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { paths: args.paths, include_merged: args.includeMerged },
 		}),
 	},
+	close_issue: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/issues/close",
+			body: { repoPath: args.repoPath, issueNumber: args.issueNumber },
+		}),
+	},
+	reopen_issue: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/issues/reopen",
+			body: { repoPath: args.repoPath, issueNumber: args.issueNumber },
+		}),
+	},
+	get_github_viewer_login: {
+		map: () => ({ method: "GET", path: "/github/viewer-login" }),
+	},
+	fetch_ci_failure_logs: {
+		map: (_args, p) => ({
+			method: "GET",
+			path: `/repo/ci-failure-logs?repoPath=${p("repoPath")}&branch=${p("branch")}`,
+		}),
+	},
+	github_set_pr_hide_drafts: {
+		map: (args) => ({ method: "POST", path: "/github/pr-hide-drafts", body: { hide: args.hide } }),
+	},
+	github_start_login: {
+		map: () => ({ method: "POST", path: "/github/auth/start" }),
+	},
+	github_poll_login: {
+		map: (args) => ({
+			method: "POST",
+			path: "/github/auth/poll",
+			body: { deviceCode: args.deviceCode },
+		}),
+	},
+	github_logout: {
+		map: () => ({ method: "POST", path: "/github/auth/logout" }),
+	},
+	github_disconnect: {
+		map: () => ({ method: "POST", path: "/github/auth/disconnect" }),
+	},
+	github_auth_status: {
+		map: () => ({ method: "GET", path: "/github/auth/status" }),
+	},
+	github_diagnostics: {
+		map: () => ({ method: "GET", path: "/github/diagnostics" }),
+	},
 	github_start_polling: {
 		map: (args) => ({
 			method: "POST",

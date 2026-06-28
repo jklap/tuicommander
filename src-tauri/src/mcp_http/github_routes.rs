@@ -4,10 +4,11 @@ use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
 use super::types::{
-    CiChecksQuery, IssueActionRequest, IssuesQuery, PathQuery, PollRepoRequest, PrDiffQuery,
-    SetVisibilityRequest, StartPollingRequest, UpdatePathsRequest,
+    CiChecksQuery, CiFailureLogsQuery, GithubPollLoginRequest, GithubSetHideDraftsRequest,
+    IssueActionRequest, IssuesQuery, PathQuery, PollRepoRequest, PrDiffQuery, SetVisibilityRequest,
+    StartPollingRequest, UpdatePathsRequest,
 };
-use super::{err_500, validate_repo_path};
+use super::{err_500, json_result, validate_repo_path};
 use crate::github_poller::PollerCmd;
 use crate::state::AppState;
 
@@ -225,4 +226,51 @@ pub(super) async fn poller_set_issue_filter(
             .try_send(PollerCmd::SetIssueFilter(body.filter));
     }
     Json(serde_json::json!({"ok": true})).into_response()
+}
+
+pub(super) async fn github_viewer_login(State(state): State<Arc<AppState>>) -> Response {
+    json_result(crate::github::get_viewer_login(&state).await)
+}
+
+pub(super) async fn ci_failure_logs(Query(q): Query<CiFailureLogsQuery>) -> Response {
+    if let Err(e) = validate_repo_path(&q.repo_path) {
+        return e.into_response();
+    }
+    json_result(crate::github::fetch_ci_failure_logs(q.repo_path, q.branch).await)
+}
+
+pub(super) async fn github_set_hide_drafts(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<GithubSetHideDraftsRequest>,
+) -> Response {
+    json_result(crate::github_poller::github_set_pr_hide_drafts_impl(
+        &state, body.hide,
+    ))
+}
+
+pub(super) async fn github_start_login(State(state): State<Arc<AppState>>) -> Response {
+    json_result(crate::github_auth::start_device_flow(&state.http_client).await)
+}
+
+pub(super) async fn github_poll_login(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<GithubPollLoginRequest>,
+) -> Response {
+    json_result(crate::github_auth::github_poll_login_impl(&state, body.device_code).await)
+}
+
+pub(super) async fn github_logout(State(state): State<Arc<AppState>>) -> Response {
+    json_result(crate::github_auth::github_logout_impl(&state).await)
+}
+
+pub(super) async fn github_disconnect(State(state): State<Arc<AppState>>) -> Response {
+    json_result(crate::github_auth::github_disconnect_impl(&state).await)
+}
+
+pub(super) async fn github_auth_status(State(state): State<Arc<AppState>>) -> Response {
+    json_result(crate::github_auth::github_auth_status_impl(&state).await)
+}
+
+pub(super) async fn github_diagnostics(State(state): State<Arc<AppState>>) -> Response {
+    json_result(crate::github_auth::github_diagnostics_impl(&state).await)
 }

@@ -425,6 +425,26 @@ pub(super) struct IssueActionRequest {
     pub issue_number: i64,
 }
 
+// --- GitHub auth / misc ---
+
+#[derive(Deserialize)]
+pub(super) struct CiFailureLogsQuery {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub branch: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct GithubSetHideDraftsRequest {
+    pub hide: bool,
+}
+
+#[derive(Deserialize)]
+pub(super) struct GithubPollLoginRequest {
+    #[serde(rename = "deviceCode")]
+    pub device_code: String,
+}
+
 // --- GitPanel commands ---
 
 #[derive(Deserialize)]

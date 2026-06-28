@@ -680,6 +680,34 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/repo/github-poller/api-debug",
             get(github_routes::api_debug_get).post(github_routes::api_debug_set),
         )
+        // GitHub auth (device-code flow) + misc — browser/PWA via loopback
+        .route(
+            "/github/viewer-login",
+            get(github_routes::github_viewer_login),
+        )
+        .route("/repo/ci-failure-logs", get(github_routes::ci_failure_logs))
+        .route(
+            "/github/pr-hide-drafts",
+            post(github_routes::github_set_hide_drafts),
+        )
+        .route(
+            "/github/auth/start",
+            post(github_routes::github_start_login),
+        )
+        .route("/github/auth/poll", post(github_routes::github_poll_login))
+        .route("/github/auth/logout", post(github_routes::github_logout))
+        .route(
+            "/github/auth/disconnect",
+            post(github_routes::github_disconnect),
+        )
+        .route(
+            "/github/auth/status",
+            get(github_routes::github_auth_status),
+        )
+        .route(
+            "/github/diagnostics",
+            get(github_routes::github_diagnostics),
+        )
         // Watchers (for browser/mobile clients)
         .route(
             "/watchers/repo",
