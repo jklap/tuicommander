@@ -221,6 +221,7 @@ Broadcasts server-side events to all browser/mobile clients. Supports optional `
 | `plugin-changed` | `{plugin_ids}` | Plugin(s) installed/removed/updated |
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
 | `mcp-toast` | `{title, message, level, sound}` | Toast notification from MCP layer |
+| `triage-progress` | `{repo_path, summary, files, phase, done, llm_used, llm_model}` | Diff-triage classification progress (browser parity for the desktop window event) |
 | `lagged` | `{missed}` | Client fell behind; N events were dropped |
 
 ### MCP Streamable HTTP
@@ -1034,9 +1035,19 @@ POST /ai/chat/conversation/delete  { id }     -> { ok }
 POST /ai/chat/new-id                         -> string (new conversation id)
 ```
 
-File-backed conversation persistence + chat config. **Streaming is NOT here** —
-`chat_subscribe`/`chat_unsubscribe` (live token streaming) will use a dedicated WS
-endpoint per the event-bridge plan; this slice covers the request/response CRUD only.
+File-backed conversation persistence + chat config.
+
+```
+GET (WS) /ai/chat/{chat_id}/stream
+```
+
+Chat registry live stream (event-bridge plan Step 4). WebSocket upgrade: the first
+frame is a `ChatEvent::Snapshot` (`{"kind":"snapshot",...}`), then live `ChatEvent`
+frames (`chunk`/`error`/`cleared`/`snapshot`) as they are fanned out. Closing the
+socket unsubscribes (no explicit `chat_unsubscribe` call). Browser parity for the
+desktop `chat_subscribe` Tauri Channel — frames are byte-identical so the same
+`applyRegistryEvent` handler consumes both. Dedicated per-chat WS, NOT the global
+`/events` bus (high-frequency token stream).
 
 ### AI Agent Loop control + knowledge + scheduler (story 068 RPC slice)
 
@@ -1051,13 +1062,29 @@ POST /ai/knowledge/sessions    { filter?, limit? }      -> SessionListEntry[]
 GET  /ai/knowledge/session?sessionId=                   -> SessionDetail | null
 GET  /ai/scheduler/config                               -> SchedulerConfig
 PUT  /ai/scheduler/config      (SchedulerConfig)        -> { ok }
+POST /ai/triage/run            { repoPath, refresh? }   -> TriageResult   (desktop only)
+GET (WS) /ai/conversation/{session_id}/stream
 ```
 
 Agent-loop *control* (cancel/pause/resume/approve), session-knowledge reads, and the
-scheduler config. **The agent token stream is NOT here** — `start_conversation` (live
-agent loop output) will use a dedicated WS endpoint per the event-bridge plan. State-
-taking commands reuse extracted `*_impl`s (`get_session_knowledge_impl`,
-`toggle_ai_suggestions_impl`, `get_knowledge_session_detail_impl`).
+scheduler config. State-taking commands reuse extracted `*_impl`s
+(`get_session_knowledge_impl`, `toggle_ai_suggestions_impl`,
+`get_knowledge_session_detail_impl`).
+
+**Conversation token stream** (event-bridge plan Step 3): the WebSocket
+`/ai/conversation/{session_id}/stream` is the browser parity for the desktop
+`start_conversation` Tauri Channel. The client sends the start params as the first
+text frame — `{ message, autonomy?, maxSteps?, temperature?, modelOverride?,
+bypassedTools?, reasoningEffort? }` — then receives `ConversationEvent` frames
+(`{"type":"text_chunk",...}` etc.) with the same 50ms batching as desktop. Dedicated
+per-session WS, NOT the global `/events` bus (high-frequency token stream). A client
+disconnect stops forwarding but leaves the conversation running — cancel explicitly
+via `/ai/conversation/cancel`.
+
+**Diff triage** (`POST /ai/triage/run`, event-bridge plan Step 2): triggers
+`run_diff_triage`; progress frames stream over the global `/events` SSE bus as
+`triage-progress` (low-frequency, safe on the bus). Desktop-only — the triage LLM
+pipeline needs the desktop providers, so the remote daemon does not serve it.
 
 ## Agent Endpoints
 

@@ -1,5 +1,6 @@
 mod agent_routes;
 mod ai_routes;
+mod ai_stream;
 pub(crate) mod ai_terminal;
 pub(crate) mod auth;
 mod claude_routes;
@@ -755,6 +756,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(ai_routes::delete_conversation_http),
         )
         .route("/ai/chat/new-id", post(ai_routes::new_conversation_id_http))
+        // Chat registry stream — dedicated per-chat WS (event-bridge plan Step 4).
+        .route("/ai/chat/{chat_id}/stream", get(ai_stream::chat_ws))
         // AI agent loop control + knowledge + scheduler (story 068 RPC slice)
         .route(
             "/ai/conversation/cancel",
@@ -771,6 +774,12 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/ai/conversation/approve",
             post(ai_routes::approve_conversation_action_http),
+        )
+        // Conversation token stream — dedicated per-session WS (event-bridge
+        // plan Step 3). NOT on the global bus: high-frequency token stream.
+        .route(
+            "/ai/conversation/{session_id}/stream",
+            get(ai_stream::conversation_ws),
         )
         .route(
             "/ai/session-knowledge",
@@ -1226,6 +1235,11 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
                 .delete(mcp_transport::mcp_delete),
         );
     }
+
+    // Diff triage trigger (event-bridge plan Step 2) — desktop-only: the triage
+    // LLM pipeline needs the desktop providers. Progress streams over `/events`.
+    #[cfg(feature = "desktop")]
+    let routes = routes.route("/ai/triage/run", post(ai_routes::run_diff_triage_http));
 
     // Static files — SPA frontend (desktop only; not embedded in the remote binary)
     #[cfg(feature = "desktop")]

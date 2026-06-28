@@ -12,7 +12,9 @@
 
 import type { Accessor, Setter } from "solid-js";
 import { batch, createSignal } from "solid-js";
+import { invoke } from "../invoke";
 import { isTauri } from "../transport";
+import { openChatStream, openConversationStream } from "../utils/aiStream";
 import { appLogger } from "./appLogger";
 
 // ---------------------------------------------------------------------------
@@ -671,7 +673,6 @@ function accumulateUsageForState(
 // ---------------------------------------------------------------------------
 
 async function sendMessage(text: string, sessionId: string | null): Promise<void> {
-	if (!isTauri()) return;
 	const s = activeConversation();
 	if (s.isStreaming()) return;
 	if (!sessionId) {
@@ -691,10 +692,17 @@ async function sendMessage(text: string, sessionId: string | null): Promise<void
 	s.activeSessionId = sessionId;
 
 	try {
-		const { invoke, Channel } = await import("@tauri-apps/api/core");
-		const onEvent = new Channel<ConversationEvent>();
-		onEvent.onmessage = (event) => applyConversationEvent(s, event, capturedKey);
-		await invoke("start_conversation", { sessionId, message: text, autonomy: "assisted", onEvent });
+		if (isTauri()) {
+			const { invoke: coreInvoke, Channel } = await import("@tauri-apps/api/core");
+			const onEvent = new Channel<ConversationEvent>();
+			onEvent.onmessage = (event) => applyConversationEvent(s, event, capturedKey);
+			await coreInvoke("start_conversation", { sessionId, message: text, autonomy: "assisted", onEvent });
+		} else {
+			// Browser/PWA: dedicated WS carries the token stream (event-bridge plan Step 5).
+			openConversationStream<ConversationEvent>(sessionId, { message: text, autonomy: "assisted" }, (event) =>
+				applyConversationEvent(s, event, capturedKey),
+			);
+		}
 	} catch (e) {
 		batch(() => {
 			s.setIsStreaming(false);
@@ -710,7 +718,8 @@ async function cancelStream(): Promise<void> {
 	if (!s.isStreaming()) return;
 	if (!s.activeSessionId) return;
 	try {
-		const { invoke } = await import("@tauri-apps/api/core");
+		// Wrapper invoke: Tauri IPC on desktop, HTTP (COMMAND_TABLE) in browser.
+		// The conversation's terminal event then arrives over the active stream.
 		await invoke("cancel_conversation", { sessionId: s.activeSessionId });
 	} catch (e) {
 		appLogger.warn("conversation", "cancel_conversation failed", { error: String(e) });
@@ -718,7 +727,6 @@ async function cancelStream(): Promise<void> {
 }
 
 async function startAgent(sessionId: string, goal: string, isUnrestricted?: boolean): Promise<void> {
-	if (!isTauri()) return;
 	const s = activeConversation();
 	const capturedKey = activeKey();
 	if (s.agentState() === "running" || s.agentState() === "paused") return;
@@ -740,16 +748,25 @@ async function startAgent(sessionId: string, goal: string, isUnrestricted?: bool
 	const bypassed = isUnrestricted ? ["*"] : [];
 
 	try {
-		const { invoke, Channel } = await import("@tauri-apps/api/core");
-		const onEvent = new Channel<ConversationEvent>();
-		onEvent.onmessage = (event) => applyConversationEvent(s, event, capturedKey);
-		await invoke("start_conversation", {
-			sessionId,
-			message: goal,
-			autonomy: "autonomous",
-			bypassedTools: bypassed,
-			onEvent,
-		});
+		if (isTauri()) {
+			const { invoke: coreInvoke, Channel } = await import("@tauri-apps/api/core");
+			const onEvent = new Channel<ConversationEvent>();
+			onEvent.onmessage = (event) => applyConversationEvent(s, event, capturedKey);
+			await coreInvoke("start_conversation", {
+				sessionId,
+				message: goal,
+				autonomy: "autonomous",
+				bypassedTools: bypassed,
+				onEvent,
+			});
+		} else {
+			// Browser/PWA: dedicated WS carries the agent token stream (event-bridge plan Step 5).
+			openConversationStream<ConversationEvent>(
+				sessionId,
+				{ message: goal, autonomy: "autonomous", bypassedTools: bypassed },
+				(event) => applyConversationEvent(s, event, capturedKey),
+			);
+		}
 	} catch (e) {
 		batch(() => {
 			s.setAgentState("error");
@@ -760,10 +777,8 @@ async function startAgent(sessionId: string, goal: string, isUnrestricted?: bool
 }
 
 async function cancelAgent(sessionId: string): Promise<void> {
-	if (!isTauri()) return;
 	const s = activeConversation();
 	try {
-		const { invoke } = await import("@tauri-apps/api/core");
 		await invoke("cancel_conversation", { sessionId });
 		s.setAgentState("cancelled");
 	} catch (e) {
@@ -774,10 +789,8 @@ async function cancelAgent(sessionId: string): Promise<void> {
 }
 
 async function pauseAgent(sessionId: string): Promise<void> {
-	if (!isTauri()) return;
 	const s = activeConversation();
 	try {
-		const { invoke } = await import("@tauri-apps/api/core");
 		await invoke("pause_conversation", { sessionId });
 		s.setAgentState("paused");
 	} catch (e) {
@@ -788,10 +801,8 @@ async function pauseAgent(sessionId: string): Promise<void> {
 }
 
 async function resumeAgent(sessionId: string): Promise<void> {
-	if (!isTauri()) return;
 	const s = activeConversation();
 	try {
-		const { invoke } = await import("@tauri-apps/api/core");
 		await invoke("resume_conversation", { sessionId });
 		s.setAgentState("running");
 	} catch (e) {
@@ -802,10 +813,8 @@ async function resumeAgent(sessionId: string): Promise<void> {
 }
 
 async function approveAction(sessionId: string, approved: boolean): Promise<void> {
-	if (!isTauri()) return;
 	const s = activeConversation();
 	try {
-		const { invoke } = await import("@tauri-apps/api/core");
 		await invoke("approve_conversation_action", { sessionId, approved });
 		s.setPendingApproval(null);
 	} catch (e) {
@@ -930,9 +939,8 @@ async function onTerminalClose(key: string): Promise<void> {
 		s.registrySubscription = null;
 	}
 
-	if ((s.isStreaming() || s.agentState() === "running") && s.activeSessionId && isTauri()) {
+	if ((s.isStreaming() || s.agentState() === "running") && s.activeSessionId) {
 		try {
-			const { invoke } = await import("@tauri-apps/api/core");
 			await invoke("cancel_conversation", { sessionId: s.activeSessionId });
 		} catch (e) {
 			appLogger.warn("conversation", "onTerminalClose: cancel_conversation failed", { error: String(e) });
@@ -1003,12 +1011,27 @@ function applyRegistryEvent(s: PerTerminalConversationState, event: RegistryChat
 }
 
 async function subscribeToRegistry(targetChatId: string): Promise<void> {
-	if (!isTauri()) return;
 	const s = activeConversation();
 
 	if (s.registrySubscription) {
 		await s.registrySubscription.cleanup();
 		s.registrySubscription = null;
+	}
+
+	// Browser/PWA: dedicated chat WS (event-bridge plan Step 5). First frame is
+	// the snapshot (carries kind:"snapshot"); WS close unsubscribes.
+	if (!isTauri()) {
+		try {
+			const dispose = openChatStream<RegistryChatEvent>(targetChatId, (event) => applyRegistryEvent(s, event));
+			s.registrySubscription = {
+				chatId: targetChatId,
+				subscriptionId: 0,
+				cleanup: async () => dispose(),
+			};
+		} catch (e) {
+			appLogger.warn("conversation", "subscribeToRegistry (ws) failed", { error: String(e) });
+		}
+		return;
 	}
 
 	try {

@@ -958,6 +958,15 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	save_scheduler_config: {
 		map: (args) => ({ method: "PUT", path: "/ai/scheduler/config", body: args.config }),
 	},
+	// Diff triage (event-bridge plan Step 2): trigger over HTTP; progress
+	// frames arrive over the `/events` SSE bridge as "triage-progress".
+	run_diff_triage: {
+		map: (args) => ({
+			method: "POST",
+			path: "/ai/triage/run",
+			body: { repoPath: args.repoPath, refresh: args.refresh },
+		}),
+	},
 	github_start_polling: {
 		map: (args) => ({
 			method: "POST",

@@ -1208,6 +1208,7 @@ fn emit_progress(
     llm_used: bool,
     llm_model: Option<&str>,
 ) {
+    // Desktop window event (native Tauri listener).
     let _ = app.emit(
         "triage-progress",
         TriageProgress {
@@ -1220,6 +1221,19 @@ fn emit_progress(
             llm_model: llm_model.map(String::from),
         },
     );
+    // Event bus → SSE bridge (browser/PWA parity). Dual-emit: there is no
+    // bus→window forwarder, so both paths are required.
+    use tauri::Manager;
+    let state = app.state::<std::sync::Arc<crate::AppState>>();
+    let _ = state.event_bus.send(crate::state::AppEvent::DiffTriageProgress {
+        repo_path: repo_path.to_string(),
+        summary: summary.map(String::from),
+        files: files.to_vec(),
+        phase: phase.to_string(),
+        done,
+        llm_used,
+        llm_model: llm_model.map(String::from),
+    });
 }
 
 #[cfg(feature = "desktop")]

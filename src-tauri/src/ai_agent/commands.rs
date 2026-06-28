@@ -27,88 +27,27 @@ pub(crate) async fn start_conversation(
     on_event: tauri::ipc::Channel<super::conversation_engine::ConversationEvent>,
 ) -> Result<(), String> {
     use super::conversation_engine::{
-        Autonomy, ConversationConfig, ConversationEvent, ReasoningLevel,
-        start_conversation as engine_start,
+        batched_conversation_stream, build_config, start_conversation as engine_start,
     };
-    use std::collections::HashSet;
 
-    // Per-call param wins; otherwise fall back to the persisted AI-chat setting.
-    let reasoning_effort =
-        reasoning_effort.or_else(|| crate::ai_chat::load_ai_chat_config().reasoning_effort);
-
-    let config = ConversationConfig {
-        autonomy: match autonomy.as_deref() {
-            Some("autonomous") => Autonomy::Autonomous,
-            _ => Autonomy::Assisted,
-        },
+    let config = build_config(
+        autonomy,
         max_steps,
-        temperature: temperature.unwrap_or(0.7),
+        temperature,
         model_override,
-        bypassed_tools: bypassed_tools
-            .unwrap_or_default()
-            .into_iter()
-            .collect::<HashSet<_>>(),
-        reasoning: ReasoningLevel::from_opt(reasoning_effort.as_deref()),
-        compact_after_tokens: Some(super::engine::DEFAULT_COMPACT_THRESHOLD_TOKENS),
-    };
+        bypassed_tools,
+        reasoning_effort,
+    );
 
-    let mut rx = engine_start(state.inner().clone(), session_id, message, config).await?;
+    let rx = engine_start(state.inner().clone(), session_id, message, config).await?;
 
-    // Bridge broadcast→Channel with 50ms TextChunk/ReasoningChunk batching
+    // Bridge broadcast→Channel via the shared 50ms batcher (same logic the
+    // browser WebSocket bridge uses — see conversation_engine::batched_conversation_stream).
+    let mut batched = batched_conversation_stream(rx);
     tokio::spawn(async move {
-        let mut text_batch = String::new();
-        let mut reasoning_batch = String::new();
-        let mut interval = tokio::time::interval(std::time::Duration::from_millis(50));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        // Flush text first, then reasoning, so ordering within a tick is stable.
-        let flush = |on_event: &tauri::ipc::Channel<ConversationEvent>,
-                     text: &mut String,
-                     reasoning: &mut String| {
-            if !text.is_empty() {
-                let _ = on_event.send(ConversationEvent::TextChunk {
-                    text: std::mem::take(text),
-                });
-            }
-            if !reasoning.is_empty() {
-                let _ = on_event.send(ConversationEvent::ReasoningChunk {
-                    text: std::mem::take(reasoning),
-                });
-            }
-        };
-        loop {
-            tokio::select! {
-                result = rx.recv() => {
-                    match result {
-                        Ok(ConversationEvent::TextChunk { text }) => {
-                            text_batch.push_str(&text);
-                        }
-                        Ok(ConversationEvent::ReasoningChunk { text }) => {
-                            reasoning_batch.push_str(&text);
-                        }
-                        Ok(other) => {
-                            // Flush pending batches before a non-text event
-                            flush(&on_event, &mut text_batch, &mut reasoning_batch);
-                            let done = matches!(other, ConversationEvent::Completed { .. } | ConversationEvent::Error { .. });
-                            let _ = on_event.send(other);
-                            if done { break; }
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            // Consumer fell behind on a high-throughput stream. Some
-                            // chunks were dropped, but the conversation is NOT over —
-                            // continue so Completed/Error still reach the frontend.
-                            // Breaking here would wedge the UI spinner forever.
-                            tracing::warn!("conversation bridge lagged {n} events — text chunks lost");
-                        }
-                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                            // Flush remaining batches on channel close, then stop.
-                            flush(&on_event, &mut text_batch, &mut reasoning_batch);
-                            break;
-                        }
-                    }
-                }
-                _ = interval.tick() => {
-                    flush(&on_event, &mut text_batch, &mut reasoning_batch);
-                }
+        while let Some(ev) = batched.recv().await {
+            if on_event.send(ev).is_err() {
+                break;
             }
         }
     });

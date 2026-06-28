@@ -1249,7 +1249,6 @@ pub fn run() {
                 .build(),
         )
         .manage(state)
-        .manage(ai_chat_registry::ChatRegistry::new())
         .manage(crate::fs::ContentSearchCancel(std::sync::Mutex::new(None)))
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_clipboard_manager::init())

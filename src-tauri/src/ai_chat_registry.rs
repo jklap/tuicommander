@@ -7,8 +7,19 @@
 use dashmap::DashMap;
 use serde::Serialize;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
+
+/// Process-global chat registry. Mirrors `conversation_engine::ACTIVE_CONVERSATIONS`
+/// so both the desktop Tauri commands and the browser WebSocket bridge reach the
+/// same instance (the axum side only has `Arc<AppState>`, not Tauri managed state).
+static CHAT_REGISTRY: LazyLock<ChatRegistry> = LazyLock::new(ChatRegistry::new);
+
+/// Accessor for the process-global chat registry.
+pub(crate) fn chat_registry() -> &'static ChatRegistry {
+    &CHAT_REGISTRY
+}
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -62,28 +73,44 @@ pub struct SubscribeResult {
 
 const MAX_MESSAGES: usize = 100;
 
-#[cfg(feature = "desktop")]
-struct Subscriber {
-    id: SubscriptionId,
-    channel: tauri::ipc::Channel<ChatEvent>,
-}
+/// Capacity of a WebSocket subscriber's buffer. Chat streams burst at 20+
+/// events/sec; this absorbs short renderer stalls. If it ever fills, the sink
+/// is treated as dead and GC'd — non-blocking, mirroring the Tauri Channel.
+const WS_SINK_BUFFER: usize = 256;
 
-struct ChatSlot {
-    state: ConversationState,
+/// A subscriber's delivery sink. Both variants are non-blocking and cheaply
+/// cloneable (so fan-out can send outside the slot lock); a failed send means
+/// the subscriber is gone (disconnected) and gets garbage-collected.
+#[derive(Clone)]
+enum ChatSink {
+    /// Desktop in-process Tauri IPC channel.
     #[cfg(feature = "desktop")]
-    subscribers: Vec<Subscriber>,
+    Channel(tauri::ipc::Channel<ChatEvent>),
+    /// Browser/PWA WebSocket bridge (event-bridge plan Step 4).
+    Ws(mpsc::Sender<ChatEvent>),
 }
 
-#[cfg(not(feature = "desktop"))]
-impl ChatSlot {
-    fn new() -> Self {
-        Self {
-            state: ConversationState::default(),
+impl ChatSink {
+    /// Non-blocking send. Returns false if the subscriber has disconnected.
+    fn send(&self, event: ChatEvent) -> bool {
+        match self {
+            #[cfg(feature = "desktop")]
+            ChatSink::Channel(c) => c.send(event).is_ok(),
+            ChatSink::Ws(tx) => tx.try_send(event).is_ok(),
         }
     }
 }
 
-#[cfg(feature = "desktop")]
+struct Subscriber {
+    id: SubscriptionId,
+    sink: ChatSink,
+}
+
+struct ChatSlot {
+    state: ConversationState,
+    subscribers: Vec<Subscriber>,
+}
+
 impl ChatSlot {
     fn new() -> Self {
         Self {
@@ -167,20 +194,14 @@ impl ChatRegistry {
         guard.state.snapshot()
     }
 
-    #[cfg(feature = "desktop")]
-    /// Subscribe a Channel to receive events for a chat.
-    /// Returns the subscription ID and a snapshot of the current state
-    /// (taken under the same lock to prevent races).
-    pub async fn subscribe(
-        &self,
-        chat_id: &str,
-        channel: tauri::ipc::Channel<ChatEvent>,
-    ) -> SubscribeResult {
+    /// Register a sink as a subscriber, returning its ID and a snapshot of the
+    /// current state (taken under the same lock to prevent a snapshot/fan-out race).
+    async fn push_subscriber(&self, chat_id: &str, sink: ChatSink) -> SubscribeResult {
         let slot = self.get_or_create(chat_id);
         let mut guard = slot.lock().await;
         let id = self.next_sub_id.fetch_add(1, Ordering::Relaxed);
         let snapshot = guard.state.snapshot();
-        guard.subscribers.push(Subscriber { id, channel });
+        guard.subscribers.push(Subscriber { id, sink });
         SubscribeResult {
             subscription_id: id,
             snapshot,
@@ -188,6 +209,28 @@ impl ChatRegistry {
     }
 
     #[cfg(feature = "desktop")]
+    /// Subscribe a Tauri IPC Channel to receive events for a chat (desktop).
+    pub async fn subscribe(
+        &self,
+        chat_id: &str,
+        channel: tauri::ipc::Channel<ChatEvent>,
+    ) -> SubscribeResult {
+        self.push_subscriber(chat_id, ChatSink::Channel(channel))
+            .await
+    }
+
+    /// Subscribe a WebSocket sink (event-bridge plan Step 4). Returns the
+    /// subscribe result (id + snapshot) plus the receiver the WS bridge drains.
+    /// On WS close the bridge calls `unsubscribe(chat_id, subscription_id)`.
+    pub async fn subscribe_ws(
+        &self,
+        chat_id: &str,
+    ) -> (SubscribeResult, mpsc::Receiver<ChatEvent>) {
+        let (tx, rx) = mpsc::channel(WS_SINK_BUFFER);
+        let result = self.push_subscriber(chat_id, ChatSink::Ws(tx)).await;
+        (result, rx)
+    }
+
     /// Remove a subscriber by ID.
     pub async fn unsubscribe(&self, chat_id: &str, sub_id: SubscriptionId) {
         if let Some(slot) = self.chats.get(chat_id) {
@@ -198,11 +241,10 @@ impl ChatRegistry {
 
     /// Fan-out an event to all subscribers of a chat.
     ///
-    /// **Critical invariant:** `channel.send()` is called **outside** the slot
-    /// mutex. We clone the subscriber handles under the lock, drop it, then
-    /// send. Dead channels (send returns Err) are garbage-collected via a
-    /// short re-lock.
-    #[cfg(feature = "desktop")]
+    /// **Critical invariant:** the sink send is called **outside** the slot
+    /// mutex. We clone the (cheap) sink handles under the lock, drop it, then
+    /// send. Dead sinks (send returns false) are garbage-collected via a short
+    /// re-lock.
     pub async fn fan_out(&self, chat_id: &str, event: ChatEvent) {
         let slot = match self.chats.get(chat_id) {
             Some(s) => s.clone(),
@@ -210,12 +252,12 @@ impl ChatRegistry {
         };
 
         // Step 1: clone subscriber handles under lock
-        let subs: Vec<(SubscriptionId, tauri::ipc::Channel<ChatEvent>)> = {
+        let subs: Vec<(SubscriptionId, ChatSink)> = {
             let guard = slot.lock().await;
             guard
                 .subscribers
                 .iter()
-                .map(|s| (s.id, s.channel.clone()))
+                .map(|s| (s.id, s.sink.clone()))
                 .collect()
         };
         // Lock is dropped here
@@ -226,8 +268,8 @@ impl ChatRegistry {
 
         // Step 2: send outside lock, collect dead IDs
         let mut dead_ids = Vec::new();
-        for (id, channel) in &subs {
-            if channel.send(event.clone()).is_err() {
+        for (id, sink) in &subs {
+            if !sink.send(event.clone()) {
                 dead_ids.push(*id);
             }
         }
@@ -238,10 +280,6 @@ impl ChatRegistry {
             guard.subscribers.retain(|s| !dead_ids.contains(&s.id));
         }
     }
-
-    /// No-op fan-out when desktop feature is disabled (no IPC subscribers).
-    #[cfg(not(feature = "desktop"))]
-    pub async fn fan_out(&self, _chat_id: &str, _event: ChatEvent) {}
 
     /// Convenience: update state + fan_out a Snapshot event.
     #[allow(dead_code)]
@@ -313,7 +351,7 @@ impl ChatRegistry {
 // Tauri commands
 // ---------------------------------------------------------------------------
 
-fn validate_id(id: &str) -> Result<(), String> {
+pub(crate) fn validate_id(id: &str) -> Result<(), String> {
     if id.is_empty() || id.len() > 64 {
         return Err("ID must be 1-64 characters".to_string());
     }
@@ -329,23 +367,21 @@ fn validate_id(id: &str) -> Result<(), String> {
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn chat_subscribe(
-    registry: tauri::State<'_, ChatRegistry>,
     chat_id: String,
     on_event: tauri::ipc::Channel<ChatEvent>,
 ) -> Result<SubscribeResult, String> {
     validate_id(&chat_id)?;
-    Ok(registry.subscribe(&chat_id, on_event).await)
+    Ok(chat_registry().subscribe(&chat_id, on_event).await)
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn chat_unsubscribe(
-    registry: tauri::State<'_, ChatRegistry>,
     chat_id: String,
     subscription_id: SubscriptionId,
 ) -> Result<(), String> {
     validate_id(&chat_id)?;
-    registry.unsubscribe(&chat_id, subscription_id).await;
+    chat_registry().unsubscribe(&chat_id, subscription_id).await;
     Ok(())
 }
 

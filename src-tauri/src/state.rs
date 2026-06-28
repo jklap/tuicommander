@@ -120,6 +120,19 @@ pub enum AppEvent {
         goal: String,
         timed_out: bool,
     },
+    /// Diff-triage classification progress — browser/SSE parity for the desktop
+    /// `triage-progress` window event. Low-frequency (a handful of phases per
+    /// triage), safe on the global bus.
+    #[serde(rename = "triage-progress")]
+    DiffTriageProgress {
+        repo_path: String,
+        summary: Option<String>,
+        files: Vec<crate::diff_triage::FileClassification>,
+        phase: String,
+        done: bool,
+        llm_used: bool,
+        llm_model: Option<String>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -1965,7 +1978,8 @@ impl AppState {
             | AppEvent::GitHubTransition { .. }
             | AppEvent::GitHubIssuesUpdate { .. }
             | AppEvent::CloseHtmlTabs { .. }
-            | AppEvent::ScheduledJobCompleted { .. } => {}
+            | AppEvent::ScheduledJobCompleted { .. }
+            | AppEvent::DiffTriageProgress { .. } => {}
         }
     }
 

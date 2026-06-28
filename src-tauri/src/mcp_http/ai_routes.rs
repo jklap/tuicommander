@@ -55,6 +55,31 @@ pub(super) async fn new_conversation_id_http() -> Response {
     json_result(Ok::<String, String>(crate::ai_chat::new_conversation_id()))
 }
 
+// ── Diff triage (event-bridge plan Step 2) ─────────────────────────────
+// Triggers `run_diff_triage`; progress streams over `/events` SSE via
+// `AppEvent::DiffTriageProgress`. Desktop-gated: the triage LLM pipeline
+// needs the desktop providers, so the remote daemon does not serve it.
+
+#[cfg(feature = "desktop")]
+#[derive(Deserialize)]
+pub(super) struct RunTriageRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    pub refresh: Option<bool>,
+}
+
+#[cfg(feature = "desktop")]
+pub(super) async fn run_diff_triage_http(
+    State(state): State<Arc<AppState>>,
+    Json(b): Json<RunTriageRequest>,
+) -> Response {
+    let app = match state.app_handle.read().clone() {
+        Some(a) => a,
+        None => return err_500("App handle not initialized"),
+    };
+    json_result(crate::diff_triage::run_diff_triage(app, b.repo_path, b.refresh).await)
+}
+
 // ── Agent loop control + knowledge + scheduler (story 068 RPC slice) ───
 // start_conversation streaming is a dedicated WS endpoint (later plan step).
 

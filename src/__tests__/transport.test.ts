@@ -850,6 +850,13 @@ describe("transport", () => {
 			expect(ss.method).toBe("PUT");
 			expect(ss.body).toEqual({ jobs: [] });
 		});
+
+		it("maps run_diff_triage trigger (event-bridge plan Step 2)", () => {
+			const r = mapCommandToHttp("run_diff_triage", { repoPath: "/r", refresh: true });
+			expect(r.method).toBe("POST");
+			expect(r.path).toBe("/ai/triage/run");
+			expect(r.body).toEqual({ repoPath: "/r", refresh: true });
+		});
 	});
 
 	describe("INTENTIONALLY_UNMAPPED (native/host-only commands)", () => {

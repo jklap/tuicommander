@@ -337,6 +337,126 @@ pub(crate) async fn start_conversation(
     Ok(event_rx)
 }
 
+/// Build a `ConversationConfig` from the loosely-typed transport params shared by
+/// the desktop Tauri command and the browser WebSocket handler. Per-call params
+/// win; `reasoning_effort` falls back to the persisted AI-chat setting.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_config(
+    autonomy: Option<String>,
+    max_steps: Option<usize>,
+    temperature: Option<f32>,
+    model_override: Option<String>,
+    bypassed_tools: Option<Vec<String>>,
+    reasoning_effort: Option<String>,
+) -> ConversationConfig {
+    let reasoning_effort =
+        reasoning_effort.or_else(|| crate::ai_chat::load_ai_chat_config().reasoning_effort);
+    ConversationConfig {
+        autonomy: match autonomy.as_deref() {
+            Some("autonomous") => Autonomy::Autonomous,
+            _ => Autonomy::Assisted,
+        },
+        max_steps,
+        temperature: temperature.unwrap_or(0.7),
+        model_override,
+        bypassed_tools: bypassed_tools.unwrap_or_default().into_iter().collect(),
+        reasoning: ReasoningLevel::from_opt(reasoning_effort.as_deref()),
+        compact_after_tokens: Some(engine::DEFAULT_COMPACT_THRESHOLD_TOKENS),
+    }
+}
+
+/// Apply 50ms TextChunk/ReasoningChunk batching to a raw conversation broadcast
+/// receiver, yielding ready-to-send events on an mpsc channel. Shared by the
+/// desktop Tauri-Channel bridge and the browser WebSocket bridge so both
+/// transports get identical batching/ordering semantics. The spawned task ends
+/// when the source closes, a Completed/Error event is forwarded, or the consumer
+/// (mpsc receiver) is dropped.
+pub(crate) fn batched_conversation_stream(
+    mut rx: broadcast::Receiver<ConversationEvent>,
+) -> tokio::sync::mpsc::Receiver<ConversationEvent> {
+    let (tx, out_rx) = tokio::sync::mpsc::channel::<ConversationEvent>(256);
+    tokio::spawn(async move {
+        let mut text_batch = String::new();
+        let mut reasoning_batch = String::new();
+        let mut interval = tokio::time::interval(Duration::from_millis(50));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        // Flush text first, then reasoning, so ordering within a tick is stable.
+        // Returns false if the downstream consumer is gone.
+        async fn flush(
+            tx: &tokio::sync::mpsc::Sender<ConversationEvent>,
+            text: &mut String,
+            reasoning: &mut String,
+        ) -> bool {
+            if !text.is_empty()
+                && tx
+                    .send(ConversationEvent::TextChunk {
+                        text: std::mem::take(text),
+                    })
+                    .await
+                    .is_err()
+            {
+                return false;
+            }
+            if !reasoning.is_empty()
+                && tx
+                    .send(ConversationEvent::ReasoningChunk {
+                        text: std::mem::take(reasoning),
+                    })
+                    .await
+                    .is_err()
+            {
+                return false;
+            }
+            true
+        }
+
+        loop {
+            tokio::select! {
+                result = rx.recv() => {
+                    match result {
+                        Ok(ConversationEvent::TextChunk { text }) => text_batch.push_str(&text),
+                        Ok(ConversationEvent::ReasoningChunk { text }) => reasoning_batch.push_str(&text),
+                        Ok(other) => {
+                            // Flush pending batches before a non-text event.
+                            if !flush(&tx, &mut text_batch, &mut reasoning_batch).await {
+                                break;
+                            }
+                            let done = matches!(
+                                other,
+                                ConversationEvent::Completed { .. } | ConversationEvent::Error { .. }
+                            );
+                            if tx.send(other).await.is_err() {
+                                break;
+                            }
+                            if done {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            // Consumer fell behind on a high-throughput stream. Some chunks
+                            // were dropped, but the conversation is NOT over — continue so
+                            // Completed/Error still reach the consumer. Breaking here would
+                            // wedge the UI spinner forever.
+                            tracing::warn!("conversation bridge lagged {n} events — text chunks lost");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            let _ = flush(&tx, &mut text_batch, &mut reasoning_batch).await;
+                            break;
+                        }
+                    }
+                }
+                _ = interval.tick() => {
+                    if !flush(&tx, &mut text_batch, &mut reasoning_batch).await {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    out_rx
+}
+
 /// Cancel an active conversation.
 ///
 /// Idempotent: cancelling a session with no active conversation is a no-op

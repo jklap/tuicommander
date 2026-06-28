@@ -104,6 +104,7 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::GitHubIssuesUpdate { .. } => "github-issues-update",
         AppEvent::CloseHtmlTabs { .. } => "close-html-tabs",
         AppEvent::ScheduledJobCompleted { .. } => "scheduled-job-completed",
+        AppEvent::DiffTriageProgress { .. } => "triage-progress",
     }
 }
 
@@ -208,6 +209,25 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             timed_out,
         } => {
             serde_json::json!({ "job_id": job_id, "goal": goal, "timed_out": timed_out })
+        }
+        AppEvent::DiffTriageProgress {
+            repo_path,
+            summary,
+            files,
+            phase,
+            done,
+            llm_used,
+            llm_model,
+        } => {
+            serde_json::json!({
+                "repo_path": repo_path,
+                "summary": summary,
+                "files": files,
+                "phase": phase,
+                "done": done,
+                "llm_used": llm_used,
+                "llm_model": llm_model,
+            })
         }
     }
 }
