@@ -1902,7 +1902,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 
 ### 23.12 UI
 - **TunnelsPanel** — List of tunnel profiles with status badges and start/stop controls
-- **TunnelEditorModal** — Create and edit tunnel profiles with form validation; file browse dialog for identity file; remote host pre-populated from tunnel host when adding forwards; numeric input mode for port fields
+- **TunnelEditorModal** — Create and edit tunnel profiles with form validation; file browse dialog for identity file; remote host pre-populated from tunnel host when adding forwards; type-aware Local/Remote forward endpoint fields; numeric input mode for port fields
 - **TunnelStatusBadge** — Color-coded status indicator (green=connected, blue=starting, orange=reconnecting, red=error, grey=stopped)
 - **Command Palette** — `toggle-tunnels` action registered for quick access
 

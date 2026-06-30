@@ -83,10 +83,7 @@ const MenuItem: Component<{
 	};
 
 	return (
-		<>
-			<Show when={props.item.separator}>
-				<div class={s.separator} />
-			</Show>
+		<Show when={!props.item.separator} fallback={<div class={s.separator} />}>
 			<div ref={wrapRef} class={s.itemWrap} onMouseEnter={openSubmenu} onMouseLeave={() => setSubmenuOpen(false)}>
 				<button
 					class={cx(s.item, props.item.disabled && s.disabled)}
@@ -120,7 +117,7 @@ const MenuItem: Component<{
 					</div>
 				</Show>
 			</div>
-		</>
+		</Show>
 	);
 };
 

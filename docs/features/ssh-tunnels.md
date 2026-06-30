@@ -163,7 +163,7 @@ Main panel listing all tunnel profiles with:
 
 Form for creating and editing profiles:
 - Name, host, port, user, identity file fields
-- Port forwards list with add/remove
+- Port forwards list with add/remove and type-aware endpoint fields: Local forwards save `remote_host`/`remote_port`, Remote forwards save `local_host`/`local_port`
 - Options section (keepalive, host key checking)
 - Validation errors shown inline
 

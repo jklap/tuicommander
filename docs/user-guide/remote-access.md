@@ -98,7 +98,7 @@ TUICommander can manage persistent SSH tunnels with automatic reconnection, port
    - **Port** — SSH port (default 22)
    - **User** — SSH username
    - **Identity File** — Optional path to SSH private key (use the Browse button to select)
-   - **Port Forwards** — Local or remote port forwarding rules (e.g., local 8080 → remote 80). The remote host is pre-populated from the tunnel host when adding a forward
+   - **Port Forwards** — Local or remote port forwarding rules (e.g., local 8080 → remote 80). Local forwards target `remote_host`/`remote_port`; Remote forwards target `local_host`/`local_port`. The remote host is pre-populated from the tunnel host when adding a Local forward
    - **Options** — ServerAliveInterval (default 15s), ServerAliveCountMax (default 3), StrictHostKeyChecking (Yes or AcceptNew)
 4. Save the profile
 

@@ -76,6 +76,29 @@ describe("ContextMenu", () => {
 		expect(separators.length).toBe(1);
 	});
 
+	it("separator renders only a divider — no selectable button row", () => {
+		const items: ContextMenuItem[] = [
+			{ label: "Top", action: vi.fn() },
+			{ label: "", action: vi.fn(), separator: true },
+			{ label: "Bottom", action: vi.fn() },
+		];
+		const { container } = render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
+		// Two real items only — the separator must NOT produce a hoverable .item button.
+		expect(container.querySelectorAll(".item").length).toBe(2);
+		expect(container.querySelectorAll(".itemWrap").length).toBe(2);
+		expect(container.querySelectorAll(".separator").length).toBe(1);
+	});
+
+	it("separator with a stray label does not render that label as a row", () => {
+		const items: ContextMenuItem[] = [
+			{ label: "Ghost", action: vi.fn(), separator: true },
+			{ label: "Real", action: vi.fn() },
+		];
+		const { container } = render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
+		const labels = Array.from(container.querySelectorAll(".label")).map((el) => el.textContent);
+		expect(labels).toEqual(["Real"]);
+	});
+
 	it("closes on Escape key", () => {
 		const handleClose = vi.fn();
 		render(() => <ContextMenu items={sampleItems} x={0} y={0} visible={true} onClose={handleClose} />);

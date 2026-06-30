@@ -35,6 +35,51 @@ function emptyForward(): ForwardSpec {
 	return { type: "Local", bind_port: 0 };
 }
 
+function parsePort(value: string, fallback: number): number {
+	const parsed = Number.parseInt(value, 10);
+	return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+export function normalizeForwardForType(forward: ForwardSpec): ForwardSpec {
+	if (forward.type === "Remote") {
+		return {
+			type: "Remote",
+			bind_port: forward.bind_port,
+			local_host: forward.local_host ?? forward.remote_host ?? "",
+			local_port: forward.local_port ?? forward.remote_port ?? 0,
+		};
+	}
+
+	return {
+		type: "Local",
+		bind_port: forward.bind_port,
+		remote_host: forward.remote_host ?? forward.local_host ?? "",
+		remote_port: forward.remote_port ?? forward.local_port ?? 0,
+	};
+}
+
+export function convertForwardType(
+	forward: ForwardSpec,
+	type: ForwardSpec["type"],
+	defaultRemoteHost = "",
+): ForwardSpec {
+	if (type === "Remote") {
+		return {
+			type,
+			bind_port: forward.bind_port,
+			local_host: forward.local_host ?? "127.0.0.1",
+			local_port: forward.local_port ?? forward.remote_port ?? 0,
+		};
+	}
+
+	return {
+		type,
+		bind_port: forward.bind_port,
+		remote_host: forward.remote_host ?? defaultRemoteHost,
+		remote_port: forward.remote_port ?? forward.local_port ?? 0,
+	};
+}
+
 export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 	const isEdit = () => !!props.profile;
 
@@ -79,6 +124,9 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 	const updateForward = (idx: number, patch: Partial<ForwardSpec>) => {
 		setForwards((f) => f.map((fw, i) => (i === idx ? { ...fw, ...patch } : fw)));
 	};
+	const replaceForward = (idx: number, next: ForwardSpec) => {
+		setForwards((f) => f.map((fw, i) => (i === idx ? next : fw)));
+	};
 
 	const handleSave = async () => {
 		const trimmedName = name().trim();
@@ -100,7 +148,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 				port: port(),
 				user: trimmedUser,
 				identity_file: identityFile().trim() || null,
-				forwards: forwards(),
+				forwards: forwards().map(normalizeForwardForType),
 				options: options(),
 				auto_connect: autoConnect(),
 			};
@@ -152,11 +200,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 						</div>
 						<div class={s.group} style={{ width: "80px" }}>
 							<label class={s.label}>Port</label>
-							<input
-								type="number"
-								value={port()}
-								onInput={(e) => setPort(Number.parseInt(e.currentTarget.value, 10) || 22)}
-							/>
+							<input type="number" value={port()} onInput={(e) => setPort(parsePort(e.currentTarget.value, 22))} />
 						</div>
 					</div>
 
@@ -231,7 +275,12 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 									<select
 										style={{ width: "80px" }}
 										value={fw.type}
-										onChange={(e) => updateForward(idx(), { type: e.currentTarget.value as "Local" | "Remote" })}
+										onChange={(e) =>
+											replaceForward(
+												idx(),
+												convertForwardType(fw, e.currentTarget.value as ForwardSpec["type"], host().trim()),
+											)
+										}
 									>
 										<option value="Local">Local</option>
 										<option value="Remote">Remote</option>
@@ -244,16 +293,23 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 										value={fw.bind_port || ""}
 										onInput={(e) =>
 											updateForward(idx(), {
-												bind_port: Number.parseInt(e.currentTarget.value, 10) || 0,
+												bind_port: parsePort(e.currentTarget.value, 0),
 											})
 										}
 									/>
 									<span style={{ color: "var(--fg-muted)" }}>:</span>
 									<input
-										placeholder="remote host"
+										placeholder={fw.type === "Remote" ? "local host" : "remote host"}
 										style={{ flex: "1" }}
-										value={fw.remote_host ?? ""}
-										onInput={(e) => updateForward(idx(), { remote_host: e.currentTarget.value })}
+										value={fw.type === "Remote" ? (fw.local_host ?? fw.remote_host ?? "") : (fw.remote_host ?? "")}
+										onInput={(e) =>
+											updateForward(
+												idx(),
+												fw.type === "Remote"
+													? { local_host: e.currentTarget.value }
+													: { remote_host: e.currentTarget.value },
+											)
+										}
 									/>
 									<span style={{ color: "var(--fg-muted)" }}>:</span>
 									<input
@@ -261,11 +317,14 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 										pattern="[0-9]*"
 										placeholder="port"
 										style={{ width: "70px" }}
-										value={fw.remote_port ?? ""}
+										value={fw.type === "Remote" ? (fw.local_port ?? fw.remote_port ?? "") : (fw.remote_port ?? "")}
 										onInput={(e) =>
-											updateForward(idx(), {
-												remote_port: Number.parseInt(e.currentTarget.value, 10) || 0,
-											})
+											updateForward(
+												idx(),
+												fw.type === "Remote"
+													? { local_port: parsePort(e.currentTarget.value, 0) }
+													: { remote_port: parsePort(e.currentTarget.value, 0) },
+											)
 										}
 									/>
 									<button
@@ -298,7 +357,7 @@ export const TunnelEditorModal: Component<TunnelEditorModalProps> = (props) => {
 								onInput={(e) =>
 									setOptions((o) => ({
 										...o,
-										server_alive_interval: Number.parseInt(e.currentTarget.value, 10) || 15,
+										server_alive_interval: parsePort(e.currentTarget.value, 15),
 									}))
 								}
 							/>

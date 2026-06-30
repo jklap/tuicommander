@@ -1715,10 +1715,12 @@ struct ChunkProcessor {
     /// Absolute buffer line of the last heuristic agent-block start.
     /// Used to emit AgentBlock end when the next block starts or agent exits.
     last_agent_block_line: Option<usize>,
-    /// Edge-detect grok's OSC 0 "Action Required" approval title so a permission
-    /// prompt fires the question notification exactly once (the title repaints
-    /// every spinner tick). True while the last title signalled awaiting-approval.
-    grok_title_awaiting: bool,
+    /// Edge-detect an "Action Required" OSC 0 title so a permission prompt fires
+    /// the question notification exactly once (the title repaints every spinner
+    /// tick). Agent-agnostic: any agent that puts "Action Required" in its title
+    /// (grok, Codex, …) drives this. True while the last title signalled
+    /// awaiting-approval.
+    title_awaiting: bool,
 }
 
 impl ChunkProcessor {
@@ -1744,7 +1746,7 @@ impl ChunkProcessor {
             tuic_session,
             last_session_conflict_mark: None,
             last_agent_block_line: None,
-            grok_title_awaiting: false,
+            title_awaiting: false,
         }
     }
 
@@ -2159,11 +2161,13 @@ impl ChunkProcessor {
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), &title);
                         }
-                        // grok signals an awaiting-approval permission prompt by
-                        // prefixing its OSC 0 title with "⚠ Action Required" (e.g.
-                        // "⚠ Action Required - ⠙ - Running: echo … - Execute Shell …").
-                        // The title repaints every spinner tick, so edge-detect the
-                        // false→true transition and fire the question exactly once.
+                        // Some agents signal an awaiting-approval permission prompt by
+                        // putting "Action Required" in their OSC 0 title (grok prefixes
+                        // "⚠ Action Required - ⠙ - Running: echo … - Execute Shell …";
+                        // Codex uses "[ . ] Action Required | …"). Agent-agnostic: any
+                        // such title drives this. The title repaints every spinner tick,
+                        // so edge-detect the false→true transition and fire the question
+                        // exactly once.
                         // DEFERRED (2026-06-11) — grok 0.2.45 in always-approve mode
                         // emits titles like "Run Shell Command echo … - grok" with NO
                         // "Action Required" prefix (verified live). The prefix may be
@@ -2171,20 +2175,20 @@ impl ChunkProcessor {
                         // (cliclack path in output_parser) covers real approvals. Re-verify
                         // grok's title in default (non-always-approve) mode before removing.
                         let title_awaiting = title.contains("Action Required");
-                        if title_awaiting && !self.grok_title_awaiting {
+                        if title_awaiting && !self.title_awaiting {
                             tuic_events.push(ParsedEvent::Question {
                                 prompt_text: clean_action_required_title(&title),
                                 confident: true,
                             });
                         }
-                        self.grok_title_awaiting = title_awaiting;
+                        self.title_awaiting = title_awaiting;
                     }
                     TermEvent::ResetTitle => {
                         #[cfg(feature = "desktop")]
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(&format!("pty-title-{session_id}"), "");
                         }
-                        self.grok_title_awaiting = false;
+                        self.title_awaiting = false;
                     }
                     TermEvent::ClipboardStore(text) => {
                         #[cfg(feature = "desktop")]
@@ -2449,7 +2453,7 @@ impl ChunkProcessor {
         for event in &events {
             // During startup/resize grace, suppress low-confidence notifications to
             // avoid boot-noise false positives — but let CONFIDENT questions through.
-            // grok signals an approval prompt via its "Action Required" title
+            // An agent can signal an approval prompt via its "Action Required" title
             // (confident), yet its continuous animation keeps resetting last_output,
             // so the startup grace never settles by silence and would otherwise
             // suppress the approval prompt for the full 120s safety cap.

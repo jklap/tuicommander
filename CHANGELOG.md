@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - **Design-system audit — tokens, accessibility, GPU animations** — Canonical CSS token migration (no orphan/aliased variables left), keyboard accessibility (`role`/`tabindex`/Enter–Space) across collapsible headers and clickable rows, progress bars moved to GPU `transform: scaleX()`, and removal of side-stripe accents and mobile glassmorphism. Active/selected states now use a non-layout inset ring, so selecting an item no longer shifts its neighbors. Contributed by @paulovitin (#93).
 
+### Fixed
+- **SSH tunnel remote forwards** — The tunnel editor now saves Remote forwards with `local_host`/`local_port`, matching the backend schema and preventing Remote forwards from being rejected as malformed Local-forward payloads.
+
 ## [1.5.1] - 2026-06-26
 
 ### Fixed
