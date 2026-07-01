@@ -10,6 +10,7 @@ import { currentBranchKey, repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { tabOrderingStore } from "../stores/tabOrdering";
 import { terminalsStore } from "../stores/terminals";
+import { writeClipboard } from "../utils/clipboard";
 import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { filterValidTerminals } from "../utils/terminalFilter";
@@ -26,6 +27,7 @@ export interface TerminalLifecycleDeps {
 	};
 	dialogs: {
 		confirmCloseTerminal: (name: string) => Promise<boolean>;
+		confirmSaveChanges: (fileName: string) => Promise<"confirm" | "cancel" | "discard">;
 		confirm: (options: {
 			title: string;
 			message: string;
@@ -145,14 +147,13 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 		if (id.startsWith("edit-")) {
 			const tab = editorTabsStore.get(id);
 			if (!skipConfirm && tab?.isDirty) {
-				const confirmed = await deps.dialogs.confirm({
-					title: "Unsaved changes",
-					message: `"${tab.fileName}" has unsaved changes.\nClose without saving?`,
-					okLabel: "Close without saving",
-					cancelLabel: "Cancel",
-					kind: "warning",
-				});
-				if (!confirmed) return;
+				const choice = await deps.dialogs.confirmSaveChanges(tab.fileName);
+				// Cancel keeps the tab open; Save persists then closes; Don't Save discards.
+				if (choice === "cancel") return;
+				if (choice === "confirm") {
+					const handle = editorTabsStore.getHandle<{ save?: () => Promise<void> }>(id);
+					if (handle?.save) await handle.save();
+				}
 			}
 			selectAfterNonTerminalClose(editorTabsStore, id);
 			editorTabsStore.remove(id);
@@ -424,7 +425,7 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 						.join("\n")
 				: "";
 			if (selection) {
-				await navigator.clipboard.writeText(selection);
+				await writeClipboard(selection);
 				deps.setStatusInfo("Copied to clipboard");
 			}
 		} catch (err) {

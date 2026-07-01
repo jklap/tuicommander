@@ -287,6 +287,26 @@ pub(super) async fn spawn_agent_session(
         }
     };
 
+    // Only Claude's CLI accepts a bare positional prompt. For other agents the
+    // no-args default below would produce an argument-parse error and an immediate
+    // exit (clap exit code 2), so reject up front with an actionable message rather
+    // than spawning a doomed process.
+    if body.args.is_none()
+        && body
+            .agent_type
+            .as_deref()
+            .is_some_and(|t| !crate::agent::agent_accepts_bare_prompt(t))
+    {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": format!(
+                "Agent '{name}' cannot be spawned with a bare prompt (only Claude's CLI accepts a positional prompt; other agents exit with code 2). Pass explicit args, or spawn via the MCP agent tool with a configured run config.",
+                name = body.agent_type.as_deref().unwrap_or_default()
+            )})),
+        )
+            .into_response();
+    }
+
     let rows = body.rows.unwrap_or(24);
     let cols = body.cols.unwrap_or(80);
     if let Err(msg) = super::validate_terminal_size(rows, cols) {
@@ -393,6 +413,21 @@ pub(super) async fn spawn_agent_session(
         .metrics
         .active_sessions
         .fetch_add(1, Ordering::Relaxed);
+
+    // Pre-set the session's agent type (mirrors session.rs spawn_pty_session) so the
+    // PTY reader's agent_active gate turns on immediately and intent/suggest protocol
+    // tokens are parsed from the first line of output.
+    let mut session_state = crate::state::SessionState::default();
+    if let Some(ref agent_type) = body.agent_type {
+        session_state.hook_instrumented = crate::pty::hook_instrumented_for(
+            &crate::config::load_agents_config(),
+            Some(agent_type.as_str()),
+        );
+        session_state.agent_type = Some(agent_type.clone());
+    }
+    state
+        .session_states
+        .insert(session_id.clone(), session_state);
 
     state.output_buffers.insert(
         session_id.clone(),

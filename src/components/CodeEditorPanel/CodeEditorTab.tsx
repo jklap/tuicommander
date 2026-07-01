@@ -189,7 +189,13 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	// Expose openSearch to the global Cmd+F router (App.tsx findInTerminal) so the
 	// shortcut works even when focus left the CodeMirror content (e.g. while
 	// dragging the scrollbar). The CM `Mod-f` keymap only fires with focus inside.
-	editorTabsStore.setHandle(props.id, { openSearch: () => setSearchVisible(true) });
+	// save/isDirty let the close-tab flow persist unsaved changes (issue #104)
+	// without reaching into this component's internal state.
+	editorTabsStore.setHandle(props.id, {
+		openSearch: () => setSearchVisible(true),
+		save: () => handleSave(),
+		isDirty: () => dirty(),
+	});
 	onCleanup(() => editorTabsStore.clearHandle(props.id));
 	/** Current symbol under cursor (for breadcrumb) */
 	const [currentSymbol, setCurrentSymbol] = createSignal<string | null>(null);

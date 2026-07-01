@@ -1,6 +1,7 @@
 import { fireEvent, render } from "@solidjs/testing-library";
 import { describe, expect, it, vi } from "vitest";
 import { HelpPanel } from "../../components/HelpPanel/HelpPanel";
+import { mockInvoke } from "../mocks/tauri";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
 	openUrl: vi.fn().mockResolvedValue(undefined),
@@ -70,6 +71,22 @@ describe("HelpPanel", () => {
 	it("displays the app version", () => {
 		const { container } = render(() => <HelpPanel {...defaultProps} />);
 		expect(container.textContent).toContain("Version");
+	});
+
+	it("copies the version to the clipboard when the Copy button is clicked", () => {
+		mockInvoke.mockClear().mockResolvedValue(undefined);
+
+		const { container } = render(() => <HelpPanel {...defaultProps} />);
+		const copyBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.trim() === "Copy");
+		expect(copyBtn).not.toBeUndefined();
+
+		fireEvent.click(copyBtn!);
+
+		// writeClipboard routes through the native clipboard-manager plugin in Tauri.
+		expect(mockInvoke).toHaveBeenCalledWith(
+			"plugin:clipboard-manager|write_text",
+			expect.objectContaining({ text: __APP_VERSION__ }),
+		);
 	});
 
 	it("displays license and credits", () => {

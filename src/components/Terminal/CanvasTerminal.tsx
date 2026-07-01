@@ -6,6 +6,7 @@ import { appLogger } from "../../stores/appLogger";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { filterMatchesToBlock } from "../../utils/blockSearchFilter";
+import { writeClipboard } from "../../utils/clipboard";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
 import { ensureKeyboardViewportTracking, keyboardOcclusion } from "../../utils/keyboardViewport";
 import { handleOpenUrl } from "../../utils/openUrl";
@@ -188,7 +189,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	const copyLink = (link: LinkTarget) => {
 		const text = link.path.startsWith("file://") ? link.path.slice(7) : link.path;
-		navigator.clipboard.writeText(text).catch(() => {});
+		writeClipboard(text).catch(() => {});
 	};
 
 	// Cached CSS custom properties (re-read on remeasure, not every frame)
@@ -2894,7 +2895,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 			if (text) {
 				cachedSelectionText = text;
-				await navigator.clipboard.writeText(text);
+				await writeClipboard(text);
 				setStatus?.("Copied to clipboard");
 			}
 		} catch (e) {

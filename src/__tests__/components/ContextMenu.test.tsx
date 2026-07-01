@@ -66,14 +66,17 @@ describe("ContextMenu", () => {
 		expect(action).not.toHaveBeenCalled();
 	});
 
-	it("renders separator when item has separator flag", () => {
+	it("renders the item AND a trailing divider when a real item sets separator", () => {
 		const items: ContextMenuItem[] = [
 			{ label: "Above", action: vi.fn(), separator: true },
 			{ label: "Below", action: vi.fn() },
 		];
 		const { container } = render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
-		const separators = container.querySelectorAll(".separator");
-		expect(separators.length).toBe(1);
+		// `separator` on a real item is a trailing-divider MODIFIER — "Above"
+		// must still render its button, not be replaced by the divider.
+		const labels = Array.from(container.querySelectorAll(".label")).map((el) => el.textContent);
+		expect(labels).toEqual(["Above", "Below"]);
+		expect(container.querySelectorAll(".separator").length).toBe(1);
 	});
 
 	it("separator renders only a divider — no selectable button row", () => {
@@ -89,14 +92,19 @@ describe("ContextMenu", () => {
 		expect(container.querySelectorAll(".separator").length).toBe(1);
 	});
 
-	it("separator with a stray label does not render that label as a row", () => {
+	it("a real item with separator renders its label plus a trailing divider", () => {
+		// Regression guard: commit 2f032261 treated `separator` as exclusive
+		// (divider OR item), silently dropping every FileBrowser item that
+		// requested a trailing divider — New File, Paste, Delete, Add to
+		// .gitignore all vanished. A non-empty label must ALWAYS render.
 		const items: ContextMenuItem[] = [
-			{ label: "Ghost", action: vi.fn(), separator: true },
-			{ label: "Real", action: vi.fn() },
+			{ label: "Delete", action: vi.fn(), separator: true },
+			{ label: "Reveal", action: vi.fn() },
 		];
 		const { container } = render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
 		const labels = Array.from(container.querySelectorAll(".label")).map((el) => el.textContent);
-		expect(labels).toEqual(["Real"]);
+		expect(labels).toEqual(["Delete", "Reveal"]);
+		expect(container.querySelectorAll(".separator").length).toBe(1);
 	});
 
 	it("closes on Escape key", () => {

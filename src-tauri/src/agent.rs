@@ -797,6 +797,16 @@ fn get_binary_version(path: &str) -> Option<String> {
     None
 }
 
+/// Whether an agent's CLI accepts a bare positional prompt as its first argument.
+///
+/// Only Claude's CLI does. codex/gemini/aider/goose require a subcommand or an
+/// explicit flag, and hand a bare prompt straight to their clap parser, which
+/// rejects it with a usage error and exits with code 2. Spawn paths use this to
+/// fail fast instead of launching a process that dies immediately with no report.
+pub(crate) fn agent_accepts_bare_prompt(agent_type: &str) -> bool {
+    agent_type == "claude"
+}
+
 /// Detect claude binary location (legacy, delegates to detect_agent_binary)
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn detect_claude_binary() -> Result<String, String> {
@@ -952,6 +962,18 @@ mod tests {
     use super::*;
 
     // resolve_cli and extra_bin_dirs tests are now in cli.rs
+
+    #[test]
+    fn only_claude_accepts_a_bare_prompt() {
+        assert!(agent_accepts_bare_prompt("claude"));
+        // Every other known agent CLI would exit with code 2 on a bare prompt.
+        for agent in ["codex", "gemini", "aider", "goose", "opencode", "amp"] {
+            assert!(
+                !agent_accepts_bare_prompt(agent),
+                "{agent} must not be treated as accepting a bare prompt"
+            );
+        }
+    }
 
     #[test]
     fn test_detect_claude_binary() {

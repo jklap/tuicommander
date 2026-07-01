@@ -140,6 +140,31 @@ fn is_codex_chrome_bullet(text: &str) -> bool {
         || after.contains("interrupt")
 }
 
+/// True if the row is an agent "working" status line that stays on screen for
+/// the WHOLE time the agent is busy — even while a spawned subprocess runs and
+/// the TUI is frozen (no grid changes at all).
+///
+/// Codex renders `• Working (12s • esc to interrupt)` (the blink spinner
+/// alternates `•` U+2022 / `◦` U+25E6) and then FREEZES its UI while a child
+/// process (cargo, git) runs — a long `cargo build` is minutes with zero grid
+/// changes. The change-driven spinner keepalive (`is_spinner_row` over
+/// `changed_rows`) cannot see a frozen line, so the idle timer needs a
+/// PRESENCE-driven signal: while this line sits in the content zone the agent
+/// is alive, regardless of whether it changed this tick.
+///
+/// Keyed on the "esc to interrupt" hint (shown only while working) so it never
+/// matches plain `• …` output bullets or the `• Boot` startup line.
+pub fn is_working_status_row(text: &str) -> bool {
+    let t = text.trim_start();
+    // Optional Codex blink bullet (• / ◦) then the working status text.
+    let t = t
+        .strip_prefix('\u{2022}')
+        .or_else(|| t.strip_prefix('\u{25E6}'))
+        .unwrap_or(t)
+        .trim_start();
+    t.starts_with("Working") && t.contains("esc to interrupt")
+}
+
 /// junie (JetBrains) renders a persistent idle status bar whose "effort"
 /// indicator uses a partial-circle glyph (◐◑◒◓, U+25D0–U+25D3) — the SAME glyphs
 /// Claude Code uses for its animated tool-progress spinner. Without
@@ -240,6 +265,46 @@ pub fn find_chrome_cutoff(rows: &[&str]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- is_working_status_row (presence-driven busy keepalive) ---
+
+    #[test]
+    fn codex_working_line_is_working_status() {
+        assert!(is_working_status_row("• Working (9m 24s • esc to interrupt)"));
+    }
+
+    #[test]
+    fn codex_working_blink_frame_is_working_status() {
+        // The blink spinner alternates • (U+2022) and ◦ (U+25E6); both frames
+        // must register or the keepalive drops on every other tick.
+        assert!(is_working_status_row("◦ Working (12s • esc to interrupt)"));
+    }
+
+    #[test]
+    fn codex_working_indented_is_working_status() {
+        assert!(is_working_status_row("   • Working (1m 3s • esc to interrupt)"));
+    }
+
+    #[test]
+    fn codex_output_bullet_is_not_working_status() {
+        // Plain action-result bullets must NOT hold the agent busy forever.
+        assert!(!is_working_status_row("• Added deny.toml (+95 -0)"));
+        assert!(!is_working_status_row("• Ran cargo test -p proxy-min"));
+    }
+
+    #[test]
+    fn codex_boot_line_is_not_working_status() {
+        // Startup line has no "esc to interrupt" hint.
+        assert!(!is_working_status_row("• Boot"));
+    }
+
+    #[test]
+    fn prose_mentioning_interrupt_is_not_working_status() {
+        // Real agent text about interrupts must not be mistaken for the status.
+        assert!(!is_working_status_row(
+            "You can press esc to interrupt a running task."
+        ));
+    }
 
     // --- is_separator_line ---
 

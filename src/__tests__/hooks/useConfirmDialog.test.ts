@@ -26,6 +26,7 @@ describe("useConfirmDialog", () => {
 				confirmLabel: "Yes",
 				cancelLabel: "No",
 				kind: "warning",
+				defaultButton: "confirm",
 			});
 
 			dialog.handleConfirm();
@@ -60,6 +61,7 @@ describe("useConfirmDialog", () => {
 				confirmLabel: "OK",
 				cancelLabel: "Cancel",
 				kind: "warning",
+				defaultButton: "confirm",
 			});
 
 			dialog.handleClose();
@@ -156,6 +158,7 @@ describe("useConfirmDialog", () => {
 				confirmLabel: "Remove",
 				cancelLabel: "Cancel",
 				kind: "warning",
+				defaultButton: "confirm",
 			});
 
 			dialog.handleConfirm();
@@ -179,6 +182,7 @@ describe("useConfirmDialog", () => {
 				confirmLabel: "Close",
 				cancelLabel: "Cancel",
 				kind: "warning",
+				defaultButton: "confirm",
 			});
 
 			dialog.handleConfirm();
@@ -202,6 +206,7 @@ describe("useConfirmDialog", () => {
 				confirmLabel: "Remove",
 				cancelLabel: "Cancel",
 				kind: "warning",
+				defaultButton: "confirm",
 			});
 
 			dialog.handleConfirm();
@@ -212,6 +217,42 @@ describe("useConfirmDialog", () => {
 			const promise = dialog.confirmRemoveRepo("other-repo");
 			dialog.handleClose();
 			expect(await promise).toBe(false);
+		});
+	});
+
+	describe("confirmSaveChanges()", () => {
+		it("offers Save / Don't Save / Cancel with Save as the Enter default", () => {
+			void dialog.confirmSaveChanges("notes.md");
+
+			expect(dialog.dialogState()).toEqual({
+				title: "Unsaved changes",
+				message: '"notes.md" has unsaved changes.\nDo you want to save your changes before closing?',
+				confirmLabel: "Save",
+				cancelLabel: "Cancel",
+				discardLabel: "Don't Save",
+				kind: "warning",
+				defaultButton: "confirm",
+			});
+
+			dialog.handleClose();
+		});
+
+		it("resolves 'confirm' when the user chooses Save", async () => {
+			const promise = dialog.confirmSaveChanges("a.ts");
+			dialog.handleConfirm();
+			expect(await promise).toBe("confirm");
+		});
+
+		it("resolves 'discard' when the user chooses Don't Save", async () => {
+			const promise = dialog.confirmSaveChanges("a.ts");
+			dialog.handleDiscard();
+			expect(await promise).toBe("discard");
+		});
+
+		it("resolves 'cancel' when the user cancels", async () => {
+			const promise = dialog.confirmSaveChanges("a.ts");
+			dialog.handleClose();
+			expect(await promise).toBe("cancel");
 		});
 	});
 });

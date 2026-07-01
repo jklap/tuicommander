@@ -42,6 +42,7 @@ describe("useTerminalLifecycle", () => {
 
 	const mockDialogs = {
 		confirmCloseTerminal: vi.fn().mockResolvedValue(true),
+		confirmSaveChanges: vi.fn().mockResolvedValue("discard"),
 		confirm: vi.fn().mockResolvedValue(true),
 	};
 
@@ -55,6 +56,7 @@ describe("useTerminalLifecycle", () => {
 		mockPty.canSpawn.mockReset().mockResolvedValue(true);
 		mockPty.close.mockReset().mockResolvedValue(undefined);
 		mockDialogs.confirmCloseTerminal.mockReset().mockResolvedValue(true);
+		mockDialogs.confirmSaveChanges.mockReset().mockResolvedValue("discard");
 		mockDialogs.confirm.mockReset().mockResolvedValue(true);
 		mockSetStatusInfo.mockReset();
 		// Default: no foreground process (plain shell)
@@ -434,31 +436,47 @@ describe("useTerminalLifecycle", () => {
 			expect(terminalsStore.state.activeId).toBe(termId);
 		});
 
-		it("asks for confirmation when closing a dirty editor tab", async () => {
+		it("prompts to save a dirty editor tab and saves before closing on Save", async () => {
 			editorTabsStore.add("/repo/file.ts", "file.ts");
 			const editId = editorTabsStore.getIds()[0];
 			editorTabsStore.setDirty(editId, true);
+			const save = vi.fn().mockResolvedValue(undefined);
+			editorTabsStore.setHandle(editId, { save });
 
-			mockDialogs.confirm.mockResolvedValueOnce(true);
+			mockDialogs.confirmSaveChanges.mockResolvedValueOnce("confirm");
 			await lifecycle.closeTerminal(editId);
 
-			expect(mockDialogs.confirm).toHaveBeenCalledTimes(1);
-			expect(mockDialogs.confirm.mock.calls[0][0]).toMatchObject({
-				title: "Unsaved changes",
-				kind: "warning",
-			});
+			expect(mockDialogs.confirmSaveChanges).toHaveBeenCalledWith("file.ts");
+			expect(save).toHaveBeenCalledTimes(1);
 			expect(editorTabsStore.getIds().length).toBe(0);
 		});
 
-		it("keeps the dirty editor tab when the user cancels", async () => {
+		it("closes a dirty editor tab without saving on Don't Save", async () => {
 			editorTabsStore.add("/repo/file.ts", "file.ts");
 			const editId = editorTabsStore.getIds()[0];
 			editorTabsStore.setDirty(editId, true);
+			const save = vi.fn().mockResolvedValue(undefined);
+			editorTabsStore.setHandle(editId, { save });
 
-			mockDialogs.confirm.mockResolvedValueOnce(false);
+			mockDialogs.confirmSaveChanges.mockResolvedValueOnce("discard");
 			await lifecycle.closeTerminal(editId);
 
-			expect(mockDialogs.confirm).toHaveBeenCalledTimes(1);
+			expect(save).not.toHaveBeenCalled();
+			expect(editorTabsStore.getIds().length).toBe(0);
+		});
+
+		it("keeps the dirty editor tab and does not save when the user cancels", async () => {
+			editorTabsStore.add("/repo/file.ts", "file.ts");
+			const editId = editorTabsStore.getIds()[0];
+			editorTabsStore.setDirty(editId, true);
+			const save = vi.fn().mockResolvedValue(undefined);
+			editorTabsStore.setHandle(editId, { save });
+
+			mockDialogs.confirmSaveChanges.mockResolvedValueOnce("cancel");
+			await lifecycle.closeTerminal(editId);
+
+			expect(mockDialogs.confirmSaveChanges).toHaveBeenCalledTimes(1);
+			expect(save).not.toHaveBeenCalled();
 			expect(editorTabsStore.getIds()).toContain(editId);
 		});
 
@@ -468,7 +486,7 @@ describe("useTerminalLifecycle", () => {
 
 			await lifecycle.closeTerminal(editId);
 
-			expect(mockDialogs.confirm).not.toHaveBeenCalled();
+			expect(mockDialogs.confirmSaveChanges).not.toHaveBeenCalled();
 			expect(editorTabsStore.getIds().length).toBe(0);
 		});
 
@@ -751,17 +769,17 @@ describe("useTerminalLifecycle", () => {
 
 	describe("copyFromTerminal", () => {
 		it("copies selection to clipboard", async () => {
-			const mockWriteText = vi.fn().mockResolvedValue(undefined);
-			Object.defineProperty(navigator, "clipboard", {
-				value: { writeText: mockWriteText, readText: vi.fn() },
-				writable: true,
-				configurable: true,
-			});
+			// In Tauri mode the copy routes through the native clipboard-manager plugin
+			// (see utils/clipboard.ts) rather than navigator.clipboard, which WKWebView
+			// rejects when the document isn't focused / user activation has lapsed.
 			vi.spyOn(window, "getSelection").mockReturnValue({ toString: () => "selected text" } as Selection);
 
 			await lifecycle.copyFromTerminal();
 
-			expect(mockWriteText).toHaveBeenCalledWith("selected text");
+			expect(mockInvoke).toHaveBeenCalledWith("plugin:clipboard-manager|write_text", {
+				text: "selected text",
+				label: undefined,
+			});
 			expect(mockSetStatusInfo).toHaveBeenCalledWith("Copied to clipboard");
 		});
 

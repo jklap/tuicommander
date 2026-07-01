@@ -1110,6 +1110,25 @@ const App: Component = () => {
 		if (isTauri()) getCurrentWindow().destroy();
 	};
 
+	// Trap keystrokes while the quit dialog is open (issue #102). The terminal's
+	// hidden input sits underneath and would otherwise receive Enter/Escape before
+	// they reach the dialog. A capture-phase listener intercepts the key before it
+	// descends to that input, so nothing leaks through. Both Enter and Escape
+	// cancel: quitting closes all sessions, so it must be an explicit Quit click.
+	createEffect(() => {
+		if (!quitDialogVisible()) return;
+		const onKeyDownCapture = (e: KeyboardEvent) => {
+			if (e.key === "Escape" || e.key === "Enter") {
+				e.preventDefault();
+				e.stopPropagation();
+				e.stopImmediatePropagation();
+				setQuitDialogVisible(false);
+			}
+		};
+		document.addEventListener("keydown", onKeyDownCapture, true);
+		onCleanup(() => document.removeEventListener("keydown", onKeyDownCapture, true));
+	});
+
 	// Build agent submenu items for the context menu
 	/** Launch an agent in the active terminal */
 	const launchAgentInActiveTerminal = async (agentType: AgentType, cmd: string) => {
@@ -2886,10 +2905,13 @@ const App: Component = () => {
 				message={dialogs.dialogState()?.message ?? ""}
 				confirmLabel={dialogs.dialogState()?.confirmLabel}
 				cancelLabel={dialogs.dialogState()?.cancelLabel}
+				discardLabel={dialogs.dialogState()?.discardLabel}
 				kind={dialogs.dialogState()?.kind}
+				defaultButton={dialogs.dialogState()?.defaultButton}
 				autoCancelMs={dialogs.dialogState()?.autoCancelMs}
 				onClose={dialogs.handleClose}
 				onConfirm={dialogs.handleConfirm}
+				onDiscard={dialogs.handleDiscard}
 			/>
 
 			{/* Folder-drop recursive transfer confirmation */}

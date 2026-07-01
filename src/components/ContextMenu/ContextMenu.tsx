@@ -82,8 +82,15 @@ const MenuItem: Component<{
 		});
 	};
 
+	// `separator` on an EMPTY-label item is a standalone divider row (no button).
+	// `separator` on a REAL item (non-empty label) is a trailing-divider modifier:
+	// render the item, then a divider after it. FileBrowser/App menus use the
+	// modifier form — treating separator as exclusive silently drops those items
+	// (e.g. Delete). Disambiguate on the label being empty.
+	const isPureSeparator = () => !!props.item.separator && props.item.label === "";
+
 	return (
-		<Show when={!props.item.separator} fallback={<div class={s.separator} />}>
+		<Show when={!isPureSeparator()} fallback={<div class={s.separator} />}>
 			<div ref={wrapRef} class={s.itemWrap} onMouseEnter={openSubmenu} onMouseLeave={() => setSubmenuOpen(false)}>
 				<button
 					class={cx(s.item, props.item.disabled && s.disabled)}
@@ -117,6 +124,9 @@ const MenuItem: Component<{
 					</div>
 				</Show>
 			</div>
+			<Show when={props.item.separator}>
+				<div class={s.separator} />
+			</Show>
 		</Show>
 	);
 };

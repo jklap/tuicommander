@@ -1684,6 +1684,16 @@ fn handle_agent(
                 return serde_json::json!({"error": msg});
             }
 
+            // Canonical agent type for this spawn: the run config's key when one
+            // resolved, otherwise the raw agent_type param. Pre-set below so the
+            // PTY reader's agent_active gate turns on immediately and intent/suggest
+            // protocol tokens are parsed from the first line — headless spawns have
+            // no frontend foreground polling to flip the gate on later.
+            let effective_agent_type: Option<String> = resolved
+                .as_ref()
+                .map(|rc| rc.agent_type.clone())
+                .or_else(|| args["agent_type"].as_str().map(|s| s.to_string()));
+
             let session_id = Uuid::new_v4().to_string();
             let pty_system = native_pty_system();
             let pair = match pty_system.openpty(PtySize {
@@ -1743,7 +1753,19 @@ fn handle_agent(
                         cmd.arg(arg);
                     }
                 } else {
-                    // Run config matched but no args override — use default MCP param logic
+                    // No run config matched (passthrough): only Claude's CLI accepts a
+                    // bare positional prompt. codex/gemini/aider/goose treat it as an
+                    // argument-parse error and exit immediately (clap exit code 2),
+                    // leaving the caller with an opaque failure and no report. Fail fast
+                    // with an actionable error instead of spawning a doomed process —
+                    // see docs/user-guide/ai-agents.md (agents are launched bare).
+                    if !crate::agent::agent_accepts_bare_prompt(&rc.agent_type) {
+                        return serde_json::json!({"error": format!(
+                            "Agent '{name}' cannot be spawned with a bare prompt (only Claude's CLI accepts a positional prompt; other agents exit with code 2). Pass explicit args containing a {{prompt}} placeholder, or configure a run config named '{name}' in Settings -> Agents.",
+                            name = rc.agent_type
+                        )});
+                    }
+                    // Claude default: MCP param args plus the positional prompt.
                     if args["print_mode"].as_bool().unwrap_or(false) {
                         cmd.arg("--print");
                     }
@@ -1826,6 +1848,20 @@ fn handle_agent(
             state
                 .last_output_ms
                 .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
+            // Pre-set the session's agent type (mirrors session.rs spawn_pty_session)
+            // so agent_active_for_parse is true from the first output chunk and
+            // intent/suggest tokens are parsed without waiting on foreground polling.
+            let mut session_state = crate::state::SessionState::default();
+            if effective_agent_type.is_some() {
+                session_state.hook_instrumented = crate::pty::hook_instrumented_for(
+                    &agents_cfg,
+                    effective_agent_type.as_deref(),
+                );
+                session_state.agent_type = effective_agent_type;
+            }
+            state
+                .session_states
+                .insert(session_id.clone(), session_state);
             // Register grid_watch so format=grid WebSocket streams work for
             // MCP-spawned agent sessions (mirrors session.rs spawn_pty_session).
             let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());

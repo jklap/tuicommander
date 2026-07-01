@@ -1,11 +1,25 @@
 import { createSignal } from "solid-js";
 
+/** Which button the Enter key activates. Defaults to "confirm" for backward
+ *  compatibility; destructive dialogs can set "cancel" so an accidental Enter
+ *  takes the safe path instead of the primary (destructive) action. */
+export type ConfirmDefaultButton = "confirm" | "cancel";
+
+/** Outcome of a confirm dialog. "discard" is only reachable when a third
+ *  (discard) button is configured, e.g. the Save / Don't Save / Cancel prompt. */
+export type ConfirmResult = "confirm" | "cancel" | "discard";
+
 export interface ConfirmOptions {
 	title: string;
 	message: string;
 	okLabel?: string;
 	cancelLabel?: string;
+	/** Optional middle button (e.g. "Don't Save"). When set the dialog offers a
+	 *  third outcome ("discard") between confirm and cancel. */
+	discardLabel?: string;
 	kind?: "info" | "warning" | "error";
+	/** Which button Enter activates. Defaults to "confirm". */
+	defaultButton?: ConfirmDefaultButton;
 	/** When set, the dialog auto-clicks cancel after this many ms, with a countdown on the cancel label. */
 	autoCancelMs?: number;
 }
@@ -16,7 +30,9 @@ export interface ConfirmDialogState {
 	message: string;
 	confirmLabel: string;
 	cancelLabel: string;
+	discardLabel?: string;
 	kind: "info" | "warning" | "error";
+	defaultButton: ConfirmDefaultButton;
 	autoCancelMs?: number;
 }
 
@@ -33,7 +49,7 @@ export function useConfirmDialog() {
 	// shown. Concurrent confirm() calls enqueue instead of overwriting a single
 	// resolver — the previous single-slot design orphaned every promise but the
 	// last (its await never settled) and silently dropped earlier dialogs.
-	const queue: Array<{ options: ConfirmOptions; resolve: (value: boolean) => void }> = [];
+	const queue: Array<{ options: ConfirmOptions; resolve: (value: ConfirmResult) => void }> = [];
 
 	/** Render the dialog at the head of the queue, or hide it when empty. */
 	function showHead() {
@@ -47,7 +63,9 @@ export function useConfirmDialog() {
 			message: head.options.message,
 			confirmLabel: head.options.okLabel || "OK",
 			cancelLabel: head.options.cancelLabel || "Cancel",
+			discardLabel: head.options.discardLabel,
 			kind: head.options.kind || "warning",
+			defaultButton: head.options.defaultButton || "confirm",
 			autoCancelMs: head.options.autoCancelMs,
 		});
 	}
@@ -56,13 +74,13 @@ export function useConfirmDialog() {
 	 *  When a dialog is already visible, this one queues and shows after it. */
 	function confirm(options: ConfirmOptions): Promise<boolean> {
 		return new Promise<boolean>((resolve) => {
-			queue.push({ options, resolve });
+			queue.push({ options, resolve: (value) => resolve(value === "confirm") });
 			if (queue.length === 1) showHead();
 		});
 	}
 
 	/** Resolve the current dialog with `value` and advance to the next queued one. */
-	function settle(value: boolean) {
+	function settle(value: ConfirmResult) {
 		const head = queue.shift();
 		head?.resolve(value);
 		showHead();
@@ -70,12 +88,17 @@ export function useConfirmDialog() {
 
 	/** Called when user confirms */
 	function handleConfirm() {
-		settle(true);
+		settle("confirm");
 	}
 
 	/** Called when user cancels (button, Escape, or overlay click) */
 	function handleClose() {
-		settle(false);
+		settle("cancel");
+	}
+
+	/** Called when the user picks the middle "discard" action (e.g. Don't Save) */
+	function handleDiscard() {
+		settle("discard");
 	}
 
 	/** Confirm removing a worktree/branch */
@@ -116,6 +139,29 @@ export function useConfirmDialog() {
 			okLabel: "Close",
 			cancelLabel: "Cancel",
 			kind: "warning",
+		});
+	}
+
+	/** Prompt to save unsaved editor changes before closing a tab.
+	 *  Enter defaults to Save (a safe, non-destructive action) and Escape cancels,
+	 *  so an accidental keypress never discards the user's changes.
+	 *  Resolves "confirm" = save then close, "discard" = close without saving,
+	 *  "cancel" = keep the tab open. */
+	async function confirmSaveChanges(fileName: string): Promise<ConfirmResult> {
+		return new Promise<ConfirmResult>((resolve) => {
+			queue.push({
+				options: {
+					title: "Unsaved changes",
+					message: '"' + fileName + '" has unsaved changes.\nDo you want to save your changes before closing?',
+					okLabel: "Save",
+					discardLabel: "Don't Save",
+					cancelLabel: "Cancel",
+					kind: "warning",
+					defaultButton: "confirm",
+				},
+				resolve,
+			});
+			if (queue.length === 1) showHead();
 		});
 	}
 
@@ -169,6 +215,7 @@ export function useConfirmDialog() {
 
 	return {
 		confirm,
+		confirmSaveChanges,
 		confirmRemoveWorktree,
 		confirmRemoveLockedWorktree,
 		confirmCloseTerminal,
@@ -182,5 +229,7 @@ export function useConfirmDialog() {
 		handleConfirm,
 		/** Handler for cancel button / Escape key / overlay click */
 		handleClose,
+		/** Handler for the middle discard button (e.g. Don't Save) */
+		handleDiscard,
 	};
 }

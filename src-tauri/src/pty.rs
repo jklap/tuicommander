@@ -1139,6 +1139,23 @@ fn should_transition_idle(state: &crate::state::AppState, session_id: &str) -> I
     IdleDecision::NO
 }
 
+/// Presence-driven busy signal for the idle timer. True when the CONTENT zone
+/// (above the chrome cutoff) still shows an agent "working" status line.
+///
+/// Some agents (Codex) freeze their TUI while a child subprocess runs — zero
+/// grid changes for minutes — but keep the `• Working (… esc to interrupt)`
+/// line on screen. The change-driven spinner keepalive stamps `last_output_ms`
+/// only from CHANGED rows, so a frozen line can't refresh it and
+/// `should_transition_idle` fires a false busy→idle. Guarding on the line's
+/// PRESENCE keeps a genuinely-working agent busy.
+fn screen_shows_working_status(rows: &[String]) -> bool {
+    let refs: Vec<&str> = rows.iter().map(|s| s.as_str()).collect();
+    let cutoff = crate::chrome::find_chrome_cutoff(&refs).unwrap_or(refs.len());
+    refs[..cutoff]
+        .iter()
+        .any(|r| crate::chrome::is_working_status_row(r))
+}
+
 /// Emit a ShellState parsed event via both event bus and Tauri IPC.
 fn emit_shell_state(state: &crate::state::AppState, session_id: &str, shell_state: &str) {
     let agent_type = state
@@ -1421,26 +1438,43 @@ fn spawn_silence_timer(
             if let Some(atom) = state.shell_states.get(&session_id)
                 && atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY
             {
-                let decision = should_transition_idle(&state, &session_id);
-                if decision.should_transition
-                    && try_shell_transition(&state, &session_id, SHELL_BUSY, SHELL_IDLE, true)
-                {
-                    if decision.force_cleared_subtasks {
-                        // Story 1366-2b3e/H1: the stale-recovery path inside
-                        // should_transition_idle reset active_sub_tasks in-memory
-                        // but the frontend store only learns from this stream.
-                        // Without an explicit count=0 emission, the UI keeps a
-                        // non-zero badge and notifications stay suppressed.
-                        emit_active_subtasks(&state, &session_id, 0, "");
+                // Presence-driven keepalive: agents that freeze their TUI during a
+                // child subprocess (Codex during a long cargo/git) stop producing
+                // grid changes, so the change-driven spinner keepalive can't refresh
+                // last_output_ms. While the working status line is still on screen the
+                // agent is alive — refresh the timestamp and skip the idle transition
+                // instead of falsely flipping idle.
+                let working_on_screen = state
+                    .vt_log_buffers
+                    .get(&session_id)
+                    .map(|vt| screen_shows_working_status(&vt.lock().screen_rows()))
+                    .unwrap_or(false);
+                if working_on_screen {
+                    if let Some(ts) = state.last_output_ms.get(&session_id) {
+                        ts.store(epoch_now, std::sync::atomic::Ordering::Relaxed);
                     }
-                    // Restore cursor visibility — Ink-based agents (Claude Code)
-                    // send DECTCEM hide (CSI ?25l) for spinners but may not
-                    // send CNORM (CSI ?25h) when returning to the prompt.
-                    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
-                        vt.lock().process(b"\x1b[?25h");
+                } else {
+                    let decision = should_transition_idle(&state, &session_id);
+                    if decision.should_transition
+                        && try_shell_transition(&state, &session_id, SHELL_BUSY, SHELL_IDLE, true)
+                    {
+                        if decision.force_cleared_subtasks {
+                            // Story 1366-2b3e/H1: the stale-recovery path inside
+                            // should_transition_idle reset active_sub_tasks in-memory
+                            // but the frontend store only learns from this stream.
+                            // Without an explicit count=0 emission, the UI keeps a
+                            // non-zero badge and notifications stay suppressed.
+                            emit_active_subtasks(&state, &session_id, 0, "");
+                        }
+                        // Restore cursor visibility — Ink-based agents (Claude Code)
+                        // send DECTCEM hide (CSI ?25l) for spinners but may not
+                        // send CNORM (CSI ?25h) when returning to the prompt.
+                        if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+                            vt.lock().process(b"\x1b[?25h");
+                        }
+                        emit_shell_state(&state, &session_id, "idle");
+                        record_inferred_outcome_if_no_osc133(&state, &session_id);
                     }
-                    emit_shell_state(&state, &session_id, "idle");
-                    record_inferred_outcome_if_no_osc133(&state, &session_id);
                 }
             }
 
@@ -1639,7 +1673,10 @@ fn tuic_state_awaiting_event(payload: &str, line: i64) -> Option<ParsedEvent> {
 /// Whether `agent_type`'s config enables native-hook instrumentation. Resolved
 /// once when the session's agent type becomes known (config changes apply on the
 /// next agent launch, matching when the hooks themselves take effect).
-fn hook_instrumented_for(agents: &crate::config::AgentsConfig, agent_type: Option<&str>) -> bool {
+pub(crate) fn hook_instrumented_for(
+    agents: &crate::config::AgentsConfig,
+    agent_type: Option<&str>,
+) -> bool {
     agent_type
         .and_then(|at| agents.agents.get(at))
         .and_then(|s| s.hook_instrumentation)
@@ -7285,6 +7322,47 @@ mod tests {
         assert!(
             !chrome_only || has_spinner,
             "Aider Knight Rider spinner must pass the busy transition gate"
+        );
+    }
+
+    // --- Presence-driven working-status keepalive (Codex frozen-TUI false-idle) ---
+
+    /// Codex freezes its TUI during a child subprocess (long `cargo`/`git`): the
+    /// grid stops changing for minutes, so the change-driven spinner keepalive
+    /// cannot refresh `last_output_ms` and the idle timer would falsely flip
+    /// idle. The presence guard must still see the `• Working (… esc to
+    /// interrupt)` line in the content zone and hold the agent busy.
+    #[test]
+    fn test_codex_frozen_working_line_holds_busy() {
+        // Real layout (mirrors the live capture): the working line sits directly
+        // above the `›` input prompt, with the model footer below it.
+        let screen: Vec<String> = vec![
+            "• Ran cargo test -p agent2-transport --locked".into(),
+            "  └     Blocking waiting for file lock on package cache".into(),
+            "    … +30 lines (ctrl + t to view transcript)".into(),
+            "• Working (14m 56s • esc to interrupt)".into(),
+            "› Improve documentation in @filename".into(),
+            "  gpt-5.5 high · ~/Gits/LS/agent2".into(),
+        ];
+        assert!(
+            screen_shows_working_status(&screen),
+            "a frozen Codex working line above the prompt must keep the agent busy"
+        );
+    }
+
+    /// When Codex finishes a turn the working line is gone (only the ready
+    /// prompt remains) → the presence guard must NOT hold busy, so the idle
+    /// timer is free to transition busy→idle normally.
+    #[test]
+    fn test_codex_ready_prompt_allows_idle() {
+        let screen: Vec<String> = vec![
+            "• Done. Added deny.toml and updated Cargo.toml.".into(),
+            "› Improve documentation in @filename".into(),
+            "  gpt-5.5 high · ~/Gits/LS/agent2".into(),
+        ];
+        assert!(
+            !screen_shows_working_status(&screen),
+            "a ready prompt with no working line must allow the idle transition"
         );
     }
 

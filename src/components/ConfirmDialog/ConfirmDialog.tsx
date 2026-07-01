@@ -7,11 +7,17 @@ export interface ConfirmDialogProps {
 	message: string;
 	confirmLabel?: string;
 	cancelLabel?: string;
+	/** Optional middle button (e.g. "Don't Save"). Rendered only when set. */
+	discardLabel?: string;
 	kind?: "warning" | "info" | "error";
+	/** Which button Enter activates. Defaults to "confirm". */
+	defaultButton?: "confirm" | "cancel";
 	/** When set, auto-clicks the cancel button after this many ms, showing a countdown on its label. */
 	autoCancelMs?: number;
 	onClose: () => void;
 	onConfirm: () => void;
+	/** Invoked when the middle discard button is clicked. */
+	onDiscard?: () => void;
 }
 
 /**
@@ -50,7 +56,13 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
 				props.onClose();
 			} else if (e.key === "Enter") {
 				e.preventDefault();
-				props.onConfirm();
+				// Enter activates the configured default button. Destructive dialogs
+				// point it at Cancel so an accidental Enter takes the safe path.
+				if ((props.defaultButton ?? "confirm") === "cancel") {
+					props.onClose();
+				} else {
+					props.onConfirm();
+				}
 			}
 		};
 
@@ -82,6 +94,11 @@ export const ConfirmDialog: Component<ConfirmDialogProps> = (props) => {
 							{props.cancelLabel ?? "Cancel"}
 							{remaining() !== null ? ` (${remaining()})` : ""}
 						</button>
+						<Show when={props.discardLabel}>
+							<button class={d.cancelBtn} onClick={() => props.onDiscard?.()}>
+								{props.discardLabel}
+							</button>
+						</Show>
 						<button class={d.primaryBtn} onClick={props.onConfirm}>
 							{props.confirmLabel ?? "OK"}
 						</button>
