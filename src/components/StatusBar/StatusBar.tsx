@@ -14,6 +14,7 @@ import { settingsStore } from "../../stores/settings";
 import { statusBarTicker } from "../../stores/statusBarTicker";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
+import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { activePrStatus } from "../../utils/mergedPrGrace";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
@@ -92,7 +93,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 	const handleCopyCwd = async () => {
 		if (!props.cwd) return;
 		try {
-			await navigator.clipboard.writeText(shortenHomePath(props.cwd));
+			await writeClipboard(shortenHomePath(props.cwd));
 			setCwdCopied(true);
 			setTimeout(() => setCwdCopied(false), 1500);
 		} catch (err) {

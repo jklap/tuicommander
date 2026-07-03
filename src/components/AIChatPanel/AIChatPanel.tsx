@@ -5,6 +5,7 @@ import { type ConversationMeta, conversationStore, type ToolCallEntry } from "..
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
+import { writeClipboard } from "../../utils/clipboard";
 import { getShellFamily, sendCommand } from "../../utils/sendCommand";
 import p from "../shared/panel.module.css";
 import { ContentRenderer } from "../ui/ContentRenderer";
@@ -36,7 +37,7 @@ export interface AIChatPanelProps {
 /** Copy text to clipboard, return true on success */
 async function copyToClipboard(text: string): Promise<boolean> {
 	try {
-		await navigator.clipboard.writeText(text);
+		await writeClipboard(text);
 		return true;
 	} catch {
 		return false;
@@ -146,7 +147,7 @@ const ToolCallCard: Component<{ entry: ToolCallEntry }> = (props) => {
 		outputExpanded() || !isLong() ? fullOutput() : fullOutput().slice(0, TOOL_OUTPUT_TRUNCATE) + "…";
 
 	const handleCopy = () => {
-		void navigator.clipboard.writeText(fullOutput()).then(() => {
+		void writeClipboard(fullOutput()).then(() => {
 			setCopied(true);
 			setTimeout(() => setCopied(false), 1500);
 		});

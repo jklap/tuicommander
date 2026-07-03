@@ -67,6 +67,7 @@ const clampSubmenu = (wrapEl: HTMLDivElement, submenuEl: HTMLDivElement) => {
 const MenuItem: Component<{
 	item: ContextMenuItem;
 	onClose: () => void;
+	isLast?: boolean;
 }> = (props) => {
 	let wrapRef: HTMLDivElement | undefined;
 	let submenuRef: HTMLDivElement | undefined;
@@ -87,10 +88,20 @@ const MenuItem: Component<{
 	// render the item, then a divider after it. FileBrowser/App menus use the
 	// modifier form — treating separator as exclusive silently drops those items
 	// (e.g. Delete). Disambiguate on the label being empty.
+	//
+	// A trailing separator (pure divider row OR the modifier's trailing divider)
+	// is suppressed on the LAST item — a divider with nothing after it is noise.
 	const isPureSeparator = () => !!props.item.separator && props.item.label === "";
 
 	return (
-		<Show when={!isPureSeparator()} fallback={<div class={s.separator} />}>
+		<Show
+			when={!isPureSeparator()}
+			fallback={
+				<Show when={!props.isLast}>
+					<div class={s.separator} />
+				</Show>
+			}
+		>
 			<div ref={wrapRef} class={s.itemWrap} onMouseEnter={openSubmenu} onMouseLeave={() => setSubmenuOpen(false)}>
 				<button
 					class={cx(s.item, props.item.disabled && s.disabled)}
@@ -120,11 +131,19 @@ const MenuItem: Component<{
 				</button>
 				<Show when={submenuOpen() && props.item.children}>
 					<div ref={submenuRef} class={s.submenu}>
-						<For each={props.item.children}>{(child) => <MenuItem item={child} onClose={props.onClose} />}</For>
+						<For each={props.item.children}>
+							{(child, i) => (
+								<MenuItem
+									item={child}
+									onClose={props.onClose}
+									isLast={i() === (props.item.children?.length ?? 0) - 1}
+								/>
+							)}
+						</For>
 					</div>
 				</Show>
 			</div>
-			<Show when={props.item.separator}>
+			<Show when={props.item.separator && !props.isLast}>
 				<div class={s.separator} />
 			</Show>
 		</Show>
@@ -226,7 +245,9 @@ export const ContextMenu: Component<ContextMenuProps> = (props) => {
 					opacity: "0",
 				}}
 			>
-				<For each={props.items}>{(item) => <MenuItem item={item} onClose={props.onClose} />}</For>
+				<For each={props.items}>
+					{(item, i) => <MenuItem item={item} onClose={props.onClose} isLast={i() === props.items.length - 1} />}
+				</For>
 			</div>
 		</Show>
 	);

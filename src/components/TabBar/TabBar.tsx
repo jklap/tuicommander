@@ -31,6 +31,7 @@ import { makeBranchKey } from "../../stores/tabManager";
 import { tabOrderingStore } from "../../stores/tabOrdering";
 import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
+import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { handleOpenUrl } from "../../utils/openUrl";
 import type { LeafRect } from "../../utils/paneTreeGeometry";
@@ -172,9 +173,9 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					label: t("tabBar.copyPath", "Copy Path"),
 					action: () => {
 						if (tab?.filePath)
-							navigator.clipboard
-								.writeText(shortenHomePath(tab.filePath))
-								.catch((err) => appLogger.error("app", "Failed to copy path", err));
+							writeClipboard(shortenHomePath(tab.filePath)).catch((err) =>
+								appLogger.error("app", "Failed to copy path", err),
+							);
 					},
 				},
 				{
@@ -217,9 +218,9 @@ export const TabBar: Component<TabBarProps> = (props) => {
 							{
 								label: t("tabBar.copyPath", "Copy Path"),
 								action: () => {
-									navigator.clipboard
-										.writeText(shortenHomePath(tab.filePath))
-										.catch((err) => appLogger.error("app", "Failed to copy path", err));
+									writeClipboard(shortenHomePath(tab.filePath)).catch((err) =>
+										appLogger.error("app", "Failed to copy path", err),
+									);
 								},
 							},
 						]
@@ -265,9 +266,9 @@ export const TabBar: Component<TabBarProps> = (props) => {
 					label: t("tabBar.copyPath", "Copy Path"),
 					action: () => {
 						if (tab?.filePath)
-							navigator.clipboard
-								.writeText(shortenHomePath(tab.filePath))
-								.catch((err) => appLogger.error("app", "Failed to copy path", err));
+							writeClipboard(shortenHomePath(tab.filePath)).catch((err) =>
+								appLogger.error("app", "Failed to copy path", err),
+							);
 					},
 				},
 				{

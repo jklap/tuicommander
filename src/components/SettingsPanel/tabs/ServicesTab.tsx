@@ -10,6 +10,7 @@ import {
 } from "../../../stores/remoteConnections";
 import { rpc, type UpstreamMcpConfig, type UpstreamMcpServer, type UpstreamTransport } from "../../../transport";
 import { cx } from "../../../utils";
+import { writeClipboard } from "../../../utils/clipboard";
 import { handleOpenUrl } from "../../../utils/openUrl";
 import { SettingInput, SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -345,7 +346,7 @@ export const ServicesTab: Component = () => {
 		const url = connectUrl();
 		if (!url) return;
 		try {
-			await navigator.clipboard.writeText(url);
+			await writeClipboard(url);
 			setUrlCopied(true);
 			setTimeout(() => setUrlCopied(false), 2000);
 		} catch {
@@ -832,8 +833,7 @@ export const ServicesTab: Component = () => {
 							<button
 								class={s.mcpSnippetCopy}
 								onClick={() => {
-									navigator.clipboard
-										.writeText(bridgeInfo()!.config_snippet)
+									writeClipboard(bridgeInfo()!.config_snippet)
 										.then(() => {
 											setSnippetCopied(true);
 											setTimeout(() => setSnippetCopied(false), 2000);

@@ -1,5 +1,6 @@
 import { type Component, createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { invoke } from "../../invoke";
+import { writeClipboard } from "../../utils/clipboard";
 import d from "../shared/dialog.module.css";
 import s from "./GeneratorsModal.module.css";
 
@@ -103,7 +104,7 @@ export const GeneratorsModal: Component<{ onClose: () => void }> = (props) => {
 
 	const copy = async (text: string, setCopiedFn: (v: boolean) => void) => {
 		if (!text) return;
-		await navigator.clipboard.writeText(text);
+		await writeClipboard(text);
 		setCopiedFn(true);
 		setTimeout(() => setCopiedFn(false), 2000);
 	};

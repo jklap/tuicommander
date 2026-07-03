@@ -15,6 +15,7 @@ import { uiStore } from "../../stores/ui";
 import type { ContentMatch, DirEntry } from "../../types/fs";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
+import { writeClipboard } from "../../utils/clipboard";
 import { isAbsolutePath, joinPath, replaceBasename } from "../../utils/pathUtils";
 import { fileContextSmartMenuItem } from "../../utils/promptContext";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -881,9 +882,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		const fsRoot = root();
 		if (!fsRoot) return;
 		const fullPath = `${fsRoot}/${entry.path}`;
-		navigator.clipboard
-			.writeText(shortenHomePath(fullPath))
-			.catch((err) => appLogger.error("app", "Failed to copy path", err));
+		writeClipboard(shortenHomePath(fullPath)).catch((err) => appLogger.error("app", "Failed to copy path", err));
 	};
 
 	const getContextMenuItems = (entry: DirEntry): ContextMenuItem[] => {

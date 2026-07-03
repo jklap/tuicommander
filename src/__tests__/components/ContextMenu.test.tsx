@@ -107,6 +107,29 @@ describe("ContextMenu", () => {
 		expect(container.querySelectorAll(".separator").length).toBe(1);
 	});
 
+	it("suppresses a trailing separator on the LAST item (no dangling divider)", () => {
+		// Every context menu renders through this component; a modifier separator
+		// on the final item must NOT paint a divider with nothing after it.
+		const items: ContextMenuItem[] = [
+			{ label: "First", action: vi.fn() },
+			{ label: "Last", action: vi.fn(), separator: true },
+		];
+		const { container } = render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
+		const labels = Array.from(container.querySelectorAll(".label")).map((el) => el.textContent);
+		expect(labels).toEqual(["First", "Last"]);
+		expect(container.querySelectorAll(".separator").length).toBe(0);
+	});
+
+	it("suppresses a pure separator row when it is the LAST item", () => {
+		const items: ContextMenuItem[] = [
+			{ label: "Only", action: vi.fn() },
+			{ label: "", action: vi.fn(), separator: true },
+		];
+		const { container } = render(() => <ContextMenu items={items} x={0} y={0} visible={true} onClose={() => {}} />);
+		expect(container.querySelectorAll(".item").length).toBe(1);
+		expect(container.querySelectorAll(".separator").length).toBe(0);
+	});
+
 	it("closes on Escape key", () => {
 		const handleClose = vi.fn();
 		render(() => <ContextMenu items={sampleItems} x={0} y={0} visible={true} onClose={handleClose} />);

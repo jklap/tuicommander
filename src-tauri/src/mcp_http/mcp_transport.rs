@@ -1853,10 +1853,8 @@ fn handle_agent(
             // intent/suggest tokens are parsed without waiting on foreground polling.
             let mut session_state = crate::state::SessionState::default();
             if effective_agent_type.is_some() {
-                session_state.hook_instrumented = crate::pty::hook_instrumented_for(
-                    &agents_cfg,
-                    effective_agent_type.as_deref(),
-                );
+                session_state.hook_instrumented =
+                    crate::pty::hook_instrumented_for(&agents_cfg, effective_agent_type.as_deref());
                 session_state.agent_type = effective_agent_type;
             }
             state

@@ -13,6 +13,7 @@ import { FONT_FAMILIES, settingsStore } from "../../stores/settings";
 import { type AwaitingInputType, isShellState, terminalsStore } from "../../stores/terminals";
 import { isTauri, subscribePty, type Unsubscribe } from "../../transport";
 import { onClickKeyDown } from "../../utils/a11y";
+import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { ComposePanel } from "../ComposePanel";
@@ -649,7 +650,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
 			// Listen for OSC 52 clipboard store from Rust (native renderer)
 			unlistenClipboardStore = await listen<string>(`pty-clipboard-store-${targetSessionId}`, (event) => {
-				navigator.clipboard.writeText(event.payload).catch(() => {});
+				writeClipboard(event.payload).catch(() => {});
 			});
 			if (disposed) {
 				unlistenClipboardStore();

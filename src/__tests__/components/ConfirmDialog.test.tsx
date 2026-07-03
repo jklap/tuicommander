@@ -40,9 +40,7 @@ describe("ConfirmDialog", () => {
 	it("Enter takes the safe path when defaultButton is 'cancel'", () => {
 		const onConfirm = vi.fn();
 		const onClose = vi.fn();
-		render(() => (
-			<ConfirmDialog {...baseProps} defaultButton="cancel" onConfirm={onConfirm} onClose={onClose} />
-		));
+		render(() => <ConfirmDialog {...baseProps} defaultButton="cancel" onConfirm={onConfirm} onClose={onClose} />);
 		fireEvent.keyDown(document, { key: "Enter" });
 		expect(onClose).toHaveBeenCalledTimes(1);
 		expect(onConfirm).not.toHaveBeenCalled();

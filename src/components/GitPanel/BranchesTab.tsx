@@ -7,6 +7,7 @@ import { toastsStore } from "../../stores/toasts";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { branchListsEqual } from "../../utils/branchListsEqual";
+import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu/ContextMenu";
@@ -725,7 +726,7 @@ export const BranchesTab: Component<BranchesTabProps> = (props) => {
 
 		const copyName: ContextMenuItem = {
 			label: "Copy Name",
-			action: () => void navigator.clipboard.writeText(branch.name),
+			action: () => void writeClipboard(branch.name),
 		};
 
 		if (branch.is_remote) {

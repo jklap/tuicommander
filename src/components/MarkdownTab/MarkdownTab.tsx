@@ -10,6 +10,7 @@ import { editorTabsStore } from "../../stores/editorTabs";
 import { type FileTab, type MdTabData, mdTabsStore } from "../../stores/mdTabs";
 import { repositoriesStore } from "../../stores/repositories";
 import { toastsStore } from "../../stores/toasts";
+import { writeClipboard } from "../../utils/clipboard";
 import { openFileAction } from "../../utils/filePreview";
 import { isAbsolutePath, joinPath, pathDirname } from "../../utils/pathUtils";
 import {
@@ -361,9 +362,7 @@ export const MarkdownTab: Component<MarkdownTabProps> = (props) => {
 	const handleCopyPath = () => {
 		const path = fullPath();
 		if (!path) return;
-		navigator.clipboard
-			.writeText(shortenHomePath(path))
-			.catch((err) => appLogger.error("app", "Failed to copy path", err));
+		writeClipboard(shortenHomePath(path)).catch((err) => appLogger.error("app", "Failed to copy path", err));
 	};
 
 	const handleHeaderContextMenu = (ev: MouseEvent) => {

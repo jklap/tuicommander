@@ -270,7 +270,9 @@ mod tests {
 
     #[test]
     fn codex_working_line_is_working_status() {
-        assert!(is_working_status_row("• Working (9m 24s • esc to interrupt)"));
+        assert!(is_working_status_row(
+            "• Working (9m 24s • esc to interrupt)"
+        ));
     }
 
     #[test]
@@ -282,7 +284,9 @@ mod tests {
 
     #[test]
     fn codex_working_indented_is_working_status() {
-        assert!(is_working_status_row("   • Working (1m 3s • esc to interrupt)"));
+        assert!(is_working_status_row(
+            "   • Working (1m 3s • esc to interrupt)"
+        ));
     }
 
     #[test]

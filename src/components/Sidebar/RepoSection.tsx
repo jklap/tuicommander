@@ -5,6 +5,7 @@ import { githubStore } from "../../stores/github";
 import type { BranchState, RepositoryState } from "../../stores/repositories";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { writeClipboard } from "../../utils/clipboard";
 import { _resetMergedActivityAccum, activePrStatus } from "../../utils/mergedPrGrace";
 import { effectiveMergeMethod } from "../../utils/prMerge";
 
@@ -330,7 +331,7 @@ export const BranchItem: Component<{
 		const path = props.branch.worktreePath;
 		if (path) {
 			try {
-				await navigator.clipboard.writeText(shortenHomePath(path));
+				await writeClipboard(shortenHomePath(path));
 			} catch (err) {
 				appLogger.warn("app", "Failed to copy path to clipboard", err);
 			}

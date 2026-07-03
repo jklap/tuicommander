@@ -9,6 +9,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { settingsStore } from "../../stores/settings";
 import { terminalsStore } from "../../stores/terminals";
 import { toastsStore } from "../../stores/toasts";
+import { writeClipboard } from "../../utils/clipboard";
 import { attachIframeKeyForwarder } from "../../utils/iframeKeyForwarder";
 import { IFRAME_SEARCH_SCRIPT } from "../../utils/iframeSearch";
 import { assignTabToActiveGroup } from "../../utils/paneTabAssign";
@@ -300,7 +301,7 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 			}
 			case "tuic:clipboard": {
 				const text = typeof data.text === "string" ? data.text : "";
-				navigator.clipboard.writeText(text).catch((err) => {
+				writeClipboard(text).catch((err) => {
 					appLogger.warn("plugin", `tuic:clipboard failed: ${err}`);
 				});
 				return;

@@ -10,6 +10,53 @@
 
 Features to test when TUICommander is more usable.
 
+## Clipboard "Copy Path" fix (2026-07-02, uncommitted)
+
+- [ ] **Copy Path / copy actions in all context menus** now route through the native clipboard-manager plugin (`writeClipboard`) instead of `navigator.clipboard.writeText` (rejected by WKWebView). Verify paste works after: RepoSection branch/worktree Copy Path, TabBar (diff/markdown/editor) Copy Path, FileBrowser Copy Path, CodeEditorTab, MarkdownPanel/Tab, StatusBar cwd, App "Copy Block Output", ErrorLogPanel, GeneratorsModal, AIChatPanel, GitHubPanel/Tab, ServicesTab, KnowledgeHistory, useSmartPrompts clipboard output.
+
+## Web-Mode Verification via agent-browser (2026-07-02)
+
+_Drove the live orchestrator web UI (`http://localhost:9876/`, browser mode `isTauri()===false`) with agent-browser CLI. Goal: verify `[HUMAN]`/unverified items via the web frontend and find features missing in web mode._
+
+### Harness limitations discovered (why exhaustive web coverage is blocked)
+- **Command Palette is desktop-only** — `<Show when={isTauri()}>` at `App.tsx:2743` ("Tauri only — many actions are Tauri-specific"). It is **NOT rendered in web/PWA/remote mode at all**. So every palette-driven item below is UNVERIFIABLE in web AND is a real web GAP: cross-repo content search (§ line 96), cross-terminal search `~` (§ line 313), file/content search `!`/`?` (§ line 359). Browser/PWA users have no Cmd+P.
+- **Focus/blur**: agent-browser's tab is not OS-focused; blur-closing popovers (bell dropdown edge cases) and JS-dispatched keydown (untrusted `isTrusted:false`) don't fire app shortcuts. Cmd+P is also swallowed by the browser (print). → keyboard-shortcut-only overlays can't be driven headless.
+- **Live-instance risk**: the orchestrator is Boss's actively-used app (shared backend). Frontend view state (active repo/tab) is per-client, but sessions/config are shared — so keyboard `press` can leak into a focused live terminal. Aggressive automation on the live instance is unsafe; **exhaustive web testing needs an isolated instance** (`make dev`/`make preview` on :9877, or a scratch instance) driven via agent-browser.
+
+### Verified working in web/browser mode ✓
+- [x] Web UI loads fully in browser mode (`isTauri()` false, WS transport) — sidebar, terminals, panels, file browser all render _(verified web 2026-07-02)_
+- [x] Settings ▸ General: **Content Indexing** dropdown has **4** options (Disabled / Active repo only / Active + on switch / All repos at boot) _(confirms line ~137 in web)_
+- [x] Settings ▸ General: **Default IDE** dropdown is data-driven and lists all **12 JetBrains** IDEs (IntelliJ, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet) _(confirms line ~74 in web)_
+- [x] Settings ▸ General: Auto-Standby slider, Experimental Features section, Update channel (Stable/Nightly) + Check Now all render in web
+- [x] Settings ▸ Appearance: Theme dropdown, terminal font, cursor style, Tab Ordering (Grouped/Terminals First/Free) + **Cycle All Tab Types** toggle (default OFF, right after Tab Ordering) _(confirms #58 line ~56 in web)_; Repository Groups color pickers present
+- [x] Settings ▸ Providers: **redesigned** into a multi-provider list ("Providers + Add" + Slot Assignments), NOT the old single Ollama/Anthropic/… dropdown. OpenRouter shows "✓ key" (key-saved indicator), Ollama provider "no key needed" with model list _(NOTE: lines 211-215 describe the OLD Providers UI — stale; the redesign has no visible single-dropdown or per-slot "Test Connection" here)_
+- [x] Settings ▸ AI Chat: Temperature slider + **extended-thinking dropdown (Auto/Off/Low/Medium/High)** + Scheduled Tasks; **no "context lines" slider** exists _(confirms line ~216 NOTE + line ~1214 in web)_
+- [x] Help panel: Keyboard Shortcuts list + **real-time search filter works** (typing "clear scroll" filters to 1 row) _(confirms lines 524-527 in web)_
+- [x] Help panel: **Global Hotkey section correctly HIDDEN in browser** (`innerText` has no "Global Hotkey") _(confirms line ~341; lines 334-340 are desktop-only gaps)_; Resources links (Website/GitHub/Documentation/Report an Issue) present
+- [x] Process Monitor page (`/process/monitor`) renders a live table PROCESS/PID/SESSION/RSS/CPU with auto-update _(confirms line ~1090 in web; Manual/Refresh controls not present on this standalone page)_
+- [x] Notification bell: click with none → "No notifications" empty state _(confirms line 384 in web)_
+
+### Web GAPS — features unavailable in browser mode (verified via `isTauri()` gates in code)
+_(A) Fully desktop-only (hidden/`return null`/disabled in web):_ Command Palette (`App.tsx:2743`), IDE Launcher (`IdeLauncher.tsx:192` `return null`), user-plugin load + "Install from folder/ZIP" (`pluginLoader.ts:344`, `PluginsTab.tsx:442`), Dictation tab (`SettingsPanel.tsx:55`), Global Hotkey (`KeyboardShortcutsTab.tsx:523`), detached panel windows / detach-to-window (`App.tsx:1583`, `PanelWindowControls.tsx`), TUIC CLI install dialog + status (`App.tsx:723`, `GeneralTab.tsx:134`), MCP install + Agent Hooks config (`AgentsTab.tsx:623,633`), auto-updater (`updater.ts`), custom launchers "Open In" (`GeneralTab.tsx:396`), mdkb code-intel go-to-def (`GeneralTab.tsx:198`), native file drag-drop onto UI (`useFileDrop.ts:215`), agent-binary detection (`useAgentDetection.ts:44`), audio output-device picker (`NotificationsTab.tsx:97`), deep-links (`deep-link-handler.ts:201`), Share-to-`.tuic.json` (`SettingsPanel.tsx:194`).
+_(B) Degraded/HTTP-fallback in web:_ clipboard (`navigator.clipboard`), open-URL (`window.open`), notification sound (Web Audio) + badge (`setAppBadge`), file picker (text prompt vs native), PTY transport (WS vs IPC), **conversation history NOT persisted to disk in browser** (`conversationStore.ts`), repo file picker.
+
+### Isolated-instance pass (`:9877`, 2026-07-02)
+_Launched a 2nd debug instance (`src-tauri/target/debug/tuicommander`; single-instance lock is `#[cfg(not(debug_assertions))]` so debug allows it). It ignored `TUIC_PORT` and mcp_http auto-retried the port (9876 busy → bound **9877**, socket `mcp-74593.sock`). Isolated backend/sessions; **filesystem is still shared**, so no repo-mutating tests were run on Boss's repos._
+- [x] **TCP port retry IS implemented** — `mcp_http` logs "Port 9876 busy, trying 9877 … using 9877" and bound `0.0.0.0:9877` _(CORRECTS the "TCP port retry NOT IMPLEMENTED" NOTE in the TCP Port Retry section below — that note looked at `lib.rs`; the real HTTP server in `mcp_http` retries. Second instance → port+1 confirmed live; also picks an alt unix socket `mcp-<pid>.sock`)_
+- [x] File Browser **tree view**: toggle flat↔tree (chevrons appear), expand folder loads children lazily with file sizes + correct indentation _(web-verified: expanded `docs/` → hooks.md 9.5KB, memory-export.md 2.4KB, solutions/; confirms lines 344-346)_
+- [x] **SSH Tunnel Manager** web-available: modal "SSH Tunnels" + "+ New Tunnel"; existing tunnel row with Start/Edit/Log/Del _(UI present in web; confirms controls of lines 954-963 — actual connect/start not exercised)_
+- [x] **Watchers popover** web-available: "WATCHERS + New" + TEMPLATES (test/Watcher/Continue) each with Attach + edit + delete _(confirms lines 1172-1184 UI; trigger-firing not exercised)_
+- [x] **Smart Prompts drawer** web-available: search box + "No AI agent detected" gate + categorized prompts (GIT/REVIEW/PR/MERGE/CI) + "Manage Smart Prompts…" _(confirms lines 373 drawer; agent-gated actions like Smart Commit shown-but-gated confirms line 369)_
+- [x] **AI Chat panel** web-available (Level 1 renders): empty state "Ask me about your terminal output", KNOWLEDGE bar (0 cmds / HISTORY), input "Ask about your terminal… (Enter to send)", model-override dropdown, **Assisted↔Autonomous** toggle, Conversation history + Clear buttons _(confirms lines 210-211, 222, 227-228, 249, 283; send/stream NOT exercised — spends real provider tokens; history persistence is degraded in browser per conversationStore isTauri gates)_
+- [x] **Plugins tab** web-available: Installed/Browse sub-tabs, "Check for plugin updates" toggle, built-in plugins (`plan`, `stories-ticker`, tagged BUILT-IN) each with enable toggle + Logs button _(confirms lines 674-675; built-ins DO load in web, only USER-plugin load is skipped; "Install from folder/ZIP" buttons correctly ABSENT in web — desktop-only, confirms line 676 gap)_
+
+### Not re-verified in web this pass (deferred)
+- Command-palette items — **desktop-only** (unverifiable in web by design): lines 96-104, 313-322, 359-365
+- AI Chat send/streaming + Level-2 agent loop (spends real provider tokens): lines 212-213, 216-234 partial, 237-246, 248-255
+- Terminal lifecycle exit-closes-tab, context menus, link menus (need canvas keystroke injection — flaky under headless automation): lines 1142-1147, 1373-1376
+- Git diff of deleted/new/modified files, File Browser move/copy-paste, staging (would mutate Boss's shared repos — needs a scratch repo): lines 1113-1115, 1154-1157, 357
+- GitHub CI/PR popovers (need live PRs + gh auth), Remote Connection manager, Plugins install/hot-reload (install is desktop-only)
+
 ## Perf pass + light-theme fix — visual checks (2026-06-09)
 
 _Code-verified + `make check` green; these need Boss's eyes on the live dev app (canvas/editor not HTTP/MCP-observable)._
@@ -390,9 +437,9 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [x] Dismiss individual items and "Dismiss All" work for each section
 
 ## TCP Port Retry
-- [x] Start two instances of TUIC → second instance binds to port+1 (check logs)
-- [ ] Start three instances → third binds to port+2 _(NOTE: code inspection shows no port retry logic in lib.rs:1870 — single bind attempt, fatal on failure. First item may have been tested with single-instance plugin disabled in dev mode)_
-- [ ] Start four → third fails with clear error message showing port range attempted _(NOTE: TCP port retry NOT IMPLEMENTED — single bind attempt only)_
+- [x] Start two instances of TUIC → second instance binds to port+1 (check logs) _(RE-VERIFIED live 2026-07-02: 2nd debug instance logged "Port 9876 busy, trying 9877 … using 9877", bound `0.0.0.0:9877`)_
+- [ ] Start three instances → third binds to port+2 _(CORRECTION: the prior "NOT IMPLEMENTED" NOTE was WRONG — it looked at `lib.rs`, but the retry lives in `mcp_http` (`mcp_http::…` "Port N busy, trying N+1"). Retry mechanism CONFIRMED for port+1; port+2 (3rd instance) not explicitly tested but the loop implies it works)_
+- [ ] Start four → third fails with clear error message showing port range attempted _(NOTE: retry IS implemented in mcp_http; the exhaustion/error path was not exercised — needs 4+ instances to confirm the final error message)_
 
 ## Stale Suggestions Fix
 - [HUMAN] Agent emits suggestions → chips appear at bottom

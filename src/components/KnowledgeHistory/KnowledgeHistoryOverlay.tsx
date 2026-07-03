@@ -3,6 +3,7 @@ import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
 import { uiStore } from "../../stores/ui";
 import { cx } from "../../utils";
+import { writeClipboard } from "../../utils/clipboard";
 import s from "./KnowledgeHistoryOverlay.module.css";
 
 interface SessionListEntry {
@@ -60,7 +61,7 @@ function kindBadgeClass(kind: string): string {
 
 async function copyToClipboard(text: string): Promise<void> {
 	try {
-		await navigator.clipboard.writeText(text);
+		await writeClipboard(text);
 	} catch (e) {
 		appLogger.warn("ai-agent", `clipboard write failed: ${String(e)}`);
 	}

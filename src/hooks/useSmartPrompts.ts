@@ -7,6 +7,7 @@ import { promptLibraryStore, type SavedPrompt } from "../stores/promptLibrary";
 import { providerRegistryStore } from "../stores/providerRegistry";
 import { repositoriesStore } from "../stores/repositories";
 import { terminalsStore } from "../stores/terminals";
+import { writeClipboard } from "../utils/clipboard";
 import { prContextVariables } from "../utils/promptContext";
 import { usePty } from "./usePty";
 
@@ -357,7 +358,7 @@ export function useSmartPrompts() {
 		if (!output) return;
 		switch (prompt.outputTarget) {
 			case "clipboard":
-				navigator.clipboard.writeText(output).then(
+				writeClipboard(output).then(
 					() => appLogger.info("prompts", `"${prompt.name}" output copied to clipboard`),
 					(err) => appLogger.error("prompts", `Failed to copy to clipboard`, err),
 				);

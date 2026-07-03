@@ -1,6 +1,6 @@
 import { fireEvent, render } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "../mocks/tauri";
+import { mockInvoke } from "../mocks/tauri";
 
 const {
 	mockToggleExpanded,
@@ -1356,12 +1356,9 @@ describe("Sidebar", () => {
 		});
 
 		it("context menu Copy Path action copies worktreePath to clipboard", async () => {
-			const writeTextMock = vi.fn().mockResolvedValue(undefined);
-			Object.defineProperty(navigator, "clipboard", {
-				value: { writeText: writeTextMock },
-				writable: true,
-				configurable: true,
-			});
+			// In Tauri mode writeClipboard() routes through the native clipboard-manager
+			// plugin (WKWebView rejects navigator.clipboard.writeText), so assert on the invoke.
+			mockInvoke.mockClear();
 
 			setRepos({
 				"/repo1": makeRepo({
@@ -1387,9 +1384,12 @@ describe("Sidebar", () => {
 			const copyPathItem = Array.from(items).find((i) => i.querySelector(".label")?.textContent === "Copy Path")!;
 			fireEvent.click(copyPathItem);
 
-			// The action is async (uses navigator.clipboard.writeText)
+			// The action is async (writeClipboard → native clipboard-manager plugin)
 			await vi.waitFor(() => {
-				expect(writeTextMock).toHaveBeenCalledWith("/path/to/repo");
+				expect(mockInvoke).toHaveBeenCalledWith("plugin:clipboard-manager|write_text", {
+					text: "/path/to/repo",
+					label: undefined,
+				});
 			});
 		});
 

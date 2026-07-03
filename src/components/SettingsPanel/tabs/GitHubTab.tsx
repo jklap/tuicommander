@@ -13,6 +13,7 @@ import { settingsStore } from "../../../stores/settings";
 import { rpc } from "../../../transport";
 import type { IssueFilterMode } from "../../../types";
 import { cx } from "../../../utils";
+import { writeClipboard } from "../../../utils/clipboard";
 import { handleOpenUrl } from "../../../utils/openUrl";
 import { SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
@@ -117,7 +118,7 @@ export const GitHubTab: Component = () => {
 
 			// Copy code to clipboard
 			try {
-				await navigator.clipboard.writeText(resp.user_code);
+				await writeClipboard(resp.user_code);
 			} catch (e) {
 				appLogger.warn("github", "Clipboard auto-copy failed", e);
 			}
@@ -222,7 +223,7 @@ export const GitHubTab: Component = () => {
 		const code = deviceCode()?.user_code;
 		if (!code) return;
 		try {
-			await navigator.clipboard.writeText(code);
+			await writeClipboard(code);
 			setCopied(true);
 			setTimeout(() => setCopied(false), 2000);
 		} catch {

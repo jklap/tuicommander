@@ -22,6 +22,7 @@ import { TabBar } from "./components/TabBar";
 import { TerminalArea } from "./components/TerminalArea";
 import { Toolbar } from "./components/Toolbar";
 import { editorTabsStore } from "./stores/editorTabs";
+import { writeClipboard } from "./utils/clipboard";
 
 const SettingsPanel = lazy(() => import("./components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })));
 
@@ -1286,7 +1287,12 @@ const App: Component = () => {
 			label: "Copy",
 			shortcut: `${getModifierSymbol()}C`,
 			action: terminalLifecycle.copyFromTerminal,
-			separator: agentDetection.getAvailable().length > 0,
+		},
+		{
+			label: "Paste",
+			shortcut: `${getModifierSymbol()}V`,
+			action: terminalLifecycle.pasteToTerminal,
+			separator: true,
 		},
 		{
 			label: "Copy Block Output",
@@ -1302,7 +1308,7 @@ const App: Component = () => {
 				if (!ref) return;
 				const lines = await ref.getBufferLines(lastBlock.executionLine + 1, lastBlock.endLine);
 				const text = lines.join("\n").trimEnd();
-				if (text) navigator.clipboard.writeText(text);
+				if (text) writeClipboard(text);
 			},
 			disabled: (() => {
 				const activeId = terminalsStore.state.activeId;
@@ -1311,7 +1317,6 @@ const App: Component = () => {
 				return !term?.commandBlocks?.length;
 			})(),
 		},
-		{ label: "Paste", shortcut: `${getModifierSymbol()}V`, action: terminalLifecycle.pasteToTerminal },
 		{
 			label: "Split Right",
 			shortcut: keyFor("split-vertical"),

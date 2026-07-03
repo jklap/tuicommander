@@ -7,6 +7,7 @@ import {
 	appLogger,
 } from "../../stores/appLogger";
 import { errorLogStore } from "../../stores/errorLog";
+import { writeClipboard } from "../../utils/clipboard";
 import s from "./ErrorLogPanel.module.css";
 
 /** Audience tabs. "User" (default) hides app-internal telemetry so it can't bury
@@ -166,12 +167,12 @@ export const ErrorLogPanel: Component = () => {
 	});
 
 	const handleCopy = (entry: AppLogEntry) => {
-		navigator.clipboard.writeText(formatEntryForClipboard(entry)).catch(() => {});
+		writeClipboard(formatEntryForClipboard(entry)).catch(() => {});
 	};
 
 	const handleCopyAll = () => {
 		const text = filteredEntries().map(formatEntryForClipboard).join("\n");
-		navigator.clipboard.writeText(text).catch(() => {});
+		writeClipboard(text).catch(() => {});
 	};
 
 	return (

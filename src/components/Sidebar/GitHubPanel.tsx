@@ -11,6 +11,7 @@ import { settingsStore } from "../../stores/settings";
 import type { BranchPrStatus, GitHubIssue, IssueFilterMode } from "../../types";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
+import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { IssueDetailContent } from "../IssueDetailPopover/IssueDetailContent";
 import {
@@ -181,7 +182,7 @@ export const GitHubPanel: Component<{
 	};
 
 	const handleCopyIssueNumber = (issue: GitHubIssue) => {
-		navigator.clipboard.writeText(`#${issue.number}`).catch(() => {});
+		writeClipboard(`#${issue.number}`).catch(() => {});
 	};
 
 	return (
