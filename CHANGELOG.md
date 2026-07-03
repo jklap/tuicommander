@@ -10,6 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Design-system audit — tokens, accessibility, GPU animations** — Canonical CSS token migration (no orphan/aliased variables left), keyboard accessibility (`role`/`tabindex`/Enter–Space) across collapsible headers and clickable rows, progress bars moved to GPU `transform: scaleX()`, and removal of side-stripe accents and mobile glassmorphism. Active/selected states now use a non-layout inset ring, so selecting an item no longer shifts its neighbors. Contributed by @paulovitin (#93).
 
 ### Fixed
+- **Codex tab showed idle while working** — Codex freezes its terminal UI while a child process runs (a long `cargo`/`git`), producing no output, so the output-driven busy detection flipped the tab to idle after ~2.5s even though the agent was still working. The idle timer now treats the on-screen `• Working (… esc to interrupt)` status line as a liveness signal and keeps the tab busy until it disappears.
+- **Context-menu items dropped + dangling separators** — A regression made every menu item that requested a trailing divider (the File Browser's New File, Paste, Delete, Add to .gitignore) render as *only* a divider, so those items vanished from the menu. Items now always render; a separator on the last item is suppressed so no context menu ends with a dangling divider (affected every menu — sidebar, terminal, file browser, git). The terminal menu also groups Copy and Paste together.
 - **SSH tunnel remote forwards** — The tunnel editor now saves Remote forwards with `local_host`/`local_port`, matching the backend schema and preventing Remote forwards from being rejected as malformed Local-forward payloads.
 
 ## [1.5.1] - 2026-06-26

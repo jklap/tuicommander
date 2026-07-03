@@ -73,7 +73,7 @@ App.tsx (central orchestrator)
 ├── RunCommandDialog/         # Configure terminal commands
 ├── WorktreeManager/          # Overlay panel for worktree management
 ├── MergePostActionDialog/    # Dialog for post-merge actions (keep/delete branch)
-├── ContextMenu/              # Right-click menu for terminals
+├── ContextMenu/              # Shared right-click menu (all panels). `separator:true` on an item = trailing divider AFTER it; empty-label item = standalone divider; a trailing separator on the LAST item is suppressed
 └── IdeLauncher/              # Open repository in IDE
 ```
 
