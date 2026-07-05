@@ -96,10 +96,29 @@ function extractThemeObject(): Record<string, string> {
 	return theme;
 }
 
+/**
+ * Whether a document brings its own styling — an inline `<style>` block or a
+ * linked `<link rel="stylesheet">`. Such documents are self-styled (design or
+ * preview work opened via `ui action=tab html=...`) and must NOT have the TUIC
+ * chrome base sheet forced onto them, or a white page renders dark and any
+ * typography it defines is overridden (#080). Plain unstyled HTML — including
+ * plugin dashboards, which ship no own styles and rely on the shared
+ * `.dashboard`/`.dash-*` classes from PLUGIN_BASE_CSS — is not self-styled and
+ * still gets the base sheet. Over-detection is the safe direction: at worst a
+ * self-styled doc keeps its own look.
+ */
+export function hasOwnStyling(html: string): boolean {
+	return /<style[\s>]/i.test(html) || /<link\b[^>]*\brel\s*=\s*['"]?\s*stylesheet/i.test(html);
+}
+
 /** Inject theme CSS variables and base stylesheet into HTML before </head> (or prepend if no </head>) */
-function injectThemeVars(html: string): string {
+export function injectThemeVars(html: string): string {
 	const themeStyle = extractThemeVars();
-	const baseStyle = `<style id="tuic-base">${PLUGIN_BASE_CSS}</style>`;
+	// Only force the base body/typography sheet onto documents that bring no
+	// styling of their own. Self-styled HTML keeps its own background, color and
+	// font-size (#080). The theme-var block and the SDK/search scripts are
+	// injected in both cases — they only define CSS vars / add behavior.
+	const baseStyle = hasOwnStyling(html) ? "" : `<style id="tuic-base">${PLUGIN_BASE_CSS}</style>`;
 	const injection = baseStyle + themeStyle + TUIC_SDK_SCRIPT + IFRAME_SEARCH_SCRIPT;
 	const headClose = html.indexOf("</head>");
 	if (headClose >= 0) {
