@@ -568,6 +568,274 @@ async fn plugin_rename_path_inner(from: String, to: String) -> Result<(), String
 }
 
 // ---------------------------------------------------------------------------
+// Build-artifact scan (capability-gated: fs:scan)
+//
+// DEFERRED (2026-07-05) — this core is wired in stories 083 (register the
+// `fs:scan`/`fs:delete` capabilities in KNOWN_CAPABILITIES + invoke_handler +
+// PluginHost methods) & 084 (HTTP parity routes). Until then nothing references
+// it in release builds, so each item carries a dead-code allow. The gate calls
+// below use `check_plugin_capability(.., "fs:scan"/"fs:delete")` — those strings
+// only resolve once 083 registers them. Remove every `#[allow(dead_code)]` in
+// this section when the commands are registered — the parity rule forbids
+// landing the IPC command without its HTTP route, which is why wiring is a
+// separate story, not part of this one.
+// ---------------------------------------------------------------------------
+
+/// Known build-artifact directory names mapped to a language/tool kind.
+/// Shared by the scanner (which dirs to measure) and the delete guard (which
+/// names are removable). Generic names like `bin`/`obj` are .NET conventions;
+/// the delete guard's other conditions (inside a registered repo, not the repo
+/// root, `$HOME`-scoped) keep them from being a footgun.
+#[allow(dead_code)]
+pub(crate) const ARTIFACT_DIRS: &[(&str, &str)] = &[
+    ("target", "rust"),
+    ("node_modules", "node"),
+    (".venv", "python"),
+    ("__pycache__", "python"),
+    ("obj", "dotnet"),
+    ("bin", "dotnet"),
+    (".gradle", "gradle"),
+];
+
+/// Cap on scan-walk recursion into a repo (runaway backstop; real source trees
+/// are far shallower). Symlinked dirs are never followed, so cycles are impossible.
+#[allow(dead_code)]
+const MAX_SCAN_DEPTH: u8 = 8;
+
+/// Cap on size-measurement recursion within a matched artifact dir. Deeper than
+/// MAX_SCAN_DEPTH because `node_modules` nests heavily; symlinks are not followed.
+#[allow(dead_code)]
+const MAX_SIZE_DEPTH: u8 = 64;
+
+/// One matched build-artifact directory: its absolute path, tool kind, total
+/// on-disk size, last-build age (max mtime of direct children, as Unix secs),
+/// and the repo root it was found under.
+#[derive(serde::Serialize)]
+pub struct ArtifactEntry {
+    pub path: String,
+    pub kind: String,
+    pub size_bytes: u64,
+    pub last_modified_secs: u64,
+    pub repo: String,
+}
+
+/// Recursively sum sizes of regular files under `dir`. Does not follow symlinks
+/// (uses `DirEntry` file types / non-traversing metadata), so it can't escape
+/// the tree or loop. Per-dir read errors are non-fatal — a macOS TCC-protected
+/// subdir is skipped, not counted, and never aborts the sum.
+#[allow(dead_code)]
+fn dir_size_bytes(dir: &std::path::Path, depth: u8) -> u64 {
+    if depth == 0 {
+        return 0;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for e in rd.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
+        if ft.is_symlink() {
+            continue;
+        }
+        if ft.is_dir() {
+            total += dir_size_bytes(&e.path(), depth - 1);
+        } else if ft.is_file()
+            && let Ok(m) = e.metadata()
+        {
+            total += m.len();
+        }
+    }
+    total
+}
+
+/// Max mtime (Unix secs) among the direct children of `dir`. Dir mtime is
+/// unreliable as a "last build" signal; the newest direct child is cheap and
+/// closer to the truth. Returns 0 if the dir is unreadable or empty.
+#[allow(dead_code)]
+fn max_child_mtime_secs(dir: &std::path::Path) -> u64 {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut max = 0u64;
+    for e in rd.flatten() {
+        if let Ok(m) = e.metadata()
+            && let Ok(mt) = m.modified()
+            && let Ok(d) = mt.duration_since(std::time::UNIX_EPOCH)
+        {
+            max = max.max(d.as_secs());
+        }
+    }
+    max
+}
+
+/// Measure a matched artifact dir into an `ArtifactEntry` (summed whole).
+#[allow(dead_code)]
+fn measure(dir: &std::path::Path, kind: &str, repo: &str) -> ArtifactEntry {
+    ArtifactEntry {
+        path: dir.to_string_lossy().to_string(),
+        kind: kind.to_string(),
+        size_bytes: dir_size_bytes(dir, MAX_SIZE_DEPTH),
+        last_modified_secs: max_child_mtime_secs(dir),
+        repo: repo.to_string(),
+    }
+}
+
+/// Recursively find build-artifact directories under `dir`. On a match, the dir
+/// is summed whole and NOT descended into (stop-at-match), so a `node_modules`
+/// nested inside another is folded into the outer entry — never double counted.
+/// Skips `.git` and symlinked dirs; per-dir read errors are non-fatal.
+#[allow(dead_code)]
+fn walk_artifacts(dir: &std::path::Path, repo: &str, depth: u8, out: &mut Vec<ArtifactEntry>) {
+    if depth == 0 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let Ok(ft) = e.file_type() else { continue };
+        if !ft.is_dir() || ft.is_symlink() {
+            continue;
+        }
+        let name = e.file_name().to_string_lossy().to_string();
+        if name == ".git" {
+            continue;
+        }
+        let p = e.path();
+        if let Some((_, kind)) = ARTIFACT_DIRS.iter().find(|(n, _)| *n == name) {
+            out.push(measure(&p, kind, repo));
+        } else {
+            walk_artifacts(&p, repo, depth - 1, out);
+        }
+    }
+}
+
+/// Scan registered repo roots for build-artifact directories. Read-only; gated
+/// by `fs:scan`. Each repo path is `validate_within_home`'d; a repo that fails
+/// validation (moved, unmounted, outside `$HOME`) is skipped, not fatal.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+#[allow(dead_code)]
+pub async fn scan_build_artifacts(
+    repo_paths: Vec<String>,
+    plugin_id: String,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<Vec<ArtifactEntry>, String> {
+    scan_build_artifacts_impl(&state, repo_paths, plugin_id).await
+}
+
+#[allow(dead_code)]
+pub(crate) async fn scan_build_artifacts_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    repo_paths: Vec<String>,
+    plugin_id: String,
+) -> Result<Vec<ArtifactEntry>, String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "fs:scan")?;
+    scan_build_artifacts_inner(repo_paths).await
+}
+
+#[allow(dead_code)]
+async fn scan_build_artifacts_inner(repo_paths: Vec<String>) -> Result<Vec<ArtifactEntry>, String> {
+    spawn_blocking_fs(move || {
+        let mut out = Vec::new();
+        for raw in &repo_paths {
+            let Ok(root) = validate_within_home(raw) else {
+                continue;
+            };
+            let repo = root.to_string_lossy().to_string();
+            walk_artifacts(&root, &repo, MAX_SCAN_DEPTH, &mut out);
+        }
+        Ok(out)
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Build-artifact delete (capability-gated: fs:delete)
+//
+// DEFERRED (2026-07-05) — like the scan core above, wired to IPC + HTTP in
+// stories 083/084; each item carries a dead-code allow until then. Remove the
+// allows when the command is registered.
+// ---------------------------------------------------------------------------
+
+/// Guard for a destructive `remove_dir_all`. ALL conditions must hold, or the
+/// path is refused. Canonicalizes first so a symlink pointing outside a repo
+/// resolves to its real location and fails containment:
+///   1. basename is a known artifact dir name (`ARTIFACT_DIRS`);
+///   2. strictly inside one of the caller-supplied registered repo roots
+///      (`starts_with` a root AND not equal to it — never delete a repo root).
+///
+/// `$HOME` scoping is enforced separately by `validate_within_home` on both the
+/// target and each repo root before this runs (defense in depth).
+#[allow(dead_code)]
+fn assert_deletable(path: &std::path::Path, repo_roots: &[PathBuf]) -> Result<(), String> {
+    let c = path
+        .canonicalize()
+        .map_err(|e| format!("Failed to resolve path: {e}"))?;
+
+    let name = c.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if !ARTIFACT_DIRS.iter().any(|(n, _)| *n == name) {
+        return Err(format!("Refusing to delete: '{name}' is not a build-artifact dir"));
+    }
+
+    let inside = repo_roots.iter().any(|r| c.starts_with(r) && c != *r);
+    if !inside {
+        return Err("Refusing to delete: path is outside all registered repos".into());
+    }
+
+    Ok(())
+}
+
+/// Delete a build-artifact directory. Destructive; gated by `fs:delete`. The
+/// target and every repo root are `validate_within_home`'d, then `assert_deletable`
+/// enforces the artifact-name + strict-containment guard before `remove_dir_all`.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+#[allow(dead_code)]
+pub async fn delete_build_artifact(
+    path: String,
+    repo_paths: Vec<String>,
+    plugin_id: String,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<(), String> {
+    delete_build_artifact_impl(&state, path, repo_paths, plugin_id).await
+}
+
+#[allow(dead_code)]
+pub(crate) async fn delete_build_artifact_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    path: String,
+    repo_paths: Vec<String>,
+    plugin_id: String,
+) -> Result<(), String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "fs:delete")?;
+    delete_build_artifact_inner(path, repo_paths).await
+}
+
+#[allow(dead_code)]
+async fn delete_build_artifact_inner(path: String, repo_paths: Vec<String>) -> Result<(), String> {
+    spawn_blocking_fs(move || {
+        // $HOME scope + canonicalization of the target.
+        let canonical = validate_within_home(&path)?;
+
+        // Canonicalize each registered repo root (resolves symlinks so
+        // containment is compared apples-to-apples). Roots that fail validation
+        // are dropped, not fatal — a stale repo entry can't widen the guard.
+        let mut roots = Vec::new();
+        for r in &repo_paths {
+            if let Ok(rc) = validate_within_home(r) {
+                roots.push(rc);
+            }
+        }
+
+        assert_deletable(&canonical, &roots)?;
+
+        std::fs::remove_dir_all(&canonical).map_err(|e| format!("Failed to remove: {e}"))
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -862,5 +1130,206 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("absolute"));
+    }
+
+    // -- scan_build_artifacts tests --
+
+    #[test]
+    fn scan_build_artifacts_finds_known_dirs_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("target")).unwrap();
+        std::fs::write(root.join("target/a.o"), vec![0u8; 100]).unwrap();
+        std::fs::create_dir_all(root.join("node_modules")).unwrap();
+        std::fs::write(root.join("node_modules/pkg.js"), vec![0u8; 50]).unwrap();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join(".git/HEAD"), vec![0u8; 20]).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), vec![0u8; 30]).unwrap();
+
+        let mut out = Vec::new();
+        walk_artifacts(root, "repo", MAX_SCAN_DEPTH, &mut out);
+
+        assert_eq!(
+            out.len(),
+            2,
+            "expected target+node_modules only, got {:?}",
+            out.iter().map(|e| &e.path).collect::<Vec<_>>()
+        );
+        assert!(out.iter().any(|e| e.path.ends_with("target") && e.kind == "rust"));
+        assert!(out
+            .iter()
+            .any(|e| e.path.ends_with("node_modules") && e.kind == "node"));
+        assert!(!out.iter().any(|e| e.path.contains(".git")));
+    }
+
+    #[test]
+    fn scan_build_artifacts_no_double_count_nested() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let nm = root.join("node_modules");
+        std::fs::create_dir_all(nm.join("dep/node_modules")).unwrap();
+        std::fs::write(nm.join("outer.js"), vec![0u8; 100]).unwrap();
+        std::fs::write(nm.join("dep/node_modules/inner.js"), vec![0u8; 200]).unwrap();
+
+        let mut out = Vec::new();
+        walk_artifacts(root, "repo", MAX_SCAN_DEPTH, &mut out);
+
+        assert_eq!(out.len(), 1, "nested node_modules must not be a separate entry");
+        // Outer dir is summed whole (300 bytes = outer.js + nested inner.js),
+        // proving stop-at-match measures the tree but does not re-emit the nested dir.
+        assert_eq!(out[0].size_bytes, 300);
+    }
+
+    #[test]
+    fn scan_build_artifacts_sums_sizes_recursively() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let t = root.join("target");
+        std::fs::create_dir_all(t.join("debug/deps")).unwrap();
+        std::fs::write(t.join("f1"), vec![0u8; 10]).unwrap();
+        std::fs::write(t.join("debug/f2"), vec![0u8; 20]).unwrap();
+        std::fs::write(t.join("debug/deps/f3"), vec![0u8; 30]).unwrap();
+
+        let mut out = Vec::new();
+        walk_artifacts(root, "repo", MAX_SCAN_DEPTH, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].size_bytes, 60);
+    }
+
+    #[test]
+    fn scan_build_artifacts_missing_dir_is_non_fatal() {
+        let mut out = Vec::new();
+        walk_artifacts(
+            Path::new("/nonexistent/path/xyz-tuic-test"),
+            "repo",
+            MAX_SCAN_DEPTH,
+            &mut out,
+        );
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn scan_build_artifacts_inner_validates_within_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = set_home_dir_override(tmp.path().to_path_buf());
+        let repo = tmp.path().join("myrepo");
+        std::fs::create_dir_all(repo.join("target")).unwrap();
+        std::fs::write(repo.join("target/x"), vec![0u8; 42]).unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let out = rt
+            .block_on(scan_build_artifacts_inner(vec![
+                repo.to_string_lossy().to_string(),
+                "/outside/home/repo".to_string(), // invalid → skipped, not fatal
+            ]))
+            .unwrap();
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].size_bytes, 42);
+        assert_eq!(out[0].kind, "rust");
+    }
+
+    // -- delete_build_artifact tests --
+
+    #[test]
+    fn delete_build_artifact_accepts_target_inside_repo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let target = repo.join("target");
+        std::fs::create_dir_all(&target).unwrap();
+        let roots = vec![repo.canonicalize().unwrap()];
+
+        assert!(assert_deletable(&target, &roots).is_ok());
+    }
+
+    #[test]
+    fn delete_build_artifact_rejects_outside_all_repos() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        // A real `target` dir that lives OUTSIDE the registered repo root.
+        let stray = tmp.path().join("elsewhere/target");
+        std::fs::create_dir_all(&stray).unwrap();
+        let roots = vec![repo.canonicalize().unwrap()];
+
+        let err = assert_deletable(&stray, &roots).unwrap_err();
+        assert!(err.contains("outside"), "got: {err}");
+    }
+
+    #[test]
+    fn delete_build_artifact_rejects_non_artifact_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let src = repo.join("src"); // not a known artifact dir
+        std::fs::create_dir_all(&src).unwrap();
+        let roots = vec![repo.canonicalize().unwrap()];
+
+        let err = assert_deletable(&src, &roots).unwrap_err();
+        assert!(err.contains("artifact"), "got: {err}");
+    }
+
+    #[test]
+    fn delete_build_artifact_rejects_repo_root_itself() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Repo root whose own name happens to be a known artifact name — the
+        // guard must still refuse to delete the registered root (c == root).
+        let repo = tmp.path().join("target");
+        std::fs::create_dir_all(&repo).unwrap();
+        let root = repo.canonicalize().unwrap();
+
+        let err = assert_deletable(&root, &[root.clone()]).unwrap_err();
+        assert!(err.contains("outside"), "got: {err}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_build_artifact_rejects_symlink_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        // Real `target` outside the repo; a symlink inside the repo points to it.
+        let outside = tmp.path().join("outside/target");
+        std::fs::create_dir_all(&outside).unwrap();
+        let link = repo.join("target");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        let roots = vec![repo.canonicalize().unwrap()];
+
+        // canonicalize() resolves the symlink to `outside`, which is not inside
+        // the repo root → rejected despite the artifact-name basename matching.
+        let err = assert_deletable(&link, &roots).unwrap_err();
+        assert!(err.contains("outside"), "got: {err}");
+    }
+
+    #[test]
+    fn delete_build_artifact_inner_removes_real_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = set_home_dir_override(tmp.path().to_path_buf());
+        let repo = tmp.path().join("repo");
+        let target = repo.join("target");
+        std::fs::create_dir_all(target.join("debug")).unwrap();
+        std::fs::write(target.join("debug/artifact.o"), vec![0u8; 10]).unwrap();
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(delete_build_artifact_inner(
+            target.to_string_lossy().to_string(),
+            vec![repo.to_string_lossy().to_string()],
+        ));
+        assert!(result.is_ok(), "delete failed: {:?}", result);
+        assert!(!target.exists(), "target should be removed");
+        assert!(repo.exists(), "repo root must survive");
+    }
+
+    #[test]
+    fn delete_build_artifact_inner_rejects_outside_home() {
+        let _guard = FS_TEST_LOCK.lock().unwrap();
+        let home = dirs::home_dir().unwrap();
+        if !Path::new("/tmp").starts_with(&home) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let result = rt.block_on(delete_build_artifact_inner(
+                "/tmp/.tuic-test-delete/target".to_string(),
+                vec!["/tmp/.tuic-test-delete".to_string()],
+            ));
+            assert!(result.is_err());
+        }
     }
 }
