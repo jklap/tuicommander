@@ -276,6 +276,7 @@ All stores persist to localStorage:
 - [x] Ideas panel (formerly Notes) with send-to-terminal and delete actions
 - [x] Terminal session persistence across app restarts
 - [x] GitHub GraphQL API (replaces gh CLI for PR/CI data)
+- [x] Multi-account GitHub: multiple github.com logins + GitHub Enterprise Server (PAT), per-repo account bindings with ambiguity chooser, isolated per-account polling/rate-limits/circuit-breaker (see FEATURES.md 8.13)
 - [x] Auto-update via tauri-plugin-updater with progress badge
 - [x] Prevent system sleep while agents are working (keepawake)
 - [x] Usage limit detection for Claude Code (weekly/session) with status bar badge

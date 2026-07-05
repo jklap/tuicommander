@@ -30,6 +30,34 @@ When multiple sources are available, TUICommander uses this priority:
 3. OAuth token (from Settings login)
 4. `gh` CLI token
 
+## Multiple Accounts (github.com + GitHub Enterprise)
+
+TUICommander is account-centric: you can monitor repos across **several GitHub accounts at once** — additional github.com logins and GitHub Enterprise Server (GHE) instances — and bind each repo to the account that should monitor it. If you only use one github.com account, nothing changes; skip this section.
+
+### Adding accounts
+
+Open **Settings > GitHub > Additional GitHub Accounts**. The account you logged in with above is your default.
+
+- **Another github.com account** — click **"Add another github.com account"** and complete the device flow (same as the primary login).
+- **GitHub Enterprise Server** — under **"Add Enterprise account"**, enter the host (e.g. `github.mycompany.com`) and a **Personal Access Token** with `repo` scope, then click **Add account**. The PAT is validated against your GHE server and stored in the OS keyring. (GHE uses a PAT because there is no per-host OAuth App.)
+
+Each account shows its login, avatar, and a source badge. Remove an account to delete its token, its repo bindings, and its cached state.
+
+### Binding repos to accounts
+
+Open **Settings > GitHub > Repository Bindings**. Each workspace repo shows how it resolves:
+
+- **Bound** — the repo is monitored by the shown account. Click **Unbind** to detach it.
+- **Needs binding** — the repo matches more than one account or GitHub remote. TUICommander does **not** guess `origin`; pick the right account/remote from the chooser to bind it.
+- **Needs account** — a github.com repo with no account configured yet; add one first.
+
+A repo with exactly one matching account is bound automatically. Worktrees share their main checkout's binding.
+
+### How multiple accounts behave
+
+- Each account polls independently with its own rate-limit budget and circuit breaker, so a rate limit or auth failure on one account never stalls the others.
+- **Limitation:** CI Auto-Heal (which shells out to `gh`) is disabled for GHE-bound repos and shows a clear message. PRs, CI status, issues, merge, and approve all work against bound GHE repos.
+
 ## Requirements
 
 - GitHub authentication (see above)

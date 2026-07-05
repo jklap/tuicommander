@@ -6,13 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **"QR for Remote Mobile Connection" command** — A Command Palette entry that pops a large, black-on-white QR code in a dialog: scan it with your phone to open the mobile companion PWA, no typing. Reuses the Settings → Services connect flow (the session token is embedded server-side and never reaches the UI); shows a hint when Remote Access is disabled and a network picker when the machine has multiple IPs.
+- **Multiple GitHub accounts (github.com + GitHub Enterprise)** — TUICommander is now account-centric instead of single-account. Add a second github.com account (device flow) or any number of **GitHub Enterprise Server** accounts (paste a Personal Access Token), and bind each workspace repo to the account that should monitor it. A repo with an ambiguous origin (multiple GitHub remotes or matching accounts) surfaces a **binding chooser** instead of silently picking `origin`. Every account gets its own isolated polling, rate-limit budget, viewer identity, and circuit breaker, so a rate limit or auth failure on one account never stalls the others. github.com-only setups are byte-for-byte unchanged — the OAuth device flow, token resolution, and single-batch polling behave exactly as before. Managed under Settings → GitHub → *Additional GitHub Accounts* and *Repository Bindings*.
+- **Event-driven multi-agent orchestration (MCP)** — Agents connected over the MCP control surface can coordinate through TUICommander as the hub: discover peers, exchange messages, and receive push-style notifications driven by session events rather than polling.
+- **Full browser / PWA / remote HTTP parity** — Git Panel writes, the GitHub panel and auth, AI Chat and the autonomous agent loop, the Claude Usage dashboard, plugin data/lifecycle, provider keyring, filesystem, and terminal reads now all have HTTP/SSE/WS equivalents. The mobile PWA and remote clients can now drive nearly the entire app, not just terminals.
+- **Command Palette button in browser mode** — The toolbar exposes the Command Palette directly when running over HTTP/PWA, replacing the hidden desktop-only IDE launcher entry.
+- **Merge with pending CI + squash default** — The PR Merge action is available while CI is still running and defaults to *Squash & merge*.
+
 ### Changed
+- **Branch context menu reorganized by usage frequency** — The sidebar branch menu groups the actions you reach for most at the top.
 - **Design-system audit — tokens, accessibility, GPU animations** — Canonical CSS token migration (no orphan/aliased variables left), keyboard accessibility (`role`/`tabindex`/Enter–Space) across collapsible headers and clickable rows, progress bars moved to GPU `transform: scaleX()`, and removal of side-stripe accents and mobile glassmorphism. Active/selected states now use a non-layout inset ring, so selecting an item no longer shifts its neighbors. Contributed by @paulovitin (#93).
 
 ### Fixed
 - **Codex tab showed idle while working** — Codex freezes its terminal UI while a child process runs (a long `cargo`/`git`), producing no output, so the output-driven busy detection flipped the tab to idle after ~2.5s even though the agent was still working. The idle timer now treats the on-screen `• Working (… esc to interrupt)` status line as a liveness signal and keeps the tab busy until it disappears.
 - **Context-menu items dropped + dangling separators** — A regression made every menu item that requested a trailing divider (the File Browser's New File, Paste, Delete, Add to .gitignore) render as *only* a divider, so those items vanished from the menu. Items now always render; a separator on the last item is suppressed so no context menu ends with a dangling divider (affected every menu — sidebar, terminal, file browser, git). The terminal menu also groups Copy and Paste together.
 - **SSH tunnel remote forwards** — The tunnel editor now saves Remote forwards with `local_host`/`local_port`, matching the backend schema and preventing Remote forwards from being rejected as malformed Local-forward payloads.
+- **Codex spawn reliability + intent parsing** — Hardened Codex CLI launching, intent parsing, and several related UI issues (#100–#104).
+- **Browser / PWA mode fixes** — Killed a duplicate "PTY:" tab race, fixed worktree-create routing, wired scroll history and coalesced scroll-to-offset so browser-mode scrolling renders, forwarded the mouse wheel to the app whenever mouse reporting is on, and added `convertFileSrc` to the Tauri shim to stop a PWA crash.
+- **iPad / touch input** — Fixed on-screen-keyboard focus (only the focused terminal lifts above the keyboard, anchored to the cursor row), touch-scroll direction, emoji-glyph rendering, and long-press to start drags so sidebar scroll still works.
+- **Clipboard consistency** — All copy paths route through the shared `writeClipboard` helper.
 
 ## [1.5.1] - 2026-06-26
 

@@ -1,12 +1,35 @@
 # GitHub Integration
 
-**Modules:** `src-tauri/src/github.rs`, `src-tauri/src/github_auth.rs`
+**Modules:** `src-tauri/src/github.rs`, `src-tauri/src/github_auth.rs`, `src-tauri/src/github_account.rs`
 
-Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to gh CLI tokens.
+Integrates with GitHub via GraphQL API for PR status, CI checks, and batch queries. Supports OAuth Device Flow login as an alternative to gh CLI tokens, plus **multiple accounts** (additional github.com logins and GitHub Enterprise Server) with per-repo bindings.
+
+## Multi-Account Model (`github_account.rs`)
+
+The integration is **account-centric**: the primary key is a stable `GitHubAccountId`, not the host. This keeps github.com behaving exactly as before behind an "ambient default" account while enabling additional accounts.
+
+- **`GitHubHost`** — canonical (lowercased, validated) host. `is_cloud()` → github.com; `graphql_url()` / `rest_base()` return `api.github.com` (+`/graphql`) for cloud and `https://{host}/api/graphql` / `https://{host}/api/v3` for GHE. `is_ambient_default()` routes the global-vs-per-account branch points.
+- **Account kinds** — `GithubComOAuth` / `GithubComEnv` / `GithubComGhCli` (the ambient default, existing auth chain), additional named github.com accounts, and `GhePat` (GitHub Enterprise Server via pasted PAT).
+- **Credential storage** — github.com keeps `Credential::GithubOauthToken` (`github/oauth-token`) unchanged; per-account PATs use `Credential::GithubToken(account_id)` → `github/account/{id}/token`.
+- **Repo bindings** — `{repo_path → account_id, owner, repo, remote_name}` persisted per canonical repo root (worktrees resolve to the main root). `resolve_repo_account(repo_path)` returns `RepoResolution::{Bound | NeedsBind(candidates) | NeedsAccount | Unmonitored}` — binding-first, single-candidate auto-confirm, ambiguity surfaces all candidates (never a silent `origin` pick).
+- **Per-account isolation (hybrid)** — github.com keeps the global breaker/viewer/rate/cooldown fields byte-for-byte; GHE accounts get isolated `ghe_state: DashMap<AccountId, GheAccountState>`. The poller groups repos by resolved account and runs one batch per account, so a fault on one never opens another's breaker. Cooldown keys: `owner/repo` (cloud, unchanged) vs `{account_id}:owner/repo` (GHE).
+- **Limitation** — `fetch_ci_failure_logs` (gh-CLI-assisted) is disabled with a clear message for non-github.com accounts; all REST + GraphQL paths route through `github_rest_url(host, path)` / account-scoped tokens (no hardcoded `api.github.com` outside `GitHubHost` + tests).
+
+### Multi-account commands
+
+| Command | Signature | Description |
+|---------|-----------|-------------|
+| `github_list_accounts` | `() -> Vec<GitHubAccount>` | Additional accounts beyond the ambient github.com default |
+| `github_add_account` | `(host: String, pat: String) -> GitHubAccount` | Validate PAT against `{rest_base}/user`, store token + record (github.com rejected → device flow) |
+| `github_remove_account` | `(id: String) -> ()` | Cascade-remove token + record + bindings + per-account caches |
+| `github_bind_repo` | `(repo_path, account_id, remote_name) -> ()` | Persist a repo→account binding |
+| `github_unbind_repo` | `(repo_path: String) -> ()` | Remove a repo binding |
+| `github_list_bindings` | `() -> Vec<Binding>` | All persisted repo→account bindings |
+| `github_resolve_repo` | `(repo_path: String) -> RepoResolutionDto` | `bound` / `needs-bind` / `needs-account` / `unmonitored` + candidates |
 
 ## Token Resolution
 
-Priority order (first non-empty wins):
+Priority order (first non-empty wins) for the ambient github.com account:
 
 1. `GH_TOKEN` environment variable
 2. `GITHUB_TOKEN` environment variable
@@ -14,7 +37,7 @@ Priority order (first non-empty wins):
 4. `gh_token` crate (reads `~/.config/gh/hosts.yml`)
 5. `gh auth token` CLI subprocess
 
-The active token source is tracked in `AppState.github_token_source` as a `TokenSource` enum (`Env`, `OAuth`, `GhCli`, `None`).
+The active token source is tracked in `AppState.github_token_source` as a `TokenSource` enum (`Env`, `OAuth`, `GhCli`, `Pat`, `None`). `resolve_token_for_account(&GitHubAccount)` runs this exact chain for github.com and returns the vault PAT (`TokenSource::Pat`) for GHE accounts.
 
 ## Tauri Commands — Authentication (`github_auth.rs`)
 

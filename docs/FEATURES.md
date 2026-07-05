@@ -410,6 +410,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Keyboard-navigable: `↑/↓` to move, `Enter` to execute, `Esc` to close
 - **Search modes**: type `!` to search files by name, `?` to search file contents, `~` to search across all open terminal buffers. File/content results open in editor tab (content matches jump to the matched line). Terminal results navigate to the terminal tab/pane and scroll to the matched line. Leading spaces after prefix are ignored
 - **Discoverable search commands**: "Search Terminals", "Search Files", "Search in File Contents" appear as regular palette commands and pre-fill the corresponding prefix
+- **QR for Remote Mobile Connection**: opens a large black-on-white QR (in a dialog) that a phone can scan to launch the mobile companion PWA. Reuses the Settings → Services connect flow (`get_connect_url` — token stays server-side); shows a hint when Remote Access is disabled and a network picker for multi-IP machines
 - Powered by `actionRegistry.ts` (`ACTION_META` map)
 
 ### 3.12 Activity Dashboard (`Cmd+Shift+A`)
@@ -919,6 +920,28 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Shows user avatar, login name, and token source after authentication
 - Logout removes OAuth token, falls back to env/gh CLI
 - On 401: auto-clears invalid OAuth token and prompts re-auth
+
+### 8.13 Multiple Accounts (github.com + GitHub Enterprise)
+GitHub integration is **account-centric**: TUICommander can manage N accounts and each workspace repo is explicitly bound to the account that monitors it (a persisted binding, not derived live from `origin`).
+
+**Account kinds**
+- **Ambient github.com default** — the account you authenticate with via the OAuth device flow above (or `GH_TOKEN`/`gh` CLI). Behaves exactly as before; a github.com-only user sees zero change.
+- **Additional github.com accounts** — extra named github.com logins added via the device flow (Settings → GitHub → *Additional GitHub Accounts* → "Add another github.com account").
+- **GitHub Enterprise Server (GHE)** — added by host + a pasted **Personal Access Token** (no per-host OAuth App). Validated against `https://{host}/api/v3/user`; PAT stored in the OS keyring under `github/account/{id}/token`.
+
+**Repository bindings** (Settings → GitHub → *Repository Bindings*)
+- Each workspace repo resolves to one of: **Bound** (shows the account + *Unbind*), **NeedsBind** (a candidate chooser — no silent `origin` pick when multiple GitHub remotes/accounts match), **NeedsAccount** (a github.com repo with no account yet → points to setup), or **Unmonitored**.
+- A single matching account auto-confirms; ambiguity always asks. Worktrees of a repo share the main checkout's binding.
+
+**Per-account isolation** (hybrid model)
+- github.com keeps the global breaker/viewer/rate/cooldown state byte-for-byte; each GHE account gets its own `ghe_state` (circuit breaker, viewer login, rate budget).
+- The poller groups active repos by account and runs one batch per account, so a 401 / rate-limit / fault on one account never opens another's breaker or blocks its polling.
+- Cooldown keys are account-scoped (`{account_id}:owner/repo` for GHE; `owner/repo` unchanged for cloud); github.com logout clears only cloud cooldowns; removing an account drops only its token, record, bindings, and caches.
+
+**Limitations**
+- REST + GraphQL (PRs, CI, issues, merge, approve, issue comments) work against bound GHE repos. `gh`-CLI-assisted CI-failure-log fetching (CI Auto-Heal) is disabled with a clear message for non-github.com accounts.
+
+Backend: `github_account.rs` (`GitHubHost`, account model, binding store, `resolve_repo_account`), commands `github_list_accounts` / `github_add_account` / `github_remove_account` / `github_bind_repo` / `github_unbind_repo` / `github_list_bindings` / `github_resolve_repo`.
 
 ---
 

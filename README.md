@@ -89,6 +89,7 @@ The feedback loop happens in the same window:
 - **Git Panel** — Staging, inline commit, blame with age heatmap, canvas commit graph, stashes, branches with ahead/behind counts.
 - **Diff views** — Side-by-side, unified, or scroll-all-files. Word-level highlighting, hunk and line-level restore.
 - **PR management** — Merge via GitHub API with auto-detected merge method. Post-merge cleanup.
+- **Multiple GitHub accounts** — Run more than one github.com login *and* any number of GitHub Enterprise Server accounts side by side. Bind each repo to the account that monitors it; ambiguous repos ask instead of guessing. Every account polls independently — a rate limit on one never stalls the others.
 - **GitHub Issues** — Filter by assigned/created/mentioned, labels with colors, close/reopen.
 - **CI Auto-Heal** — When CI fails, TUICommander fetches failure logs and injects them into the agent for automatic fix.
 - **Built-in code editor** — Syntax highlighting, find/replace, disk conflict detection, a VS Code-style change-overview ruler, and a Cmd/Ctrl+hover go-to-definition affordance.
@@ -191,6 +192,7 @@ TUICommander isn't a black box. Everything you click, you can also drive from a 
 - Worktree Manager (`Cmd+Shift+W`): all worktrees across all repos, orphan detection, batch operations
 - Git Panel (`Cmd+Shift+D`): staging, commit, log with canvas commit graph, stashes, branches, blame with age heatmap
 - PR management: merge via GitHub API, auto-detect merge method, post-merge cleanup dialog
+- Multi-account GitHub: multiple github.com logins + GitHub Enterprise Server accounts (PAT), per-repo account bindings with an ambiguity chooser, isolated per-account polling/rate-limits/circuit-breaker
 - GitHub Issues: filter by assigned/created/mentioned, labels with colors, close/reopen
 - Auto-delete branch on PR close, CI Auto-Heal, PR notifications
 - Repository groups: named, colored, collapsible, drag-and-drop reordering
