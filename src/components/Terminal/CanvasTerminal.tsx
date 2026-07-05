@@ -169,6 +169,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		spans?: { row: number; colStart: number; colEnd: number }[];
 	} | null = null;
 	const detectedLinks = new Map<number, { colStart: number; colEnd: number }[]>();
+	// Spans of links that span soft-wrapped rows (web + file://), keyed by row.
+	// scanRowForLinks() merges these each time it rebuilds a row's dashed-underline
+	// spans, so multi-row underlines survive the per-frame rebuild at line ~1367.
+	// Recomputed by verifyVisibleFileLinks(); cleared with detectedLinks so it
+	// can't paint stale rows after a scroll/resize.
+	const wrappedLinkSpans = new Map<number, { colStart: number; colEnd: number }[]>();
+	function clearDetectedLinks() {
+		detectedLinks.clear();
+		wrappedLinkSpans.clear();
+	}
 
 	// Link context menu: right-clicking a detected link offers Open / Copy link.
 	// TUIC is UI-first — opening a link (e.g. a markdown file) is a primary action,
@@ -403,7 +413,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			lastResizeRows = rows;
 
 			rowMap.clear();
-			detectedLinks.clear();
+			clearDetectedLinks();
 			fullRepaintNeeded = true;
 			lastDisplayOffset = -1;
 			invokeRef("resize_pty", { sessionId: props.sessionId, rows, cols }).catch(ipcErr("resize_pty"));
@@ -1328,7 +1338,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			selectionEnd = null;
 			cachedSelectionText = "";
 			rowMap.clear();
-			detectedLinks.clear();
+			clearDetectedLinks();
 			fullRepaintNeeded = true;
 		}
 
@@ -1346,7 +1356,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// When backend sends all screen rows, replace rowMap to discard stale entries
 		if (decision.fullReplace) {
 			rowMap.clear();
-			detectedLinks.clear();
+			clearDetectedLinks();
 
 			fullRepaintNeeded = true;
 		} else if (decision.scrollWait) {
@@ -1355,7 +1365,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// them to wrong screen positions, producing ghost content.
 			// Clear immediately (brief blank < ~5ms) and request a full frame.
 			rowMap.clear();
-			detectedLinks.clear();
+			clearDetectedLinks();
 			fullRepaintNeeded = true;
 			invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 			currentFrame = frame;
@@ -1464,6 +1474,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			spans.push(...cached.spans);
 		}
 
+		// Spans from links that span soft-wrapped rows (web + file://) — invisible
+		// from this single row's text, so merged from the wrapped-link map that
+		// verifyVisibleFileLinks() builds via terminal_get_logical_line.
+		const wrapped = wrappedLinkSpans.get(rowIndex);
+		if (wrapped) spans.push(...wrapped);
+
 		if (spans.length > 0) detectedLinks.set(rowIndex, spans);
 		else detectedLinks.delete(rowIndex);
 	}
@@ -1537,8 +1553,27 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (verified.length > 0) anyFound = true;
 		}
 
-		// Multi-row pass: detect file:// URLs spanning soft-wrapped rows.
-		// Check each row that is full-width (likely wrapped) for partial file:// prefix.
+		// Multi-row pass: detect web (http/https) + file:// URLs spanning
+		// soft-wrapped rows. Each full-width row is a wrap candidate; the joined
+		// logical line is scanned and any match that crosses a row boundary has
+		// its per-row spans recorded in wrappedLinkSpans (merged by scanRowForLinks
+		// so they survive the per-frame rebuild). Rebuilt fresh each pass.
+		wrappedLinkSpans.clear();
+		// Record a match's per-row spans into wrappedLinkSpans.
+		const recordWrappedSpans = (startRow: number, matchIndex: number, matchEnd: number) => {
+			for (let offset = matchIndex; offset < matchEnd; ) {
+				const spanRow = startRow + Math.floor(offset / cols);
+				const spanColStart = offset % cols;
+				const remaining = matchEnd - offset;
+				const spanColEnd = Math.min(spanColStart + remaining, cols);
+				const existing = wrappedLinkSpans.get(spanRow) || [];
+				existing.push({ colStart: spanColStart, colEnd: spanColEnd });
+				wrappedLinkSpans.set(spanRow, existing);
+				offset += spanColEnd - spanColStart;
+			}
+		};
+		const spansMultipleRows = (matchIndex: number, matchEnd: number) =>
+			Math.floor(matchIndex / cols) !== Math.floor((matchEnd - 1) / cols);
 		const checkedLogicalStarts = new Set<number>();
 		for (let i = 0; i < maxRow; i++) {
 			if (!alive) return;
@@ -1546,7 +1581,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (!row) continue;
 			const text = rowToText(row);
 			if (text.length < cols) continue; // not full-width, not wrapped
-			if (!text.includes("file://")) continue;
+			const hasFile = text.includes("file://");
+			const hasWeb = /https?:\/\//.test(text);
+			if (!hasFile && !hasWeb) continue;
 			if (checkedLogicalStarts.has(i)) continue;
 			try {
 				const [startRow, logicalText] = (await ref("terminal_get_logical_line", {
@@ -1555,30 +1592,32 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				})) as [number, string];
 				if (!alive) return;
 				if (startRow === i && logicalText === text) continue; // single row
+				if (checkedLogicalStarts.has(startRow)) continue;
 				checkedLogicalStarts.add(startRow);
+
+				// Web URLs — no path resolution needed.
+				WEB_URL_RE.lastIndex = 0;
+				let wm: RegExpExecArray | null;
+				while ((wm = WEB_URL_RE.exec(logicalText)) !== null) {
+					const matchEnd = wm.index + wm[0].length;
+					if (!spansMultipleRows(wm.index, matchEnd)) continue;
+					recordWrappedSpans(startRow, wm.index, matchEnd);
+					anyFound = true;
+				}
+
+				// file:// URLs — underline only once resolved to a real path.
 				FILE_URL_RE.lastIndex = 0;
 				let m: RegExpExecArray | null;
 				while ((m = FILE_URL_RE.exec(logicalText)) !== null) {
 					const matchEnd = m.index + m[0].length;
-					// Only process if this match spans multiple rows
-					if (Math.floor(m.index / cols) === Math.floor((matchEnd - 1) / cols)) continue;
+					if (!spansMultipleRows(m.index, matchEnd)) continue;
 					try {
 						const r = (await ref("resolve_terminal_path", { cwd, candidate: m[1] })) as {
 							absolute_path: string;
 							is_directory: boolean;
 						} | null;
 						if (!r) continue;
-						// Add spans to detectedLinks for each row
-						for (let offset = m.index; offset < matchEnd; ) {
-							const spanRow = startRow + Math.floor(offset / cols);
-							const spanColStart = offset % cols;
-							const remaining = matchEnd - offset;
-							const spanColEnd = Math.min(spanColStart + remaining, cols);
-							const existing = detectedLinks.get(spanRow) || [];
-							existing.push({ colStart: spanColStart, colEnd: spanColEnd });
-							detectedLinks.set(spanRow, existing);
-							offset += spanColEnd - spanColStart;
-						}
+						recordWrappedSpans(startRow, m.index, matchEnd);
 						anyFound = true;
 					} catch {
 						/* resolve failed */
@@ -1663,9 +1702,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			const urlMatches: { text: string; path: string; index: number }[] = [];
 			let match: RegExpExecArray | null;
 
-			// Web URLs (no resolution needed)
+			// Web URLs (no resolution needed). A URL that reaches the row's right
+			// edge may be soft-wrapped onto the next row — defer it to the
+			// logical-line pass below so the FULL url is captured, not the
+			// truncated single-row prefix (e.g. http://127.0.0.1:8090 wrapping to
+			// ".../8" + "090" must not open as http://127.0.0.1:8).
 			webUrlRe.lastIndex = 0;
 			while ((match = webUrlRe.exec(rowText)) !== null) {
+				if (match.index + match[0].length >= rowText.length) continue;
 				urlMatches.push({ text: match[0], path: match[0], index: match.index });
 			}
 
@@ -1743,6 +1787,21 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 		}
 
+		// A web URL that reaches the row's right edge was deferred above (it may be
+		// soft-wrapped); force the logical-line pass so it's re-detected on the
+		// joined line even when the row happens not to be wrapped.
+		let rowHasEdgeUrl = false;
+		{
+			WEB_URL_RE.lastIndex = 0;
+			let em: RegExpExecArray | null;
+			while ((em = WEB_URL_RE.exec(rowText)) !== null) {
+				if (em.index + em[0].length >= rowText.length) {
+					rowHasEdgeUrl = true;
+					break;
+				}
+			}
+		}
+
 		// If no single-row link found, try logical line (joins soft-wrapped rows)
 		if (!hoveredLink && ref) {
 			try {
@@ -1751,7 +1810,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					row,
 				})) as [number, string];
 				if (!alive || gen !== linkCheckGeneration) return;
-				if (startRow !== row || logicalText !== rowText) {
+				if (startRow !== row || logicalText !== rowText || rowHasEdgeUrl) {
 					const cols = lastScreenCols > 0 ? lastScreenCols : currentFrame?.screenCols || 80;
 					const colOffset = (row - startRow) * cols;
 					const logicalCol = colOffset + col;
@@ -2114,7 +2173,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				e.preventDefault();
 
 				rowMap.clear();
-				detectedLinks.clear();
+				clearDetectedLinks();
 				fullRepaintNeeded = true;
 				currentFrame = null;
 				lastDisplayOffset = -1;
@@ -2738,7 +2797,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			getSelectionText: () => cachedSelectionText,
 			refresh: () => {
 				rowMap.clear();
-				detectedLinks.clear();
+				clearDetectedLinks();
 				fullRepaintNeeded = true;
 				currentFrame = null;
 				lastDisplayOffset = -1;
@@ -2932,7 +2991,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		fileLinkCache.clear();
 		resetFrameTiming(props.sessionId);
 		rowMap.clear();
-		detectedLinks.clear();
+		clearDetectedLinks();
 		gridRenderer?.invalidateCaches();
 		releaseCache();
 	});
