@@ -233,7 +233,7 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [HUMAN] With timeout=1: open two tabs, switch away from one for 1+ min while it's idle → standby badge (⏸) appears in the background tab
 - [HUMAN] Click the standby tab → badge disappears immediately (SIGCONT on focus)
 - [x] `curl http://localhost:<port>/session/list` → standby field present, `true` for stopped session _(verified: mcp_transport.rs:862-875 MCP session list includes `"standby": bool` from state.standby_sessions; HTTP /sessions endpoint does NOT include it — MCP-only field)_
-- [ ] Set timeout=0 → within 30s, any currently stopped sessions wake up (no badge remains) _(NOTE: pty.rs:3930-3932 only skips new standby creation when timeout_min==0; no SIGCONT for existing standby sessions on config change. Badge would persist until user focuses the tab.)_
+- [ ] Set timeout=0 → within 30s, any currently stopped sessions wake up (no badge remains) _(FIXED story 095-f2eb: the standby checker now calls `wake_all_standby` (pty.rs) when `timeout_min==0` — SIGCONT every parked session + emit standby=false — instead of bare `continue`. Unit-tested (wake-all clears map, empty no-op, re-arm ok). Rust change → needs a `make dev`/`make build` restart to verify live; badge should clear within one 30s tick.)_
 
 ## Detachable Panels
 - [HUMAN] Activity Dashboard: click detach button in header → opens in separate window
@@ -595,7 +595,7 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [HUMAN] Click CI badge in status bar opens popover
 - [HUMAN] Popover shows individual check names and statuses
 - [HUMAN] Success/failure/pending icons correct
-- [ ] Click check item opens URL in browser _(NOTE: PrDetailContent.tsx:238-244 renders check items as plain divs with icon, name, status — no onClick handler. CI check items are NOT clickable.)_
+- [ ] Click check item opens URL in browser _(NOTE: PrDetailContent.tsx:238-244 renders check items as plain divs with icon, name, status — no onClick handler. CI check items are NOT clickable. Feature tracked as story 096-2ac0.)_
 - [HUMAN] Loading state shown while fetching
 
 ### Optimized GitHub Polling (062)

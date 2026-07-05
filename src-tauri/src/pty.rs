@@ -4700,6 +4700,11 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
             interval.tick().await;
             let timeout_min = state.config.read().standby_timeout_minutes;
             if timeout_min == 0 {
+                // Standby disabled: wake any sessions still parked (SIGSTOP'd)
+                // from a previous non-zero timeout. Otherwise their stopped
+                // badge persists until the user manually focuses each tab
+                // (to-test.md:236, story 095).
+                wake_all_standby(&state);
                 continue;
             }
             let timeout_ms = u64::from(timeout_min) * 60_000;
@@ -4835,6 +4840,30 @@ pub(crate) fn wake_session(state: &AppState, session_id: &str) -> Result<bool, S
     Ok(true)
 }
 
+/// Wake every session currently in standby. Used when the user disables standby
+/// (timeout=0) so already-parked sessions resume instead of staying SIGSTOP'd.
+/// Returns the number of sessions for which a wake was attempted.
+///
+/// Keys are collected into a Vec first: `wake_session` calls
+/// `standby_sessions.remove`, and mutating a DashMap while holding an `iter()`
+/// shard guard on the same map deadlocks. A session killed between the snapshot
+/// and the wake is handled by `wake_session` (removes its entry, then returns
+/// Err on the missing session — no panic).
+#[cfg(unix)]
+pub(crate) fn wake_all_standby(state: &AppState) -> usize {
+    let parked: Vec<String> = state
+        .standby_sessions
+        .iter()
+        .map(|e| e.key().clone())
+        .collect();
+    for session_id in &parked {
+        if let Err(e) = wake_session(state, session_id) {
+            tracing::warn!(session_id, error = %e, "Standby wake-all (timeout=0) failed");
+        }
+    }
+    parked.len()
+}
+
 #[cfg(unix)]
 fn emit_standby_event(state: &AppState, session_id: &str, standby: bool) {
     #[cfg(feature = "desktop")]
@@ -4846,6 +4875,53 @@ fn emit_standby_event(state: &AppState, session_id: &str, standby: bool) {
                 "standby": standby,
             }),
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod standby_tests {
+    use super::*;
+
+    /// timeout=0 must wake ALL parked sessions. Entries with no live session
+    /// (the "killed between listing and wake" case) must not panic — each is
+    /// removed from the map before wake_session errors on the missing session.
+    #[test]
+    fn wake_all_standby_clears_every_parked_session() {
+        let state = crate::state::tests_support::make_test_app_state();
+        state.standby_sessions.insert("gone-1".to_string(), 111);
+        state.standby_sessions.insert("gone-2".to_string(), 222);
+        state.standby_sessions.insert("gone-3".to_string(), 333);
+
+        let attempted = wake_all_standby(&state);
+
+        assert_eq!(attempted, 3, "wake attempted for every parked session");
+        assert!(
+            state.standby_sessions.is_empty(),
+            "standby map must be empty after wake-all even when the sessions are gone"
+        );
+    }
+
+    /// Empty standby map is a no-op — no panic, nothing to wake.
+    #[test]
+    fn wake_all_standby_empty_is_noop() {
+        let state = crate::state::tests_support::make_test_app_state();
+        assert_eq!(wake_all_standby(&state), 0);
+        assert!(state.standby_sessions.is_empty());
+    }
+
+    /// After a timeout=0 wake-all, standby can re-arm normally when the user
+    /// sets a positive timeout again — wake_all_standby sets no persistent
+    /// "disabled" flag, it only clears the current standby set.
+    #[test]
+    fn wake_all_standby_leaves_map_ready_to_rearm() {
+        let state = crate::state::tests_support::make_test_app_state();
+        state.standby_sessions.insert("gone-1".to_string(), 111);
+        wake_all_standby(&state);
+        assert!(state.standby_sessions.is_empty());
+
+        // Re-arming (as the checker would on the next tick with timeout>0) works.
+        state.standby_sessions.insert("re-armed".to_string(), 444);
+        assert_eq!(state.standby_sessions.len(), 1);
     }
 }
 
