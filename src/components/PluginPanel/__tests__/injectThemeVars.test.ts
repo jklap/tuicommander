@@ -1,67 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { hasOwnStyling, injectThemeVars } from "../PluginPanel";
-
-describe("hasOwnStyling", () => {
-	it("detects an inline <style> block", () => {
-		expect(hasOwnStyling("<html><head><style>body{color:red}</style></head></html>")).toBe(true);
-		expect(hasOwnStyling('<style type="text/css">a{}</style>')).toBe(true);
-	});
-
-	it("detects a linked stylesheet regardless of attribute order/quoting", () => {
-		expect(hasOwnStyling('<link rel="stylesheet" href="x.css">')).toBe(true);
-		expect(hasOwnStyling("<link href='x.css' rel=stylesheet>")).toBe(true);
-	});
-
-	it("returns false for plain unstyled HTML (incl. dashboard markup)", () => {
-		expect(hasOwnStyling("<div>hello</div>")).toBe(false);
-		expect(hasOwnStyling('<div class="dashboard"><h1 class="dash-title">x</h1></div>')).toBe(false);
-		// A stray word "style" in text must not trip detection.
-		expect(hasOwnStyling("<p>the style of this page</p>")).toBe(false);
-	});
-
-	it("ignores <style>/stylesheet text inside comments and inert script templates", () => {
-		// A genuinely-unstyled dashboard that merely embeds style-looking text in a
-		// comment or a <script type="text/template"> must still get PLUGIN_BASE_CSS.
-		expect(hasOwnStyling("<!-- <style>body{color:red}</style> --><div class='dashboard'>x</div>")).toBe(
-			false,
-		);
-		expect(
-			hasOwnStyling(
-				'<script type="text/template"><style>a{}</style><link rel="stylesheet" href="x.css"></script><div>x</div>',
-			),
-		).toBe(false);
-	});
-
-	it("treats an empty <style></style> placeholder as unstyled", () => {
-		expect(hasOwnStyling("<html><head><style></style></head><body>x</body></html>")).toBe(false);
-		expect(hasOwnStyling("<style>   </style><div>x</div>")).toBe(false);
-	});
-});
+import { injectThemeVars } from "../PluginPanel";
 
 describe("injectThemeVars base-sheet scoping (#080)", () => {
-	it("does NOT inject the tuic-base sheet when the document is self-styled", () => {
+	it("does NOT inject the tuic-base sheet for self-styled (design/preview) tabs", () => {
 		const out = injectThemeVars(
 			"<html><head><style>body{background:#fff;color:#000;font-size:20px}</style></head><body>hi</body></html>",
+			true,
 		);
 		expect(out).not.toContain('id="tuic-base"');
 		// The document's own style is preserved untouched.
 		expect(out).toContain("background:#fff");
 	});
 
-	it("does NOT inject the tuic-base sheet when the document links a stylesheet", () => {
-		const out = injectThemeVars('<html><head><link rel="stylesheet" href="a.css"></head><body>hi</body></html>');
-		expect(out).not.toContain('id="tuic-base"');
+	it("injects the tuic-base sheet for plugin dashboards even when they ship their own <style>", () => {
+		// Regression: a dashboard shipping supplementary layout styles still relies
+		// on PLUGIN_BASE_CSS for typography/theme. Source (selfStyled=false), not
+		// content sniffing, decides — so the base sheet must be present.
+		const out = injectThemeVars(
+			'<html><head><style>.col{border-top:2px solid red}</style></head><body><div class="dashboard">x</div></body></html>',
+			false,
+		);
+		expect(out).toContain('id="tuic-base"');
+		// The dashboard's own supplementary style is preserved alongside the base.
+		expect(out).toContain("border-top:2px solid red");
 	});
 
-	it("injects the tuic-base sheet for plain unstyled HTML", () => {
-		const out = injectThemeVars('<html><head></head><body><div class="dashboard">x</div></body></html>');
+	it("injects the tuic-base sheet for plain unstyled plugin dashboards", () => {
+		const out = injectThemeVars('<html><head></head><body><div class="dashboard">x</div></body></html>', false);
 		expect(out).toContain('id="tuic-base"');
 	});
 
 	it("still injects the SDK script in both branches", () => {
-		const styled = injectThemeVars("<style>a{}</style><body>x</body>");
-		const plain = injectThemeVars("<body>x</body>");
-		expect(styled).toContain('id="tuic-sdk"');
-		expect(plain).toContain('id="tuic-sdk"');
+		const selfStyled = injectThemeVars("<style>a{}</style><body>x</body>", true);
+		const dashboard = injectThemeVars("<body>x</body>", false);
+		expect(selfStyled).toContain('id="tuic-sdk"');
+		expect(dashboard).toContain('id="tuic-sdk"');
 	});
 });

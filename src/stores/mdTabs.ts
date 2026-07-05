@@ -42,6 +42,14 @@ export interface PluginPanelTab extends BaseTab {
 	html: string;
 	/** Optional URL to load instead of inline HTML (mutually exclusive with html) */
 	url?: string;
+	/**
+	 * Source-derived styling mode. Undefined/false for SDK plugin dashboards
+	 * (`addPluginPanel`) — they get PLUGIN_BASE_CSS forced on so the shared
+	 * `.dashboard`/`.dash-*` classes render. True for MCP `ui action=tab` design/
+	 * preview tabs (`openUiTab`) — they keep their own background/typography and
+	 * the base sheet is omitted (#080).
+	 */
+	selfStyled?: boolean;
 }
 
 /** Native Claude Usage Dashboard tab */
@@ -274,7 +282,10 @@ function createMdTabsStore() {
 			}
 
 			const id = base._nextId("md");
-			const tab: PluginPanelTab = { type: "plugin-panel", id, title, pluginId, html, pinned };
+			// MCP `ui` tabs are design/preview surfaces: keep their own styling and
+			// omit PLUGIN_BASE_CSS (#080). SDK plugin dashboards use addPluginPanel,
+			// which leaves selfStyled unset so the base sheet is injected.
+			const tab: PluginPanelTab = { type: "plugin-panel", id, title, pluginId, html, pinned, selfStyled: true };
 			const resolvedRepo = resolveRepoForCwd(originRepoPath) ?? undefined;
 			if (resolvedRepo) tab.repoPath = resolvedRepo;
 			if (url) tab.url = url;

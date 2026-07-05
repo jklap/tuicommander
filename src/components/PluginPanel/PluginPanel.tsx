@@ -97,47 +97,27 @@ function extractThemeObject(): Record<string, string> {
 }
 
 /**
- * Whether a document brings its own styling — a non-empty `<style>` block or a
- * linked `<link rel="stylesheet">`. Such documents are self-styled (design or
- * preview work opened via `ui action=tab html=...`) and must NOT have the TUIC
- * chrome base sheet forced onto them, or a white page renders dark and any
- * typography it defines is overridden (#080). Plain unstyled HTML — including
- * plugin dashboards, which ship no own styles and rely on the shared
- * `.dashboard`/`.dash-*` classes from PLUGIN_BASE_CSS — is not self-styled and
- * still gets the base sheet.
+ * Inject theme CSS variables, the base stylesheet, and the SDK/search scripts
+ * into HTML before </head> (or prepend if no </head>).
  *
- * Detection parses the HTML into an inert `<template>` fragment rather than
- * regex-scanning the raw string, so `<style>`/`rel="stylesheet"` text living
- * inside a comment or an inert `<script type="text/template">` no longer
- * misclassifies a genuinely-unstyled dashboard as self-styled (which would
- * silently drop PLUGIN_BASE_CSS). An empty `<style></style>` placeholder is
- * likewise treated as unstyled. Template content is inert — parsing never
- * fetches linked resources or runs scripts.
+ * `selfStyled` decides the base sheet and is derived from the tab's SOURCE, not
+ * by sniffing the HTML. A plugin dashboard legitimately ships its own
+ * supplementary `<style>` for layout yet still relies on PLUGIN_BASE_CSS for
+ * typography/theme; content sniffing conflated the two and dropped the base
+ * sheet, rendering dashboards serif-on-white.
+ *
+ *  - Plugin dashboards (SDK `addPluginPanel`) → selfStyled=false → the base
+ *    sheet is forced on so the shared `.dashboard`/`.dash-*` classes render.
+ *  - Design/preview tabs (MCP `ui action=tab html=…` / `file://`, #080) →
+ *    selfStyled=true → the base sheet is omitted so a self-styled white page
+ *    keeps its own background, color and typography.
+ *
+ * Theme vars and the SDK/search scripts are injected in both cases — they only
+ * define CSS vars / add behavior.
  */
-export function hasOwnStyling(html: string): boolean {
-	const tpl = document.createElement("template");
-	tpl.innerHTML = html;
-	const root = tpl.content;
-	// A <style> with actual rules (script/comment text is not parsed into
-	// <style> elements, so it can't trip this).
-	const hasInlineStyle = Array.from(root.querySelectorAll("style")).some(
-		(el) => (el.textContent ?? "").trim().length > 0,
-	);
-	if (hasInlineStyle) return true;
-	// A <link rel="stylesheet"> (rel is space-separated, case-insensitive).
-	return Array.from(root.querySelectorAll("link")).some((el) =>
-		(el.getAttribute("rel") ?? "").split(/\s+/).some((r) => r.toLowerCase() === "stylesheet"),
-	);
-}
-
-/** Inject theme CSS variables and base stylesheet into HTML before </head> (or prepend if no </head>) */
-export function injectThemeVars(html: string): string {
+export function injectThemeVars(html: string, selfStyled: boolean): string {
 	const themeStyle = extractThemeVars();
-	// Only force the base body/typography sheet onto documents that bring no
-	// styling of their own. Self-styled HTML keeps its own background, color and
-	// font-size (#080). The theme-var block and the SDK/search scripts are
-	// injected in both cases — they only define CSS vars / add behavior.
-	const baseStyle = hasOwnStyling(html) ? "" : `<style id="tuic-base">${PLUGIN_BASE_CSS}</style>`;
+	const baseStyle = selfStyled ? "" : `<style id="tuic-base">${PLUGIN_BASE_CSS}</style>`;
 	const injection = baseStyle + themeStyle + TUIC_SDK_SCRIPT + IFRAME_SEARCH_SCRIPT;
 	const headClose = html.indexOf("</head>");
 	if (headClose >= 0) {
@@ -459,14 +439,14 @@ export const PluginPanel: Component<PluginPanelProps> = (props) => {
 					const withBase = content.includes("<head")
 						? content.replace(/<head([^>]*)>/i, `<head$1>${baseTag}`)
 						: `${baseTag}${content}`;
-					setSrcdoc(injectThemeVars(withBase));
+					setSrcdoc(injectThemeVars(withBase, props.tab.selfStyled ?? false));
 				})
 				.catch((err) => {
 					appLogger.error("plugin", `Failed to read file:// tab content: ${filePath}`, err);
 					setSrcdoc(`<body style="color:#e55;padding:24px">Failed to load ${filePath}: ${err}</body>`);
 				});
 		} else if (!url) {
-			setSrcdoc(injectThemeVars(props.tab.html));
+			setSrcdoc(injectThemeVars(props.tab.html, props.tab.selfStyled ?? false));
 		}
 	});
 
