@@ -10,10 +10,15 @@
 use serde_json::Value;
 use std::io::{self, BufRead, Write};
 use std::sync::{
-    Arc, Mutex,
+    Arc, LazyLock, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+/// `$TUIC_SESSION` inherited from the parent agent PTY, read once at startup.
+/// `None` when the bridge runs outside a TUIC-managed PTY (e.g. a bare CLI).
+static TUIC_SESSION_ENV: LazyLock<Option<String>> =
+    LazyLock::new(|| std::env::var("TUIC_SESSION").ok().filter(|s| !s.is_empty()));
 
 // ---------------------------------------------------------------------------
 // Platform-specific IPC connection
@@ -166,6 +171,21 @@ async fn connect_ipc() -> Result<IpcStream, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Identity header
+// ---------------------------------------------------------------------------
+
+/// HTTP header the bridge asserts so the server can auto-bind this connection to
+/// the agent's PTY session. The value is `$TUIC_SESSION`, inherited from the
+/// parent agent process — the bridge never invents it. Absent env → no header,
+/// and the server falls back to explicit `agent register`.
+fn tuic_session_header_line(tuic_session: Option<&str>) -> String {
+    match tuic_session {
+        Some(s) if !s.is_empty() => format!("x-tuic-session: {s}\r\n"),
+        _ => String::new(),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // JSON-RPC helpers
 // ---------------------------------------------------------------------------
 
@@ -211,6 +231,9 @@ async fn post_mcp(
     if let Some(sid) = session_id {
         headers.push_str(&format!("mcp-session-id: {sid}\r\n"));
     }
+    // Assert our PTY identity so the server auto-binds swarm identity without an
+    // explicit `agent register` round-trip. Read once, cached at startup.
+    headers.push_str(&tuic_session_header_line(TUIC_SESSION_ENV.as_deref()));
     headers.push_str("\r\n");
 
     stream
@@ -574,5 +597,24 @@ async fn main() {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tuic_session_header_line;
+
+    #[test]
+    fn header_emitted_when_session_present() {
+        assert_eq!(
+            tuic_session_header_line(Some("550e8400-e29b-41d4-a716-446655440a01")),
+            "x-tuic-session: 550e8400-e29b-41d4-a716-446655440a01\r\n"
+        );
+    }
+
+    #[test]
+    fn header_absent_without_session() {
+        assert_eq!(tuic_session_header_line(None), "");
+        assert_eq!(tuic_session_header_line(Some("")), "");
     }
 }

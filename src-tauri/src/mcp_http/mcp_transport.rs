@@ -127,6 +127,100 @@ fn is_valid_uuid(s: &str) -> bool {
     s.len() == 36 && Uuid::parse_str(s).is_ok()
 }
 
+/// Current unix time in milliseconds. Centralizes the `SystemTime` boilerplate
+/// duplicated across the messaging/spawn paths.
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Cap for a peer message typed into a terminal. Longer messages become a
+/// pointer to the inbox rather than flooding the recipient's screen.
+const INJECT_MAX_BYTES: usize = 2048;
+
+/// Frame a peer message as a single line to type into the recipient's terminal.
+/// Newlines are collapsed to spaces (a multi-line paste into a TUI is fragile);
+/// oversized bodies become a pointer to the inbox. The full, untouched content
+/// always remains available via `agent action=inbox`.
+fn frame_peer_message(sender_name: &str, content: &str) -> String {
+    let one_line = content.replace(['\n', '\r'], " ");
+    let framed = format!("[TUIC message from {sender_name}] {one_line}");
+    if framed.len() > INJECT_MAX_BYTES {
+        format!("[TUIC] new message from {sender_name} — read it with: agent action=inbox")
+    } else {
+        framed
+    }
+}
+
+/// HTTP header the bridge asserts to declare which PTY session it belongs to.
+/// The value is the agent's `$TUIC_SESSION` (the PTY tab UUID), which the bridge
+/// inherits from its parent agent process's environment.
+const TUIC_SESSION_HEADER: &str = "x-tuic-session";
+
+/// Bind an MCP session to a PTY (tuic) session identity: upsert `peer_agents`
+/// and the `mcp_to_session` / `session_to_mcp` reverse indices. Shared by the
+/// explicit `agent register` action and the initialize `x-tuic-session`
+/// auto-bind so the two never drift. Last-writer-wins on the forward map
+/// (`mcp_to_session`); the reverse map is deduped so a reconnecting bridge that
+/// mints fresh MCP session ids does not accumulate stale entries.
+fn bind_peer_identity(
+    state: &AppState,
+    mcp_sid: &str,
+    tuic_session: &str,
+    name: String,
+    project: Option<String>,
+    registered_at: u64,
+) {
+    state.peer_agents.insert(
+        tuic_session.to_string(),
+        crate::state::PeerAgent {
+            tuic_session: tuic_session.to_string(),
+            mcp_session_id: mcp_sid.to_string(),
+            name,
+            project,
+            registered_at,
+        },
+    );
+    state
+        .mcp_to_session
+        .insert(mcp_sid.to_string(), tuic_session.to_string());
+    let mut reverse = state
+        .session_to_mcp
+        .entry(tuic_session.to_string())
+        .or_default();
+    if !reverse.iter().any(|s| s == mcp_sid) {
+        reverse.push(mcp_sid.to_string());
+    }
+}
+
+/// Auto-bind an MCP session to its PTY identity from the `x-tuic-session` header
+/// that tuic-bridge asserts (it inherits `TUIC_SESSION` from the agent PTY).
+/// Makes swarm identity automatic — no explicit `agent register` needed, which
+/// matters for clients that never surface initialize `instructions` (e.g. Codex).
+/// Ignored unless the header is a well-formed UUID. Preserves an existing peer's
+/// display name/project across a bridge reconnect (only `register` renames);
+/// last-writer-wins on the MCP→session mapping. Returns whether a bind happened.
+fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&str>) -> bool {
+    let Some(tuic) = header.filter(|s| !s.is_empty()) else {
+        return false;
+    };
+    if !is_valid_uuid(tuic) {
+        return false;
+    }
+    let (name, project, registered_at) = match state.peer_agents.get(tuic) {
+        Some(existing) => (
+            existing.name.clone(),
+            existing.project.clone(),
+            existing.registered_at,
+        ),
+        None => ("agent".to_string(), None, now_unix_ms()),
+    };
+    bind_peer_identity(state, mcp_sid, tuic, name, project, registered_at);
+    true
+}
+
 /// Build server instructions for the MCP initialize response.
 /// Tells the connecting agent what tools are available, which repos are managed,
 /// and what sessions are currently active so it can orient itself.
@@ -165,8 +259,8 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
         out.push_str("**Worktrees:** never `git worktree add/remove` — always use `repo action=worktree_create` / `worktree_remove` so TUIC tracks the worktree and can spawn a PTY inside.\n\n");
     } else {
         out.push_str("## Tools\n\n");
-        out.push_str("- `session` (PTY panes, tmux-equivalent): list, create, input, output, status, resize, close, kill, pause, resume, process_stats\n");
-        out.push_str("- `agent` (AI peers + messaging): spawn, detect, stats, metrics, register, list_peers, send, inbox\n");
+        out.push_str("- `session` (PTY panes, tmux-equivalent): list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats\n");
+        out.push_str("- `agent` (AI peers + messaging): spawn, wait, detect, stats, metrics, register, list_peers, send, inbox\n");
         out.push_str("- `repo` (repos, PRs, worktrees): list, active, prs, status, worktree_list, worktree_create, worktree_remove\n");
         out.push_str("- `ui` (tabs, toasts, confirm dialogs): tab, toast, confirm\n");
         out.push_str("- `plugin_dev_guide`: plugin authoring reference\n\n");
@@ -265,8 +359,9 @@ fn validate_mcp_repo_path(path: &str) -> Result<(), serde_json::Value> {
 }
 
 const SESSION_ACTIONS: &str =
-    "list, create, input, output, resize, close, kill, pause, resume, status, process_stats";
-const AGENT_ACTIONS: &str = "spawn, detect, stats, metrics, register, list_peers, send, inbox";
+    "list, create, input, output, resize, close, kill, pause, resume, status, process_stats, wait";
+const AGENT_ACTIONS: &str =
+    "spawn, detect, stats, metrics, register, list_peers, send, inbox, wait";
 const REPO_ACTIONS: &str =
     "list, active, prs, status, worktree_list, worktree_create, worktree_remove";
 const UI_ACTIONS: &str = "tab, toast, confirm, screenshot";
@@ -294,10 +389,12 @@ fn native_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: Active sessions with cwd, process info. Call first to discover IDs.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta poll: since_cursor=<previous cursor> returns only new lines — very cheap, use for monitoring. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Shell state for a session: {shell_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}. Use to poll agent progress without streaming output.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: Active sessions with cwd, process info. Call first to discover IDs.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta poll: since_cursor=<previous cursor> returns only new lines — very cheap, use for monitoring. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Shell state for a session: {shell_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}. Use to poll agent progress without streaming output.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state, exit_code}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: list, create, input, output, status, resize, close, kill, pause, resume, process_stats" },
-                "session_id": { "type": "string", "description": "Session ID (required for input, output, resize, close, pause, resume)" },
+                "action": { "type": "string", "description": "One of: list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats" },
+                "session_id": { "type": "string", "description": "Session ID (required for input, output, resize, close, pause, resume, wait)" },
+                "until": { "type": "string", "description": "Wait target: 'idle' or 'exited' (action=wait, default idle)" },
+                "timeout_ms": { "type": "integer", "description": "Max wait in ms (action=wait; default 5000, capped 8000). On timeout returns {timed_out:true} — call again to keep waiting." },
                 "input": { "type": "string", "description": "Raw text to write (action=input)" },
                 "special_key": { "type": "string", "description": "Special key: enter, tab, ctrl+c, ctrl+d, ctrl+z, ctrl+l, ctrl+a, ctrl+e, ctrl+k, ctrl+u, ctrl+w, ctrl+r, up, down, left, right, home, end, backspace, delete, escape (action=input)" },
                 "rows": { "type": "integer", "description": "Terminal rows (action=create or resize)" },
@@ -312,9 +409,10 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. Spawn agents (Claude Code, Codex, Aider, Goose) in managed PTYs, detect installed agents, and peer-to-peer messaging.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Returns {session_id}. Use session action=input/output to interact.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Register as peer (pass your $TUIC_SESSION env var).\n- list_peers: List peers. Optional: project filter.\n- send: Message a peer (requires to, message).\n- inbox: Read messages. Optional: limit, since (unix millis).",
+            "description": "AI agent orchestration. Spawn agents (Claude Code, Codex, Aider, Goose) in managed PTYs, detect installed agents, and peer-to-peer messaging.\n\nOrchestration in 5 lines:\n1. Identity is automatic — you are already registered as $TUIC_SESSION (no register call needed).\n2. Spawn a peer: spawn prompt=<task> [agent_type=codex|gemini|...] → {session_id}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle: spawned peers auto-notify you (idle/exited) — you get woken, no polling.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Returns {session_id, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>) or a session reaches a state. Returns {met, timed_out}.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Optional rename/project-set (identity already auto-bound). Pass your $TUIC_SESSION.\n- list_peers: List peers. Optional: project filter.\n- send: Message a peer (requires to, message).\n- inbox: Read messages. Optional: limit, since (unix millis).",
             "inputSchema": { "type": "object", "properties": {
-                "action": { "type": "string", "description": "One of: spawn, detect, stats, metrics, register, list_peers, send, inbox" },
+                "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
+                "timeout_ms": { "type": "integer", "description": "Max wait in ms (action=wait; default 5000, capped 8000). On timeout returns {timed_out:true} — call again to keep waiting." },
                 "prompt": { "type": "string", "description": "Task prompt for the agent (action=spawn)" },
                 "cwd": { "type": "string", "description": "Working directory (action=spawn)" },
                 "model": { "type": "string", "description": "Model override (action=spawn)" },
@@ -330,7 +428,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "project": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
                 "to": { "type": "string", "description": "Recipient tuic_session UUID (action=send, required)" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
-                "since": { "type": "integer", "description": "Unix millis — only return messages after this (action=inbox)" }
+                "since": { "type": "integer", "description": "Unix millis — return messages after this (action=inbox), or wake on mail newer than this (action=wait)" }
             }, "required": ["action"] }
         },
         {
@@ -816,7 +914,11 @@ pub(crate) async fn handle_mcp_tool_call(
             // POST /sessions/{id}/write route. Read-only actions (list/output/status/…)
             // stay open for monitoring.
             let action = args["action"].as_str().unwrap_or("");
-            if matches!(
+            if action == "wait" {
+                // Read-only blocking wait — needs the async runtime for its poll
+                // loop, so it can't live in the sync handle_session.
+                handle_session_wait(state, args).await
+            } else if matches!(
                 action,
                 "create" | "input" | "kill" | "close" | "pause" | "resume"
             ) && !addr.ip().is_loopback()
@@ -828,7 +930,13 @@ pub(crate) async fn handle_mcp_tool_call(
                 handle_session(state, args, mcp_session_id)
             }
         }
-        "agent" => handle_agent_unified(state, addr, args, mcp_session_id),
+        "agent" => {
+            if args["action"].as_str() == Some("wait") {
+                handle_agent_wait(state, args, mcp_session_id).await
+            } else {
+                handle_agent_unified(state, addr, args, mcp_session_id)
+            }
+        }
         "repo" => handle_repo(state, args, is_claude_code).await,
         "ui" => handle_ui_unified(state, addr, args, mcp_session_id).await,
         "plugin_dev_guide" => {
@@ -852,6 +960,123 @@ pub(crate) async fn handle_mcp_tool_call(
         _ => serde_json::json!({"error": format!(
             "Unknown tool '{}'. Available: session, agent, repo, ui, plugin_dev_guide, config, debug, search_tools, get_tool_schema, call_tool, ai_terminal_*", name
         )}),
+    }
+}
+
+/// Server-side poll cadence for blocking `wait`. Small enough to feel immediate,
+/// large enough to stay cheap.
+const WAIT_POLL_MS: u64 = 100;
+/// Default `wait` timeout when the caller omits `timeout_ms`.
+const WAIT_DEFAULT_MS: u64 = 5_000;
+/// Hard cap on `wait`. MUST stay under the tuic-bridge 10s read timeout, or a
+/// long wait would surface to the agent as a bridge proxy error instead of a
+/// clean `timed_out:true` it can re-issue.
+const WAIT_MAX_MS: u64 = 8_000;
+
+/// Resolve the effective wait timeout: default when absent/zero, capped at the
+/// bridge-safe maximum.
+fn clamp_wait_timeout(requested: Option<u64>) -> u64 {
+    match requested {
+        Some(ms) if ms > 0 => ms.min(WAIT_MAX_MS),
+        _ => WAIT_DEFAULT_MS,
+    }
+}
+
+/// Whether a session's blocking-wait condition is currently satisfied.
+/// `until` is "idle" (shell idle) or "exited" (process gone / exit code recorded).
+fn session_wait_met(state: &AppState, session_id: &str, until: &str) -> bool {
+    match until {
+        // `exit_codes` is recorded by `mark_session_exited` and kept for the
+        // tombstone TTL. Using only this signal avoids a false "exited" for a
+        // never-created (typo'd) session id, which would otherwise return met
+        // immediately because it isn't in `sessions`.
+        "exited" => state.exit_codes.contains_key(session_id),
+        // Default and "idle": shell state reached IDLE.
+        _ => state
+            .shell_states
+            .get(session_id)
+            .map(|a| a.load(std::sync::atomic::Ordering::Relaxed) == crate::pty::SHELL_IDLE)
+            .unwrap_or(false),
+    }
+}
+
+/// `session action=wait` — block (server-side) until the session is idle or has
+/// exited, or the timeout elapses. Replaces an LLM polling loop (each poll is a
+/// full model turn) with one cheap blocking call.
+async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) -> serde_json::Value {
+    let session_id = match require_session_id(args, "wait") {
+        Ok(id) => id.to_string(),
+        Err(e) => return e,
+    };
+    let until = args["until"].as_str().unwrap_or("idle");
+    if !matches!(until, "idle" | "exited") {
+        return serde_json::json!({"error": "wait 'until' must be 'idle' or 'exited'"});
+    }
+    let timeout_ms = clamp_wait_timeout(args["timeout_ms"].as_u64());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        if session_wait_met(state, &session_id, until) {
+            let shell_state = state
+                .shell_states
+                .get(&session_id)
+                .map(|a| crate::pty::shell_state_str(a.load(std::sync::atomic::Ordering::Relaxed)));
+            return serde_json::json!({
+                "met": true,
+                "timed_out": false,
+                "until": until,
+                "shell_state": shell_state,
+                "exit_code": state.exit_codes.get(&session_id).map(|e| *e.value()),
+            });
+        }
+        if std::time::Instant::now() >= deadline {
+            return serde_json::json!({
+                "met": false,
+                "timed_out": true,
+                "until": until,
+                "hint": "Condition not met within timeout — call wait again to keep waiting, or inspect with session action=status.",
+            });
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(WAIT_POLL_MS)).await;
+    }
+}
+
+/// `agent action=wait` — block until the caller's inbox has a message newer than
+/// `since` (unix ms), or the timeout elapses. The caller must be registered
+/// (identity auto-binds at initialize, so this is normally already true).
+async fn handle_agent_wait(
+    state: &Arc<AppState>,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let caller_tuic = match mcp_session_id
+        .and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()))
+    {
+        Some(t) => t,
+        None => {
+            return serde_json::json!({"error": "You are not registered. Identity normally auto-binds at initialize; ensure $TUIC_SESSION is set or call agent action=register."});
+        }
+    };
+    let since = args["since"].as_u64().unwrap_or(0);
+    let timeout_ms = clamp_wait_timeout(args["timeout_ms"].as_u64());
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
+    loop {
+        let fresh = state
+            .agent_inbox
+            .get(&caller_tuic)
+            .map(|q| q.iter().filter(|m| m.timestamp > since).count())
+            .unwrap_or(0);
+        if fresh > 0 {
+            return serde_json::json!({
+                "met": true,
+                "timed_out": false,
+                "new_messages": fresh,
+                "hint": "New mail — read it with agent action=inbox since=<last_ms>.",
+            });
+        }
+        if std::time::Instant::now() >= deadline {
+            return serde_json::json!({"met": false, "timed_out": true, "new_messages": 0});
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(WAIT_POLL_MS)).await;
     }
 }
 
@@ -1752,19 +1977,36 @@ fn handle_agent(
                     for arg in &final_args {
                         cmd.arg(arg);
                     }
-                } else {
-                    // No run config matched (passthrough): only Claude's CLI accepts a
-                    // bare positional prompt. codex/gemini/aider/goose treat it as an
-                    // argument-parse error and exit immediately (clap exit code 2),
-                    // leaving the caller with an opaque failure and no report. Fail fast
-                    // with an actionable error instead of spawning a doomed process —
-                    // see docs/user-guide/ai-agents.md (agents are launched bare).
-                    if !crate::agent::agent_accepts_bare_prompt(&rc.agent_type) {
-                        return serde_json::json!({"error": format!(
-                            "Agent '{name}' cannot be spawned with a bare prompt (only Claude's CLI accepts a positional prompt; other agents exit with code 2). Pass explicit args containing a {{prompt}} placeholder, or configure a run config named '{name}' in Settings -> Agents.",
-                            name = rc.agent_type
-                        )});
+                } else if !crate::agent::agent_accepts_bare_prompt(&rc.agent_type) {
+                    // No run config, and this agent's CLI does not take a bare
+                    // positional prompt. Use the built-in per-agent template
+                    // (mirrors the shipped frontend spawnArgs) so cross-agent
+                    // spawns work out of the box; only truly unknown agents fail,
+                    // now with a copy-pasteable example.
+                    match crate::agent::default_prompt_args(&rc.agent_type) {
+                        Some(template) => {
+                            let merged = match merge_mcp_params_into_args(
+                                &template,
+                                args["model"].as_str(),
+                                args["print_mode"].as_bool().unwrap_or(false),
+                                args["output_format"].as_str(),
+                            ) {
+                                Ok(m) => m,
+                                Err(e) => return serde_json::json!({"error": e}),
+                            };
+                            let final_args = substitute_prompt_in_args(&merged, &effective_prompt);
+                            for arg in &final_args {
+                                cmd.arg(arg);
+                            }
+                        }
+                        None => {
+                            return serde_json::json!({"error": format!(
+                                "Don't know how to spawn agent '{name}' with a prompt. Pass explicit args with a {{prompt}} placeholder, e.g. args=[\"--message\", \"{{prompt}}\"], or configure a run config named '{name}' in Settings -> Agents.",
+                                name = rc.agent_type
+                            )});
+                        }
                     }
+                } else {
                     // Claude default: MCP param args plus the positional prompt.
                     if args["print_mode"].as_bool().unwrap_or(false) {
                         cmd.arg("--print");
@@ -1932,6 +2174,7 @@ fn handle_agent(
                 "server_ts": spawn_ts,
                 "monitor_with": format!("session(action=output, session_id={session_id})"),
                 "status_with": format!("session(action=status, session_id={session_id})"),
+                "wait_with": format!("session(action=wait, session_id={session_id}, until=idle) — blocks instead of polling"),
             });
             if caller_tuic.is_some()
                 && let Some(obj) = response.as_object_mut()
@@ -1939,6 +2182,12 @@ fn handle_agent(
                 obj.insert(
                     "peer_monitor_with".to_string(),
                     serde_json::json!(format!("agent(action=inbox, since={spawn_ts})")),
+                );
+                obj.insert(
+                    "peer_wait_with".to_string(),
+                    serde_json::json!(format!(
+                        "agent(action=wait, since={spawn_ts}) — blocks until this peer messages you; it auto-notifies on idle/exit"
+                    )),
                 );
             }
             response
@@ -2002,29 +2251,13 @@ fn handle_messaging(
             }
             let name = args["name"].as_str().unwrap_or("agent").to_string();
             let project = args["project"].as_str().map(|s| s.to_string());
-            let now_ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
+            let now_ms = now_unix_ms();
 
-            let peer = crate::state::PeerAgent {
-                tuic_session: tuic_session.to_string(),
-                mcp_session_id: mcp_sid.clone(),
-                name: name.clone(),
-                project,
-                registered_at: now_ms,
-            };
-            state.peer_agents.insert(tuic_session.to_string(), peer);
-            // Map MCP session → PTY session for self-close guard resolution.
-            // Reverse index (session_to_mcp) keeps tombstone cleanup O(1).
-            state
-                .mcp_to_session
-                .insert(mcp_sid.clone(), tuic_session.to_string());
-            state
-                .session_to_mcp
-                .entry(tuic_session.to_string())
-                .or_default()
-                .push(mcp_sid.clone());
+            // Upsert peer + reverse indices via the shared binder (same path the
+            // initialize auto-bind uses, so the two never drift). Explicit
+            // register sets name/project verbatim; the guard above already
+            // prevented hijacking another live session's identity.
+            bind_peer_identity(state, &mcp_sid, tuic_session, name.clone(), project, now_ms);
             // Identity bindings are security-relevant; record them (no message content).
             tracing::info!(
                 source = "agent_msg",
@@ -2048,12 +2281,13 @@ fn handle_messaging(
                 "ok": true,
                 "tuic_session": tuic_session,
                 "name": name,
+                "identity": "Automatic — you were bound to $TUIC_SESSION at connect. register is only needed to set a friendly name/project; spawn/send/inbox/wait work without it.",
                 "workflow": {
-                    "spawn_same_repo": "agent action=spawn prompt=<task> cwd=<repo_path> — returns {session_id, monitor_with, peer_monitor_with?}. As registered orchestrator, prefer peer_monitor_with (agent inbox) over monitor_with (raw session output) to avoid token burn.",
+                    "spawn_same_repo": "agent action=spawn prompt=<task> cwd=<repo_path> — returns {session_id, monitor_with, peer_monitor_with?, wait_with}. As orchestrator, prefer wait/inbox over raw session output to avoid token burn.",
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
-                    "monitor": "agent action=inbox since=<last_ms> at 500–2000ms cadence. Poll is authoritative for LLMs (SSE push exists but is a hint). NEVER session output on peers (token burn).",
-                    "auto_state_change": "Spawned peers auto-post {type:state_change, state:idle|busy|exited, session_id, exit_code?} to your inbox — no manual send needed for lifecycle.",
-                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. Response {delivered_via_channel: bool} — false = queued in peer's inbox (peer reads on next poll), NOT a failure.",
+                    "monitor": "PREFER blocking waits over polling: agent action=wait since=<last_ms> (wakes on new mail) or session action=wait session_id=<id> until=idle|exited. Each returns {met, timed_out}; on timed_out just call again. NEVER session output on peers (token burn).",
+                    "auto_state_change": "Spawned peers auto-post {type:state_change, state:idle|exited, session_id, exit_code?} to your inbox AND wake your terminal — no manual send needed for lifecycle.",
+                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is TYPED into an idle peer's terminal so it acts immediately; a busy peer gets it on its next idle transition. Response {delivered_via_channel: bool} — false just means not via SSE, NOT a failure.",
                     "list_peers": "agent action=list_peers project=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "Automatic on MCP session close (tombstone_transient_cleanup). Peer state + inbox drained; PTY reaped."
@@ -2179,6 +2413,14 @@ fn handle_messaging(
             #[cfg(unix)]
             if let Err(e) = crate::pty::wake_session(state, to) {
                 tracing::debug!(session = %to, error = %e, "Wake on message delivery failed");
+            }
+            // Event-driven wake: type the message into an idle recipient's terminal
+            // so it acts without polling. Skip when already pushed over the SSE
+            // channel (CC agents receive it as a synthetic turn — injecting too
+            // would double-deliver). The inbox always holds the authoritative copy.
+            if !pushed {
+                let framed = frame_peer_message(&sender_name, message);
+                crate::pty::deliver_message_to_pty(state, to, &framed);
             }
             // Forensic trail: sender, recipient, size, and delivery path — but never the
             // content (it can be up to 64 KB and may carry sensitive coordination text).
@@ -2912,6 +3154,17 @@ pub(super) async fn mcp_post(
                     repo_path,
                 },
             );
+
+            // Auto-bind swarm identity from the `x-tuic-session` header the bridge
+            // asserts (it inherits `TUIC_SESSION` from the agent PTY). This makes
+            // `agent register` optional — the caller already has a working peer
+            // identity for spawn/send, which is what clients that ignore initialize
+            // `instructions` (e.g. Codex) otherwise never obtain.
+            let tuic_session_header = headers
+                .get(TUIC_SESSION_HEADER)
+                .and_then(|v| v.to_str().ok());
+            apply_initialize_identity(&state, &session_id, tuic_session_header);
+
             let instructions = build_mcp_instructions(&state, client_name);
 
             let response = serde_json::json!({
@@ -3617,6 +3870,7 @@ mod tests {
             github_poller: parking_lot::Mutex::new(None),
             github_viewer_login: parking_lot::RwLock::new(None),
             github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
+            ghe_state: dashmap::DashMap::new(),
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(uuid::Uuid::new_v4().to_string()),
@@ -3673,6 +3927,7 @@ mod tests {
             peer_agents: dashmap::DashMap::new(),
             agent_inbox: dashmap::DashMap::new(),
             agent_inbox_evictions: dashmap::DashMap::new(),
+            pending_injections: dashmap::DashMap::new(),
             session_html_tabs: dashmap::DashMap::new(),
             mcp_to_session: dashmap::DashMap::new(),
             session_to_mcp: dashmap::DashMap::new(),
@@ -3786,6 +4041,286 @@ mod tests {
             state.output_buffers.contains_key(sid),
             "output_buffers should contain session"
         );
+    }
+
+    // ── initialize auto-identity tests (Step 1) ─────────────────────
+
+    const TEST_UUID_A: &str = "550e8400-e29b-41d4-a716-446655440a01";
+    const TEST_UUID_B: &str = "550e8400-e29b-41d4-a716-446655440a02";
+
+    #[test]
+    fn initialize_identity_auto_binds_from_header() {
+        let state = test_state();
+        let bound = apply_initialize_identity(&state, "mcp-init-1", Some(TEST_UUID_A));
+        assert!(bound, "valid header must auto-bind");
+        assert_eq!(
+            state
+                .mcp_to_session
+                .get("mcp-init-1")
+                .map(|v| v.value().clone()),
+            Some(TEST_UUID_A.to_string()),
+            "forward map mcp→tuic must be populated"
+        );
+        assert!(
+            state.peer_agents.contains_key(TEST_UUID_A),
+            "peer must be auto-registered so spawn gets the swarm preamble"
+        );
+        assert!(
+            state
+                .session_to_mcp
+                .get(TEST_UUID_A)
+                .map(|v| v.contains(&"mcp-init-1".to_string()))
+                .unwrap_or(false),
+            "reverse map must contain the mcp session for O(1) cleanup"
+        );
+    }
+
+    #[test]
+    fn initialize_identity_ignores_invalid_or_missing_header() {
+        let state = test_state();
+        assert!(!apply_initialize_identity(&state, "mcp-x", None));
+        assert!(!apply_initialize_identity(&state, "mcp-x", Some("")));
+        assert!(!apply_initialize_identity(
+            &state,
+            "mcp-x",
+            Some("not-a-uuid")
+        ));
+        assert!(state.mcp_to_session.is_empty(), "no binding on bad header");
+        assert!(state.peer_agents.is_empty());
+    }
+
+    #[test]
+    fn initialize_identity_rebind_last_writer_wins() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-old", Some(TEST_UUID_A));
+        // Bridge reconnect: same agent, fresh mcp-session-id.
+        apply_initialize_identity(&state, "mcp-new", Some(TEST_UUID_A));
+        assert_eq!(
+            state.peer_agents.get(TEST_UUID_A).unwrap().mcp_session_id,
+            "mcp-new",
+            "peer must point at the newest mcp session"
+        );
+        // Reverse index accumulates both until cleanup, but must be deduped per id.
+        let reverse = state.session_to_mcp.get(TEST_UUID_A).unwrap();
+        assert!(reverse.contains(&"mcp-new".to_string()));
+    }
+
+    #[test]
+    fn initialize_identity_dedupes_reverse_index_on_same_session() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-dup", Some(TEST_UUID_A));
+        apply_initialize_identity(&state, "mcp-dup", Some(TEST_UUID_A));
+        let reverse = state.session_to_mcp.get(TEST_UUID_A).unwrap();
+        assert_eq!(
+            reverse.iter().filter(|s| *s == "mcp-dup").count(),
+            1,
+            "same mcp session must not be pushed twice"
+        );
+    }
+
+    #[test]
+    fn initialize_identity_preserves_registered_name_across_reconnect() {
+        let state = test_state();
+        // Agent explicitly registers with a friendly name.
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "worker-1"
+            }),
+            Some("mcp-reg"),
+        );
+        // Bridge reconnects → auto-bind with a fresh mcp session id.
+        apply_initialize_identity(&state, "mcp-reconnect", Some(TEST_UUID_B));
+        assert_eq!(
+            state.peer_agents.get(TEST_UUID_B).unwrap().name,
+            "worker-1",
+            "auto-bind must not clobber a registered display name"
+        );
+    }
+
+    #[test]
+    fn register_still_binds_after_refactor() {
+        // Guards the DRY refactor of register onto bind_peer_identity.
+        let state = test_state();
+        let r = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_A, "name": "w"
+            }),
+            Some("mcp-reg-1"),
+        );
+        assert_eq!(r["ok"], true);
+        assert_eq!(
+            state
+                .mcp_to_session
+                .get("mcp-reg-1")
+                .map(|v| v.value().clone()),
+            Some(TEST_UUID_A.to_string())
+        );
+        assert_eq!(state.peer_agents.get(TEST_UUID_A).unwrap().name, "w");
+    }
+
+    #[test]
+    fn register_renames_auto_bound_caller_without_hijack_rejection() {
+        // After the initialize auto-bind, the SAME mcp session may still call
+        // register to set a friendly name/project. The live-hijack guard must
+        // not treat this as a hijack (prior binding is its own session).
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-self", Some(TEST_UUID_A));
+        // Simulate the mcp session being live (guard checks mcp_sessions).
+        state.mcp_sessions.insert(
+            "mcp-self".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: false,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
+        let r = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_A, "name": "renamed"
+            }),
+            Some("mcp-self"),
+        );
+        assert_eq!(r["ok"], true, "self-rename after auto-bind must succeed");
+        assert_eq!(state.peer_agents.get(TEST_UUID_A).unwrap().name, "renamed");
+    }
+
+    #[test]
+    fn frame_peer_message_single_line_and_pointer() {
+        // Normal message → framed one-liner with sender.
+        let f = frame_peer_message("lead", "please rebase");
+        assert_eq!(f, "[TUIC message from lead] please rebase");
+        // Newlines collapse to spaces (no multi-line paste into a TUI).
+        let f = frame_peer_message("lead", "line1\nline2");
+        assert_eq!(f, "[TUIC message from lead] line1 line2");
+        // Oversized body → pointer to the inbox instead of a screen flood.
+        let big = "x".repeat(INJECT_MAX_BYTES + 100);
+        let f = frame_peer_message("lead", &big);
+        assert!(f.contains("agent action=inbox"));
+        assert!(f.len() < INJECT_MAX_BYTES);
+    }
+
+    // ── blocking wait tests (Step 3) ────────────────────────────────
+
+    #[test]
+    fn clamp_wait_timeout_defaults_and_caps() {
+        assert_eq!(
+            clamp_wait_timeout(None),
+            WAIT_DEFAULT_MS,
+            "absent → default"
+        );
+        assert_eq!(
+            clamp_wait_timeout(Some(0)),
+            WAIT_DEFAULT_MS,
+            "zero → default"
+        );
+        assert_eq!(clamp_wait_timeout(Some(1_000)), 1_000, "in-range preserved");
+        assert_eq!(
+            clamp_wait_timeout(Some(60_000)),
+            WAIT_MAX_MS,
+            "over-cap clamped under the bridge 10s read timeout"
+        );
+        assert!(
+            WAIT_MAX_MS < 10_000,
+            "cap must stay under bridge read timeout"
+        );
+    }
+
+    #[test]
+    fn session_wait_met_idle_and_exited() {
+        use std::sync::atomic::AtomicU8;
+        let state = test_state();
+        state
+            .shell_states
+            .insert("s1".to_string(), AtomicU8::new(crate::pty::SHELL_BUSY));
+        assert!(!session_wait_met(&state, "s1", "idle"), "busy → not met");
+        state
+            .shell_states
+            .insert("s1".to_string(), AtomicU8::new(crate::pty::SHELL_IDLE));
+        assert!(session_wait_met(&state, "s1", "idle"), "idle → met");
+
+        assert!(
+            !session_wait_met(&state, "s2", "exited"),
+            "unknown session → not exited (avoid false immediate met)"
+        );
+        state.exit_codes.insert("s3".to_string(), 0);
+        assert!(
+            session_wait_met(&state, "s3", "exited"),
+            "exit code recorded → exited"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_wait_returns_immediately_when_already_idle() {
+        use std::sync::atomic::AtomicU8;
+        let state = test_state();
+        state
+            .shell_states
+            .insert("s".to_string(), AtomicU8::new(crate::pty::SHELL_IDLE));
+        let r = handle_session_wait(
+            &state,
+            &serde_json::json!({"action":"wait","session_id":"s","until":"idle"}),
+        )
+        .await;
+        assert_eq!(r["met"], true);
+        assert_eq!(r["timed_out"], false);
+    }
+
+    #[tokio::test]
+    async fn session_wait_times_out_with_flag() {
+        use std::sync::atomic::AtomicU8;
+        let state = test_state();
+        state
+            .shell_states
+            .insert("s".to_string(), AtomicU8::new(crate::pty::SHELL_BUSY));
+        let r = handle_session_wait(
+            &state,
+            &serde_json::json!({"action":"wait","session_id":"s","until":"idle","timeout_ms":200}),
+        )
+        .await;
+        assert_eq!(r["met"], false);
+        assert_eq!(r["timed_out"], true);
+    }
+
+    #[tokio::test]
+    async fn agent_wait_returns_on_existing_message_since() {
+        use std::collections::VecDeque;
+        let state = test_state();
+        // Register caller so mcp_to_session resolves.
+        apply_initialize_identity(&state, "mcp-w", Some(TEST_UUID_A));
+        let mut q = VecDeque::new();
+        q.push_back(crate::state::AgentMessage {
+            id: "m1".into(),
+            from_tuic_session: "lead".into(),
+            from_name: "lead".into(),
+            content: "go".into(),
+            timestamp: 5_000,
+            delivered_via_channel: false,
+        });
+        state.agent_inbox.insert(TEST_UUID_A.to_string(), q);
+        let r = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action":"wait","since":1000}),
+            Some("mcp-w"),
+        )
+        .await;
+        assert_eq!(r["met"], true);
+        assert_eq!(r["new_messages"], 1);
+    }
+
+    #[tokio::test]
+    async fn agent_wait_requires_registration() {
+        let state = test_state();
+        let r = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action":"wait"}),
+            Some("mcp-unregistered"),
+        )
+        .await;
+        assert!(r["error"].as_str().unwrap().contains("not registered"));
     }
 
     // ── messaging tool tests ────────────────────────────────────────
@@ -4468,12 +5003,59 @@ mod tests {
         let action_desc = agent["inputSchema"]["properties"]["action"]["description"]
             .as_str()
             .unwrap();
-        for action in &["register", "list_peers", "send", "inbox"] {
+        for action in &["register", "list_peers", "send", "inbox", "wait"] {
             assert!(
                 action_desc.contains(action),
                 "agent action description must include '{action}'"
             );
         }
+    }
+
+    #[test]
+    fn agent_tool_description_carries_orchestration_crash_course() {
+        // Tool descriptions reach every MCP client (unlike initialize
+        // `instructions`, which clients like Codex ignore). The 5-line
+        // orchestration primer + wait/send delivery semantics must live here.
+        let defs = native_tool_definitions();
+        let agent = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "agent")
+            .unwrap();
+        let desc = agent["description"].as_str().unwrap();
+        assert!(
+            desc.contains("Identity is automatic"),
+            "must state auto-identity"
+        );
+        assert!(desc.contains("wait"), "must mention the wait primitive");
+        assert!(
+            desc.to_lowercase().contains("typed into"),
+            "must explain push-into-terminal delivery"
+        );
+        assert!(
+            desc.contains("do NOT poll"),
+            "must discourage polling loops"
+        );
+    }
+
+    #[test]
+    fn session_tool_description_includes_wait() {
+        let defs = native_tool_definitions();
+        let session = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == "session")
+            .unwrap();
+        let action_desc = session["inputSchema"]["properties"]["action"]["description"]
+            .as_str()
+            .unwrap();
+        assert!(action_desc.contains("wait"), "session must advertise wait");
+        assert!(
+            session["inputSchema"]["properties"]["until"].is_object(),
+            "session wait needs an 'until' param"
+        );
     }
 
     #[test]
@@ -6453,6 +7035,32 @@ mod tests {
                 .unwrap()
                 .contains("Cannot kill own session"),
             "error message must mention 'Cannot kill own session': {result}"
+        );
+    }
+
+    #[test]
+    fn session_close_rejects_own_session() {
+        // Mirror of the kill guard for `close`. With Story 074 auto-identity the
+        // caller is in mcp_to_session even without an explicit register, so this
+        // guard now fires for the common orchestrator-closes-itself mistake.
+        let state = test_state();
+        let mcp_sid = "mcp-close-guard-test";
+        let tuic_sid = "550e8400-e29b-41d4-a716-446655440009";
+        state
+            .mcp_to_session
+            .insert(mcp_sid.to_string(), tuic_sid.to_string());
+
+        let result = handle_session(
+            &state,
+            &serde_json::json!({"action": "close", "session_id": tuic_sid}),
+            Some(mcp_sid),
+        );
+        assert!(
+            result["error"]
+                .as_str()
+                .map(|e| e.contains("Cannot close own session"))
+                .unwrap_or(false),
+            "close own session must be rejected with a hint: {result}"
         );
     }
 

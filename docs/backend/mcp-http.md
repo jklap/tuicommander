@@ -165,8 +165,8 @@ Seven native tools, organized by domain. Two (`config`, `debug`) are hidden by d
 
 | Tool | Actions | Default |
 |------|---------|---------|
-| `session` | list, create, input, output, resize, close, kill, pause, resume | Enabled |
-| `agent` | spawn, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
+| `session` | list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
+| `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `repo` | list, active, prs, status, worktree_list, worktree_create, worktree_remove | Enabled |
 | `ui` | tab, toast, confirm | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
@@ -365,10 +365,26 @@ The `agent` tool's messaging actions (`register`, `list_peers`, `send`, `inbox`)
 
 ### Protocol
 
-1. **Register**: Agent reads `$TUIC_SESSION` env var and calls `agent action=register tuic_session=<uuid>`. This links the MCP session to the stable tab identity.
+0. **Auto-identity** *(no call needed)*: `tuic-bridge` inherits `$TUIC_SESSION` from the agent
+   PTY and sends it as the `x-tuic-session` header on the initialize `POST /mcp`. The server
+   validates the UUID and binds the MCP session to that tuic session (`apply_initialize_identity`
+   → shared `bind_peer_identity`), auto-registering the peer. `agent action=register` becomes an
+   optional rename. Last-writer-wins across a bridge reconnect (fresh MCP session id); an
+   existing peer's display name is preserved.
+1. **Register** *(optional)*: sets a friendly name/project on the already-bound identity.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by project).
-3. **Send**: `agent action=send to=<tuic_session> message="..."` routes the message to the recipient's inbox.
-4. **Receive**: Messages arrive via MCP channel notification (real-time, if SSE connected) and/or `agent action=inbox` (polling).
+3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
+4. **Receive** — three layers, most-immediate first:
+   - **Channel push**: real-time `notifications/claude/channel` when the recipient holds an SSE stream (CC + channels flag).
+   - **PTY injection**: for any idle agent without a live channel, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it acts on its next turn without polling. A busy recipient's message is queued and flushed on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead.
+   - **Inbox poll**: `agent action=inbox since=<ms>` — always the authoritative store.
+5. **Wait** *(prefer over polling)*: `agent action=wait since=<ms>` blocks until new mail;
+   `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. Server-side
+   100 ms poll, default 5 s / cap 8 s (kept under the bridge's 10 s read timeout). Returns
+   `{met, timed_out}`; re-call on `timed_out`.
+
+Spawned peers additionally auto-post a `state_change` (`idle` / `exited`) to the parent's inbox
+**and** wake the parent's terminal, so an orchestrator never polls for child lifecycle.
 
 ### Channel Push Delivery
 

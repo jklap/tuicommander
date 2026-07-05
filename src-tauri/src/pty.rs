@@ -1050,6 +1050,11 @@ fn try_shell_transition(
                     );
                 }
             }
+            // Now that this session is idle, deliver any peer messages that
+            // arrived while it was busy. Safe for shells too (no pending → no-op).
+            if new == SHELL_IDLE {
+                flush_pending_injections(state, session_id);
+            }
         }
         ok
     } else {
@@ -2896,6 +2901,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     state.terminal_rows.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
     state.shell_state_since_ms.remove(session_id);
+    state.pending_injections.remove(session_id);
     #[cfg(unix)]
     state.standby_sessions.remove(session_id);
     state.session_parent.remove(session_id);
@@ -2932,12 +2938,134 @@ fn push_state_change_to_parent(state: &AppState, session_id: &str, payload: serd
         timestamp: now_ms,
         delivered_via_channel: false,
     };
-    let mut inbox = state.agent_inbox.entry(parent_id).or_default();
-    if inbox.len() >= crate::state::AGENT_INBOX_CAPACITY {
-        inbox.pop_front();
-        // eviction counting intentionally skipped for system messages (no orchestrator opt-in needed)
+    {
+        let mut inbox = state.agent_inbox.entry(parent_id.clone()).or_default();
+        if inbox.len() >= crate::state::AGENT_INBOX_CAPACITY {
+            inbox.pop_front();
+            // eviction counting intentionally skipped for system messages (no orchestrator opt-in needed)
+        }
+        inbox.push_back(msg);
     }
-    inbox.push_back(msg);
+    // Wake the orchestrator: an idle parent won't poll its inbox, so surface the
+    // lifecycle change directly in its terminal. Uses a compact human line — the
+    // full JSON payload stays in the inbox for programmatic reads.
+    let state_desc = payload
+        .get("state")
+        .and_then(|s| s.as_str())
+        .unwrap_or("changed");
+    let framed = match payload.get("exit_code").and_then(|c| c.as_i64()) {
+        Some(code) => format!(
+            "[TUIC] child agent {} {} (exit {})",
+            short_session(session_id),
+            state_desc,
+            code
+        ),
+        None => format!(
+            "[TUIC] child agent {} is now {}",
+            short_session(session_id),
+            state_desc
+        ),
+    };
+    deliver_message_to_pty(state, &parent_id, &framed);
+}
+
+/// First 8 chars of a session UUID, for compact human-facing labels.
+fn short_session(session_id: &str) -> &str {
+    session_id.get(..8).unwrap_or(session_id)
+}
+
+/// Whether a framed peer message should be typed into `session_id` right now
+/// rather than queued. True only for an agent session that is idle and not
+/// blocked on its own question — writing into a busy Ink TUI can corrupt its
+/// render, and writing into a plain shell would execute the message as a command.
+pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
+    let is_agent = state
+        .session_states
+        .get(session_id)
+        .map(|s| s.agent_type.is_some())
+        .unwrap_or(false);
+    if !is_agent {
+        return false;
+    }
+    let idle = state
+        .shell_states
+        .get(session_id)
+        .map(|a| a.load(std::sync::atomic::Ordering::Relaxed) == SHELL_IDLE)
+        .unwrap_or(false);
+    let awaiting = state
+        .session_states
+        .get(session_id)
+        .map(|s| s.awaiting_input)
+        .unwrap_or(false);
+    idle && !awaiting
+}
+
+/// Type a framed line into a session's PTY as if the user submitted it, waking an
+/// idle agent so it processes the message on its next turn. Mirrors the MCP
+/// `session input` split-write (text flush, then CR flush) that Ink/raw-mode
+/// agents require — a concatenated Enter is missed. Best-effort: a dead PTY is
+/// logged and ignored (the inbox still holds the message).
+pub(crate) fn inject_text_into_pty(state: &AppState, session_id: &str, text: &str) {
+    let Some(entry) = state.sessions.get(session_id) else {
+        return;
+    };
+    let mut session = entry.lock();
+    if let Err(e) = session.writer.write_all(text.as_bytes()) {
+        tracing::debug!(session = %session_id, error = %e, "inject text write failed");
+        return;
+    }
+    let _ = session.writer.flush();
+    if let Err(e) = session.writer.write_all(b"\r") {
+        tracing::debug!(session = %session_id, error = %e, "inject CR write failed");
+        return;
+    }
+    let _ = session.writer.flush();
+}
+
+/// Deliver a framed peer message into a recipient's terminal, waking it. Injects
+/// immediately when the recipient is an idle agent; otherwise queues it to flush
+/// on the recipient's next BUSY→IDLE transition. No-op for non-agent sessions.
+/// The caller has already buffered the authoritative copy in the inbox.
+pub(crate) fn deliver_message_to_pty(state: &AppState, session_id: &str, framed: &str) {
+    // Never queue for a non-agent — shells and dead sessions have no wake path.
+    let is_agent = state
+        .session_states
+        .get(session_id)
+        .map(|s| s.agent_type.is_some())
+        .unwrap_or(false);
+    if !is_agent {
+        return;
+    }
+    if should_inject_now(state, session_id) {
+        inject_text_into_pty(state, session_id, framed);
+    } else {
+        state
+            .pending_injections
+            .entry(session_id.to_string())
+            .or_default()
+            .push_back(framed.to_string());
+    }
+}
+
+/// Drain and inject any messages queued for a session that just went idle. Called
+/// from the BUSY→IDLE transition. Skips (leaves queued) while the agent is blocked
+/// on its own question, so a peer message never answers a user-facing prompt.
+pub(crate) fn flush_pending_injections(state: &AppState, session_id: &str) {
+    let awaiting = state
+        .session_states
+        .get(session_id)
+        .map(|s| s.awaiting_input)
+        .unwrap_or(false);
+    if awaiting {
+        return;
+    }
+    let pending: Vec<String> = match state.pending_injections.get_mut(session_id) {
+        Some(mut q) => q.drain(..).collect(),
+        None => return,
+    };
+    for text in pending {
+        inject_text_into_pty(state, session_id, &text);
+    }
 }
 
 /// Keeps `output_buffers`, `vt_log_buffers`, `last_output_ms`, and `exit_codes`
@@ -9927,6 +10055,189 @@ mod tests {
         assert!(
             !state.session_to_mcp.contains_key(sid),
             "session_to_mcp entry must be removed"
+        );
+    }
+
+    // ── PTY-injection message delivery (Step 2) ─────────────────────
+
+    fn agent_session(state: &crate::state::AppState, sid: &str, shell: u8) {
+        use std::sync::atomic::AtomicU8;
+        state
+            .shell_states
+            .insert(sid.to_string(), AtomicU8::new(shell));
+        state.session_states.insert(
+            sid.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("claude".to_string()),
+                ..Default::default()
+            },
+        );
+    }
+
+    #[test]
+    fn should_inject_now_only_for_idle_agent() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "idle-agent", SHELL_IDLE);
+        agent_session(&state, "busy-agent", SHELL_BUSY);
+        assert!(
+            should_inject_now(&state, "idle-agent"),
+            "idle agent → inject"
+        );
+        assert!(
+            !should_inject_now(&state, "busy-agent"),
+            "busy agent → queue"
+        );
+        assert!(
+            !should_inject_now(&state, "unknown"),
+            "unknown session → never inject"
+        );
+    }
+
+    #[test]
+    fn should_inject_now_false_for_shell_and_awaiting() {
+        use std::sync::atomic::AtomicU8;
+        let state = crate::state::tests_support::make_test_app_state();
+        // Plain shell (no agent_type) — must never be injected into.
+        state
+            .shell_states
+            .insert("shell".to_string(), AtomicU8::new(SHELL_IDLE));
+        state
+            .session_states
+            .insert("shell".to_string(), crate::state::SessionState::default());
+        assert!(!should_inject_now(&state, "shell"), "shell → never inject");
+
+        // Agent idle but blocked on its own question.
+        state
+            .shell_states
+            .insert("q".to_string(), AtomicU8::new(SHELL_IDLE));
+        state.session_states.insert(
+            "q".to_string(),
+            crate::state::SessionState {
+                agent_type: Some("claude".to_string()),
+                awaiting_input: true,
+                ..Default::default()
+            },
+        );
+        assert!(
+            !should_inject_now(&state, "q"),
+            "awaiting_input agent → do not answer its prompt"
+        );
+    }
+
+    #[test]
+    fn deliver_queues_pending_for_busy_agent() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "busy", SHELL_BUSY);
+        deliver_message_to_pty(&state, "busy", "[TUIC message from lead] go");
+        let q = state.pending_injections.get("busy").expect("queued");
+        assert_eq!(q.len(), 1);
+        assert_eq!(q.front().unwrap(), "[TUIC message from lead] go");
+    }
+
+    #[test]
+    fn deliver_noop_for_non_agent() {
+        let state = crate::state::tests_support::make_test_app_state();
+        // No session_states entry → not an agent.
+        deliver_message_to_pty(&state, "ghost", "hi");
+        assert!(
+            !state.pending_injections.contains_key("ghost"),
+            "non-agent must never queue"
+        );
+    }
+
+    #[test]
+    fn deliver_idle_agent_does_not_queue() {
+        // Idle agent → inject path (no live PTY here, so best-effort no-op), but
+        // critically it must NOT sit in the pending queue.
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "idle", SHELL_IDLE);
+        deliver_message_to_pty(&state, "idle", "now");
+        assert!(
+            !state.pending_injections.contains_key("idle"),
+            "idle agent message is injected, not queued"
+        );
+    }
+
+    #[test]
+    fn flush_drains_pending_on_idle_transition() {
+        use std::collections::VecDeque;
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "sess", SHELL_BUSY);
+        let mut q = VecDeque::new();
+        q.push_back("msg-1".to_string());
+        q.push_back("msg-2".to_string());
+        state.pending_injections.insert("sess".to_string(), q);
+
+        // BUSY→IDLE must drain the queue (inject is best-effort; drain is the
+        // observable invariant — no message is stranded).
+        assert!(try_shell_transition(
+            &state, "sess", SHELL_BUSY, SHELL_IDLE, false
+        ));
+        assert!(
+            state
+                .pending_injections
+                .get("sess")
+                .map(|q| q.is_empty())
+                .unwrap_or(true),
+            "pending must be drained after idle transition"
+        );
+    }
+
+    #[test]
+    fn flush_keeps_pending_while_awaiting_input() {
+        use std::collections::VecDeque;
+        let state = crate::state::tests_support::make_test_app_state();
+        use std::sync::atomic::AtomicU8;
+        state
+            .shell_states
+            .insert("sess".to_string(), AtomicU8::new(SHELL_BUSY));
+        state.session_states.insert(
+            "sess".to_string(),
+            crate::state::SessionState {
+                agent_type: Some("claude".to_string()),
+                awaiting_input: true,
+                ..Default::default()
+            },
+        );
+        let mut q = VecDeque::new();
+        q.push_back("later".to_string());
+        state.pending_injections.insert("sess".to_string(), q);
+
+        try_shell_transition(&state, "sess", SHELL_BUSY, SHELL_IDLE, false);
+        assert_eq!(
+            state.pending_injections.get("sess").map(|q| q.len()),
+            Some(1),
+            "must not answer a user prompt — keep queued until awaiting clears"
+        );
+    }
+
+    #[test]
+    fn state_change_to_parent_queues_wake_for_busy_parent() {
+        // A child going idle must both inbox-notify AND wake an idle/busy parent.
+        // Here the parent is busy → the wake is queued into its pending injections.
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "parent", SHELL_BUSY);
+        state
+            .session_parent
+            .insert("child".to_string(), "parent".to_string());
+
+        push_state_change_to_parent(
+            &state,
+            "child",
+            serde_json::json!({"type":"state_change","state":"idle","session_id":"child"}),
+        );
+
+        // Inbox got the JSON payload…
+        assert_eq!(
+            state.agent_inbox.get("parent").map(|q| q.len()),
+            Some(1),
+            "parent inbox must receive the state_change"
+        );
+        // …and a human wake line was queued for the busy parent's terminal.
+        let pending = state.pending_injections.get("parent").expect("queued wake");
+        assert!(
+            pending.front().unwrap().contains("is now idle"),
+            "wake line must describe the child state"
         );
     }
 

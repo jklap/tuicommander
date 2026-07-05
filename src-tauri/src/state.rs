@@ -899,7 +899,12 @@ pub struct AppState {
     pub(crate) github_viewer_login: parking_lot::RwLock<Option<String>>,
     /// Remaining GraphQL points from last poll — used for proactive throttling.
     /// Initialized to u32::MAX (no constraint). Written by each successful batch poll.
+    /// This is the github.com budget; GHE accounts track their own in `ghe_state`.
     pub(crate) github_rate_limit_remaining: std::sync::atomic::AtomicU32,
+    /// Per-account runtime state for non-github.com (GHE) accounts: breaker +
+    /// viewer-login cache + rate budget, keyed by account id. github.com uses the
+    /// global fields above, so a github.com-only user is byte-for-byte unchanged.
+    pub(crate) ghe_state: DashMap<String, crate::github::GheAccountState>,
     /// Shutdown sender for the HTTP server — send () to gracefully stop it.
     /// Only the TCP listener + TLS renewal task listen to this signal now;
     /// IPC listeners (Unix socket / named pipe) and the session reaper live
@@ -1057,6 +1062,11 @@ pub struct AppState {
     /// Cumulative eviction count per agent since last inbox read (tuic_session → count).
     /// Incremented on each FIFO eviction; consumed and reset by the inbox action.
     pub(crate) agent_inbox_evictions: DashMap<String, u64>,
+    /// Peer messages queued to be typed into a recipient's PTY on its next
+    /// BUSY→IDLE transition (tuic_session → framed lines). Populated when a message
+    /// arrives for a busy/awaiting agent; drained by `flush_pending_injections`.
+    /// The inbox always holds the authoritative copy — this is only the wake-up path.
+    pub(crate) pending_injections: DashMap<String, VecDeque<String>>,
     /// HTML tab IDs (pluginIds) created by each session (tuic_session → [tab_id]).
     /// Populated by ui(tab) calls from registered agents; cleared on session exit
     /// so orphan tabs can be auto-closed by the frontend.
@@ -1197,6 +1207,7 @@ impl AppState {
             github_poller: parking_lot::Mutex::new(None),
             github_viewer_login: parking_lot::RwLock::new(None),
             github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
+            ghe_state: dashmap::DashMap::new(),
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(session_token),
@@ -1248,6 +1259,7 @@ impl AppState {
             peer_agents: DashMap::new(),
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
+            pending_injections: DashMap::new(),
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),
@@ -3259,6 +3271,7 @@ mod tests {
             github_poller: parking_lot::Mutex::new(None),
             github_viewer_login: parking_lot::RwLock::new(None),
             github_rate_limit_remaining: std::sync::atomic::AtomicU32::new(u32::MAX),
+            ghe_state: dashmap::DashMap::new(),
             server_shutdown: parking_lot::Mutex::new(None),
             ipc_started: std::sync::atomic::AtomicBool::new(false),
             session_token: parking_lot::RwLock::new(String::from("test-token")),
@@ -3315,6 +3328,7 @@ mod tests {
             peer_agents: DashMap::new(),
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
+            pending_injections: DashMap::new(),
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),

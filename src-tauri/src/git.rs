@@ -72,27 +72,38 @@ pub(crate) fn resolve_git_dir(repo_path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Resolve the **common** git directory for a (possibly per-worktree) git dir.
+/// Resolve a repo path to its canonical main-worktree root.
 ///
-/// In a linked worktree, `resolve_git_dir` returns the per-worktree gitdir
-/// (`.../.git/worktrees/<id>`), which holds only worktree-local state (HEAD,
-/// index, logs). Shared state — `config`, `refs/heads`, `refs/remotes`,
-/// `packed-refs` — lives in the common dir, located via the `commondir` file.
-/// For a normal (non-worktree) repo there is no `commondir` file and this
-/// returns `git_dir` unchanged.
-pub(crate) fn common_git_dir(git_dir: &Path) -> PathBuf {
-    match fs::read_to_string(git_dir.join("commondir")) {
-        Ok(content) => {
-            let rel = content.trim();
-            let p = if Path::new(rel).is_absolute() {
-                PathBuf::from(rel)
-            } else {
-                git_dir.join(rel)
-            };
-            p.canonicalize().unwrap_or(p)
+/// Linked worktrees share the binding of their main repo: a linked worktree's
+/// gitdir contains a `commondir` file pointing at the main `.git`; the main
+/// worktree root is that common dir's parent. A normal repo resolves to the
+/// parent of its own `.git`. Falls back to the canonicalized input when the path
+/// is not a git repo, so callers always get a stable key.
+pub(crate) fn canonical_repo_root(repo_path: &Path) -> PathBuf {
+    if let Some(git_dir) = resolve_git_dir(repo_path) {
+        // A linked worktree's gitdir has a `commondir` file → the main `.git`.
+        let common_git_dir = match fs::read_to_string(git_dir.join("commondir")) {
+            Ok(rel) => {
+                let rel = rel.trim();
+                let p = Path::new(rel);
+                if p.is_absolute() {
+                    p.to_path_buf()
+                } else {
+                    git_dir.join(p)
+                }
+            }
+            Err(_) => git_dir.clone(),
+        };
+        let common_git_dir = common_git_dir.canonicalize().unwrap_or(common_git_dir);
+        if let Some(parent) = common_git_dir.parent() {
+            return parent
+                .canonicalize()
+                .unwrap_or_else(|_| parent.to_path_buf());
         }
-        Err(_) => git_dir.to_path_buf(),
     }
+    repo_path
+        .canonicalize()
+        .unwrap_or_else(|_| repo_path.to_path_buf())
 }
 
 /// Read the current branch name from .git/HEAD (file I/O, no subprocess).
@@ -111,13 +122,96 @@ pub(crate) fn read_branch_from_head(repo_path: &Path) -> Option<String> {
     None // detached HEAD
 }
 
-/// Read the origin remote URL from .git/config (file I/O, no subprocess).
+/// Resolve the git config file holding a repo's remotes, handling linked
+/// worktrees.
+///
+/// A normal repo has `<gitdir>/config`. A linked worktree's gitdir has NO
+/// `config` of its own — remotes live in the COMMON config (pointed at by the
+/// worktree's `commondir` file). Falling back to the common config makes remote
+/// resolution work in worktrees too. For a normal checkout `<gitdir>/config`
+/// exists, so behavior there is unchanged.
+fn resolve_git_config_path(repo_path: &Path) -> Option<PathBuf> {
+    let git_dir = resolve_git_dir(repo_path)?;
+    let own = git_dir.join("config");
+    if own.is_file() {
+        return Some(own);
+    }
+    // Linked worktree: the config (with the remotes) lives in the common dir.
+    let cfg = common_git_dir(&git_dir).join("config");
+    cfg.is_file().then_some(cfg)
+}
+
+/// The common git dir for a (possibly-worktree) gitdir.
+///
+/// A linked worktree's gitdir has a `commondir` file pointing at the main `.git`,
+/// where the shared refs (`refs/heads`, `refs/remotes`, `packed-refs`) and config
+/// live. A normal gitdir has no `commondir`, so this returns it unchanged —
+/// making callers worktree-aware without altering normal-checkout behavior.
+fn common_git_dir(git_dir: &Path) -> PathBuf {
+    match fs::read_to_string(git_dir.join("commondir")) {
+        Ok(rel) => {
+            let rel = rel.trim();
+            let common = if Path::new(rel).is_absolute() {
+                PathBuf::from(rel)
+            } else {
+                git_dir.join(rel)
+            };
+            common.canonicalize().unwrap_or(common)
+        }
+        Err(_) => git_dir.to_path_buf(),
+    }
+}
+
+/// Read the origin remote URL from the git config (file I/O, no subprocess).
 /// Parses the `[remote "origin"]` section for the `url` key.
 pub(crate) fn read_remote_url(repo_path: &Path) -> Option<String> {
-    // `config` lives in the common dir, not the per-worktree gitdir.
-    let common = common_git_dir(&resolve_git_dir(repo_path)?);
-    let config_content = fs::read_to_string(common.join("config")).ok()?;
+    let config_content = fs::read_to_string(resolve_git_config_path(repo_path)?).ok()?;
     parse_git_config_remote_url(&config_content, "origin")
+}
+
+/// Enumerate ALL git remotes as `(name, url)` from the git config (file I/O, no
+/// subprocess). Unlike [`read_remote_url`] — which only reads `origin` — this
+/// surfaces every remote so the caller can detect multi-remote ambiguity
+/// (origin + upstream + fork) when binding a repo to a GitHub account.
+pub(crate) fn list_remotes(repo_path: &Path) -> Vec<(String, String)> {
+    let Some(cfg) = resolve_git_config_path(repo_path) else {
+        return Vec::new();
+    };
+    let Ok(config_content) = fs::read_to_string(cfg) else {
+        return Vec::new();
+    };
+    parse_git_config_remotes(&config_content)
+}
+
+/// Parse all `[remote "<name>"] url = <url>` pairs from a git config string.
+fn parse_git_config_remotes(config: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    let mut current: Option<String> = None;
+    for line in config.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('[') {
+            current = parse_remote_section_name(trimmed);
+            continue;
+        }
+        if let Some(name) = &current
+            && let Some(rest) = trimmed.strip_prefix("url")
+        {
+            let rest = rest.trim_start();
+            if let Some(value) = rest.strip_prefix('=') {
+                out.push((name.clone(), value.trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// Extract `origin` from a `[remote "origin"]` section header, or `None` for
+/// any other section.
+fn parse_remote_section_name(header: &str) -> Option<String> {
+    header
+        .strip_prefix("[remote \"")?
+        .strip_suffix("\"]")
+        .map(|name| name.to_string())
 }
 
 /// Parse a git config string for a remote's URL.
@@ -1227,10 +1321,10 @@ pub(crate) fn sort_branches(branches: &mut [serde_json::Value]) {
 /// 2. Read `refs/remotes/origin/HEAD` symref (set by `git clone` or `git remote set-head`)
 /// 3. Return `None` if no default branch can be determined
 fn detect_default_branch(git_dir: &Path) -> Option<String> {
-    // refs/heads, refs/remotes and packed-refs all live in the common dir,
-    // which differs from `git_dir` inside a linked worktree.
-    let git_dir = &common_git_dir(git_dir);
-
+    // Refs live in the common dir for linked worktrees (identical for normal
+    // repos), so resolve them there.
+    let refs_dir = common_git_dir(git_dir);
+    let git_dir = refs_dir.as_path();
     // 1. Check well-known candidate names in local refs
     if let Some(name) = MAIN_BRANCH_CANDIDATES.iter().find(|name| {
         git_dir.join("refs/heads").join(name).exists()
@@ -3092,6 +3186,113 @@ pub(crate) async fn get_file_blame(path: String, file: String) -> Result<Vec<Bla
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- list_remotes / parse_git_config_remotes ---
+
+    #[test]
+    fn parse_config_remotes_enumerates_all() {
+        let config = r#"[core]
+    repositoryformatversion = 0
+[remote "origin"]
+    url = git@github.com:octocat/hello.git
+    fetch = +refs/heads/*:refs/remotes/origin/*
+[branch "main"]
+    remote = origin
+[remote "upstream"]
+    url = https://github.com/upstream/hello.git
+"#;
+        let remotes = parse_git_config_remotes(config);
+        assert_eq!(
+            remotes,
+            vec![
+                (
+                    "origin".to_string(),
+                    "git@github.com:octocat/hello.git".to_string()
+                ),
+                (
+                    "upstream".to_string(),
+                    "https://github.com/upstream/hello.git".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_config_remotes_ignores_pushurl_and_non_remotes() {
+        let config = r#"[remote "origin"]
+    url = git@github.com:octocat/hello.git
+    pushurl = git@github.com:octocat/fork.git
+"#;
+        let remotes = parse_git_config_remotes(config);
+        assert_eq!(
+            remotes,
+            vec![(
+                "origin".to_string(),
+                "git@github.com:octocat/hello.git".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn list_remotes_reads_from_git_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let git_dir = dir.path().join(".git");
+        std::fs::create_dir_all(&git_dir).expect("mkdir .git");
+        std::fs::write(
+            git_dir.join("config"),
+            "[remote \"origin\"]\n\turl = git@github.com:octocat/hello.git\n",
+        )
+        .expect("write config");
+        let remotes = list_remotes(dir.path());
+        assert_eq!(
+            remotes,
+            vec![(
+                "origin".to_string(),
+                "git@github.com:octocat/hello.git".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn list_remotes_empty_for_non_repo() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(list_remotes(dir.path()).is_empty());
+    }
+
+    // --- canonical_repo_root ---
+
+    #[test]
+    fn canonical_repo_root_normal_repo_is_its_own_root() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("main");
+        std::fs::create_dir_all(root.join(".git")).expect("mkdir .git");
+        assert_eq!(canonical_repo_root(&root), root.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn canonical_repo_root_linked_worktree_resolves_to_main() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // Main repo: <base>/main/.git/ with a linked-worktree gitdir.
+        let main = dir.path().join("main");
+        let main_git = main.join(".git");
+        let wt_gitdir = main_git.join("worktrees").join("feat");
+        std::fs::create_dir_all(&wt_gitdir).expect("mkdir worktree gitdir");
+        // commondir points back at the main .git (relative, as git writes it).
+        std::fs::write(wt_gitdir.join("commondir"), "../..\n").expect("write commondir");
+
+        // Linked worktree checkout: <base>/feat/.git is a file → gitdir.
+        let wt = dir.path().join("feat");
+        std::fs::create_dir_all(&wt).expect("mkdir worktree");
+        std::fs::write(
+            wt.join(".git"),
+            format!("gitdir: {}\n", wt_gitdir.display()),
+        )
+        .expect("write .git file");
+
+        // Both the main repo and its linked worktree canonicalize to the same root.
+        assert_eq!(canonical_repo_root(&wt), canonical_repo_root(&main));
+        assert_eq!(canonical_repo_root(&main), main.canonicalize().unwrap());
+    }
 
     #[test]
     fn get_repo_initials_splits_on_hyphens() {

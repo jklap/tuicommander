@@ -109,26 +109,37 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
 
 ### Messaging Flow
 
-1. **Register** — The agent reads its `$TUIC_SESSION` and registers as a peer:
+> **Identity is automatic.** The bridge asserts your `$TUIC_SESSION` at connect
+> (`x-tuic-session` header → server auto-bind), so an agent spawned inside TUICommander
+> is already a registered peer. `agent action=register` is only needed to set a friendly
+> name/project, or from a standalone session where the env-var route is unavailable.
+
+> **Prefer blocking waits over polling.** `agent action=wait since=<ms>` returns as soon
+> as new mail arrives; `session action=wait session_id=<id> until=idle|exited` blocks on a
+> peer's lifecycle. Both cap at 8 s and return `{met, timed_out}` — on `timed_out` just call
+> again. Incoming messages are also **typed into an idle peer's terminal**, so a waiting
+> orchestrator is woken by its children without any poll loop.
+
+1. **Register** *(optional — sets name/project)* — the agent reads its `$TUIC_SESSION`:
    ```
-   messaging action=register tuic_session="$TUIC_SESSION" name="worker-1" project="/path/to/repo"
+   agent action=register tuic_session="$TUIC_SESSION" name="worker-1" project="/path/to/repo"
    ```
 
 2. **Discover peers** — Find other agents connected to TUICommander:
    ```
-   messaging action=list_peers
-   messaging action=list_peers project="/path/to/repo"   # filter by repo
+   agent action=list_peers
+   agent action=list_peers project="/path/to/repo"   # filter by repo
    ```
 
 3. **Send a message** — Address by the recipient's `tuic_session` UUID:
    ```
-   messaging action=send to="<recipient-tuic-session>" message="PR review done, 3 issues found"
+   agent action=send to="<recipient-tuic-session>" message="PR review done, 3 issues found"
    ```
 
 4. **Check inbox** — Read buffered messages (useful if channel push was missed):
    ```
-   messaging action=inbox
-   messaging action=inbox limit=10 since=1712000000000
+   agent action=inbox
+   agent action=inbox limit=10 since=1712000000000
    ```
 
 ### Channel Push vs Inbox
@@ -138,7 +149,7 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
 | **Channel push** | Recipient has active SSE stream | Real-time | `--dangerously-load-development-channels server:tuicommander` on the recipient's CC process |
 | **Inbox buffer** | Always | Poll-based | Registration only |
 
-Messages are always buffered in the inbox regardless of whether channel push succeeds. The inbox holds up to 128 messages per agent (FIFO eviction). Individual messages are capped at 64 KB.
+Messages are always buffered in the inbox regardless of whether channel push succeeds. The inbox holds up to 100 messages per agent (FIFO eviction). Individual messages are capped at 64 KB.
 
 ### Using Messaging from a Standalone Claude Code Session
 
@@ -149,23 +160,30 @@ If you run Claude Code outside TUICommander but still want to use TUIC messaging
    export TUIC_SESSION=$(uuidgen)
    ```
 
-2. **Connect to TUIC's MCP server** — add to your `.mcp.json`:
+2. **Connect to TUIC's MCP server** — the MCP channel is a Unix socket (Windows: named
+   pipe), reached through the `tuic-bridge` stdio adapter, **not** a TCP port. TUICommander
+   auto-installs this entry into each supported agent's config; to add it by hand:
    ```json
    {
      "mcpServers": {
        "tuicommander": {
-         "url": "http://localhost:17463/mcp"
+         "command": "tuic-bridge",
+         "args": []
        }
      }
    }
    ```
+   The bridge finds the socket via `TUIC_SOCKET` → `mcp.sock` → any `mcp-*.sock` in the
+   config dir. It reads `$TUIC_SESSION` from its environment and forwards it as the
+   `x-tuic-session` header, so identity binds automatically on connect.
 
 3. **Enable channel push** *(optional, for real-time delivery)*:
    ```bash
    claude --dangerously-load-development-channels server:tuicommander
    ```
 
-4. **Register on first turn** — the agent must call `messaging action=register` with its `$TUIC_SESSION` before sending or receiving.
+4. **(Optional) register a name** — identity auto-binds from `$TUIC_SESSION`; call
+   `agent action=register` only to set a display name/project.
 
 ### Messaging vs Claude Code Native SendMessage
 

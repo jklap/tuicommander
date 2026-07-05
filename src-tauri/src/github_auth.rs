@@ -71,6 +71,8 @@ pub(crate) enum TokenSource {
     OAuth,
     /// gh CLI config or `gh auth token`
     GhCli,
+    /// Personal Access Token pasted for a GitHub Enterprise Server account
+    Pat,
     /// No token available
     #[default]
     None,
@@ -243,11 +245,61 @@ pub(crate) async fn github_poll_login_impl(
         // Activate immediately in runtime state
         *state.github_token.write() = Some(access_token.clone());
         *state.github_token_source.write() = TokenSource::OAuth;
-        // Reset circuit breaker so we retry any previously-failed repos
+        // Reset the github.com circuit breaker so we retry any previously-failed repos
         state.github_circuit_breaker.reset();
-        // Clear the repo cooldown cache so "not found" repos get re-checked
-        state.git_cache.github_repo_cooldown.clear();
+        // Clear only github.com cooldowns ("owner/name", no ':'), leaving GHE
+        // cooldowns ("{id}:owner/name") untouched — github.com login must not
+        // disturb other accounts' state.
+        state
+            .git_cache
+            .github_repo_cooldown
+            .retain(|key, _| key.contains(':'));
         tracing::info!(source = "github", "OAuth Device Flow login successful");
+    }
+
+    Ok(result)
+}
+
+/// Poll the Device Flow for an ADDITIONAL github.com account. Unlike
+/// [`github_poll_login`], success does NOT touch the ambient default's token or
+/// runtime state: it validates the new token against `/user`, resolves the login
+/// (the account id), and persists a named registry entry with its own
+/// per-account token. The frontend drives this with the same start/interval as a
+/// normal login, but in "add account" mode.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn github_poll_add_account(
+    state: State<'_, Arc<AppState>>,
+    device_code: String,
+) -> Result<PollResult, String> {
+    let result = poll_device_flow(&state.http_client, &device_code).await?;
+
+    if let PollResult::Success {
+        ref access_token, ..
+    } = result
+    {
+        let host = crate::github_account::GitHubHost::new("github.com")
+            .expect("github.com is a valid host");
+        let login =
+            crate::github_account::fetch_account_login(&state.http_client, &host, access_token)
+                .await?
+                .ok_or_else(|| "GitHub did not return a login for this token".to_string())?;
+
+        if login == crate::github_account::GitHubAccount::GITHUB_COM_ID {
+            // Defensive: a real GitHub login can never be "github.com", but never
+            // let a value collide with the ambient default's reserved id.
+            return Err("Unexpected login collides with the default account id".to_string());
+        }
+
+        let account = crate::github_account::GitHubAccount::github_com_named(&login);
+        let token = access_token.clone();
+        let account_for_save = account.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::github_account::add_account_record(account_for_save, Some(&token))
+        })
+        .await
+        .map_err(|e| format!("keyring task panicked: {e}"))??;
+        tracing::info!(source = "github", login = %login, "Registered additional github.com account");
     }
 
     Ok(result)
@@ -322,22 +374,23 @@ pub(crate) struct GitHubDiagnostics {
     pub repos_monitored: u32,
 }
 
-/// Get GitHub integration diagnostics for the settings UI.
-#[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn github_diagnostics(
-    state: State<'_, Arc<AppState>>,
-) -> Result<GitHubDiagnostics, String> {
-    github_diagnostics_impl(state.inner()).await
-}
-
-pub(crate) async fn github_diagnostics_impl(
-    state: &Arc<AppState>,
-) -> Result<GitHubDiagnostics, String> {
-    let circuit_breaker_open = state.github_circuit_breaker.check().is_err();
-    let circuit_breaker_status = match state.github_circuit_breaker.check() {
+/// Compute GitHub integration diagnostics from the current state.
+///
+/// Pure seam (no `State`/network) so the Step 0 characterization net can pin
+/// the diagnostics shape for a github.com-only setup.
+pub(crate) fn compute_diagnostics(state: &AppState) -> GitHubDiagnostics {
+    let cloud_status = state.github_circuit_breaker.check();
+    // A GHE account whose breaker is open also counts as "open" for the UI, but
+    // never changes the github.com-only output (ghe_state is empty then).
+    let ghe_open = state
+        .ghe_state
+        .iter()
+        .any(|e| e.value().circuit_breaker.check().is_err());
+    let circuit_breaker_open = cloud_status.is_err() || ghe_open;
+    let circuit_breaker_status = match &cloud_status {
+        Ok(()) if ghe_open => "An Enterprise account is backing off".to_string(),
         Ok(()) => "OK".to_string(),
-        Err(msg) => msg,
+        Err(msg) => msg.clone(),
     };
 
     let now = std::time::Instant::now();
@@ -353,12 +406,30 @@ pub(crate) async fn github_diagnostics_impl(
     // `entry_count` is eventually consistent — fine for a diagnostic gauge.
     let repos_monitored = state.git_cache.github_status.entry_count() as u32;
 
-    Ok(GitHubDiagnostics {
+    GitHubDiagnostics {
         circuit_breaker_open,
         circuit_breaker_status,
         repos_not_found,
         repos_monitored,
-    })
+    }
+}
+
+/// Get GitHub integration diagnostics for the settings UI.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn github_diagnostics(
+    state: State<'_, Arc<AppState>>,
+) -> Result<GitHubDiagnostics, String> {
+    github_diagnostics_impl(state.inner()).await
+}
+
+/// HTTP/IPC-parity wrapper over the pure `compute_diagnostics` seam. Kept so the
+/// `/github/diagnostics` axum route (github_routes.rs) and the Tauri command
+/// share one code path; `compute_diagnostics` now also folds in GHE accounts.
+pub(crate) async fn github_diagnostics_impl(
+    state: &Arc<AppState>,
+) -> Result<GitHubDiagnostics, String> {
+    Ok(compute_diagnostics(state))
 }
 
 /// Get the current GitHub authentication status, including the user's
@@ -399,11 +470,17 @@ pub(crate) async fn github_auth_status_impl(state: &Arc<AppState>) -> Result<Aut
         });
     };
 
-    // Call GitHub /user to get login + avatar
-    crate::github_debug::log_api("GET", "https://api.github.com/user", "validate_token_impl");
+    // Call GitHub /user to get login + avatar. This validates the github.com
+    // global token, so it uses the cloud REST base (routed through GitHubHost
+    // rather than hardcoding api.github.com).
+    let user_url = crate::github_account::github_rest_url(
+        &crate::github_account::GitHubHost::new("github.com").expect("github.com is valid"),
+        "/user",
+    );
+    crate::github_debug::log_api("GET", &user_url, "validate_token_impl");
     let resp = state
         .http_client
-        .get("https://api.github.com/user")
+        .get(&user_url)
         .header("Authorization", format!("Bearer {token}"))
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", "TUICommander")
@@ -440,6 +517,7 @@ pub(crate) async fn github_auth_status_impl(state: &Arc<AppState>) -> Result<Aut
                     TokenSource::Env => "environment variable",
                     TokenSource::OAuth => "OAuth",
                     TokenSource::GhCli => "gh CLI",
+                    TokenSource::Pat => "Personal Access Token",
                     TokenSource::None => "current",
                 }
             );
@@ -528,34 +606,52 @@ pub(crate) fn resolve_all_candidates() -> Vec<(String, TokenSource)> {
 }
 
 fn resolve_all_candidates_inner(include_keychain: bool) -> Vec<(String, TokenSource)> {
-    let mut candidates = Vec::new();
-    if let Ok(token) = std::env::var("GH_TOKEN")
-        && !token.is_empty()
-    {
-        candidates.push((token, TokenSource::Env));
-    }
-    if let Ok(token) = std::env::var("GITHUB_TOKEN")
-        && !token.is_empty()
-        && !candidates.iter().any(|(t, _)| t == &token)
-    {
-        candidates.push((token, TokenSource::Env));
-    }
-    if include_keychain
-        && let Ok(Some(token)) = read_github_oauth_token()
-        && !candidates.iter().any(|(t, _)| t == &token)
-    {
-        candidates.push((token, TokenSource::OAuth));
-    }
-    if let Ok(token) = gh_token::get()
-        && !token.is_empty()
-        && !candidates.iter().any(|(t, _)| t == &token)
-    {
-        candidates.push((token, TokenSource::GhCli));
-    }
-    if let Some(token) = token_from_gh_cli()
-        && !candidates.iter().any(|(t, _)| t == &token)
-    {
-        candidates.push((token, TokenSource::GhCli));
+    // Gather raw inputs (with the same per-source guards as before), then delegate
+    // the priority ordering + value-dedup to the pure `order_token_candidates` seam.
+    let gh_token_env = std::env::var("GH_TOKEN").ok().filter(|t| !t.is_empty());
+    let github_token_env = std::env::var("GITHUB_TOKEN").ok().filter(|t| !t.is_empty());
+    let keychain_oauth = if include_keychain {
+        read_github_oauth_token().ok().flatten()
+    } else {
+        None
+    };
+    let gh_token_crate = gh_token::get().ok().filter(|t| !t.is_empty());
+    let gh_cli = token_from_gh_cli();
+    order_token_candidates(
+        gh_token_env,
+        github_token_env,
+        keychain_oauth,
+        gh_token_crate,
+        gh_cli,
+    )
+}
+
+/// Pure priority-ordering + value-dedup of token candidates.
+///
+/// Seam pinned by the Step 0 characterization net so the github.com fallback
+/// order can't drift during the multi-account refactor. Order is fixed:
+/// GH_TOKEN env → GITHUB_TOKEN env → keyring OAuth → gh_token crate → gh CLI.
+/// A later source is dropped when its token value already appeared earlier.
+pub(crate) fn order_token_candidates(
+    gh_token_env: Option<String>,
+    github_token_env: Option<String>,
+    keychain_oauth: Option<String>,
+    gh_token_crate: Option<String>,
+    gh_cli: Option<String>,
+) -> Vec<(String, TokenSource)> {
+    let mut candidates: Vec<(String, TokenSource)> = Vec::new();
+    for (tok, src) in [
+        (gh_token_env, TokenSource::Env),
+        (github_token_env, TokenSource::Env),
+        (keychain_oauth, TokenSource::OAuth),
+        (gh_token_crate, TokenSource::GhCli),
+        (gh_cli, TokenSource::GhCli),
+    ] {
+        if let Some(t) = tok
+            && !candidates.iter().any(|(existing, _)| existing == &t)
+        {
+            candidates.push((t, src));
+        }
     }
     candidates
 }
@@ -578,6 +674,39 @@ pub(crate) fn resolve_token_without_keychain() -> (Option<String>, TokenSource) 
         .next()
         .map(|(t, s)| (Some(t), s))
         .unwrap_or((None, TokenSource::None))
+}
+
+/// Resolve the token for a specific account.
+///
+/// - The ambient github.com default runs the EXISTING env→keyring-OAuth→gh chain
+///   unchanged (so a single-account user sees no behavior change).
+/// - Every NAMED account (a GHE PAT or an additional github.com account) returns
+///   ONLY its own per-account vault token — never the ambient chain. This anchors
+///   each named account to an explicit token so `gh auth switch` (or an env-var
+///   change) can't silently drift its identity. A GHE account reports
+///   [`TokenSource::Pat`]; an additional github.com account reports
+///   [`TokenSource::OAuth`] (its device-flow token, stored per-account). A
+///   missing token yields `(None, TokenSource::None)`.
+pub(crate) fn resolve_token_for_account(
+    account: &crate::github_account::GitHubAccount,
+) -> (Option<String>, TokenSource) {
+    if account.is_ambient_default() {
+        // Ambient github.com default — existing chain, byte-for-byte unchanged.
+        return resolve_token_with_source();
+    }
+    match crate::credentials::get(Credential::GithubToken(&account.id))
+        .ok()
+        .flatten()
+    {
+        Some(token) => {
+            let source = match account.kind {
+                crate::github_account::AccountKind::GhePat => TokenSource::Pat,
+                _ => TokenSource::OAuth,
+            };
+            (Some(token), source)
+        }
+        None => (None, TokenSource::None),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -782,5 +911,72 @@ mod tests {
 
         // Cleanup
         delete_github_oauth_token().unwrap();
+    }
+
+    // --- resolve_token_for_account (Step 4) ---
+
+    use crate::github_account::{AccountKind, GitHubAccount, GitHubHost};
+
+    #[test]
+    #[serial_test::serial]
+    fn resolve_for_github_com_delegates_to_existing_chain() {
+        // github.com accounts must run the existing env→OAuth→gh chain verbatim,
+        // so the result is identical to resolve_token_with_source(). Serialized
+        // against the env-mutating token tests so the global env is stable across
+        // the two resolutions below.
+        let acc = GitHubAccount::github_com(AccountKind::GithubComOauth, None);
+        assert_eq!(resolve_token_for_account(&acc), resolve_token_with_source());
+    }
+
+    #[test]
+    fn resolve_for_ghe_returns_vault_pat() {
+        let host = GitHubHost::new("ghe.resolve-pat-test.example").unwrap();
+        let acc = GitHubAccount::ghe_pat(host, None);
+        // The mock keyring is installed lazily on first credential access.
+        crate::credentials::set(Credential::GithubToken(&acc.id), "ghp_resolve_test").unwrap();
+
+        let (token, source) = resolve_token_for_account(&acc);
+        assert_eq!(token, Some("ghp_resolve_test".to_string()));
+        assert_eq!(source, TokenSource::Pat);
+
+        crate::credentials::delete(Credential::GithubToken(&acc.id)).unwrap();
+    }
+
+    #[test]
+    fn resolve_for_ghe_missing_pat_is_none() {
+        let host = GitHubHost::new("ghe.missing-pat-test.example").unwrap();
+        let acc = GitHubAccount::ghe_pat(host, None);
+        // Ensure no token is present for this id.
+        let _ = crate::credentials::delete(Credential::GithubToken(&acc.id));
+
+        assert_eq!(resolve_token_for_account(&acc), (None, TokenSource::None));
+    }
+
+    // --- Story 005: named github.com accounts anchored to their own token ---
+
+    #[test]
+    fn resolve_for_named_github_com_uses_own_token_not_chain() {
+        // An additional named github.com account resolves ONLY from its own
+        // per-account vault slot — never the ambient env→OAuth→gh chain — so a
+        // `gh auth switch` cannot drift its identity. Source is OAuth (its
+        // device-flow token), distinct from a GHE PAT.
+        let acc = GitHubAccount::github_com_named("named-anchor-test");
+        crate::credentials::set(Credential::GithubToken(&acc.id), "gho_named_anchor").unwrap();
+
+        let (token, source) = resolve_token_for_account(&acc);
+        assert_eq!(token, Some("gho_named_anchor".to_string()));
+        assert_eq!(source, TokenSource::OAuth);
+
+        crate::credentials::delete(Credential::GithubToken(&acc.id)).unwrap();
+    }
+
+    #[test]
+    fn resolve_for_named_github_com_missing_token_is_none() {
+        // No ambient fallback: a named github.com account with no stored token
+        // resolves to None, it does NOT silently fall back to env/gh.
+        let acc = GitHubAccount::github_com_named("named-missing-test");
+        let _ = crate::credentials::delete(Credential::GithubToken(&acc.id));
+
+        assert_eq!(resolve_token_for_account(&acc), (None, TokenSource::None));
     }
 }
