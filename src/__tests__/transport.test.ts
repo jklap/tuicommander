@@ -677,6 +677,47 @@ describe("transport", () => {
 			expect(mapCommandToHttp("github_diagnostics", {}).path).toBe("/github/diagnostics");
 		});
 
+		it("maps multi-account accounts + repo bindings", () => {
+			expect(mapCommandToHttp("github_list_accounts", {}).method).toBe("GET");
+			expect(mapCommandToHttp("github_list_accounts", {}).path).toBe("/github/accounts");
+
+			const add = mapCommandToHttp("github_add_account", { host: "ghe.acme.com", pat: "ghp_x" });
+			expect(add.method).toBe("POST");
+			expect(add.path).toBe("/github/accounts");
+			expect(add.body).toEqual({ host: "ghe.acme.com", pat: "ghp_x" });
+
+			const rm = mapCommandToHttp("github_remove_account", { id: "ghe.acme.com" });
+			expect(rm.method).toBe("POST");
+			expect(rm.path).toBe("/github/accounts/remove");
+			expect(rm.body).toEqual({ id: "ghe.acme.com" });
+
+			expect(mapCommandToHttp("github_list_bindings", {}).path).toBe("/github/bindings");
+			expect(mapCommandToHttp("github_list_bindings", {}).method).toBe("GET");
+
+			const bind = mapCommandToHttp("github_bind_repo", {
+				repoPath: "/my/repo",
+				accountId: "ghe.acme.com",
+				remoteName: "origin",
+			});
+			expect(bind.method).toBe("POST");
+			expect(bind.path).toBe("/github/bindings");
+			expect(bind.body).toEqual({ repoPath: "/my/repo", accountId: "ghe.acme.com", remoteName: "origin" });
+
+			const unbind = mapCommandToHttp("github_unbind_repo", { repoPath: "/my/repo" });
+			expect(unbind.method).toBe("POST");
+			expect(unbind.path).toBe("/github/bindings/remove");
+			expect(unbind.body).toEqual({ repoPath: "/my/repo" });
+
+			const resolve = mapCommandToHttp("github_resolve_repo", { repoPath: "/my/repo" });
+			expect(resolve.method).toBe("GET");
+			expect(resolve.path).toBe("/github/resolve-repo?repoPath=%2Fmy%2Frepo");
+
+			const resolveBatch = mapCommandToHttp("github_resolve_repos", { repoPaths: ["/a", "/b"] });
+			expect(resolveBatch.method).toBe("POST");
+			expect(resolveBatch.path).toBe("/github/resolve-repos");
+			expect(resolveBatch.body).toEqual({ repoPaths: ["/a", "/b"] });
+		});
+
 		it("maps ai-prompts load/save", () => {
 			expect(mapCommandToHttp("load_ai_prompts", {}).path).toBe("/config/ai-prompts");
 			expect(mapCommandToHttp("load_ai_prompts", {}).method).toBe("GET");

@@ -445,6 +445,45 @@ pub(super) struct GithubPollLoginRequest {
     pub device_code: String,
 }
 
+#[derive(Deserialize)]
+pub(super) struct GithubAddAccountRequest {
+    pub host: String,
+    pub pat: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct GithubRemoveAccountRequest {
+    pub id: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct GithubBindRepoRequest {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+    #[serde(rename = "accountId")]
+    pub account_id: String,
+    #[serde(rename = "remoteName")]
+    pub remote_name: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct GithubRepoPathBody {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct GithubResolveRepoQuery {
+    #[serde(rename = "repoPath")]
+    pub repo_path: String,
+}
+
+#[derive(Deserialize)]
+pub(super) struct GithubResolveReposRequest {
+    #[serde(rename = "repoPaths")]
+    pub repo_paths: Vec<String>,
+}
+
 // --- Config / themes / notes / misc (story 066) ---
 
 #[derive(Deserialize)]

@@ -736,6 +736,35 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	github_diagnostics: {
 		map: () => ({ method: "GET", path: "/github/diagnostics" }),
 	},
+	// Multi-account: accounts + repo bindings
+	github_list_accounts: {
+		map: () => ({ method: "GET", path: "/github/accounts" }),
+	},
+	github_add_account: {
+		map: (args) => ({ method: "POST", path: "/github/accounts", body: { host: args.host, pat: args.pat } }),
+	},
+	github_remove_account: {
+		map: (args) => ({ method: "POST", path: "/github/accounts/remove", body: { id: args.id } }),
+	},
+	github_list_bindings: {
+		map: () => ({ method: "GET", path: "/github/bindings" }),
+	},
+	github_bind_repo: {
+		map: (args) => ({
+			method: "POST",
+			path: "/github/bindings",
+			body: { repoPath: args.repoPath, accountId: args.accountId, remoteName: args.remoteName },
+		}),
+	},
+	github_unbind_repo: {
+		map: (args) => ({ method: "POST", path: "/github/bindings/remove", body: { repoPath: args.repoPath } }),
+	},
+	github_resolve_repo: {
+		map: (_args, p) => ({ method: "GET", path: `/github/resolve-repo?repoPath=${p("repoPath")}` }),
+	},
+	github_resolve_repos: {
+		map: (args) => ({ method: "POST", path: "/github/resolve-repos", body: { repoPaths: args.repoPaths } }),
+	},
 	// --- Story 066: config / themes / notes / misc ---
 	load_ai_prompts: {
 		map: () => ({ method: "GET", path: "/config/ai-prompts" }),

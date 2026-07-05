@@ -180,6 +180,11 @@ impl GitHubAccount {
 
     /// Build a GitHub Enterprise Server account authenticated by PAT. The id
     /// defaults to the canonical host (one account per host in v1).
+    ///
+    /// The id can in principle equal a `github_com_named` login id (e.g. a
+    /// dotless GHE host `acme` vs login `acme`); [`add_account_record`] rejects
+    /// adding an id already owned by a different host so the two can't silently
+    /// clobber each other's record + vault token.
     pub(crate) fn ghe_pat(host: GitHubHost, login: Option<String>) -> Self {
         Self {
             id: host.as_str().to_string(),
@@ -504,12 +509,36 @@ pub(crate) fn resolve_repo_account(
 // Persistence operations (testable, no network / no State)
 // ---------------------------------------------------------------------------
 
+/// Serializes the load-modify-save cycles of the account registry and binding
+/// stores so two concurrent mutations can't lose an update. Both stores share
+/// one lock — account removal touches them together. Poison is recovered (a
+/// panic mid-mutation must not wedge all later account edits).
+static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn store_guard() -> std::sync::MutexGuard<'static, ()> {
+    STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// Add or update an account record, storing its PAT (GHE accounts) in the vault.
 pub(crate) fn add_account_record(account: GitHubAccount, pat: Option<&str>) -> Result<(), String> {
+    let _guard = store_guard();
+    let mut registry = GitHubAccountRegistry::load();
+    // Reject an id already used by a DIFFERENT host: a bare-hostname GHE account
+    // (id = host) and a named github.com account (id = login) could otherwise
+    // collide and silently clobber each other's record + vault token. Same host
+    // = a legitimate update (e.g. PAT refresh), so upsert is allowed.
+    if let Some(existing) = registry.get(&account.id)
+        && existing.host != account.host
+    {
+        return Err(format!(
+            "Account id '{}' is already used by a different host ({}). Rename or remove it first.",
+            account.id,
+            existing.host.as_str()
+        ));
+    }
     if let Some(pat) = pat {
         crate::credentials::set(Credential::GithubToken(&account.id), pat)?;
     }
-    let mut registry = GitHubAccountRegistry::load();
     registry.upsert(account);
     registry.save()
 }
@@ -518,6 +547,7 @@ pub(crate) fn add_account_record(account: GitHubAccount, pat: Option<&str>) -> R
 /// that referenced it. (Per-account in-memory cache invalidation is layered on
 /// in Step 9, once those caches become account-scoped.)
 pub(crate) fn remove_account_everywhere(account_id: &str) -> Result<(), String> {
+    let _guard = store_guard();
     // Best-effort token delete — absence is not an error.
     let _ = crate::credentials::delete(Credential::GithubToken(account_id));
     let mut registry = GitHubAccountRegistry::load();
@@ -547,10 +577,23 @@ pub(crate) fn bind_repo_to_account(
         repo,
         remote_name: remote_name.to_string(),
     };
+    let _guard = store_guard();
     let mut store = RepoBindingStore::load();
     store.set_binding(repo_path, binding.clone());
     store.save()?;
     Ok(binding)
+}
+
+/// Remove a repo→account binding; returns whether one existed. Serialized with
+/// the other binding mutations.
+pub(crate) fn unbind_repo(repo_path: &std::path::Path) -> Result<bool, String> {
+    let _guard = store_guard();
+    let mut store = RepoBindingStore::load();
+    let removed = store.remove_binding(repo_path);
+    if removed {
+        store.save()?;
+    }
+    Ok(removed)
 }
 
 // ---------------------------------------------------------------------------
@@ -593,10 +636,11 @@ pub(crate) async fn fetch_account_login(
 
 /// Add a GitHub Enterprise Server account: validate the PAT against
 /// `{rest_base}/user`, store it under the new account id, and persist the record.
+///
+/// Shared by the Tauri command and the HTTP route (IPC/HTTP parity).
 #[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn github_add_account(
-    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+pub(crate) async fn github_add_account_impl(
+    state: &std::sync::Arc<crate::state::AppState>,
     host: String,
     pat: String,
 ) -> Result<GitHubAccount, String> {
@@ -615,13 +659,24 @@ pub(crate) async fn github_add_account(
     Ok(account)
 }
 
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn github_add_account(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    host: String,
+    pat: String,
+) -> Result<GitHubAccount, String> {
+    github_add_account_impl(state.inner(), host, pat).await
+}
+
 /// Remove an account: its PAT, its record, all of its repo bindings, and its
 /// in-memory caches (per-account breaker/viewer/rate + its cooldown entries).
 /// Only the removed account's state is touched — others are untouched.
+///
+/// Shared by the Tauri command and the HTTP route (IPC/HTTP parity).
 #[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn github_remove_account(
-    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+pub(crate) fn github_remove_account_impl(
+    state: &std::sync::Arc<crate::state::AppState>,
     id: String,
 ) -> Result<(), String> {
     remove_account_everywhere(&id)?;
@@ -634,6 +689,15 @@ pub(crate) async fn github_remove_account(
         .github_repo_cooldown
         .retain(|key, _| !key.starts_with(&prefix));
     Ok(())
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn github_remove_account(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    id: String,
+) -> Result<(), String> {
+    github_remove_account_impl(state.inner(), id)
 }
 
 /// Persist a repo→account binding for the chosen remote.
@@ -716,15 +780,16 @@ impl From<RepoResolution> for RepoResolutionDto {
 }
 
 /// Resolve a repo's account binding status (for the binding chooser UI).
+///
+/// Shared by the Tauri command and the HTTP route (IPC/HTTP parity).
 #[cfg(feature = "desktop")]
-#[tauri::command]
-pub(crate) async fn github_resolve_repo(
-    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+pub(crate) fn github_resolve_repo_impl(
+    state: &std::sync::Arc<crate::state::AppState>,
     repo_path: String,
 ) -> Result<RepoResolutionDto, String> {
     let registry = GitHubAccountRegistry::load();
     let bindings = RepoBindingStore::load();
-    let default = crate::github::github_com_account(&state);
+    let default = crate::github::github_com_account(state);
     let resolution = resolve_repo_account(
         std::path::Path::new(&repo_path),
         &registry,
@@ -734,16 +799,53 @@ pub(crate) async fn github_resolve_repo(
     Ok(RepoResolutionDto::from(resolution))
 }
 
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn github_resolve_repo(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    repo_path: String,
+) -> Result<RepoResolutionDto, String> {
+    github_resolve_repo_impl(state.inner(), repo_path)
+}
+
+/// Batch variant of [`github_resolve_repo_impl`]: loads the registry, bindings,
+/// and github.com default ONCE and resolves every path against them, keyed by
+/// the input repo path. Avoids the N-round-trip / 2N-disk-read cost of resolving
+/// each repo with its own command call.
+///
+/// Shared by the Tauri command and the HTTP route (IPC/HTTP parity).
+#[cfg(feature = "desktop")]
+pub(crate) fn github_resolve_repos_impl(
+    state: &std::sync::Arc<crate::state::AppState>,
+    repo_paths: Vec<String>,
+) -> std::collections::HashMap<String, RepoResolutionDto> {
+    let registry = GitHubAccountRegistry::load();
+    let bindings = RepoBindingStore::load();
+    let default = crate::github::github_com_account(state);
+    repo_paths
+        .into_iter()
+        .map(|p| {
+            let resolution =
+                resolve_repo_account(std::path::Path::new(&p), &registry, &bindings, Some(&default));
+            (p, RepoResolutionDto::from(resolution))
+        })
+        .collect()
+}
+
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn github_resolve_repos(
+    state: tauri::State<'_, std::sync::Arc<crate::state::AppState>>,
+    repo_paths: Vec<String>,
+) -> Result<std::collections::HashMap<String, RepoResolutionDto>, String> {
+    Ok(github_resolve_repos_impl(state.inner(), repo_paths))
+}
+
 /// Remove a repo→account binding (re-resolves on the next poll).
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn github_unbind_repo(repo_path: String) -> Result<bool, String> {
-    let mut store = RepoBindingStore::load();
-    let removed = store.remove_binding(std::path::Path::new(&repo_path));
-    if removed {
-        store.save()?;
-    }
-    Ok(removed)
+    unbind_repo(std::path::Path::new(&repo_path))
 }
 
 #[cfg(test)]
@@ -1516,6 +1618,31 @@ mod tests {
         );
 
         crate::credentials::delete(Credential::GithubToken("ghe.add-test.example")).unwrap();
+    }
+
+    #[test]
+    fn add_account_rejects_id_collision_across_hosts() {
+        // A bare-hostname GHE id ("acme") and a github.com login id ("acme") must
+        // not silently clobber each other's record + vault token.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let ghe = GitHubAccount::ghe_pat(GitHubHost::new("acme").unwrap(), None);
+        assert_eq!(ghe.id, "acme");
+        add_account_record(ghe, Some("ghp_acme")).unwrap();
+
+        // Same id, different host (github.com login) → rejected.
+        let named = GitHubAccount::github_com_named("acme");
+        assert_eq!(named.id, "acme");
+        let err = add_account_record(named, Some("gho_acme")).unwrap_err();
+        assert!(err.contains("different host"), "got: {err}");
+
+        // The GHE account's token survived (no clobber).
+        assert_eq!(
+            crate::credentials::get(Credential::GithubToken("acme")).unwrap(),
+            Some("ghp_acme".to_string())
+        );
+        crate::credentials::delete(Credential::GithubToken("acme")).unwrap();
     }
 
     #[test]

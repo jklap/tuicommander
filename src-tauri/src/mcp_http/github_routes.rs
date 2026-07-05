@@ -4,9 +4,11 @@ use axum::response::{IntoResponse, Response};
 use std::sync::Arc;
 
 use super::types::{
-    CiChecksQuery, CiFailureLogsQuery, GithubPollLoginRequest, GithubSetHideDraftsRequest,
-    IssueActionRequest, IssuesQuery, PathQuery, PollRepoRequest, PrDiffQuery, SetVisibilityRequest,
-    StartPollingRequest, UpdatePathsRequest,
+    CiChecksQuery, CiFailureLogsQuery, GithubAddAccountRequest, GithubBindRepoRequest,
+    GithubPollLoginRequest, GithubRemoveAccountRequest, GithubRepoPathBody, GithubResolveRepoQuery,
+    GithubResolveReposRequest, GithubSetHideDraftsRequest, IssueActionRequest, IssuesQuery,
+    PathQuery, PollRepoRequest, PrDiffQuery, SetVisibilityRequest, StartPollingRequest,
+    UpdatePathsRequest,
 };
 use super::{err_500, json_result, validate_repo_path};
 use crate::github_poller::PollerCmd;
@@ -273,4 +275,56 @@ pub(super) async fn github_auth_status(State(state): State<Arc<AppState>>) -> Re
 
 pub(super) async fn github_diagnostics(State(state): State<Arc<AppState>>) -> Response {
     json_result(crate::github_auth::github_diagnostics_impl(&state).await)
+}
+
+// --- Multi-account: accounts + repo bindings (IPC/HTTP parity) ---
+
+pub(super) async fn github_list_accounts() -> Response {
+    Json(crate::github_account::GitHubAccountRegistry::load().list().to_vec()).into_response()
+}
+
+pub(super) async fn github_add_account(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<GithubAddAccountRequest>,
+) -> Response {
+    json_result(crate::github_account::github_add_account_impl(&state, body.host, body.pat).await)
+}
+
+pub(super) async fn github_remove_account(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<GithubRemoveAccountRequest>,
+) -> Response {
+    json_result(crate::github_account::github_remove_account_impl(&state, body.id))
+}
+
+pub(super) async fn github_list_bindings() -> Response {
+    Json(crate::github_account::RepoBindingStore::load().entries()).into_response()
+}
+
+pub(super) async fn github_bind_repo(Json(body): Json<GithubBindRepoRequest>) -> Response {
+    json_result(crate::github_account::bind_repo_to_account(
+        std::path::Path::new(&body.repo_path),
+        &body.account_id,
+        &body.remote_name,
+    ))
+}
+
+pub(super) async fn github_unbind_repo(Json(body): Json<GithubRepoPathBody>) -> Response {
+    json_result(crate::github_account::unbind_repo(std::path::Path::new(
+        &body.repo_path,
+    )))
+}
+
+pub(super) async fn github_resolve_repo(
+    State(state): State<Arc<AppState>>,
+    Query(q): Query<GithubResolveRepoQuery>,
+) -> Response {
+    json_result(crate::github_account::github_resolve_repo_impl(&state, q.repo_path))
+}
+
+pub(super) async fn github_resolve_repos(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<GithubResolveReposRequest>,
+) -> Response {
+    Json(crate::github_account::github_resolve_repos_impl(&state, body.repo_paths)).into_response()
 }

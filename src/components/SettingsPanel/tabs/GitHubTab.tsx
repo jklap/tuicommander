@@ -182,15 +182,21 @@ export const GitHubTab: Component = () => {
 	}
 
 	async function fetchResolutions() {
-		const out: Record<string, RepoResolutionDto> = {};
-		for (const repo of activeRepos()) {
-			try {
-				out[repo.path] = await rpc<RepoResolutionDto>("github_resolve_repo", { repoPath: repo.path });
-			} catch (e) {
-				appLogger.debug("github", "resolve_repo failed", e);
-			}
+		const repos = activeRepos();
+		if (repos.length === 0) {
+			setResolutions({});
+			return;
 		}
-		setResolutions(out);
+		try {
+			// One batched call — the backend loads the registry/bindings once and
+			// resolves every repo, instead of N sequential round-trips.
+			const map = await rpc<Record<string, RepoResolutionDto>>("github_resolve_repos", {
+				repoPaths: repos.map((r) => r.path),
+			});
+			setResolutions(map);
+		} catch (e) {
+			appLogger.debug("github", "resolve_repos failed", e);
+		}
 	}
 
 	async function bindRepo(repoPath: string, accountId: string, remoteName: string) {

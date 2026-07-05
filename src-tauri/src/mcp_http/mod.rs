@@ -730,6 +730,31 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/github/diagnostics",
             get(github_routes::github_diagnostics),
         )
+        // Multi-account: accounts + repo bindings (IPC/HTTP parity)
+        .route(
+            "/github/accounts",
+            get(github_routes::github_list_accounts).post(github_routes::github_add_account),
+        )
+        .route(
+            "/github/accounts/remove",
+            post(github_routes::github_remove_account),
+        )
+        .route(
+            "/github/bindings",
+            get(github_routes::github_list_bindings).post(github_routes::github_bind_repo),
+        )
+        .route(
+            "/github/bindings/remove",
+            post(github_routes::github_unbind_repo),
+        )
+        .route(
+            "/github/resolve-repo",
+            get(github_routes::github_resolve_repo),
+        )
+        .route(
+            "/github/resolve-repos",
+            post(github_routes::github_resolve_repos),
+        )
         // AI watchers (story 070 RPC parity) — CRUD; fires surface as SessionCreated SSE
         .route(
             "/ai/watchers",
