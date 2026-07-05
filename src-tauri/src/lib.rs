@@ -34,7 +34,10 @@ pub(crate) mod git_cli;
 pub(crate) mod git_graph;
 pub(crate) mod git_reads;
 pub(crate) mod github;
+pub(crate) mod github_account;
 pub(crate) mod github_auth;
+#[cfg(test)]
+mod github_compat_tests;
 pub(crate) mod github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
@@ -1584,10 +1587,18 @@ pub fn run() {
             github_poller::github_set_pr_hide_drafts,
             github_auth::github_start_login,
             github_auth::github_poll_login,
+            github_auth::github_poll_add_account,
             github_auth::github_logout,
             github_auth::github_disconnect,
             github_auth::github_diagnostics,
             github_auth::github_auth_status,
+            github_account::github_add_account,
+            github_account::github_remove_account,
+            github_account::github_bind_repo,
+            github_account::github_unbind_repo,
+            github_account::github_resolve_repo,
+            github_account::github_list_accounts,
+            github_account::github_list_bindings,
             worktree::generate_worktree_name_cmd,
             worktree::generate_clone_branch_name_cmd,
             worktree::merge_and_archive_worktree,
