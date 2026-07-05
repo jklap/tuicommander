@@ -101,6 +101,45 @@ pub(super) async fn plugin_fs_rename(
     )
 }
 
+#[derive(Deserialize)]
+pub(super) struct ScanBody {
+    #[serde(rename = "repoPaths")]
+    pub repo_paths: Vec<String>,
+}
+
+pub(super) async fn plugin_scan_build_artifacts(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(body): Json<ScanBody>,
+) -> Response {
+    json_result(
+        crate::plugin_fs::scan_build_artifacts_impl(&state, body.repo_paths, plugin_id).await,
+    )
+}
+
+#[derive(Deserialize)]
+pub(super) struct DeleteArtifactBody {
+    pub path: String,
+    #[serde(rename = "repoPaths")]
+    pub repo_paths: Vec<String>,
+}
+
+pub(super) async fn plugin_delete_build_artifact(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(body): Json<DeleteArtifactBody>,
+) -> Response {
+    json_result(
+        crate::plugin_fs::delete_build_artifact_impl(
+            &state,
+            body.path,
+            body.repo_paths,
+            plugin_id,
+        )
+        .await,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // CLI execution
 // ---------------------------------------------------------------------------

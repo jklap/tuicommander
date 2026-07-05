@@ -494,6 +494,24 @@ await host.renamePath(
 );
 ```
 
+#### `host.scanBuildArtifacts(repoPaths) -> Promise<ArtifactEntry[]>`
+
+Recursively scan the given repo roots for build-artifact directories (`target/`, `node_modules/`, `.venv`, `__pycache__`, `.NET obj/bin`, `.gradle`). Read-only. Unlike `listDirectory`, this **ignores `.gitignore`** (artifact dirs are gitignored by design) and stops descending on a match, so a nested `node_modules` is folded into the outer entry — never double counted. Each `repoPaths` entry is `$HOME`-scoped and silently skipped if it fails validation. **Requires `"fs:scan"` capability.**
+
+Each `ArtifactEntry` is `{ path, kind, size_bytes, last_modified_secs, repo }` — `kind` is one of `rust | node | python | dotnet | gradle`, `last_modified_secs` is the max mtime of the dir's direct children (a "last build" signal).
+
+```typescript
+const entries = await host.scanBuildArtifacts(host.getRepos().map((r) => r.path));
+```
+
+#### `host.deleteBuildArtifact(path, repoPaths) -> Promise<void>`
+
+Delete a build-artifact directory. Destructive. The backend guard requires (all must hold): the path canonicalizes to a basename that is a known artifact dir, it is strictly inside one of `repoPaths` (never a repo root itself), and it is `$HOME`-scoped. Only then is `remove_dir_all` run. **Requires `"fs:delete"` capability.**
+
+```typescript
+await host.deleteBuildArtifact("/Users/me/project/target", ["/Users/me/project"]);
+```
+
 ### Tier 3c: Status Bar Ticker (capability-gated)
 
 The status bar has a shared ticker area that rotates messages from multiple plugins. Messages are grouped by priority tier:
@@ -1088,6 +1106,8 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `fs:watch` | `host.watchPath()` | Can watch filesystem paths within `$HOME` for changes |
 | `fs:write` | `host.writeFile()` | Can write files within `$HOME` (10 MB limit) |
 | `fs:rename` | `host.renamePath()` | Can rename/move files within `$HOME` |
+| `fs:scan` | `host.scanBuildArtifacts()` | Can recursively scan registered repos for build-artifact directories (read-only; ignores `.gitignore`) |
+| `fs:delete` | `host.deleteBuildArtifact()` | Can delete a build-artifact directory inside a registered repo (guarded `remove_dir_all`) |
 | `exec:cli` | `host.execCli()` | Can execute CLI binaries declared in manifest `binaries` field |
 | `git:read` | `host.getGitBranches()`, `host.getRecentCommits()`, `host.getGitDiff()` | Read-only access to git repository state |
 | `ui:context-menu` | `host.registerTerminalAction()` | Can add actions to the terminal right-click "Actions" submenu |

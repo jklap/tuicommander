@@ -23,6 +23,7 @@ import { fileIconRegistry } from "./fileIconRegistry";
 import { filePreviewRegistry } from "./filePreviewRegistry";
 import { markdownProviderRegistry } from "./markdownProviderRegistry";
 import type {
+	ArtifactEntry,
 	Disposable,
 	FileIconProvider,
 	FsChangeEvent,
@@ -500,6 +501,16 @@ function createPluginRegistry() {
 			async renamePath(from: string, to: string): Promise<void> {
 				requireCapability(pluginId, capabilities, "fs:rename");
 				await invoke("plugin_rename_path", { from, to, pluginId });
+			},
+
+			async scanBuildArtifacts(repoPaths: string[]): Promise<ArtifactEntry[]> {
+				requireCapability(pluginId, capabilities, "fs:scan");
+				return invoke<ArtifactEntry[]>("scan_build_artifacts", { repoPaths, pluginId });
+			},
+
+			async deleteBuildArtifact(path: string, repoPaths: string[]): Promise<void> {
+				requireCapability(pluginId, capabilities, "fs:delete");
+				await invoke("delete_build_artifact", { path, repoPaths, pluginId });
 			},
 
 			async watchPath(

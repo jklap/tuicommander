@@ -137,6 +137,8 @@ const KNOWN_CAPABILITIES: &[&str] = &[
     "fs:watch",
     "fs:write",
     "fs:rename",
+    "fs:scan",
+    "fs:delete",
     "net:http",
     "credentials:read",
     "ui:panel",
@@ -1173,6 +1175,16 @@ mod tests {
         let mut m = valid_manifest("test");
         m.capabilities = vec!["pty:write".into(), "ui:markdown".into(), "ui:sound".into()];
         assert!(validate_manifest(&m, "test").is_ok());
+    }
+
+    #[test]
+    fn validate_accepts_build_cleaner_capabilities() {
+        // fs:scan (read-only) and fs:delete (destructive) are the build-cleaner
+        // plugin's capabilities — must be in KNOWN_CAPABILITIES so an external
+        // manifest declaring them loads instead of being rejected as unknown.
+        let mut m = valid_manifest("build-cleaner");
+        m.capabilities = vec!["fs:scan".into(), "fs:delete".into(), "ui:panel".into(), "ui:ticker".into()];
+        assert!(validate_manifest(&m, "build-cleaner").is_ok());
     }
 
     // -- Binary validation --

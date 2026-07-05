@@ -570,15 +570,11 @@ async fn plugin_rename_path_inner(from: String, to: String) -> Result<(), String
 // ---------------------------------------------------------------------------
 // Build-artifact scan (capability-gated: fs:scan)
 //
-// DEFERRED (2026-07-05) — this core is wired in stories 083 (register the
-// `fs:scan`/`fs:delete` capabilities in KNOWN_CAPABILITIES + invoke_handler +
-// PluginHost methods) & 084 (HTTP parity routes). Until then nothing references
-// it in release builds, so each item carries a dead-code allow. The gate calls
-// below use `check_plugin_capability(.., "fs:scan"/"fs:delete")` — those strings
-// only resolve once 083 registers them. Remove every `#[allow(dead_code)]` in
-// this section when the commands are registered — the parity rule forbids
-// landing the IPC command without its HTTP route, which is why wiring is a
-// separate story, not part of this one.
+// Wired to IPC (`scan_build_artifacts` in the invoke_handler, `lib.rs`) and to
+// HTTP parity (`/api/plugins/{id}/build-artifacts/scan`, `plugin_routes.rs`).
+// The `fs:scan`/`fs:delete` capability strings are registered in
+// `KNOWN_CAPABILITIES` (`plugins.rs`); the PluginHost exposes `scanBuildArtifacts`
+// / `deleteBuildArtifact`.
 // ---------------------------------------------------------------------------
 
 /// Known build-artifact directory names mapped to a language/tool kind.
@@ -586,7 +582,6 @@ async fn plugin_rename_path_inner(from: String, to: String) -> Result<(), String
 /// names are removable). Generic names like `bin`/`obj` are .NET conventions;
 /// the delete guard's other conditions (inside a registered repo, not the repo
 /// root, `$HOME`-scoped) keep them from being a footgun.
-#[allow(dead_code)]
 pub(crate) const ARTIFACT_DIRS: &[(&str, &str)] = &[
     ("target", "rust"),
     ("node_modules", "node"),
@@ -599,12 +594,10 @@ pub(crate) const ARTIFACT_DIRS: &[(&str, &str)] = &[
 
 /// Cap on scan-walk recursion into a repo (runaway backstop; real source trees
 /// are far shallower). Symlinked dirs are never followed, so cycles are impossible.
-#[allow(dead_code)]
 const MAX_SCAN_DEPTH: u8 = 8;
 
 /// Cap on size-measurement recursion within a matched artifact dir. Deeper than
 /// MAX_SCAN_DEPTH because `node_modules` nests heavily; symlinks are not followed.
-#[allow(dead_code)]
 const MAX_SIZE_DEPTH: u8 = 64;
 
 /// One matched build-artifact directory: its absolute path, tool kind, total
@@ -623,7 +616,6 @@ pub struct ArtifactEntry {
 /// (uses `DirEntry` file types / non-traversing metadata), so it can't escape
 /// the tree or loop. Per-dir read errors are non-fatal — a macOS TCC-protected
 /// subdir is skipped, not counted, and never aborts the sum.
-#[allow(dead_code)]
 fn dir_size_bytes(dir: &std::path::Path, depth: u8) -> u64 {
     if depth == 0 {
         return 0;
@@ -651,7 +643,6 @@ fn dir_size_bytes(dir: &std::path::Path, depth: u8) -> u64 {
 /// Max mtime (Unix secs) among the direct children of `dir`. Dir mtime is
 /// unreliable as a "last build" signal; the newest direct child is cheap and
 /// closer to the truth. Returns 0 if the dir is unreadable or empty.
-#[allow(dead_code)]
 fn max_child_mtime_secs(dir: &std::path::Path) -> u64 {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return 0;
@@ -669,7 +660,6 @@ fn max_child_mtime_secs(dir: &std::path::Path) -> u64 {
 }
 
 /// Measure a matched artifact dir into an `ArtifactEntry` (summed whole).
-#[allow(dead_code)]
 fn measure(dir: &std::path::Path, kind: &str, repo: &str) -> ArtifactEntry {
     ArtifactEntry {
         path: dir.to_string_lossy().to_string(),
@@ -684,7 +674,6 @@ fn measure(dir: &std::path::Path, kind: &str, repo: &str) -> ArtifactEntry {
 /// is summed whole and NOT descended into (stop-at-match), so a `node_modules`
 /// nested inside another is folded into the outer entry — never double counted.
 /// Skips `.git` and symlinked dirs; per-dir read errors are non-fatal.
-#[allow(dead_code)]
 fn walk_artifacts(dir: &std::path::Path, repo: &str, depth: u8, out: &mut Vec<ArtifactEntry>) {
     if depth == 0 {
         return;
@@ -715,7 +704,6 @@ fn walk_artifacts(dir: &std::path::Path, repo: &str, depth: u8, out: &mut Vec<Ar
 /// validation (moved, unmounted, outside `$HOME`) is skipped, not fatal.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-#[allow(dead_code)]
 pub async fn scan_build_artifacts(
     repo_paths: Vec<String>,
     plugin_id: String,
@@ -724,7 +712,6 @@ pub async fn scan_build_artifacts(
     scan_build_artifacts_impl(&state, repo_paths, plugin_id).await
 }
 
-#[allow(dead_code)]
 pub(crate) async fn scan_build_artifacts_impl(
     state: &std::sync::Arc<crate::AppState>,
     repo_paths: Vec<String>,
@@ -734,7 +721,6 @@ pub(crate) async fn scan_build_artifacts_impl(
     scan_build_artifacts_inner(repo_paths).await
 }
 
-#[allow(dead_code)]
 async fn scan_build_artifacts_inner(repo_paths: Vec<String>) -> Result<Vec<ArtifactEntry>, String> {
     spawn_blocking_fs(move || {
         let mut out = Vec::new();
@@ -753,9 +739,9 @@ async fn scan_build_artifacts_inner(repo_paths: Vec<String>) -> Result<Vec<Artif
 // ---------------------------------------------------------------------------
 // Build-artifact delete (capability-gated: fs:delete)
 //
-// DEFERRED (2026-07-05) — like the scan core above, wired to IPC + HTTP in
-// stories 083/084; each item carries a dead-code allow until then. Remove the
-// allows when the command is registered.
+// Wired to IPC (`delete_build_artifact`) and HTTP parity
+// (`/api/plugins/{id}/build-artifacts/delete`). Destructive; the guard below is
+// the sharp edge.
 // ---------------------------------------------------------------------------
 
 /// Guard for a destructive `remove_dir_all`. ALL conditions must hold, or the
@@ -767,7 +753,6 @@ async fn scan_build_artifacts_inner(repo_paths: Vec<String>) -> Result<Vec<Artif
 ///
 /// `$HOME` scoping is enforced separately by `validate_within_home` on both the
 /// target and each repo root before this runs (defense in depth).
-#[allow(dead_code)]
 fn assert_deletable(path: &std::path::Path, repo_roots: &[PathBuf]) -> Result<(), String> {
     let c = path
         .canonicalize()
@@ -791,7 +776,6 @@ fn assert_deletable(path: &std::path::Path, repo_roots: &[PathBuf]) -> Result<()
 /// enforces the artifact-name + strict-containment guard before `remove_dir_all`.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-#[allow(dead_code)]
 pub async fn delete_build_artifact(
     path: String,
     repo_paths: Vec<String>,
@@ -801,7 +785,6 @@ pub async fn delete_build_artifact(
     delete_build_artifact_impl(&state, path, repo_paths, plugin_id).await
 }
 
-#[allow(dead_code)]
 pub(crate) async fn delete_build_artifact_impl(
     state: &std::sync::Arc<crate::AppState>,
     path: String,
@@ -812,7 +795,6 @@ pub(crate) async fn delete_build_artifact_impl(
     delete_build_artifact_inner(path, repo_paths).await
 }
 
-#[allow(dead_code)]
 async fn delete_build_artifact_inner(path: String, repo_paths: Vec<String>) -> Result<(), String> {
     spawn_blocking_fs(move || {
         // $HOME scope + canonicalization of the target.

@@ -36,7 +36,7 @@ wiz stories. This file is the session-scoped scratch list for the `/goal` loop.)
   `plugin_watch_path`/unwatch, `plugin_http_fetch` → likely desktop-only). Sizable + a
   plugin-fs/install **security** dimension — warrants a focused pass.
 
-## Unify build_router and build_remote_router (tech debt)
+## Unify build_router and build_remote_router (tech debt) — STORY `094-ec55` (2026-07-05)
 
 - **Problem:** `src-tauri/src/mcp_http/mod.rs` maintains TWO hand-written route
   lists — `build_router` (desktop/loopback) and `build_remote_router` (tuic-remote).
@@ -100,6 +100,10 @@ router, transport 108/108, both build targets green, pushed.
 (Step 2), conversation token WS (Step 3), chat token WS (Step 4), browser WS wiring
 (Step 5). These are the genuine event-bridge infra — best done in a focused session via
 `/wiz:work plans/http-parity-ai-event-bridge.md`.
+**UPDATE 2026-07-05: DONE.** The event-bridge plan shipped in full — all acceptance
+criteria `[x]` in `plans/http-parity-ai-event-bridge.md` (SSE triage-progress, per-id
+conversation/chat WS, browser wiring, 114 transport tests). No stories to create; this
+entry is closed.
 
 **068-070 + run_diff_triage are PLANNED** → `plans/http-parity-ai-event-bridge.md`
 (active plan, 2026-06-28). Codebase exploration found a THIRD transport GPT missed:
@@ -161,7 +165,7 @@ see below.
 
 ## MCP orchestration follow-ups (plan: mcp-orchestration-fixes, stories 074–079)
 
-### O1. Live E2E of cross-agent orchestration (plan acceptance criterion 2)
+### O1. Live E2E of cross-agent orchestration (plan acceptance criterion 2) — STORY `091-22b7` (2026-07-05, includes O6)
 - **Opportunity:** claude↔codex spawn + auto-identity + PTY-injection wake + parent→child
   follow-up is **code-verified** (unit tests) but not yet driven end-to-end live.
 - **Why not now:** Rust backend does not hot-reload into Boss's `make dev` session
@@ -182,7 +186,7 @@ see below.
   by the Makefile's `--ignore` list where relevant. Migrating off them is upstream-gated
   (gtk-rs via tauri) — see AGENTS.md Accepted Security Decisions. **Priority:** P3 hygiene.
 
-### O3. Fold claude into the default_prompt_args template table
+### O3. Fold claude into the default_prompt_args template table — STORY `092-c9f2` (2026-07-05, depends on 091)
 - **Opportunity:** claude keeps a dedicated bare-append branch while every other agent flows
   through `default_prompt_args` + merge + substitute. Unifying removes the special case.
 - **Why not now:** claude's branch puts `--print/--model` *before* the positional prompt;
@@ -195,12 +199,43 @@ see below.
   injection only targets idle agents. Revisit if a peer message ever concatenates onto stray
   input. **Complexity:** XS. **Priority:** P3.
 
-### O5. Guard claude-only MCP params on non-claude spawns
+### O5. Guard claude-only MCP params on non-claude spawns — STORY `093-1e56` (2026-07-05)
 - **Opportunity:** `print_mode`/`output_format` passed for e.g. codex inject `--print`/
   `--output-format` via `merge_mcp_params_into_args` → clap exit 2. Warn or drop claude-only
   params when `agent_type != claude`. **Complexity:** S. **Priority:** P3.
 
-### O6. Spot-check each default_prompt_args template against the live CLI
+### O6. Spot-check each default_prompt_args template against the live CLI — folded into STORY `091-22b7` (criterion 6)
 - **Opportunity:** templates mirror `src/agents.ts` (shipped) but weren't run against each
   CLI's current `--help`. Codex `exec` vs bare positional and goose `session` semantics
   deserve a live confirmation. Rolls up into O1's live pass. **Complexity:** S. **Priority:** P2.
+
+## dev-install.sh targets release bundle path, not dev — build-cleaner plan (2026-07-05)
+
+- **Problem/opportunity:** `scripts/dev-install.sh` symlinks plugins into
+  `$HOME/Library/Application Support/**tuicommander**/plugins` (release bundle id), but a
+  `make dev` build runs under bundle id `**com.tuic.commander**` and watches
+  `$HOME/Library/Application Support/com.tuic.commander/plugins`. So `dev-install.sh <plugin>`
+  does NOT make the plugin visible to a dev build — discovered while loading `build-cleaner`
+  into the running `make dev` instance (had to `ln -sfn` into the dev dir by hand).
+- **Proposed solution:** In `dev-install.sh`, symlink into BOTH the release and the
+  `com.tuic.commander` dev dir on macOS (and the Linux/Windows dev-vs-release equivalents),
+  or detect which app id is installed. A dual-symlink is simplest and idempotent.
+- **Expected benefits:** `dev-install.sh` actually works for the primary dev workflow;
+  no silent "plugin didn't load" confusion.
+- **Trade-offs:** Two symlinks per plugin; negligible. Must mirror the `--clean` path so both
+  are removed.
+- **Complexity:** S (a second `PLUGINS_DIR` loop). **Priority:** P2 (blocks smooth plugin dev).
+
+## Plugin watcher doesn't hot-load plugins added after boot — build-cleaner plan (2026-07-05)
+
+- **Problem/opportunity:** The plugins dir file-watcher (`[plugins] Watching … for changes`)
+  did not load a plugin whose symlink was created AFTER app boot; touching its `manifest.json`
+  also didn't trigger discovery. Frontend plugin discovery appears to run once at init; a new
+  plugin needs a frontend reload (Cmd+R) or app restart to appear.
+- **Proposed solution:** Confirm whether the watcher is meant to hot-add new plugin dirs. If
+  yes, have the loader re-scan on a new top-level dir/symlink create event and register it. If
+  intentionally boot-only, document it (the "Watching for changes" log implies live add works).
+- **Expected benefits:** True plugin hot-install; matches the log's promise.
+- **Trade-offs:** Re-scan must debounce and de-dupe already-loaded plugins.
+- **Complexity:** M (loader + watcher wiring; verify against existing hot-reload for edits).
+- **Priority:** P3 (edit-hot-reload works; only first-time add is affected).

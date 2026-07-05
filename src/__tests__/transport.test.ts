@@ -941,6 +941,25 @@ describe("transport", () => {
 			expect(rn.path).toBe("/api/plugins/my-plugin/fs/rename");
 			expect(rn.body).toEqual({ from: "/home/user/a.txt", to: "/home/user/b.txt" });
 
+			// scan_build_artifacts
+			const scan = mapCommandToHttp("scan_build_artifacts", {
+				pluginId: "build-cleaner",
+				repoPaths: ["/home/user/repoA", "/home/user/repoB"],
+			});
+			expect(scan.method).toBe("POST");
+			expect(scan.path).toBe("/api/plugins/build-cleaner/build-artifacts/scan");
+			expect(scan.body).toEqual({ repoPaths: ["/home/user/repoA", "/home/user/repoB"] });
+
+			// delete_build_artifact
+			const del = mapCommandToHttp("delete_build_artifact", {
+				pluginId: "build-cleaner",
+				path: "/home/user/repoA/target",
+				repoPaths: ["/home/user/repoA"],
+			});
+			expect(del.method).toBe("POST");
+			expect(del.path).toBe("/api/plugins/build-cleaner/build-artifacts/delete");
+			expect(del.body).toEqual({ path: "/home/user/repoA/target", repoPaths: ["/home/user/repoA"] });
+
 			// plugin_exec_cli
 			const ex = mapCommandToHttp("plugin_exec_cli", {
 				pluginId: "my-plugin",

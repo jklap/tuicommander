@@ -1776,6 +1776,8 @@ pub fn run() {
             plugin_fs::plugin_rename_path,
             plugin_fs::plugin_watch_path,
             plugin_fs::plugin_unwatch,
+            plugin_fs::scan_build_artifacts,
+            plugin_fs::delete_build_artifact,
             plugin_http::plugin_http_fetch,
             plugin_pty::plugin_read_session_output,
             plugin_exec::plugin_exec_cli,

@@ -1283,6 +1283,14 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(plugin_routes::plugin_fs_rename),
         )
         .route(
+            "/api/plugins/{plugin_id}/build-artifacts/scan",
+            post(plugin_routes::plugin_scan_build_artifacts),
+        )
+        .route(
+            "/api/plugins/{plugin_id}/build-artifacts/delete",
+            post(plugin_routes::plugin_delete_build_artifact),
+        )
+        .route(
             "/api/plugins/{plugin_id}/exec",
             post(plugin_routes::plugin_exec),
         )

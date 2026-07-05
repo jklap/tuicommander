@@ -33,7 +33,7 @@ Constraints:
 - `id` must match directory name exactly, non-empty
 - `main` must be a filename only (no path separators or `..`)
 - `minAppVersion` must be <= current app version (current: 0.3.x)
-- `capabilities`: subset of `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `exec:cli`, `git:read`
+- `capabilities`: subset of `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
 - `allowedUrls`: URL patterns for `net:http` (supports `*` wildcard for path prefix matching)
 - `agentTypes`: optional array of agent type strings. When set, output watchers and structured event handlers only fire for terminals running a matching agent. Omit or use `[]` for universal plugins. Valid values: `claude`, `gemini`, `opencode`, `aider`, `codex`, `amp`, `cursor`, `goose`, `droid`, `git`.
 - `binaries`: optional array of CLI binary names this plugin may execute via `exec:cli` (e.g. `["rtk", "mdkb"]`). The on-disk manifest is the source of truth — binaries not declared here are rejected.
@@ -232,6 +232,8 @@ host.getGitDiff(repoPath, scope?)       // unified diff string (scope: "staged" 
 | `await host.readCredential(serviceName: string): Promise<string \| null>` | `credentials:read` |
 | `await host.writeFile(absolutePath: string, content: string): Promise<void>` | `fs:write` |
 | `await host.renamePath(from: string, to: string): Promise<void>` | `fs:rename` |
+| `await host.scanBuildArtifacts(repoPaths: string[]): Promise<ArtifactEntry[]>` | `fs:scan` |
+| `await host.deleteBuildArtifact(path: string, repoPaths: string[]): Promise<void>` | `fs:delete` |
 | `await host.httpFetch(url: string, options?): Promise<HttpResponse>` | `net:http` |
 | `host.registerTerminalAction({ id, label, action(ctx), disabled?(ctx) }): Disposable` | `ui:context-menu` |
 | `host.registerContextMenuAction({ id, label, target, action(ctx), disabled?(ctx) }): Disposable` | `ui:context-menu` |
