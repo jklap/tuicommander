@@ -40,6 +40,7 @@ import {
 } from "./components/PostMergeCleanupDialog/PostMergeCleanupDialog";
 import { ProcessManagerModal } from "./components/ProcessManagerModal/ProcessManagerModal";
 import { PromptDialog } from "./components/PromptDialog";
+import { RemoteQrDialog } from "./components/RemoteQrDialog";
 import { RenameBranchDialog } from "./components/RenameBranchDialog";
 import { RunCommandDialog } from "./components/RunCommandDialog";
 import { TaskQueuePanel } from "./components/TaskQueuePanel";
@@ -308,6 +309,7 @@ const App: Component = () => {
 
 	const [showProcessManager, setShowProcessManager] = createSignal(false);
 	const [showGenerators, setShowGenerators] = createSignal(false);
+	const [showRemoteQr, setShowRemoteQr] = createSignal(false);
 	const [whatsNewVersion, setWhatsNewVersion] = createSignal<string | null>(null);
 	const whatsNewEntry = () => {
 		const v = whatsNewVersion();
@@ -1911,6 +1913,7 @@ const App: Component = () => {
 		},
 		toggleProcessManager: () => setShowProcessManager((v) => !v),
 		toggleGenerators: () => setShowGenerators((v) => !v),
+		showRemoteQr: () => setShowRemoteQr(true),
 		blockPrev: () => {
 			const term = terminalsStore.getActive();
 			if (!term?.ref || term.commandBlocks.length === 0) return;
@@ -2950,6 +2953,11 @@ const App: Component = () => {
 			{/* Generators modal */}
 			<Show when={showGenerators()}>
 				<GeneratorsModal onClose={() => setShowGenerators(false)} />
+			</Show>
+
+			{/* QR for Remote Mobile Connection */}
+			<Show when={showRemoteQr()}>
+				<RemoteQrDialog onClose={() => setShowRemoteQr(false)} />
 			</Show>
 
 			{/* What's New dialog — shown once after stable version update */}

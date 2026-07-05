@@ -89,6 +89,7 @@ export interface ShortcutHandlers {
 	detachActivityDashboard: () => void;
 	toggleProcessManager: () => void;
 	toggleGenerators: () => void;
+	showRemoteQr: () => void;
 	blockPrev: () => void;
 	blockNext: () => void;
 	blockFoldToggle: () => void;

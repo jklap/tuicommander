@@ -76,6 +76,7 @@ function createMockHandlers(): ShortcutHandlers {
 		detachActivityDashboard: vi.fn(),
 		toggleProcessManager: vi.fn(),
 		toggleGenerators: vi.fn(),
+		showRemoteQr: vi.fn(),
 		refreshTerminal: vi.fn(),
 		blockPrev: vi.fn(),
 		blockNext: vi.fn(),
