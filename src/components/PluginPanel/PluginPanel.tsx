@@ -97,18 +97,37 @@ function extractThemeObject(): Record<string, string> {
 }
 
 /**
- * Whether a document brings its own styling — an inline `<style>` block or a
+ * Whether a document brings its own styling — a non-empty `<style>` block or a
  * linked `<link rel="stylesheet">`. Such documents are self-styled (design or
  * preview work opened via `ui action=tab html=...`) and must NOT have the TUIC
  * chrome base sheet forced onto them, or a white page renders dark and any
  * typography it defines is overridden (#080). Plain unstyled HTML — including
  * plugin dashboards, which ship no own styles and rely on the shared
  * `.dashboard`/`.dash-*` classes from PLUGIN_BASE_CSS — is not self-styled and
- * still gets the base sheet. Over-detection is the safe direction: at worst a
- * self-styled doc keeps its own look.
+ * still gets the base sheet.
+ *
+ * Detection parses the HTML into an inert `<template>` fragment rather than
+ * regex-scanning the raw string, so `<style>`/`rel="stylesheet"` text living
+ * inside a comment or an inert `<script type="text/template">` no longer
+ * misclassifies a genuinely-unstyled dashboard as self-styled (which would
+ * silently drop PLUGIN_BASE_CSS). An empty `<style></style>` placeholder is
+ * likewise treated as unstyled. Template content is inert — parsing never
+ * fetches linked resources or runs scripts.
  */
 export function hasOwnStyling(html: string): boolean {
-	return /<style[\s>]/i.test(html) || /<link\b[^>]*\brel\s*=\s*['"]?\s*stylesheet/i.test(html);
+	const tpl = document.createElement("template");
+	tpl.innerHTML = html;
+	const root = tpl.content;
+	// A <style> with actual rules (script/comment text is not parsed into
+	// <style> elements, so it can't trip this).
+	const hasInlineStyle = Array.from(root.querySelectorAll("style")).some(
+		(el) => (el.textContent ?? "").trim().length > 0,
+	);
+	if (hasInlineStyle) return true;
+	// A <link rel="stylesheet"> (rel is space-separated, case-insensitive).
+	return Array.from(root.querySelectorAll("link")).some((el) =>
+		(el.getAttribute("rel") ?? "").split(/\s+/).some((r) => r.toLowerCase() === "stylesheet"),
+	);
 }
 
 /** Inject theme CSS variables and base stylesheet into HTML before </head> (or prepend if no </head>) */

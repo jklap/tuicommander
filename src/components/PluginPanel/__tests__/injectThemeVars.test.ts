@@ -18,6 +18,24 @@ describe("hasOwnStyling", () => {
 		// A stray word "style" in text must not trip detection.
 		expect(hasOwnStyling("<p>the style of this page</p>")).toBe(false);
 	});
+
+	it("ignores <style>/stylesheet text inside comments and inert script templates", () => {
+		// A genuinely-unstyled dashboard that merely embeds style-looking text in a
+		// comment or a <script type="text/template"> must still get PLUGIN_BASE_CSS.
+		expect(hasOwnStyling("<!-- <style>body{color:red}</style> --><div class='dashboard'>x</div>")).toBe(
+			false,
+		);
+		expect(
+			hasOwnStyling(
+				'<script type="text/template"><style>a{}</style><link rel="stylesheet" href="x.css"></script><div>x</div>',
+			),
+		).toBe(false);
+	});
+
+	it("treats an empty <style></style> placeholder as unstyled", () => {
+		expect(hasOwnStyling("<html><head><style></style></head><body>x</body></html>")).toBe(false);
+		expect(hasOwnStyling("<style>   </style><div>x</div>")).toBe(false);
+	});
 });
 
 describe("injectThemeVars base-sheet scoping (#080)", () => {
