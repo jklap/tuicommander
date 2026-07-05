@@ -1965,6 +1965,7 @@ fn handle_agent(
                 if let Some(ref rc_args) = rc.args {
                     // Run config matched: merge MCP params, then substitute {prompt}
                     let merged = match merge_mcp_params_into_args(
+                        &rc.agent_type,
                         rc_args,
                         args["model"].as_str(),
                         args["print_mode"].as_bool().unwrap_or(false),
@@ -1986,6 +1987,7 @@ fn handle_agent(
                     match crate::agent::default_prompt_args(&rc.agent_type) {
                         Some(template) => {
                             let merged = match merge_mcp_params_into_args(
+                                &rc.agent_type,
                                 &template,
                                 args["model"].as_str(),
                                 args["print_mode"].as_bool().unwrap_or(false),
@@ -3789,13 +3791,21 @@ fn substitute_prompt_in_args(args: &[String], prompt: &str) -> Vec<String> {
 
 /// Merge MCP params (model, print_mode, output_format) into run config args.
 /// Returns Ok(merged args) or Err(conflict description).
+///
+/// `agent_type` gates the Claude-only flags: `--print` and `--output-format` are
+/// understood only by the `claude` CLI. For any other agent (codex, gemini,
+/// goose, …) they are DROPPED with a `warn` — injecting them makes the child
+/// clap-exit 2 and the spawn silently fails (todo.md O5). `--model` is generic
+/// and passed through for every agent.
 fn merge_mcp_params_into_args(
+    agent_type: &str,
     args: &[String],
     model: Option<&str>,
     print_mode: bool,
     output_format: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let mut merged = args.to_vec();
+    let is_claude = agent_type == "claude";
 
     if let Some(model_val) = model {
         if args.iter().any(|a| a.starts_with("--model")) {
@@ -3808,19 +3818,33 @@ fn merge_mcp_params_into_args(
         merged.push(model_val.to_string());
     }
 
-    if print_mode && !args.iter().any(|a| a.starts_with("--print")) {
-        merged.push("--print".to_string());
+    if print_mode {
+        if !is_claude {
+            tracing::warn!(
+                agent_type,
+                "Dropping Claude-only MCP param print_mode (--print) for non-claude agent"
+            );
+        } else if !args.iter().any(|a| a.starts_with("--print")) {
+            merged.push("--print".to_string());
+        }
     }
 
     if let Some(fmt) = output_format {
-        if args.iter().any(|a| a.starts_with("--output-format")) {
+        if !is_claude {
+            tracing::warn!(
+                agent_type,
+                output_format = fmt,
+                "Dropping Claude-only MCP param output_format (--output-format) for non-claude agent"
+            );
+        } else if args.iter().any(|a| a.starts_with("--output-format")) {
             return Err(format!(
                 "Conflict: run config already contains --output-format but MCP param output_format=\"{}\" was also passed",
                 fmt
             ));
+        } else {
+            merged.push("--output-format".to_string());
+            merged.push(fmt.to_string());
         }
-        merged.push("--output-format".to_string());
-        merged.push(fmt.to_string());
     }
 
     Ok(merged)
@@ -7348,7 +7372,7 @@ mod tests {
     #[test]
     fn merge_params_model_no_conflict() {
         let args = vec!["--fast".to_string()];
-        let result = merge_mcp_params_into_args(&args, Some("gpt-4"), false, None).unwrap();
+        let result = merge_mcp_params_into_args("claude", &args, Some("gpt-4"), false, None).unwrap();
         assert!(result.contains(&"--model".to_string()));
         assert!(result.contains(&"gpt-4".to_string()));
     }
@@ -7356,7 +7380,7 @@ mod tests {
     #[test]
     fn merge_params_model_conflict() {
         let args = vec!["--model".to_string(), "sonnet".to_string()];
-        let result = merge_mcp_params_into_args(&args, Some("gpt-4"), false, None);
+        let result = merge_mcp_params_into_args("claude", &args, Some("gpt-4"), false, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Conflict"));
     }
@@ -7364,14 +7388,14 @@ mod tests {
     #[test]
     fn merge_params_print_mode_appended() {
         let args = vec![];
-        let result = merge_mcp_params_into_args(&args, None, true, None).unwrap();
+        let result = merge_mcp_params_into_args("claude", &args, None, true, None).unwrap();
         assert!(result.contains(&"--print".to_string()));
     }
 
     #[test]
     fn merge_params_print_mode_already_present() {
         let args = vec!["--print".to_string()];
-        let result = merge_mcp_params_into_args(&args, None, true, None).unwrap();
+        let result = merge_mcp_params_into_args("claude", &args, None, true, None).unwrap();
         // Should not duplicate
         assert_eq!(result.iter().filter(|a| *a == "--print").count(), 1);
     }
@@ -7379,14 +7403,70 @@ mod tests {
     #[test]
     fn merge_params_output_format_conflict() {
         let args = vec!["--output-format".to_string(), "json".to_string()];
-        let result = merge_mcp_params_into_args(&args, None, false, Some("text"));
+        let result = merge_mcp_params_into_args("claude", &args, None, false, Some("text"));
         assert!(result.is_err());
     }
 
     #[test]
     fn merge_params_output_format_no_conflict() {
         let args = vec![];
-        let result = merge_mcp_params_into_args(&args, None, false, Some("json")).unwrap();
+        let result = merge_mcp_params_into_args("claude", &args, None, false, Some("json")).unwrap();
+        assert!(result.contains(&"--output-format".to_string()));
+        assert!(result.contains(&"json".to_string()));
+    }
+
+    // Claude-only-param guard (todo.md O5): --print / --output-format must be
+    // dropped for non-claude agents (codex/gemini/goose die with clap error 2).
+
+    #[test]
+    fn merge_params_codex_drops_print_mode() {
+        let args = vec!["{prompt}".to_string()];
+        let result = merge_mcp_params_into_args("codex", &args, None, true, None).unwrap();
+        assert!(!result.contains(&"--print".to_string()), "codex must not receive --print");
+        assert_eq!(result, vec!["{prompt}".to_string()], "args otherwise unchanged");
+    }
+
+    #[test]
+    fn merge_params_codex_drops_output_format() {
+        let args = vec!["{prompt}".to_string()];
+        let result = merge_mcp_params_into_args("codex", &args, None, false, Some("json")).unwrap();
+        assert!(!result.contains(&"--output-format".to_string()), "codex must not receive --output-format");
+        assert!(!result.contains(&"json".to_string()));
+    }
+
+    #[test]
+    fn merge_params_codex_drops_both() {
+        let args = vec!["{prompt}".to_string()];
+        let result = merge_mcp_params_into_args("codex", &args, None, true, Some("json")).unwrap();
+        assert!(!result.contains(&"--print".to_string()));
+        assert!(!result.contains(&"--output-format".to_string()));
+        assert_eq!(result, vec!["{prompt}".to_string()]);
+    }
+
+    #[test]
+    fn merge_params_codex_neither_is_noop() {
+        let args = vec!["{prompt}".to_string()];
+        let result = merge_mcp_params_into_args("codex", &args, None, false, None).unwrap();
+        assert_eq!(result, vec!["{prompt}".to_string()]);
+    }
+
+    #[test]
+    fn merge_params_codex_keeps_model() {
+        // --model is generic (codex accepts it) — only print/output-format are gated.
+        let args = vec!["{prompt}".to_string()];
+        let result = merge_mcp_params_into_args("codex", &args, Some("gpt-5"), true, Some("json")).unwrap();
+        assert!(result.contains(&"--model".to_string()));
+        assert!(result.contains(&"gpt-5".to_string()));
+        assert!(!result.contains(&"--print".to_string()));
+        assert!(!result.contains(&"--output-format".to_string()));
+    }
+
+    #[test]
+    fn merge_params_claude_keeps_both() {
+        // Regression: claude behavior unchanged — both flags still injected.
+        let args: Vec<String> = vec![];
+        let result = merge_mcp_params_into_args("claude", &args, None, true, Some("json")).unwrap();
+        assert!(result.contains(&"--print".to_string()));
         assert!(result.contains(&"--output-format".to_string()));
         assert!(result.contains(&"json".to_string()));
     }

@@ -199,10 +199,13 @@ see below.
   injection only targets idle agents. Revisit if a peer message ever concatenates onto stray
   input. **Complexity:** XS. **Priority:** P3.
 
-### O5. Guard claude-only MCP params on non-claude spawns — STORY `093-1e56` (2026-07-05)
+### O5. Guard claude-only MCP params on non-claude spawns — DONE (story `093-1e56`, 2026-07-06)
 - **Opportunity:** `print_mode`/`output_format` passed for e.g. codex inject `--print`/
   `--output-format` via `merge_mcp_params_into_args` → clap exit 2. Warn or drop claude-only
   params when `agent_type != claude`. **Complexity:** S. **Priority:** P3.
+- **Fixed:** `merge_mcp_params_into_args` now takes `agent_type`; `--print`/`--output-format`
+  dropped (with `tracing::warn`) for non-claude agents; `--model` stays generic. Both call
+  sites pass `rc.agent_type`. 6 new + 6 updated tests (12 green), clippy clean.
 
 ### O6. Spot-check each default_prompt_args template against the live CLI — folded into STORY `091-22b7` (criterion 6)
 - **Opportunity:** templates mirror `src/agents.ts` (shipped) but weren't run against each
