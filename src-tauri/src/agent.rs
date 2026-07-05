@@ -807,6 +807,27 @@ pub(crate) fn agent_accepts_bare_prompt(agent_type: &str) -> bool {
     agent_type == "claude"
 }
 
+/// Default spawn arguments (with a `{prompt}` placeholder) for a non-Claude agent
+/// launched via MCP without an explicit run config. Mirrors the per-agent
+/// `spawnArgs` the frontend uses in `src/agents.ts` — the authoritative, shipped
+/// knowledge of each CLI's invocation. Lets `agent action=spawn agent_type=codex`
+/// work out of the box instead of failing the bare-prompt guard. Model/print
+/// flags are layered on separately by `merge_mcp_params_into_args`, so this only
+/// encodes the prompt-carrying shape. Returns `None` for agents we can't launch
+/// non-interactively (caller must pass explicit `args`).
+pub(crate) fn default_prompt_args(agent_type: &str) -> Option<Vec<String>> {
+    let args: &[&str] = match agent_type {
+        // Positional prompt (interactive with the task pre-filled).
+        "gemini" | "codex" | "opencode" | "grok" | "amp" | "cursor" | "droid" => &["{prompt}"],
+        // Aider: non-interactive single message, auto-confirm edits.
+        "aider" => &["--yes-always", "--message", "{prompt}"],
+        // Goose: the `session` subcommand carries the prompt.
+        "goose" => &["session", "{prompt}"],
+        _ => return None,
+    };
+    Some(args.iter().map(|s| s.to_string()).collect())
+}
+
 /// Detect claude binary location (legacy, delegates to detect_agent_binary)
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn detect_claude_binary() -> Result<String, String> {
@@ -973,6 +994,48 @@ mod tests {
                 "{agent} must not be treated as accepting a bare prompt"
             );
         }
+    }
+
+    #[test]
+    fn default_prompt_args_cover_known_agents() {
+        // Positional-prompt agents.
+        for agent in [
+            "gemini", "codex", "opencode", "grok", "amp", "cursor", "droid",
+        ] {
+            assert_eq!(
+                default_prompt_args(agent),
+                Some(vec!["{prompt}".to_string()]),
+                "{agent} should get a positional prompt template"
+            );
+        }
+        // Aider: non-interactive message with auto-confirm.
+        assert_eq!(
+            default_prompt_args("aider"),
+            Some(vec![
+                "--yes-always".to_string(),
+                "--message".to_string(),
+                "{prompt}".to_string()
+            ])
+        );
+        // Goose: session subcommand carries the prompt.
+        assert_eq!(
+            default_prompt_args("goose"),
+            Some(vec!["session".to_string(), "{prompt}".to_string()])
+        );
+        // Every template must contain the placeholder so substitution works.
+        for agent in ["gemini", "codex", "aider", "goose"] {
+            assert!(
+                default_prompt_args(agent)
+                    .unwrap()
+                    .iter()
+                    .any(|a| a.contains("{prompt}")),
+                "{agent} template must carry the {{prompt}} placeholder"
+            );
+        }
+        // Claude is handled by the dedicated bare-append branch, not a template.
+        assert_eq!(default_prompt_args("claude"), None);
+        // Unknown agents have no template → caller must pass explicit args.
+        assert_eq!(default_prompt_args("totally-unknown"), None);
     }
 
     #[test]

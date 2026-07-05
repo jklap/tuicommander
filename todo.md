@@ -158,3 +158,49 @@ see below.
 - **Why still deferred:** it shares the exact mechanism the 068-070 agent/chat/watcher push
   events need — do it once, in that pass, so the `AppEvent`-over-SSE pattern is designed
   coherently rather than bolted on per-command. Priority P3.
+
+## MCP orchestration follow-ups (plan: mcp-orchestration-fixes, stories 074–079)
+
+### O1. Live E2E of cross-agent orchestration (plan acceptance criterion 2)
+- **Opportunity:** claude↔codex spawn + auto-identity + PTY-injection wake + parent→child
+  follow-up is **code-verified** (unit tests) but not yet driven end-to-end live.
+- **Why not now:** Rust backend does not hot-reload into Boss's `make dev` session
+  (AGENTS.md Dev Hot Reload); needs codex + claude installed. Requires a rebuild that
+  tears down the live session — Boss's call on timing.
+- **Proposed:** after `make dev`/`make build`, drive `:9877`: spawn codex from claude,
+  assert child auto-registers (no register call), `send` a follow-up, observe injection in
+  the child grid, then reverse roles. Confirm `agent action=wait` wakes on the child's
+  auto `state_change`.
+- **Trade-offs:** none (verification). **Complexity:** S. **Priority:** P1.
+
+### O2. cargo-audit — bcrypt advisory FIXED; unmaintained warnings remain (allowed)
+- **DONE:** `make check` failed at `cargo audit` on RUSTSEC-2026-0199 (bcrypt `verify`
+  non-ASCII panic). Fixed by bumping the direct dep `bcrypt` 0.19.1→0.19.2 (Cargo.lock only).
+  `make check` is now fully green.
+- **Remaining (non-blocking):** ~24 `unmaintained` warnings (proc-macro-error, gtk-rs GTK3
+  bindings, fxhash) are *allowed* by cargo audit (warnings, not errors) and already tolerated
+  by the Makefile's `--ignore` list where relevant. Migrating off them is upstream-gated
+  (gtk-rs via tauri) — see AGENTS.md Accepted Security Decisions. **Priority:** P3 hygiene.
+
+### O3. Fold claude into the default_prompt_args template table
+- **Opportunity:** claude keeps a dedicated bare-append branch while every other agent flows
+  through `default_prompt_args` + merge + substitute. Unifying removes the special case.
+- **Why not now:** claude's branch puts `--print/--model` *before* the positional prompt;
+  the template path appends after. Won't change the most-used spawn path's arg order without
+  a live check. **Complexity:** S. **Priority:** P3.
+
+### O4. PTY injection: optional Ctrl-U line-clear prefix
+- **Opportunity:** `inject_text_into_pty` writes text + `\r` (mirrors MCP `session input`).
+  Frontend `sendCommand` also prefixes Ctrl-U to clear a partial line. Deferred because
+  injection only targets idle agents. Revisit if a peer message ever concatenates onto stray
+  input. **Complexity:** XS. **Priority:** P3.
+
+### O5. Guard claude-only MCP params on non-claude spawns
+- **Opportunity:** `print_mode`/`output_format` passed for e.g. codex inject `--print`/
+  `--output-format` via `merge_mcp_params_into_args` → clap exit 2. Warn or drop claude-only
+  params when `agent_type != claude`. **Complexity:** S. **Priority:** P3.
+
+### O6. Spot-check each default_prompt_args template against the live CLI
+- **Opportunity:** templates mirror `src/agents.ts` (shipped) but weren't run against each
+  CLI's current `--help`. Codex `exec` vs bare positional and goose `session` semantics
+  deserve a live confirmation. Rolls up into O1's live pass. **Complexity:** S. **Priority:** P2.

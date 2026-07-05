@@ -1051,6 +1051,11 @@ pub struct AppState {
     /// Cumulative eviction count per agent since last inbox read (tuic_session → count).
     /// Incremented on each FIFO eviction; consumed and reset by the inbox action.
     pub(crate) agent_inbox_evictions: DashMap<String, u64>,
+    /// Peer messages queued to be typed into a recipient's PTY on its next
+    /// BUSY→IDLE transition (tuic_session → framed lines). Populated when a message
+    /// arrives for a busy/awaiting agent; drained by `flush_pending_injections`.
+    /// The inbox always holds the authoritative copy — this is only the wake-up path.
+    pub(crate) pending_injections: DashMap<String, VecDeque<String>>,
     /// HTML tab IDs (pluginIds) created by each session (tuic_session → [tab_id]).
     /// Populated by ui(tab) calls from registered agents; cleared on session exit
     /// so orphan tabs can be auto-closed by the frontend.
@@ -1241,6 +1246,7 @@ impl AppState {
             peer_agents: DashMap::new(),
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
+            pending_injections: DashMap::new(),
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),
@@ -3309,6 +3315,7 @@ mod tests {
             peer_agents: DashMap::new(),
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
+            pending_injections: DashMap::new(),
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),
