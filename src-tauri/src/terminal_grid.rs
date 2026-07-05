@@ -525,7 +525,6 @@ impl TerminalGrid {
     }
 
     /// Number of visible columns.
-    #[cfg(test)]
     pub fn columns(&self) -> usize {
         self.term.grid().columns()
     }
@@ -1519,6 +1518,98 @@ impl TerminalGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Replay a raw PTY byte capture (e.g. recorded via `script -q file cmd`)
+    /// into a fresh grid and dump the full buffer, for offline debugging of
+    /// emulation bugs (story 056-7545: Ink duplication into scrollback).
+    ///
+    /// Env vars: TUIC_REPLAY_FILE (required), TUIC_REPLAY_ROWS/COLS (default
+    /// 50x220), TUIC_REPLAY_CHUNK (default 4096), TUIC_REPLAY_OUT (dump path,
+    /// default stdout), TUIC_REPLAY_RESIZE ("byteoffset:rows:cols,..." —
+    /// resizes applied when the replay crosses each byte offset).
+    ///
+    /// Run: `cargo test --lib replay_capture_from_env -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn replay_capture_from_env() {
+        let path = match std::env::var("TUIC_REPLAY_FILE") {
+            Ok(p) => p,
+            Err(_) => {
+                eprintln!("TUIC_REPLAY_FILE not set — skipping");
+                return;
+            }
+        };
+        let rows: u16 = std::env::var("TUIC_REPLAY_ROWS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50);
+        let cols: u16 = std::env::var("TUIC_REPLAY_COLS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(220);
+        let chunk: usize = std::env::var("TUIC_REPLAY_CHUNK")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4096);
+
+        // Optional resize schedule: "byteoffset:rows:cols,..."
+        let mut resizes: Vec<(usize, u16, u16)> = std::env::var("TUIC_REPLAY_RESIZE")
+            .ok()
+            .map(|spec| {
+                spec.split(',')
+                    .filter_map(|item| {
+                        let mut parts = item.split(':');
+                        Some((
+                            parts.next()?.trim().parse().ok()?,
+                            parts.next()?.trim().parse().ok()?,
+                            parts.next()?.trim().parse().ok()?,
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        resizes.sort_unstable();
+
+        let data = std::fs::read(&path).expect("read TUIC_REPLAY_FILE");
+        let mut grid = TerminalGrid::new(rows, cols, 10000);
+        let mut fed = 0usize;
+        let mut next_resize = 0usize;
+        for c in data.chunks(chunk) {
+            while next_resize < resizes.len() && resizes[next_resize].0 <= fed {
+                let (_, r, w) = resizes[next_resize];
+                // Mirror production: VtLogBuffer::resize_with_shell_state uses
+                // ReflowMode::All on the normal screen (None only for alt).
+                let mode = if grid.is_alternate_screen() {
+                    ReflowMode::None
+                } else {
+                    ReflowMode::All
+                };
+                grid.resize_with_mode(r, w, mode);
+                eprintln!("resized to {r}x{w} at byte {fed}");
+                next_resize += 1;
+            }
+            let _ = grid.process(c);
+            fed += c.len();
+        }
+
+        let mut out = String::new();
+        let history = grid.scrollback_count();
+        for line in grid.read_scrollback_lines(0, history) {
+            out.push_str(&line);
+            out.push('\n');
+        }
+        out.push_str("──── screen ────\n");
+        for line in grid.screen_text_rows() {
+            out.push_str(&line);
+            out.push('\n');
+        }
+
+        match std::env::var("TUIC_REPLAY_OUT") {
+            Ok(dest) => std::fs::write(&dest, &out).expect("write TUIC_REPLAY_OUT"),
+            Err(_) => println!("{out}"),
+        }
+        eprintln!("replayed {} bytes → {} history lines", data.len(), history);
+    }
 
     #[test]
     fn new_creates_empty_grid() {

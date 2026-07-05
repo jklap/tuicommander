@@ -549,6 +549,7 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/sessions/{id}/name", put(session::set_session_name))
         .route("/sessions/{id}/resize", post(session::resize_session))
         .route("/sessions/{id}/output", get(session::get_output))
+        .route("/sessions/{id}/raw-ring", get(session::get_raw_ring))
         .route("/sessions/{id}/pause", post(session::pause_session))
         .route("/sessions/{id}/resume", post(session::resume_session))
         .route("/sessions/{id}/kitty-flags", get(session::get_kitty_flags))
@@ -1365,6 +1366,7 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
         .route("/sessions/{id}/name", put(session::set_session_name))
         .route("/sessions/{id}/resize", post(session::resize_session))
         .route("/sessions/{id}/output", get(session::get_output))
+        .route("/sessions/{id}/raw-ring", get(session::get_raw_ring))
         .route("/sessions/{id}/pause", post(session::pause_session))
         .route("/sessions/{id}/resume", post(session::resume_session))
         .route("/sessions/{id}/kitty-flags", get(session::get_kitty_flags))
@@ -2125,6 +2127,7 @@ mod tests {
             plugin_watchers: DashMap::new(),
             ansi_colors: parking_lot::RwLock::new(None),
             vt_log_buffers: DashMap::new(),
+            pty_raw_rings: DashMap::new(),
             #[cfg(feature = "desktop")]
             grid_channels: DashMap::new(),
             grid_watch: DashMap::new(),

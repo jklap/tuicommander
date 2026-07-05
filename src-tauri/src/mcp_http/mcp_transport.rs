@@ -3626,6 +3626,7 @@ mod tests {
             plugin_watchers: dashmap::DashMap::new(),
             ansi_colors: parking_lot::RwLock::new(None),
             vt_log_buffers: dashmap::DashMap::new(),
+            pty_raw_rings: dashmap::DashMap::new(),
             #[cfg(feature = "desktop")]
             grid_channels: dashmap::DashMap::new(),
             grid_watch: dashmap::DashMap::new(),

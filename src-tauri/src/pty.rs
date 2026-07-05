@@ -152,6 +152,11 @@ pub(crate) fn build_shell_command(shell: &str) -> CommandBuilder {
 #[cfg(unix)]
 const PTY_CHILD_NICE_DEFAULT: i32 = 10;
 
+/// Capacity of the per-session raw-byte flight recorder (story 056-7545).
+/// 2 MiB ≈ several minutes of heavy agent output — enough to capture the
+/// corruption window when a duplication shows up in the wild.
+const PTY_RAW_RING_CAP: usize = 2 * 1024 * 1024;
+
 /// Resolve the nice value to apply to PTY children: `TUIC_PTY_NICE` env override
 /// if set and parseable, else [`PTY_CHILD_NICE_DEFAULT`].
 #[cfg(unix)]
@@ -2846,6 +2851,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     }
     state.output_buffers.remove(session_id);
     state.vt_log_buffers.remove(session_id);
+    state.pty_raw_rings.remove(session_id);
     #[cfg(feature = "desktop")]
     state.grid_channels.remove(session_id);
     state.grid_watch.remove(session_id);
@@ -3017,6 +3023,7 @@ pub(crate) fn spawn_tombstone_sweeper(state: Arc<AppState>) {
             for id in candidates {
                 state.output_buffers.remove(&id);
                 state.vt_log_buffers.remove(&id);
+                state.pty_raw_rings.remove(&id);
                 state.last_output_ms.remove(&id);
                 state.exit_codes.remove(&id);
                 tracing::debug!(source = "pty", session_id = %id, "Tombstone reaped");
@@ -3568,6 +3575,18 @@ pub(crate) fn spawn_reader_thread(
                     Ok(0) => break,
                     Ok(n) => {
                         state.metrics.bytes_emitted.fetch_add(n, Ordering::Relaxed);
+                        // Flight recorder: keep the last PTY_RAW_RING_CAP raw bytes
+                        // (pre-transform) so a wild rendering corruption can be
+                        // dumped and replayed offline (story 056-7545).
+                        {
+                            let ring = state.pty_raw_rings.entry(session_id.clone()).or_default();
+                            let mut ring = ring.lock();
+                            ring.extend(&buf[..n]);
+                            if ring.len() > PTY_RAW_RING_CAP {
+                                let excess = ring.len() - PTY_RAW_RING_CAP;
+                                ring.drain(..excess);
+                            }
+                        }
                         let utf8_data = utf8_buf.push(&buf[..n]);
                         let esc_data = esc_buf.push(&utf8_data);
                         let (kitty_clean, kitty_actions) = strip_kitty_sequences(&esc_data);
@@ -4390,6 +4409,81 @@ pub(crate) fn get_session_shell_family(
         .map(|entry| classify_shell(&entry.lock().shell))
 }
 
+/// Shared resize core for the Tauri command and the HTTP route (story 056-7545).
+///
+/// Order matters: the grid must adopt the new dimensions BEFORE the PTY ioctl
+/// delivers SIGWINCH to the child. With the old PTY-first order the child could
+/// repaint for the new width while the grid still wrapped at the old one (the
+/// window grows with vt-lock contention under bursty output); wide lines then
+/// autowrapped in the narrow grid, breaking Ink's cursor-up arithmetic and
+/// stranding intermediate render rows in scrollback as duplicated blocks.
+///
+/// Same-dims calls are a no-op (returns None): they would otherwise deliver a
+/// gratuitous SIGWINCH (full Ink repaint) per redundant caller (MCP/HTTP/multi
+/// -client — the desktop frontend already guards, others don't).
+///
+/// Returns the post-resize full frame to flush, if the grid was resized.
+pub(crate) fn resize_session_core(
+    state: &AppState,
+    session_id: &str,
+    rows: u16,
+    cols: u16,
+) -> Result<Option<Vec<u8>>, String> {
+    if rows == 0 || cols == 0 {
+        return Err("Invalid dimensions: rows and cols must be > 0".to_string());
+    }
+    // Pass shell_state so reflow can be smarter: idle → All, busy → HistoryOnly.
+    let shell_state = state
+        .shell_states
+        .get(session_id)
+        .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(SHELL_NULL);
+    // Resize the grid and capture a fresh full frame, holding the vt lock so no
+    // PTY chunk can land between the no-op check and the resize. `resize_with_mode`
+    // marks the grid fully damaged, so `serialize_dirty_rows` yields the whole
+    // viewport. The caller must flush it: the reader thread only sends frames on
+    // PTY data or the ticker, so a resize/zoom over idle or static content would
+    // otherwise leave the viewport blank until a scroll forces
+    // `terminal_request_frame`.
+    let resize_frame = match state.vt_log_buffers.get(session_id) {
+        Some(vt_log) => {
+            let mut vt = vt_log.lock();
+            if vt.grid_screen_lines() == rows as usize && vt.grid_columns() == cols as usize {
+                return Ok(None);
+            }
+            vt.resize_with_shell_state(rows, cols, shell_state);
+            Some(vt.serialize_dirty_rows())
+        }
+        None => None,
+    };
+    // Update terminal rows for cursor-up clamping in the reader thread.
+    if let Some(r) = state.terminal_rows.get(session_id) {
+        r.store(rows, Ordering::Relaxed);
+    }
+    // Mark resize in silence state so the reader thread suppresses re-parsed events
+    // from the shell's prompt redraw triggered by SIGWINCH.
+    if let Some(ss) = state.silence_states.get(session_id) {
+        ss.lock().on_resize();
+    }
+    // Only now signal the child (TIOCSWINSZ → SIGWINCH): everything it repaints
+    // from here on meets a grid that already wraps at the new width.
+    let entry = state
+        .sessions
+        .get(session_id)
+        .ok_or_else(|| format!("Session not found: {session_id}"))?;
+    entry
+        .lock()
+        .master
+        .resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("Failed to resize PTY: {e}"))?;
+    Ok(resize_frame)
+}
+
 /// Enable or disable VT100 diff rendering for a PTY session.
 /// Resize a PTY session
 #[cfg(feature = "desktop")]
@@ -4400,50 +4494,7 @@ pub(crate) fn resize_pty(
     rows: u16,
     cols: u16,
 ) -> Result<(), String> {
-    if rows == 0 || cols == 0 {
-        return Err("Invalid dimensions: rows and cols must be > 0".to_string());
-    }
-    let entry = state
-        .sessions
-        .get(&session_id)
-        .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    let session = entry.lock();
-    session
-        .master
-        .resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| format!("Failed to resize PTY: {e}"))?;
-    // Resize VT log buffer dimensions to match new terminal size.
-    // Pass shell_state so reflow can be smarter: idle → All, busy → HistoryOnly.
-    let shell_state = state
-        .shell_states
-        .get(&session_id)
-        .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
-        .unwrap_or(SHELL_NULL);
-    // Resize the grid and capture a fresh full frame. `resize_with_mode` marks the
-    // grid fully damaged, so `serialize_dirty_rows` yields the whole viewport. We must
-    // flush it ourselves: the reader thread only sends frames on PTY data or the ticker,
-    // so a resize/zoom over idle or static content (e.g. an agent's printed output)
-    // would otherwise leave the viewport blank until a scroll forces
-    // `terminal_request_frame`. Emitting here makes zoom repaint immediately.
-    let resize_frame = state.vt_log_buffers.get(&session_id).map(|vt_log| {
-        let mut vt = vt_log.lock();
-        vt.resize_with_shell_state(rows, cols, shell_state);
-        vt.serialize_dirty_rows()
-    });
-    // Update terminal rows for cursor-up clamping in the reader thread.
-    if let Some(r) = state.terminal_rows.get(&session_id) {
-        r.store(rows, Ordering::Relaxed);
-    }
-    // Mark resize in silence state so the reader thread suppresses re-parsed events
-    // from the shell's prompt redraw triggered by SIGWINCH.
-    if let Some(ss) = state.silence_states.get(&session_id) {
-        ss.lock().on_resize();
-    }
+    let resize_frame = resize_session_core(&state, &session_id, rows, cols)?;
     // Flush the post-resize frame so the viewport repaints without waiting for the
     // next PTY data event (fixes blank screen after zoom on static content).
     if let Some(frame) = resize_frame {

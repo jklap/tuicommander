@@ -180,28 +180,43 @@ pub(super) async fn resize_session(
             Json(serde_json::json!({"error": msg})),
         );
     }
-    let entry = match state.sessions.get(&session_id) {
-        Some(e) => e,
-        None => return session_not_found(),
-    };
-    let session = entry.lock();
-    if let Err(e) = session.master.resize(PtySize {
-        rows: body.rows,
-        cols: body.cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    }) {
-        return (
+    // Shared core: grid-before-SIGWINCH ordering + same-dims no-op (056-7545).
+    match crate::pty::resize_session_core(&state, &session_id, body.rows, body.cols) {
+        Ok(Some(frame)) => {
+            crate::pty::send_grid_frame(&state, &session_id, frame);
+            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+        }
+        Ok(None) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))),
+        Err(e) if e.starts_with("Session not found") => session_not_found(),
+        Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Resize failed: {}", e)})),
-        );
+        ),
     }
-    drop(session);
-    // Resize VT log buffer to match new terminal dimensions.
-    if let Some(vt_log) = state.vt_log_buffers.get(&session_id) {
-        vt_log.lock().resize(body.rows, body.cols);
+}
+
+/// Dump the raw PTY byte flight recorder for a session (story 056-7545).
+/// Returns the most recent raw output bytes (pre-transform, up to 2 MiB) as
+/// binary, for offline replay via `replay_capture_from_env`.
+pub(super) async fn get_raw_ring(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    match state.pty_raw_rings.get(&session_id) {
+        Some(ring) => {
+            let bytes: Vec<u8> = {
+                let ring = ring.lock();
+                ring.iter().copied().collect()
+            };
+            (
+                StatusCode::OK,
+                [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+                bytes,
+            )
+                .into_response()
+        }
+        None => session_not_found().into_response(),
     }
-    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
 pub(super) async fn get_output(

@@ -927,6 +927,12 @@ pub struct AppState {
     /// Per-session VT100 log buffers for clean mobile/REST output (session_id → buffer).
     /// Separate DashMap to avoid writer contention on PtySession.
     pub(crate) vt_log_buffers: DashMap<String, Mutex<VtLogBuffer>>,
+    /// Per-session ring of the most recent raw PTY output bytes (pre-transform),
+    /// capped at `PTY_RAW_RING_CAP`. Always on — memory-only flight recorder for
+    /// emulation bugs (story 056-7545): when a rendering corruption shows up in
+    /// the wild, GET /sessions/{id}/raw-ring dumps the exact byte stream for
+    /// offline replay (terminal_grid.rs `replay_capture_from_env`).
+    pub(crate) pty_raw_rings: DashMap<String, Mutex<std::collections::VecDeque<u8>>>,
     #[cfg(feature = "desktop")]
     pub(crate) grid_channels: DashMap<String, tauri::ipc::Channel<Vec<u8>>>,
     /// Watch channel for WebSocket grid streaming (session_id → sender).
@@ -1200,6 +1206,7 @@ impl AppState {
             plugin_watchers: DashMap::new(),
             ansi_colors: parking_lot::RwLock::new(None),
             vt_log_buffers: DashMap::new(),
+            pty_raw_rings: DashMap::new(),
             #[cfg(feature = "desktop")]
             grid_channels: DashMap::new(),
             grid_watch: DashMap::new(),
@@ -2297,14 +2304,8 @@ impl VtLogBuffer {
         changed
     }
 
-    /// Update grid dimensions on terminal resize.
-    ///
-    /// Rows are always resized (row count affects scrollback extraction).
-    /// Cols are only resized upward: when a side panel shrinks the terminal,
-    /// Ink re-renders at narrow width and pushes reformatted fragments into
-    /// scrollback. By keeping the grid at max-cols, the narrow Ink output
-    /// arrives as short lines (not wrapped fragments) and CUU cursor
-    /// addressing still works because the lines are shorter than grid cols.
+    /// Update grid dimensions on terminal resize (shell-state-agnostic shim).
+    #[cfg(test)]
     pub fn resize(&mut self, rows: u16, cols: u16) {
         self.resize_with_shell_state(rows, cols, crate::pty::SHELL_NULL);
     }
@@ -2467,6 +2468,10 @@ impl VtLogBuffer {
 
     pub(crate) fn grid_screen_lines(&self) -> usize {
         self.grid.screen_lines()
+    }
+
+    pub(crate) fn grid_columns(&self) -> usize {
+        self.grid.columns()
     }
 
     pub(crate) fn grid_history_size(&self) -> usize {
@@ -3263,6 +3268,7 @@ mod tests {
             plugin_watchers: dashmap::DashMap::new(),
             ansi_colors: parking_lot::RwLock::new(None),
             vt_log_buffers: dashmap::DashMap::new(),
+            pty_raw_rings: dashmap::DashMap::new(),
             #[cfg(feature = "desktop")]
             grid_channels: dashmap::DashMap::new(),
             grid_watch: dashmap::DashMap::new(),
