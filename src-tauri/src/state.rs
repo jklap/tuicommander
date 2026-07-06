@@ -1039,6 +1039,14 @@ pub struct AppState {
     /// Per-session terminal viewport rows. Updated by resize_pty, read by the
     /// reader thread to clamp cursor-up (ESC[nA) sequences to viewport height.
     pub(crate) terminal_rows: DashMap<String, AtomicU16>,
+    /// Per-session resize serialization lock. `resize_session_core` clones the Arc
+    /// and holds the mutex across BOTH the grid resize and `master.resize` so two
+    /// concurrent differing resizes (Tauri command + HTTP route) cannot interleave
+    /// and leave the grid and PTY at mismatched dimensions (CONC-B, story 100-e303).
+    /// The stored `(rows, cols)` is the last size that actually reached the PTY —
+    /// the no-op guard compares against it, not just the grid, so a grid-resized-
+    /// but-PTY-failed retry still re-applies the PTY. `(0, 0)` = nothing applied yet.
+    pub(crate) resize_locks: DashMap<String, Arc<Mutex<(u16, u16)>>>,
     /// Exit codes for tombstoned sessions (session_id → code).
     /// Populated by `pty::mark_session_exited` when a PTY process exits so
     /// post-mortem `session action=output` reads can return the real code.
@@ -1252,6 +1260,7 @@ impl AppState {
             last_input_ms: DashMap::new(),
             shell_states: DashMap::new(),
             terminal_rows: DashMap::new(),
+            resize_locks: DashMap::new(),
             exit_codes: DashMap::new(),
             shell_state_since_ms: DashMap::new(),
             loaded_plugins: DashMap::new(),
@@ -3321,6 +3330,7 @@ mod tests {
             last_input_ms: DashMap::new(),
             shell_states: DashMap::new(),
             terminal_rows: DashMap::new(),
+            resize_locks: DashMap::new(),
             exit_codes: DashMap::new(),
             shell_state_since_ms: DashMap::new(),
             loaded_plugins: DashMap::new(),

@@ -2201,6 +2201,7 @@ mod tests {
             last_input_ms: DashMap::new(),
             shell_states: DashMap::new(),
             terminal_rows: DashMap::new(),
+            resize_locks: DashMap::new(),
             exit_codes: DashMap::new(),
             shell_state_since_ms: DashMap::new(),
             loaded_plugins: DashMap::new(),

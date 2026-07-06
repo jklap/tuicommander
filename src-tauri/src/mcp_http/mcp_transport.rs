@@ -3944,6 +3944,7 @@ mod tests {
             last_input_ms: dashmap::DashMap::new(),
             shell_states: dashmap::DashMap::new(),
             terminal_rows: dashmap::DashMap::new(),
+            resize_locks: dashmap::DashMap::new(),
             exit_codes: dashmap::DashMap::new(),
             shell_state_since_ms: dashmap::DashMap::new(),
             loaded_plugins: dashmap::DashMap::new(),

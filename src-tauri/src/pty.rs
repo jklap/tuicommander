@@ -2897,6 +2897,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     state.last_output_ms.remove(session_id);
     state.last_prompts.remove(session_id);
     state.terminal_rows.remove(session_id);
+    state.resize_locks.remove(session_id);
     state.exit_codes.remove(session_id);
     state.term_aliases.remove(session_id);
 }
@@ -2926,6 +2927,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     state.shell_states.remove(session_id);
     state.last_prompts.remove(session_id);
     state.terminal_rows.remove(session_id);
+    state.resize_locks.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
     state.shell_state_since_ms.remove(session_id);
     state.pending_injections.remove(session_id);
@@ -4587,6 +4589,33 @@ pub(crate) fn resize_session_core(
     if rows == 0 || cols == 0 {
         return Err("Invalid dimensions: rows and cols must be > 0".to_string());
     }
+    // Serialize the whole grid+PTY resize for this session under one lock so two
+    // concurrent differing resizes (Tauri `resize_pty` + HTTP route) cannot interleave
+    // their two critical sections and leave the grid and PTY at mismatched dimensions
+    // (CONC-B, story 100-e303). Clone the Arc and drop the DashMap Ref before locking
+    // so we never hold a `resize_locks` shard guard across the resize.
+    let resize_lock = state
+        .resize_locks
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new((0, 0))))
+        .clone();
+    let mut applied = resize_lock.lock();
+    // Seed the last-applied dims from the live grid the first time we see this session:
+    // at creation the grid and PTY share the openpty size, so a first resize that only
+    // matches the startup dims no-ops instead of firing a gratuitous SIGWINCH. `(0, 0)`
+    // is the never-applied sentinel (real dims are guarded > 0 above).
+    if *applied == (0, 0)
+        && let Some(vt_log) = state.vt_log_buffers.get(session_id)
+    {
+        let vt = vt_log.lock();
+        *applied = (vt.grid_screen_lines() as u16, vt.grid_columns() as u16);
+    }
+    // No-op guard compares against the last dims that actually reached the PTY, not just
+    // the grid: a prior call that resized the grid but then failed `master.resize` leaves
+    // them divergent, and a grid-only guard would skip the PTY forever (CONC-B criterion 2).
+    if *applied == (rows, cols) {
+        return Ok(None);
+    }
     // Pass shell_state so reflow can be smarter: idle → All, busy → HistoryOnly.
     let shell_state = state
         .shell_states
@@ -4594,20 +4623,22 @@ pub(crate) fn resize_session_core(
         .map(|a| a.load(std::sync::atomic::Ordering::Relaxed))
         .unwrap_or(SHELL_NULL);
     // Resize the grid and capture a fresh full frame, holding the vt lock so no
-    // PTY chunk can land between the no-op check and the resize. `resize_with_mode`
+    // PTY chunk can land between the check and the resize. `resize_with_shell_state`
     // marks the grid fully damaged, so `serialize_dirty_rows` yields the whole
     // viewport. The caller must flush it: the reader thread only sends frames on
     // PTY data or the ticker, so a resize/zoom over idle or static content would
     // otherwise leave the viewport blank until a scroll forces
-    // `terminal_request_frame`.
+    // `terminal_request_frame`. If the grid already matches (PTY-only retry after a
+    // prior `master.resize` failure) skip the grid work but still re-apply the PTY.
     let resize_frame = match state.vt_log_buffers.get(session_id) {
         Some(vt_log) => {
             let mut vt = vt_log.lock();
             if vt.grid_screen_lines() == rows as usize && vt.grid_columns() == cols as usize {
-                return Ok(None);
+                None
+            } else {
+                vt.resize_with_shell_state(rows, cols, shell_state);
+                Some(vt.serialize_dirty_rows())
             }
-            vt.resize_with_shell_state(rows, cols, shell_state);
-            Some(vt.serialize_dirty_rows())
         }
         None => None,
     };
@@ -4636,6 +4667,11 @@ pub(crate) fn resize_session_core(
             pixel_height: 0,
         })
         .map_err(|e| format!("Failed to resize PTY: {e}"))?;
+    // Record the dims only now that they've reached the PTY, still under `applied`, so
+    // a racing resize either waits behind this lock or observes a consistent value.
+    // On a `master.resize` failure above we return via `?` WITHOUT updating `applied`,
+    // so a later retry re-applies the PTY instead of no-opping on a grid-only match.
+    *applied = (rows, cols);
     Ok(resize_frame)
 }
 
