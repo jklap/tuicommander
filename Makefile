@@ -62,7 +62,7 @@ check:
 	@rtk pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
 	@cd src-tauri && rtk cargo fmt --check && echo "  rustfmt ✓"
 	@cd src-tauri && rtk cargo clippy --release -- -D warnings && echo "  clippy ✓"
-	@cd src-tauri && ulimit -n 10240 && rtk cargo test -q && echo "  cargo test ✓"
+	@cd src-tauri && ulimit -n 10240 && rtk cargo nextest run && rtk cargo test --doc -q && echo "  rust tests ✓"
 	@bash -o pipefail -c 'rtk pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
 	@rtk pnpm audit --audit-level=high && echo "  pnpm audit ✓"
 	@cd src-tauri && rtk err cargo audit -q --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 && echo "  cargo audit ✓"

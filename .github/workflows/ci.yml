@@ -99,6 +99,9 @@ jobs:
         with:
           workspaces: './src-tauri -> target'
 
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
       - name: Create dist stub for include_dir
         run: mkdir -p dist && echo '<html></html>' > dist/index.html
 
@@ -132,7 +135,22 @@ jobs:
           CMAKE_C_FLAGS: '-fPIC'
           CMAKE_CXX_FLAGS: '-fPIC'
           RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
-        run: cargo test
+        run: cargo nextest run --profile ci
+
+      # nextest does not run doctests — run them separately so doc examples stay
+      # covered. Linux-only: doctests are platform-independent logic.
+      - name: Doctests
+        working-directory: src-tauri
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+          RUSTC_WRAPPER: "sccache"
+          CARGO_INCREMENTAL: "0"
+          CMAKE_C_COMPILER_LAUNCHER: "sccache"
+          CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
+          CMAKE_C_FLAGS: '-fPIC'
+          CMAKE_CXX_FLAGS: '-fPIC'
+          RUSTFLAGS: '-C link-arg=-fuse-ld=mold'
+        run: cargo test --doc
 
   # Verify tuic-remote compiles without the desktop feature (catches missing cfg gates)
   check-remote:
@@ -219,6 +237,11 @@ jobs:
           # an absolute path — use `cache-directories` instead.
           cache-directories: ${{ matrix.platform == 'windows-latest' && 'C:/t' || '' }}
 
+      # Only macOS runs the test suite below (Windows tests are skipped).
+      - name: Install nextest
+        if: matrix.platform != 'windows-latest'
+        uses: taiki-e/install-action@nextest
+
       # A restored Windows build cache (C:/t) may hold a CMakeCache.txt from an
       # older VS generator (e.g. VS 17 2022). When the runner image moves to a
       # newer VS (18 2026), CMake aborts: "generator does not match the generator
@@ -274,4 +297,4 @@ jobs:
           CMAKE_CXX_COMPILER_LAUNCHER: "sccache"
           CMAKE_C_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || '' }}
           CMAKE_CXX_FLAGS: ${{ matrix.label == 'macOS-ARM' && '-march=armv8.4-a' || '' }}
-        run: cargo test
+        run: cargo nextest run --profile ci

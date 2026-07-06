@@ -10,7 +10,7 @@ Read [`docs/sync-matrix.md`](docs/sync-matrix.md) before any feature/API/config 
 - `to-test.md` tracks features awaiting manual testing — add items there for minor features.
 - **`[HUMAN]` is a last resort.** Before marking a to-test item `[HUMAN]`, you MUST attempt verification through this escalation ladder:
   1. **Code inspection** — read the source, confirm the logic exists at file:line
-  2. **Test execution** — `cargo test`, `vitest run` with relevant filter
+  2. **Test execution** — `cargo nextest run` (doctests: `cargo test --doc`), `vitest run` with relevant filter
   3. **CLI probing** — `curl` HTTP endpoints, `grep` for patterns
   4. **MCP maccontrol** — take screenshots, click UI elements, verify visual state
   5. **MCP invoke/JS** — call Tauri commands, inspect store state, trigger actions programmatically
