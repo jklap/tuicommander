@@ -30,16 +30,24 @@ jobs:
           git tag -f nightly
           git push origin nightly --force
 
-      - name: Delete old nightly assets
+      - name: Delete old nightly release (keep tag, refresh published_at)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Delete all existing assets from the nightly release so only the
-          # current build's artifacts remain after the build matrix completes.
-          gh release view nightly --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | while read -r name; do
-            echo "Deleting $name"
-            gh release delete-asset nightly "$name" --repo "$GITHUB_REPOSITORY" --yes
-          done
+          # Delete the whole rolling nightly release (KEEPING the tag we just moved) so
+          # the build matrix's tauri-action recreates it fresh — resetting published_at
+          # to the current run time. The previous approach deleted only the ASSETS and
+          # left the release object intact; GitHub freezes published_at at the initial
+          # draft->published transition and NEVER refreshes it on tag moves, asset swaps,
+          # or note edits, so the public page showed a stale "released this Apr 13" date.
+          #
+          # Rejected alternative — PATCH the release to set published_at: the GitHub
+          # "Update a release" API does not accept published_at as a writable field, so
+          # delete+recreate is the only route that refreshes it. Do NOT revert this to an
+          # asset-only cleanup. --cleanup-tag=false preserves the nightly tag (and the
+          # stable /releases/tag/nightly URL); `|| true` tolerates the first-ever run
+          # when no release exists yet.
+          gh release delete nightly --repo "$GITHUB_REPOSITORY" --cleanup-tag=false --yes || true
 
   build:
     needs: cleanup
