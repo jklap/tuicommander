@@ -283,6 +283,11 @@ pub(super) async fn github_list_accounts() -> Response {
     Json(crate::github_account::GitHubAccountRegistry::load().list().to_vec()).into_response()
 }
 
+// Desktop-only: the add/remove/resolve impls in github_account.rs are
+// #[cfg(feature = "desktop")] (keychain-backed). The remote daemon never serves
+// GitHub routes (build_remote_router omits them), so gate these handlers to match
+// their impls and keep the always-compiled lib building for tuic-remote (#094-ec55).
+#[cfg(feature = "desktop")]
 pub(super) async fn github_add_account(
     State(state): State<Arc<AppState>>,
     Json(body): Json<GithubAddAccountRequest>,
@@ -290,6 +295,7 @@ pub(super) async fn github_add_account(
     json_result(crate::github_account::github_add_account_impl(&state, body.host, body.pat).await)
 }
 
+#[cfg(feature = "desktop")]
 pub(super) async fn github_remove_account(
     State(state): State<Arc<AppState>>,
     Json(body): Json<GithubRemoveAccountRequest>,
@@ -315,6 +321,7 @@ pub(super) async fn github_unbind_repo(Json(body): Json<GithubRepoPathBody>) -> 
     )))
 }
 
+#[cfg(feature = "desktop")]
 pub(super) async fn github_resolve_repo(
     State(state): State<Arc<AppState>>,
     Query(q): Query<GithubResolveRepoQuery>,
@@ -322,6 +329,7 @@ pub(super) async fn github_resolve_repo(
     json_result(crate::github_account::github_resolve_repo_impl(&state, q.repo_path))
 }
 
+#[cfg(feature = "desktop")]
 pub(super) async fn github_resolve_repos(
     State(state): State<Arc<AppState>>,
     Json(body): Json<GithubResolveReposRequest>,

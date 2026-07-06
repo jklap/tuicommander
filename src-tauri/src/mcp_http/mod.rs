@@ -507,38 +507,17 @@ fn tunnel_routes() -> Router<Arc<AppState>> {
         .route("/agent-keys", get(commands::list_agent_keys))
 }
 
-pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) -> Router {
-    // When remote access is enabled, allow any origin (Basic Auth secures the endpoint).
-    // Otherwise, restrict to localhost and Tauri webview origins.
-    let cors = if remote_auth {
-        CorsLayer::new()
-            .allow_origin(tower_http::cors::Any)
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-    } else {
-        let allowed_origins = [
-            "http://localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "http://127.0.0.1"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "tauri://localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-            "https://tauri.localhost"
-                .parse::<axum::http::HeaderValue>()
-                .unwrap(),
-        ];
-        CorsLayer::new()
-            .allow_origin(allowed_origins.to_vec())
-            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
-            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
-    };
-
-    let mut routes = Router::new()
-        // Health & version
-        .route("/health", get(session::health))
+/// Routes shared by BOTH `build_router` (desktop/loopback) and
+/// `build_remote_router` (tuic-remote daemon) — identical method + handler in
+/// both. Returned WITHOUT `.with_state`/layers so each caller merges it before
+/// applying its own state and middleware.
+///
+/// Router-specific routes stay in their own builder: desktop-only surfaces, the
+/// per-router `/fs/read-editor*` handler down-scope (SECURITY), and the
+/// remote-only `/watchers/hot-repos`.
+fn shared_routes() -> Router<Arc<AppState>> {
+    Router::new()
+        // Version (authenticated)
         .route("/api/version", get(session::app_version))
         // Session lifecycle
         .route(
@@ -642,23 +621,18 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/sessions/worktree",
             post(session::create_session_with_worktree),
         )
-        // Orchestrator
+        // Orchestrator stats
         .route("/stats", get(session::get_stats))
         .route("/metrics", get(session::get_metrics))
         .route("/process/stats", get(session::get_process_stats))
         .route("/process/monitor", get(session::process_monitor_panel))
-        // Git/GitHub
+        // Git operations
         .route("/repo/info", get(git_routes::repo_info))
         .route("/repo/remote-url", get(git_routes::remote_url))
         .route("/repo/diff", get(git_routes::repo_diff))
         .route("/repo/diff-stats", get(git_routes::repo_diff_stats))
         .route("/repo/files", get(git_routes::repo_changed_files))
-        .route("/repo/github", get(github_routes::repo_github_status))
-        .route("/repo/prs", get(github_routes::repo_pr_statuses))
         .route("/repo/branches", get(git_routes::repo_branches))
-        .route("/repo/ci", get(github_routes::repo_ci_checks))
-        .route("/repo/pr-diff", get(github_routes::repo_pr_diff))
-        .route("/repo/approve-pr", post(github_routes::repo_approve_pr))
         .route(
             "/repo/branches/merged",
             get(git_routes::repo_merged_branches),
@@ -669,6 +643,257 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/repo/diff-stats/batch",
             get(git_routes::repo_diff_stats_batch),
         )
+        // Watchers
+        .route(
+            "/watchers/repo",
+            post(watcher_routes::start_repo_watcher_http)
+                .delete(watcher_routes::stop_repo_watcher_http),
+        )
+        .route(
+            "/watchers/dir",
+            post(watcher_routes::start_dir_watcher_http)
+                .delete(watcher_routes::stop_dir_watcher_http),
+        )
+        // Logs
+        .route(
+            "/logs",
+            get(log_routes::get_logs)
+                .post(log_routes::push_log)
+                .delete(log_routes::clear_logs),
+        )
+        // Diagnostics
+        .route(
+            "/diagnostics",
+            get(log_routes::diagnostics_get).post(log_routes::diagnostics_set),
+        )
+        // Worktrees
+        .route(
+            "/worktrees",
+            get(worktree_routes::list_worktrees_http).post(worktree_routes::create_worktree_http),
+        )
+        .route(
+            "/worktrees/dir",
+            get(worktree_routes::get_worktrees_dir_http),
+        )
+        .route(
+            "/worktrees/paths",
+            get(worktree_routes::get_worktree_paths_http),
+        )
+        .route(
+            "/worktrees/generate-name",
+            post(worktree_routes::generate_worktree_name_http),
+        )
+        .route(
+            "/worktrees/finalize",
+            post(worktree_routes::finalize_merged_worktree_http),
+        )
+        .route(
+            "/worktrees/{branch}",
+            delete(worktree_routes::remove_worktree_http),
+        )
+        // File operations
+        .route("/repo/file", get(git_routes::read_file_http))
+        .route("/repo/file-diff", get(git_routes::get_file_diff_http))
+        .route(
+            "/repo/markdown-files",
+            get(git_routes::list_markdown_files_http),
+        )
+        // Branch operations
+        .route(
+            "/repo/local-branches",
+            get(worktree_routes::list_local_branches_http),
+        )
+        .route(
+            "/repo/checkout-remote",
+            post(worktree_routes::checkout_remote_branch_http),
+        )
+        .route(
+            "/repo/orphan-worktrees",
+            get(worktree_routes::detect_orphan_worktrees_http),
+        )
+        .route(
+            "/repo/remove-orphan",
+            post(worktree_routes::remove_orphan_worktree_http),
+        )
+        .route("/repo/branch/rename", post(git_routes::rename_branch_http))
+        .route("/repo/initials", get(git_routes::get_initials_http))
+        .route(
+            "/repo/is-main-branch",
+            get(git_routes::check_is_main_branch_http),
+        )
+        // Agents
+        .route(
+            "/agents/verify-session",
+            post(agent_routes::verify_agent_session_http),
+        )
+        .route("/agents", get(agent_routes::detect_agents))
+        .route(
+            "/agents/detect",
+            get(agent_routes::detect_agent_binary_http),
+        )
+        .route(
+            "/agents/ides",
+            get(agent_routes::detect_installed_ides_http),
+        )
+        // File system
+        .route("/fs/list", get(fs_routes::list_directory_http))
+        .route("/fs/search", get(fs_routes::search_files_http))
+        .route("/fs/search-content", get(fs_routes::search_content_http))
+        .route(
+            "/fs/search-content-all",
+            get(fs_routes::search_content_all_http),
+        )
+        .route("/fs/read", get(fs_routes::fs_read_file_http))
+        .route("/fs/read-external", get(fs_routes::read_external_file_http))
+        .route("/fs/write", post(fs_routes::write_file_http))
+        .route("/fs/mkdir", post(fs_routes::create_directory_http))
+        .route("/fs/delete", post(fs_routes::delete_path_http))
+        .route("/fs/rename", post(fs_routes::rename_path_http))
+        .route("/fs/copy", post(fs_routes::copy_path_http))
+        .route("/fs/gitignore", post(fs_routes::add_to_gitignore_http))
+        .route(
+            "/fs/resolve-terminal-path",
+            get(fs_routes::resolve_terminal_path_http),
+        )
+        .route("/fs/stat", get(fs_routes::stat_path_http))
+        .route("/fs/warm-index", post(fs_routes::warm_content_index_http))
+        .route(
+            "/fs/write-external",
+            post(fs_routes::write_external_file_http),
+        )
+        .route("/fs/copy-abs", post(fs_routes::copy_path_abs_http))
+        .route("/fs/move-abs", post(fs_routes::move_path_abs_http))
+        .route("/fs/transfer", post(fs_routes::fs_transfer_paths_http))
+        // Claude Usage dashboard
+        .route("/claude/usage", get(claude_routes::claude_usage_api))
+        .route(
+            "/claude/timeline",
+            get(claude_routes::claude_usage_timeline),
+        )
+        .route(
+            "/claude/session-stats",
+            get(claude_routes::claude_session_stats),
+        )
+        .route("/claude/projects", get(claude_routes::claude_project_list))
+        // Recent commits / git panel
+        .route(
+            "/repo/recent-commits",
+            get(git_routes::get_recent_commits_http),
+        )
+        .route("/repo/panel-context", get(git_routes::git_panel_context))
+        .route("/repo/run-git", post(git_routes::run_git_command_http))
+        .route(
+            "/repo/working-tree-status",
+            get(git_routes::working_tree_status),
+        )
+        .route("/repo/stage", post(git_routes::stage_files_http))
+        .route("/repo/unstage", post(git_routes::unstage_files_http))
+        .route("/repo/discard", post(git_routes::discard_files_http))
+        .route(
+            "/repo/apply-reverse-patch",
+            post(git_routes::apply_reverse_patch_http),
+        )
+        .route("/repo/commit", post(git_routes::git_commit_http))
+        .route("/repo/commit-log", get(git_routes::commit_log_http))
+        .route("/repo/stash", get(git_routes::stash_list_http))
+        .route("/repo/stash/apply", post(git_routes::stash_apply_http))
+        .route("/repo/stash/pop", post(git_routes::stash_pop_http))
+        .route("/repo/stash/drop", post(git_routes::stash_drop_http))
+        .route("/repo/stash/show", get(git_routes::stash_show_http))
+        .route("/repo/file-history", get(git_routes::file_history_http))
+        .route("/repo/file-blame", get(git_routes::file_blame_http))
+        // Git panel (story 064)
+        .route(
+            "/repo/gutter-changes",
+            get(git_routes::get_gutter_changes_http),
+        )
+        .route(
+            "/repo/branches-detail",
+            get(git_routes::get_branches_detail_http),
+        )
+        .route(
+            "/repo/recent-branches",
+            get(git_routes::get_recent_branches_http),
+        )
+        .route("/repo/branch-base", get(git_routes::get_branch_base_http))
+        .route(
+            "/repo/worktree-dirty",
+            get(git_routes::check_worktree_dirty_http),
+        )
+        .route(
+            "/repo/base-ref-options",
+            get(git_routes::list_base_ref_options_http),
+        )
+        .route(
+            "/repo/clone-branch-name",
+            post(git_routes::generate_clone_branch_name_http),
+        )
+        .route("/repo/commit-graph", get(git_routes::get_commit_graph_http))
+        .route("/repo/create-branch", post(git_routes::create_branch_http))
+        .route("/repo/delete-branch", post(git_routes::delete_branch_http))
+        .route(
+            "/repo/delete-local-branch",
+            post(git_routes::delete_local_branch_http),
+        )
+        .route(
+            "/repo/update-from-base",
+            post(git_routes::update_from_base_http),
+        )
+        .route(
+            "/repo/switch-branch",
+            post(worktree_routes::switch_branch_http),
+        )
+        .route(
+            "/repo/merge-archive-worktree",
+            post(worktree_routes::merge_and_archive_worktree_http),
+        )
+        // System info
+        .route("/system/local-ips", get(git_routes::get_local_ips_http))
+        .route("/system/local-ip", get(git_routes::get_local_ip_http))
+        // Server-Sent Events
+        .route("/events", get(sse_routes::sse_events))
+}
+
+pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) -> Router {
+    // When remote access is enabled, allow any origin (Basic Auth secures the endpoint).
+    // Otherwise, restrict to localhost and Tauri webview origins.
+    let cors = if remote_auth {
+        CorsLayer::new()
+            .allow_origin(tower_http::cors::Any)
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+    } else {
+        let allowed_origins = [
+            "http://localhost"
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+            "http://127.0.0.1"
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+            "tauri://localhost"
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+            "https://tauri.localhost"
+                .parse::<axum::http::HeaderValue>()
+                .unwrap(),
+        ];
+        CorsLayer::new()
+            .allow_origin(allowed_origins.to_vec())
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers([AUTHORIZATION, CONTENT_TYPE])
+    };
+
+    let mut routes = Router::new()
+        // Routes common to the remote daemon router live in shared_routes().
+        .merge(shared_routes())
+        // Health
+        .route("/health", get(session::health))
+        // Git/GitHub (desktop-only)
+        .route("/repo/github", get(github_routes::repo_github_status))
+        .route("/repo/prs", get(github_routes::repo_pr_statuses))
+        .route("/repo/ci", get(github_routes::repo_ci_checks))
+        .route("/repo/pr-diff", get(github_routes::repo_pr_diff))
+        .route("/repo/approve-pr", post(github_routes::repo_approve_pr))
         .route("/repo/prs/batch", post(github_routes::repo_all_pr_statuses))
         .route("/repo/issues", get(github_routes::repo_issues))
         .route("/repo/issues/close", post(github_routes::repo_close_issue))
@@ -730,15 +955,8 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/github/diagnostics",
             get(github_routes::github_diagnostics),
         )
-        // Multi-account: accounts + repo bindings (IPC/HTTP parity)
-        .route(
-            "/github/accounts",
-            get(github_routes::github_list_accounts).post(github_routes::github_add_account),
-        )
-        .route(
-            "/github/accounts/remove",
-            post(github_routes::github_remove_account),
-        )
+        // Multi-account repo bindings (IPC/HTTP parity). Accounts + repo resolution
+        // are gated to desktop below — their impls are #[cfg(feature = "desktop")].
         .route(
             "/github/bindings",
             get(github_routes::github_list_bindings).post(github_routes::github_bind_repo),
@@ -746,14 +964,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/github/bindings/remove",
             post(github_routes::github_unbind_repo),
-        )
-        .route(
-            "/github/resolve-repo",
-            get(github_routes::github_resolve_repo),
-        )
-        .route(
-            "/github/resolve-repos",
-            post(github_routes::github_resolve_repos),
         )
         // AI watchers (story 070 RPC parity) — CRUD; fires surface as SessionCreated SSE
         .route(
@@ -827,17 +1037,6 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route(
             "/ai/scheduler/config",
             get(ai_routes::scheduler_config_get).put(ai_routes::scheduler_config_put),
-        )
-        // Watchers (for browser/mobile clients)
-        .route(
-            "/watchers/repo",
-            post(watcher_routes::start_repo_watcher_http)
-                .delete(watcher_routes::stop_repo_watcher_http),
-        )
-        .route(
-            "/watchers/dir",
-            post(watcher_routes::start_dir_watcher_http)
-                .delete(watcher_routes::stop_dir_watcher_http),
         )
         // Config
         .route(
@@ -995,79 +1194,13 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/config/remote-connections/{id}",
             delete(config_routes::delete_remote_connection),
         )
-        // Logs
-        .route(
-            "/logs",
-            get(log_routes::get_logs)
-                .post(log_routes::push_log)
-                .delete(log_routes::clear_logs),
-        )
-        // Diagnostics
-        .route(
-            "/diagnostics",
-            get(log_routes::diagnostics_get).post(log_routes::diagnostics_set),
-        )
         // Debug: execute JS in the main WebView (loopback-only, enforced in handler).
         // Local router only — never the remote router (this is an RCE surface).
         .route("/debug/invoke_js", post(log_routes::invoke_js_http))
-        // Worktrees
-        .route(
-            "/worktrees",
-            get(worktree_routes::list_worktrees_http).post(worktree_routes::create_worktree_http),
-        )
-        .route(
-            "/worktrees/dir",
-            get(worktree_routes::get_worktrees_dir_http),
-        )
-        .route(
-            "/worktrees/paths",
-            get(worktree_routes::get_worktree_paths_http),
-        )
-        .route(
-            "/worktrees/generate-name",
-            post(worktree_routes::generate_worktree_name_http),
-        )
-        .route(
-            "/worktrees/finalize",
-            post(worktree_routes::finalize_merged_worktree_http),
-        )
-        .route(
-            "/worktrees/{branch}",
-            delete(worktree_routes::remove_worktree_http),
-        )
-        // File operations
-        .route("/repo/file", get(git_routes::read_file_http))
-        .route("/repo/file-diff", get(git_routes::get_file_diff_http))
-        .route(
-            "/repo/markdown-files",
-            get(git_routes::list_markdown_files_http),
-        )
-        // Branch operations
-        .route(
-            "/repo/local-branches",
-            get(worktree_routes::list_local_branches_http),
-        )
-        .route(
-            "/repo/checkout-remote",
-            post(worktree_routes::checkout_remote_branch_http),
-        )
-        .route(
-            "/repo/orphan-worktrees",
-            get(worktree_routes::detect_orphan_worktrees_http),
-        )
-        .route(
-            "/repo/remove-orphan",
-            post(worktree_routes::remove_orphan_worktree_http),
-        )
+        // Branch operations (desktop-only)
         .route(
             "/repo/merge-pr",
             post(worktree_routes::merge_pr_via_github_http),
-        )
-        .route("/repo/branch/rename", post(git_routes::rename_branch_http))
-        .route("/repo/initials", get(git_routes::get_initials_http))
-        .route(
-            "/repo/is-main-branch",
-            get(git_routes::check_is_main_branch_http),
         )
         // Prompt processing
         .route("/prompt/process", post(agent_routes::process_prompt_http))
@@ -1091,150 +1224,20 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             "/prompt/execute-api",
             post(agent_routes::execute_api_prompt_http),
         )
-        // Agents
-        .route(
-            "/agents/verify-session",
-            post(agent_routes::verify_agent_session_http),
-        )
-        .route("/agents", get(agent_routes::detect_agents))
-        .route(
-            "/agents/detect",
-            get(agent_routes::detect_agent_binary_http),
-        )
-        .route(
-            "/agents/ides",
-            get(agent_routes::detect_installed_ides_http),
-        )
-        // File browser
-        .route("/fs/list", get(fs_routes::list_directory_http))
-        .route("/fs/search", get(fs_routes::search_files_http))
-        .route("/fs/search-content", get(fs_routes::search_content_http))
-        .route(
-            "/fs/search-content-all",
-            get(fs_routes::search_content_all_http),
-        )
-        .route("/fs/read", get(fs_routes::fs_read_file_http))
+        // File browser — desktop gets the large (250 MB) editor read cap; the
+        // remote router down-scopes these two paths to the standard-cap handlers.
         .route("/fs/read-editor", get(fs_routes::read_editor_file_http))
-        .route("/fs/read-external", get(fs_routes::read_external_file_http))
         .route(
             "/fs/read-editor-external",
             get(fs_routes::read_editor_file_external_http),
         )
-        .route("/fs/write", post(fs_routes::write_file_http))
-        .route("/fs/mkdir", post(fs_routes::create_directory_http))
-        .route("/fs/delete", post(fs_routes::delete_path_http))
-        .route("/fs/rename", post(fs_routes::rename_path_http))
-        .route("/fs/copy", post(fs_routes::copy_path_http))
-        .route("/fs/gitignore", post(fs_routes::add_to_gitignore_http))
-        .route(
-            "/fs/resolve-terminal-path",
-            get(fs_routes::resolve_terminal_path_http),
-        )
-        .route("/fs/stat", get(fs_routes::stat_path_http))
-        .route("/fs/warm-index", post(fs_routes::warm_content_index_http))
-        .route(
-            "/fs/write-external",
-            post(fs_routes::write_external_file_http),
-        )
-        .route("/fs/copy-abs", post(fs_routes::copy_path_abs_http))
-        .route("/fs/move-abs", post(fs_routes::move_path_abs_http))
-        .route("/fs/transfer", post(fs_routes::fs_transfer_paths_http))
-        // Claude Usage dashboard
-        .route("/claude/usage", get(claude_routes::claude_usage_api))
-        .route(
-            "/claude/timeline",
-            get(claude_routes::claude_usage_timeline),
-        )
-        .route(
-            "/claude/session-stats",
-            get(claude_routes::claude_session_stats),
-        )
-        .route("/claude/projects", get(claude_routes::claude_project_list))
         // Notes
         .route(
             "/config/notes",
             get(config_routes::get_notes).put(config_routes::put_notes),
         )
-        // Recent commits
-        .route(
-            "/repo/recent-commits",
-            get(git_routes::get_recent_commits_http),
-        )
-        // GitPanel commands
-        .route("/repo/panel-context", get(git_routes::git_panel_context))
-        .route("/repo/run-git", post(git_routes::run_git_command_http))
-        .route(
-            "/repo/working-tree-status",
-            get(git_routes::working_tree_status),
-        )
-        .route("/repo/stage", post(git_routes::stage_files_http))
-        .route("/repo/unstage", post(git_routes::unstage_files_http))
-        .route("/repo/discard", post(git_routes::discard_files_http))
-        .route(
-            "/repo/apply-reverse-patch",
-            post(git_routes::apply_reverse_patch_http),
-        )
-        .route("/repo/commit", post(git_routes::git_commit_http))
-        .route("/repo/commit-log", get(git_routes::commit_log_http))
-        .route("/repo/stash", get(git_routes::stash_list_http))
-        .route("/repo/stash/apply", post(git_routes::stash_apply_http))
-        .route("/repo/stash/pop", post(git_routes::stash_pop_http))
-        .route("/repo/stash/drop", post(git_routes::stash_drop_http))
-        .route("/repo/stash/show", get(git_routes::stash_show_http))
-        .route("/repo/file-history", get(git_routes::file_history_http))
-        .route("/repo/file-blame", get(git_routes::file_blame_http))
-        // Git panel (story 064)
-        .route(
-            "/repo/gutter-changes",
-            get(git_routes::get_gutter_changes_http),
-        )
-        .route(
-            "/repo/branches-detail",
-            get(git_routes::get_branches_detail_http),
-        )
-        .route(
-            "/repo/recent-branches",
-            get(git_routes::get_recent_branches_http),
-        )
-        .route("/repo/branch-base", get(git_routes::get_branch_base_http))
-        .route(
-            "/repo/worktree-dirty",
-            get(git_routes::check_worktree_dirty_http),
-        )
-        .route(
-            "/repo/base-ref-options",
-            get(git_routes::list_base_ref_options_http),
-        )
-        .route(
-            "/repo/clone-branch-name",
-            post(git_routes::generate_clone_branch_name_http),
-        )
-        .route("/repo/commit-graph", get(git_routes::get_commit_graph_http))
-        .route("/repo/create-branch", post(git_routes::create_branch_http))
-        .route("/repo/delete-branch", post(git_routes::delete_branch_http))
-        .route(
-            "/repo/delete-local-branch",
-            post(git_routes::delete_local_branch_http),
-        )
-        .route(
-            "/repo/update-from-base",
-            post(git_routes::update_from_base_http),
-        )
-        .route(
-            "/repo/switch-branch",
-            post(worktree_routes::switch_branch_http),
-        )
-        .route(
-            "/repo/merge-archive-worktree",
-            post(worktree_routes::merge_and_archive_worktree_http),
-        )
-        // System
-        .route("/system/local-ips", get(git_routes::get_local_ips_http))
-        .route("/system/local-ip", get(git_routes::get_local_ip_http))
         // Plugins
         .route("/plugins/list", get(git_routes::list_user_plugins_http))
-        // Server-Sent Events (for browser/mobile clients)
-        .route("/events", get(sse_routes::sse_events))
         // MCP status + instructions
         .route("/mcp/status", get(config_routes::get_mcp_status_http))
         .route("/mcp/upstream-status", get(upstream_status_handler))
@@ -1334,6 +1337,30 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         );
     }
 
+    // Multi-account accounts + repo resolution — desktop-only: add/remove/resolve go
+    // through the keychain-backed #[cfg(feature = "desktop")] impls in github_account.rs.
+    // The remote daemon never serves GitHub routes (build_remote_router omits them), so
+    // gate these out of the always-compiled build_router so the lib builds for
+    // tuic-remote (#094-ec55 remote-target fix).
+    #[cfg(feature = "desktop")]
+    let routes = routes
+        .route(
+            "/github/accounts",
+            get(github_routes::github_list_accounts).post(github_routes::github_add_account),
+        )
+        .route(
+            "/github/accounts/remove",
+            post(github_routes::github_remove_account),
+        )
+        .route(
+            "/github/resolve-repo",
+            get(github_routes::github_resolve_repo),
+        )
+        .route(
+            "/github/resolve-repos",
+            post(github_routes::github_resolve_repos),
+        );
+
     // Diff triage trigger (event-bridge plan Step 2) — desktop-only: the triage
     // LLM pipeline needs the desktop providers. Progress streams over `/events`.
     #[cfg(feature = "desktop")]
@@ -1388,355 +1415,23 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
         .with_state(state.clone());
 
     let routes = Router::new()
-        // Version (authenticated)
-        .route("/api/version", get(session::app_version))
-        // Session lifecycle
-        .route(
-            "/sessions",
-            get(session::list_sessions).post(session::create_session),
-        )
-        .route("/sessions/{id}/write", post(session::write_to_session))
-        .route("/sessions/{id}/name", put(session::set_session_name))
-        .route("/sessions/{id}/resize", post(session::resize_session))
-        .route("/sessions/{id}/output", get(session::get_output))
-        .route("/sessions/{id}/raw-ring", get(session::get_raw_ring))
-        .route("/sessions/{id}/pause", post(session::pause_session))
-        .route("/sessions/{id}/resume", post(session::resume_session))
-        .route("/sessions/{id}/kitty-flags", get(session::get_kitty_flags))
-        .route(
-            "/sessions/{id}/foreground",
-            get(session::get_foreground_process),
-        )
-        .route("/sessions/{id}/shell-state", get(session::get_shell_state))
-        .route("/sessions/{id}/last-prompt", get(session::get_last_prompt))
-        .route(
-            "/sessions/{id}/input-buffer",
-            get(session::get_input_buffer_content),
-        )
-        .route(
-            "/sessions/{id}/leaf-pid",
-            get(session::get_session_leaf_pid),
-        )
-        .route(
-            "/sessions/{id}/has-foreground",
-            get(session::has_foreground_process),
-        )
-        .route("/sessions/{id}/visible", post(session::set_session_visible))
-        .route("/sessions/{id}", delete(session::close_session))
-        // WebSocket streaming
-        .route("/sessions/{id}/stream", get(session::ws_stream))
-        // Terminal grid commands
-        .route(
-            "/sessions/{id}/terminal/scroll",
-            post(session::terminal_scroll),
-        )
-        .route(
-            "/sessions/{id}/terminal/scroll-to",
-            post(session::terminal_scroll_to),
-        )
-        .route(
-            "/sessions/{id}/terminal/scroll-to-offset",
-            post(session::terminal_scroll_to_offset),
-        )
-        .route(
-            "/sessions/{id}/terminal/scroll-info",
-            get(session::terminal_scroll_info),
-        )
-        .route(
-            "/sessions/{id}/terminal/search",
-            post(session::terminal_search),
-        )
-        .route(
-            "/sessions/{id}/terminal/search-buffer",
-            post(session::terminal_search_buffer),
-        )
-        .route(
-            "/sessions/{id}/terminal/row-text",
-            get(session::terminal_get_row_text),
-        )
-        .route(
-            "/sessions/{id}/terminal/lines",
-            get(session::terminal_get_lines),
-        )
-        .route(
-            "/sessions/{id}/terminal/styled-rows",
-            get(session::terminal_styled_rows),
-        )
-        .route(
-            "/sessions/{id}/terminal/cursor-line",
-            get(session::terminal_get_cursor_line),
-        )
-        .route(
-            "/sessions/{id}/terminal/hyperlink",
-            get(session::terminal_hyperlink_at),
-        )
-        .route(
-            "/sessions/{id}/terminal/hyperlink-span",
-            get(session::terminal_hyperlink_span),
-        )
-        .route(
-            "/sessions/{id}/terminal/selection-text",
-            get(session::terminal_get_selection_text),
-        )
-        .route(
-            "/sessions/{id}/terminal/logical-line",
-            get(session::terminal_get_logical_line),
-        )
-        .route(
-            "/sessions/{id}/terminal/request-frame",
-            post(session::terminal_request_frame),
-        )
-        // Agent sessions
-        .route("/sessions/agent", post(agent_routes::spawn_agent_session))
-        .route(
-            "/sessions/worktree",
-            post(session::create_session_with_worktree),
-        )
-        // Orchestrator stats
-        .route("/stats", get(session::get_stats))
-        .route("/metrics", get(session::get_metrics))
-        .route("/process/stats", get(session::get_process_stats))
-        .route("/process/monitor", get(session::process_monitor_panel))
-        // Git operations
-        .route("/repo/info", get(git_routes::repo_info))
-        .route("/repo/remote-url", get(git_routes::remote_url))
-        .route("/repo/diff", get(git_routes::repo_diff))
-        .route("/repo/diff-stats", get(git_routes::repo_diff_stats))
-        .route("/repo/files", get(git_routes::repo_changed_files))
-        .route("/repo/branches", get(git_routes::repo_branches))
-        .route(
-            "/repo/branches/merged",
-            get(git_routes::repo_merged_branches),
-        )
-        .route("/repo/summary", get(git_routes::repo_summary))
-        .route("/repo/structure", get(git_routes::repo_structure))
-        .route(
-            "/repo/diff-stats/batch",
-            get(git_routes::repo_diff_stats_batch),
-        )
-        // Watchers
-        .route(
-            "/watchers/repo",
-            post(watcher_routes::start_repo_watcher_http)
-                .delete(watcher_routes::stop_repo_watcher_http),
-        )
-        .route(
-            "/watchers/dir",
-            post(watcher_routes::start_dir_watcher_http)
-                .delete(watcher_routes::stop_dir_watcher_http),
-        )
-        .route(
-            "/watchers/hot-repos",
-            put(watcher_routes::set_hot_repos_http),
-        )
-        // Logs
-        .route(
-            "/logs",
-            get(log_routes::get_logs)
-                .post(log_routes::push_log)
-                .delete(log_routes::clear_logs),
-        )
-        // Diagnostics
-        .route(
-            "/diagnostics",
-            get(log_routes::diagnostics_get).post(log_routes::diagnostics_set),
-        )
-        // Worktrees
-        .route(
-            "/worktrees",
-            get(worktree_routes::list_worktrees_http).post(worktree_routes::create_worktree_http),
-        )
-        .route(
-            "/worktrees/dir",
-            get(worktree_routes::get_worktrees_dir_http),
-        )
-        .route(
-            "/worktrees/paths",
-            get(worktree_routes::get_worktree_paths_http),
-        )
-        .route(
-            "/worktrees/generate-name",
-            post(worktree_routes::generate_worktree_name_http),
-        )
-        .route(
-            "/worktrees/finalize",
-            post(worktree_routes::finalize_merged_worktree_http),
-        )
-        .route(
-            "/worktrees/{branch}",
-            delete(worktree_routes::remove_worktree_http),
-        )
-        // File operations
-        .route("/repo/file", get(git_routes::read_file_http))
-        .route("/repo/file-diff", get(git_routes::get_file_diff_http))
-        .route(
-            "/repo/markdown-files",
-            get(git_routes::list_markdown_files_http),
-        )
-        // Branch operations
-        .route(
-            "/repo/local-branches",
-            get(worktree_routes::list_local_branches_http),
-        )
-        .route(
-            "/repo/checkout-remote",
-            post(worktree_routes::checkout_remote_branch_http),
-        )
-        .route(
-            "/repo/orphan-worktrees",
-            get(worktree_routes::detect_orphan_worktrees_http),
-        )
-        .route(
-            "/repo/remove-orphan",
-            post(worktree_routes::remove_orphan_worktree_http),
-        )
-        .route("/repo/branch/rename", post(git_routes::rename_branch_http))
-        .route("/repo/initials", get(git_routes::get_initials_http))
-        .route(
-            "/repo/is-main-branch",
-            get(git_routes::check_is_main_branch_http),
-        )
-        // Agents
-        .route(
-            "/agents/verify-session",
-            post(agent_routes::verify_agent_session_http),
-        )
-        .route("/agents", get(agent_routes::detect_agents))
-        .route(
-            "/agents/detect",
-            get(agent_routes::detect_agent_binary_http),
-        )
-        .route(
-            "/agents/ides",
-            get(agent_routes::detect_installed_ides_http),
-        )
-        // File system
-        .route("/fs/list", get(fs_routes::list_directory_http))
-        .route("/fs/search", get(fs_routes::search_files_http))
-        .route("/fs/search-content", get(fs_routes::search_content_http))
-        .route(
-            "/fs/search-content-all",
-            get(fs_routes::search_content_all_http),
-        )
-        .route("/fs/read", get(fs_routes::fs_read_file_http))
+        // Routes common to the desktop/loopback router live in shared_routes().
+        .merge(shared_routes())
         // SECURITY: remote clients get the standard (10 MB) cap, NOT the large
         // editor cap. The 250 MB editor read is a desktop-local feature; serving
         // it over a (possibly metered/slow) remote link risks OOM/latency since
         // the whole file is read into a String→JSON with no streaming. Route the
         // editor paths through the standard-cap handlers remotely.
         .route("/fs/read-editor", get(fs_routes::fs_read_file_http))
-        .route("/fs/read-external", get(fs_routes::read_external_file_http))
         .route(
             "/fs/read-editor-external",
             get(fs_routes::read_external_file_http),
         )
-        .route("/fs/write", post(fs_routes::write_file_http))
-        .route("/fs/mkdir", post(fs_routes::create_directory_http))
-        .route("/fs/delete", post(fs_routes::delete_path_http))
-        .route("/fs/rename", post(fs_routes::rename_path_http))
-        .route("/fs/copy", post(fs_routes::copy_path_http))
-        .route("/fs/gitignore", post(fs_routes::add_to_gitignore_http))
+        // Watchers — remote-only hot-repos toggle
         .route(
-            "/fs/resolve-terminal-path",
-            get(fs_routes::resolve_terminal_path_http),
+            "/watchers/hot-repos",
+            put(watcher_routes::set_hot_repos_http),
         )
-        .route("/fs/stat", get(fs_routes::stat_path_http))
-        .route("/fs/warm-index", post(fs_routes::warm_content_index_http))
-        .route(
-            "/fs/write-external",
-            post(fs_routes::write_external_file_http),
-        )
-        .route("/fs/copy-abs", post(fs_routes::copy_path_abs_http))
-        .route("/fs/move-abs", post(fs_routes::move_path_abs_http))
-        .route("/fs/transfer", post(fs_routes::fs_transfer_paths_http))
-        // Claude Usage dashboard
-        .route("/claude/usage", get(claude_routes::claude_usage_api))
-        .route(
-            "/claude/timeline",
-            get(claude_routes::claude_usage_timeline),
-        )
-        .route(
-            "/claude/session-stats",
-            get(claude_routes::claude_session_stats),
-        )
-        .route("/claude/projects", get(claude_routes::claude_project_list))
-        // Recent commits / git panel
-        .route(
-            "/repo/recent-commits",
-            get(git_routes::get_recent_commits_http),
-        )
-        .route("/repo/panel-context", get(git_routes::git_panel_context))
-        .route("/repo/run-git", post(git_routes::run_git_command_http))
-        .route(
-            "/repo/working-tree-status",
-            get(git_routes::working_tree_status),
-        )
-        .route("/repo/stage", post(git_routes::stage_files_http))
-        .route("/repo/unstage", post(git_routes::unstage_files_http))
-        .route("/repo/discard", post(git_routes::discard_files_http))
-        .route(
-            "/repo/apply-reverse-patch",
-            post(git_routes::apply_reverse_patch_http),
-        )
-        .route("/repo/commit", post(git_routes::git_commit_http))
-        .route("/repo/commit-log", get(git_routes::commit_log_http))
-        .route("/repo/stash", get(git_routes::stash_list_http))
-        .route("/repo/stash/apply", post(git_routes::stash_apply_http))
-        .route("/repo/stash/pop", post(git_routes::stash_pop_http))
-        .route("/repo/stash/drop", post(git_routes::stash_drop_http))
-        .route("/repo/stash/show", get(git_routes::stash_show_http))
-        .route("/repo/file-history", get(git_routes::file_history_http))
-        .route("/repo/file-blame", get(git_routes::file_blame_http))
-        // Git panel (story 064)
-        .route(
-            "/repo/gutter-changes",
-            get(git_routes::get_gutter_changes_http),
-        )
-        .route(
-            "/repo/branches-detail",
-            get(git_routes::get_branches_detail_http),
-        )
-        .route(
-            "/repo/recent-branches",
-            get(git_routes::get_recent_branches_http),
-        )
-        .route("/repo/branch-base", get(git_routes::get_branch_base_http))
-        .route(
-            "/repo/worktree-dirty",
-            get(git_routes::check_worktree_dirty_http),
-        )
-        .route(
-            "/repo/base-ref-options",
-            get(git_routes::list_base_ref_options_http),
-        )
-        .route(
-            "/repo/clone-branch-name",
-            post(git_routes::generate_clone_branch_name_http),
-        )
-        .route("/repo/commit-graph", get(git_routes::get_commit_graph_http))
-        .route("/repo/create-branch", post(git_routes::create_branch_http))
-        .route("/repo/delete-branch", post(git_routes::delete_branch_http))
-        .route(
-            "/repo/delete-local-branch",
-            post(git_routes::delete_local_branch_http),
-        )
-        .route(
-            "/repo/update-from-base",
-            post(git_routes::update_from_base_http),
-        )
-        .route(
-            "/repo/switch-branch",
-            post(worktree_routes::switch_branch_http),
-        )
-        .route(
-            "/repo/merge-archive-worktree",
-            post(worktree_routes::merge_and_archive_worktree_http),
-        )
-        // System info
-        .route("/system/local-ips", get(git_routes::get_local_ips_http))
-        .route("/system/local-ip", get(git_routes::get_local_ip_http))
-        // Server-Sent Events
-        .route("/events", get(sse_routes::sse_events))
         // SSH tunnel management
         .nest("/tunnels", tunnel_routes())
         .with_state(state.clone())
@@ -2275,6 +1970,116 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn shared_routes_surface_is_locked_and_desktop_only_excluded() {
+        // Drift guard (#094-ec55): shared_routes() is the single source both build_router
+        // and build_remote_router merge, so a shared route present in only one router is
+        // impossible by construction. This test pins the shared SURFACE so (a) a shared
+        // route silently dropped from shared_routes() is caught, and (b) a desktop-only
+        // route accidentally added to shared_routes() — which would re-expose it on the
+        // remote daemon — is caught. We probe with PATCH — a method NO shared route uses —
+        // so a registered path returns 405 (method-not-allowed, router level) while an
+        // unregistered path returns 404. This reflects ROUTE EXISTENCE only, never a
+        // handler's own 404 (e.g. get_output 404s for a missing session, which would
+        // false-fail a GET probe). Path params are filled with a placeholder segment.
+        let must_exist = [
+            "/api/version",
+            "/sessions",
+            "/sessions/x/write",
+            "/sessions/x/output",
+            "/sessions/x/terminal/scroll",
+            "/sessions/x/terminal/lines",
+            "/sessions/agent",
+            "/sessions/worktree",
+            "/stats",
+            "/metrics",
+            "/process/stats",
+            "/repo/info",
+            "/repo/diff",
+            "/repo/files",
+            "/repo/branches",
+            "/repo/commit",
+            "/repo/stash",
+            "/repo/gutter-changes",
+            "/repo/create-branch",
+            "/watchers/repo",
+            "/watchers/dir",
+            "/logs",
+            "/diagnostics",
+            "/worktrees",
+            "/worktrees/x",
+            "/agents",
+            "/agents/detect",
+            "/fs/list",
+            "/fs/read",
+            "/fs/write",
+            "/fs/stat",
+            "/claude/usage",
+            "/claude/projects",
+            "/system/local-ip",
+        ];
+        // Desktop-only or router-specific — MUST NOT be in shared_routes():
+        // /health (public_routes only), /fs/read-editor & /watchers/hot-repos
+        // (router-specific handlers), and every desktop-only family.
+        let must_not_exist = [
+            "/health",
+            "/fs/read-editor",
+            "/watchers/hot-repos",
+            "/github/accounts",
+            "/github/resolve-repo",
+            "/repo/github",
+            "/repo/prs",
+            "/ai/watchers",
+            "/ai/chat/conversations",
+            "/config",
+            "/config/themes",
+            "/mcp/status",
+            "/plugins/list",
+            "/api/push/test",
+            "/prompt/process",
+            "/debug/invoke_js",
+            "/exec/shell-script",
+        ];
+        let state = test_state();
+        let app = shared_routes().with_state(state);
+        for p in must_exist {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PATCH")
+                        .uri(p)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_ne!(
+                resp.status(),
+                StatusCode::NOT_FOUND,
+                "shared route missing from shared_routes(): {p}"
+            );
+        }
+        for p in must_not_exist {
+            let resp = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method("PATCH")
+                        .uri(p)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                resp.status(),
+                StatusCode::NOT_FOUND,
+                "desktop-only/router-specific path leaked into shared_routes(): {p}"
+            );
+        }
     }
 
     #[tokio::test]
