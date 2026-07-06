@@ -3073,6 +3073,17 @@ pub(crate) fn deliver_message_to_pty(state: &AppState, session_id: &str, framed:
             .entry(session_id.to_string())
             .or_default()
             .push_back(framed.to_string());
+        // CONC-A (story 101-20e3): the should_inject_now read above and this push are
+        // not atomic vs a concurrent BUSY→IDLE flush. If the silence timer transitions
+        // the session to idle and drains the (still-empty) queue in the window between
+        // them, our message would sit queued until the NEXT idle cycle — exactly the
+        // auto-wake this feature exists to deliver. Re-check after enqueuing: if the
+        // session went idle during the window, flush it ourselves. A double flush is
+        // harmless — flush_pending_injections drains under a get_mut write lock, so the
+        // racing flush that loses just finds an empty queue.
+        if should_inject_now(state, session_id) {
+            flush_pending_injections(state, session_id);
+        }
     }
 }
 
@@ -10295,6 +10306,50 @@ mod tests {
             !state.pending_injections.contains_key("idle"),
             "idle agent message is injected, not queued"
         );
+    }
+
+    #[test]
+    fn deliver_reenqueue_recovers_message_when_idle_races_enqueue() {
+        // CONC-A (story 101-20e3): the sender's should_inject_now read and its
+        // pending_injections push are not atomic vs a concurrent BUSY→IDLE flush. If the
+        // silence timer transitions to idle and drains the (still-empty) queue between
+        // them, the message would be stranded until the NEXT idle cycle. The post-enqueue
+        // re-check must recover it. Stress the race with a barrier: after both the sender
+        // and the transition+flush complete with the session ending idle, the queue MUST
+        // be empty (message delivered) regardless of interleaving. Pre-fix this fails in
+        // the bug window (sender reads busy, timer flushes empty, sender enqueues with no
+        // recovery); post-fix the assertion holds on every interleaving.
+        use std::sync::{Arc, Barrier};
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        for i in 0..500 {
+            agent_session(&state, "race", SHELL_BUSY);
+            state.pending_injections.remove("race");
+
+            let barrier = Arc::new(Barrier::new(2));
+            let (s1, b1) = (Arc::clone(&state), Arc::clone(&barrier));
+            let sender = std::thread::spawn(move || {
+                b1.wait();
+                deliver_message_to_pty(&s1, "race", "[TUIC message from lead] go");
+            });
+            let (s2, b2) = (Arc::clone(&state), Arc::clone(&barrier));
+            let timer = std::thread::spawn(move || {
+                b2.wait();
+                // Silence timer: BUSY→IDLE also runs flush_pending_injections on idle.
+                try_shell_transition(&s2, "race", SHELL_BUSY, SHELL_IDLE, false);
+            });
+            sender.join().unwrap();
+            timer.join().unwrap();
+
+            let queued = state
+                .pending_injections
+                .get("race")
+                .map(|q| q.len())
+                .unwrap_or(0);
+            assert_eq!(
+                queued, 0,
+                "iteration {i}: message left deferred in queue after busy→idle race"
+            );
+        }
     }
 
     #[test]
