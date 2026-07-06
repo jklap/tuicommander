@@ -825,8 +825,12 @@ pub(crate) fn github_resolve_repos_impl(
     repo_paths
         .into_iter()
         .map(|p| {
-            let resolution =
-                resolve_repo_account(std::path::Path::new(&p), &registry, &bindings, Some(&default));
+            let resolution = resolve_repo_account(
+                std::path::Path::new(&p),
+                &registry,
+                &bindings,
+                Some(&default),
+            );
             (p, RepoResolutionDto::from(resolution))
         })
         .collect()

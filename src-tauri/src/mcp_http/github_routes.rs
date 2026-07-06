@@ -280,7 +280,12 @@ pub(super) async fn github_diagnostics(State(state): State<Arc<AppState>>) -> Re
 // --- Multi-account: accounts + repo bindings (IPC/HTTP parity) ---
 
 pub(super) async fn github_list_accounts() -> Response {
-    Json(crate::github_account::GitHubAccountRegistry::load().list().to_vec()).into_response()
+    Json(
+        crate::github_account::GitHubAccountRegistry::load()
+            .list()
+            .to_vec(),
+    )
+    .into_response()
 }
 
 // Desktop-only: the add/remove/resolve impls in github_account.rs are
@@ -300,7 +305,9 @@ pub(super) async fn github_remove_account(
     State(state): State<Arc<AppState>>,
     Json(body): Json<GithubRemoveAccountRequest>,
 ) -> Response {
-    json_result(crate::github_account::github_remove_account_impl(&state, body.id))
+    json_result(crate::github_account::github_remove_account_impl(
+        &state, body.id,
+    ))
 }
 
 pub(super) async fn github_list_bindings() -> Response {
@@ -326,7 +333,10 @@ pub(super) async fn github_resolve_repo(
     State(state): State<Arc<AppState>>,
     Query(q): Query<GithubResolveRepoQuery>,
 ) -> Response {
-    json_result(crate::github_account::github_resolve_repo_impl(&state, q.repo_path))
+    json_result(crate::github_account::github_resolve_repo_impl(
+        &state,
+        q.repo_path,
+    ))
 }
 
 #[cfg(feature = "desktop")]
@@ -334,5 +344,9 @@ pub(super) async fn github_resolve_repos(
     State(state): State<Arc<AppState>>,
     Json(body): Json<GithubResolveReposRequest>,
 ) -> Response {
-    Json(crate::github_account::github_resolve_repos_impl(&state, body.repo_paths)).into_response()
+    Json(crate::github_account::github_resolve_repos_impl(
+        &state,
+        body.repo_paths,
+    ))
+    .into_response()
 }

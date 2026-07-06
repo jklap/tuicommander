@@ -130,13 +130,8 @@ pub(super) async fn plugin_delete_build_artifact(
     Json(body): Json<DeleteArtifactBody>,
 ) -> Response {
     json_result(
-        crate::plugin_fs::delete_build_artifact_impl(
-            &state,
-            body.path,
-            body.repo_paths,
-            plugin_id,
-        )
-        .await,
+        crate::plugin_fs::delete_build_artifact_impl(&state, body.path, body.repo_paths, plugin_id)
+            .await,
     )
 }
 

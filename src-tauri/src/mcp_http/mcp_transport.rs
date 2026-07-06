@@ -7373,7 +7373,8 @@ mod tests {
     #[test]
     fn merge_params_model_no_conflict() {
         let args = vec!["--fast".to_string()];
-        let result = merge_mcp_params_into_args("claude", &args, Some("gpt-4"), false, None).unwrap();
+        let result =
+            merge_mcp_params_into_args("claude", &args, Some("gpt-4"), false, None).unwrap();
         assert!(result.contains(&"--model".to_string()));
         assert!(result.contains(&"gpt-4".to_string()));
     }
@@ -7411,7 +7412,8 @@ mod tests {
     #[test]
     fn merge_params_output_format_no_conflict() {
         let args = vec![];
-        let result = merge_mcp_params_into_args("claude", &args, None, false, Some("json")).unwrap();
+        let result =
+            merge_mcp_params_into_args("claude", &args, None, false, Some("json")).unwrap();
         assert!(result.contains(&"--output-format".to_string()));
         assert!(result.contains(&"json".to_string()));
     }
@@ -7423,15 +7425,25 @@ mod tests {
     fn merge_params_codex_drops_print_mode() {
         let args = vec!["{prompt}".to_string()];
         let result = merge_mcp_params_into_args("codex", &args, None, true, None).unwrap();
-        assert!(!result.contains(&"--print".to_string()), "codex must not receive --print");
-        assert_eq!(result, vec!["{prompt}".to_string()], "args otherwise unchanged");
+        assert!(
+            !result.contains(&"--print".to_string()),
+            "codex must not receive --print"
+        );
+        assert_eq!(
+            result,
+            vec!["{prompt}".to_string()],
+            "args otherwise unchanged"
+        );
     }
 
     #[test]
     fn merge_params_codex_drops_output_format() {
         let args = vec!["{prompt}".to_string()];
         let result = merge_mcp_params_into_args("codex", &args, None, false, Some("json")).unwrap();
-        assert!(!result.contains(&"--output-format".to_string()), "codex must not receive --output-format");
+        assert!(
+            !result.contains(&"--output-format".to_string()),
+            "codex must not receive --output-format"
+        );
         assert!(!result.contains(&"json".to_string()));
     }
 
@@ -7455,7 +7467,8 @@ mod tests {
     fn merge_params_codex_keeps_model() {
         // --model is generic (codex accepts it) — only print/output-format are gated.
         let args = vec!["{prompt}".to_string()];
-        let result = merge_mcp_params_into_args("codex", &args, Some("gpt-5"), true, Some("json")).unwrap();
+        let result =
+            merge_mcp_params_into_args("codex", &args, Some("gpt-5"), true, Some("json")).unwrap();
         assert!(result.contains(&"--model".to_string()));
         assert!(result.contains(&"gpt-5".to_string()));
         assert!(!result.contains(&"--print".to_string()));

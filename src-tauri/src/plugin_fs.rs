@@ -760,7 +760,9 @@ fn assert_deletable(path: &std::path::Path, repo_roots: &[PathBuf]) -> Result<()
 
     let name = c.file_name().and_then(|s| s.to_str()).unwrap_or("");
     if !ARTIFACT_DIRS.iter().any(|(n, _)| *n == name) {
-        return Err(format!("Refusing to delete: '{name}' is not a build-artifact dir"));
+        return Err(format!(
+            "Refusing to delete: '{name}' is not a build-artifact dir"
+        ));
     }
 
     let inside = repo_roots.iter().any(|r| c.starts_with(r) && c != *r);
@@ -1138,10 +1140,14 @@ mod tests {
             "expected target+node_modules only, got {:?}",
             out.iter().map(|e| &e.path).collect::<Vec<_>>()
         );
-        assert!(out.iter().any(|e| e.path.ends_with("target") && e.kind == "rust"));
-        assert!(out
-            .iter()
-            .any(|e| e.path.ends_with("node_modules") && e.kind == "node"));
+        assert!(
+            out.iter()
+                .any(|e| e.path.ends_with("target") && e.kind == "rust")
+        );
+        assert!(
+            out.iter()
+                .any(|e| e.path.ends_with("node_modules") && e.kind == "node")
+        );
         assert!(!out.iter().any(|e| e.path.contains(".git")));
     }
 
@@ -1157,7 +1163,11 @@ mod tests {
         let mut out = Vec::new();
         walk_artifacts(root, "repo", MAX_SCAN_DEPTH, &mut out);
 
-        assert_eq!(out.len(), 1, "nested node_modules must not be a separate entry");
+        assert_eq!(
+            out.len(),
+            1,
+            "nested node_modules must not be a separate entry"
+        );
         // Outer dir is summed whole (300 bytes = outer.js + nested inner.js),
         // proving stop-at-match measures the tree but does not re-emit the nested dir.
         assert_eq!(out[0].size_bytes, 300);

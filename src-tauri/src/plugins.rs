@@ -1183,7 +1183,12 @@ mod tests {
         // plugin's capabilities — must be in KNOWN_CAPABILITIES so an external
         // manifest declaring them loads instead of being rejected as unknown.
         let mut m = valid_manifest("build-cleaner");
-        m.capabilities = vec!["fs:scan".into(), "fs:delete".into(), "ui:panel".into(), "ui:ticker".into()];
+        m.capabilities = vec![
+            "fs:scan".into(),
+            "fs:delete".into(),
+            "ui:panel".into(),
+            "ui:ticker".into(),
+        ];
         assert!(validate_manifest(&m, "build-cleaner").is_ok());
     }
 
