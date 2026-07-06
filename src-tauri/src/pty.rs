@@ -1002,6 +1002,15 @@ impl SilenceState {
 /// Pass `notify_parent=false` from process-exit paths — the sole "exited"
 /// notification from `mark_session_exited` is sufficient; suppressing the
 /// intermediate "idle" avoids the orchestrator double-firing on exit.
+///
+/// RE-ENTRANCY INVARIANT (CONC-C, story 099-6526): this fn does its own
+/// `shell_states.get(session_id)` below. Callers MUST NOT hold a `shell_states`
+/// Ref for the same key across this call — a held Ref plus this second get on the
+/// same shard can deadlock under parking_lot writer-fairness when a concurrent
+/// session create/destroy is queued to write the shard between the two reads.
+/// Load what you need, drop the Ref, then call. `flush_pending_injections` and
+/// `push_state_change_to_parent` invoked below do not touch `shell_states`, so the
+/// internal Ref held across them is safe.
 fn try_shell_transition(
     state: &crate::state::AppState,
     session_id: &str,
@@ -1199,11 +1208,16 @@ fn transition_shell_state(
     target: u8,
     label: &str,
 ) {
-    if let Some(atom) = state.shell_states.get(session_id) {
-        let prev = atom.load(std::sync::atomic::Ordering::Acquire);
-        if prev != target && try_shell_transition(state, session_id, prev, target, true) {
-            emit_shell_state(state, session_id, label);
-        }
+    // Load `prev` and DROP the shell_states Ref before calling try_shell_transition,
+    // which re-gets the same key: holding a Ref across that second get can deadlock
+    // under parking_lot writer-fairness if a session create/destroy writes the shard
+    // in the window between the two reads (CONC-C, story 099-6526).
+    let prev = match state.shell_states.get(session_id) {
+        Some(atom) => atom.load(std::sync::atomic::Ordering::Acquire),
+        None => return,
+    };
+    if prev != target && try_shell_transition(state, session_id, prev, target, true) {
+        emit_shell_state(state, session_id, label);
     }
 }
 
@@ -1445,9 +1459,15 @@ fn spawn_silence_timer(
             // `should_transition_idle` checks elapsed time vs threshold (500ms shell /
             // 2500ms agent) and sub-task count. Spinner rows keep last_output_ms
             // fresh in the reader, so this won't fire while a spinner is active.
-            if let Some(atom) = state.shell_states.get(&session_id)
-                && atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY
-            {
+            // Drop the shell_states Ref immediately after loading — try_shell_transition
+            // below re-gets the same key, and holding a Ref across that second get risks
+            // the CONC-C re-entrant-read deadlock (story 099-6526).
+            let is_busy = state
+                .shell_states
+                .get(&session_id)
+                .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY)
+                .unwrap_or(false);
+            if is_busy {
                 // Presence-driven keepalive: agents that freeze their TUI during a
                 // child subprocess (Codex during a long cargo/git) stop producing
                 // grid changes, so the change-driven spinner keepalive can't refresh
@@ -2738,15 +2758,22 @@ impl ChunkProcessor {
         // Shell state: reader transitions → BUSY on real output OR active spinner.
         // Idle transitions are handled exclusively by the silence timer to
         // eliminate the two-path race that caused 15+ fix/revert cycles.
-        if (!chrome_only || has_spinner)
-            && !silence.lock().is_resize_grace()
-            && let Some(atom) = state.shell_states.get(session_id)
+        // Load `prev` and drop the shell_states Ref before try_shell_transition (which
+        // re-gets the same key): holding a Ref across that second get risks the CONC-C
+        // re-entrant-read deadlock (story 099-6526).
+        let prev = if (!chrome_only || has_spinner) && !silence.lock().is_resize_grace() {
+            state
+                .shell_states
+                .get(session_id)
+                .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire))
+        } else {
+            None
+        };
+        if let Some(prev) = prev
+            && prev != SHELL_BUSY
+            && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
         {
-            let prev = atom.load(std::sync::atomic::Ordering::Acquire);
-            if prev != SHELL_BUSY && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
-            {
-                emit_shell_state(state, session_id, "busy");
-            }
+            emit_shell_state(state, session_id, "busy");
         }
 
         // Update terminal mode in SessionState when it changes.
