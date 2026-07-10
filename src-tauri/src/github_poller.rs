@@ -629,6 +629,83 @@ fn process_repo_update(
 }
 
 // ---------------------------------------------------------------------------
+// Shared start/config helpers (IPC/HTTP parity)
+// ---------------------------------------------------------------------------
+
+/// Push the poll config (paths, issue filter, hide-drafts) to a running poller.
+///
+/// `resync` additionally requests a full re-emit (`ForceResync`) — sent when a
+/// client (re)subscribes to an *already-running* poller whose frontend store may
+/// have reset (e.g. webview reload after standby), so unchanged PRs/issues
+/// re-hydrate instead of staying blank until the next data change. A freshly
+/// started poller has no prior state to resync, so it passes `resync = false`.
+///
+/// Shared by the Tauri command and the HTTP route so both transports send the
+/// identical command sequence.
+pub(crate) fn send_poller_config(
+    poller: &GitHubPoller,
+    paths: Vec<String>,
+    issue_filter: String,
+    pr_hide_drafts: bool,
+    resync: bool,
+) {
+    if let Err(e) = poller.cmd_tx.try_send(PollerCmd::UpdatePaths(paths)) {
+        tracing::warn!(
+            source = "github",
+            "Failed to send UpdatePaths to poller: {e}"
+        );
+    }
+    if let Err(e) = poller
+        .cmd_tx
+        .try_send(PollerCmd::SetIssueFilter(issue_filter))
+    {
+        tracing::warn!(
+            source = "github",
+            "Failed to send SetIssueFilter to poller: {e}"
+        );
+    }
+    if let Err(e) = poller
+        .cmd_tx
+        .try_send(PollerCmd::SetPrHideDrafts(pr_hide_drafts))
+    {
+        tracing::warn!(
+            source = "github",
+            "Failed to send SetPrHideDrafts to poller: {e}"
+        );
+    }
+    if resync && let Err(e) = poller.cmd_tx.try_send(PollerCmd::ForceResync) {
+        tracing::warn!(
+            source = "github",
+            "Failed to send ForceResync to poller: {e}"
+        );
+    }
+}
+
+/// Start the GitHub poller if not already running, then push the poll config.
+///
+/// Cold start: spawns the poller and seeds it (no resync — nothing to re-emit).
+/// Already running: forwards the new config and forces a resync for the
+/// (re)subscribing client. This is the single implementation behind both the
+/// Tauri `github_start_polling` command and the HTTP `poller_start` route.
+#[cfg(feature = "desktop")]
+pub(crate) fn ensure_polling(
+    state: &Arc<AppState>,
+    app: AppHandle,
+    paths: Vec<String>,
+    issue_filter: String,
+    pr_hide_drafts: bool,
+) {
+    let mut guard = state.github_poller.lock();
+    if let Some(poller) = guard.as_ref() {
+        send_poller_config(poller, paths, issue_filter, pr_hide_drafts, true);
+        return;
+    }
+    let poller = GitHubPoller::start(Arc::clone(state), app);
+    send_poller_config(&poller, paths, issue_filter, pr_hide_drafts, false);
+    *guard = Some(poller);
+}
+
+// ---------------------------------------------------------------------------
 // Tauri commands
 // ---------------------------------------------------------------------------
 
@@ -641,69 +718,7 @@ pub(crate) async fn github_start_polling(
     issue_filter: String,
     pr_hide_drafts: bool,
 ) -> Result<(), String> {
-    let mut guard = state.github_poller.lock();
-    if guard.is_some() {
-        // Already running — just update paths and filter
-        if let Some(poller) = guard.as_ref() {
-            if let Err(e) = poller.cmd_tx.try_send(PollerCmd::UpdatePaths(paths)) {
-                tracing::warn!(
-                    source = "github",
-                    "Failed to send UpdatePaths to poller: {e}"
-                );
-            }
-            if let Err(e) = poller
-                .cmd_tx
-                .try_send(PollerCmd::SetIssueFilter(issue_filter))
-            {
-                tracing::warn!(
-                    source = "github",
-                    "Failed to send SetIssueFilter to poller: {e}"
-                );
-            }
-            if let Err(e) = poller
-                .cmd_tx
-                .try_send(PollerCmd::SetPrHideDrafts(pr_hide_drafts))
-            {
-                tracing::warn!(
-                    source = "github",
-                    "Failed to send SetPrHideDrafts to poller: {e}"
-                );
-            }
-            // Frontend just (re)subscribed — its store reset to empty (e.g. webview
-            // reload after standby). Force a full re-emit so unchanged PRs/issues
-            // re-hydrate instead of staying blank until the next data change.
-            if let Err(e) = poller.cmd_tx.try_send(PollerCmd::ForceResync) {
-                tracing::warn!(
-                    source = "github",
-                    "Failed to send ForceResync to poller: {e}"
-                );
-            }
-        }
-        return Ok(());
-    }
-    let poller = GitHubPoller::start(Arc::clone(&state), app);
-    if let Err(e) = poller.cmd_tx.try_send(PollerCmd::UpdatePaths(paths)) {
-        tracing::warn!(source = "github", "Failed to send initial UpdatePaths: {e}");
-    }
-    if let Err(e) = poller
-        .cmd_tx
-        .try_send(PollerCmd::SetIssueFilter(issue_filter))
-    {
-        tracing::warn!(
-            source = "github",
-            "Failed to send initial SetIssueFilter: {e}"
-        );
-    }
-    if let Err(e) = poller
-        .cmd_tx
-        .try_send(PollerCmd::SetPrHideDrafts(pr_hide_drafts))
-    {
-        tracing::warn!(
-            source = "github",
-            "Failed to send initial SetPrHideDrafts: {e}"
-        );
-    }
-    *guard = Some(poller);
+    ensure_polling(state.inner(), app, paths, issue_filter, pr_hide_drafts);
     Ok(())
 }
 
@@ -842,7 +857,6 @@ mod tests {
                 pending,
                 total: failed + pending,
             },
-            check_details: vec![],
             author: String::new(),
             commits: 1,
             mergeable: mergeable.to_string(),
@@ -1126,5 +1140,54 @@ mod tests {
         let cur: Option<String> = None;
         assert!(!should_emit(Some(&prev), &cur, false));
         assert!(should_emit(Some(&prev), &cur, true));
+    }
+
+    // --- IPC/HTTP parity: shared poller start/config path (story 127-89ec) ----
+    // `send_poller_config` is the single command sequence behind both the Tauri
+    // `github_start_polling` command and the HTTP `poller_start` route. The HTTP
+    // route previously dropped SetPrHideDrafts + ForceResync; these guard that the
+    // shared helper carries the full config on the (re)subscribe path and omits
+    // only ForceResync on a fresh cold start.
+
+    #[test]
+    fn send_poller_config_resync_sends_full_sequence() {
+        let (tx, mut rx) = mpsc::channel(8);
+        let poller = GitHubPoller { cmd_tx: tx };
+        send_poller_config(
+            &poller,
+            vec!["/repo".to_string()],
+            "assigned".to_string(),
+            true,
+            true,
+        );
+        assert!(
+            matches!(rx.try_recv(), Ok(PollerCmd::UpdatePaths(p)) if p == vec!["/repo".to_string()])
+        );
+        assert!(matches!(rx.try_recv(), Ok(PollerCmd::SetIssueFilter(f)) if f == "assigned"));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PollerCmd::SetPrHideDrafts(true))
+        ));
+        assert!(matches!(rx.try_recv(), Ok(PollerCmd::ForceResync)));
+        assert!(rx.try_recv().is_err(), "no extra commands expected");
+    }
+
+    #[test]
+    fn send_poller_config_cold_start_omits_resync() {
+        // A freshly started poller has no prior state to re-emit, so cold start
+        // passes resync = false: hide-drafts is still forwarded, ForceResync is not.
+        let (tx, mut rx) = mpsc::channel(8);
+        let poller = GitHubPoller { cmd_tx: tx };
+        send_poller_config(&poller, vec![], String::new(), false, false);
+        assert!(matches!(rx.try_recv(), Ok(PollerCmd::UpdatePaths(_))));
+        assert!(matches!(rx.try_recv(), Ok(PollerCmd::SetIssueFilter(_))));
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(PollerCmd::SetPrHideDrafts(false))
+        ));
+        assert!(
+            rx.try_recv().is_err(),
+            "cold start must not send ForceResync"
+        );
     }
 }

@@ -3,7 +3,7 @@ members = [".", "crates/tuic-bridge", "crates/tuic-cli", "patches/alacritty_term
 resolver = "2"
 
 [workspace.package]
-version = "1.5.1"
+version = "1.5.2"
 
 [package]
 name = "tuicommander"
@@ -16,8 +16,10 @@ default-run = "tuicommander"
 [profile.dev]
 opt-level = 1
 
+# Dependencies compiled at opt-level 1 in dev (was 2): much faster first-build /
+# cold rebuild, runtime still acceptable for dev. whisper/audio only need O1.
 [profile.dev.package."*"]
-opt-level = 2
+opt-level = 1
 
 [profile.release]
 lto = "thin"
@@ -93,7 +95,10 @@ workspace = true
 
 [lib]
 name = "tuicommander_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# Desktop-only: the bin links the lib as rlib (main.rs → tuicommander_lib::run()).
+# staticlib/cdylib are only needed for mobile (iOS/Android) — dropping them makes
+# the huge lib compile once instead of three times. Re-add if mobile is planned.
+crate-type = ["rlib"]
 
 [[bin]]
 name = "tuic-remote"

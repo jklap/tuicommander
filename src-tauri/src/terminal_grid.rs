@@ -5,7 +5,7 @@ use alacritty_terminal::index::{Column, Line, Point};
 use alacritty_terminal::term::cell::{Cell, Flags, Osc133CellType};
 use alacritty_terminal::term::color::{Colors, named_color_to_index};
 use alacritty_terminal::term::search::RegexSearch;
-use alacritty_terminal::term::{Config, Term, TermDamage, TermMode};
+use alacritty_terminal::term::{Config, Term, TermDamage, TermMode, TermParseDamage};
 use alacritty_terminal::vte::ansi::{self, Color, CursorShape, CursorStyle, NamedColor, Rgb};
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -436,26 +436,83 @@ impl TerminalGrid {
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
         self.processor.advance(&mut self.term, data);
 
-        let curr_rows = self.read_screen_text();
+        // Prefer the alacritty parse-damage set: read+diff ONLY the lines whose
+        // content actually changed, instead of rebuilding+diffing the whole screen
+        // (O(rows*cols)) on every PTY chunk. Fall back to a full read+diff when a
+        // full re-read is required (initial frame / resize / scroll / alt-screen /
+        // clear) or when the view is scrolled (display_offset != 0) — the latter
+        // sidesteps any viewport-vs-grid line-index mismatch. The text-equality
+        // check is preserved in BOTH paths, so an over-reported damaged line (e.g.
+        // cursor-only movement) never produces a spurious ChangedRow.
+        let parse_damage = self.term.parse_damage();
+        self.term.reset_parse_damage();
 
+        let must_full = self.prev_rows.is_empty()
+            || self.term.grid().display_offset() != 0
+            || matches!(parse_damage, TermParseDamage::Full);
+
+        if must_full {
+            let curr_rows = self.read_screen_text();
+            let changed: Vec<ChangedRow> = curr_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(i, curr)| {
+                    let prev = self.prev_rows.get(i).map(String::as_str).unwrap_or("");
+                    (curr != prev).then(|| ChangedRow {
+                        row_index: i,
+                        text: curr.clone(),
+                    })
+                })
+                .collect();
+            self.prev_rows = curr_rows;
+            return changed;
+        }
+
+        // Partial path: `prev_rows` is already screen-sized (the first frame and
+        // every resize take the full path above), so damaged indices are valid.
+        let TermParseDamage::Partial(lines) = parse_damage else {
+            unreachable!("Full handled by must_full above")
+        };
+        let mut changed = Vec::new();
+        for i in lines {
+            let Some(curr) = self.row_to_text(Line(i as i32)) else {
+                continue;
+            };
+            let prev = self.prev_rows.get(i).map(String::as_str).unwrap_or("");
+            if curr != prev {
+                if i < self.prev_rows.len() {
+                    self.prev_rows[i].clone_from(&curr);
+                }
+                changed.push(ChangedRow {
+                    row_index: i,
+                    text: curr,
+                });
+            }
+        }
+        changed
+    }
+
+    /// Reference (pre-optimization) implementation of `process`: always rebuilds
+    /// and diffs the ENTIRE visible screen. Kept test-only as the correctness
+    /// oracle for the parse-damage fast path — `process_damage_matches_full_diff`
+    /// asserts the two produce identical `ChangedRow`s across an input matrix.
+    #[cfg(test)]
+    pub(crate) fn process_full(&mut self, data: &[u8]) -> Vec<ChangedRow> {
+        self.processor.advance(&mut self.term, data);
+        self.term.reset_parse_damage();
+        let curr_rows = self.read_screen_text();
         let changed: Vec<ChangedRow> = curr_rows
             .iter()
             .enumerate()
             .filter_map(|(i, curr)| {
                 let prev = self.prev_rows.get(i).map(String::as_str).unwrap_or("");
-                if curr != prev {
-                    Some(ChangedRow {
-                        row_index: i,
-                        text: curr.clone(),
-                    })
-                } else {
-                    None
-                }
+                (curr != prev).then(|| ChangedRow {
+                    row_index: i,
+                    text: curr.clone(),
+                })
             })
             .collect();
-
         self.prev_rows = curr_rows;
-
         changed
     }
 
@@ -1518,6 +1575,74 @@ impl TerminalGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Differential oracle (story 138): the parse-damage fast path in `process()`
+    /// must produce byte-identical `ChangedRow`s to the old full-screen
+    /// rebuild+diff (`process_full`) for every chunk. Two independent
+    /// grids are fed the SAME byte stream; a divergence (e.g. a missed damaged
+    /// line → under-report) surfaces as an assertion failure at that chunk.
+    #[test]
+    fn process_damage_matches_full_diff() {
+        // A matrix exercising the tricky paths: plain text, newlines, clear,
+        // cursor moves + overwrite, colors, tabs, wide (CJK) chars, backspace/CUB,
+        // alt-screen enter/exit, OSC, and scroll-inducing newlines.
+        let inputs: &[&[u8]] = &[
+            b"hello world",
+            b"\r\nsecond line here",
+            b"\x1b[2J\x1b[H", // clear screen + home
+            b"line A\r\nline B\r\nline C",
+            b"\x1b[1;1Hover",                  // cursor home + overwrite row 0
+            b"\x1b[31mred\x1b[0m then normal", // SGR colors (text only compared)
+            b"tab\tstop\there",
+            b"wide \xe4\xb8\xad\xe6\x96\x87 chars", // CJK wide chars + spacers
+            b"\x08\x08\x08xyz",                     // backspaces
+            b"\x1b[5Dmid",                          // CUB then write
+            b"\x1b[?1049h",                         // enter alt screen
+            b"alternate buffer text\r\nrow two",
+            b"\x1b[?1049l", // exit alt screen
+            b"back on primary screen",
+            b"\x1b]0;my title\x07after title", // OSC 0 title + text
+            b"z",
+            b"\r\n\r\n\r\n\r\n\r\n", // several newlines (scrolling)
+            b"final content on a new line",
+        ];
+
+        let mut opt = TerminalGrid::new(24, 80, 1000);
+        let mut reference = TerminalGrid::new(24, 80, 1000);
+
+        for (idx, chunk) in inputs.iter().enumerate() {
+            let mut a = opt.process(chunk);
+            let mut b = reference.process_full(chunk);
+            a.sort_by_key(|r| r.row_index);
+            b.sort_by_key(|r| r.row_index);
+            if a != b {
+                eprintln!("=== chunk {idx} {:?} ===", String::from_utf8_lossy(chunk));
+                eprintln!("DAMAGE path : {a:?}");
+                eprintln!("FULL   path : {b:?}");
+            }
+            assert_eq!(
+                a,
+                b,
+                "ChangedRow mismatch at chunk {idx} ({:?}): damage path diverged from full-diff",
+                String::from_utf8_lossy(chunk),
+            );
+        }
+    }
+
+    /// Cursor-only movement must NOT produce a ChangedRow (text unchanged), even
+    /// though it damages lines — the text-equality guard filters it. Guards the
+    /// core safety property of the over-report-is-safe design.
+    #[test]
+    fn process_ignores_cursor_only_movement() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        grid.process(b"content on row zero\r\nrow one text");
+        // Pure cursor moves: home, down, up, right — no text written.
+        let changed = grid.process(b"\x1b[H\x1b[B\x1b[A\x1b[10C");
+        assert!(
+            changed.is_empty(),
+            "cursor-only movement must not report ChangedRows, got {changed:?}"
+        );
+    }
 
     /// Replay a raw PTY byte capture (e.g. recorded via `script -q file cmd`)
     /// into a fresh grid and dump the full buffer, for offline debugging of

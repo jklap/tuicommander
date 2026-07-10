@@ -133,6 +133,50 @@ pub enum AppEvent {
         llm_used: bool,
         llm_model: Option<String>,
     },
+    /// Reserved lifecycle events for GitHub Ops workflows. Producers are wired
+    /// incrementally as each workflow graduates from primitive to runtime flow.
+    #[allow(dead_code)]
+    #[serde(rename = "review-progress")]
+    ReviewProgress {
+        repo_path: String,
+        payload: serde_json::Value,
+    },
+    #[allow(dead_code)]
+    #[serde(rename = "conflict-assist-status")]
+    ConflictAssistStatus {
+        repo_path: String,
+        payload: serde_json::Value,
+    },
+    #[allow(dead_code)]
+    #[serde(rename = "proposals-ready")]
+    ProposalsReady {
+        repo_path: String,
+        payload: serde_json::Value,
+    },
+    /// Background recreation of a stale worktree directory failed. Emitted on the
+    /// bus (SSE) AND the Tauri window so browser/PWA/remote clients learn the
+    /// outcome, not just the desktop app.
+    #[serde(rename = "worktree-create-failed")]
+    WorktreeCreateFailed {
+        repo_path: String,
+        branch: String,
+        reason: String,
+    },
+}
+
+impl AppEvent {
+    /// Session id for the PTY-scoped variants that are routed to a per-session
+    /// channel in addition to the global bus. `None` for all other variants
+    /// (they ride the global `event_bus` only). Keep this in sync with the
+    /// variants the session-scoped WS handlers care about.
+    pub(crate) fn pty_session_id(&self) -> Option<&str> {
+        match self {
+            AppEvent::PtyParsed { session_id, .. }
+            | AppEvent::PtyExit { session_id }
+            | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
+            _ => None,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -917,8 +961,9 @@ pub struct AppState {
     /// tripping the MCP bridge's 3-failure / 9s health threshold and flipping
     /// it offline.
     pub(crate) ipc_started: std::sync::atomic::AtomicBool,
-    /// Random session token for browser cookie auth — regenerated on each server start.
-    /// Browsers auto-send cookies in fetch(), unlike stored Basic Auth credentials.
+    /// Random session token for browser cookie auth — generated once when empty,
+    /// then persisted in config and reused across server starts (not regenerated
+    /// per start). Browsers auto-send cookies in fetch(), unlike stored Basic Auth.
     /// Behind RwLock so it can be regenerated at runtime (invalidating all sessions).
     pub(crate) session_token: parking_lot::RwLock<String>,
     pub(crate) auth_rate_limits: DashMap<std::net::IpAddr, (u32, Instant)>,
@@ -1109,6 +1154,14 @@ pub struct AppState {
     /// Per-MCP-session broadcast channels for inter-agent messaging notifications.
     /// Each SSE listener subscribes; `send` action pushes here for real-time delivery.
     pub(crate) messaging_channels: DashMap<String, tokio::sync::broadcast::Sender<String>>,
+    /// Per-PTY-session broadcast channels carrying that session's `AppEvent`s
+    /// (`PtyParsed`/`PtyExit`/`SessionClosed`). Populated by `emit_pty_event`
+    /// ALONGSIDE the global `event_bus` (which still feeds `/events` SSE and the
+    /// state accumulator). The session-scoped WS handlers subscribe here instead
+    /// of the global bus, so a session's events are no longer cloned+filtered by
+    /// every other session's WS receiver. Created on-demand when a WS handler
+    /// subscribes; reaped in `cleanup_session`/`tombstone_transient_cleanup`.
+    pub(crate) pty_event_channels: DashMap<String, tokio::sync::broadcast::Sender<AppEvent>>,
     /// Per-session command outcome + error/fix knowledge store.
     /// Populated by pty.rs OSC 133 hooks and SessionState transitions.
     /// Consumed by the agent loop for context injection.
@@ -1163,6 +1216,30 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Emit a PTY-scoped `AppEvent` (`PtyParsed`/`PtyExit`/`SessionClosed`) to
+    /// BOTH transports: the per-session channel (so the session-scoped WS
+    /// handlers receive it directly, without every other session's receiver
+    /// cloning+filtering it) AND the global `event_bus` (which still feeds
+    /// `/events` SSE, the session-state accumulator, relay, watcher, etc.).
+    ///
+    /// The per-session send is best-effort: it only fires when a WS handler has
+    /// created the channel (via `subscribe`) — we never create it on the emit
+    /// side, so sessions no client ever attaches to don't leak a channel. A send
+    /// with no live receivers is a harmless no-op (`Err` dropped), exactly like
+    /// the global bus with no subscribers.
+    ///
+    /// Non-PTY events (repo/dir/github/UI/...) must keep using `event_bus.send`
+    /// directly; `pty_session_id()` returns `None` for them so they'd never reach
+    /// a per-session channel anyway.
+    pub(crate) fn emit_pty_event(&self, event: AppEvent) {
+        if let Some(sid) = event.pty_session_id()
+            && let Some(tx) = self.pty_event_channels.get(sid)
+        {
+            let _ = tx.send(event.clone());
+        }
+        let _ = self.event_bus.send(event);
+    }
+
     /// Acquire one slot in the monitoring-git concurrency limit. Hold the
     /// returned permit for the lifetime of the background git subprocess, then
     /// drop it. Operational (user-initiated) git must NOT call this.
@@ -1274,6 +1351,7 @@ impl AppState {
             session_to_mcp: DashMap::new(),
             session_parent: DashMap::new(),
             messaging_channels: DashMap::new(),
+            pty_event_channels: DashMap::new(),
             session_knowledge: DashMap::new(),
             knowledge_dirty: DashMap::new(),
             has_osc133_integration: DashMap::new(),
@@ -1450,15 +1528,20 @@ fn repo_name_to_prefix(name: &str, existing: &DashMap<String, String>) -> String
     }
 
     let segments = split_name_segments(name);
-    let base = if segments.len() >= 2 {
-        segments.iter().map(|s| &s[..1]).collect::<String>()
-    } else {
-        let s = &segments[0];
-        if s.len() < 3 {
-            s.clone()
-        } else {
-            s[..2].to_string()
+    let base = match segments.as_slice() {
+        // split_name_segments never returns empty (it pushes "sh"), but guard
+        // defensively so a future change can't reintroduce an OOB index.
+        [] => "sh".to_string(),
+        [single] => {
+            if single.chars().count() < 3 {
+                single.clone()
+            } else {
+                single.chars().take(2).collect()
+            }
         }
+        // Multi-word: take the first char of each segment. chars() (not byte
+        // slicing) so multibyte directory names never panic mid-codepoint.
+        multi => multi.iter().filter_map(|s| s.chars().next()).collect(),
     };
 
     let used_prefixes: std::collections::HashSet<String> = existing
@@ -1943,6 +2026,16 @@ impl AppState {
                         ..Default::default()
                     });
 
+                // Unblock-triggered flush (story 091): user-input just cleared
+                // question_confident. If the agent answered a confident question but
+                // stays idle, there is no BUSY→IDLE transition to drain its queued
+                // peer messages — deliver them now. flush_pending_injections is
+                // self-guarded (idle agent, no confident question), and this runs
+                // outside the session_states entry lock to avoid re-entrancy.
+                if event_type == "user-input" {
+                    crate::pty::flush_pending_injections(state, session_id);
+                }
+
                 // Spawn push notification outside the DashMap lock
                 if let Some((sid, prompt)) = push_data
                     && !state
@@ -2007,7 +2100,11 @@ impl AppState {
             | AppEvent::GitHubIssuesUpdate { .. }
             | AppEvent::CloseHtmlTabs { .. }
             | AppEvent::ScheduledJobCompleted { .. }
-            | AppEvent::DiffTriageProgress { .. } => {}
+            | AppEvent::DiffTriageProgress { .. }
+            | AppEvent::ReviewProgress { .. }
+            | AppEvent::ConflictAssistStatus { .. }
+            | AppEvent::ProposalsReady { .. }
+            | AppEvent::WorktreeCreateFailed { .. } => {}
         }
     }
 
@@ -2651,6 +2748,78 @@ pub(crate) mod tests_support {
 mod tests {
     use super::*;
 
+    // ── emit_pty_event: per-session channel + global-bus parity (story 140) ──
+
+    #[tokio::test]
+    async fn emit_pty_event_isolates_per_session_and_mirrors_global_bus() {
+        let state = tests_support::make_test_app_state();
+
+        // A session-scoped WS handler for "a" creates + subscribes to its channel.
+        let mut rx_a = state
+            .pty_event_channels
+            .entry("a".to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(16).0)
+            .subscribe();
+        // A global-bus consumer (e.g. /events SSE, state accumulator) sees all.
+        let mut bus_rx = state.event_bus.subscribe();
+
+        // One event for "a" (has a channel) and one for "b" (no channel attached).
+        state.emit_pty_event(AppEvent::PtyParsed {
+            session_id: "a".to_string(),
+            parsed: serde_json::json!({ "type": "x" }),
+        });
+        state.emit_pty_event(AppEvent::PtyExit {
+            session_id: "b".to_string(),
+        });
+
+        // "a"'s channel receives ONLY a's event — no cross-session leakage, and
+        // no per-session filter block needed on the handler side.
+        match rx_a.try_recv() {
+            Ok(AppEvent::PtyParsed { session_id, .. }) => assert_eq!(session_id, "a"),
+            other => panic!("expected PtyParsed for a, got {other:?}"),
+        }
+        assert!(
+            rx_a.try_recv().is_err(),
+            "session a's channel must not receive session b's event"
+        );
+
+        // The global bus still received BOTH events (parity for SSE/accumulator).
+        let mut seen = Vec::new();
+        while let Ok(e) = bus_rx.try_recv() {
+            seen.push(e.pty_session_id().map(str::to_string));
+        }
+        assert_eq!(seen, vec![Some("a".to_string()), Some("b".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn session_closed_survives_channel_reap() {
+        // Critical invariant: the final "closed" frame must reach the client even
+        // though cleanup reaps the per-session channel right after emitting it.
+        // broadcast drains buffered messages before signalling Closed.
+        let state = tests_support::make_test_app_state();
+        let mut rx = state
+            .pty_event_channels
+            .entry("s".to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(16).0)
+            .subscribe();
+
+        state.emit_pty_event(AppEvent::SessionClosed {
+            session_id: "s".to_string(),
+            reason: "process_exit".to_string(),
+        });
+        // Simulate cleanup_session/tombstone_transient_cleanup dropping the sender.
+        state.pty_event_channels.remove("s");
+
+        match rx.recv().await {
+            Ok(AppEvent::SessionClosed { reason, .. }) => assert_eq!(reason, "process_exit"),
+            other => panic!("closed frame must survive channel reap, got {other:?}"),
+        }
+        assert!(matches!(
+            rx.recv().await,
+            Err(tokio::sync::broadcast::error::RecvError::Closed)
+        ));
+    }
+
     // ── data_dir ─────────────────────────────────────────────
 
     #[test]
@@ -2762,6 +2931,35 @@ mod tests {
     fn prefix_three_word() {
         let m = DashMap::new();
         assert_eq!(repo_name_to_prefix("my-awesome-project", &m), "map");
+    }
+
+    #[test]
+    fn prefix_separator_only_no_panic() {
+        // A directory literally named "---" or "..." splits into no segments;
+        // split_name_segments falls back to ["sh"]. Must not panic.
+        let m = DashMap::new();
+        assert_eq!(repo_name_to_prefix("---", &m), "sh");
+        assert_eq!(repo_name_to_prefix("...", &m), "sh");
+        assert_eq!(repo_name_to_prefix("_._", &m), "sh");
+    }
+
+    #[test]
+    fn prefix_multibyte_single_word_no_panic() {
+        // Non-ASCII single-word name: old &s[..2] byte slice panicked on a
+        // multibyte char boundary. chars().take(2) is safe.
+        let m = DashMap::new();
+        assert_eq!(repo_name_to_prefix("über", &m), "üb");
+        // 2-char multibyte word stays as-is (< 3 chars).
+        assert_eq!(repo_name_to_prefix("ök", &m), "ök");
+    }
+
+    #[test]
+    fn prefix_multibyte_multi_word_no_panic() {
+        // Multi-word name whose first segment starts with a multibyte char:
+        // old &s[..1] byte slice panicked. chars().next() is safe.
+        let m = DashMap::new();
+        assert_eq!(repo_name_to_prefix("über-café", &m), "üc");
+        assert_eq!(repo_name_to_prefix("日本-project", &m), "日p");
     }
 
     // ── assign_term_alias (prefix + counter) ──────────────
@@ -3344,6 +3542,7 @@ mod tests {
             session_to_mcp: DashMap::new(),
             session_parent: DashMap::new(),
             messaging_channels: DashMap::new(),
+            pty_event_channels: DashMap::new(),
             session_knowledge: DashMap::new(),
             knowledge_dirty: DashMap::new(),
             has_osc133_integration: DashMap::new(),
@@ -3947,6 +4146,36 @@ mod tests {
         assert!(
             !s.question_confident,
             "user-input should clear question_confident"
+        );
+    }
+
+    #[test]
+    fn test_user_input_unblock_flushes_pending_injections() {
+        // A peer message queued while a confident question blocked injection must
+        // drain when the user answers (user-input) and the agent stays idle —
+        // there is no BUSY→IDLE transition on that path (story 091 unblock flush).
+        use std::collections::VecDeque;
+        use std::sync::atomic::AtomicU8;
+        let state = fresh_state();
+        state.session_states.get_mut("s1").unwrap().agent_type = Some("claude".to_string());
+        state
+            .shell_states
+            .insert("s1".to_string(), AtomicU8::new(crate::pty::SHELL_IDLE));
+        let q = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "Enter to select", "confident": true }),
+        );
+        apply(&state, &q);
+        let mut pending = VecDeque::new();
+        pending.push_back("[TUIC message from peer] wake".to_string());
+        state.pending_injections.insert("s1".to_string(), pending);
+
+        let ui = make_parsed("user-input", serde_json::json!({ "content": "yes" }));
+        apply(&state, &ui);
+        assert_eq!(
+            state.pending_injections.get("s1").map(|q| q.len()),
+            Some(0),
+            "user-input while idle must drain queued peer messages"
         );
     }
 

@@ -109,6 +109,21 @@ fn err_500(msg: &str) -> Response {
         .into_response()
 }
 
+/// Wrap an `Ok(T)` / `Err(String)` result from a call to an upstream API (e.g.
+/// GitHub) into a JSON HTTP response. Ok → 200 with JSON body, Err → 502 Bad
+/// Gateway with `{"error": msg}` — distinct from [`json_result`]'s 500 because
+/// the failure originates upstream, not in our own server.
+pub(crate) fn upstream_json_result<T: serde::Serialize>(result: Result<T, String>) -> Response {
+    match result {
+        Ok(val) => (StatusCode::OK, Json(serde_json::json!(val))).into_response(),
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({"error": e})),
+        )
+            .into_response(),
+    }
+}
+
 /// Default IPC endpoint path for local MCP bridge connections (Unix domain socket).
 #[cfg(unix)]
 pub(crate) fn socket_path() -> std::path::PathBuf {
@@ -893,9 +908,25 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
         .route("/repo/prs", get(github_routes::repo_pr_statuses))
         .route("/repo/ci", get(github_routes::repo_ci_checks))
         .route("/repo/pr-diff", get(github_routes::repo_pr_diff))
+        .route("/repo/merged-prs", get(github_routes::repo_merged_prs))
+        .route(
+            "/repo/changelog",
+            get(github_routes::repo_generate_changelog),
+        )
+        .route(
+            "/repo/conflict-assist",
+            post(github_routes::repo_conflict_assist),
+        )
         .route("/repo/approve-pr", post(github_routes::repo_approve_pr))
+        .route("/repo/create-pr", post(github_routes::repo_create_pr))
+        .route("/repo/create-issue", post(github_routes::repo_create_issue))
+        .route(
+            "/repo/post-pr-review",
+            post(github_routes::repo_post_pr_review),
+        )
         .route("/repo/prs/batch", post(github_routes::repo_all_pr_statuses))
         .route("/repo/issues", get(github_routes::repo_issues))
+        .route("/repo/issue-detail", get(github_routes::repo_issue_detail))
         .route("/repo/issues/close", post(github_routes::repo_close_issue))
         .route(
             "/repo/issues/reopen",
@@ -1270,6 +1301,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(plugin_routes::plugin_fs_read),
         )
         .route(
+            "/api/plugins/{plugin_id}/fs/read-base64",
+            get(plugin_routes::plugin_fs_read_base64),
+        )
+        .route(
             "/api/plugins/{plugin_id}/fs/tail",
             get(plugin_routes::plugin_fs_tail),
         )
@@ -1365,6 +1400,18 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
     // LLM pipeline needs the desktop providers. Progress streams over `/events`.
     #[cfg(feature = "desktop")]
     let routes = routes.route("/ai/triage/run", post(ai_routes::run_diff_triage_http));
+    #[cfg(feature = "desktop")]
+    let routes = routes.route("/ai/review/pr", post(ai_routes::run_pr_review_http));
+    #[cfg(feature = "desktop")]
+    let routes = routes.route(
+        "/ai/improvements/scan",
+        post(ai_routes::run_improvement_scan_http),
+    );
+    #[cfg(feature = "desktop")]
+    let routes = routes.route(
+        "/repo/create-issue-from-proposal",
+        post(ai_routes::create_issue_from_proposal_http),
+    );
 
     // Static files — SPA frontend (desktop only; not embedded in the remote binary)
     #[cfg(feature = "desktop")]
@@ -1530,6 +1577,26 @@ pub async fn start_server(
                         .agent_inbox
                         .retain(|tuic, _| known_tuic.contains(tuic));
                 }
+
+                // Sweep expired auth rate-limit entries so the map can't grow
+                // unbounded for IPs that fail once and never return (scanners,
+                // IPv6 rotation). Window is read fresh each pass so runtime
+                // config changes take effect on the next sweep.
+                let rl_window = reaper_state
+                    .config
+                    .read()
+                    .services
+                    .auth
+                    .auth_rate_limit_window_secs;
+                let evicted =
+                    auth::sweep_expired_rate_limits(&reaper_state.auth_rate_limits, rl_window);
+                if evicted > 0 {
+                    tracing::debug!(
+                        source = "auth",
+                        evicted,
+                        "Swept expired auth rate-limit entries"
+                    );
+                }
             }
         });
 
@@ -1668,32 +1735,66 @@ pub async fn start_server(
             "0.0.0.0"
         };
         const MAX_PORT_ATTEMPTS: u16 = 3;
+        // Boot-race resilience: on a `make dev` restart the outgoing process
+        // (debug builds skip the single-instance lock) may still hold the port
+        // for a moment, so the fresh boot's bind loses the race. Without a retry
+        // the server would run Unix-socket-only until a settings toggle triggers
+        // restart_server — the "starts without :9876, comes alive when I touch
+        // settings" symptom. Retry the full port sweep with backoff so the boot
+        // waits for the port to free. A genuine 2nd live instance still binds
+        // base_port+1 on the first sweep, so it pays no delay.
+        const BIND_RETRY_ROUNDS: u32 = 6;
+        const BIND_RETRY_BACKOFF_MS: u64 = 500;
 
         let mut listener_result: Option<std::net::TcpListener> = None;
         // Port 0 = OS-assigned, no retry needed
         let attempts = if base_port == 0 { 1 } else { MAX_PORT_ATTEMPTS };
-        for attempt in 0..attempts {
-            let port = base_port + attempt;
-            let bind_addr = format!("{host}:{port}");
-            match std::net::TcpListener::bind(&bind_addr) {
-                Ok(listener) => {
-                    listener.set_nonblocking(true).ok();
-                    if attempt > 0 {
-                        tracing::info!(source = "mcp_http", "Port {base_port} busy, using {port}");
+        'bind: for round in 0..BIND_RETRY_ROUNDS {
+            for attempt in 0..attempts {
+                let port = base_port + attempt;
+                let bind_addr = format!("{host}:{port}");
+                match std::net::TcpListener::bind(&bind_addr) {
+                    Ok(listener) => {
+                        listener.set_nonblocking(true).ok();
+                        if attempt > 0 {
+                            tracing::info!(
+                                source = "mcp_http",
+                                "Port {base_port} busy, using {port}"
+                            );
+                        }
+                        listener_result = Some(listener);
+                        break 'bind;
                     }
-                    listener_result = Some(listener);
-                    break;
-                }
-                Err(_) if attempt + 1 < attempts => {
-                    tracing::warn!(source = "mcp_http", "Port {port} busy, trying {}", port + 1);
-                }
-                Err(e) => {
-                    tracing::error!(
-                        source = "mcp_http",
-                        "Failed to bind TCP on ports {base_port}–{port}: {e}"
-                    );
+                    Err(_) if attempt + 1 < attempts => {
+                        tracing::warn!(
+                            source = "mcp_http",
+                            "Port {port} busy, trying {}",
+                            port + 1
+                        );
+                    }
+                    Err(e) => {
+                        // Whole sweep failed this round. Retry after a backoff to
+                        // ride out a restart race, unless rounds are exhausted.
+                        if round + 1 < BIND_RETRY_ROUNDS {
+                            tracing::warn!(
+                                source = "mcp_http",
+                                "Ports {base_port}–{port} busy (round {}/{BIND_RETRY_ROUNDS}); retrying in {BIND_RETRY_BACKOFF_MS}ms",
+                                round + 1
+                            );
+                        } else {
+                            tracing::error!(
+                                source = "mcp_http",
+                                "Failed to bind TCP on ports {base_port}–{port} after {BIND_RETRY_ROUNDS} rounds: {e}"
+                            );
+                        }
+                    }
                 }
             }
+            // OS-assigned port can't fail meaningfully; don't sleep past the last round.
+            if base_port == 0 || round + 1 >= BIND_RETRY_ROUNDS {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(BIND_RETRY_BACKOFF_MS)).await;
         }
 
         if let Some(listener) = listener_result {
@@ -1910,6 +2011,7 @@ mod tests {
             session_to_mcp: DashMap::new(),
             session_parent: DashMap::new(),
             messaging_channels: DashMap::new(),
+            pty_event_channels: DashMap::new(),
             session_knowledge: DashMap::new(),
             knowledge_dirty: DashMap::new(),
             has_osc133_integration: DashMap::new(),
@@ -2166,6 +2268,16 @@ mod tests {
     #[tokio::test]
     async fn test_config_strips_password_hash() {
         let state = test_state();
+        {
+            let mut cfg = state.config.write();
+            cfg.services.auth.password_hash = "password-hash".to_string();
+            cfg.services.auth.session_token = "session-secret".to_string();
+            cfg.services.auth.session_token_exists = true;
+            cfg.services.relay.token = "relay-secret".to_string();
+            cfg.services.relay.token_exists = Some(true);
+            cfg.services.push.vapid_private_key = "vapid-secret".to_string();
+            cfg.services.push.vapid_private_key_exists = true;
+        }
         let app = build_router(state, false, true);
         let resp = app.oneshot(get_localhost("/config")).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
@@ -2176,6 +2288,30 @@ mod tests {
         assert!(
             config.pointer("/services/auth/password_hash").is_none(),
             "Password hash should be stripped from HTTP response"
+        );
+        assert!(
+            config.pointer("/services/auth/session_token").is_none(),
+            "Session token should be stripped from HTTP response"
+        );
+        assert_eq!(
+            config.pointer("/services/auth/session_token_exists"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert!(
+            config.pointer("/services/relay/token").is_none(),
+            "Relay token should be stripped from HTTP response"
+        );
+        assert_eq!(
+            config.pointer("/services/relay/token_exists"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert!(
+            config.pointer("/services/push/vapid_private_key").is_none(),
+            "VAPID private key should be stripped from HTTP response"
+        );
+        assert_eq!(
+            config.pointer("/services/push/vapid_private_key_exists"),
+            Some(&serde_json::Value::Bool(true))
         );
     }
 
@@ -3334,11 +3470,36 @@ mod tests {
     #[tokio::test]
     async fn test_config_get() {
         let state = test_state();
+        {
+            let mut cfg = state.config.write();
+            cfg.services.auth.password_hash = "password-hash".to_string();
+            cfg.services.auth.session_token = "session-secret".to_string();
+            cfg.services.auth.session_token_exists = true;
+            cfg.services.relay.token = "relay-secret".to_string();
+            cfg.services.relay.token_exists = Some(true);
+            cfg.services.push.vapid_private_key = "vapid-secret".to_string();
+            cfg.services.push.vapid_private_key_exists = true;
+        }
         let result = call_mcp_tool(&state, "config", serde_json::json!({"action": "get"})).await;
         assert!(result["font_family"].as_str().is_some());
         assert!(
             result.pointer("/services/auth/password_hash").is_none(),
             "Password hash should be stripped from MCP tool response"
+        );
+        assert!(result.pointer("/services/auth/session_token").is_none());
+        assert_eq!(
+            result.pointer("/services/auth/session_token_exists"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert!(result.pointer("/services/relay/token").is_none());
+        assert_eq!(
+            result.pointer("/services/relay/token_exists"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert!(result.pointer("/services/push/vapid_private_key").is_none());
+        assert_eq!(
+            result.pointer("/services/push/vapid_private_key_exists"),
+            Some(&serde_json::Value::Bool(true))
         );
     }
 

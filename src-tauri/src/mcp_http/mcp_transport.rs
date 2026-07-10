@@ -7,7 +7,6 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1171,29 +1170,32 @@ fn handle_session(
             if text.is_empty() && key_seq.is_none() {
                 return serde_json::json!({"error": "Action 'input' requires 'input' (text) and/or 'special_key'"});
             }
-            let entry = match state.sessions.get(session_id) {
-                Some(e) => e,
-                None => return serde_json::json!({"error": "Session not found"}),
-            };
-            let mut session = entry.lock();
-            // Write text and special_key as separate writes when both are present.
-            // Ink/raw-mode apps (Claude Code) process input character-by-character;
-            // concatenating text + "\r" into one write causes Enter to be missed.
-            if !text.is_empty() {
-                if let Err(e) = session.writer.write_all(text.as_bytes()) {
-                    return serde_json::json!({"error": format!("Write failed: {}", e)});
+            // Write text and special_key as separate writes (not concatenated
+            // into one buffer) when both are present. Ink/raw-mode apps (Claude
+            // Code) process input character-by-character; concatenating text +
+            // "\r" into one write causes Enter to be missed. Both writes still
+            // go out under a single PTY lock acquisition (write_pty_input_pair)
+            // so a concurrent writer on the same session can't interleave
+            // between the text and the Enter keystroke.
+            match (text.is_empty(), key_seq) {
+                (false, Some(seq)) => {
+                    if let Err(e) =
+                        super::session::write_pty_input_pair(state, session_id, text, seq)
+                    {
+                        return serde_json::json!({"error": e});
+                    }
                 }
-                if let Err(e) = session.writer.flush() {
-                    tracing::warn!(session_id = %session_id, "PTY flush failed: {e}");
+                (false, None) => {
+                    if let Err(e) = super::session::write_pty_input(state, session_id, text) {
+                        return serde_json::json!({"error": e});
+                    }
                 }
-            }
-            if let Some(seq) = key_seq {
-                if let Err(e) = session.writer.write_all(seq.as_bytes()) {
-                    return serde_json::json!({"error": format!("Write failed: {}", e)});
+                (true, Some(seq)) => {
+                    if let Err(e) = super::session::write_pty_input(state, session_id, seq) {
+                        return serde_json::json!({"error": e});
+                    }
                 }
-                if let Err(e) = session.writer.flush() {
-                    tracing::warn!(session_id = %session_id, "PTY flush failed: {e}");
-                }
+                (true, None) => unreachable!("checked above: text.is_empty() && key_seq.is_none()"),
             }
             serde_json::json!({"ok": true})
         }
@@ -1351,7 +1353,7 @@ fn handle_session(
                 // the UI. Without this the reader thread's EOF-driven
                 // session-closed event may never fire (the cloned reader fd
                 // keeps the pty master alive after close_pty_core drops it).
-                let _ = state.event_bus.send(crate::state::AppEvent::SessionClosed {
+                state.emit_pty_event(crate::state::AppEvent::SessionClosed {
                     session_id: session_id.to_string(),
                     reason: "closed".to_string(),
                 });
@@ -1384,7 +1386,7 @@ fn handle_session(
             }
             if crate::pty::kill_pty_core(state, session_id) {
                 tracing::info!(source = "session", session_id = %session_id, "Session killed: SIGKILL");
-                let _ = state.event_bus.send(crate::state::AppEvent::SessionClosed {
+                state.emit_pty_event(crate::state::AppEvent::SessionClosed {
                     session_id: session_id.to_string(),
                     reason: "killed".to_string(),
                 });
@@ -1678,54 +1680,20 @@ async fn handle_worktree(
                 crate::worktree::generate_worktree_name(&existing)
             });
 
-            let config = crate::worktree::WorktreeConfig {
-                task_name: branch_name.clone(),
-                base_repo: path.clone(),
-                branch: Some(branch_name),
-                create_branch: true,
-            };
-
-            let worktrees_dir = crate::worktree::resolve_worktree_dir_for_repo(
-                std::path::Path::new(&path),
-                &state.worktrees_dir,
-            );
-            let config_bg = config.clone();
-            let worktrees_dir_bg = worktrees_dir.clone();
-            let wt_result = tokio::task::spawn_blocking(move || {
-                crate::worktree::create_worktree_with_stale_recovery(
-                    &worktrees_dir_bg,
-                    &config_bg,
-                    base_ref.as_deref(),
-                )
-            })
-            .await;
-            match wt_result {
-                Ok(Ok(wt)) => {
-                    state.invalidate_repo_caches(&path);
-                    let wt_path = wt.path.to_string_lossy().to_string();
-                    let branch_name = wt.branch.clone().unwrap_or_default();
-                    // Notify frontend so it can offer to switch to the new worktree
-                    let _ = state
-                        .event_bus
-                        .send(crate::state::AppEvent::WorktreeCreated {
-                            repo_path: path.clone(),
-                            branch: branch_name.clone(),
-                            worktree_path: wt_path.clone(),
-                        });
-                    #[cfg(feature = "desktop")]
-                    if let Some(handle) = state.app_handle.read().as_ref() {
-                        let _ = handle.emit(
-                            "worktree-created",
-                            serde_json::json!({
-                                "repo_path": path,
-                                "branch": branch_name,
-                                "worktree_path": wt_path,
-                            }),
-                        );
-                    }
+            match super::worktree_routes::create_worktree_shared(
+                state,
+                path.clone(),
+                branch_name,
+                base_ref,
+            )
+            .await
+            {
+                Ok(created) => {
+                    let wt_path = created.path;
+                    let branch_name = created.branch;
                     let mut response = serde_json::json!({
-                        "worktree_path": wt_path,
-                        "branch": wt.branch,
+                        "worktree_path": &wt_path,
+                        "branch": created.worktree.branch,
                     });
                     // Optionally spawn a PTY session in the new worktree
                     if args["spawn_session"].as_bool().unwrap_or(false) {
@@ -1738,32 +1706,11 @@ async fn handle_worktree(
                             }
                         }
                     }
-                    let repo_path_for_script = path.clone();
-                    let wt_path_for_script = wt_path.clone();
-                    if let Some(script) = tokio::task::spawn_blocking(move || {
-                        crate::config::resolve_effective_setup_script(&repo_path_for_script)
-                    })
-                    .await
-                    .ok()
-                    .flatten()
-                    {
-                        let cwd = wt_path_for_script;
-                        match tokio::task::spawn_blocking(move || {
-                            crate::worktree::run_setup_script(script, cwd)
-                        })
-                        .await
-                        {
-                            Ok(Ok(result)) => {
-                                response["setup_script"] = result;
-                            }
-                            Ok(Err(e)) => {
-                                response["setup_script_error"] = serde_json::json!(e);
-                            }
-                            Err(e) => {
-                                response["setup_script_error"] =
-                                    serde_json::json!(format!("task panic: {e}"));
-                            }
-                        }
+                    if let Some(setup_script) = created.setup_script {
+                        response["setup_script"] = setup_script;
+                    }
+                    if let Some(setup_script_error) = created.setup_script_error {
+                        response["setup_script_error"] = setup_script_error;
                     }
                     // Add structured hint for Claude Code clients to spawn a subagent in the worktree
                     if is_claude_code {
@@ -1781,8 +1728,7 @@ async fn handle_worktree(
                     }
                     response
                 }
-                Ok(Err(e)) => serde_json::json!({"error": e}),
-                Err(e) => serde_json::json!({"error": format!("task panic: {e}")}),
+                Err((_status, body)) => body.0,
             }
         }
         "remove" => {
@@ -1807,9 +1753,12 @@ async fn handle_worktree(
                 archive.as_deref(),
                 false,
             ) {
-                Ok(()) => {
+                Ok(outcome) => {
                     state.invalidate_repo_caches(&path);
-                    serde_json::json!({"ok": true})
+                    serde_json::json!({
+                        "ok": true,
+                        "branch_delete_warning": outcome.branch_delete_warning,
+                    })
                 }
                 Err(e) => serde_json::json!({"error": e}),
             }
@@ -1954,6 +1903,10 @@ fn handle_agent(
                 }
             }
 
+            // Initial prompt withheld from argv for prefill-only TUIs (codex):
+            // queued into pending_injections after session registration below.
+            let mut deferred_initial_prompt: Option<String> = None;
+
             if let Some(raw_args) = args.get("args").and_then(|a| a.as_array()) {
                 // Explicit args from caller override everything
                 for arg in raw_args {
@@ -1963,13 +1916,18 @@ fn handle_agent(
                 }
             } else if let Some(ref rc) = resolved {
                 if let Some(ref rc_args) = rc.args {
-                    // Run config matched: merge MCP params, then substitute {prompt}
+                    // Run config matched: merge MCP params, then substitute {prompt}.
+                    // User-authored args are authoritative — flags keep their legacy
+                    // appended placement and the prompt rides argv verbatim (no
+                    // prefill-only deferral): a config like codex ["exec","{prompt}"]
+                    // must not be rewritten behind the user's back.
                     let merged = match merge_mcp_params_into_args(
                         &rc.agent_type,
                         rc_args,
                         args["model"].as_str(),
                         args["print_mode"].as_bool().unwrap_or(false),
                         args["output_format"].as_str(),
+                        false,
                     ) {
                         Ok(m) => m,
                         Err(e) => return serde_json::json!({"error": e}),
@@ -1978,12 +1936,13 @@ fn handle_agent(
                     for arg in &final_args {
                         cmd.arg(arg);
                     }
-                } else if !crate::agent::agent_accepts_bare_prompt(&rc.agent_type) {
-                    // No run config, and this agent's CLI does not take a bare
-                    // positional prompt. Use the built-in per-agent template
+                } else {
+                    // No run config args: use the built-in per-agent template
                     // (mirrors the shipped frontend spawnArgs) so cross-agent
                     // spawns work out of the box; only truly unknown agents fail,
-                    // now with a copy-pasteable example.
+                    // with a copy-pasteable example. Claude rides the same table
+                    // (story 092) — merge's claude flags-first rule keeps its
+                    // argv byte-identical to the retired dedicated branch.
                     match crate::agent::default_prompt_args(&rc.agent_type) {
                         Some(template) => {
                             let merged = match merge_mcp_params_into_args(
@@ -1992,11 +1951,14 @@ fn handle_agent(
                                 args["model"].as_str(),
                                 args["print_mode"].as_bool().unwrap_or(false),
                                 args["output_format"].as_str(),
+                                true,
                             ) {
                                 Ok(m) => m,
                                 Err(e) => return serde_json::json!({"error": e}),
                             };
-                            let final_args = substitute_prompt_in_args(&merged, &effective_prompt);
+                            let (final_args, deferred) =
+                                finalize_spawn_args(&rc.agent_type, &merged, &effective_prompt);
+                            deferred_initial_prompt = deferred;
                             for arg in &final_args {
                                 cmd.arg(arg);
                             }
@@ -2008,20 +1970,6 @@ fn handle_agent(
                             )});
                         }
                     }
-                } else {
-                    // Claude default: MCP param args plus the positional prompt.
-                    if args["print_mode"].as_bool().unwrap_or(false) {
-                        cmd.arg("--print");
-                    }
-                    if let Some(format) = args["output_format"].as_str() {
-                        cmd.arg("--output-format");
-                        cmd.arg(format);
-                    }
-                    if let Some(model) = args["model"].as_str() {
-                        cmd.arg("--model");
-                        cmd.arg(model);
-                    }
-                    cmd.arg(&effective_prompt);
                 }
             } else {
                 // No run config, no explicit args — default MCP param logic
@@ -2104,6 +2052,18 @@ fn handle_agent(
             state
                 .session_states
                 .insert(session_id.clone(), session_state);
+            // Prefill-only TUIs (codex): the task was withheld from argv — queue it
+            // now so the BUSY→IDLE flush types it (text + CR) the moment the child's
+            // TUI reaches its ready prompt. Queued AFTER session_states is inserted:
+            // flush_pending_injections requires agent_type to treat this session as
+            // an injectable agent. Same delivery path as peer messages (story 091).
+            if let Some(initial_prompt) = deferred_initial_prompt {
+                state
+                    .pending_injections
+                    .entry(session_id.clone())
+                    .or_default()
+                    .push_back(initial_prompt);
+            }
             // Register grid_watch so format=grid WebSocket streams work for
             // MCP-spawned agent sessions (mirrors session.rs spawn_pty_session).
             let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
@@ -2520,6 +2480,11 @@ fn handle_config(
                 {
                     o.remove("vapid_private_key");
                 }
+                if let Some(relay) = services.pointer_mut("/relay")
+                    && let Some(o) = relay.as_object_mut()
+                {
+                    o.remove("token");
+                }
             }
             json
         }
@@ -2541,11 +2506,7 @@ fn handle_config(
             // Preserve server-managed secrets
             {
                 let current = state.config.read();
-                config.services.auth.session_token = current.services.auth.session_token.clone();
-                config.services.push.vapid_private_key =
-                    current.services.push.vapid_private_key.clone();
-                config.services.push.vapid_public_key =
-                    current.services.push.vapid_public_key.clone();
+                crate::config::preserve_redacted_app_config_secrets(&mut config, &current);
             }
             match crate::config::save_app_config(config.clone()) {
                 Ok(()) => {
@@ -3789,6 +3750,35 @@ fn substitute_prompt_in_args(args: &[String], prompt: &str) -> Vec<String> {
     }
 }
 
+/// Final argv + optional deferred initial prompt for an orchestrated agent spawn.
+///
+/// For prefill-only TUIs (`crate::agent::prompt_prefill_only`, e.g. codex) the
+/// task must NOT ride in argv — it prefills the interactive input without
+/// submitting, parking the child forever (story 091). Every argv element
+/// carrying `{prompt}` is dropped and the prompt is returned separately for the
+/// caller to queue as a pending injection, delivered (text + CR) on the child's
+/// first idle. All other agents keep the normal placeholder substitution.
+///
+/// Applied ONLY to the built-in `default_prompt_args` template path — a
+/// user-authored run config (e.g. codex `["exec", "{prompt}"]`) is authoritative
+/// and must never be rewritten behind the user's back.
+fn finalize_spawn_args(
+    agent_type: &str,
+    merged: &[String],
+    prompt: &str,
+) -> (Vec<String>, Option<String>) {
+    if crate::agent::prompt_prefill_only(agent_type) {
+        let argv = merged
+            .iter()
+            .filter(|a| !a.contains("{prompt}"))
+            .cloned()
+            .collect();
+        (argv, Some(prompt.to_string()))
+    } else {
+        (substitute_prompt_in_args(merged, prompt), None)
+    }
+}
+
 /// Merge MCP params (model, print_mode, output_format) into run config args.
 /// Returns Ok(merged args) or Err(conflict description).
 ///
@@ -3797,26 +3787,24 @@ fn substitute_prompt_in_args(args: &[String], prompt: &str) -> Vec<String> {
 /// goose, …) they are DROPPED with a `warn` — injecting them makes the child
 /// clap-exit 2 and the spawn silently fails (todo.md O5). `--model` is generic
 /// and passed through for every agent.
+///
+/// Placement: when `default_template` is true (args came from
+/// `default_prompt_args`, not a user run config) claude's flags go FIRST, in
+/// `--print`, `--output-format`, `--model` order — byte-identical to the retired
+/// dedicated claude spawn branch, whose argv put every flag before the
+/// positional prompt (story 092). Everything else — every other agent AND every
+/// user-authored run config (whose args may start with a wrapper subcommand
+/// flags must not precede) — keeps flags appended, as before.
 fn merge_mcp_params_into_args(
     agent_type: &str,
     args: &[String],
     model: Option<&str>,
     print_mode: bool,
     output_format: Option<&str>,
+    default_template: bool,
 ) -> Result<Vec<String>, String> {
-    let mut merged = args.to_vec();
     let is_claude = agent_type == "claude";
-
-    if let Some(model_val) = model {
-        if args.iter().any(|a| a.starts_with("--model")) {
-            return Err(format!(
-                "Conflict: run config already contains --model but MCP param model=\"{}\" was also passed",
-                model_val
-            ));
-        }
-        merged.push("--model".to_string());
-        merged.push(model_val.to_string());
-    }
+    let mut flags: Vec<String> = Vec::new();
 
     if print_mode {
         if !is_claude {
@@ -3825,7 +3813,7 @@ fn merge_mcp_params_into_args(
                 "Dropping Claude-only MCP param print_mode (--print) for non-claude agent"
             );
         } else if !args.iter().any(|a| a.starts_with("--print")) {
-            merged.push("--print".to_string());
+            flags.push("--print".to_string());
         }
     }
 
@@ -3842,11 +3830,31 @@ fn merge_mcp_params_into_args(
                 fmt
             ));
         } else {
-            merged.push("--output-format".to_string());
-            merged.push(fmt.to_string());
+            flags.push("--output-format".to_string());
+            flags.push(fmt.to_string());
         }
     }
 
+    if let Some(model_val) = model {
+        if args.iter().any(|a| a.starts_with("--model")) {
+            return Err(format!(
+                "Conflict: run config already contains --model but MCP param model=\"{}\" was also passed",
+                model_val
+            ));
+        }
+        flags.push("--model".to_string());
+        flags.push(model_val.to_string());
+    }
+
+    let merged = if is_claude && default_template {
+        let mut m = flags;
+        m.extend(args.iter().cloned());
+        m
+    } else {
+        let mut m = args.to_vec();
+        m.extend(flags);
+        m
+    };
     Ok(merged)
 }
 
@@ -3958,6 +3966,7 @@ mod tests {
             session_to_mcp: dashmap::DashMap::new(),
             session_parent: dashmap::DashMap::new(),
             messaging_channels: dashmap::DashMap::new(),
+            pty_event_channels: dashmap::DashMap::new(),
             session_knowledge: dashmap::DashMap::new(),
             knowledge_dirty: dashmap::DashMap::new(),
             has_osc133_integration: dashmap::DashMap::new(),
@@ -4065,6 +4074,62 @@ mod tests {
         assert!(
             state.output_buffers.contains_key(sid),
             "output_buffers should contain session"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_input_updates_same_input_state_as_http_write() {
+        let state = test_state();
+        let result = handle_session(&state, &serde_json::json!({"action": "create"}), None);
+        if result.get("error").is_some() {
+            eprintln!("Skipping: PTY not available in this environment");
+            return;
+        }
+        let sid = result["session_id"].as_str().unwrap();
+
+        let input = handle_session(
+            &state,
+            &serde_json::json!({"action": "input", "session_id": sid, "input": "/"}),
+            None,
+        );
+
+        assert!(input.get("error").is_none(), "unexpected error: {input}");
+        assert!(
+            state
+                .last_input_ms
+                .get(sid)
+                .is_some_and(|stamp| stamp.load(std::sync::atomic::Ordering::Relaxed) > 0),
+            "MCP session(input) must stamp last_input_ms"
+        );
+        assert!(
+            state
+                .slash_mode
+                .get(sid)
+                .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed)),
+            "MCP session(input) must feed InputLineBuffer and enter slash mode for '/'"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_worktree_http_rejects_invalid_repo_path_before_git() {
+        use axum::response::IntoResponse;
+
+        let state = test_state();
+        let response = crate::mcp_http::worktree_routes::create_worktree_http(
+            axum::extract::State(state),
+            axum::Json(crate::mcp_http::types::CreateWorktreeRequest {
+                base_repo: "relative/path".to_string(),
+                branch_name: "feature/test".to_string(),
+                base_ref: None,
+            }),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(
+            response.status(),
+            axum::http::StatusCode::BAD_REQUEST,
+            "invalid repo paths must be rejected before git worktree creation"
         );
     }
 
@@ -7367,6 +7432,110 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
+    // finalize_spawn_args tests (story 091 — prefill-only TUIs)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn finalize_codex_withholds_prompt_from_argv() {
+        // codex's positional prompt only prefills its TUI (never submits):
+        // the placeholder must be dropped and the task deferred for injection.
+        let merged = vec!["{prompt}".to_string()];
+        let (argv, deferred) = finalize_spawn_args("codex", &merged, "say pong");
+        assert!(argv.is_empty(), "codex argv must not carry the task");
+        assert_eq!(deferred.as_deref(), Some("say pong"));
+    }
+
+    #[test]
+    fn finalize_codex_keeps_flags_drops_prompt() {
+        let merged = vec![
+            "{prompt}".to_string(),
+            "--model".to_string(),
+            "o4".to_string(),
+        ];
+        let (argv, deferred) = finalize_spawn_args("codex", &merged, "task");
+        assert_eq!(argv, vec!["--model", "o4"]);
+        assert_eq!(deferred.as_deref(), Some("task"));
+    }
+
+    #[test]
+    fn finalize_codex_defers_even_without_placeholder() {
+        // Run-config args with no {prompt}: substitute would APPEND the prompt,
+        // which for codex still only prefills — defer it instead.
+        let merged = vec!["--fast".to_string()];
+        let (argv, deferred) = finalize_spawn_args("codex", &merged, "task");
+        assert_eq!(argv, vec!["--fast"]);
+        assert_eq!(deferred.as_deref(), Some("task"));
+    }
+
+    #[test]
+    fn finalize_other_agents_substitute_as_before() {
+        let merged = vec!["session".to_string(), "{prompt}".to_string()];
+        let (argv, deferred) = finalize_spawn_args("goose", &merged, "do it");
+        assert_eq!(argv, vec!["session", "do it"]);
+        assert!(deferred.is_none(), "non-prefill agents keep argv delivery");
+    }
+
+    #[test]
+    fn claude_template_argv_byte_identical_to_retired_branch() {
+        // Story 092: claude folded into the default_prompt_args table. The row +
+        // merge's claude flags-first rule must reproduce the retired dedicated
+        // spawn branch's argv EXACTLY (element-for-element) for representative
+        // spawns: prompt only; prompt+model; prompt+print_mode+output_format.
+        let old_branch = |prompt: &str,
+                          model: Option<&str>,
+                          print_mode: bool,
+                          output_format: Option<&str>|
+         -> Vec<String> {
+            // Verbatim ordering of the retired branch:
+            // --print, --output-format F, --model M, <prompt>.
+            let mut argv: Vec<String> = Vec::new();
+            if print_mode {
+                argv.push("--print".to_string());
+            }
+            if let Some(f) = output_format {
+                argv.push("--output-format".to_string());
+                argv.push(f.to_string());
+            }
+            if let Some(m) = model {
+                argv.push("--model".to_string());
+                argv.push(m.to_string());
+            }
+            argv.push(prompt.to_string());
+            argv
+        };
+        let new_path = |prompt: &str,
+                        model: Option<&str>,
+                        print_mode: bool,
+                        output_format: Option<&str>|
+         -> Vec<String> {
+            let template = crate::agent::default_prompt_args("claude").expect("claude row");
+            let merged = merge_mcp_params_into_args(
+                "claude",
+                &template,
+                model,
+                print_mode,
+                output_format,
+                true,
+            )
+            .expect("no conflicts");
+            let (argv, deferred) = finalize_spawn_args("claude", &merged, prompt);
+            assert!(deferred.is_none(), "claude keeps argv prompt delivery");
+            argv
+        };
+        for (model, print_mode, output_format) in [
+            (None, false, None),               // prompt only
+            (Some("opus"), false, None),       // prompt + model
+            (None, true, Some("stream-json")), // prompt + print + format
+        ] {
+            assert_eq!(
+                new_path("fix the bug", model, print_mode, output_format),
+                old_branch("fix the bug", model, print_mode, output_format),
+                "argv drift for model={model:?} print={print_mode} format={output_format:?}"
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
     // merge_mcp_params_into_args tests
     // -----------------------------------------------------------------------
 
@@ -7374,7 +7543,7 @@ mod tests {
     fn merge_params_model_no_conflict() {
         let args = vec!["--fast".to_string()];
         let result =
-            merge_mcp_params_into_args("claude", &args, Some("gpt-4"), false, None).unwrap();
+            merge_mcp_params_into_args("claude", &args, Some("gpt-4"), false, None, false).unwrap();
         assert!(result.contains(&"--model".to_string()));
         assert!(result.contains(&"gpt-4".to_string()));
     }
@@ -7382,7 +7551,7 @@ mod tests {
     #[test]
     fn merge_params_model_conflict() {
         let args = vec!["--model".to_string(), "sonnet".to_string()];
-        let result = merge_mcp_params_into_args("claude", &args, Some("gpt-4"), false, None);
+        let result = merge_mcp_params_into_args("claude", &args, Some("gpt-4"), false, None, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Conflict"));
     }
@@ -7390,14 +7559,14 @@ mod tests {
     #[test]
     fn merge_params_print_mode_appended() {
         let args = vec![];
-        let result = merge_mcp_params_into_args("claude", &args, None, true, None).unwrap();
+        let result = merge_mcp_params_into_args("claude", &args, None, true, None, false).unwrap();
         assert!(result.contains(&"--print".to_string()));
     }
 
     #[test]
     fn merge_params_print_mode_already_present() {
         let args = vec!["--print".to_string()];
-        let result = merge_mcp_params_into_args("claude", &args, None, true, None).unwrap();
+        let result = merge_mcp_params_into_args("claude", &args, None, true, None, false).unwrap();
         // Should not duplicate
         assert_eq!(result.iter().filter(|a| *a == "--print").count(), 1);
     }
@@ -7405,7 +7574,7 @@ mod tests {
     #[test]
     fn merge_params_output_format_conflict() {
         let args = vec!["--output-format".to_string(), "json".to_string()];
-        let result = merge_mcp_params_into_args("claude", &args, None, false, Some("text"));
+        let result = merge_mcp_params_into_args("claude", &args, None, false, Some("text"), false);
         assert!(result.is_err());
     }
 
@@ -7413,7 +7582,7 @@ mod tests {
     fn merge_params_output_format_no_conflict() {
         let args = vec![];
         let result =
-            merge_mcp_params_into_args("claude", &args, None, false, Some("json")).unwrap();
+            merge_mcp_params_into_args("claude", &args, None, false, Some("json"), false).unwrap();
         assert!(result.contains(&"--output-format".to_string()));
         assert!(result.contains(&"json".to_string()));
     }
@@ -7424,7 +7593,7 @@ mod tests {
     #[test]
     fn merge_params_codex_drops_print_mode() {
         let args = vec!["{prompt}".to_string()];
-        let result = merge_mcp_params_into_args("codex", &args, None, true, None).unwrap();
+        let result = merge_mcp_params_into_args("codex", &args, None, true, None, false).unwrap();
         assert!(
             !result.contains(&"--print".to_string()),
             "codex must not receive --print"
@@ -7439,7 +7608,8 @@ mod tests {
     #[test]
     fn merge_params_codex_drops_output_format() {
         let args = vec!["{prompt}".to_string()];
-        let result = merge_mcp_params_into_args("codex", &args, None, false, Some("json")).unwrap();
+        let result =
+            merge_mcp_params_into_args("codex", &args, None, false, Some("json"), false).unwrap();
         assert!(
             !result.contains(&"--output-format".to_string()),
             "codex must not receive --output-format"
@@ -7450,7 +7620,8 @@ mod tests {
     #[test]
     fn merge_params_codex_drops_both() {
         let args = vec!["{prompt}".to_string()];
-        let result = merge_mcp_params_into_args("codex", &args, None, true, Some("json")).unwrap();
+        let result =
+            merge_mcp_params_into_args("codex", &args, None, true, Some("json"), false).unwrap();
         assert!(!result.contains(&"--print".to_string()));
         assert!(!result.contains(&"--output-format".to_string()));
         assert_eq!(result, vec!["{prompt}".to_string()]);
@@ -7459,7 +7630,7 @@ mod tests {
     #[test]
     fn merge_params_codex_neither_is_noop() {
         let args = vec!["{prompt}".to_string()];
-        let result = merge_mcp_params_into_args("codex", &args, None, false, None).unwrap();
+        let result = merge_mcp_params_into_args("codex", &args, None, false, None, false).unwrap();
         assert_eq!(result, vec!["{prompt}".to_string()]);
     }
 
@@ -7468,7 +7639,8 @@ mod tests {
         // --model is generic (codex accepts it) — only print/output-format are gated.
         let args = vec!["{prompt}".to_string()];
         let result =
-            merge_mcp_params_into_args("codex", &args, Some("gpt-5"), true, Some("json")).unwrap();
+            merge_mcp_params_into_args("codex", &args, Some("gpt-5"), true, Some("json"), false)
+                .unwrap();
         assert!(result.contains(&"--model".to_string()));
         assert!(result.contains(&"gpt-5".to_string()));
         assert!(!result.contains(&"--print".to_string()));
@@ -7479,10 +7651,24 @@ mod tests {
     fn merge_params_claude_keeps_both() {
         // Regression: claude behavior unchanged — both flags still injected.
         let args: Vec<String> = vec![];
-        let result = merge_mcp_params_into_args("claude", &args, None, true, Some("json")).unwrap();
+        let result =
+            merge_mcp_params_into_args("claude", &args, None, true, Some("json"), false).unwrap();
         assert!(result.contains(&"--print".to_string()));
         assert!(result.contains(&"--output-format".to_string()));
         assert!(result.contains(&"json".to_string()));
+    }
+
+    #[test]
+    fn merge_params_run_config_claude_keeps_appended_order() {
+        // Regression (codex review, story 092): the claude flags-first rule is
+        // scoped to the default template. A user run config may wrap claude in a
+        // launcher subcommand ("launch claude {prompt}") — prepending flags
+        // before it would feed them to the wrapper. Run-config args keep the
+        // legacy appended placement.
+        let args = vec!["launch".to_string(), "{prompt}".to_string()];
+        let result =
+            merge_mcp_params_into_args("claude", &args, Some("opus"), false, None, false).unwrap();
+        assert_eq!(result, vec!["launch", "{prompt}", "--model", "opus"]);
     }
 
     #[test]

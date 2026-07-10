@@ -137,7 +137,7 @@ impl AudioCapture {
 
     /// Stop capturing and return all collected audio as 16kHz mono f32 PCM.
     /// Consumes self (batch mode compatibility).
-    #[allow(dead_code)]
+    #[allow(dead_code)] // genuinely unused: the only stop() caller (commands.rs) is StreamingSession::stop, not this batch-mode API
     pub fn stop(mut self) -> Vec<f32> {
         self.stream.take();
         self.buffer.lock().drain(..).collect()

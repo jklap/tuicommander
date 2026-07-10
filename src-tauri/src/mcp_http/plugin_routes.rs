@@ -31,6 +31,14 @@ pub(super) async fn plugin_fs_read(
     json_result(crate::plugin_fs::plugin_read_file_impl(&state, q.path, plugin_id).await)
 }
 
+pub(super) async fn plugin_fs_read_base64(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Query(q): Query<FsReadQuery>,
+) -> Response {
+    json_result(crate::plugin_fs::plugin_read_file_base64_impl(&state, q.path, plugin_id).await)
+}
+
 #[derive(Deserialize)]
 pub(super) struct FsTailQuery {
     pub path: String,
@@ -173,8 +181,6 @@ pub(super) struct HttpFetchBody {
     pub method: Option<String>,
     pub headers: Option<HashMap<String, String>>,
     pub body: Option<String>,
-    #[serde(rename = "allowedUrls")]
-    pub allowed_urls: Vec<String>,
 }
 
 pub(super) async fn plugin_http_fetch(
@@ -189,7 +195,6 @@ pub(super) async fn plugin_http_fetch(
             body.method,
             body.headers,
             body.body,
-            body.allowed_urls,
             plugin_id,
         )
         .await,

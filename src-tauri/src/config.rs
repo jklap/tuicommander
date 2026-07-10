@@ -168,7 +168,9 @@ pub(crate) fn persist_atomic(target: &std::path::Path, data: &[u8]) -> Result<()
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {e}"))?;
     }
-    let temp = target.with_extension(format!("tmp.{}", std::process::id()));
+    // Unique per-call temp name (uuid) — a per-process name lets two concurrent
+    // writers to the same target collide on the temp file and corrupt it (#117-a503).
+    let temp = target.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
     std::fs::write(&temp, data).map_err(|e| format!("Failed to write temp file: {e}"))?;
 
     #[cfg(unix)]
@@ -311,8 +313,10 @@ pub(crate) struct AuthConfig {
     pub(crate) username: String,
     #[serde(default)]
     pub(crate) password_hash: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) session_token: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) session_token_exists: bool,
     #[serde(default = "default_session_token_duration_secs")]
     pub(crate) session_token_duration_secs: u64,
     #[serde(default)]
@@ -336,6 +340,7 @@ impl Default for AuthConfig {
             username: String::new(),
             password_hash: String::new(),
             session_token: String::new(),
+            session_token_exists: false,
             session_token_duration_secs: default_session_token_duration_secs(),
             lan_auth_bypass: false,
             auth_rate_limit_max: default_auth_rate_limit_max(),
@@ -391,8 +396,17 @@ pub(crate) struct RelayConfig {
     pub(crate) enabled: bool,
     #[serde(default)]
     pub(crate) url: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) token: String,
+    // `Option<bool>` (unlike the plain `bool` used by session_token_exists /
+    // vapid_private_key_exists) so a partial JSON payload that OMITS this key
+    // (e.g. agent MCP `config/save`, or a partial PUT /config) deserializes to
+    // `None` ("caller didn't touch this") rather than defaulting to `false`
+    // ("caller explicitly cleared it"). preserve_redacted_app_config_secrets
+    // relies on that distinction to avoid silently deleting the stored relay
+    // token — see DATA-1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) token_exists: Option<bool>,
     #[serde(default)]
     pub(crate) session_id: String,
 }
@@ -401,8 +415,10 @@ pub(crate) struct RelayConfig {
 pub(crate) struct PushConfig {
     #[serde(default)]
     pub(crate) enabled: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) vapid_private_key: String,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub(crate) vapid_private_key_exists: bool,
     #[serde(default)]
     pub(crate) vapid_public_key: String,
     #[serde(default = "default_vapid_subject")]
@@ -414,6 +430,7 @@ impl Default for PushConfig {
         Self {
             enabled: false,
             vapid_private_key: String::new(),
+            vapid_private_key_exists: false,
             vapid_public_key: String::new(),
             vapid_subject: default_vapid_subject(),
         }
@@ -432,27 +449,6 @@ pub(crate) struct ServicesConfig {
     pub(crate) relay: RelayConfig,
     #[serde(default)]
     pub(crate) push: PushConfig,
-}
-
-impl ServicesConfig {
-    #[allow(dead_code)]
-    pub(crate) fn validate(&self) -> Vec<String> {
-        let mut warnings = Vec::new();
-        if self.server.enabled && self.auth.password_hash.is_empty() && !self.auth.lan_auth_bypass {
-            warnings.push(
-                "Remote access enabled with no password and LAN bypass off — \
-                 all connections will require auth but no password is set"
-                    .to_string(),
-            );
-        }
-        if self.relay.enabled && self.relay.token.is_empty() {
-            warnings.push("Relay enabled but relay token is empty".to_string());
-        }
-        if self.push.enabled && self.push.vapid_private_key.is_empty() {
-            warnings.push("Push enabled but VAPID private key is empty".to_string());
-        }
-        warnings
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -546,6 +542,11 @@ pub(crate) struct AppConfig {
     /// Auto-copy terminal selection to clipboard
     #[serde(default = "default_true")]
     pub(crate) copy_on_select: bool,
+    /// Honor OSC 52 clipboard-write sequences from terminal output. Disable to
+    /// ignore clipboard writes emitted by displayed files/logs. Frontend-gated
+    /// (the OSC 52 write executes in the renderer); stored here for persistence.
+    #[serde(default = "default_true")]
+    pub(crate) osc52_clipboard: bool,
     /// Show last prompt overlay bar at the top of the terminal
     #[serde(default = "default_true")]
     pub(crate) show_last_prompt: bool,
@@ -628,6 +629,10 @@ fn default_language() -> String {
 
 fn default_vapid_subject() -> String {
     "mailto:noreply@tuicommander.com".to_string()
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn default_update_channel() -> String {
@@ -716,6 +721,7 @@ impl Default for AppConfig {
             intent_tab_title: true,
             suggest_followups: true,
             copy_on_select: true,
+            osc52_clipboard: true,
             show_last_prompt: true,
             bell_style: default_bell_style(),
             global_hotkey: None,
@@ -1280,6 +1286,136 @@ fn migrate_flat_services(val: &mut serde_json::Value) {
     );
 }
 
+fn read_secret(cred: crate::credentials::Credential<'_>) -> Option<String> {
+    match crate::credentials::get(cred) {
+        Ok(value) => value,
+        Err(e) => {
+            tracing::warn!(
+                source = "config",
+                "Failed to read secret from credential vault: {e}"
+            );
+            None
+        }
+    }
+}
+
+fn hydrate_app_config_secrets(config: &mut AppConfig) {
+    if config.services.auth.session_token.is_empty() {
+        if let Some(token) = read_secret(crate::credentials::Credential::RemoteSessionToken) {
+            config.services.auth.session_token = token;
+        }
+    } else if let Err(e) = crate::credentials::set(
+        crate::credentials::Credential::RemoteSessionToken,
+        &config.services.auth.session_token,
+    ) {
+        tracing::warn!(
+            source = "config",
+            "Failed to migrate session token to vault: {e}"
+        );
+    }
+    config.services.auth.session_token_exists = !config.services.auth.session_token.is_empty();
+
+    if config.services.relay.token.is_empty() {
+        if let Some(token) = read_secret(crate::credentials::Credential::RelayToken) {
+            config.services.relay.token = token;
+        }
+    } else if let Err(e) = crate::credentials::set(
+        crate::credentials::Credential::RelayToken,
+        &config.services.relay.token,
+    ) {
+        tracing::warn!(
+            source = "config",
+            "Failed to migrate relay token to vault: {e}"
+        );
+    }
+    config.services.relay.token_exists = Some(!config.services.relay.token.is_empty());
+
+    if config.services.push.vapid_private_key.is_empty() {
+        if let Some(key) = read_secret(crate::credentials::Credential::PushVapidPrivateKey) {
+            config.services.push.vapid_private_key = key;
+        }
+    } else if let Err(e) = crate::credentials::set(
+        crate::credentials::Credential::PushVapidPrivateKey,
+        &config.services.push.vapid_private_key,
+    ) {
+        tracing::warn!(
+            source = "config",
+            "Failed to migrate VAPID private key to vault: {e}"
+        );
+    }
+    config.services.push.vapid_private_key_exists =
+        !config.services.push.vapid_private_key.is_empty();
+}
+
+fn persist_secret(
+    cred: crate::credentials::Credential<'_>,
+    value: &str,
+    exists: bool,
+) -> Result<bool, String> {
+    if !value.is_empty() {
+        crate::credentials::set(cred, value)?;
+        Ok(true)
+    } else if exists {
+        Ok(true)
+    } else {
+        crate::credentials::delete(cred)?;
+        Ok(false)
+    }
+}
+
+fn config_for_disk(mut config: AppConfig) -> Result<AppConfig, String> {
+    config.services.auth.session_token_exists = persist_secret(
+        crate::credentials::Credential::RemoteSessionToken,
+        &config.services.auth.session_token,
+        config.services.auth.session_token_exists,
+    )?;
+    config.services.auth.session_token.clear();
+
+    config.services.relay.token_exists = Some(persist_secret(
+        crate::credentials::Credential::RelayToken,
+        &config.services.relay.token,
+        // `None` (never resolved by preserve_redacted_app_config_secrets) is
+        // treated as "not known to exist" — matches the prior `bool` default.
+        config.services.relay.token_exists.unwrap_or(false),
+    )?);
+    config.services.relay.token.clear();
+
+    config.services.push.vapid_private_key_exists = persist_secret(
+        crate::credentials::Credential::PushVapidPrivateKey,
+        &config.services.push.vapid_private_key,
+        config.services.push.vapid_private_key_exists,
+    )?;
+    config.services.push.vapid_private_key.clear();
+
+    Ok(config)
+}
+
+pub(crate) fn preserve_redacted_app_config_secrets(config: &mut AppConfig, current: &AppConfig) {
+    if config.services.auth.session_token.is_empty() && current.services.auth.session_token_exists {
+        config.services.auth.session_token = current.services.auth.session_token.clone();
+        config.services.auth.session_token_exists = true;
+    }
+    // DATA-1: `token_exists` is `Option<bool>` for relay specifically so we can tell
+    // "caller omitted this field" (None — preserve) apart from "caller explicitly
+    // cleared it" (Some(false) — honor the clear, matches ServicesTab.tsx's
+    // `token_exists = v.length > 0` on the bearer-token input). A partial payload
+    // (agent MCP `config/save`, partial PUT /config) that simply doesn't mention
+    // relay.token_exists must NOT be treated the same as an explicit clear.
+    if config.services.relay.token.is_empty()
+        && config.services.relay.token_exists != Some(false)
+        && current.services.relay.token_exists.unwrap_or(false)
+    {
+        config.services.relay.token = current.services.relay.token.clone();
+        config.services.relay.token_exists = Some(true);
+    }
+    if config.services.push.vapid_private_key.is_empty()
+        && current.services.push.vapid_private_key_exists
+    {
+        config.services.push.vapid_private_key = current.services.push.vapid_private_key.clone();
+        config.services.push.vapid_private_key_exists = true;
+    }
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_app_config() -> AppConfig {
     let path = config_dir().join(APP_CONFIG_FILE);
@@ -1302,7 +1438,10 @@ pub(crate) fn load_app_config() -> AppConfig {
     };
     migrate_flat_services(&mut val);
     match serde_json::from_value(val) {
-        Ok(cfg) => cfg,
+        Ok(mut cfg) => {
+            hydrate_app_config_secrets(&mut cfg);
+            cfg
+        }
         Err(e) => {
             tracing::error!(path = %path.display(), "Config deserialization failed after migration: {e}. Using defaults.");
             AppConfig::default()
@@ -1312,7 +1451,8 @@ pub(crate) fn load_app_config() -> AppConfig {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_app_config(config: AppConfig) -> Result<(), String> {
-    save_json_config(APP_CONFIG_FILE, &config)
+    let disk_config = config_for_disk(config)?;
+    save_json_config(APP_CONFIG_FILE, &disk_config)
 }
 
 // Notification config
@@ -1510,7 +1650,8 @@ pub(crate) fn save_repo_local_config(repo_path: String) -> Result<(), String> {
     };
     let json = serde_json::to_string_pretty(&merged).map_err(|e| e.to_string())?;
     let file = dir.join(REPO_LOCAL_CONFIG_FILE);
-    std::fs::write(&file, json).map_err(|e| format!("Failed to write {}: {e}", file.display()))?;
+    persist_atomic(&file, json.as_bytes())
+        .map_err(|e| format!("Failed to write {}: {e}", file.display()))?;
     Ok(())
 }
 
@@ -1833,6 +1974,7 @@ mod tests {
             suggest_followups: false,
             global_hotkey: Some("CommandOrControl+Shift+T".to_string()),
             copy_on_select: true,
+            osc52_clipboard: true,
             show_last_prompt: false,
             bell_style: "visual".to_string(),
             collapse_tools: true,
@@ -1987,6 +2129,108 @@ mod tests {
         assert_eq!(username, "user2");
         // flat field NOT consumed (migration skipped)
         assert!(val.get("remote_access_enabled").is_some());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn app_config_secrets_roundtrip_through_credential_vault() {
+        let tmp = TempDir::new().unwrap();
+        let _guard = set_config_dir_override(tmp.path().to_path_buf());
+        let _ = crate::credentials::delete(crate::credentials::Credential::RemoteSessionToken);
+        let _ = crate::credentials::delete(crate::credentials::Credential::RelayToken);
+        let _ = crate::credentials::delete(crate::credentials::Credential::PushVapidPrivateKey);
+
+        let mut cfg = AppConfig::default();
+        cfg.services.auth.session_token = "session-secret".to_string();
+        cfg.services.relay.token = "relay-secret".to_string();
+        cfg.services.push.vapid_private_key = "vapid-secret".to_string();
+        cfg.services.push.vapid_public_key = "vapid-public".to_string();
+
+        save_app_config(cfg).unwrap();
+
+        let disk: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(tmp.path().join("config.json")).unwrap())
+                .unwrap();
+        assert!(disk.pointer("/services/auth/session_token").is_none());
+        assert_eq!(
+            disk.pointer("/services/auth/session_token_exists"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert!(disk.pointer("/services/relay/token").is_none());
+        assert_eq!(
+            disk.pointer("/services/relay/token_exists"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert!(disk.pointer("/services/push/vapid_private_key").is_none());
+        assert_eq!(
+            disk.pointer("/services/push/vapid_private_key_exists"),
+            Some(&serde_json::Value::Bool(true))
+        );
+
+        let loaded = load_app_config();
+        assert_eq!(loaded.services.auth.session_token, "session-secret");
+        assert!(loaded.services.auth.session_token_exists);
+        assert_eq!(loaded.services.relay.token, "relay-secret");
+        assert_eq!(loaded.services.relay.token_exists, Some(true));
+        assert_eq!(loaded.services.push.vapid_private_key, "vapid-secret");
+        assert!(loaded.services.push.vapid_private_key_exists);
+    }
+
+    #[test]
+    fn relay_token_exists_omitted_in_json_deserializes_to_none() {
+        // Sanity-check the serde attribute itself: a JSON object that never
+        // mentions "token_exists" must deserialize to `None`, not `Some(false)`.
+        let relay: RelayConfig = serde_json::from_str(
+            r#"{"enabled": true, "url": "wss://relay.example.com", "session_id": "abc"}"#,
+        )
+        .unwrap();
+        assert_eq!(relay.token_exists, None);
+    }
+
+    #[test]
+    fn preserve_redacted_secrets_keeps_relay_token_when_payload_omits_exists_flag() {
+        // DATA-1 regression test: an agent MCP `config/save` (or partial PUT
+        // /config) that never mentions `relay.token_exists` must NOT delete the
+        // stored relay token. Before the fix, `token_exists` was a plain `bool`
+        // that defaulted to `false` on omission, which the old guard read as an
+        // explicit "no token exists" signal and wiped the stored token.
+        let mut current = AppConfig::default();
+        current.services.relay.token = "existing-secret".to_string();
+        current.services.relay.token_exists = Some(true);
+
+        // Simulate a partial payload: caller only touched an unrelated field,
+        // so relay.token / relay.token_exists come back at their JSON defaults
+        // (empty string / None) exactly as `#[serde(default)]` would produce
+        // for a JSON object that omits both keys.
+        let mut incoming = AppConfig::default();
+        assert_eq!(incoming.services.relay.token_exists, None);
+        assert!(incoming.services.relay.token.is_empty());
+
+        preserve_redacted_app_config_secrets(&mut incoming, &current);
+
+        assert_eq!(incoming.services.relay.token, "existing-secret");
+        assert_eq!(incoming.services.relay.token_exists, Some(true));
+    }
+
+    #[test]
+    fn preserve_redacted_secrets_honors_explicit_relay_token_clear() {
+        // The explicit-clear affordance (ServicesTab.tsx sets
+        // `token_exists = v.length > 0` on every keystroke of the bearer-token
+        // input) must keep working: an incoming payload that explicitly says
+        // `token_exists: false` alongside an empty token means "the user
+        // cleared this field" and must NOT be restored from `current`.
+        let mut current = AppConfig::default();
+        current.services.relay.token = "existing-secret".to_string();
+        current.services.relay.token_exists = Some(true);
+
+        let mut incoming = AppConfig::default();
+        incoming.services.relay.token_exists = Some(false);
+        assert!(incoming.services.relay.token.is_empty());
+
+        preserve_redacted_app_config_secrets(&mut incoming, &current);
+
+        assert!(incoming.services.relay.token.is_empty());
+        assert_eq!(incoming.services.relay.token_exists, Some(false));
     }
 
     #[test]
@@ -2205,6 +2449,56 @@ mod tests {
 
         // Verify no temp file remains
         assert!(!temp.exists());
+    }
+
+    #[test]
+    fn persist_atomic_survives_concurrent_writers() {
+        use std::sync::Arc;
+        use std::thread;
+
+        let dir = TempDir::new().unwrap();
+        let target = Arc::new(dir.path().join("concurrent.bin"));
+
+        // Eight writers hammer the SAME target with distinct homogeneous payloads.
+        // With a per-call unique temp name no two writers ever share a temp path,
+        // so every rename atomically installs a fully-written payload. A per-process
+        // temp name (the old bug) would make the writers collide: one truncates the
+        // temp while another renames it, yielding a truncated/interleaved file or a
+        // rename error (panics the thread).
+        let payloads: Vec<Vec<u8>> = (0..8u8).map(|i| vec![b'A' + i; 4096]).collect();
+        let mut handles = Vec::new();
+        for p in payloads.clone() {
+            let target = Arc::clone(&target);
+            handles.push(thread::spawn(move || {
+                for _ in 0..40 {
+                    persist_atomic(&target, &p).unwrap();
+                }
+            }));
+        }
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // The final file must be exactly one writer's full, homogeneous payload.
+        let content = fs::read(&*target).unwrap();
+        assert_eq!(content.len(), 4096, "file truncated → temp-name collision");
+        let byte = content[0];
+        assert!(
+            payloads.iter().any(|p| p[0] == byte),
+            "file byte {byte} matches no writer"
+        );
+        assert!(
+            content.iter().all(|&b| b == byte),
+            "interleaved content → concurrent-write race"
+        );
+
+        // No temp files left behind by any writer.
+        let leftovers: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "temp files leaked: {leftovers:?}");
     }
 
     #[cfg(unix)]

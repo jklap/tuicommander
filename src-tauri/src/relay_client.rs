@@ -1,5 +1,14 @@
 //! Relay client: connects to the cloud relay server via WSS, bridging
-//! E2E-encrypted messages between TUICommander's event bus and the mobile PWA.
+//! encrypted messages between TUICommander's event bus and the mobile PWA.
+//!
+//! TRUST MODEL — this is NOT end-to-end encryption. The AES-256-GCM key is
+//! derived (HKDF) from the relay token, and that SAME token is sent to the
+//! relay for authentication (see `connect_and_run`, the `Bearer {token}`
+//! handshake). The relay operator therefore holds the token and CAN re-derive
+//! the key and decrypt all forwarded messages. The guarantee is transport
+//! encryption with a trusted relay operator — treat the operator as able to
+//! read message contents. True E2E would require a key the relay never sees
+//! (e.g. X25519 ECDH per `docs/research/e2e-relay-server.md`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,10 +55,16 @@ enum PeerStatus {
 }
 
 // ---------------------------------------------------------------------------
-// E2E Encryption (AES-256-GCM with HKDF key derivation)
+// Message Encryption (AES-256-GCM with HKDF key derivation)
+// NOTE: not end-to-end — the key is derived from the relay token, which the
+// relay itself receives for auth, so the relay operator CAN decrypt. See the
+// TRUST MODEL note in the module docs above.
 // ---------------------------------------------------------------------------
 
 /// Derive a 256-bit AES key from the relay token using HKDF-SHA-256.
+///
+/// NOT E2E: the relay receives this same token for authentication and can
+/// therefore re-derive this key (see module-level TRUST MODEL note).
 ///
 /// BREAKING CHANGE: mobile clients must update their key derivation to use the
 /// same HKDF parameters (salt + info) or they will fail to decrypt messages.
@@ -213,7 +228,10 @@ async fn connect_and_run(
     let (ws_stream, _) = tokio_tungstenite::connect_async(ws_url).await?;
     let (mut ws_sink, mut ws_source) = ws_stream.split();
 
-    // Authenticate: send bearer token as first text message
+    // Authenticate: send bearer token as first text message.
+    // NOTE: this is the exact reason the scheme is not E2E — the relay now
+    // holds `relay_token`, the same secret `derive_cipher` uses for the AES
+    // key, so it can decrypt everything below. Trusted-relay, not zero-knowledge.
     ws_sink
         .send(Message::Text(format!("Bearer {relay_token}").into()))
         .await?;
