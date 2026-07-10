@@ -27,6 +27,57 @@ describe("settingsStore", () => {
 		vi.useRealTimers();
 	});
 
+	/** Hydrate the store so save() is unlocked — pre-hydrate saves are refused
+	 *  to avoid clobbering config.json with defaults. */
+	async function hydrateStore(): Promise<void> {
+		mockInvoke.mockResolvedValueOnce({
+			shell: null,
+			font_family: "JetBrains Mono",
+			font_size: 14,
+			theme: "vscode-dark",
+			mcp_server_enabled: false,
+			ide: "vscode",
+			default_font_size: 13,
+		});
+		await store.hydrate();
+	}
+
+	function saveConfigCalls(): unknown[][] {
+		return mockInvoke.mock.calls.filter((c: unknown[]) => c[0] === "save_config");
+	}
+
+	describe("pre-hydrate write protection", () => {
+		it("does not persist before hydrate", async () => {
+			await testInScopeAsync(async () => {
+				store.setIde("cursor");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(saveConfigCalls()).toHaveLength(0);
+			});
+		});
+
+		it("does not persist when hydrate failed", async () => {
+			mockInvoke.mockRejectedValueOnce(new Error("no backend"));
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				store.setIde("cursor");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(saveConfigCalls()).toHaveLength(0);
+			});
+		});
+
+		it("persists after successful hydrate", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				store.setIde("cursor");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(saveConfigCalls()).toHaveLength(1);
+			});
+		});
+	});
+
 	describe("defaults", () => {
 		it("has correct default values", () => {
 			testInScope(() => {
@@ -50,6 +101,7 @@ describe("settingsStore", () => {
 
 		it("persists IDE via debounced save_config", async () => {
 			await testInScopeAsync(async () => {
+				await hydrateStore();
 				store.setIde("cursor");
 				// Not yet saved (debounced)
 				expect(mockInvoke).not.toHaveBeenCalledWith("save_config", expect.anything());
@@ -64,6 +116,7 @@ describe("settingsStore", () => {
 
 		it("coalesces rapid changes into single save", async () => {
 			await testInScopeAsync(async () => {
+				await hydrateStore();
 				store.setIde("cursor");
 				store.setIde("zed");
 				store.setIde("windsurf");
@@ -87,6 +140,7 @@ describe("settingsStore", () => {
 
 		it("persists font via debounced save_config", async () => {
 			await testInScopeAsync(async () => {
+				await hydrateStore();
 				store.setFont("Fira Code");
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
@@ -259,6 +313,7 @@ describe("settingsStore", () => {
 
 		it("persists shell via debounced save", async () => {
 			await testInScopeAsync(async () => {
+				await hydrateStore();
 				store.setShell("/bin/zsh");
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
@@ -272,6 +327,7 @@ describe("settingsStore", () => {
 	describe("setTheme()", () => {
 		it("sets theme and persists via debounced save", async () => {
 			await testInScopeAsync(async () => {
+				await hydrateStore();
 				store.setTheme("dracula");
 				expect(store.state.theme).toBe("dracula");
 				vi.advanceTimersByTime(600);
@@ -286,6 +342,7 @@ describe("settingsStore", () => {
 	describe("setSplitTabMode()", () => {
 		it("sets split tab mode and persists via debounced save", async () => {
 			await testInScopeAsync(async () => {
+				await hydrateStore();
 				store.setSplitTabMode("unified");
 				expect(store.state.splitTabMode).toBe("unified");
 				vi.advanceTimersByTime(600);
@@ -324,6 +381,7 @@ describe("settingsStore", () => {
 
 		it("sets autoShowPrPopover and persists via debounced save", async () => {
 			await testInScopeAsync(async () => {
+				await hydrateStore();
 				store.setAutoShowPrPopover(false);
 				expect(store.state.autoShowPrPopover).toBe(false);
 				vi.advanceTimersByTime(600);
@@ -364,6 +422,7 @@ describe("settingsStore", () => {
 
 		it("persists issueFilter via debounced save_config", async () => {
 			await testInScopeAsync(async () => {
+				await hydrateStore();
 				store.setIssueFilter("mentioned");
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
@@ -447,6 +506,7 @@ describe("settingsStore", () => {
 
 		it("setPrHideDrafts persists via debounced save_config", async () => {
 			await testInScopeAsync(async () => {
+				await hydrateStore();
 				store.setPrHideDrafts(true);
 				vi.advanceTimersByTime(600);
 				await vi.runAllTimersAsync();
@@ -510,6 +570,7 @@ describe("settingsStore", () => {
 
 		it("stores launchers in state and persists them via save_config", async () => {
 			await testInScopeAsync(async () => {
+				await hydrateStore();
 				store.setCustomLaunchers([launcher]);
 				expect(store.state.customLaunchers).toEqual([launcher]);
 

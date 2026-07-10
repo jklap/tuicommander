@@ -296,7 +296,6 @@ describe("useAgentPolling", () => {
 						onunload: () => {},
 					},
 					["pty:write"],
-					[],
 					["claude"],
 				);
 
@@ -352,7 +351,6 @@ describe("useAgentPolling", () => {
 						onunload: () => {},
 					},
 					["pty:write"],
-					[],
 					["claude"],
 				);
 
@@ -368,7 +366,6 @@ describe("useAgentPolling", () => {
 						onunload: () => {},
 					},
 					["pty:write"],
-					[],
 					["codex"],
 				);
 

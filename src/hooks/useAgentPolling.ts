@@ -178,6 +178,12 @@ export function useAgentPolling(): void {
 
 		const pollAll = async () => {
 			const currentIds = terminalsStore.getIds();
+			// NOT parallelized (story 143-8bef): detectAgentForTerminal collects
+			// claimedIds from the OTHER terminals' already-stored agentSessionId to
+			// avoid two terminals claiming the same discovered session. That dedup
+			// only holds if each terminal's claim is persisted before the next is
+			// polled — Promise.allSettled would race and break it (see test
+			// "passes claimed_ids from other terminals to avoid duplicate assignment").
 			for (const id of currentIds) {
 				await detectAgentForTerminal(id);
 			}

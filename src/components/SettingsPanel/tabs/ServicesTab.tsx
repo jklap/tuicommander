@@ -90,13 +90,15 @@ interface AuthConfig {
 	username: string;
 	password_hash: string;
 	session_token_duration_secs: number;
+	session_token_exists?: boolean;
 	lan_auth_bypass: boolean;
 }
 
 interface RelayConfig {
 	enabled: boolean;
 	url: string;
-	token: string;
+	token?: string;
+	token_exists?: boolean;
 	session_id: string;
 }
 
@@ -719,7 +721,7 @@ export const ServicesTab: Component = () => {
 				label={t("services.toggle.enableRelay", "Enable cloud relay")}
 				hint={t(
 					"services.hint.relayDescription",
-					"Connect from anywhere via an E2E-encrypted WebSocket relay. No port forwarding or VPN needed.",
+					"Connect from anywhere via an encrypted WebSocket relay. No port forwarding or VPN needed. Note: traffic is encrypted in transit, but the relay operator can derive the key — this is not end-to-end encryption.",
 				)}
 			/>
 
@@ -757,13 +759,14 @@ export const ServicesTab: Component = () => {
 						setRelayToken(v);
 						saveConfigField((c) => {
 							c.services.relay.token = v;
+							c.services.relay.token_exists = v.length > 0;
 						});
 					}}
 					type="password"
 					placeholder={t("services.placeholder.relayToken", "Paste token from relay server registration")}
 					hint={t(
 						"services.hint.relayToken",
-						"Obtained from the relay server's /register endpoint. Used for both authentication and E2E encryption key derivation.",
+						"Obtained from the relay server's /register endpoint. Used for both authentication and encryption key derivation — because the relay receives this token, it can derive the key, so traffic is not end-to-end encrypted.",
 					)}
 				/>
 

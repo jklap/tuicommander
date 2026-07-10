@@ -536,6 +536,7 @@ function tabTitle(tab: PaneTab): string {
 			const m = mdTabsStore.get(tab.id);
 			if (!m) return tab.id;
 			if (m.type === "claude-usage") return "Claude Usage";
+			if (m.type === "github-ops") return "GitHub Ops";
 			if (m.type === "plugin-panel") return (m as { title?: string }).title ?? "Plugin";
 			if (m.type === "pr-diff") return `PR #${(m as { prNumber: number }).prNumber}`;
 			if ("title" in m && m.title) return m.title as string;

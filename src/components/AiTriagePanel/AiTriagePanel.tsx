@@ -6,6 +6,7 @@ import { repositoriesStore } from "../../stores/repositories";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import p from "../shared/panel.module.css";
+import { SeverityIcon } from "../shared/SeverityIcon";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
 import s from "./AiTriagePanel.module.css";
 
@@ -124,6 +125,25 @@ export const AiTriagePanel: Component<AiTriagePanelProps> = (props) => {
 							</Show>
 						</span>
 					</div>
+					<Show when={(file.findings?.length ?? 0) > 0}>
+						<div class={s.findingsList}>
+							<For each={file.findings}>
+								{(finding) => (
+									<div class={s.findingItem}>
+										<SeverityIcon severity={finding.severity} />
+										<span class={s.findingBody}>
+											<Show when={finding.line != null}>
+												<button class={s.findingLine} title="Open in editor" onClick={() => handleEdit(file.path)}>
+													:{finding.line}
+												</button>
+											</Show>
+											<span class={s.findingMessage}>{finding.message}</span>
+										</span>
+									</div>
+								)}
+							</For>
+						</div>
+					</Show>
 				</div>
 			</div>
 		);

@@ -33,20 +33,44 @@ const {
 	tickerPriority: (sev: string) => number;
 	configToForm: (cfg: Record<string, unknown>) => Record<string, unknown>;
 	formToConfig: (form: Record<string, unknown>, base: Record<string, unknown>) => Record<string, unknown>;
-	buildPanelHtml: (entries: unknown[], cfg: Record<string, unknown>, now: number) => string;
+	buildPanelHtml: (
+		entries: unknown[] | null,
+		cfg: Record<string, unknown>,
+		now: number,
+		opts?: { scanning?: boolean },
+	) => string;
 };
 
 const GIB = 1024 * 1024 * 1024;
 const HOUR = 3600;
 const NOW = 1_000_000_000; // fixed clock
 
+/** Every kind the scanner can emit — mirrors ALL_KINDS in main.js. */
+const KINDS = [
+	"rust",
+	"maven",
+	"node",
+	"jscache",
+	"python",
+	"dotnet",
+	"gradle",
+	"cmake",
+	"swift",
+	"flutter",
+	"terraform",
+	"elixir",
+	"zig",
+	"haskell",
+	"php",
+];
+
 const CFG = {
 	perArtifactWarnBytes: 5 * GIB,
 	totalWarnBytes: 50 * GIB,
 	totalCriticalBytes: 150 * GIB,
 	hotWindowSecs: 24 * HOUR,
-	pollIntervalMs: 300_000,
-	enabledKinds: ["rust", "node", "python", "dotnet", "gradle"],
+	pollIntervalMs: 3_600_000,
+	enabledKinds: [...KINDS],
 };
 
 /** An artifact built `ageHours` ago. */
@@ -156,11 +180,12 @@ describe("build-cleaner pure helpers", () => {
 	});
 
 	describe("config round-trip", () => {
-		it("configToForm converts bytes/secs to GiB/hours", () => {
+		it("configToForm converts bytes/secs/ms to GiB/hours/minutes", () => {
 			const form = configToForm(CFG);
 			expect(form.perArtifactWarnGiB).toBe(5);
 			expect(form.totalWarnGiB).toBe(50);
 			expect(form.hotWindowHours).toBe(24);
+			expect(form.pollIntervalMinutes).toBe(60);
 		});
 
 		it("formToConfig is the inverse and clamps invalid values", () => {
@@ -169,23 +194,24 @@ describe("build-cleaner pure helpers", () => {
 			expect(back.perArtifactWarnBytes).toBe(CFG.perArtifactWarnBytes);
 			expect(back.totalWarnBytes).toBe(CFG.totalWarnBytes);
 			expect(back.hotWindowSecs).toBe(CFG.hotWindowSecs);
+			expect(back.pollIntervalMs).toBe(CFG.pollIntervalMs);
 		});
 
 		it("formToConfig rejects non-positive numbers, falling back to base", () => {
-			const back = formToConfig({ perArtifactWarnGiB: -3, totalWarnGiB: 0 }, CFG);
+			const back = formToConfig({ perArtifactWarnGiB: -3, totalWarnGiB: 0, pollIntervalMinutes: -1 }, CFG);
 			expect(back.perArtifactWarnBytes).toBe(CFG.perArtifactWarnBytes);
 			expect(back.totalWarnBytes).toBe(CFG.totalWarnBytes);
+			expect(back.pollIntervalMs).toBe(CFG.pollIntervalMs);
+		});
+
+		it("formToConfig floors the poll interval at 5 minutes", () => {
+			const back = formToConfig({ pollIntervalMinutes: 1 }, CFG);
+			expect(back.pollIntervalMs).toBe(5 * 60000);
 		});
 
 		it("formToConfig drops unknown kinds and falls back if empty", () => {
 			expect(formToConfig({ enabledKinds: ["rust", "bogus"] }, CFG).enabledKinds).toEqual(["rust"]);
-			expect(formToConfig({ enabledKinds: ["bogus"] }, CFG).enabledKinds).toEqual([
-				"rust",
-				"node",
-				"python",
-				"dotnet",
-				"gradle",
-			]);
+			expect(formToConfig({ enabledKinds: ["bogus"] }, CFG).enabledKinds).toEqual(KINDS);
 		});
 	});
 
@@ -216,6 +242,33 @@ describe("build-cleaner pure helpers", () => {
 			const html = buildPanelHtml([art("rust", 30, 1)], CFG, NOW); // 1h old < 24h window
 			expect(html).toContain("badge-hot");
 			expect(html).toContain(">recent<");
+		});
+
+		it("renders a scanning placeholder for null entries (no scan yet)", () => {
+			const html = buildPanelHtml(null, CFG, NOW);
+			expect(html).toContain("Scanning repositories");
+			expect(html).toContain("Scanning…");
+			expect(html).toContain("disabled");
+			expect(html).not.toContain("dash-stat-grid");
+		});
+
+		it("disables the Rescan button while a scan is in flight over cached entries", () => {
+			const html = buildPanelHtml([art("rust", 30, 48)], CFG, NOW, { scanning: true });
+			expect(html).toContain("Scanning…");
+			expect(html).toContain("disabled");
+			expect(html).toContain("dash-stat-grid"); // cached data still rendered
+		});
+
+		it("aligns columns across per-repo tables via a shared colgroup", () => {
+			const html = buildPanelHtml([art("rust", 30, 48)], CFG, NOW);
+			expect(html).toContain("<colgroup>");
+			expect(html).toContain("table-layout: fixed");
+		});
+
+		it("does not rely on window.confirm (blocked by iframe sandbox)", () => {
+			const html = buildPanelHtml([art("rust", 30, 48)], CFG, NOW);
+			expect(html).not.toContain("window.confirm");
+			expect(html).toContain("armed"); // two-step arm/confirm flow
 		});
 
 		it("escapes paths to prevent HTML injection", () => {

@@ -638,6 +638,9 @@ export const RepoSection: Component<{
 	onToggle: () => void;
 	onToggleCollapsed: () => void;
 	onCheckoutRemoteBranch?: (branchName: string) => void;
+	onAutofixIssue?: (issueNumber: number, prompt: string) => void;
+	onConflictAssist?: (prNumber: number) => void;
+	onPushBranch?: (worktreePath: string) => void;
 	onSwitchBranch: (branchName: string) => void;
 	switchBranchList: () => string[];
 	currentBranch: () => string;
@@ -963,6 +966,9 @@ export const RepoSection: Component<{
 						props.onCheckoutRemoteBranch?.(branch);
 					}}
 					onCreateWorktree={props.onCreateWorktreeFromBranch}
+					onConflictAssist={props.onConflictAssist}
+					onPushBranch={props.onPushBranch}
+					onAutofix={props.onAutofixIssue}
 					onCleanupActive={setRemoteCleanupActive}
 				/>
 			</Show>

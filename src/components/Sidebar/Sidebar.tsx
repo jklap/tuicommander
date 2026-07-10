@@ -44,6 +44,8 @@ export interface SidebarProps {
 	runningGitOps?: Set<string>;
 	onRefreshBranchStats?: () => Promise<void>;
 	onCheckoutRemoteBranch?: (repoPath: string, branchName: string) => void;
+	onAutofixIssue?: (repoPath: string, issueNumber: number, prompt: string) => void;
+	onConflictAssist?: (repoPath: string, prNumber: number) => void;
 	onSwitchBranch?: (repoPath: string, branchName: string) => void;
 	switchBranchLists?: Record<string, string[]>;
 	currentBranches?: Record<string, string>;
@@ -299,6 +301,17 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 				}
 				onCheckoutRemoteBranch={
 					props.onCheckoutRemoteBranch ? (branch) => props.onCheckoutRemoteBranch!(repo.path, branch) : undefined
+				}
+				onAutofixIssue={
+					props.onAutofixIssue
+						? (issueNumber, prompt) => props.onAutofixIssue!(repo.path, issueNumber, prompt)
+						: undefined
+				}
+				onConflictAssist={
+					props.onConflictAssist ? (prNumber) => props.onConflictAssist!(repo.path, prNumber) : undefined
+				}
+				onPushBranch={
+					props.onBackgroundGit ? (worktreePath) => props.onBackgroundGit!(worktreePath, "push", ["push"]) : undefined
 				}
 				onSettings={() => props.onRepoSettings(repo.path)}
 				onRemove={() => props.onRemoveRepo(repo.path)}

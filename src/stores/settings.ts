@@ -3,6 +3,7 @@ import { setLocale } from "../i18n";
 import { invoke } from "../invoke";
 import type { IssueFilterMode } from "../types";
 import { appLogger } from "./appLogger";
+import { toastsStore } from "./toasts";
 
 // Legacy storage keys for one-time migration
 const LEGACY_KEYS = {
@@ -53,6 +54,7 @@ interface RustAppConfig {
 	intent_tab_title: boolean;
 	suggest_followups: boolean;
 	copy_on_select: boolean;
+	osc52_clipboard: boolean;
 	show_last_prompt: boolean;
 	bell_style: string;
 	global_hotkey: string | null;
@@ -360,6 +362,7 @@ interface SettingsStoreState {
 	intentTabTitle: boolean;
 	suggestFollowups: boolean;
 	copyOnSelect: boolean;
+	osc52Clipboard: boolean;
 	showLastPrompt: boolean;
 	bellStyle: "none" | "visual" | "sound" | "both";
 	globalHotkey: string | null;
@@ -411,6 +414,7 @@ function createSettingsStore() {
 		intentTabTitle: true,
 		suggestFollowups: true,
 		copyOnSelect: true,
+		osc52Clipboard: true,
 		showLastPrompt: true,
 		bellStyle: "visual",
 		globalHotkey: null,
@@ -438,6 +442,11 @@ function createSettingsStore() {
 	// (e.g. session_token_duration_secs, mcp_server_enabled). Updated on hydrate.
 	let baseConfig: RustAppConfig | null = null;
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
+	// Write lock: save() serializes the ENTIRE state, so a save before a
+	// successful hydrate would overwrite config.json with defaults, wiping the
+	// user's settings (observed in the field: full config reset to defaults).
+	// No successful hydrate, no persist.
+	let hydrated = false;
 
 	/** Build a full RustAppConfig from current store state + base config fields */
 	function buildConfig(): RustAppConfig {
@@ -467,6 +476,7 @@ function createSettingsStore() {
 			intent_tab_title: state.intentTabTitle,
 			suggest_followups: state.suggestFollowups,
 			copy_on_select: state.copyOnSelect,
+			osc52_clipboard: state.osc52Clipboard,
 			show_last_prompt: state.showLastPrompt,
 			bell_style: state.bellStyle,
 			global_hotkey: state.globalHotkey,
@@ -495,6 +505,13 @@ function createSettingsStore() {
 
 	/** Debounced save — coalesces rapid setting changes into a single IPC call */
 	function save(): void {
+		if (!hydrated) {
+			appLogger.error(
+				"config",
+				"Refusing to persist settings: store not hydrated — would clobber config.json with defaults",
+			);
+			return;
+		}
 		if (saveTimer) clearTimeout(saveTimer);
 		saveTimer = setTimeout(() => {
 			saveTimer = null;
@@ -550,6 +567,7 @@ function createSettingsStore() {
 				setState("disabledAgents", config.disabled_agents ?? []);
 				setState("intentTabTitle", config.intent_tab_title ?? true);
 				setState("copyOnSelect", config.copy_on_select ?? true);
+				setState("osc52Clipboard", config.osc52_clipboard ?? true);
 				setState("showLastPrompt", config.show_last_prompt ?? false);
 				setState("bellStyle", (config.bell_style || "visual") as SettingsStoreState["bellStyle"]);
 				setState("suggestFollowups", config.suggest_followups ?? true);
@@ -576,8 +594,14 @@ function createSettingsStore() {
 				setState("standbyTimeoutMinutes", config.standby_timeout_minutes ?? 5);
 				setState("customLaunchers", config.custom_launchers ?? []);
 				setState("inlineBlameEnabled", config.inline_blame_enabled ?? true);
+				hydrated = true;
 			} catch (err) {
-				appLogger.error("config", "Failed to hydrate settings", err);
+				appLogger.error("config", "Failed to hydrate settings — persistence disabled for this session", err);
+				toastsStore.add(
+					"Settings failed to load",
+					"Running on defaults; changes will NOT be saved. Check logs and restart.",
+					"error",
+				);
 			}
 		},
 
@@ -739,6 +763,12 @@ function createSettingsStore() {
 		/** Set copy-on-select preference */
 		setCopyOnSelect(enabled: boolean): void {
 			setState("copyOnSelect", enabled);
+			save();
+		},
+
+		/** Enable/disable honoring OSC 52 clipboard-write sequences from terminal output */
+		setOsc52Clipboard(enabled: boolean): void {
+			setState("osc52Clipboard", enabled);
 			save();
 		},
 

@@ -2,6 +2,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { type ActionEntry, getActionEntries } from "../../actions/actionRegistry";
 import type { ShortcutHandlers } from "../../hooks/useKeyboardShortcuts";
+import { terminalsStore } from "../../stores/terminals";
+import { makeTerminal, testInScope } from "../helpers/store";
 
 function createMockHandlers(): ShortcutHandlers {
 	return {
@@ -153,6 +155,28 @@ describe("actionRegistry", () => {
 				execute: vi.fn(),
 			};
 			expect(entry.id).toBe("switch-repo:/some/path");
+		});
+
+		it("close-terminal closes the active terminal, not the first tab", () => {
+			testInScope(() => {
+				const first = terminalsStore.add(makeTerminal({ name: "T1" }));
+				const active = terminalsStore.add(makeTerminal({ name: "T2" }));
+				terminalsStore.setActive(active);
+
+				const handlers = createMockHandlers();
+				// terminalIds()[0] would resolve to a different (first) tab — prove we ignore it.
+				(handlers.terminalIds as ReturnType<typeof vi.fn>).mockReturnValue([first, active]);
+
+				const entry = getActionEntries(handlers).find((e) => e.id === "close-terminal");
+				expect(entry).toBeDefined();
+				entry?.execute();
+
+				expect(handlers.closeTerminal).toHaveBeenCalledWith(active);
+				expect(handlers.closeTerminal).not.toHaveBeenCalledWith(first);
+
+				terminalsStore.remove(first);
+				terminalsStore.remove(active);
+			});
 		});
 
 		it("execute calls the corresponding handler", () => {

@@ -28,6 +28,8 @@ export interface PrSectionProps {
 	icon?: "pr" | "user";
 	onCheckout: (branchName: string) => void;
 	onCreateWorktree?: (branchName: string) => void;
+	onConflictAssist?: (prNumber: number) => void;
+	onPushBranch?: (worktreePath: string) => void;
 	onMerged: (branchName: string, baseBranch: string, hasDirtyFiles: boolean) => void;
 }
 
@@ -206,7 +208,12 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 											>
 												&times;
 											</button>
-											<PrDetailContent repoPath={props.repoPath} branch={pr.branch}>
+											<PrDetailContent
+												repoPath={props.repoPath}
+												branch={pr.branch}
+												onConflictAssist={props.onConflictAssist}
+												onPushBranch={props.onPushBranch}
+											>
 												<div class={s.ghItemActions}>
 													<button
 														class={s.ghActionBtn}

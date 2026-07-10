@@ -279,6 +279,16 @@ export const GeneralTab: Component = () => {
 			/>
 
 			<SettingToggle
+				checked={settingsStore.state.osc52Clipboard}
+				onChange={(v) => settingsStore.setOsc52Clipboard(v)}
+				label={t("general.toggle.osc52Clipboard", "Allow OSC 52 clipboard writes")}
+				hint={t(
+					"general.hint.osc52Clipboard",
+					"Let terminal programs set the system clipboard (OSC 52). A notice appears on each write. Disable to ignore clipboard writes from terminal output.",
+				)}
+			/>
+
+			<SettingToggle
 				checked={settingsStore.state.showLastPrompt}
 				onChange={(v) => settingsStore.setShowLastPrompt(v)}
 				label="Show last prompt bar"

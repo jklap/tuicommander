@@ -1,7 +1,8 @@
 import type { Component } from "solid-js";
-import type { MdTabData, PrDiffTab as PrDiffTabData } from "../../stores/mdTabs";
+import type { GithubOpsTab as GithubOpsTabData, MdTabData, PrDiffTab as PrDiffTabData } from "../../stores/mdTabs";
 import { ClaudeUsageDashboard } from "../ClaudeUsageDashboard";
 import { CommandOverview } from "../CommandOverview";
+import { GithubOpsDashboard } from "../GithubOpsDashboard";
 import { HtmlPreviewTab } from "../HtmlPreviewTab";
 import { MarkdownTab } from "../MarkdownTab";
 import { PluginPanel } from "../PluginPanel";
@@ -11,6 +12,7 @@ import { PrDiffTab } from "../PrDiffTab";
 export const MdTabContent: Component<{ tab: MdTabData; onClose: () => void }> = (props) => {
 	const tab = props.tab;
 	if (tab.type === "claude-usage") return <ClaudeUsageDashboard />;
+	if (tab.type === "github-ops") return <GithubOpsDashboard repoPath={(tab as GithubOpsTabData).repoPath} />;
 	if (tab.type === "command-overview") return <CommandOverview />;
 	if (tab.type === "plugin-panel") return <PluginPanel tab={tab} onClose={props.onClose} />;
 	if (tab.type === "pr-diff") {

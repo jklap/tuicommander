@@ -1859,6 +1859,7 @@ const App: Component = () => {
 					if (typeof selected === "string") handleOpenFilePath(selected);
 				} catch (err) {
 					appLogger.error("app", "Open file dialog failed", err);
+					toastsStore.add("Open file failed", String(err), "error", true);
 				}
 			})();
 		},
@@ -1870,6 +1871,7 @@ const App: Component = () => {
 					if (typeof selected === "string") revealFolderInBrowser(selected);
 				} catch (err) {
 					appLogger.error("app", "Open folder dialog failed", err);
+					toastsStore.add("Open folder failed", String(err), "error", true);
 				}
 			})();
 		},
@@ -1881,12 +1883,14 @@ const App: Component = () => {
 					const stat = await invoke<{ exists: boolean; is_dir: boolean }>("stat_path", { path: typed });
 					if (!stat.exists) {
 						appLogger.warn("app", "Open Path: path does not exist", { path: typed });
+						toastsStore.add("Path does not exist", typed, "warn", true);
 						return;
 					}
 					if (stat.is_dir) revealFolderInBrowser(typed);
 					else handleOpenFilePath(typed);
 				} catch (err) {
 					appLogger.error("app", "Open path failed", err);
+					toastsStore.add("Open path failed", String(err), "error", true);
 				}
 			})();
 		},
@@ -1989,6 +1993,7 @@ const App: Component = () => {
 					handleOpenFilePath(target);
 				} catch (err) {
 					appLogger.error("app", "New file creation failed", err);
+					toastsStore.add("New file failed", String(err), "error", true);
 				}
 			})();
 		},
@@ -2632,6 +2637,8 @@ const App: Component = () => {
 					buildAgentMenuItems={buildSidebarAgentMenuItems}
 					onRefreshBranchStats={gitOps.refreshAllBranchStats}
 					onCheckoutRemoteBranch={gitOps.handleCheckoutRemoteBranch}
+					onAutofixIssue={gitOps.handleAutofixIssue}
+					onConflictAssist={gitOps.handleConflictAssist}
 					onSwitchBranch={gitOps.handleSwitchBranch}
 					switchBranchLists={gitOps.switchBranchLists()}
 					currentBranches={gitOps.currentBranches()}

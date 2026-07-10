@@ -183,9 +183,9 @@ export async function setPluginEnabled(id: string, enabled: boolean): Promise<vo
 			pluginRegistry.unregister(id);
 			pluginStore.updatePlugin(id, { loaded: false });
 		} else if (loadedPluginIds.has(id)) {
+			// pluginRegistry.unregister() already issues the Rust-side unregister.
 			pluginRegistry.unregister(id);
 			loadedPluginIds.delete(id);
-			invoke("unregister_loaded_plugin", { pluginId: id }).catch(() => {});
 		}
 	}
 }
@@ -243,10 +243,11 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
 	}
 
 	const plugin = (mod as { default: TuiPlugin }).default;
-	pluginRegistry.register(plugin, manifest.capabilities, manifest.allowedUrls, manifest.agentTypes);
+	// Await register() — it performs Rust registration + onload asynchronously.
+	// Without the await we'd log success and add to loadedPluginIds before those
+	// actually complete (race).
+	await pluginRegistry.register(plugin, manifest.capabilities, manifest.agentTypes);
 	loadedPluginIds.add(manifest.id);
-
-	// Rust-side registration is already handled by pluginRegistry.register()
 
 	logger.info(`Loaded v${manifest.version}`);
 	appLogger.info("plugin", `Loaded plugin "${manifest.id}" v${manifest.version}`);
@@ -277,9 +278,9 @@ async function handlePluginChanged(event: { payload: string[] }): Promise<void> 
 
 		// Unregister if previously loaded
 		if (loadedPluginIds.has(pluginId)) {
+			// pluginRegistry.unregister() already issues the Rust-side unregister.
 			pluginRegistry.unregister(pluginId);
 			loadedPluginIds.delete(pluginId);
-			invoke("unregister_loaded_plugin", { pluginId }).catch(() => {});
 		}
 
 		// Re-discover this specific plugin's manifest

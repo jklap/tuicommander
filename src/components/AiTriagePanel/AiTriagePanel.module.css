@@ -210,6 +210,51 @@
   color: var(--error);
 }
 
+/* Line-level findings surfaced under a file header (LLM review output). */
+.findingsList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding-left: 2px;
+}
+
+.findingItem {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start;
+  gap: 6px;
+  font-size: var(--font-xs);
+}
+
+.findingBody {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+
+.findingLine {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.findingLine:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.findingMessage {
+  color: var(--fg-secondary);
+  overflow-wrap: anywhere;
+}
+
 .fileActions {
   display: flex;
   gap: 4px;

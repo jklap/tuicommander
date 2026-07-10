@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { sendCommand } from "../../utils/sendCommand";
+import { containsShellMetacharacters, sendCommand } from "../../utils/sendCommand";
 
 /**
  * Fake writer that records every call in order. Returns a resolved promise
@@ -100,5 +100,34 @@ describe("sendCommand", () => {
 		await sendCommand(writeFn, "foo", null, "posix");
 		expect(calls.length).toBe(2);
 		expect(calls[1]).toBe("\r");
+	});
+
+	it("withholds the trailing Enter when submit is false", async () => {
+		setPlatform("MacIntel");
+		const { writeFn, calls } = makeRecorder();
+		await sendCommand(writeFn, "rm -rf /", null, "posix", false);
+		// Text is typed (with Ctrl-U prefix) but NOT executed — user must press Enter.
+		expect(calls).toEqual(["\x15rm -rf /"]);
+	});
+
+	it("submits by default (submit omitted) — backward compatible", async () => {
+		setPlatform("MacIntel");
+		const { writeFn, calls } = makeRecorder();
+		await sendCommand(writeFn, "ls", null, "posix");
+		expect(calls).toEqual(["\x15ls", "\r"]);
+	});
+});
+
+describe("containsShellMetacharacters", () => {
+	it("flags command chaining, substitution, and redirection", () => {
+		for (const s of ["a; b", "a | b", "a && b", "$(whoami)", "`id`", "echo > f", "cat < f", "a\nb"]) {
+			expect(containsShellMetacharacters(s)).toBe(true);
+		}
+	});
+
+	it("does not flag plain suggestion prose", () => {
+		for (const s of ["Fix the bug", "Run tests", "Deploy", "Refactor auth module"]) {
+			expect(containsShellMetacharacters(s)).toBe(false);
+		}
 	});
 });

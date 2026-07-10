@@ -644,6 +644,9 @@ export interface PluginHost {
 	/** Read a file as UTF-8 text. Path must be absolute and within $HOME. Requires "fs:read". */
 	readFile(absolutePath: string): Promise<string>;
 
+	/** Read a file as base64-encoded bytes. Path must be absolute and within $HOME. Requires "fs:read". */
+	readFileBase64(absolutePath: string): Promise<string>;
+
 	/**
 	 * Read the last N bytes of a file, skipping partial first line.
 	 * Useful for large JSONL files. Requires "fs:read".
