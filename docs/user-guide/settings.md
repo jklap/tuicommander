@@ -16,6 +16,7 @@ Open settings with `Cmd+,`. Settings are organized into tabs.
 | **Auto-check for updates** | Check for new versions on startup |
 | **Auto-show PR popover** | Automatically display PR details when switching branches. Only shows for OPEN pull requests — CLOSED PRs are hidden, and MERGED PRs fade after 5 minutes of user activity. |
 | **Copy on Select** | Auto-copy terminal selection to clipboard. When text is selected in the terminal, it is immediately copied. A "Copied to clipboard" confirmation appears in the status bar. Enabled by default. Also configurable in Appearance tab. |
+| **Allow OSC 52 clipboard writes** | Let terminal programs set the system clipboard via the OSC 52 escape sequence (used by tmux, vim, ssh yank-over-SSH, etc.). Because OSC 52 is honored from anywhere in the byte stream, a displayed file or log can also overwrite the clipboard — so a non-blocking "Clipboard updated" notice appears on every write. Disable to ignore OSC 52 entirely. Enabled by default. |
 | **Repository defaults** | Base branch, file handling, setup/run scripts applied to new repos |
 | **Experimental Features** | Master toggle for experimental features. When enabled, shows sub-toggles: **AI Chat** (AI Chat panel, shortcuts, command palette entry), **Scroll History** (scrollback overlay with search when scrolling up in agent mode). |
 
@@ -33,6 +34,7 @@ Open settings with `Cmd+,`. Settings are organized into tabs.
 | **Repository groups** | — | — | Create, rename, delete, and color-code groups |
 | **Reset panel sizes** | — | — | Restore sidebar and panel widths to defaults |
 | **Copy on Select** | `boolean` | `true` | Auto-copy terminal selection to clipboard |
+| **Allow OSC 52 clipboard writes** | `boolean` | `true` | Honor OSC 52 clipboard writes from terminal output (shows a notice per write) |
 | **Bell Style** | `none/visual/sound/both` | `visual` | Terminal bell behavior |
 
 ## Agents Tab

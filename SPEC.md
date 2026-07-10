@@ -1,6 +1,6 @@
 # TUICommander Specification
 
-**Version:** 1.5.1
+**Version:** 1.5.2
 **Last Updated:** 2026-05-04
 
 ## Overview
@@ -276,7 +276,7 @@ All stores persist to localStorage:
 - [x] Ideas panel (formerly Notes) with send-to-terminal and delete actions
 - [x] Terminal session persistence across app restarts
 - [x] GitHub GraphQL API (replaces gh CLI for PR/CI data)
-- [x] Multi-account GitHub: multiple github.com logins + GitHub Enterprise Server (PAT), per-repo account bindings with ambiguity chooser, isolated per-account polling/rate-limits/circuit-breaker (see FEATURES.md 8.13)
+- [x] Multi-account GitHub: multiple github.com logins + GitHub Enterprise Server (PAT), per-repo account bindings with ambiguity chooser, isolated per-account polling/rate-limits/circuit-breaker (see FEATURES.md 8.14)
 - [x] Auto-update via tauri-plugin-updater with progress badge
 - [x] Prevent system sleep while agents are working (keepawake)
 - [x] Usage limit detection for Claude Code (weekly/session) with status bar badge
@@ -316,6 +316,7 @@ All stores persist to localStorage:
 - [x] `ai_terminal_*` MCP tools — external agent surface (Claude Code, Cursor) driving TUICommander terminals with user-confirmation gates
 - [x] ChoicePrompt parser variant — numbered confirmation menu detection with destructive-label flagging, PWA overlay, `sendPtyKey()` helper
 - [x] MCP OAuth 2.1 — RFC 9728 + RFC 8414 PKCE flow for upstream MCP servers, `tuic://oauth-callback` deep link, shared `TokenManager` with thundering-herd-safe refresh
+- [x] GitHub Ops dashboard — live review/conflict/autofix/changelog state plus Headless-slot improvement proposals with explicit issue creation
 
 ### Completed (Voice Dictation)
 - [x] Local Whisper inference via whisper-rs (Metal GPU acceleration)

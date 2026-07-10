@@ -61,6 +61,7 @@
 - **Trailing whitespace trimmed** — All copy paths (Cmd+C, Ctrl+C, copy-on-select) strip trailing spaces from terminal rows
 - **Copy on Select** — When enabled (Settings > General > Terminal or Settings > Appearance), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar.
 - **Copy feedback (Cmd+C)** — Copying via Cmd+C shows "Copied to clipboard" in the status bar, consistent with copy-on-select and Ctrl+C paths.
+- **OSC 52 clipboard writes** — Terminal programs (tmux, vim, ssh yank) can set the system clipboard via the OSC 52 escape sequence. Because any displayed file/log can also emit it, each write surfaces a non-blocking "Clipboard updated by &lt;session&gt;" notice, and the behavior can be disabled entirely via Settings > General > Terminal > "Allow OSC 52 clipboard writes". Suggestion chips (OSC 7770 `suggest=`) carrying shell metacharacters are inserted without auto-Enter so a click cannot silently execute a spoofed command.
 
 ### 1.6 Clear Terminal
 - `Cmd+L` — clears display, running processes unaffected
@@ -771,7 +772,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Per-repo settings: storage strategy, prompt on create, delete branch on remove, auto-archive, orphan cleanup, PR merge strategy, after-merge behavior, PR visibility filters (hide drafts/conflicting/CI-failing)
 - Setup script: runs once after creation (e.g., `npm install`)
 - Archive script: runs before a worktree is archived or deleted; non-zero exit blocks the operation
-- Merge & Archive: right-click → merge branch into main, then archive or delete based on setting
+- Merge & Archive: right-click → merge branch into main, then archive or delete based on setting. Conflict cleanup reports `(aborted)` only when `git merge --abort` succeeds; if abort fails, the error includes the manual recovery command.
 - External worktree detection: monitors `.git/worktrees/` for changes from CLI or other tools
 - Remove via sidebar `×` button or context menu (with confirmation)
 - **Worktree Manager panel** (`Cmd+Shift+W` or Command Palette → "Worktree manager"):
@@ -835,6 +836,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Author, timestamps, state, merge readiness, review decision
 - CI check details, labels, line changes, commit count
 - View Diff button: opens PR diff as a dedicated panel tab with collapsible file sections, dual line numbers, and color-coded additions/deletions
+- AI Review: reviews PR diffs from the popover and falls back to a local-clone diff when GitHub refuses to render oversized PR diffs
 - Merge button: visible when PR is open, approved, CI green — merges via GitHub API. Merge method auto-detected from repo-allowed methods; auto-fallback to squash on HTTP 405 rejection
 - Approve button: submit an approving review via GitHub API (remote-only PRs)
 - Post-merge cleanup dialog: after merge, offers checkable steps (switch to base, pull, delete local/remote branch)
@@ -902,17 +904,23 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - MCP HTTP endpoint: `GET /repo/issues?path=...` returns issues JSON
 - MCP HTTP endpoint: `POST /repo/issues/close` closes an issue
 
-### 8.10 Polling
+### 8.10 GitHub Ops Dashboard
+- Dedicated GitHub Ops dashboard tab with live columns for PR review findings, auto-fix sessions, conflict assists, improvement proposals, and CI / merge readiness.
+- Improvement scans run a one-shot Headless-slot LLM pass over local repo context with focus modes: `refactor`, `testing`, and `perf`.
+- Proposals are notification-first: scan results emit `proposals-ready` over desktop events and `/events` SSE; no GitHub issue is created automatically.
+- Each proposal can be promoted to a GitHub issue only through an explicit user action, using the existing authenticated issue creation path.
+
+### 8.11 Polling
 - Active window: every 30 seconds
 - Hidden window: every 2 minutes
 - API budget: ~2 calls/min/repo
 
-### 8.11 Token Resolution
+### 8.12 Token Resolution
 - Priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring token → `gh_token` crate → `gh auth token` CLI
 - `gh_token` crate with empty-string bug workaround
 - Fallback to `gh auth token` CLI
 
-### 8.12 OAuth Device Flow Login
+### 8.13 OAuth Device Flow Login
 - One-click GitHub authentication from Settings > GitHub tab
 - Uses GitHub OAuth App Device Flow (no client secret, works on desktop)
 - Token stored in OS keyring (macOS Keychain, Windows Credential Manager, Linux Secret Service)
@@ -921,7 +929,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - Logout removes OAuth token, falls back to env/gh CLI
 - On 401: auto-clears invalid OAuth token and prompts re-auth
 
-### 8.13 Multiple Accounts (github.com + GitHub Enterprise)
+### 8.14 Multiple Accounts (github.com + GitHub Enterprise)
 GitHub integration is **account-centric**: TUICommander can manage N accounts and each workspace repo is explicitly bound to the account that monitors it (a persisted binding, not derived live from `origin`).
 
 **Account kinds**
@@ -1466,9 +1474,9 @@ All data persisted to platform config directory via Rust:
 - Built-in plugins (TypeScript, compiled with app) and external plugins (JS, loaded at runtime)
 - Hot-reload: file changes in plugin directories trigger automatic re-import
 - Per-plugin error logging with ring buffer (500 entries)
-- Capability-gated access: `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
+- Capability-gated access: `pty:write`, `pty:read`, `ui:markdown`, `ui:sound`, `ui:panel`, `ui:ticker`, `ui:context-menu`, `ui:sidebar`, `ui:file-icons`, `ui:file-preview`, `net:http`, `credentials:read`, `invoke:read_file`, `invoke:list_markdown_files`, `fs:read`, `fs:list`, `fs:watch`, `fs:write`, `fs:rename`, `fs:scan`, `fs:delete`, `exec:cli`, `git:read`
 - CLI execution API: sandboxed execution of whitelisted CLI binaries (`mdkb`) with timeout and size limits
-- Filesystem API: sandboxed read, write, rename, list, tail-read, and watch operations restricted to `$HOME`
+- Filesystem API: sandboxed text read, base64 binary read, write, rename, list, tail-read, and watch operations restricted to `$HOME`
 - HTTP API: outbound requests scoped to manifest-declared URL patterns (SSRF prevention)
 - Credential API: cross-platform credential reading (macOS Keychain, Linux/Windows JSON file) with user consent
 - Panel API: rich HTML panels in sandboxed iframes (`sandbox="allow-scripts"`) with structured message bridge (`onMessage`/`send`) and automatic CSS theme variable injection
@@ -1489,6 +1497,7 @@ All data persisted to platform config directory via Rust:
 - Fetched on demand with 1-hour TTL cache
 - Version comparison for "Update available" detection
 - Install/update via download URL
+- `docx-preview` plugin: previews Word `.docx`/`.dotx` files as clean HTML using Mammoth.js
 
 ### 17.4 Deep Links (`tuic://`)
 - `tuic://install-plugin?url=https://...` — Download and install plugin (HTTPS only, confirmation dialog)

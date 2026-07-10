@@ -78,6 +78,13 @@ The socket at `<config_dir>/mcp.sock` is managed with two safety layers to survi
 | `GET` | `/repo/github-status?path=` | Get GitHub status |
 | `GET` | `/repo/pr-statuses?path=` | Get batch PR statuses |
 | `GET` | `/repo/ci-checks?path=` | Get CI check details |
+| `POST` | `/ai/review/pr` | AI review of a PR diff → line-level findings (Main slot) |
+| `POST` | `/repo/create-pr` | Create a PR (gh wrapper, UI-gated) |
+| `POST` | `/repo/create-issue` | Create an issue (gh wrapper, UI-gated) |
+| `POST` | `/repo/post-pr-review` | Post a PR review with inline comments |
+| `GET` | `/repo/merged-prs?path=&sinceTag=` | Merged PRs via GraphQL (changelog source) |
+| `GET` | `/repo/changelog?path=&sinceTag=` | AI changelog `{markdown, json}` (Headless slot) |
+| `POST` | `/repo/conflict-assist` | Worktree + rebase; reports clean/conflicts + agent prompt |
 
 ### Configuration
 
@@ -86,6 +93,11 @@ The socket at `<config_dir>/mcp.sock` is managed with two safety layers to survi
 | `GET` | `/config` | Get app config |
 | `PUT` | `/config` | Save app config |
 | `POST` | `/auth/hash-password` | Hash password for remote access |
+
+`GET /config` and MCP `config action=get` redact remote-access secrets:
+`services.auth.password_hash`, `services.auth.session_token`,
+`services.relay.token`, and `services.push.vapid_private_key`. The config shape
+exposes only the corresponding `*_exists` booleans for secret presence.
 
 ### Agents
 
@@ -252,9 +264,19 @@ The `session` tool's `action=output` strips ANSI escape codes by default, return
 | `format` | (text) | `"raw"` preserves ANSI escape codes |
 | `since_cursor` | (none) | Cursor from a previous response — returns only new scrollback lines since this position |
 
+`session action=input` and HTTP `POST /sessions/:id/write` share the same PTY
+write path: each write is flushed, stamps `last_input_ms`, and feeds the
+`InputLineBuffer` so slash-mode tracking stays identical for MCP and remote web
+clients.
+
 **Delta reads:** The non-raw output path returns a `cursor` field (monotonic scrollback position). Pass `since_cursor` on subsequent calls to receive only new lines since that position, avoiding full re-reads. The `total_written` field is kept alongside `cursor` for backwards compatibility. When `since_cursor` is provided, screen rows are excluded — only scrollback log lines are returned.
 
 ### MCP Tool: `repo` — Worktree Create (Claude Code Agent Hint)
+
+MCP `repo action=worktree_create` uses the same creation path as HTTP
+`POST /worktrees`, including `base_repo` validation, stale-worktree recovery,
+cache invalidation, `worktree-created` SSE/Tauri events, and setup-script result
+reporting.
 
 When the MCP client identifies as Claude Code (detected via `clientInfo.name` at initialize time), the `repo action=worktree_create` response includes an additional `cc_agent_hint` field:
 
@@ -272,6 +294,10 @@ When the MCP client identifies as Claude Code (detected via `clientInfo.name` at
 This works around Claude Code's inability to change its working directory mid-session. The hint tells CC to spawn a subagent that uses absolute paths for all file operations (Read, Edit, Glob, Grep) and `cd <path> && ...` for shell commands.
 
 Non-Claude Code MCP clients do not receive this field.
+
+### MCP Tool: `repo` — Worktree Remove
+
+MCP `repo action=worktree_remove` returns `{ "ok": true, "branch_delete_warning": null }` on full success. When `delete_branch=true` and safe branch deletion fails after the worktree is removed, the action still succeeds with `branch_delete_warning` populated so clients can report that the worktree was removed but the branch was kept.
 
 ## Upstream MCP Proxy
 
@@ -414,6 +440,7 @@ This requires the client to be launched with `--dangerously-load-development-cha
 When remote access is enabled:
 - Basic Auth with username/password
 - Password stored as bcrypt hash in config
+- Session token, relay token, and VAPID private key stored in the OS keyring-backed credential vault
 - Applied to all endpoints
 
 When MCP-only (localhost):
@@ -442,6 +469,16 @@ invoke("get_repo_info", { path }) → GET /repo/info?path=...
 ```
 
 PTY output in browser mode uses WebSocket instead of Tauri events.
+
+### GitHub Ops AI Routes
+
+Desktop/browser mode exposes the GitHub Ops AI helpers over HTTP; the remote
+daemon does not serve them because they depend on desktop provider credentials.
+
+| Endpoint | Body | Response | Notes |
+|----------|------|----------|-------|
+| `POST /ai/improvements/scan` | `{ repoPath, focus }` | `ImprovementScanResult` | One-shot Headless-slot LLM scan over local repo context (`focus`: `refactor`, `testing`, `perf`). Dual-emits `proposals-ready` to the window and `/events` SSE. |
+| `POST /repo/create-issue-from-proposal` | `{ repoPath, proposal }` | `CreatedIssue` | Explicit user-gated issue creation from one proposal; scan itself never creates issues. |
 
 ## Mobile Transport
 
