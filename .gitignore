@@ -49,6 +49,7 @@ CLAUDE.md
 scripts/*
 !scripts/dev-install.sh
 !scripts/generate-release-notes.sh
+!scripts/hooks/
 !scripts/perf/
 scripts/perf/results/
 marketing

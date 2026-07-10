@@ -21,17 +21,25 @@ export MACOSX_DEPLOYMENT_TARGET ?= 10.15
 # Distribution output
 DIST_DIR=dist-release
 
-.PHONY: all clean dev test build build-dmg check fmt sign verify-sign notarize release dist \
-       nightly github-release preview bump release-notes \
+.PHONY: all clean dev test build build-dmg check cov fmt sign verify-sign notarize release dist \
+       nightly github-release preview bump release-notes hooks \
        gh-debug-on gh-debug-off gh-debug-status gh-debug-logs gh-rate logs
 
 all: build sign
 
-# Run in development mode with hot reload (debug tracing for our code only)
+# Install tracked git hooks (pre-push issue-keyword guard). Idempotent.
+hooks:
+	@bash scripts/hooks/install-hooks.sh
+
+# Run in development mode with frontend-only hot reload (debug tracing for our code only).
 # Pre-builds frontend so the PWA (served from dist/) is up to date.
-dev:
+# `--no-watch` disables the Tauri CLI's Rust file watcher: editing `src-tauri/**`
+# (or its `.rs.tmp.*` scratch files) will NOT rebuild/restart the Rust backend.
+# Vite HMR still reloads the UI (it runs as a separate `beforeDevCommand` process).
+# Rust changes require a manual `make dev` restart — see AGENTS.md "Dev Hot Reload".
+dev: hooks
 	@pnpm exec vite build
-	TAURI_CLI_WATCHER_IGNORE_FILENAME=.taurignore RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev
+	RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch
 
 # Build frontend + launch Tauri dev (for quick manual testing)
 test:
@@ -60,12 +68,23 @@ check:
 	@echo "Running checks..."
 	@rtk pnpm exec tsc --noEmit && echo "  tsc ✓"
 	@rtk pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
+	@bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
 	@cd src-tauri && rtk cargo fmt --check && echo "  rustfmt ✓"
 	@cd src-tauri && rtk cargo clippy --release -- -D warnings && echo "  clippy ✓"
 	@cd src-tauri && ulimit -n 10240 && rtk cargo nextest run && rtk cargo test --doc -q && echo "  rust tests ✓"
 	@bash -o pipefail -c 'rtk pnpm exec vitest run --reporter=dot 2>&1 | tail -3' && echo "  vitest ✓"
 	@rtk pnpm audit --audit-level=high && echo "  pnpm audit ✓"
 	@cd src-tauri && rtk err cargo audit -q --ignore RUSTSEC-2026-0097 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 && echo "  cargo audit ✓"
+
+# Rust coverage: cargo-llvm-cov + nextest. Terminal summary + HTML report.
+# Instrumented artifacts live in target/llvm-cov-target — the normal build
+# cache is untouched, but the first run is a full cold rebuild (whisper.cpp
+# included), so expect several minutes. Doctests are not measured
+# (doctest coverage requires nightly).
+cov:
+	@cd src-tauri && ulimit -n 10240 && rtk cargo llvm-cov nextest
+	@cd src-tauri && rtk cargo llvm-cov report --html
+	@echo "HTML report: src-tauri/target/llvm-cov/html/index.html"
 
 # GitHub API debug logging — toggle at runtime, view logs
 gh-debug-on:
