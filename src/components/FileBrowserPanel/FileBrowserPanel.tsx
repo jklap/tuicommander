@@ -1370,6 +1370,34 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 
 					{/* Flat list view (default, or when searching) */}
 					<Show when={viewMode() === "flat" || searchQuery().trim()}>
+						{/* Go up entry when in a subdirectory and not searching — shown even when the
+						    directory is empty so the user is never stranded without a way back. */}
+						<Show
+							when={
+								!loading() &&
+								!searching() &&
+								!error() &&
+								!searchQuery().trim() &&
+								currentSubdir() !== "." &&
+								currentSubdir() !== ""
+							}
+						>
+							<div
+								class={cx(s.entry, s.entryParent)}
+								role="button"
+								tabIndex={0}
+								onClick={navigateUp}
+								onKeyDown={onClickKeyDown(navigateUp)}
+							>
+								<span class={s.entryIcon}>
+									<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+										<path d="M8 2L2 8l6 6V10h6V6H8V2z" />
+									</svg>
+								</span>
+								<span class={s.entryName}>..</span>
+							</div>
+						</Show>
+
 						<Show when={!loading() && !searching() && !error() && filteredEntries().length === 0}>
 							<div class={s.empty}>
 								{!root()
@@ -1381,24 +1409,6 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 						</Show>
 
 						<Show when={!loading() && !searching() && !error() && filteredEntries().length > 0}>
-							{/* Go up entry when in a subdirectory and not searching */}
-							<Show when={!searchQuery().trim() && currentSubdir() !== "." && currentSubdir() !== ""}>
-								<div
-									class={cx(s.entry, s.entryParent)}
-									role="button"
-									tabIndex={0}
-									onClick={navigateUp}
-									onKeyDown={onClickKeyDown(navigateUp)}
-								>
-									<span class={s.entryIcon}>
-										<svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-											<path d="M8 2L2 8l6 6V10h6V6H8V2z" />
-										</svg>
-									</span>
-									<span class={s.entryName}>..</span>
-								</div>
-							</Show>
-
 							<For each={filteredEntries()}>
 								{(entry, index) => {
 									const isSearch = !!searchQuery().trim();
