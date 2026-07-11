@@ -722,11 +722,6 @@ pub(crate) struct SilenceState {
     /// Strong activity (real output or Working marker) was observed after that
     /// submission. Until then, the old ready prompt is not proof of completion.
     turn_activity_seen: bool,
-    /// Signature of the animated-spinner rows at the last observation. A spinner
-    /// is defined by ANIMATION: if the zone is byte-identical across ticks it is
-    /// a frozen completed-turn summary line (e.g. Claude "✻ Sautéed for 1m 25s"),
-    /// not active work. Used to stop a static glyph from pinning BUSY (#446-596f).
-    spinner_zone_sig: Option<u64>,
 }
 
 impl SilenceState {
@@ -756,24 +751,7 @@ impl SilenceState {
             interrupt_requested_at: None,
             turn_started_by_input: false,
             turn_activity_seen: false,
-            spinner_zone_sig: None,
         }
-    }
-
-    /// Record the current animated-spinner signature and report whether it is
-    /// LIVE (changed since the last observation = still animating). The first
-    /// sighting after a reset counts as live so genuine work start is never
-    /// missed; an unchanged zone on the next tick is a frozen summary line.
-    fn note_spinner_zone_live(&mut self, sig: u64) -> bool {
-        let live = self.spinner_zone_sig != Some(sig);
-        self.spinner_zone_sig = Some(sig);
-        live
-    }
-
-    /// Forget the last spinner signature so the next spinner burst is judged
-    /// live from its first frame. Called whenever the screen is not Working.
-    fn reset_spinner_zone(&mut self) {
-        self.spinner_zone_sig = None;
     }
 
     fn note_explicit_state(&mut self, state: u8, hook_state: bool) {
@@ -1398,23 +1376,18 @@ fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
     AgentScreenActivity::Ready
 }
 
-/// Claude's animated-spinner rows within the scanned content zone.
-///
-/// Claude separators really do frame the input area, unlike Codex. Scan the
-/// content zone when present; during work the prompt box disappears and no
-/// cutoff is found, so the live spinner remains in scope. Shared by the
-/// screen classifier and the liveness signature so the two never drift.
-fn claude_spinner_rows(rows: &[String]) -> Vec<&str> {
-    let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
-    let scan_end = crate::chrome::find_chrome_cutoff(&refs).unwrap_or(rows.len());
-    let scan_start = scan_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
-    rows[scan_start..scan_end]
-        .iter()
-        .map(String::as_str)
-        .filter(|row| crate::chrome::is_spinner_row(row))
-        .collect()
-}
-
+/// Claude/Gemini/Aider screen classification is PROMPT-based only (#446-596f):
+/// Working is never inferred from glyph presence. A spinner is defined by
+/// ANIMATION, and animation is only observable as text above the input area
+/// CHANGING — the PTY reader owns that evidence (a spinner row among the
+/// post-cutoff `changed_rows` latches and keeps BUSY; a byte-identical repaint
+/// produces no ChangedRow, so a frozen glyph physically cannot). Any static
+/// glyph — a completed-turn summary (`✻ Sautéed for 1m 25s`), a `· run /mcp`
+/// hint, HUD bars, banner art — is therefore inert by construction: it cannot
+/// classify Working, cannot latch or hold BUSY, and cannot mask the Ready
+/// prompt below it. Codex is the deliberate exception (presence-based, see
+/// `detect_codex_screen_activity`): its TUI legitimately freezes while a child
+/// process runs.
 fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActivity {
     let content_end = rows
         .iter()
@@ -1424,9 +1397,7 @@ fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActivity {
     let prompt_present = rows[chrome_start..content_end]
         .iter()
         .any(|row| row.trim_start().starts_with('\u{276F}'));
-    if !claude_spinner_rows(rows).is_empty() {
-        AgentScreenActivity::Working
-    } else if prompt_present {
+    if prompt_present {
         AgentScreenActivity::Ready
     } else {
         AgentScreenActivity::Unknown
@@ -1440,45 +1411,20 @@ fn gemini_prompt_present(rows: &[String]) -> bool {
     })
 }
 
-/// Gemini's braille-spinner rows above the prompt.
-fn gemini_spinner_rows(rows: &[String]) -> Vec<&str> {
-    let prompt_idx = rows.iter().rposition(|row| {
-        let t = row.trim_start();
-        t == ">" || t.starts_with("> ")
-    });
-    let scan_end = prompt_idx.unwrap_or(rows.len());
-    let scan_start = scan_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
-    rows[scan_start..scan_end]
-        .iter()
-        .map(String::as_str)
-        .filter(|row| row.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c)))
-        .collect()
-}
-
+/// Prompt-based only — see `detect_claude_screen_activity` for the rationale.
 fn detect_gemini_screen_activity(rows: &[String]) -> AgentScreenActivity {
-    if !gemini_spinner_rows(rows).is_empty() {
-        AgentScreenActivity::Working
-    } else if gemini_prompt_present(rows) {
+    if gemini_prompt_present(rows) {
         AgentScreenActivity::Ready
     } else {
         AgentScreenActivity::Unknown
     }
 }
 
-/// Aider's spinner rows in the last few lines.
-fn aider_spinner_rows(rows: &[String]) -> Vec<&str> {
-    let scan_start = rows.len().saturating_sub(6);
-    rows[scan_start..]
-        .iter()
-        .map(String::as_str)
-        .filter(|row| crate::chrome::is_spinner_row(row))
-        .collect()
-}
-
+/// Prompt-based only — see `detect_claude_screen_activity` for the rationale.
+/// During generation Aider has no bottom input box (prompt_toolkit returned),
+/// so the screen reads Unknown and BUSY is held by spinner movement + silence.
 fn detect_aider_screen_activity(rows: &[String]) -> AgentScreenActivity {
-    if !aider_spinner_rows(rows).is_empty() {
-        AgentScreenActivity::Working
-    } else if rows.iter().rev().take(3).any(|row| row.trim() == ">") {
+    if rows.iter().rev().take(3).any(|row| row.trim() == ">") {
         AgentScreenActivity::Ready
     } else {
         AgentScreenActivity::Unknown
@@ -1495,37 +1441,6 @@ fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> Ag
     }
 }
 
-/// Stable hash of a set of rows.
-fn hash_rows(rows: &[&str]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    for r in rows {
-        r.hash(&mut h);
-    }
-    h.finish()
-}
-
-/// Signature of the animated-spinner rows a screen detector is looking at, for
-/// agents whose Working verdict rests on an ANIMATED spinner (claude, gemini,
-/// aider). Codex's Working comes from a static "esc to interrupt" status line —
-/// its TUI legitimately freezes while a child process runs — so it is exempt
-/// (`None`) and never liveness-gated. `None` also means "no spinner on screen".
-/// Callers compare this across observations: an unchanged signature is a frozen
-/// completed-turn summary line (e.g. `✻ Sautéed for 1m 25s`), not active work.
-fn spinner_zone_sig(agent_type: Option<&str>, rows: &[String]) -> Option<u64> {
-    let spinner_rows = match agent_type {
-        Some("claude") => claude_spinner_rows(rows),
-        Some("gemini") => gemini_spinner_rows(rows),
-        Some("aider") => aider_spinner_rows(rows),
-        _ => return None,
-    };
-    if spinner_rows.is_empty() {
-        None
-    } else {
-        Some(hash_rows(&spinner_rows))
-    }
-}
-
 pub(crate) fn has_ready_screen_adapter(agent_type: Option<&str>) -> bool {
     matches!(agent_type, Some("claude" | "codex" | "gemini" | "aider"))
 }
@@ -1536,34 +1451,24 @@ fn stamp_last_output_now(state: &crate::state::AppState, session_id: &str, now_m
     }
 }
 
-/// Apply positive screen evidence immediately. In particular this repairs an
-/// already-false-idle session: Working is an edge into BUSY, not merely a
-/// keepalive that only runs while the state happens to be busy.
-fn apply_working_screen(
+/// Apply positive working evidence immediately. In particular this repairs an
+/// already-false-idle session: working evidence is an edge into BUSY, not merely
+/// a keepalive that only runs while the state happens to be busy. An explicit
+/// idle marker (agent hook) outranks it until the next busy evidence.
+///
+/// Two sources call this (#446-596f):
+/// - `"working-screen"` — Codex's presence-based `• Working (… esc to
+///   interrupt)` status line (its TUI legitimately freezes while a child runs).
+/// - `"spinner-movement"` — a spinner row among the post-cutoff `changed_rows`.
+///   Changed rows are text-equality diffed, so this fires only while the
+///   spinner actually ANIMATES; a frozen glyph cannot reach here.
+fn apply_working_evidence(
     state: &crate::state::AppState,
     silence: &Arc<Mutex<SilenceState>>,
     session_id: &str,
     now_ms: u64,
+    source: &'static str,
 ) {
-    // Liveness gate (#446-596f): an animated-spinner Working is honored only
-    // while the spinner keeps CHANGING. A frozen zone is a completed-turn
-    // summary line (e.g. Claude "✻ Sautéed for 1m 25s") that would otherwise pin
-    // the session BUSY forever. Codex's status-line Working returns `None` here
-    // (its frozen TUI is genuinely working) and is never gated.
-    let agent_type = state
-        .session_states
-        .get(session_id)
-        .and_then(|s| s.agent_type.clone());
-    // Compute the signature (and drop the buffer lock) BEFORE touching `silence`.
-    let spinner_sig = state
-        .vt_log_buffers
-        .get(session_id)
-        .and_then(|vt| spinner_zone_sig(agent_type.as_deref(), &vt.lock().screen_rows()));
-    if let Some(sig) = spinner_sig
-        && !silence.lock().note_spinner_zone_live(sig)
-    {
-        return;
-    }
     {
         let mut sl = silence.lock();
         if sl.explicit_idle {
@@ -1582,7 +1487,7 @@ fn apply_working_screen(
     {
         tracing::debug!(
             session_id,
-            activity_source = "codex-working-screen",
+            activity_source = source,
             "Shell state → busy"
         );
         emit_shell_state(state, session_id, "busy");
@@ -1909,9 +1814,11 @@ fn spawn_silence_timer(
             }
 
             // Reconcile high-confidence screen evidence before the silence
-            // fallback. This runs regardless of current state so a Working marker
-            // repairs an already-false-idle session instead of merely keeping a
-            // pre-existing BUSY alive.
+            // fallback. Working here means Codex's presence-based status line
+            // (the only screen classifier that returns Working, #446-596f); it
+            // runs regardless of current state so it repairs an already-false-
+            // idle session instead of merely keeping a pre-existing BUSY alive.
+            // Claude/Gemini/Aider BUSY is movement-driven in the reader.
             let agent_type = state
                 .session_states
                 .get(&session_id)
@@ -1925,23 +1832,19 @@ fn spawn_silence_timer(
                 .unwrap_or(AgentScreenActivity::Unknown);
             let screen_confirms_idle = match screen_activity {
                 AgentScreenActivity::Working => {
-                    apply_working_screen(&state, &silence, &session_id, epoch_now);
+                    apply_working_evidence(
+                        &state,
+                        &silence,
+                        &session_id,
+                        epoch_now,
+                        "working-screen",
+                    );
                     false
                 }
-                AgentScreenActivity::Ready => {
-                    let mut sl = silence.lock();
-                    sl.reset_spinner_zone();
-                    sl.note_ready_screen()
-                }
-                AgentScreenActivity::Interrupted => {
-                    let mut sl = silence.lock();
-                    sl.reset_spinner_zone();
-                    sl.note_interrupted_screen()
-                }
+                AgentScreenActivity::Ready => silence.lock().note_ready_screen(),
+                AgentScreenActivity::Interrupted => silence.lock().note_interrupted_screen(),
                 AgentScreenActivity::Unknown => {
-                    let mut sl = silence.lock();
-                    sl.reset_spinner_zone();
-                    sl.note_unknown_screen();
+                    silence.lock().note_unknown_screen();
                     false
                 }
             };
@@ -3218,18 +3121,16 @@ impl ChunkProcessor {
         // generic chrome cutoff is a presentation/logging boundary and must not
         // erase agent-specific liveness evidence (Codex tool separators are the
         // canonical counterexample).
+        let agent_type = state
+            .session_states
+            .get(session_id)
+            .and_then(|s| s.agent_type.clone());
         let screen_activity = screen_cache
             .as_ref()
-            .map(|rows| {
-                let agent_type = state
-                    .session_states
-                    .get(session_id)
-                    .and_then(|s| s.agent_type.clone());
-                detect_agent_screen_activity(agent_type.as_deref(), rows)
-            })
+            .map(|rows| detect_agent_screen_activity(agent_type.as_deref(), rows))
             .unwrap_or(AgentScreenActivity::Unknown);
         if screen_activity == AgentScreenActivity::Working && !explicit_idle_in_chunk {
-            apply_working_screen(state, silence, session_id, now_epoch_ms());
+            apply_working_evidence(state, silence, session_id, now_epoch_ms(), "working-screen");
         }
 
         // Stamp last_output_ms for real output and for active spinner repaints.
@@ -3239,11 +3140,12 @@ impl ChunkProcessor {
         //
         // Spinner detection runs on the SAME post-cutoff `changed_rows` as
         // everything else. Real spinners (Gemini braille, Aider Knight Rider,
-        // Claude `✻ Thinking…`) all render ABOVE the input separator, so they
-        // survive the chrome cutoff and still keep the agent alive here. Footer
-        // chrome below the separator (the periodic statusline repaint whose
-        // `█░·` glyphs look like spinner runs) sits past the cutoff and is
-        // dropped — agnostic to whatever the user puts in their status bar.
+        // Claude `✻ Thinking…`) all render ABOVE the input separator and LEAD
+        // their row, so they survive the chrome cutoff and still keep the agent
+        // alive here. A status-line HUD's `█░` progress bar or a `·`-bearing
+        // footer is NOT a spinner (`is_spinner_row` requires the glyph to lead
+        // the line, #446-596f), so it can never keep a session busy even if it
+        // renders above the cutoff.
         let has_spinner = chrome_only
             && changed_rows
                 .iter()
@@ -8174,6 +8076,8 @@ mod tests {
             "Knight Rider spinner must survive (no cutoff to drop it)"
         );
         let chrome_only = !filtered.is_empty() && filtered.iter().all(|r| is_chrome_row(&r.text));
+        // Aider's Knight Rider bar leads its row, so the structural is_spinner_row
+        // matches it (#446-596f).
         let has_spinner = chrome_only
             && filtered
                 .iter()
@@ -8265,21 +8169,25 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------
-    // Stuck-busy liveness battery (#446-596f).
+    // Stuck-busy battery (#446-596f).
     //
-    // Symptom: a Claude Code session that FINISHED its turn and sits idle at the
-    // prompt is reported BUSY forever. Cause: Claude leaves a completed-turn
-    // summary line (`✻ Sautéed for 1m 25s`) above the input box. The screen
-    // classifier is glyph-based, so it still reads that ✻ as a spinner and
-    // returns Working. dc0ae6df made Working authoritative with no timeout
-    // escape, so the frozen glyph pins BUSY.
+    // Symptom history: sessions pinned BUSY forever by STATIC glyphs the screen
+    // classifier read as a live spinner — a completed-turn summary (`✻ Sautéed
+    // for 1m 25s`), a `· run /mcp` hint, a wiz HUD `░░` bar. Each glyph fix
+    // regressed differently (a hash-based liveness gate blocked re-latching but
+    // never demoted the Working classification, so the idle path stayed
+    // unreachable).
     //
-    // Fix layer: a spinner is defined by ANIMATION. `spinner_zone_sig` +
-    // `note_spinner_zone_live` require the spinner rows to CHANGE across ticks;
-    // a byte-identical zone is a frozen summary, not active work. This is
-    // content-agnostic (no tense/word parsing) and per-agent aware — Codex's
-    // Working comes from a static "esc to interrupt" status line (its TUI truly
-    // freezes while a child runs), so Codex is exempt from the liveness gate.
+    // Definitive design: "if the text above the input area moves, the agent is
+    // active — period." BUSY is latched/kept ONLY by movement (post-cutoff
+    // `changed_rows` are text-equality diffed, so a frozen glyph produces no
+    // ChangedRow and is inert by construction), by user submission, and by
+    // hooks. The Claude/Gemini/Aider screen classifiers are PROMPT-based only
+    // (Ready/Unknown, never Working), so a static glyph can never mask the
+    // ready prompt or hold the idle path hostage. Codex is the one deliberate
+    // exception: its presence-based `• Working (… esc to interrupt)` line holds
+    // BUSY while its TUI legitimately freezes during a child process — accepted
+    // policy: for Codex we prefer false-BUSY over false-IDLE.
     // ---------------------------------------------------------------------
 
     /// A representative Claude idle screen: assistant output, a summary/spinner
@@ -8297,76 +8205,148 @@ mod tests {
         ]
     }
 
-    /// The classifier alone cannot tell a completed summary from a live spinner:
-    /// both carry the ✻ glyph, so both read Working. Liveness is what separates
-    /// them — this documents WHY the fix lives at the signature layer, not here.
+    /// The classifier no longer distinguishes summary from live spinner — it
+    /// does not look at glyphs at all. A visible prompt is Ready regardless of
+    /// what static decoration sits above it; the idle path is always reachable.
     #[test]
-    fn claude_classifier_is_glyph_based_by_design() {
-        let done = claude_screen_with("✻ Sautéed for 1m 25s");
-        let live = claude_screen_with("✻ Sautéing… (12s · esc to interrupt)");
-        assert_eq!(
-            detect_claude_screen_activity(&done),
-            AgentScreenActivity::Working
-        );
-        assert_eq!(
-            detect_claude_screen_activity(&live),
-            AgentScreenActivity::Working
-        );
-    }
-
-    #[test]
-    fn repro_claude_completed_summary_freezes_then_idles() {
-        // The exact wedge: `✻ Sautéed for 1m 25s` sitting above the prompt.
-        let screen = claude_screen_with("✻ Sautéed for 1m 25s");
-        let sig = spinner_zone_sig(Some("claude"), &screen).expect("✻ glyph present");
-        let mut s = SilenceState::new();
-        assert!(s.note_spinner_zone_live(sig), "first sight is honored as live");
-        assert!(
-            !s.note_spinner_zone_live(sig),
-            "unchanged zone next tick = frozen summary, must NOT hold Working"
-        );
-    }
-
-    #[test]
-    fn repro_claude_completed_summary_variants_freeze() {
-        // Every mapped Claude completion glyph must go idle once frozen.
-        for line in [
-            "✻ Cogitated for 3m 47s",
+    fn claude_classifier_is_prompt_based_never_working() {
+        for mid in [
+            "✻ Sautéed for 1m 25s",                     // completed-turn summary
+            "✻ Sautéing… (12s · esc to interrupt)",     // spinner frame (frozen render)
             "✳ Ideated for 2m 9s · 1 local agent still running",
             "· Proofed for 1m 14s (↓ 1.6k tokens)",
             "✽ Sautéed for 12s",
         ] {
-            let screen = claude_screen_with(line);
-            let sig = spinner_zone_sig(Some("claude"), &screen)
-                .unwrap_or_else(|| panic!("{line:?}: expected a spinner glyph in zone"));
-            let mut s = SilenceState::new();
-            assert!(s.note_spinner_zone_live(sig), "{line:?}: first sight live");
-            assert!(
-                !s.note_spinner_zone_live(sig),
-                "{line:?}: frozen next tick must not stay Working"
+            let screen = claude_screen_with(mid);
+            assert_eq!(
+                detect_claude_screen_activity(&screen),
+                AgentScreenActivity::Ready,
+                "{mid:?}: a visible ❯ prompt is Ready — no glyph can mask it"
             );
         }
     }
 
+    /// During real work Claude hides its prompt box: without a ❯ the screen is
+    /// Unknown (never a heuristic idle source); BUSY is held by spinner/output
+    /// movement in the reader, not by classification.
     #[test]
-    fn control_claude_active_spinner_stays_live() {
-        // An ANIMATING spinner (elapsed counter increments) changes its signature
-        // every tick → stays live → stays Working. Live-work detection intact.
-        let a = claude_screen_with("✻ Sautéing… (12s · esc to interrupt)");
-        let b = claude_screen_with("✻ Sautéing… (13s · esc to interrupt)");
-        let sa = spinner_zone_sig(Some("claude"), &a).unwrap();
-        let sb = spinner_zone_sig(Some("claude"), &b).unwrap();
-        assert_ne!(sa, sb, "changing elapsed must change the signature");
-        let mut s = SilenceState::new();
-        assert!(s.note_spinner_zone_live(sa));
-        assert!(s.note_spinner_zone_live(sb), "animation keeps it live");
+    fn claude_working_screen_without_prompt_is_unknown() {
+        let screen: Vec<String> = vec![
+            "⏺ Editing src/main.rs…".into(),
+            "".into(),
+            "✻ Sautéing… (12s · esc to interrupt)".into(),
+            "".into(),
+        ];
+        assert_eq!(
+            detect_claude_screen_activity(&screen),
+            AgentScreenActivity::Unknown
+        );
+    }
+
+    /// THE core invariant of the movement design: a byte-identical repaint of a
+    /// frozen "spinner" line produces NO ChangedRow (text-equality diff in
+    /// `TerminalGrid::process`), so it can never pass the reader's busy gate —
+    /// while a genuinely animating frame always does.
+    #[test]
+    fn frozen_summary_repaint_produces_no_movement() {
+        let mut grid = crate::terminal_grid::TerminalGrid::new(24, 80, 1000);
+        let frame = "\x1b[H\x1b[2K\u{273B} Saut\u{00E9}ed for 1m 25s";
+        let first = grid.process(frame.as_bytes());
+        assert!(
+            first.iter().any(|r| crate::chrome::is_spinner_row(&r.text)),
+            "first paint of the line IS movement"
+        );
+        let repaint = grid.process(frame.as_bytes());
+        assert!(
+            repaint.is_empty(),
+            "byte-identical repaint must produce no ChangedRow → no busy evidence"
+        );
+        let animated = grid.process("\x1b[H\x1b[2K\u{273B} Saut\u{00E9}ing\u{2026} (13s)".as_bytes());
+        assert!(
+            animated.iter().any(|r| crate::chrome::is_spinner_row(&r.text)),
+            "an animating spinner frame IS movement and keeps/latches BUSY"
+        );
+    }
+
+    /// A real captured Claude idle screen: the `▐▛███▜▌` welcome banner (█ art),
+    /// the empty `❯` input box framed by separators, and a wiz status-line HUD
+    /// whose progress bar is a run of `░`/`█` block glyphs. Nothing here is an
+    /// animated spinner — the turn is over and Claude waits for input.
+    fn claude_idle_with_banner_and_hud() -> Vec<String> {
+        vec![
+            "╭─── Claude Code v2.1.202 ──────────────────────────────╮".into(),
+            "│                   ▐▛███▜▌                   │ What's new".into(),
+            "│                  ▝▜█████▛▘                  │ Forked subagents".into(),
+            "│      Opus 4.8 (1M context) · Claude Team    │           ".into(),
+            "╰───────────────────────────────────────────────────────╯".into(),
+            "".into(),
+            " ⚠ 2 MCP servers need authentication · run /mcp".into(),
+            "".into(),
+            "───────────────────────────────────────────────────────────".into(),
+            "❯ ".into(),
+            "───────────────────────────────────────────────────────────".into(),
+            "  [Opus 4.8 (1M) | Team] ░░░░░░░░░░ 0% | cerebro | [C1 S33]".into(),
+            "  5h: 52% (52m) | 7d: 18% (22h) | $0 | 📅 $124.01 | 13m".into(),
+            "  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents".into(),
+        ]
+    }
+
+    /// #446-596f regression: block-glyph art (the welcome banner) and a status-
+    /// line HUD progress bar (`░░░░`) are NOT Claude's animated spinner. Claude's
+    /// spinner is dingbats (✻ ✳ ✶) / middle-dot `·`; solid blocks appear only in
+    /// static art. Before the fix, `is_spinner_row` matched `█`/`░`, so an idle
+    /// Claude prompt read Working and the session never returned to idle.
+    #[test]
+    fn claude_idle_with_wiz_hud_is_ready_not_working() {
+        let screen = claude_idle_with_banner_and_hud();
+        assert_eq!(
+            detect_claude_screen_activity(&screen),
+            AgentScreenActivity::Ready,
+            "an idle Claude prompt under banner art, a `· run /mcp` hint and a \
+             live wiz HUD is Ready, not Working"
+        );
+    }
+
+    /// The wiz HUD ticks every second (elapsed timer, token counts), so the old
+    /// frozen-signature liveness gate could not save us — the bar is genuinely
+    /// changing. The only robust cut is that block glyphs are not a spinner.
+    #[test]
+    fn wiz_hud_progress_bar_is_not_a_claude_spinner() {
+        let hud = "  [Opus 4.8 (1M) | Team] ██░░░░░░░░ 17% | cerebro".to_string();
+        assert!(
+            !crate::chrome::is_spinner_row(&hud),
+            "a status-line progress bar is not an animated spinner"
+        );
+    }
+
+    /// Guardrail: the fix must NOT break Aider, whose real "Knight Rider" spinner
+    /// IS a run of block glyphs that LEADS its row, so the structural
+    /// `is_spinner_row` still matches it — its movement latches/keeps BUSY via
+    /// the reader gate. Classification stays prompt-based: mid-generation Aider
+    /// has no input box, so the screen is Unknown (never a false Ready).
+    #[test]
+    fn aider_knight_rider_block_spinner_still_movement_evidence() {
+        assert!(
+            crate::chrome::is_spinner_row("░░░█░░░░░░"),
+            "Aider's Knight Rider block spinner leads the row → still a spinner"
+        );
+        let generating: Vec<String> = vec![
+            "Applied edit to src/main.rs".into(),
+            "░░░█░░░░░░".into(),
+        ];
+        assert_eq!(
+            detect_aider_screen_activity(&generating),
+            AgentScreenActivity::Unknown,
+            "no input box during generation → Unknown, BUSY held by movement"
+        );
     }
 
     #[test]
-    fn codex_working_is_presence_based_and_exempt() {
-        // Codex Working comes from the "esc to interrupt" status line, not an
-        // animated spinner: spinner_zone_sig is None so it is never liveness-
-        // gated (a frozen-but-working TUI must stay busy).
+    fn codex_working_is_presence_based_by_policy() {
+        // Codex Working comes from the "esc to interrupt" status line presence,
+        // NOT from movement: its TUI legitimately freezes for minutes while a
+        // child process (cargo, git) runs. Accepted policy: prefer false-BUSY
+        // over false-IDLE for Codex.
         let working = vec![
             "• Ran cargo test --workspace".to_string(),
             "• Working (2m 55s • esc to interrupt)".into(),
@@ -8376,58 +8356,6 @@ mod tests {
         assert_eq!(
             detect_codex_screen_activity(&working),
             AgentScreenActivity::Working
-        );
-        assert_eq!(
-            spinner_zone_sig(Some("codex"), &working),
-            None,
-            "codex must be exempt from the animated-spinner liveness gate"
-        );
-    }
-
-    #[test]
-    fn gemini_braille_spinner_liveness() {
-        // Gemini uses braille frames (⠋⠙⠹…). Different frames → live; a frozen
-        // frame → idle-eligible.
-        let mk = |sp: &str| vec![sp.to_string(), "".into(), "> ".into()];
-        let a = mk("⠋ Generating…");
-        let b = mk("⠙ Generating…");
-        let sa = spinner_zone_sig(Some("gemini"), &a).expect("braille present");
-        let sb = spinner_zone_sig(Some("gemini"), &b).unwrap();
-        assert_ne!(sa, sb, "different braille frames animate");
-        let mut s = SilenceState::new();
-        assert!(s.note_spinner_zone_live(sa));
-        assert!(s.note_spinner_zone_live(sb));
-        assert!(!s.note_spinner_zone_live(sb), "frozen frame stops holding busy");
-    }
-
-    #[test]
-    fn aider_knight_rider_spinner_liveness() {
-        // Aider's Knight-Rider bar (░█) animates; a frozen bar goes idle.
-        let mk = |sp: &str| vec!["aider output".to_string(), sp.into(), ">".into()];
-        let a = mk("░██░░░░░░░");
-        let b = mk("░░██░░░░░░");
-        let sa = spinner_zone_sig(Some("aider"), &a).expect("bar present");
-        let sb = spinner_zone_sig(Some("aider"), &b).unwrap();
-        assert_ne!(sa, sb);
-        let mut s = SilenceState::new();
-        assert!(s.note_spinner_zone_live(sa));
-        assert!(s.note_spinner_zone_live(sb));
-        assert!(!s.note_spinner_zone_live(sb), "frozen bar stops holding busy");
-    }
-
-    #[test]
-    fn reset_spinner_zone_makes_next_burst_live() {
-        // After the screen goes non-Working, the next spinner burst must be
-        // honored as live even if its first frame equals a prior signature.
-        let screen = claude_screen_with("✻ Sautéing… (12s · esc to interrupt)");
-        let sig = spinner_zone_sig(Some("claude"), &screen).unwrap();
-        let mut s = SilenceState::new();
-        assert!(s.note_spinner_zone_live(sig));
-        assert!(!s.note_spinner_zone_live(sig)); // stalled
-        s.reset_spinner_zone(); // screen went Ready/Unknown in between
-        assert!(
-            s.note_spinner_zone_live(sig),
-            "a fresh burst after reset is live from its first frame"
         );
     }
 
@@ -8498,7 +8426,7 @@ mod tests {
         let silence = Arc::new(Mutex::new(SilenceState::new()));
         state.silence_states.insert(sid.into(), silence.clone());
 
-        apply_working_screen(&state, &silence, sid, now_epoch_ms());
+        apply_working_evidence(&state, &silence, sid, now_epoch_ms(), "working-screen");
 
         assert_eq!(
             state.shell_states.get(sid).unwrap().load(Ordering::Acquire),
@@ -8521,7 +8449,7 @@ mod tests {
         let silence = Arc::new(Mutex::new(sl));
         state.silence_states.insert(sid.into(), silence.clone());
 
-        apply_working_screen(&state, &silence, sid, now_epoch_ms());
+        apply_working_evidence(&state, &silence, sid, now_epoch_ms(), "working-screen");
 
         assert_eq!(
             state.shell_states.get(sid).unwrap().load(Ordering::Acquire),
@@ -8542,10 +8470,16 @@ mod tests {
     }
 
     #[test]
-    fn test_other_agent_screen_adapters_distinguish_working_and_ready() {
+    fn test_other_agent_screen_adapters_are_prompt_based() {
+        // Classification is prompt-based only (#446-596f): no prompt → Unknown
+        // (BUSY is movement-driven in the reader), prompt → Ready. Gemini keeps
+        // its prompt on screen even mid-work, so a working Gemini classifies
+        // Ready — harmless, because its braille spinner repaints every second
+        // and each movement resets `ready_since`, so the 1.5s ready confirm
+        // never completes while it is genuinely working.
         let claude_working = vec!["✻ Cogitating… (12s)".into()];
         let claude_ready = vec!["Answer complete".into(), "❯".into()];
-        let gemini_working = vec![
+        let gemini_working_prompt_visible = vec![
             "⠴ Checking files… (esc to cancel, 14s)".into(),
             "────────────────────────".into(),
             "> Type your message".into(),
@@ -8555,11 +8489,15 @@ mod tests {
         let aider_ready = vec!["Tokens: 10k sent".into(), ">".into()];
 
         for (agent, rows, expected) in [
-            ("claude", claude_working, AgentScreenActivity::Working),
+            ("claude", claude_working, AgentScreenActivity::Unknown),
             ("claude", claude_ready, AgentScreenActivity::Ready),
-            ("gemini", gemini_working, AgentScreenActivity::Working),
+            (
+                "gemini",
+                gemini_working_prompt_visible,
+                AgentScreenActivity::Ready,
+            ),
             ("gemini", gemini_ready, AgentScreenActivity::Ready),
-            ("aider", aider_working, AgentScreenActivity::Working),
+            ("aider", aider_working, AgentScreenActivity::Unknown),
             ("aider", aider_ready, AgentScreenActivity::Ready),
         ] {
             assert_eq!(detect_agent_screen_activity(Some(agent), &rows), expected);

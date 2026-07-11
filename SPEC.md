@@ -1,6 +1,6 @@
 # TUICommander Specification
 
-**Version:** 1.5.2
+**Version:** 1.6.0
 **Last Updated:** 2026-07-11
 
 ## Overview
@@ -304,7 +304,7 @@ All stores persist to localStorage:
 - [x] Claude Usage Dashboard (native SolidJS component with API polling, session analytics, usage timeline)
 - [x] ConfirmDialog component (in-app dark-themed replacement for native OS dialogs)
 - [x] Status bar unified agent badge with priority cascade (rate limit > usage API > PTY usage > name)
-- [x] Evidence-based PTY agent activity detection with explicit-hook precedence, agent-specific Working/Ready screens, interrupt confirmation, and confirmed-idle safety gates
+- [x] Movement-based PTY agent activity detection ("text above the input area moves = active") with explicit-hook precedence, prompt-based Ready screens, Codex presence-based Working policy, interrupt confirmation, and confirmed-idle safety gates
 - [x] PR lifecycle filtering (CLOSED hidden, MERGED hidden after 5min user activity)
 - [x] Notes/Ideas: mark as used, badge count in status bar
 - [x] Notes/Ideas: image paste support (Ctrl+V), thumbnails, send absolute paths to terminal

@@ -63,8 +63,9 @@ Drag tabs to reorder them. Visual drop indicators show where the tab will land.
 
 Sidebar branch icons also show purple when they contain unseen terminals.
 
-Agent activity combines native lifecycle hooks, the current Working/Ready UI,
-and terminal output. Claude, Codex, Gemini, and Aider require a stable ready
+Agent activity combines native lifecycle hooks, terminal movement (text
+changing above the input area means the agent is active), and the visible
+ready prompt. Claude, Codex, Gemini, and Aider require a stable ready
 screen before safety-sensitive actions such as auto-standby or queued agent
 message delivery. Pressing Ctrl-C or Escape requests interruption but does not
 turn the dot green until the agent confirms the interruption, returns to its

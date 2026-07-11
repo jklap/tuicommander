@@ -588,8 +588,8 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 ### 6.2 Agent Detection
 - Auto-detection from terminal output patterns
 - Multi-agent status line detection via regex patterns anchored to line start: Claude Code (`*`/`✢`/`·` + task text + `...`/`…`), `[Running] Task` format, Aider (Knight Rider scanner `░█` + token reports), Codex CLI (`•`/`◦` bullet spinner with time suffix), Goose (`<message>... (Ctrl+C to interrupt)`), Copilot CLI (`∴`/`●`/`○` indicators), Gemini CLI (braille dots `⠋⠙⠹...`)
-- Evidence-based activity reducer: explicit OSC lifecycle markers outrank agent-specific Working/Ready snapshots, which outrank real-output timing and silence. Positive Working evidence repairs `idle → busy`; ready prompts require a stable 1.5s observation.
-- Claude, Codex, Gemini, and Aider inspect the unfiltered terminal snapshot for activity. Codex scopes `Working … esc to interrupt` to the current `›` prompt neighborhood so tool separators cannot hide it and historical transcript text cannot create false busy.
+- Movement-based activity: BUSY is latched/kept by text changing above the input area (post-cutoff changed rows, text-equality diffed — a static glyph is inert by construction), user submission, and OSC lifecycle markers, which outrank silence. Ready prompts require a stable 1.5s observation before idle.
+- Claude, Gemini, and Aider screen classifiers are prompt-based only (Ready/Unknown, never Working from glyph presence). Codex is presence-based by policy: it inspects the unfiltered snapshot and scopes `Working … esc to interrupt` to the current `›` prompt neighborhood, holding BUSY while its TUI legitimately freezes during a child process (prefer false-BUSY over false-IDLE).
 - Ctrl-C/Escape are interrupt intent only; status changes after the agent confirms interruption, returns to a stable prompt, emits Stop, or exits.
 - Status lines rejected when they appear in diff output, code listings, or block comments
 - Brand SVG logos for each agent (fallback to capital letter)

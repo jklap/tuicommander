@@ -6,13 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-07-11
+
 ### Added
 - **DOCX Preview plugin + plugin binary reads** — The external plugin registry now includes `docx-preview`, which previews Word `.docx`/`.dotx` files as Mammoth.js HTML with raw-text fallback and conversion notes. PluginHost also gains `host.readFileBase64()` (IPC + HTTP parity) so file-preview plugins can handle binary formats without abusing UTF-8 reads.
 
 ### Fixed
-- **Reliable agent busy/idle state** — Claude, Codex, Gemini, and Aider now reconcile native lifecycle markers with unfiltered Working/Ready screen snapshots instead of letting generic chrome trimming or a single silence tick decide activity. Codex `Working` survives nearby tool separators and can repair an already-false-idle tab; Ctrl-C/Escape wait for confirmed interruption; observed hook busy state outranks silence; and heuristic-only idle cannot trigger peer-message injection or auto-standby for adapter-backed agents. Manually launched Droid sessions now receive the agent idle threshold.
+- **Reliable agent busy/idle state** — Agent activity is now movement-based: "if the text above the input area moves, the agent is active". BUSY is latched and kept alive only by actual screen changes (text-equality diffed, so a frozen glyph — a completed-turn summary `✻ Sautéed…`, a `· run /mcp` hint, a HUD progress bar — can never pin a session BUSY), by user submission, and by lifecycle hooks; Claude/Gemini/Aider screen classifiers are prompt-based only, so an idle prompt is always reachable. Codex keeps its presence-based `Working (… esc to interrupt)` detection because its TUI legitimately freezes while a child process runs. Ctrl-C/Escape wait for confirmed interruption; observed hook busy state outranks silence; heuristic-only idle cannot trigger peer-message injection or auto-standby for adapter-backed agents. Manually launched Droid sessions now receive the agent idle threshold.
 - **Context menus at viewport edges** — Large context menus and nested submenus now constrain themselves to the visible viewport and scroll when needed instead of opening partly off-screen.
 - **AI Review on oversized PRs** — When GitHub refuses to render a PR diff because it exceeds the file cap, AI Review now falls back to a local-clone `git diff` instead of surfacing the raw 406 response.
+- **File Browser "go up" in empty folders** — The `..` parent entry now shows even when a subdirectory is empty, so you are never stranded without a way back out.
 
 ## [1.5.2] - 2026-07-09
 
