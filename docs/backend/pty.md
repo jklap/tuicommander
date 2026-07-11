@@ -314,18 +314,25 @@ The reader thread tracks output silence to detect unanswered agent prompts. When
 
 ## Shell State (Busy/Idle) Detection
 
-The reader thread tracks output timing to emit `ShellState` events (`busy`/`idle`). Rust is the single source of truth — the frontend does not derive busy/idle from raw PTY data.
+The backend combines explicit lifecycle markers, agent-specific screen evidence,
+real output, and silence to emit `ShellState` events (`busy`/`idle`). Rust is the
+single source of truth — the frontend does not derive activity from raw PTY data.
 
 **Transitions:**
-- **→ busy:** Any non-chrome-only chunk transitions to busy via atomic CAS (`try_shell_transition`)
-- **→ idle (process_chunk):** Chrome-only chunks without a status line transition to idle if `should_transition_idle` passes (real output > 500ms ago for shells, > 2.5s for agents, no active sub-tasks)
-- **→ idle (backup timer):** A 1s timer catches the case where no chunks arrive at all (reader blocked on `read()`). Uses `has_recent_chunks()` (checks `last_chunk_at` with 2s window) to avoid firing when the reader is actively processing chunks
+- **Explicit markers:** OSC 133 shell markers and OSC 7770 agent hooks transition immediately. An observed hook `busy` cannot be overridden by output silence; it ends on hook `idle`, a confirmed interruption, or process exit.
+- **→ busy:** A submitted agent prompt, real output, an animated spinner, or an agent-specific `Working` screen transitions via atomic CAS (`try_shell_transition`). Positive screen evidence is evaluated even while the stored state is idle, so false-idle is self-healing.
+- **→ idle:** The 1s silence timer is the sole heuristic idle path. Plain shells use 500ms; agents use 2.5s and must have no active sub-tasks. Agents with ready-screen adapters require the ready prompt to remain stable for 1.5s.
+- **Interrupts:** Ctrl-C and bare Escape record `interrupt pending` but never force idle. Idle follows only after an interrupted/ready screen, explicit Stop, or process exit.
 
 **Spinner keepalive:** Agent spinners (dingbats ✻, braille ⠋, Aider ░█) produce chrome-only repaints at ~1Hz without a matching StatusLine event (e.g. timer-only lines like "✻ Cogitated for 3m 47s" lack trailing ellipsis). These spinner rows update `last_output_ms` via `is_spinner_row()` in `chrome.rs`, keeping `should_transition_idle()` from firing while the agent is alive. When the spinner stops, the idle timer expires naturally after AGENT_IDLE_MS (2.5s). Static chrome (mode-line ⏵, borders ▀▄) does NOT update the timestamp.
 
-**Presence-driven keepalive (frozen-TUI agents):** The keepalive above is *change-driven* — it needs the spinner row to keep repainting. Some agents (Codex) instead **freeze their whole TUI while a child subprocess runs** (`cargo`, `git`): for a long build that is minutes with no grid changes at all, so `last_output_ms` goes stale and `should_transition_idle` would falsely flip busy→idle after 2.5s (unlike Claude/Gemini, whose spinners animate continuously). The silence timer guards against this: while the **content zone** (above the chrome cutoff) still shows a working-status line — `is_working_status_row()` in `chrome.rs` matches Codex's `• Working (… esc to interrupt)`, both `•`/`◦` blink frames — `screen_shows_working_status()` re-stamps `last_output_ms` and skips the idle transition. Presence (not change) proves liveness. The line disappears when the agent finishes its turn, so idle resumes normally; the session-exit path clears state, so a crash can't wedge it busy.
+**Presence-driven adapters:** Claude, Codex, Gemini, and Aider have screen adapters that distinguish `Working`, `Ready`, and (for Codex) `Interrupted`. Activity inspection uses the full screen snapshot before presentation/log chrome filtering. This matters for Codex: its separator divides tool output from the summary rather than framing the prompt, so applying `find_chrome_cutoff()` would discard a later `• Working (… esc to interrupt)` row. Codex detection instead searches a bounded neighborhood immediately above the lowest `›` prompt; historical Working text elsewhere in scrollback cannot latch busy.
 
-**Status line ticks:** Claude Code's status line updates every ~1s while an agent is thinking. These are chrome-only chunks with `has_status_line=true`. The `!has_status_line` guard in the chunk-processing idle path prevents idle transition while status line ticks are arriving.
+**Signal precedence and confirmation:** Explicit hook busy > current Working marker > real output > silence. A ready prompt visible from the previous turn cannot cancel a newly submitted prompt until real activity has been observed. Hook-based question suppression activates only after an OSC 7770 state marker is actually received, rather than trusting a possibly stale configuration flag.
+
+**Safety consumers:** For agents with a verified screen adapter, peer-message injection and Unix auto-standby require confirmed idle (explicit Stop/OSC or stable ready screen). A silence-only idle can update the cosmetic state but cannot type into or `SIGSTOP` a potentially working agent. Agents without an adapter retain the legacy heuristic behavior until their UI is characterized.
+
+**Status line ticks:** Animated spinner repaint evidence refreshes both shell activity and `SilenceState`, preventing low-confidence question/tool-error events from contradicting a busy tab. Static mode/footer rows remain chrome only and do not prove activity.
 
 **Agent detection:** `detectAgentForTerminal()` fires on shell-state transitions (immediate on idle, 500ms debounce on busy). A 30s fallback poll catches cold starts. This replaces the previous 3s polling interval, reducing syscalls ~30x.
 

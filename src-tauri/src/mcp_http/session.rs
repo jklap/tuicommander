@@ -182,6 +182,9 @@ fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) 
         });
     let mut buf = input_entry.lock();
     let actions = buf.feed(data);
+    let interrupted = actions
+        .iter()
+        .any(|a| matches!(a, crate::input_line_buffer::InputAction::Interrupt));
     let line_submitted = actions.iter().any(|a| {
         matches!(
             a,
@@ -189,6 +192,16 @@ fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) 
                 | crate::input_line_buffer::InputAction::Interrupt
         )
     });
+    let nonempty_line_submitted = actions.iter().any(|a| {
+        matches!(a, crate::input_line_buffer::InputAction::Line(content) if !content.is_empty())
+    });
+    if interrupted || data == "\x1b" {
+        if let Some(sl) = state.silence_states.get(session_id) {
+            sl.lock().note_interrupt_requested();
+        }
+    } else if nonempty_line_submitted {
+        crate::pty::note_submitted_input(state, session_id);
+    }
     // Determine slash mode. The InputLineBuffer may accumulate junk from
     // terminal responses (e.g. DA reply "1;2c"), so buf.content() alone is
     // unreliable. Use multiple signals:

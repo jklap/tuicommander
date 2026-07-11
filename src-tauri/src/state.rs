@@ -3996,6 +3996,10 @@ mod tests {
             .insert("s1".to_string(), SessionState::default());
         // Initialize last_output_ms for shell_state derivation
         s.last_output_ms.insert("s1".to_string(), AtomicU64::new(0));
+        let mut silence = crate::pty::SilenceState::new();
+        silence.confirm_idle();
+        s.silence_states
+            .insert("s1".to_string(), Arc::new(parking_lot::Mutex::new(silence)));
         s
     }
 

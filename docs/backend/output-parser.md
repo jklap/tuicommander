@@ -308,4 +308,10 @@ The `strip_ansi()` function pre-processes CUF (Cursor Forward, `\x1b[nC`) escape
 
 ### Hook-Instrumented Session Suppression
 
-When an agent session has native hook instrumentation enabled (OSC 7770-driven state transitions via the agent's own hook system), heuristic `Question` events are suppressed for that session. Hook-instrumented agents report awaiting state directly via `OSC 7770;state=awaiting`, so the silence/regex question heuristics would only double-fire. Only `Question` detection is suppressed — idle/busy transitions and all other events pass through unchanged. The silence-idle backstop remains active so a crashed or stalled agent still recovers from "busy". See `suppress_heuristic_question()` in `src-tauri/src/pty.rs`.
+When native hook instrumentation is configured, heuristic `Question` events are
+suppressed only after the session actually emits an OSC 7770 `state=` marker.
+The runtime handshake avoids trusting a stale flag when hook installation or an
+agent upgrade has broken delivery. Hook `busy` is authoritative over silence;
+hook `idle`, a confirmed interrupted screen, or process exit ends it. Other
+parsed events continue unchanged. See `suppress_heuristic_question()` and the
+explicit-state fields in `SilenceState` (`src-tauri/src/pty.rs`).

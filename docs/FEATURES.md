@@ -163,7 +163,7 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 
 Idle, unfocused terminals are suspended to stop them consuming CPU and battery. A background checker (every 30s) sends `SIGSTOP` to the entire process group of a session — `kill(-pgid, …)`, so children (dev servers, agent processes) are paused too, not just the shell.
 
-- **Entry conditions (all required)** — timeout enabled (`> 0`), tab not focused, shell state idle, idle for at least the timeout, session startup settled, and not already in standby
+- **Entry conditions (all required)** — timeout enabled (`> 0`), tab not focused, shell state idle, idle for at least the timeout, session startup settled, and not already in standby. Claude/Codex/Gemini/Aider additionally require confirmed idle (explicit lifecycle marker or stable ready screen); silence-only idle cannot suspend them.
 - **Wake** — `SIGCONT` fires the instant the tab is focused or a message arrives for the agent; the process resumes exactly where it stopped (no session loss, no restart)
 - **Safety** — the process-group id is validated before signalling; an unsafe pgid is refused rather than risking a stop sent to the wrong group
 - **Pause badge** — suspended tabs show a pause indicator in the tab bar
@@ -588,11 +588,14 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 ### 6.2 Agent Detection
 - Auto-detection from terminal output patterns
 - Multi-agent status line detection via regex patterns anchored to line start: Claude Code (`*`/`✢`/`·` + task text + `...`/`…`), `[Running] Task` format, Aider (Knight Rider scanner `░█` + token reports), Codex CLI (`•`/`◦` bullet spinner with time suffix), Goose (`<message>... (Ctrl+C to interrupt)`), Copilot CLI (`∴`/`●`/`○` indicators), Gemini CLI (braille dots `⠋⠙⠹...`)
+- Evidence-based activity reducer: explicit OSC lifecycle markers outrank agent-specific Working/Ready snapshots, which outrank real-output timing and silence. Positive Working evidence repairs `idle → busy`; ready prompts require a stable 1.5s observation.
+- Claude, Codex, Gemini, and Aider inspect the unfiltered terminal snapshot for activity. Codex scopes `Working … esc to interrupt` to the current `›` prompt neighborhood so tool separators cannot hide it and historical transcript text cannot create false busy.
+- Ctrl-C/Escape are interrupt intent only; status changes after the agent confirms interruption, returns to a stable prompt, emits Stop, or exits.
 - Status lines rejected when they appear in diff output, code listings, or block comments
 - Brand SVG logos for each agent (fallback to capital letter)
 - Agent badge in status bar showing active agent
 - Binary detection: Rust probes well-known directories via `resolve_cli()` for reliable PATH resolution in desktop-launched apps
-- Foreground process detection: `tcgetpgrp()` on the PTY master fd, then `proc_pidpath()` to get the binary name. Handles versioned binary paths (e.g. Claude Code installs as `~/.local/share/claude/versions/2.1.87`) by scanning parent directory names when the basename is not a known agent
+- Foreground process detection: `tcgetpgrp()` on the PTY master fd, then `proc_pidpath()` to get the binary name. Handles versioned binary paths (e.g. Claude Code installs as `~/.local/share/claude/versions/2.1.87`) by scanning parent directory names when the basename is not a known agent; Droid is classified explicitly so it receives the agent idle threshold.
 
 ### 6.3 Rate Limit Detection
 - Provider-specific regex patterns detect rate limit messages

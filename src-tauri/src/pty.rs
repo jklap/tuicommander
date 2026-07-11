@@ -430,6 +430,16 @@ const SHELL_IDLE_MS: u64 = 500;
 /// Combined with the 2s frontend debounce, this gives ~4.5s total hold.
 const AGENT_IDLE_MS: u64 = 2500;
 
+/// A ready prompt must remain visible across multiple silence-timer ticks before
+/// it can end an agent turn. Ink redraws are multi-chunk (erase, then repaint),
+/// so a single snapshot can briefly show the prompt without its working row.
+const AGENT_READY_CONFIRM: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Interrupt intent is only a hint: Ctrl-C/Escape may be ignored or handled
+/// asynchronously. Keep it long enough to correlate the subsequent explicit
+/// interrupted screen, then discard it without changing shell state.
+const INTERRUPT_PENDING_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Maximum time active_sub_tasks can block idle transition (30s).
 /// If the parser sets active_sub_tasks > 0 but the agent exits or the
 /// mode-line disappears without emitting count=0, the terminal would stay
@@ -683,10 +693,39 @@ pub(crate) struct SilenceState {
     /// diagnostics only — the flush decision is driven by `last_output_at`,
     /// not the park time.
     pending_suggest_at: Option<std::time::Instant>,
+    /// True after an explicit OSC 133 / OSC 7770 busy marker and until an
+    /// explicit idle marker or a confirmed ready screen. Silence alone must not
+    /// override this state: hooks are stronger evidence than output timing.
+    explicit_busy: bool,
+    /// BUSY came from an observed agent hook. Only an explicit hook idle (or
+    /// process exit) may end it; the ready prompt is also visible during startup
+    /// and must not override the hook before Working is painted.
+    hook_busy: bool,
+    /// An explicit idle marker outranks a stale Working row left in the same
+    /// render chunk. Cleared by the next explicit busy or later real activity.
+    explicit_idle: bool,
+    /// True only after OSC 7770 `state=` was observed (OSC 133 shell markers do
+    /// not prove that an agent's configured hooks are actually running).
+    hook_state_seen: bool,
+    /// Whether the current idle state is safe for downstream uses such as
+    /// standby and peer-message injection. Enforced for agents with a verified
+    /// screen adapter; legacy heuristic-only agents retain their prior behavior.
+    idle_confirmed: bool,
+    /// First observation of a stable agent ready prompt.
+    ready_since: Option<std::time::Instant>,
+    /// Recent user request to interrupt (Ctrl-C or bare Escape). This never
+    /// changes shell state by itself; it only strengthens a matching interrupted
+    /// screen emitted by the agent.
+    interrupt_requested_at: Option<std::time::Instant>,
+    /// A user/injected prompt started a turn on an adapter-backed agent.
+    turn_started_by_input: bool,
+    /// Strong activity (real output or Working marker) was observed after that
+    /// submission. Until then, the old ready prompt is not proof of completion.
+    turn_activity_seen: bool,
 }
 
 impl SilenceState {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             last_output_at: std::time::Instant::now(),
             pending_question_line: None,
@@ -703,7 +742,134 @@ impl SilenceState {
             surfaced_tool_errors: std::collections::HashSet::new(),
             pending_suggest_items: None,
             pending_suggest_at: None,
+            explicit_busy: false,
+            hook_busy: false,
+            explicit_idle: false,
+            hook_state_seen: false,
+            idle_confirmed: false,
+            ready_since: None,
+            interrupt_requested_at: None,
+            turn_started_by_input: false,
+            turn_activity_seen: false,
         }
+    }
+
+    fn note_explicit_state(&mut self, state: u8, hook_state: bool) {
+        self.hook_state_seen |= hook_state;
+        self.ready_since = None;
+        match state {
+            SHELL_BUSY => {
+                self.explicit_busy = true;
+                self.hook_busy = hook_state;
+                self.explicit_idle = false;
+                self.idle_confirmed = false;
+                self.last_status_line_at = Some(std::time::Instant::now());
+            }
+            SHELL_IDLE => {
+                self.explicit_busy = false;
+                self.hook_busy = false;
+                self.explicit_idle = true;
+                self.idle_confirmed = true;
+                self.last_status_line_at = None;
+                self.interrupt_requested_at = None;
+                self.turn_started_by_input = false;
+                self.turn_activity_seen = false;
+            }
+            _ => {}
+        }
+    }
+
+    fn note_busy_evidence(&mut self) {
+        self.explicit_idle = false;
+        self.idle_confirmed = false;
+        self.ready_since = None;
+    }
+
+    fn note_working_screen(&mut self) {
+        self.note_busy_evidence();
+        self.turn_activity_seen = true;
+        // Keep silence-based question/tool-error detection aligned with shell
+        // activity. Previously the working marker refreshed last_output_ms but
+        // not SilenceState, allowing contradictory question events.
+        self.last_status_line_at = Some(std::time::Instant::now());
+    }
+
+    fn note_real_activity(&mut self) {
+        self.note_busy_evidence();
+        self.turn_activity_seen = true;
+    }
+
+    fn note_ready_screen(&mut self) -> bool {
+        if self.hook_busy || (self.turn_started_by_input && !self.turn_activity_seen) {
+            self.ready_since = None;
+            return false;
+        }
+        let now = std::time::Instant::now();
+        let since = self.ready_since.get_or_insert(now);
+        if since.elapsed() < AGENT_READY_CONFIRM {
+            return false;
+        }
+        self.explicit_busy = false;
+        self.explicit_idle = false;
+        self.idle_confirmed = true;
+        self.last_status_line_at = None;
+        self.interrupt_requested_at = None;
+        self.turn_started_by_input = false;
+        self.turn_activity_seen = false;
+        true
+    }
+
+    fn note_interrupted_screen(&mut self) -> bool {
+        let pending = self
+            .interrupt_requested_at
+            .is_some_and(|at| at.elapsed() < INTERRUPT_PENDING_TTL);
+        if pending {
+            self.explicit_busy = false;
+            self.hook_busy = false;
+            self.explicit_idle = false;
+            self.idle_confirmed = true;
+            self.last_status_line_at = None;
+            self.ready_since = None;
+            self.interrupt_requested_at = None;
+            self.turn_started_by_input = false;
+            self.turn_activity_seen = false;
+            return true;
+        }
+        self.note_ready_screen()
+    }
+
+    fn note_unknown_screen(&mut self) {
+        self.ready_since = None;
+        if self
+            .interrupt_requested_at
+            .is_some_and(|at| at.elapsed() >= INTERRUPT_PENDING_TTL)
+        {
+            self.interrupt_requested_at = None;
+        }
+    }
+
+    pub(crate) fn note_interrupt_requested(&mut self) {
+        self.interrupt_requested_at = Some(std::time::Instant::now());
+        self.ready_since = None;
+    }
+
+    pub(crate) fn note_user_submission(&mut self, has_ready_adapter: bool) {
+        self.interrupt_requested_at = None;
+        self.note_busy_evidence();
+        if has_ready_adapter {
+            self.explicit_busy = true;
+            self.last_status_line_at = Some(std::time::Instant::now());
+            self.turn_started_by_input = true;
+            self.turn_activity_seen = false;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn confirm_idle(&mut self) {
+        self.explicit_busy = false;
+        self.hook_busy = false;
+        self.explicit_idle = false;
+        self.idle_confirmed = true;
     }
 
     /// Called by resize_pty when the terminal is resized.
@@ -842,9 +1008,11 @@ impl SilenceState {
     /// pauses between status-line updates (API calls, file reads) don't trigger
     /// false question notifications during those gaps.
     fn is_spinner_active(&self) -> bool {
-        self.last_status_line_at
-            .map(|t| t.elapsed() < SILENCE_QUESTION_THRESHOLD)
-            .unwrap_or(false)
+        self.explicit_busy
+            || self
+                .last_status_line_at
+                .map(|t| t.elapsed() < SILENCE_QUESTION_THRESHOLD)
+                .unwrap_or(false)
     }
 
     /// Returns true if any chunk (real or chrome-only) was received recently.
@@ -1032,6 +1200,11 @@ fn try_shell_transition(
     };
     // Ref dropped here — post-transition work below re-enters shell_states.
     if ok {
+        if new == SHELL_BUSY
+            && let Some(sl) = state.silence_states.get(session_id)
+        {
+            sl.lock().note_busy_evidence();
+        }
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -1159,21 +1332,197 @@ fn should_transition_idle(state: &crate::state::AppState, session_id: &str) -> I
     IdleDecision::NO
 }
 
-/// Presence-driven busy signal for the idle timer. True when the CONTENT zone
-/// (above the chrome cutoff) still shows an agent "working" status line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AgentScreenActivity {
+    Working,
+    Ready,
+    Interrupted,
+    Unknown,
+}
+
+/// Inspect Codex's live prompt neighborhood on the UNFILTERED screen.
 ///
-/// Some agents (Codex) freeze their TUI while a child subprocess runs — zero
-/// grid changes for minutes — but keep the `• Working (… esc to interrupt)`
-/// line on screen. The change-driven spinner keepalive stamps `last_output_ms`
-/// only from CHANGED rows, so a frozen line can't refresh it and
-/// `should_transition_idle` fires a false busy→idle. Guarding on the line's
-/// PRESENCE keeps a genuinely-working agent busy.
-fn screen_shows_working_status(rows: &[String]) -> bool {
-    let refs: Vec<&str> = rows.iter().map(|s| s.as_str()).collect();
-    let cutoff = crate::chrome::find_chrome_cutoff(&refs).unwrap_or(refs.len());
-    refs[..cutoff]
+/// `find_chrome_cutoff` cannot be used here: Codex separators delimit tool
+/// output from summaries, not its prompt box. When a recent separator sits
+/// above `• Working`, the generic cutoff intentionally trims the whole region
+/// and used to hide the strongest activity signal from both reader and timer.
+/// Restricting the match to a few rows immediately above the lowest `›` prompt
+/// prevents a historical Working line elsewhere in the viewport from latching
+/// the session busy.
+fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    const PROMPT_NEIGHBORHOOD: usize = 6;
+
+    let Some(prompt_idx) = rows.iter().rposition(|row| {
+        let t = row.trim_start();
+        t.starts_with('\u{203A}') && !t.starts_with("\u{203A}\u{203A}")
+    }) else {
+        return AgentScreenActivity::Unknown;
+    };
+    let start = prompt_idx.saturating_sub(PROMPT_NEIGHBORHOOD);
+    let neighborhood = &rows[start..prompt_idx];
+
+    if neighborhood
         .iter()
-        .any(|r| crate::chrome::is_working_status_row(r))
+        .any(|row| crate::chrome::is_working_status_row(row))
+    {
+        return AgentScreenActivity::Working;
+    }
+    if neighborhood
+        .iter()
+        .any(|row| row.trim_start().starts_with("■ Conversation interrupted"))
+    {
+        return AgentScreenActivity::Interrupted;
+    }
+    AgentScreenActivity::Ready
+}
+
+fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    let content_end = rows
+        .iter()
+        .rposition(|row| !row.trim().is_empty())
+        .map_or(0, |idx| idx + 1);
+    let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
+    let prompt_idx = rows[chrome_start..content_end]
+        .iter()
+        .rposition(|row| row.trim_start().starts_with('\u{276F}'))
+        .map(|idx| idx + chrome_start);
+    let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+    // Claude separators really do frame the input area, unlike Codex. Scan the
+    // content zone when present; during work the prompt box disappears and no
+    // cutoff is found, so the live spinner remains in scope.
+    let scan_end = crate::chrome::find_chrome_cutoff(&refs).unwrap_or(rows.len());
+    let scan_start = scan_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
+    if rows[scan_start..scan_end]
+        .iter()
+        .any(|row| crate::chrome::is_spinner_row(row))
+    {
+        AgentScreenActivity::Working
+    } else if prompt_idx.is_some() {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
+fn detect_gemini_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    let prompt_idx = rows.iter().rposition(|row| {
+        let t = row.trim_start();
+        t == ">" || t.starts_with("> ")
+    });
+    let scan_end = prompt_idx.unwrap_or(rows.len());
+    let scan_start = scan_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
+    if rows[scan_start..scan_end]
+        .iter()
+        .any(|row| row.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c)))
+    {
+        AgentScreenActivity::Working
+    } else if prompt_idx.is_some() {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
+fn detect_aider_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    let scan_start = rows.len().saturating_sub(6);
+    if rows[scan_start..]
+        .iter()
+        .any(|row| crate::chrome::is_spinner_row(row))
+    {
+        AgentScreenActivity::Working
+    } else if rows.iter().rev().take(3).any(|row| row.trim() == ">") {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
+fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> AgentScreenActivity {
+    match agent_type {
+        Some("claude") => detect_claude_screen_activity(rows),
+        Some("codex") => detect_codex_screen_activity(rows),
+        Some("gemini") => detect_gemini_screen_activity(rows),
+        Some("aider") => detect_aider_screen_activity(rows),
+        _ => AgentScreenActivity::Unknown,
+    }
+}
+
+pub(crate) fn has_ready_screen_adapter(agent_type: Option<&str>) -> bool {
+    matches!(agent_type, Some("claude" | "codex" | "gemini" | "aider"))
+}
+
+fn stamp_last_output_now(state: &crate::state::AppState, session_id: &str, now_ms: u64) {
+    if let Some(ts) = state.last_output_ms.get(session_id) {
+        ts.store(now_ms, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Apply positive screen evidence immediately. In particular this repairs an
+/// already-false-idle session: Working is an edge into BUSY, not merely a
+/// keepalive that only runs while the state happens to be busy.
+fn apply_working_screen(
+    state: &crate::state::AppState,
+    silence: &Arc<Mutex<SilenceState>>,
+    session_id: &str,
+    now_ms: u64,
+) {
+    {
+        let mut sl = silence.lock();
+        if sl.explicit_idle {
+            return;
+        }
+        sl.note_working_screen();
+    }
+    stamp_last_output_now(state, session_id, now_ms);
+    let prev = state
+        .shell_states
+        .get(session_id)
+        .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
+    if let Some(prev) = prev
+        && prev != SHELL_BUSY
+        && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
+    {
+        tracing::debug!(
+            session_id,
+            activity_source = "codex-working-screen",
+            "Shell state → busy"
+        );
+        emit_shell_state(state, session_id, "busy");
+    }
+}
+
+/// A submitted line to a known agent is strong BUSY evidence even before the
+/// first model token or spinner repaint. Adapter-backed agents hold that state
+/// until a ready screen/explicit Stop; unknown agents retain the timing fallback.
+pub(crate) fn note_submitted_input(state: &AppState, session_id: &str) {
+    let agent_type = state
+        .session_states
+        .get(session_id)
+        .and_then(|s| s.agent_type.clone());
+    let is_agent = agent_type.is_some();
+    if let Some(sl) = state.silence_states.get(session_id) {
+        sl.lock()
+            .note_user_submission(has_ready_screen_adapter(agent_type.as_deref()));
+    }
+    if !is_agent {
+        return;
+    }
+    stamp_last_output_now(state, session_id, now_epoch_ms());
+    let prev = state
+        .shell_states
+        .get(session_id)
+        .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
+    if let Some(prev) = prev
+        && prev != SHELL_BUSY
+        && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
+    {
+        tracing::debug!(
+            session_id,
+            activity_source = "user-submit",
+            "Shell state → busy"
+        );
+        emit_shell_state(state, session_id, "busy");
+    }
 }
 
 /// Emit a ShellState parsed event via both event bus and Tauri IPC.
@@ -1201,14 +1550,21 @@ fn emit_shell_state(state: &crate::state::AppState, session_id: &str, shell_stat
     }
 }
 
-/// Attempt a shell state transition and emit the new state if it changed.
-/// Shared by OSC 133 A/C handlers and OSC 7770 `state=` handler.
-fn transition_shell_state(
+/// Apply an authoritative shell-state marker and emit the new state if it
+/// changed. Shared by OSC 133 A/C and OSC 7770 `state=` handlers.
+fn transition_explicit_shell_state(
     state: &crate::state::AppState,
     session_id: &str,
     target: u8,
     label: &str,
+    hook_state: bool,
 ) {
+    if let Some(sl) = state.silence_states.get(session_id) {
+        sl.lock().note_explicit_state(target, hook_state);
+    }
+    if target == SHELL_BUSY {
+        stamp_last_output_now(state, session_id, now_epoch_ms());
+    }
     // Load `prev` and DROP the shell_states Ref before calling try_shell_transition,
     // which re-gets the same key: holding a Ref across that second get can deadlock
     // under parking_lot writer-fairness if a session create/destroy writes the shard
@@ -1454,54 +1810,84 @@ fn spawn_silence_timer(
                 continue;
             }
 
-            // Sole idle path: the silence timer is the only code that transitions
-            // busy → idle. The reader thread only does → busy on real output.
-            // `should_transition_idle` checks elapsed time vs threshold (500ms shell /
-            // 2500ms agent) and sub-task count. Spinner rows keep last_output_ms
-            // fresh in the reader, so this won't fire while a spinner is active.
-            // Drop the shell_states Ref immediately after loading — try_shell_transition
-            // below re-gets the same key, and holding a Ref across that second get risks
-            // the CONC-C re-entrant-read deadlock (story 099-6526).
+            // Reconcile high-confidence screen evidence before the silence
+            // fallback. This runs regardless of current state so a Working marker
+            // repairs an already-false-idle session instead of merely keeping a
+            // pre-existing BUSY alive.
+            let agent_type = state
+                .session_states
+                .get(&session_id)
+                .and_then(|s| s.agent_type.clone());
+            let screen_activity = state
+                .vt_log_buffers
+                .get(&session_id)
+                .map(|vt| {
+                    detect_agent_screen_activity(agent_type.as_deref(), &vt.lock().screen_rows())
+                })
+                .unwrap_or(AgentScreenActivity::Unknown);
+            let screen_confirms_idle = match screen_activity {
+                AgentScreenActivity::Working => {
+                    apply_working_screen(&state, &silence, &session_id, epoch_now);
+                    false
+                }
+                AgentScreenActivity::Ready => silence.lock().note_ready_screen(),
+                AgentScreenActivity::Interrupted => silence.lock().note_interrupted_screen(),
+                AgentScreenActivity::Unknown => {
+                    silence.lock().note_unknown_screen();
+                    false
+                }
+            };
+
+            // Sole heuristic idle path: only this timer transitions busy → idle
+            // without an explicit OSC marker. A stable ready screen is stronger
+            // than timing; an explicit BUSY marker blocks timing until Stop/ready.
             let is_busy = state
                 .shell_states
                 .get(&session_id)
                 .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY)
                 .unwrap_or(false);
-            if is_busy {
-                // Presence-driven keepalive: agents that freeze their TUI during a
-                // child subprocess (Codex during a long cargo/git) stop producing
-                // grid changes, so the change-driven spinner keepalive can't refresh
-                // last_output_ms. While the working status line is still on screen the
-                // agent is alive — refresh the timestamp and skip the idle transition
-                // instead of falsely flipping idle.
-                let working_on_screen = state
-                    .vt_log_buffers
-                    .get(&session_id)
-                    .map(|vt| screen_shows_working_status(&vt.lock().screen_rows()))
-                    .unwrap_or(false);
-                if working_on_screen {
-                    if let Some(ts) = state.last_output_ms.get(&session_id) {
-                        ts.store(epoch_now, std::sync::atomic::Ordering::Relaxed);
-                    }
+            if is_busy && screen_activity != AgentScreenActivity::Working {
+                let (explicit_busy, hold_for_ready_confirmation) = {
+                    let sl = silence.lock();
+                    (
+                        sl.explicit_busy,
+                        matches!(
+                            screen_activity,
+                            AgentScreenActivity::Ready | AgentScreenActivity::Interrupted
+                        ) && !screen_confirms_idle,
+                    )
+                };
+                let decision = if screen_confirms_idle {
+                    IdleDecision::YES
+                } else if explicit_busy || hold_for_ready_confirmation {
+                    IdleDecision::NO
                 } else {
-                    let decision = should_transition_idle(&state, &session_id);
-                    if decision.should_transition
-                        && try_shell_transition(&state, &session_id, SHELL_BUSY, SHELL_IDLE, true)
-                    {
+                    should_transition_idle(&state, &session_id)
+                };
+                if decision.should_transition {
+                    // Silence-only idle is sufficient for a plain shell, but not
+                    // for an agent: standby/injection require hook or ready-screen
+                    // confirmation for the latter.
+                    if !screen_confirms_idle {
+                        silence.lock().idle_confirmed = agent_type.is_none();
+                    }
+                    if try_shell_transition(&state, &session_id, SHELL_BUSY, SHELL_IDLE, true) {
                         if decision.force_cleared_subtasks {
-                            // Story 1366-2b3e/H1: the stale-recovery path inside
-                            // should_transition_idle reset active_sub_tasks in-memory
-                            // but the frontend store only learns from this stream.
-                            // Without an explicit count=0 emission, the UI keeps a
-                            // non-zero badge and notifications stay suppressed.
                             emit_active_subtasks(&state, &session_id, 0, "");
                         }
-                        // Restore cursor visibility — Ink-based agents (Claude Code)
-                        // send DECTCEM hide (CSI ?25l) for spinners but may not
-                        // send CNORM (CSI ?25h) when returning to the prompt.
                         if let Some(vt) = state.vt_log_buffers.get(&session_id) {
                             vt.lock().process(b"\x1b[?25h");
                         }
+                        tracing::debug!(
+                            session_id,
+                            activity_source = if screen_confirms_idle {
+                                "agent-ready-screen"
+                            } else {
+                                "silence"
+                            },
+                            idle_confirmed = silence.lock().idle_confirmed,
+                            "Shell state → idle"
+                        );
                         emit_shell_state(&state, &session_id, "idle");
                         record_inferred_outcome_if_no_osc133(&state, &session_id);
                     }
@@ -1619,14 +2005,15 @@ fn spawn_silence_timer(
                 }
             };
 
-            // Hook-instrumented sessions report awaiting via OSC 7770; suppress the
-            // silence-based question heuristic (the silence-idle backstop is untouched).
-            if state
+            // Suppress heuristics only after a hook marker was observed at
+            // runtime. A persisted config flag alone can be stale after a failed
+            // install or an agent-version change.
+            let hook_configured = state
                 .session_states
                 .get(&session_id)
                 .map(|s| s.hook_instrumented)
-                .unwrap_or(false)
-            {
+                .unwrap_or(false);
+            if hook_configured && silence.lock().hook_state_seen {
                 silence.lock().clear_stale_question();
                 continue;
             }
@@ -1824,7 +2211,7 @@ impl ChunkProcessor {
             "busy" => (SHELL_BUSY, "busy"),
             _ => return,
         };
-        transition_shell_state(state, session_id, target, label);
+        transition_explicit_shell_state(state, session_id, target, label, true);
     }
 
     /// Handle a single OSC 133 event from the VTE handler.
@@ -1845,10 +2232,10 @@ impl ChunkProcessor {
         // These bypass the silence timer entirely when OSC 133 is available.
         match command {
             'A' => {
-                transition_shell_state(state, session_id, SHELL_IDLE, "idle");
+                transition_explicit_shell_state(state, session_id, SHELL_IDLE, "idle", false);
             }
             'C' => {
-                transition_shell_state(state, session_id, SHELL_BUSY, "busy");
+                transition_explicit_shell_state(state, session_id, SHELL_BUSY, "busy", false);
                 let cmd = state
                     .input_buffers
                     .get(session_id)
@@ -2198,6 +2585,7 @@ impl ChunkProcessor {
 
         // Handle terminal events from alacritty (title, clipboard, PTY writes, OSC 133, TUIC)
         let mut tuic_events: Vec<ParsedEvent> = Vec::new();
+        let mut explicit_idle_in_chunk = false;
         if !term_events.is_empty() {
             use crate::terminal_grid::{Osc133Event, TermEvent};
             for evt in term_events {
@@ -2268,6 +2656,7 @@ impl ChunkProcessor {
                         params,
                         line,
                     } => {
+                        explicit_idle_in_chunk |= command == 'A';
                         state
                             .has_osc133_integration
                             .insert(session_id.to_string(), ());
@@ -2306,6 +2695,7 @@ impl ChunkProcessor {
                             // idle/busy drive the shell-state machine; awaiting is
                             // ignored here (it's a separate field). The awaiting_input
                             // field is driven by Question/UserInput events instead.
+                            explicit_idle_in_chunk |= payload == "idle";
                             self.handle_tuic_state(&payload, session_id, state);
                             if let Some(evt) = tuic_state_awaiting_event(&payload, line as i64) {
                                 tuic_events.push(evt);
@@ -2392,7 +2782,8 @@ impl ChunkProcessor {
             .session_states
             .get(session_id)
             .map(|s| s.hook_instrumented)
-            .unwrap_or(false);
+            .unwrap_or(false)
+            && silence.lock().hook_state_seen;
         if let Some(evt) = crate::output_parser::parse_osc94(data) {
             events.push(evt);
         }
@@ -2715,6 +3106,24 @@ impl ChunkProcessor {
             }
         }
 
+        // Screen activity is evaluated on the full, unfiltered snapshot. The
+        // generic chrome cutoff is a presentation/logging boundary and must not
+        // erase agent-specific liveness evidence (Codex tool separators are the
+        // canonical counterexample).
+        let screen_activity = screen_cache
+            .as_ref()
+            .map(|rows| {
+                let agent_type = state
+                    .session_states
+                    .get(session_id)
+                    .and_then(|s| s.agent_type.clone());
+                detect_agent_screen_activity(agent_type.as_deref(), rows)
+            })
+            .unwrap_or(AgentScreenActivity::Unknown);
+        if screen_activity == AgentScreenActivity::Working && !explicit_idle_in_chunk {
+            apply_working_screen(state, silence, session_id, now_epoch_ms());
+        }
+
         // Stamp last_output_ms for real output and for active spinner repaints.
         // Spinner rows (dingbats ✻, braille ⠋, Aider ░█) prove the agent is
         // alive even though they are chrome-only — keeping the timestamp fresh
@@ -2731,14 +3140,16 @@ impl ChunkProcessor {
             && changed_rows
                 .iter()
                 .any(|r| crate::chrome::is_spinner_row(&r.text));
-        if (!chrome_only || has_spinner)
-            && let Some(ts) = state.last_output_ms.get(session_id)
-        {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64;
-            ts.store(now, std::sync::atomic::Ordering::Relaxed);
+        if (!chrome_only || has_spinner) && !explicit_idle_in_chunk {
+            {
+                let mut sl = silence.lock();
+                if has_spinner {
+                    sl.note_working_screen();
+                } else {
+                    sl.note_real_activity();
+                }
+            }
+            stamp_last_output_now(state, session_id, now_epoch_ms());
         }
 
         // SIGWINCH reflow repaints content rows for longer than the initial 1s
@@ -2761,7 +3172,10 @@ impl ChunkProcessor {
         // Load `prev` and drop the shell_states Ref before try_shell_transition (which
         // re-gets the same key): holding a Ref across that second get risks the CONC-C
         // re-entrant-read deadlock (story 099-6526).
-        let prev = if (!chrome_only || has_spinner) && !silence.lock().is_resize_grace() {
+        let prev = if (!chrome_only || has_spinner)
+            && !explicit_idle_in_chunk
+            && !silence.lock().is_resize_grace()
+        {
             state
                 .shell_states
                 .get(session_id)
@@ -3023,6 +3437,25 @@ fn short_session(session_id: &str) -> &str {
 /// (story 091). Confident questions (Ink footer, cliclack `◆ …?`, "Action
 /// Required" titles) still block injection so a peer message never answers a
 /// real approval prompt.
+fn idle_is_confirmed(state: &AppState, session_id: &str) -> bool {
+    let confirmed = state
+        .silence_states
+        .get(session_id)
+        .map(|sl| sl.lock().idle_confirmed)
+        .unwrap_or(false);
+    if confirmed {
+        return true;
+    }
+    let agent_type = state
+        .session_states
+        .get(session_id)
+        .and_then(|s| s.agent_type.clone());
+    // Preserve legacy behavior for agents without a verified ready-screen
+    // adapter. Hook-enabled variants become confirmed via explicit Stop; the
+    // remaining heuristics cannot yet provide a stronger proof.
+    !has_ready_screen_adapter(agent_type.as_deref())
+}
+
 pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
     let is_agent = state
         .session_states
@@ -3042,7 +3475,7 @@ pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
         .get(session_id)
         .map(|s| s.question_confident)
         .unwrap_or(false);
-    idle && !blocked_on_question
+    idle && idle_is_confirmed(state, session_id) && !blocked_on_question
 }
 
 /// Build the first write of an injection: Ctrl-U clears any pending input, and
@@ -3080,6 +3513,9 @@ pub(crate) fn inject_text_into_pty(state: &AppState, session_id: &str, text: &st
         return;
     }
     let _ = session.writer.flush();
+    drop(session);
+    drop(entry);
+    note_submitted_input(state, session_id);
 }
 
 /// Deliver a framed peer message into a recipient's terminal, waking it. Injects
@@ -4400,6 +4836,7 @@ pub(crate) async fn write_pty(
                 InputAction::Line(content) => {
                     line_submitted = true;
                     if !content.is_empty() {
+                        note_submitted_input(&state, &session_id);
                         // Store as last relevant prompt if >= 10 words
                         let word_count = content.split_whitespace().count();
                         if word_count >= 10 {
@@ -4432,8 +4869,19 @@ pub(crate) async fn write_pty(
                 }
                 InputAction::Interrupt => {
                     line_submitted = true;
+                    if let Some(ss) = state.silence_states.get(&session_id) {
+                        ss.lock().note_interrupt_requested();
+                    }
                 }
             }
+        }
+        // Codex advertises Escape as its normal interrupt key. A bare Escape is
+        // only intent evidence; it never flips idle until the agent redraws an
+        // interrupted/ready prompt. CSI-prefixed navigation keys are excluded.
+        if data == "\x1b"
+            && let Some(ss) = state.silence_states.get(&session_id)
+        {
+            ss.lock().note_interrupt_requested();
         }
 
         // On any line submit (Enter or Ctrl+C) reset the tool-error dedup
@@ -4763,6 +5211,23 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                     .map(|a| a.load(Ordering::Acquire));
                 let is_idle = shell_raw == Some(SHELL_IDLE);
                 if !is_idle {
+                    continue;
+                }
+
+                // For agents with a verified ready-screen adapter, a silence-only
+                // idle is not strong enough to SIGSTOP the process group. Require
+                // explicit Stop/OSC or a stable ready screen. Legacy agents that
+                // lack an adapter retain their prior timeout behavior.
+                let is_agent = state
+                    .session_states
+                    .get(session_id.as_str())
+                    .map(|s| s.agent_type.is_some())
+                    .unwrap_or(false);
+                if is_agent && !idle_is_confirmed(&state, session_id.as_str()) {
+                    tracing::trace!(
+                        session_id = session_id.as_str(),
+                        "Standby skipped: agent idle is heuristic-only"
+                    );
                     continue;
                 }
 
@@ -5335,6 +5800,7 @@ pub(crate) fn classify_agent(process_name: &str) -> Option<&'static str> {
         "cursor-agent" => Some("cursor"),
         "goose" => Some("goose"),
         "grok" => Some("grok"),
+        "droid" => Some("droid"),
         _ => None,
     }
 }
@@ -6426,6 +6892,11 @@ mod tests {
     #[test]
     fn test_classify_agent_goose() {
         assert_eq!(classify_agent("goose"), Some("goose"));
+    }
+
+    #[test]
+    fn test_classify_agent_droid() {
+        assert_eq!(classify_agent("droid"), Some("droid"));
     }
 
     #[test]
@@ -7624,8 +8095,9 @@ mod tests {
             "› Improve documentation in @filename".into(),
             "  gpt-5.5 high · ~/Gits/LS/agent2".into(),
         ];
-        assert!(
-            screen_shows_working_status(&screen),
+        assert_eq!(
+            detect_codex_screen_activity(&screen),
+            AgentScreenActivity::Working,
             "a frozen Codex working line above the prompt must keep the agent busy"
         );
     }
@@ -7640,10 +8112,183 @@ mod tests {
             "› Improve documentation in @filename".into(),
             "  gpt-5.5 high · ~/Gits/LS/agent2".into(),
         ];
-        assert!(
-            !screen_shows_working_status(&screen),
+        assert_eq!(
+            detect_codex_screen_activity(&screen),
+            AgentScreenActivity::Ready,
             "a ready prompt with no working line must allow the idle transition"
         );
+    }
+
+    /// Regression: Codex separators divide tool output from the answer; they are
+    /// not prompt-box chrome. The old presence helper applied find_chrome_cutoff,
+    /// chose this separator over the later prompt, and discarded Working.
+    #[test]
+    fn test_codex_working_after_tool_separator_is_detected() {
+        let screen: Vec<String> = vec![
+            "• Ran cargo test --workspace".into(),
+            "────────────────────────────────────────────────────────".into(),
+            "• I am checking the remaining failures.".into(),
+            "• Working (2m 55s • esc to interrupt)".into(),
+            "› Add tests for the activity detector".into(),
+            "  gpt-5.5 high · ~/repo".into(),
+        ];
+        let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
+        assert_eq!(
+            crate::chrome::find_chrome_cutoff(&refs),
+            Some(1),
+            "fixture must reproduce the misleading generic cutoff"
+        );
+        assert_eq!(
+            detect_codex_screen_activity(&screen),
+            AgentScreenActivity::Working
+        );
+    }
+
+    #[test]
+    fn test_codex_historical_working_far_from_prompt_does_not_latch_busy() {
+        let mut screen = vec!["• Working (1m • esc to interrupt)".to_string()];
+        screen.extend((0..8).map(|n| format!("old transcript row {n}")));
+        screen.push("› Ready for the next request".into());
+        screen.push("  gpt-5.5 high · ~/repo".into());
+        assert_eq!(
+            detect_codex_screen_activity(&screen),
+            AgentScreenActivity::Ready
+        );
+    }
+
+    #[test]
+    fn test_agent_ready_requires_stable_observation() {
+        let mut silence = SilenceState::new();
+        assert!(!silence.note_ready_screen());
+        assert!(!silence.idle_confirmed);
+        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(silence.note_ready_screen());
+        assert!(silence.idle_confirmed);
+    }
+
+    #[test]
+    fn test_old_ready_prompt_cannot_cancel_new_submission_before_activity() {
+        let mut silence = SilenceState::new();
+        silence.note_user_submission(true);
+        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(!silence.note_ready_screen());
+        assert!(silence.explicit_busy);
+        assert!(!silence.idle_confirmed);
+
+        silence.note_real_activity();
+        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(silence.note_ready_screen());
+        assert!(silence.idle_confirmed);
+    }
+
+    #[test]
+    fn test_hook_busy_cannot_be_overridden_by_ready_prompt() {
+        let mut silence = SilenceState::new();
+        silence.note_explicit_state(SHELL_BUSY, true);
+        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(!silence.note_ready_screen());
+        assert!(silence.explicit_busy);
+        silence.note_explicit_state(SHELL_IDLE, true);
+        assert!(silence.idle_confirmed);
+    }
+
+    #[test]
+    fn test_interrupt_request_plus_interrupted_screen_confirms_idle() {
+        let mut silence = SilenceState::new();
+        silence.note_explicit_state(SHELL_BUSY, true);
+        silence.note_interrupt_requested();
+        assert!(silence.note_interrupted_screen());
+        assert!(!silence.explicit_busy);
+        assert!(silence.idle_confirmed);
+    }
+
+    #[test]
+    fn test_ctrl_c_alone_never_confirms_idle() {
+        let mut silence = SilenceState::new();
+        silence.note_explicit_state(SHELL_BUSY, true);
+        silence.note_interrupt_requested();
+        assert!(silence.explicit_busy);
+        assert!(!silence.idle_confirmed);
+    }
+
+    #[test]
+    fn test_working_screen_recovers_idle_to_busy() {
+        use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "codex-false-idle";
+        state
+            .shell_states
+            .insert(sid.into(), AtomicU8::new(SHELL_IDLE));
+        state.last_output_ms.insert(sid.into(), AtomicU64::new(1));
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        state.silence_states.insert(sid.into(), silence.clone());
+
+        apply_working_screen(&state, &silence, sid, now_epoch_ms());
+
+        assert_eq!(
+            state.shell_states.get(sid).unwrap().load(Ordering::Acquire),
+            SHELL_BUSY
+        );
+        assert!(!silence.lock().idle_confirmed);
+    }
+
+    #[test]
+    fn test_explicit_idle_outvotes_stale_working_screen() {
+        use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "codex-stale-working";
+        state
+            .shell_states
+            .insert(sid.into(), AtomicU8::new(SHELL_IDLE));
+        state.last_output_ms.insert(sid.into(), AtomicU64::new(1));
+        let mut sl = SilenceState::new();
+        sl.note_explicit_state(SHELL_IDLE, true);
+        let silence = Arc::new(Mutex::new(sl));
+        state.silence_states.insert(sid.into(), silence.clone());
+
+        apply_working_screen(&state, &silence, sid, now_epoch_ms());
+
+        assert_eq!(
+            state.shell_states.get(sid).unwrap().load(Ordering::Acquire),
+            SHELL_IDLE
+        );
+        assert!(silence.lock().idle_confirmed);
+    }
+
+    #[test]
+    fn test_explicit_busy_suppresses_silence_question_until_idle() {
+        let mut silence = SilenceState::new();
+        silence.note_explicit_state(SHELL_BUSY, true);
+        silence.last_output_at = std::time::Instant::now() - SILENCE_QUESTION_THRESHOLD;
+        silence.pending_question_line = Some("Continue?".into());
+        assert!(!silence.is_silent());
+        silence.note_explicit_state(SHELL_IDLE, true);
+        assert!(silence.is_silent());
+    }
+
+    #[test]
+    fn test_other_agent_screen_adapters_distinguish_working_and_ready() {
+        let claude_working = vec!["✻ Cogitating… (12s)".into()];
+        let claude_ready = vec!["Answer complete".into(), "❯".into()];
+        let gemini_working = vec![
+            "⠴ Checking files… (esc to cancel, 14s)".into(),
+            "────────────────────────".into(),
+            "> Type your message".into(),
+        ];
+        let gemini_ready = vec!["> Type your message".into()];
+        let aider_working = vec!["█░  Waiting for model".into()];
+        let aider_ready = vec!["Tokens: 10k sent".into(), ">".into()];
+
+        for (agent, rows, expected) in [
+            ("claude", claude_working, AgentScreenActivity::Working),
+            ("claude", claude_ready, AgentScreenActivity::Ready),
+            ("gemini", gemini_working, AgentScreenActivity::Working),
+            ("gemini", gemini_ready, AgentScreenActivity::Ready),
+            ("aider", aider_working, AgentScreenActivity::Working),
+            ("aider", aider_ready, AgentScreenActivity::Ready),
+        ] {
+            assert_eq!(detect_agent_screen_activity(Some(agent), &rows), expected);
+        }
     }
 
     // --- Staleness counter tests ---
@@ -10106,6 +10751,11 @@ mod tests {
                 ..Default::default()
             },
         );
+        let mut silence = SilenceState::new();
+        silence.idle_confirmed = shell == SHELL_IDLE;
+        state
+            .silence_states
+            .insert(sid.to_string(), Arc::new(Mutex::new(silence)));
     }
 
     #[test]
@@ -10125,6 +10775,35 @@ mod tests {
             !should_inject_now(&state, "unknown"),
             "unknown session → never inject"
         );
+    }
+
+    #[test]
+    fn codex_heuristic_idle_is_not_safe_for_injection_or_standby() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "codex-heuristic", SHELL_IDLE);
+        state
+            .session_states
+            .get_mut("codex-heuristic")
+            .unwrap()
+            .agent_type = Some("codex".to_string());
+        state
+            .silence_states
+            .get("codex-heuristic")
+            .unwrap()
+            .lock()
+            .idle_confirmed = false;
+
+        assert!(!idle_is_confirmed(&state, "codex-heuristic"));
+        assert!(!should_inject_now(&state, "codex-heuristic"));
+
+        state
+            .silence_states
+            .get("codex-heuristic")
+            .unwrap()
+            .lock()
+            .confirm_idle();
+        assert!(idle_is_confirmed(&state, "codex-heuristic"));
+        assert!(should_inject_now(&state, "codex-heuristic"));
     }
 
     #[test]
@@ -10154,6 +10833,11 @@ mod tests {
                 ..Default::default()
             },
         );
+        let mut ready_silence = SilenceState::new();
+        ready_silence.idle_confirmed = true;
+        state
+            .silence_states
+            .insert("ready".to_string(), Arc::new(Mutex::new(ready_silence)));
         assert!(
             !should_inject_now(&state, "q"),
             "confident question agent → do not answer its prompt"
@@ -10241,6 +10925,7 @@ mod tests {
             let timer = std::thread::spawn(move || {
                 b2.wait();
                 // Silence timer: BUSY→IDLE also runs flush_pending_injections on idle.
+                s2.silence_states.get("race").unwrap().lock().idle_confirmed = true;
                 try_shell_transition(&s2, "race", SHELL_BUSY, SHELL_IDLE, false);
             });
             sender.join().unwrap();
@@ -10422,6 +11107,15 @@ mod tests {
         q.push_back("msg-2".to_string());
         state.pending_injections.insert("sess".to_string(), q);
 
+        // The transition is driven by verified ready-screen/Stop evidence in
+        // production. Model that evidence before testing its delivery side effect.
+        state
+            .silence_states
+            .get("sess")
+            .unwrap()
+            .lock()
+            .confirm_idle();
+
         // BUSY→IDLE must drain the queue (inject is best-effort; drain is the
         // observable invariant — no message is stranded).
         assert!(try_shell_transition(
@@ -10457,6 +11151,17 @@ mod tests {
         let mut q = VecDeque::new();
         q.push_back("later".to_string());
         state.pending_injections.insert("sess".to_string(), q);
+
+        state.silence_states.insert(
+            "sess".to_string(),
+            Arc::new(Mutex::new(SilenceState::new())),
+        );
+        state
+            .silence_states
+            .get("sess")
+            .unwrap()
+            .lock()
+            .confirm_idle();
 
         try_shell_transition(&state, "sess", SHELL_BUSY, SHELL_IDLE, false);
         assert_eq!(
@@ -10535,6 +11240,11 @@ mod tests {
                 ..Default::default()
             },
         );
+        let mut silence = SilenceState::new();
+        silence.confirm_idle();
+        state
+            .silence_states
+            .insert("codex".to_string(), Arc::new(Mutex::new(silence)));
         deliver_message_to_pty(&state, "codex", "[TUIC message from lead] go");
         assert!(
             !state.pending_injections.contains_key("codex"),

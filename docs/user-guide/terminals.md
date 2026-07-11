@@ -63,6 +63,13 @@ Drag tabs to reorder them. Visual drop indicators show where the tab will land.
 
 Sidebar branch icons also show purple when they contain unseen terminals.
 
+Agent activity combines native lifecycle hooks, the current Working/Ready UI,
+and terminal output. Claude, Codex, Gemini, and Aider require a stable ready
+screen before safety-sensitive actions such as auto-standby or queued agent
+message delivery. Pressing Ctrl-C or Escape requests interruption but does not
+turn the dot green until the agent confirms the interruption, returns to its
+prompt, or exits.
+
 ### Tab Shortcuts
 
 Hover a tab to see its shortcut badge: "Terminal N (Cmd+N)". Use `Cmd+1` through `Cmd+9` to jump directly. `Ctrl+Tab` / `Ctrl+Shift+Tab` — Next / previous tab.
