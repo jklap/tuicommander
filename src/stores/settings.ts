@@ -438,8 +438,9 @@ function createSettingsStore() {
 		inlineBlameEnabled: true,
 	});
 
-	// Shadow copy of the last loaded config — preserves fields not tracked in SolidJS store
-	// (e.g. session_token_duration_secs, mcp_server_enabled). Updated on hydrate.
+	// Cache of the last loaded config, refreshed on hydrate and each persist.
+	// Only read by loadFontFromConfig() now — the save path no longer builds
+	// on top of this snapshot (it does a fresh load-modify-save instead).
 	let baseConfig: RustAppConfig | null = null;
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
 	// Write lock: save() serializes the ENTIRE state, so a save before a
@@ -448,62 +449,81 @@ function createSettingsStore() {
 	// No successful hydrate, no persist.
 	let hydrated = false;
 
-	/** Build a full RustAppConfig from current store state + base config fields */
-	function buildConfig(): RustAppConfig {
-		return {
-			...(baseConfig ?? ({} as RustAppConfig)),
-			shell: state.shell,
-			font_family: state.font,
-			font_size: state.defaultFontSize,
-			font_weight: state.fontWeight,
-			theme: state.theme,
-			ide: state.ide,
-			default_font_size: state.defaultFontSize,
-			confirm_before_quit: state.confirmBeforeQuit,
-			confirm_before_closing_tab: state.confirmBeforeClosingTab,
-			max_tab_name_length: state.maxTabNameLength,
-			split_tab_mode: state.splitTabMode,
-			tab_ordering_mode: state.tabOrderingMode,
-			tab_cycling_all_types: state.tabCyclingAllTypes,
-			tab_tree_enabled: state.tabTreeEnabled,
-			auto_show_pr_popover: state.autoShowPrPopover,
-			prevent_sleep_when_busy: state.preventSleepWhenBusy,
-			auto_update_enabled: state.autoUpdateEnabled,
-			auto_update_plugins_enabled: state.autoUpdatePluginsEnabled,
-			language: state.language,
-			update_channel: state.updateChannel,
-			disabled_agents: [...state.disabledAgents],
-			intent_tab_title: state.intentTabTitle,
-			suggest_followups: state.suggestFollowups,
-			copy_on_select: state.copyOnSelect,
-			osc52_clipboard: state.osc52Clipboard,
-			show_last_prompt: state.showLastPrompt,
-			bell_style: state.bellStyle,
-			global_hotkey: state.globalHotkey,
-			issue_filter: state.issueFilter,
-			pr_hide_drafts: state.prHideDrafts,
-			pr_hide_conflicting: state.prHideConflicting,
-			pr_hide_ci_failing: state.prHideCiFailing,
-			experimental_features_enabled: state.experimentalFeaturesEnabled,
-			ai_chat_enabled: state.aiChatEnabled,
-			ai_triage_enabled: state.aiTriageEnabled,
-			ai_watchers_enabled: state.aiWatchersEnabled,
-			scrollback_reflow: state.scrollbackReflow,
-			cursor_style: state.cursorStyle,
-			terminal_renderer: state.terminalRenderer,
-			show_block_timestamps: state.showBlockTimestamps,
-			show_scrollbar_marks: state.showScrollbarMarks,
-			block_folding_enabled: state.blockFoldingEnabled,
-			index_strategy: state.indexStrategy,
-			standby_timeout_minutes: state.standbyTimeoutMinutes,
-			custom_launchers: [...state.customLaunchers],
-			inline_blame_enabled: state.inlineBlameEnabled,
-			services: baseConfig?.services ?? { auth: { session_token_duration_secs: 86400 } },
-			mcp_server_enabled: baseConfig?.mcp_server_enabled ?? true,
-		};
+	/** Overwrite the settings-store-owned fields on a freshly-loaded config.
+	 *  Fields owned by OTHER surfaces are deliberately left as loaded:
+	 *   - `services.*`        — ServicesTab (its own load-modify-save)
+	 *   - `mcp_server_enabled` — ServicesTab
+	 *   - `global_hotkey`      — the `set_global_hotkey` command
+	 *  This store must never write them from its own (possibly stale) snapshot,
+	 *  or a general-settings save clobbers a concurrent writer's change — the
+	 *  "web server disabled / hotkey lost on restart" bug. Mirrors the
+	 *  load-modify-save pattern ServicesTab already uses. */
+	function applyOwnedFields(config: RustAppConfig): RustAppConfig {
+		config.shell = state.shell;
+		config.font_family = state.font;
+		config.font_size = state.defaultFontSize;
+		config.font_weight = state.fontWeight;
+		config.theme = state.theme;
+		config.ide = state.ide;
+		config.default_font_size = state.defaultFontSize;
+		config.confirm_before_quit = state.confirmBeforeQuit;
+		config.confirm_before_closing_tab = state.confirmBeforeClosingTab;
+		config.max_tab_name_length = state.maxTabNameLength;
+		config.split_tab_mode = state.splitTabMode;
+		config.tab_ordering_mode = state.tabOrderingMode;
+		config.tab_cycling_all_types = state.tabCyclingAllTypes;
+		config.tab_tree_enabled = state.tabTreeEnabled;
+		config.auto_show_pr_popover = state.autoShowPrPopover;
+		config.prevent_sleep_when_busy = state.preventSleepWhenBusy;
+		config.auto_update_enabled = state.autoUpdateEnabled;
+		config.auto_update_plugins_enabled = state.autoUpdatePluginsEnabled;
+		config.language = state.language;
+		config.update_channel = state.updateChannel;
+		config.disabled_agents = [...state.disabledAgents];
+		config.intent_tab_title = state.intentTabTitle;
+		config.suggest_followups = state.suggestFollowups;
+		config.copy_on_select = state.copyOnSelect;
+		config.osc52_clipboard = state.osc52Clipboard;
+		config.show_last_prompt = state.showLastPrompt;
+		config.bell_style = state.bellStyle;
+		config.issue_filter = state.issueFilter;
+		config.pr_hide_drafts = state.prHideDrafts;
+		config.pr_hide_conflicting = state.prHideConflicting;
+		config.pr_hide_ci_failing = state.prHideCiFailing;
+		config.experimental_features_enabled = state.experimentalFeaturesEnabled;
+		config.ai_chat_enabled = state.aiChatEnabled;
+		config.ai_triage_enabled = state.aiTriageEnabled;
+		config.ai_watchers_enabled = state.aiWatchersEnabled;
+		config.scrollback_reflow = state.scrollbackReflow;
+		config.cursor_style = state.cursorStyle;
+		config.terminal_renderer = state.terminalRenderer;
+		config.show_block_timestamps = state.showBlockTimestamps;
+		config.show_scrollbar_marks = state.showScrollbarMarks;
+		config.block_folding_enabled = state.blockFoldingEnabled;
+		config.index_strategy = state.indexStrategy;
+		config.standby_timeout_minutes = state.standbyTimeoutMinutes;
+		config.custom_launchers = [...state.customLaunchers];
+		config.inline_blame_enabled = state.inlineBlameEnabled;
+		return config;
 	}
 
-	/** Debounced save — coalesces rapid setting changes into a single IPC call */
+	/** Load the current on-disk config, apply this store's owned fields, and
+	 *  persist. Load-modify-save guarantees fields written by other surfaces
+	 *  (services, global_hotkey, …) survive — never overwritten from a stale
+	 *  in-memory snapshot. If the fresh load fails we skip the save entirely
+	 *  rather than risk writing a partial config. */
+	async function persist(): Promise<void> {
+		try {
+			const base = await invoke<RustAppConfig>("load_config");
+			const config = applyOwnedFields(base ?? ({} as RustAppConfig));
+			baseConfig = config; // keep the cache (loadFontFromConfig) current
+			await invoke("save_config", { config });
+		} catch (err) {
+			appLogger.error("config", "Failed to save config", err);
+		}
+	}
+
+	/** Debounced save — coalesces rapid setting changes into a single persist */
 	function save(): void {
 		if (!hydrated) {
 			appLogger.error(
@@ -515,9 +535,7 @@ function createSettingsStore() {
 		if (saveTimer) clearTimeout(saveTimer);
 		saveTimer = setTimeout(() => {
 			saveTimer = null;
-			invoke("save_config", { config: buildConfig() }).catch((err: unknown) =>
-				appLogger.error("config", "Failed to save config", err),
-			);
+			void persist();
 		}, SAVE_DEBOUNCE_MS);
 	}
 

@@ -6,6 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Settings no longer clobber the web-server toggle or global hotkey** — Changing any General setting used to overwrite `config.json` wholesale from a stale in-memory snapshot, silently resetting fields owned by other panels — most visibly turning the Remote Access web server **off** and wiping the **global hotkey** on the next restart. The settings store now uses a load-modify-save (fresh `load_config` → apply only its own fields → `save_config`), matching the Services tab, so `services.*`, `mcp_server_enabled`, and `global_hotkey` are always preserved from disk.
+
 ## [1.6.0] - 2026-07-11
 
 ### Added

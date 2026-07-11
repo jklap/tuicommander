@@ -78,6 +78,77 @@ describe("settingsStore", () => {
 		});
 	});
 
+	describe("load-modify-save preserves foreign-owned fields", () => {
+		// Regression: a general-settings save must NOT clobber fields owned by
+		// other surfaces (services.server.enabled → ServicesTab, global_hotkey →
+		// set_global_hotkey command). The old buildConfig() rebuilt the whole
+		// config from a stale hydrate snapshot, wiping the web-server toggle and
+		// global hotkey on the next restart.
+		it("keeps services.server.enabled and global_hotkey set by other writers", async () => {
+			await testInScopeAsync(async () => {
+				// Hydrate with a STALE snapshot: server OFF, no hotkey.
+				mockInvoke.mockResolvedValueOnce({
+					shell: null,
+					font_family: "JetBrains Mono",
+					font_size: 14,
+					theme: "vscode-dark",
+					mcp_server_enabled: false,
+					ide: "vscode",
+					default_font_size: 13,
+					global_hotkey: null,
+					services: { server: { enabled: false, port: 9876 } },
+				});
+				await store.hydrate();
+
+				// Another surface has since enabled the server + set a hotkey; the
+				// fresh load_config the save path performs reflects that on disk.
+				mockInvoke.mockResolvedValueOnce({
+					shell: null,
+					font_family: "JetBrains Mono",
+					font_size: 14,
+					theme: "vscode-dark",
+					mcp_server_enabled: true,
+					ide: "vscode",
+					default_font_size: 13,
+					global_hotkey: "CommandOrControl+1",
+					services: { server: { enabled: true, port: 9876 } },
+				});
+
+				store.setIde("cursor");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+
+				const calls = saveConfigCalls();
+				expect(calls).toHaveLength(1);
+				const saved = (
+					calls[0][1] as {
+						config: {
+							ide: string;
+							services: { server: { enabled: boolean } };
+							global_hotkey: string | null;
+							mcp_server_enabled: boolean;
+						};
+					}
+				).config;
+				expect(saved.ide).toBe("cursor"); // owned field applied
+				expect(saved.services.server.enabled).toBe(true); // preserved
+				expect(saved.global_hotkey).toBe("CommandOrControl+1"); // preserved
+				expect(saved.mcp_server_enabled).toBe(true); // preserved
+			});
+		});
+
+		it("skips the save (no clobber) when the fresh load_config fails", async () => {
+			await testInScopeAsync(async () => {
+				await hydrateStore();
+				mockInvoke.mockRejectedValueOnce(new Error("backend down"));
+				store.setIde("cursor");
+				vi.advanceTimersByTime(600);
+				await vi.runAllTimersAsync();
+				expect(saveConfigCalls()).toHaveLength(0);
+			});
+		});
+	});
+
 	describe("defaults", () => {
 		it("has correct default values", () => {
 			testInScope(() => {
