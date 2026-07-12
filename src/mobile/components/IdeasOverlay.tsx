@@ -15,8 +15,11 @@ interface IdeasOverlayProps {
 
 export function IdeasOverlay(props: IdeasOverlayProps) {
 	const [inputText, setInputText] = createSignal("");
+	const [view, setView] = createSignal<"active" | "archived">("active");
 
-	const notes = () => notesStore.getFilteredNotes(props.repoPath);
+	const notes = () =>
+		view() === "active" ? notesStore.getActiveNotes(props.repoPath) : notesStore.getArchivedNotes(props.repoPath);
+	const archivedCount = () => notesStore.archivedCount(props.repoPath);
 
 	function handleBackdrop(e: MouseEvent) {
 		if (e.target === e.currentTarget) props.onDismiss();
@@ -41,7 +44,7 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 
 	async function handleSend(note: { id: string; text: string }) {
 		props.onDismiss();
-		notesStore.markUsed(note.id);
+		notesStore.archiveNote(note.id);
 		try {
 			// Route through the canonical sendCommand helper (split Enter for Ink
 			// raw mode, bracketed-paste for multi-line, Windows-native Ctrl-U skip).
@@ -69,18 +72,35 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 					</button>
 				</div>
 
+				<div class={styles.viewToggle}>
+					<button
+						class={styles.viewToggleBtn}
+						classList={{ [styles.viewToggleActive]: view() === "active" }}
+						onClick={() => setView("active")}
+					>
+						Active
+					</button>
+					<button
+						class={styles.viewToggleBtn}
+						classList={{ [styles.viewToggleActive]: view() === "archived" }}
+						onClick={() => setView("archived")}
+					>
+						Archived
+						<Show when={archivedCount() > 0}> ({archivedCount()})</Show>
+					</button>
+				</div>
+
 				<div class={styles.list}>
 					<Show when={notes().length === 0}>
-						<div class={styles.empty}>No ideas yet. Add one below.</div>
+						<div class={styles.empty}>
+							{view() === "active" ? "No ideas yet. Add one below." : "No archived ideas."}
+						</div>
 					</Show>
 					<For each={notes()}>
 						{(note) => (
-							<div class={styles.item} classList={{ [styles.itemUsed]: !!note.usedAt }}>
+							<div class={styles.item}>
 								<div class={styles.itemBody}>
-									<span class={styles.itemText}>
-										{note.usedAt ? "\u2713 " : ""}
-										{note.text}
-									</span>
+									<span class={styles.itemText}>{note.text}</span>
 									<div class={styles.itemMeta}>
 										<span class={styles.itemDate}>
 											{formatRelativeTime(note.createdAt, { showDateFallback: true })}
@@ -91,16 +111,64 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 									</div>
 								</div>
 								<div class={styles.itemActions}>
-									<button
-										class={`${styles.actionBtn} ${styles.sendBtn}`}
-										onClick={() => handleSend(note)}
-										title="Send to terminal"
+									<Show
+										when={view() === "active"}
+										fallback={
+											<button
+												class={`${styles.actionBtn} ${styles.unarchiveBtn}`}
+												onClick={() => notesStore.unarchiveNote(note.id)}
+												title="Unarchive"
+											>
+												<svg
+													width="14"
+													height="14"
+													viewBox="0 0 24 24"
+													fill="none"
+													stroke="currentColor"
+													stroke-width="2"
+												>
+													<polyline points="9 14 4 9 9 4" />
+													<path d="M20 20v-7a4 4 0 0 0-4-4H4" />
+												</svg>
+											</button>
+										}
 									>
-										<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-											<line x1="22" y1="2" x2="11" y2="13" />
-											<polygon points="22 2 15 22 11 13 2 9 22 2" />
-										</svg>
-									</button>
+										<button
+											class={`${styles.actionBtn} ${styles.sendBtn}`}
+											onClick={() => handleSend(note)}
+											title="Send to terminal"
+										>
+											<svg
+												width="14"
+												height="14"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+											>
+												<line x1="22" y1="2" x2="11" y2="13" />
+												<polygon points="22 2 15 22 11 13 2 9 22 2" />
+											</svg>
+										</button>
+										<button
+											class={`${styles.actionBtn} ${styles.archiveBtn}`}
+											onClick={() => notesStore.archiveNote(note.id)}
+											title="Archive"
+										>
+											<svg
+												width="14"
+												height="14"
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												stroke-width="2"
+											>
+												<polyline points="21 8 21 21 3 21 3 8" />
+												<rect x="1" y="3" width="22" height="5" />
+												<line x1="10" y1="12" x2="14" y2="12" />
+											</svg>
+										</button>
+									</Show>
 									<button
 										class={`${styles.actionBtn} ${styles.deleteBtn}`}
 										onClick={() => notesStore.removeNote(note.id)}
@@ -117,19 +185,21 @@ export function IdeasOverlay(props: IdeasOverlayProps) {
 					</For>
 				</div>
 
-				<div class={styles.inputArea}>
-					<textarea
-						class={styles.input}
-						rows={1}
-						placeholder="Type an idea..."
-						value={inputText()}
-						onInput={(e) => setInputText(e.currentTarget.value)}
-						onKeyDown={handleKeyDown}
-					/>
-					<button class={styles.submitBtn} onClick={handleSubmit} disabled={!inputText().trim()}>
-						+
-					</button>
-				</div>
+				<Show when={view() === "active"}>
+					<div class={styles.inputArea}>
+						<textarea
+							class={styles.input}
+							rows={1}
+							placeholder="Type an idea..."
+							value={inputText()}
+							onInput={(e) => setInputText(e.currentTarget.value)}
+							onKeyDown={handleKeyDown}
+						/>
+						<button class={styles.submitBtn} onClick={handleSubmit} disabled={!inputText().trim()}>
+							+
+						</button>
+					</div>
+				</Show>
 			</div>
 		</div>
 	);

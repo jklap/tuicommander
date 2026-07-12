@@ -52,6 +52,31 @@
   padding: 0;
 }
 
+.viewToggle {
+  display: flex;
+  gap: 4px;
+  padding: 0 12px 8px;
+  flex-shrink: 0;
+}
+
+.viewToggleBtn {
+  flex: 1;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.viewToggleActive {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+
 .list {
   flex: 1;
   min-height: 0;
@@ -73,10 +98,6 @@
   gap: 8px;
   padding: 8px 4px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-.itemUsed {
-  opacity: 0.5;
 }
 
 .itemBody {
@@ -141,6 +162,11 @@
 
 .sendBtn {
   color: var(--accent);
+}
+
+.archiveBtn,
+.unarchiveBtn {
+  color: var(--fg-muted);
 }
 
 .deleteBtn {

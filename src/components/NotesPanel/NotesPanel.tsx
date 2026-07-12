@@ -65,11 +65,13 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 	const [pendingImages, setPendingImages] = createSignal<string[]>([]);
 	const [pendingNoteId, setPendingNoteId] = createSignal<string | null>(null);
 	const [editingImages, setEditingImages] = createSignal<string[]>([]);
+	const [view, setView] = createSignal<"active" | "archived">("active");
 	let textareaRef: HTMLTextAreaElement | undefined;
 
-	const filteredNotes = () => notesStore.getFilteredNotes(props.repoPath);
+	const displayedNotes = () =>
+		view() === "active" ? notesStore.getActiveNotes(props.repoPath) : notesStore.getArchivedNotes(props.repoPath);
 	const badgeCount = () => notesStore.pendingCount(props.repoPath);
-	const hasCompleted = () => notesStore.getFilteredNotes(props.repoPath).some((n) => n.usedAt !== null);
+	const archivedBadgeCount = () => notesStore.archivedCount(props.repoPath);
 
 	const repoOptions = () => {
 		const repos = repositoriesStore.state.repositories;
@@ -182,7 +184,7 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 
 	const handleSend = (note: { text: string; images: string[]; id: string }) => {
 		props.onSendToTerminal(buildTerminalText(note.text, note.images));
-		notesStore.markUsed(note.id);
+		notesStore.archiveNote(note.id);
 	};
 
 	return (
@@ -201,11 +203,11 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 					</Show>
 				</div>
 				<div class={p.headerRight}>
-					<Show when={hasCompleted()}>
+					<Show when={view() === "archived" && archivedBadgeCount() > 0}>
 						<button
 							class={p.headerBtn}
-							onClick={() => notesStore.clearCompleted()}
-							title={t("notesPanel.clearCompleted", "Clear completed ideas")}
+							onClick={() => notesStore.clearArchived()}
+							title={t("notesPanel.clearArchived", "Clear archived ideas")}
 						>
 							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
 								<path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5zM11 2.5V1.5A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1H11zm1.958 1l-.846 10.58a1 1 0 0 1-.997.92h-6.23a1 1 0 0 1-.997-.92L3.042 3.5h9.916z" />
@@ -216,17 +218,36 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 				</div>
 			</div>
 
+			<div class={s.viewToggle}>
+				<button
+					class={cx(s.viewToggleBtn, view() === "active" && s.viewToggleActive)}
+					onClick={() => setView("active")}
+				>
+					{t("notesPanel.viewActive", "Active")}
+				</button>
+				<button
+					class={cx(s.viewToggleBtn, view() === "archived" && s.viewToggleActive)}
+					onClick={() => setView("archived")}
+				>
+					{t("notesPanel.viewArchived", "Archived")}
+					<Show when={archivedBadgeCount() > 0}> ({archivedBadgeCount()})</Show>
+				</button>
+			</div>
+
 			<div class={cx(p.content, s.list)}>
-				<Show when={filteredNotes().length === 0}>
-					<div class={s.empty}>{t("notesPanel.empty", "No ideas yet. Add one below.")}</div>
+				<Show when={displayedNotes().length === 0}>
+					<div class={s.empty}>
+						{view() === "active"
+							? t("notesPanel.empty", "No ideas yet. Add one below.")
+							: t("notesPanel.emptyArchived", "No archived ideas.")}
+					</div>
 				</Show>
-				<For each={filteredNotes()}>
+				<For each={displayedNotes()}>
 					{(note) => (
-						<div class={cx(s.item, !!note.usedAt && s.itemUsed)}>
+						<div class={s.item}>
 							<div class={s.body}>
 								<Show when={note.text}>
 									<span class={s.text} title={note.text}>
-										{note.usedAt ? "✓ " : ""}
 										{note.text}
 									</span>
 								</Show>
@@ -275,20 +296,40 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 								</div>
 							</div>
 							<div class={s.actions}>
-								<button
-									class={cx(s.actionBtn, s.editBtn)}
-									onClick={() => handleEdit(note.id, note.text, note.images)}
-									title={t("notesPanel.edit", "Edit note")}
+								<Show
+									when={view() === "active"}
+									fallback={
+										<button
+											class={cx(s.actionBtn, s.unarchiveBtn)}
+											onClick={() => notesStore.unarchiveNote(note.id)}
+											title={t("notesPanel.unarchive", "Unarchive idea")}
+										>
+											↩
+										</button>
+									}
 								>
-									✎
-								</button>
-								<button
-									class={cx(s.actionBtn, s.sendBtn)}
-									onClick={() => handleSend(note)}
-									title={t("notesPanel.send", "Send to terminal")}
-								>
-									▶
-								</button>
+									<button
+										class={cx(s.actionBtn, s.editBtn)}
+										onClick={() => handleEdit(note.id, note.text, note.images)}
+										title={t("notesPanel.edit", "Edit note")}
+									>
+										✎
+									</button>
+									<button
+										class={cx(s.actionBtn, s.sendBtn)}
+										onClick={() => handleSend(note)}
+										title={t("notesPanel.send", "Send to terminal")}
+									>
+										▶
+									</button>
+									<button
+										class={cx(s.actionBtn, s.archiveBtn)}
+										onClick={() => notesStore.archiveNote(note.id)}
+										title={t("notesPanel.archive", "Archive idea")}
+									>
+										📦
+									</button>
+								</Show>
 								<button
 									class={cx(s.actionBtn, s.deleteBtn)}
 									onClick={() => notesStore.removeNote(note.id)}
@@ -302,53 +343,55 @@ export const NotesPanel: Component<NotesPanelProps> = (props) => {
 				</For>
 			</div>
 
-			<div class={s.inputArea}>
-				<Show when={allPendingImages().length > 0}>
-					<div class={s.pendingThumbnails}>
-						<For each={allPendingImages()}>
-							{(imgPath) => (
-								<div class={s.pendingThumbWrap}>
-									<img
-										class={s.thumbnail}
-										src={convertFileSrc(imgPath)}
-										alt="Pending image"
-										onError={(e) => {
-											((e.currentTarget.closest(`.${s.pendingThumbWrap}`) as HTMLElement) ??
-												e.currentTarget.parentElement)!.style.display = "none";
-										}}
-									/>
-									<button class={s.thumbnailRemove} onClick={() => removePendingImage(imgPath)} title="Remove image">
-										✕
-									</button>
-								</div>
-							)}
-						</For>
-					</div>
-				</Show>
-				<textarea
-					ref={textareaRef}
-					data-focus-target="notes"
-					class={s.input}
-					rows={5}
-					placeholder={
-						editingId()
-							? t("notesPanel.editPlaceholder", "Edit idea... (Esc to cancel)")
-							: t("notesPanel.placeholder", "Type an idea and press Enter... (Ctrl+V to paste image)")
-					}
-					value={inputText()}
-					onInput={(e) => setInputText(e.currentTarget.value)}
-					onKeyDown={handleKeyDown}
-					onPaste={handlePaste}
-				/>
-				<button
-					class={s.submitBtn}
-					onClick={handleSubmit}
-					disabled={!inputText().trim() && allPendingImages().length === 0}
-					title={t("notesPanel.submit", "Add note (Enter)")}
-				>
-					+
-				</button>
-			</div>
+			<Show when={view() === "active"}>
+				<div class={s.inputArea}>
+					<Show when={allPendingImages().length > 0}>
+						<div class={s.pendingThumbnails}>
+							<For each={allPendingImages()}>
+								{(imgPath) => (
+									<div class={s.pendingThumbWrap}>
+										<img
+											class={s.thumbnail}
+											src={convertFileSrc(imgPath)}
+											alt="Pending image"
+											onError={(e) => {
+												((e.currentTarget.closest(`.${s.pendingThumbWrap}`) as HTMLElement) ??
+													e.currentTarget.parentElement)!.style.display = "none";
+											}}
+										/>
+										<button class={s.thumbnailRemove} onClick={() => removePendingImage(imgPath)} title="Remove image">
+											✕
+										</button>
+									</div>
+								)}
+							</For>
+						</div>
+					</Show>
+					<textarea
+						ref={textareaRef}
+						data-focus-target="notes"
+						class={s.input}
+						rows={5}
+						placeholder={
+							editingId()
+								? t("notesPanel.editPlaceholder", "Edit idea... (Esc to cancel)")
+								: t("notesPanel.placeholder", "Type an idea and press Enter... (Ctrl+V to paste image)")
+						}
+						value={inputText()}
+						onInput={(e) => setInputText(e.currentTarget.value)}
+						onKeyDown={handleKeyDown}
+						onPaste={handlePaste}
+					/>
+					<button
+						class={s.submitBtn}
+						onClick={handleSubmit}
+						disabled={!inputText().trim() && allPendingImages().length === 0}
+						title={t("notesPanel.submit", "Add note (Enter)")}
+					>
+						+
+					</button>
+				</div>
+			</Show>
 		</div>
 	);
 };

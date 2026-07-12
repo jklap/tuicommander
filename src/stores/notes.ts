@@ -121,8 +121,8 @@ function createNotesStore() {
 			saveNotes(state.notes);
 		},
 
-		/** Mark a note as used (sent to terminal) */
-		markUsed(id: string): void {
+		/** Archive a note (sent to terminal, or archived manually) */
+		archiveNote(id: string): void {
 			setState(
 				produce((s) => {
 					const note = s.notes.find((n) => n.id === id);
@@ -134,10 +134,33 @@ function createNotesStore() {
 			saveNotes(state.notes);
 		},
 
+		/** Unarchive a note, moving it back to the active list */
+		unarchiveNote(id: string): void {
+			setState(
+				produce((s) => {
+					const note = s.notes.find((n) => n.id === id);
+					if (note) {
+						note.usedAt = null;
+					}
+				}),
+			);
+			saveNotes(state.notes);
+		},
+
 		/** Get notes filtered by active repo. null = all notes. */
 		getFilteredNotes(activeRepo: string | null): Note[] {
 			if (!activeRepo) return state.notes;
 			return state.notes.filter((n) => n.repoPath === null || n.repoPath === activeRepo);
+		},
+
+		/** Get active (not yet archived) notes filtered by active repo. null = all notes. */
+		getActiveNotes(activeRepo: string | null): Note[] {
+			return actions.getFilteredNotes(activeRepo).filter((n) => !n.usedAt);
+		},
+
+		/** Get archived notes filtered by active repo. null = all notes. */
+		getArchivedNotes(activeRepo: string | null): Note[] {
+			return actions.getFilteredNotes(activeRepo).filter((n) => !!n.usedAt);
 		},
 
 		/** Count of notes visible for the given repo filter */
@@ -152,14 +175,20 @@ function createNotesStore() {
 				.length;
 		},
 
-		/** Remove all notes that have been used (usedAt !== null) */
-		clearCompleted(): void {
-			const completed = state.notes.filter((n) => n.usedAt !== null);
-			if (completed.length === 0) return;
-			const completedIds = completed.map((n) => n.id);
-			setState("notes", (notes) => notes.filter((n) => !completedIds.includes(n.id)));
+		/** Count of archived notes for the given repo filter */
+		archivedCount(activeRepo: string | null): number {
+			return state.notes.filter((n) => !!n.usedAt && (!activeRepo || n.repoPath === null || n.repoPath === activeRepo))
+				.length;
+		},
+
+		/** Remove all notes that have been archived (usedAt !== null) */
+		clearArchived(): void {
+			const archived = state.notes.filter((n) => n.usedAt !== null);
+			if (archived.length === 0) return;
+			const archivedIds = archived.map((n) => n.id);
+			setState("notes", (notes) => notes.filter((n) => !archivedIds.includes(n.id)));
 			saveNotes(state.notes);
-			invoke("delete_note_assets_batch", { noteIds: completedIds }).catch((err) =>
+			invoke("delete_note_assets_batch", { noteIds: archivedIds }).catch((err) =>
 				appLogger.debug("store", "Failed to delete note assets", err),
 			);
 		},
@@ -184,5 +213,6 @@ registerDebugSnapshot("notes", () => {
 		text: n.text.substring(0, 100),
 		repoPath: n.repoPath,
 		createdAt: n.createdAt,
+		archived: !!n.usedAt,
 	}));
 });
