@@ -15,6 +15,35 @@
   display: none;
 }
 
+.viewToggle {
+  display: flex;
+  gap: 4px;
+  padding: 8px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.viewToggleBtn {
+  flex: 1;
+  padding: 4px 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.viewToggleBtn:hover {
+  background: var(--bg-highlight);
+}
+
+.viewToggleActive {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+
 .list {
   flex: 1;
   overflow-y: auto;
@@ -38,14 +67,6 @@
 
 .item:hover {
   background: var(--bg-highlight);
-}
-
-.itemUsed {
-  opacity: 0.5;
-}
-
-.itemUsed .text {
-  text-decoration: line-through;
 }
 
 .body {
@@ -149,6 +170,12 @@
 .sendBtn:hover {
   background: var(--accent);
   color: var(--text-on-accent);
+}
+
+.archiveBtn:hover,
+.unarchiveBtn:hover {
+  background: var(--bg-tertiary);
+  color: var(--fg-primary);
 }
 
 .deleteBtn:hover {

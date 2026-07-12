@@ -457,7 +457,7 @@ describe("notesStore", () => {
 			testInScope(() => {
 				store.addNote("pending");
 				store.addNote("used");
-				store.markUsed(store.state.notes[0].id);
+				store.archiveNote(store.state.notes[0].id);
 				expect(store.pendingCount(null)).toBe(1);
 			});
 		});
@@ -466,8 +466,8 @@ describe("notesStore", () => {
 			testInScope(() => {
 				store.addNote("a");
 				store.addNote("b");
-				store.markUsed(store.state.notes[0].id);
-				store.markUsed(store.state.notes[1].id);
+				store.archiveNote(store.state.notes[0].id);
+				store.archiveNote(store.state.notes[1].id);
 				expect(store.pendingCount(null)).toBe(0);
 			});
 		});
@@ -486,21 +486,21 @@ describe("notesStore", () => {
 			testInScope(() => {
 				store.addNote("global pending");
 				store.addNote("repo-a used", "/repo/a", "a");
-				store.markUsed(store.state.notes[0].id); // most recent = repo-a used
+				store.archiveNote(store.state.notes[0].id); // most recent = repo-a used
 				expect(store.pendingCount("/repo/a")).toBe(1);
 			});
 		});
 	});
 
-	describe("clearCompleted()", () => {
+	describe("clearArchived()", () => {
 		it("removes all used notes", () => {
 			testInScope(() => {
 				store.addNote("pending");
 				store.addNote("used");
-				store.markUsed(store.state.notes[0].id); // most recent = "used"
+				store.archiveNote(store.state.notes[0].id); // most recent = "used"
 				mockInvoke.mockClear();
 
-				store.clearCompleted();
+				store.clearArchived();
 
 				expect(store.state.notes).toHaveLength(1);
 				expect(store.state.notes[0].text).toBe("pending");
@@ -513,7 +513,7 @@ describe("notesStore", () => {
 				store.addNote("b");
 				mockInvoke.mockClear();
 
-				store.clearCompleted();
+				store.clearArchived();
 
 				expect(store.state.notes).toHaveLength(2);
 				expect(mockInvoke).not.toHaveBeenCalled();
@@ -523,10 +523,10 @@ describe("notesStore", () => {
 		it("persists via save_notes after clearing", () => {
 			testInScope(() => {
 				store.addNote("used");
-				store.markUsed(store.state.notes[0].id);
+				store.archiveNote(store.state.notes[0].id);
 				mockInvoke.mockClear();
 
-				store.clearCompleted();
+				store.clearArchived();
 
 				expect(mockInvoke).toHaveBeenCalledWith("save_notes", { config: { notes: [] } });
 			});
@@ -538,11 +538,11 @@ describe("notesStore", () => {
 				store.addNote("used-2");
 				const id1 = store.state.notes[0].id;
 				const id2 = store.state.notes[1].id;
-				store.markUsed(id1);
-				store.markUsed(id2);
+				store.archiveNote(id1);
+				store.archiveNote(id2);
 				mockInvoke.mockClear();
 
-				store.clearCompleted();
+				store.clearArchived();
 
 				expect(mockInvoke).toHaveBeenCalledWith("delete_note_assets_batch", {
 					noteIds: expect.arrayContaining([id1, id2]),
@@ -555,9 +555,9 @@ describe("notesStore", () => {
 				store.addNote("keep-1");
 				store.addNote("remove");
 				store.addNote("keep-2");
-				store.markUsed(store.state.notes[1].id); // "remove" is at index 1
+				store.archiveNote(store.state.notes[1].id); // "remove" is at index 1
 
-				store.clearCompleted();
+				store.clearArchived();
 
 				expect(store.state.notes).toHaveLength(2);
 				expect(store.state.notes.map((n) => n.text).sort()).toEqual(["keep-1", "keep-2"]);
@@ -565,14 +565,14 @@ describe("notesStore", () => {
 		});
 	});
 
-	describe("markUsed()", () => {
+	describe("archiveNote()", () => {
 		it("sets usedAt timestamp on the note", () => {
 			testInScope(() => {
 				store.addNote("idea");
 				const id = store.state.notes[0].id;
 				expect(store.state.notes[0].usedAt).toBeNull();
 				const before = Date.now();
-				store.markUsed(id);
+				store.archiveNote(id);
 				const after = Date.now();
 				expect(store.state.notes[0].usedAt).toBeGreaterThanOrEqual(before);
 				expect(store.state.notes[0].usedAt).toBeLessThanOrEqual(after);
@@ -583,7 +583,7 @@ describe("notesStore", () => {
 			testInScope(() => {
 				store.addNote("idea");
 				mockInvoke.mockClear();
-				store.markUsed(store.state.notes[0].id);
+				store.archiveNote(store.state.notes[0].id);
 				expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything());
 			});
 		});
@@ -591,7 +591,85 @@ describe("notesStore", () => {
 		it("ignores unknown id", () => {
 			testInScope(() => {
 				store.addNote("idea");
-				expect(() => store.markUsed("nonexistent")).not.toThrow();
+				expect(() => store.archiveNote("nonexistent")).not.toThrow();
+			});
+		});
+	});
+
+	describe("unarchiveNote()", () => {
+		it("clears usedAt on the note", () => {
+			testInScope(() => {
+				store.addNote("idea");
+				const id = store.state.notes[0].id;
+				store.archiveNote(id);
+				expect(store.state.notes[0].usedAt).not.toBeNull();
+				store.unarchiveNote(id);
+				expect(store.state.notes[0].usedAt).toBeNull();
+			});
+		});
+
+		it("persists after unarchiving", () => {
+			testInScope(() => {
+				store.addNote("idea");
+				const id = store.state.notes[0].id;
+				store.archiveNote(id);
+				mockInvoke.mockClear();
+				store.unarchiveNote(id);
+				expect(mockInvoke).toHaveBeenCalledWith("save_notes", expect.anything());
+			});
+		});
+
+		it("ignores unknown id", () => {
+			testInScope(() => {
+				store.addNote("idea");
+				expect(() => store.unarchiveNote("nonexistent")).not.toThrow();
+			});
+		});
+	});
+
+	describe("getActiveNotes() / getArchivedNotes()", () => {
+		it("splits notes between active and archived by usedAt", () => {
+			testInScope(() => {
+				store.addNote("pending");
+				store.addNote("done");
+				store.archiveNote(store.state.notes[0].id); // most recent = "done"
+				expect(store.getActiveNotes(null).map((n) => n.text)).toEqual(["pending"]);
+				expect(store.getArchivedNotes(null).map((n) => n.text)).toEqual(["done"]);
+			});
+		});
+
+		it("applies the repo filter same as getFilteredNotes", () => {
+			testInScope(() => {
+				store.addNote("global");
+				store.addNote("repo-a", "/repo/a", "a");
+				store.addNote("repo-b", "/repo/b", "b");
+				expect(
+					store
+						.getActiveNotes("/repo/a")
+						.map((n) => n.text)
+						.sort(),
+				).toEqual(["global", "repo-a"]);
+			});
+		});
+	});
+
+	describe("archivedCount()", () => {
+		it("returns 0 when nothing is archived", () => {
+			testInScope(() => {
+				store.addNote("a");
+				expect(store.archivedCount(null)).toBe(0);
+			});
+		});
+
+		it("counts archived notes, filtered by repo", () => {
+			testInScope(() => {
+				store.addNote("global");
+				store.addNote("repo-a", "/repo/a", "a");
+				store.addNote("repo-b", "/repo/b", "b");
+				store.archiveNote(store.state.notes[0].id); // repo-b
+				store.archiveNote(store.state.notes[1].id); // repo-a
+				expect(store.archivedCount("/repo/a")).toBe(1);
+				expect(store.archivedCount(null)).toBe(2);
 			});
 		});
 	});
