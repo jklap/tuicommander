@@ -112,6 +112,14 @@
   padding: 4px 0;
 }
 
+/* Virtualized row wrapper — absolutely positioned by the virtualizer. The
+   bottom padding reproduces the former `.content` flex `gap: 6px` between rows
+   and is included in the measured height so row offsets stay correct. */
+.virtualRow {
+  padding-bottom: 6px;
+  box-sizing: border-box;
+}
+
 /* File row — two-line: summary on top, path + metadata below */
 .fileRow {
   border-radius: var(--radius-sm);
@@ -289,13 +297,7 @@
   transform: rotate(90deg);
 }
 
-/* Low-relevance group */
-.lowGroup {
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  overflow: hidden;
-}
-
+/* Low-relevance group toggle (row inside the virtualized list) */
 .lowGroupHeader {
   display: flex;
   align-items: center;
@@ -310,18 +312,5 @@
 
 .lowGroupHeader:hover {
   background: var(--bg-highlight);
-}
-
-.lowGroupContent {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.lowGroupContent .fileRow {
-  border-radius: 0;
-  border-left: none;
-  border-right: none;
-  border-bottom: none;
 }
 
