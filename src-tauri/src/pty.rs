@@ -1485,11 +1485,7 @@ fn apply_working_evidence(
         && prev != SHELL_BUSY
         && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
     {
-        tracing::debug!(
-            session_id,
-            activity_source = source,
-            "Shell state → busy"
-        );
+        tracing::debug!(session_id, activity_source = source, "Shell state → busy");
         emit_shell_state(state, session_id, "busy");
     }
 }
@@ -8211,8 +8207,8 @@ mod tests {
     #[test]
     fn claude_classifier_is_prompt_based_never_working() {
         for mid in [
-            "✻ Sautéed for 1m 25s",                     // completed-turn summary
-            "✻ Sautéing… (12s · esc to interrupt)",     // spinner frame (frozen render)
+            "✻ Sautéed for 1m 25s",                 // completed-turn summary
+            "✻ Sautéing… (12s · esc to interrupt)", // spinner frame (frozen render)
             "✳ Ideated for 2m 9s · 1 local agent still running",
             "· Proofed for 1m 14s (↓ 1.6k tokens)",
             "✽ Sautéed for 12s",
@@ -8261,9 +8257,12 @@ mod tests {
             repaint.is_empty(),
             "byte-identical repaint must produce no ChangedRow → no busy evidence"
         );
-        let animated = grid.process("\x1b[H\x1b[2K\u{273B} Saut\u{00E9}ing\u{2026} (13s)".as_bytes());
+        let animated =
+            grid.process("\x1b[H\x1b[2K\u{273B} Saut\u{00E9}ing\u{2026} (13s)".as_bytes());
         assert!(
-            animated.iter().any(|r| crate::chrome::is_spinner_row(&r.text)),
+            animated
+                .iter()
+                .any(|r| crate::chrome::is_spinner_row(&r.text)),
             "an animating spinner frame IS movement and keeps/latches BUSY"
         );
     }
@@ -8330,10 +8329,8 @@ mod tests {
             crate::chrome::is_spinner_row("░░░█░░░░░░"),
             "Aider's Knight Rider block spinner leads the row → still a spinner"
         );
-        let generating: Vec<String> = vec![
-            "Applied edit to src/main.rs".into(),
-            "░░░█░░░░░░".into(),
-        ];
+        let generating: Vec<String> =
+            vec!["Applied edit to src/main.rs".into(), "░░░█░░░░░░".into()];
         assert_eq!(
             detect_aider_screen_activity(&generating),
             AgentScreenActivity::Unknown,

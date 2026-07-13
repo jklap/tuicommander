@@ -908,7 +908,9 @@ mod tests {
         // spinner glyph, and the `·` in `context) · Claude Team` is mid-line.
         assert!(!is_spinner_row("│   ▐▛███▜▌   │ What's new"));
         assert!(!is_spinner_row("│  ▝▜█████▛▘  │ Forked subagents"));
-        assert!(!is_spinner_row("│ Opus 4.8 (1M context) · Claude Team · LS │"));
+        assert!(!is_spinner_row(
+            "│ Opus 4.8 (1M context) · Claude Team · LS │"
+        ));
     }
 
     #[test]

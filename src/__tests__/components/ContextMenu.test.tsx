@@ -179,7 +179,9 @@ describe("ContextMenu", () => {
 				label: `Item ${i}`,
 				action: vi.fn(),
 			}));
-			const { container } = render(() => <ContextMenu items={items} x={110} y={70} visible={true} onClose={() => {}} />);
+			const { container } = render(() => (
+				<ContextMenu items={items} x={110} y={70} visible={true} onClose={() => {}} />
+			));
 
 			await new Promise((r) => requestAnimationFrame(r));
 			const menu = container.querySelector(".menu") as HTMLElement;

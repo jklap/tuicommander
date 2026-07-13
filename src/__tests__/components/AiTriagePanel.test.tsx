@@ -7,12 +7,14 @@ function file(path: string, relevance: FileClassification["relevance"]): FileCla
 	return {
 		path,
 		relevance,
-		category: "other",
+		category: "boilerplate",
 		summary: "",
 		additions: 0,
 		deletions: 0,
 		findings: [],
-	} as FileClassification;
+		risk: "behavioral-change",
+		source: "heuristic",
+	};
 }
 
 /** Extract file paths from a flattened row list, in order. */

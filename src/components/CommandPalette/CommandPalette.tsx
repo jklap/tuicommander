@@ -93,7 +93,8 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 	// Focus input when opened
 	createEffect(() => {
 		if (isOpen()) {
-			requestAnimationFrame(() => inputRef?.focus());
+			const frame = requestAnimationFrame(() => inputRef?.focus());
+			onCleanup(() => cancelAnimationFrame(frame));
 		}
 	});
 
