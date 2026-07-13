@@ -110,7 +110,7 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports clean/conflicts + agent prompt (push gated, never auto-merge) |
 | `run_improvement_scan` | `repo_path, focus` | `ImprovementScanResult` | One-shot Headless-slot scan of local repo context for improvement proposals (`focus`: `refactor`, `testing`, `perf`); emits `proposals-ready` |
 | `create_issue_from_proposal` | `repo_path, proposal` | `CreatedIssue` | Human-gated issue creation from an improvement proposal |
-| `fetch_ci_failure_logs` | `repo_path, run_id` | `String` | Fetch failure logs from a GitHub Actions run for CI auto-heal |
+| `fetch_ci_failure_logs` | `repo_path, branch` | `String` | Fetch failed-job logs for the branch's latest GitHub Actions head, including partially completed workflow runs |
 | `check_github_circuit` | `path` | `CircuitState` | Check GitHub API circuit breaker state |
 
 ## Worktree Management (`worktree.rs`)
@@ -392,7 +392,7 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 | `start_dictation` | -- | `()` | Start recording |
 | `stop_dictation_and_transcribe` | -- | `TranscribeResponse` | Stop + transcribe. Returns `{text, skip_reason?, duration_s}` |
 | `inject_text` | `text` | `String` | Apply corrections |
-| `get_dictation_status` | -- | `DictationStatus` | Model/recording status |
+| `get_dictation_status` | -- | `DictationStatus` | Model/recording status plus normalized `audio_level` (0–1) |
 | `get_model_info` | -- | `Vec<ModelInfo>` | Available models |
 | `download_whisper_model` | `model_name` | `String` | Download model |
 | `delete_whisper_model` | `model_name` | `String` | Delete model |

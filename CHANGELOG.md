@@ -6,7 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **Dictation live microphone meter** — The floating dictation preview now includes a compact ANSI-style level meter, so you can confirm that the selected microphone is receiving speech before the first partial transcription appears.
+
 ### Fixed
+- **CI auto-heal on partially completed workflows** — A failed job now reaches the branch agent immediately even when sibling jobs keep the overall GitHub Actions workflow running. Failed log lookup or PTY delivery no longer consumes one of the three heal attempts.
+- **MCP upstream authentication editor** — Switching an HTTP upstream from Bearer to OAuth now clears the incompatible stored token, persists DCR mode when the client ID is blank, and reconnects with the selected method instead of silently remaining on Bearer.
+- **Concurrent settings saves** — Frontend configuration writers now share one serialized load-modify-save queue, preventing overlapping General, Services, and plugin writes from losing each other's fields.
+- **MCP bridge returning zero tools after a settings save** — Restarting the remote HTTP server no longer drops the runtime that owns the local Unix-socket MCP listener. Claude and other stdio clients remain connected to TUICommander instead of reporting `connected · no tools` while the web UI still appears healthy.
 - **Settings no longer clobber the web-server toggle or global hotkey** — Changing any General setting used to overwrite `config.json` wholesale from a stale in-memory snapshot, silently resetting fields owned by other panels — most visibly turning the Remote Access web server **off** and wiping the **global hotkey** on the next restart. The settings store now uses a load-modify-save (fresh `load_config` → apply only its own fields → `save_config`), matching the Services tab, so `services.*`, `mcp_server_enabled`, and `global_hotkey` are always preserved from disk.
 
 ## [1.6.0] - 2026-07-11

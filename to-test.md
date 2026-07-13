@@ -646,6 +646,7 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [HUMAN] Transcribed text injected into active terminal
 - [HUMAN] Mouse leave while recording stops recording
 - [HUMAN] Blue pulsing animation respects prefers-reduced-motion
+- [HUMAN] Dictation preview's ANSI-style microphone meter reacts to speech and returns to idle in silence _(verified: `audio.rs` computes a lock-free, speech-sensitive RMS level in the CPAL callback; `commands.rs` emits it at 20 Hz while recording; `DictationToast.tsx` renders 12 segments. `cargo test -p tuicommander dictation::audio::tests --lib` (8 passed) and `pnpm vitest run src/__tests__/components/DictationToast.test.tsx src/__tests__/stores/dictation.test.ts` (40 passed) pass. Real microphone input requires hardware.)_
 
 ### Push-to-Talk (Hotkey)
 - [HUMAN] Default hotkey F5 starts/stops recording
@@ -1466,3 +1467,11 @@ worktree build's HTTP API on :9877 or the desktop app._
 ## AI Review proof-of-work meta line (2026-07-10, frontend-only, active via HMR)
 
 - [VISUAL] Open a PR detail popover and hit AI Review "Run": below the header you must now see the model's summary plus "N files reviewed · <model>" (or "· heuristics only" for boilerplate-only diffs), followed by the findings list or "No findings". Previously a clean review showed only a bare "No findings" with no evidence the review ran. Vitest 4/4 (PrDetailContent.test.tsx).
+
+## MCP upstream authentication recovery (2026-07-12)
+
+- [x] Bearer → OAuth with blank client ID persists DCR mode instead of retaining Bearer; changing methods clears the incompatible keychain credential and reconnects. The editor also exposes “Clear saved token”. _(verified: `ServicesTab.authorize.test.ts` covers DCR/explicit auth construction; `saveEdit` performs credential deletion + reconnect after a successful config save.)_
+
+## CI auto-heal with a partially completed workflow (2026-07-13)
+
+- [x] A failed job is selected and its log is downloadable while a sibling job leaves the workflow `in_progress`; failed log retrieval or PTY delivery leaves the attempt count unchanged. _(verified: GitHub CLI probe against `Lansweeper/wiz-agents` run `29193902748` returned failed job `86653322376` logs while sibling job `86653322370` was still running; Rust parser tests and `useCiHeal.hook.test.ts` cover job selection and attempt accounting.)_
