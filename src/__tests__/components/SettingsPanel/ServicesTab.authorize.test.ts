@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { shouldShowAuthorize } from "../../../components/SettingsPanel/tabs/ServicesTab";
+import { authFromUpstreamForm, shouldShowAuthorize } from "../../../components/SettingsPanel/tabs/ServicesTab";
 
 describe("shouldShowAuthorize", () => {
 	it("shows button when auth type is oauth2 (explicit config)", () => {
@@ -48,5 +48,27 @@ describe("shouldShowAuthorize", () => {
 
 	it("hides button for a disabled upstream mid-authentication", () => {
 		expect(shouldShowAuthorize("oauth2", "authenticating", false)).toBe(false);
+	});
+});
+
+describe("authFromUpstreamForm", () => {
+	const form = {
+		transportType: "http" as const,
+		authMethod: "oauth2" as const,
+		oauthClientId: "",
+		oauthClientSecret: "",
+		oauthScopes: "",
+	};
+
+	it("clears a previous Bearer block when OAuth uses DCR", () => {
+		expect(authFromUpstreamForm(form, { type: "bearer", token: "old" })).toBeUndefined();
+	});
+
+	it("persists explicit OAuth configuration", () => {
+		expect(authFromUpstreamForm({ ...form, oauthClientId: "client", oauthScopes: "read write" })).toEqual({
+			type: "oauth2",
+			client_id: "client",
+			scopes: ["read", "write"],
+		});
 	});
 });
