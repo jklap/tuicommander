@@ -38,6 +38,28 @@
   flex-shrink: 0;
 }
 
+.meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  height: 16px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-sm);
+  line-height: 1;
+  letter-spacing: -1px;
+  flex-shrink: 0;
+}
+
+.bar,
+.barActive {
+  transition: color 70ms linear;
+}
+
+.barActive {
+  color: var(--activity);
+}
+
 .text {
   overflow: hidden;
   text-overflow: ellipsis;

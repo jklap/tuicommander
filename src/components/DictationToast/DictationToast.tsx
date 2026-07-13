@@ -11,9 +11,10 @@ export function DictationToast() {
 	const [visible, setVisible] = createSignal(false);
 	const [exiting, setExiting] = createSignal(false);
 
-	// Show toast when partialText becomes non-empty
+	// Show the preview as soon as capture starts, so the meter confirms input
+	// before Whisper has produced its first partial transcription.
 	createEffect(() => {
-		if (dictationStore.state.partialText) {
+		if (dictationStore.state.recording || dictationStore.state.partialText) {
 			setExiting(false);
 			setVisible(true);
 		}
@@ -35,6 +36,20 @@ export function DictationToast() {
 		<Show when={visible()}>
 			<div class={styles.toast} data-exiting={exiting()}>
 				<span class={styles.indicator} />
+				<span
+					class={styles.meter}
+					role="meter"
+					aria-label={`Microphone level ${Math.round(dictationStore.state.audioLevel * 100)}%`}
+					aria-valuemin="0"
+					aria-valuemax="100"
+					aria-valuenow={Math.round(dictationStore.state.audioLevel * 100)}
+				>
+					{Array.from({ length: 12 }, (_, index) => (
+						<span class={index < Math.ceil(dictationStore.state.audioLevel * 12) ? styles.barActive : styles.bar}>
+							▮
+						</span>
+					))}
+				</span>
 				<span class={styles.text}>
 					{dictationStore.state.partialText || "Listening"}
 					<span class={styles.dots} />
