@@ -7,7 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **Dictation live microphone meter** — The floating dictation preview now includes a compact ANSI-style level meter, so you can confirm that the selected microphone is receiving speech before the first partial transcription appears.
+- **Dictation live microphone meter** — The floating dictation preview now includes a compact centered spectrum meter whose bars widen outward from the center with your voice, so you can confirm that the selected microphone is receiving speech before the first partial transcription appears.
 
 ### Fixed
 - **CI auto-heal on partially completed workflows** — A failed job now reaches the branch agent immediately even when sibling jobs keep the overall GitHub Actions workflow running. Failed log lookup or PTY delivery no longer consumes one of the three heal attempts.
