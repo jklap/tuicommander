@@ -102,6 +102,13 @@ pub(crate) fn detect_transitions(
 
     let mut primary_type: Option<&str> = None;
 
+    // A push replaces the head SHA. Its failing checks are a *fresh* failure even
+    // when the previous head was also failing — so `ci_failed` must re-fire on a
+    // new commit, not only on the failed==0 → failed>0 edge. Otherwise an agent's
+    // fix-push whose CI fails again before the poller observes an intermediate
+    // all-pending (failed==0) poll never re-triggers auto-heal, stalling the loop.
+    let new_commit = old.head_ref_oid != new.head_ref_oid && !new.head_ref_oid.is_empty();
+
     // Terminal transitions
     if old_state != "MERGED" && new_state == "MERGED" {
         primary_type = Some("merged");
@@ -130,7 +137,7 @@ pub(crate) fn detect_transitions(
                 pr_number,
                 title: title.clone(),
             });
-        } else if old.checks.failed == 0 && new.checks.failed > 0 {
+        } else if new.checks.failed > 0 && (old.checks.failed == 0 || new_commit) {
             primary_type = Some("ci_failed");
             out.push(PrTransition::CiFailed {
                 repo_path: rp.clone(),
@@ -161,7 +168,7 @@ pub(crate) fn detect_transitions(
 
     // New commit pushed to an open PR: head_ref_oid changed. Independent signal
     // (a push can coincide with ci_failed etc.), carries the new oid for dedup.
-    if new_state == "OPEN" && old.head_ref_oid != new.head_ref_oid && !new.head_ref_oid.is_empty() {
+    if new_state == "OPEN" && new_commit {
         out.push(PrTransition::Pushed {
             repo_path: rp.clone(),
             branch: branch.clone(),
@@ -938,6 +945,34 @@ mod tests {
         let t = detect_transitions("/repo", &old, &new);
         assert_eq!(t.len(), 1);
         assert!(matches!(&t[0], PrTransition::CiFailed { .. }));
+    }
+
+    #[test]
+    fn transition_ci_failed_on_new_commit_while_still_failing() {
+        // Regression: an agent's fix-push whose CI fails again before the poller
+        // sees an intermediate all-pending (failed==0) poll. old and new are both
+        // failing, but the head SHA changed — ci_failed must re-fire so auto-heal
+        // continues past the first attempt instead of stalling.
+        let mut old = make_pr("OPEN", "MERGEABLE", "", 2, 0);
+        old.head_ref_oid = "aaaa".to_string();
+        let mut new = make_pr("OPEN", "MERGEABLE", "", 2, 0);
+        new.head_ref_oid = "bbbb".to_string();
+        let t = detect_transitions("/repo", &old, &new);
+        // Both ci_failed (fresh failure on the new head) and pushed (oid changed).
+        assert!(t.iter().any(|x| matches!(x, PrTransition::CiFailed { .. })));
+        assert!(t.iter().any(|x| matches!(x, PrTransition::Pushed { .. })));
+    }
+
+    #[test]
+    fn no_ci_failed_when_still_failing_same_commit() {
+        // Same head SHA, still failing: no new ci_failed (would re-heal endlessly
+        // without a real change to react to).
+        let mut old = make_pr("OPEN", "MERGEABLE", "", 2, 0);
+        old.head_ref_oid = "aaaa".to_string();
+        let mut new = make_pr("OPEN", "MERGEABLE", "", 2, 0);
+        new.head_ref_oid = "aaaa".to_string();
+        let t = detect_transitions("/repo", &old, &new);
+        assert!(!t.iter().any(|x| matches!(x, PrTransition::CiFailed { .. })));
     }
 
     #[test]

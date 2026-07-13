@@ -1179,6 +1179,25 @@ describe("useGitOperations", () => {
 			expect(branch?.deletions).toBe(3);
 		});
 
+		it("scopes to a single repo when a path is given — other repos untouched", async () => {
+			repositoriesStore.add({ path: "/repo-a", displayName: "A" });
+			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });
+			repositoriesStore.add({ path: "/repo-b", displayName: "B" });
+			repositoriesStore.setBranch("/repo-b", "main", { worktreePath: "/repo-b" });
+			mockSummary({
+				worktree_paths: { main: "/repo-a" },
+				merged_branches: [],
+				diff_stats: { "/repo-a": { additions: 7, deletions: 2 } },
+				last_commit_ts: {},
+			});
+
+			await gitOps.refreshAllBranchStats("/repo-a");
+
+			// Only the scoped repo's structure was fetched — no fan-out to /repo-b.
+			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(1);
+			expect(mockRepo.getRepoStructure).toHaveBeenCalledWith("/repo-a");
+		});
+
 		it("prunes branches not in worktree paths", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });

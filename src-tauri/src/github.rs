@@ -3246,8 +3246,90 @@ fn truncate_ci_logs(logs: &str) -> String {
     )
 }
 
-/// Find the most recent failed workflow run for a branch, then fetch its logs.
-/// Uses `gh run list` to find the run ID, then `gh run view --log-failed`.
+/// Return the failed job IDs and names from `gh run view --json jobs` output.
+fn failed_jobs_from_run_json(value: &serde_json::Value) -> Vec<(u64, String)> {
+    value
+        .get("jobs")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|job| job.get("conclusion").and_then(serde_json::Value::as_str) == Some("failure"))
+        .filter_map(|job| {
+            let id = job.get("databaseId")?.as_u64()?;
+            let name = job
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("failed job")
+                .to_string();
+            Some((id, name))
+        })
+        .collect()
+}
+
+/// A failing PR check that isn't (necessarily) a GitHub Actions workflow — the
+/// aggregated PR check summary also carries external CI (CircleCI, Codacy, …)
+/// that auto-heal can't fetch logs for. `is_github_actions` is derived from the
+/// check's detail link, which for GHA points at `/actions/runs/…`.
+struct FailingCheck {
+    name: String,
+    is_github_actions: bool,
+}
+
+/// A check's detail link points at `/actions/runs/…` only for GitHub Actions.
+/// External CI (CircleCI, Codacy, …) links to its own host, so this cleanly
+/// separates checks whose logs auto-heal can fetch from those it can't.
+fn is_github_actions_link(link: &str) -> bool {
+    link.contains("/actions/runs/")
+}
+
+/// List the PR's failing checks via `gh pr checks`. Unlike `gh run list` (which
+/// only sees GitHub Actions), this reflects the SAME aggregated set the PR
+/// summary shows, so it can explain a failure that lives on external CI.
+///
+/// `gh pr checks` exits non-zero when any check is failing/pending, so we parse
+/// stdout regardless of exit status and only bail when stdout has no JSON.
+fn list_failing_checks_cli(gh: &str, repo_slug: &str, branch: &str) -> Vec<FailingCheck> {
+    let mut cmd = Command::new(gh);
+    cmd.args([
+        "pr",
+        "checks",
+        branch,
+        "--repo",
+        repo_slug,
+        "--json",
+        "name,bucket,link",
+    ]);
+    crate::cli::apply_no_window(&mut cmd);
+    let output = match cmd.output() {
+        Ok(o) => o,
+        Err(_) => return Vec::new(),
+    };
+    let json: serde_json::Value = match serde_json::from_slice(&output.stdout) {
+        Ok(j) => j,
+        Err(_) => return Vec::new(),
+    };
+    json.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|c| c.get("bucket").and_then(serde_json::Value::as_str) == Some("fail"))
+        .map(|c| {
+            let name = c
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("failed check")
+                .to_string();
+            let link = c.get("link").and_then(serde_json::Value::as_str).unwrap_or("");
+            FailingCheck {
+                name,
+                is_github_actions: is_github_actions_link(link),
+            }
+        })
+        .collect()
+}
+
+/// Find failed jobs for the branch's latest head commit and fetch their logs.
+/// Job-level log downloads work even while sibling jobs keep the overall
+/// workflow run in progress, unlike `gh run view --log-failed`.
 /// Resolves the GitHub repo slug from the local repo path.
 fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<String, String> {
     let repo_path_buf = PathBuf::from(repo_path);
@@ -3276,10 +3358,12 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<String, S
     let repo_slug = format!("{owner}/{repo}");
     let gh = crate::agent::resolve_cli("gh");
 
-    // Step 1: find the latest failed run for the branch
+    // Step 1: list recent runs and restrict inspection to the latest head SHA.
+    // A commit commonly has several workflow runs, all of which may contribute
+    // checks to the PR summary.
     crate::github_debug::log_api(
         "CLI",
-        &format!("gh run list --repo {repo_slug} --branch {branch}"),
+        &format!("gh run list --repo {repo_slug} --branch {branch} --limit 50"),
         "fetch_ci_failure_logs_impl",
     );
     let mut list_cmd = Command::new(&gh);
@@ -3290,12 +3374,10 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<String, S
         &repo_slug,
         "--branch",
         branch,
-        "--status",
-        "failure",
         "--limit",
-        "1",
+        "50",
         "--json",
-        "databaseId",
+        "databaseId,headSha",
     ]);
     crate::cli::apply_no_window(&mut list_cmd);
 
@@ -3309,43 +3391,121 @@ fn fetch_ci_failure_logs_impl(repo_path: &str, branch: &str) -> Result<String, S
 
     let list_json: serde_json::Value = serde_json::from_slice(&list_output.stdout)
         .map_err(|e| format!("Failed to parse gh run list output: {e}"))?;
-    let run_id = list_json
+    let runs = list_json
         .as_array()
-        .and_then(|arr| arr.first())
-        .and_then(|obj| obj.get("databaseId"))
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| "No failed workflow runs found for this branch".to_string())?;
+        .ok_or_else(|| "Unexpected gh run list response".to_string())?;
+    let latest_head_sha = runs
+        .first()
+        .and_then(|run| run.get("headSha"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|sha| !sha.is_empty())
+        .ok_or_else(|| "No workflow runs found for this branch".to_string())?;
+    let run_ids: Vec<u64> = runs
+        .iter()
+        .filter(|run| {
+            run.get("headSha").and_then(serde_json::Value::as_str) == Some(latest_head_sha)
+        })
+        .filter_map(|run| run.get("databaseId").and_then(serde_json::Value::as_u64))
+        .collect();
 
-    // Step 2: fetch failure logs for that run
-    crate::github_debug::log_api(
-        "CLI",
-        &format!("gh run view {run_id} --repo {repo_slug} --log-failed"),
-        "fetch_ci_failure_logs_impl",
-    );
-    let mut view_cmd = Command::new(&gh);
-    view_cmd.args([
-        "run",
-        "view",
-        &run_id.to_string(),
-        "--repo",
-        &repo_slug,
-        "--log-failed",
-    ]);
-    crate::cli::apply_no_window(&mut view_cmd);
-
-    let view_output = view_cmd
-        .output()
-        .map_err(|e| format!("Failed to run gh: {e}"))?;
-    if !view_output.status.success() {
-        let stderr = String::from_utf8_lossy(&view_output.stderr);
-        return Err(format!("gh run view failed: {stderr}"));
+    // Step 2: inspect jobs on every workflow run for the current head. A run may
+    // still be in progress while one of its jobs is already conclusively red.
+    let mut failed_jobs = Vec::new();
+    for run_id in run_ids {
+        crate::github_debug::log_api(
+            "CLI",
+            &format!("gh run view {run_id} --repo {repo_slug} --json jobs"),
+            "fetch_ci_failure_logs_impl",
+        );
+        let mut view_cmd = Command::new(&gh);
+        view_cmd.args([
+            "run",
+            "view",
+            &run_id.to_string(),
+            "--repo",
+            &repo_slug,
+            "--json",
+            "jobs",
+        ]);
+        crate::cli::apply_no_window(&mut view_cmd);
+        let view_output = view_cmd
+            .output()
+            .map_err(|e| format!("Failed to run gh: {e}"))?;
+        // A single run that can't be viewed (e.g. HTTP 404 for a stale/deleted or
+        // cross-repo run surfaced by `run list`) must NOT abort the whole heal —
+        // other runs on the same head may still carry the failing jobs. Skip it.
+        if !view_output.status.success() {
+            let stderr = String::from_utf8_lossy(&view_output.stderr);
+            tracing::warn!(
+                source = "fetch_ci_failure_logs_impl",
+                "gh run view {run_id} failed, skipping: {}",
+                stderr.trim()
+            );
+            continue;
+        }
+        let run_json: serde_json::Value = match serde_json::from_slice(&view_output.stdout) {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!(
+                    source = "fetch_ci_failure_logs_impl",
+                    "failed to parse gh run view {run_id} output, skipping: {e}"
+                );
+                continue;
+            }
+        };
+        failed_jobs.extend(failed_jobs_from_run_json(&run_json));
     }
 
-    let logs = String::from_utf8_lossy(&view_output.stdout);
+    if failed_jobs.is_empty() {
+        // No failed GitHub Actions job — but the PR summary may still be red from
+        // external CI (CircleCI, Codacy, …). Auto-heal only reads GitHub Actions
+        // logs, so name the real culprits instead of the misleading "no jobs".
+        let failing = list_failing_checks_cli(&gh, &repo_slug, branch);
+        let external: Vec<String> = failing
+            .iter()
+            .filter(|c| !c.is_github_actions)
+            .map(|c| c.name.clone())
+            .collect();
+        if !external.is_empty() {
+            return Err(format!(
+                "Auto-heal can only fetch GitHub Actions logs, but the failing checks run on external CI (not supported): {}. Fix them on that provider — auto-heal can't retrieve their logs.",
+                external.join(", ")
+            ));
+        }
+        return Err("No failed GitHub Actions job found for this branch head".to_string());
+    }
+
+    // Step 3: download each failed job directly. The jobs API exposes completed
+    // job logs before the containing workflow run reaches a terminal state.
+    let mut logs = String::new();
+    for (job_id, job_name) in failed_jobs {
+        let endpoint = format!("repos/{repo_slug}/actions/jobs/{job_id}/logs");
+        crate::github_debug::log_api(
+            "CLI",
+            &format!("gh api {endpoint}"),
+            "fetch_ci_failure_logs_impl",
+        );
+        let mut logs_cmd = Command::new(&gh);
+        logs_cmd.args(["api", &endpoint]);
+        crate::cli::apply_no_window(&mut logs_cmd);
+        let logs_output = logs_cmd
+            .output()
+            .map_err(|e| format!("Failed to run gh: {e}"))?;
+        if !logs_output.status.success() {
+            let stderr = String::from_utf8_lossy(&logs_output.stderr);
+            return Err(format!("gh api job logs failed: {stderr}"));
+        }
+        if !logs.is_empty() {
+            logs.push_str("\n\n");
+        }
+        logs.push_str(&format!("===== FAILED JOB: {job_name} =====\n"));
+        logs.push_str(&String::from_utf8_lossy(&logs_output.stdout));
+    }
+
     Ok(truncate_ci_logs(&logs))
 }
 
-/// Tauri command: fetch CI failure logs for the latest failed run on a branch.
+/// Tauri command: fetch failed-job logs for the branch's latest workflow head.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) async fn fetch_ci_failure_logs(
     repo_path: String,
@@ -3372,6 +3532,33 @@ pub(crate) async fn get_pr_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- is_github_actions_link tests ---
+
+    #[test]
+    fn github_actions_run_link_is_recognized() {
+        assert!(is_github_actions_link(
+            "https://github.com/Lansweeper/agent2/actions/runs/29229498673/job/86750457823"
+        ));
+    }
+
+    #[test]
+    fn circleci_link_is_not_github_actions() {
+        assert!(!is_github_actions_link(
+            "https://circleci.com/gh/Lansweeper/agent2/1328"
+        ));
+        assert!(!is_github_actions_link(
+            "https://app.circleci.com/pipelines/gh/Lansweeper/agent2/229/workflows/abc"
+        ));
+    }
+
+    #[test]
+    fn codacy_and_empty_links_are_not_github_actions() {
+        assert!(!is_github_actions_link(
+            "https://app.codacy.com/gh/Lansweeper/agent2/pull-requests/38"
+        ));
+        assert!(!is_github_actions_link(""));
+    }
 
     // --- hex_to_rgba tests ---
 
@@ -5313,6 +5500,39 @@ mod tests {
     fn test_ci_log_empty_input() {
         assert_eq!(truncate_ci_logs(""), "");
         assert_eq!(truncate_ci_logs("  \n  "), "");
+    }
+
+    #[test]
+    fn failed_jobs_are_found_before_workflow_run_completes() {
+        let run = serde_json::json!({
+            "status": "in_progress",
+            "conclusion": "",
+            "jobs": [
+                { "databaseId": 101, "name": "still running", "conclusion": "" },
+                { "databaseId": 102, "name": "tests", "conclusion": "failure" },
+                { "databaseId": 103, "name": "lint", "conclusion": "success" }
+            ]
+        });
+
+        assert_eq!(
+            failed_jobs_from_run_json(&run),
+            vec![(102, "tests".to_string())]
+        );
+    }
+
+    #[test]
+    fn failed_jobs_ignore_entries_without_database_id() {
+        let run = serde_json::json!({
+            "jobs": [
+                { "name": "missing id", "conclusion": "failure" },
+                { "databaseId": 201, "conclusion": "failure" }
+            ]
+        });
+
+        assert_eq!(
+            failed_jobs_from_run_json(&run),
+            vec![(201, "failed job".to_string())]
+        );
     }
 
     #[test]

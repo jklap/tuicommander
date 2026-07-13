@@ -858,9 +858,9 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
   - **CI failure** — fetches failure logs and injects them with a fix prompt
   - **Merge conflict** (`mergeable === "CONFLICTING"`) — injects a resolve-conflicts prompt
 - Toggle per-branch via pill-switch toggle in PR detail popover (visible when CI is failing or the PR is conflicting), styled consistently with CI check item rows
-- Fetches logs via `gh run view --log-failed`, truncated to ~4000 chars
+- Fetches completed failed-job logs directly via the GitHub Actions jobs API, including when sibling jobs keep the workflow run in progress; logs are sanitized and truncated before injection
 - Waits for agent to be idle/awaiting input before injecting
-- Max 3 attempts per block cycle, then stops and logs a warning
+- Max 3 delivered attempts per block cycle, then stops and logs a warning; log-fetch and terminal-delivery failures do not consume the budget
 - Enabling while already blocked kicks off a heal immediately
 - Attempt counter visible in PR detail popover
 - Status tracked per-branch in `BranchState.ciAutoHeal`

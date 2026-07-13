@@ -291,10 +291,16 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		recentlyProcessedBranches.set(`${repoPath}::${branchName}`, now);
 	};
 
-	const refreshAllBranchStats = async () => {
+	// `scopeRepoPath` limits the refresh to a single repo. A `repo-changed`
+	// event carries the one repo that changed, so scoping avoids re-scanning
+	// every open repo in unison on each filesystem event. Called with no arg
+	// (init, branch ops) it refreshes all active repos as before.
+	const refreshAllBranchStats = async (scopeRepoPath?: string) => {
 		// Skip parked repos — they should stay dormant. (#1358-caf5)
+		const activePaths = repositoriesStore.getActivePaths();
+		const paths = scopeRepoPath ? activePaths.filter((p) => p === scopeRepoPath) : activePaths;
 		await Promise.all(
-			repositoriesStore.getActivePaths().map(async (repoPath) => {
+			paths.map(async (repoPath) => {
 				const gen = (refreshGeneration.get(repoPath) ?? 0) + 1;
 				refreshGeneration.set(repoPath, gen);
 
@@ -1870,8 +1876,11 @@ export function useGitOperations(deps: GitOperationsDeps) {
 	const [currentBranches, setCurrentBranches] = createSignal<Record<string, string>>({});
 
 	/** Refresh the local branch list and current branch for all git repos (for context menu). */
-	const refreshBranchLists = async () => {
-		const repos = repositoriesStore.getOrderedRepos().filter((r) => r.isGitRepo !== false);
+	const refreshBranchLists = async (scopeRepoPath?: string) => {
+		const repos = repositoriesStore
+			.getOrderedRepos()
+			.filter((r) => r.isGitRepo !== false)
+			.filter((r) => !scopeRepoPath || r.path === scopeRepoPath);
 		const results: Record<string, string[]> = {};
 		const heads: Record<string, string> = {};
 		await Promise.all(
@@ -1885,14 +1894,21 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				}
 			}),
 		);
-		setSwitchBranchLists(results);
-		setCurrentBranches(heads);
+		// Scoped refresh merges into the existing maps so the other repos'
+		// dropdown lists aren't wiped; a full refresh replaces wholesale.
+		if (scopeRepoPath) {
+			setSwitchBranchLists((prev) => ({ ...prev, ...results }));
+			setCurrentBranches((prev) => ({ ...prev, ...heads }));
+		} else {
+			setSwitchBranchLists(results);
+			setCurrentBranches(heads);
+		}
 	};
 
 	// Compose branch stats + branch list refresh into a single function
-	const refreshAllBranchStatsAndLists = async () => {
-		await refreshAllBranchStats();
-		await refreshBranchLists();
+	const refreshAllBranchStatsAndLists = async (scopeRepoPath?: string) => {
+		await refreshAllBranchStats(scopeRepoPath);
+		await refreshBranchLists(scopeRepoPath);
 	};
 
 	/** After a branch switch on the main worktree, migrate all stale branch entries

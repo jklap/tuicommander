@@ -127,6 +127,33 @@ describe("useCiHeal budget + re-entry guard", () => {
 		expect(h.sendCommand).toHaveBeenCalledTimes(1);
 	});
 
+	it("does not consume an attempt when CI logs cannot be fetched", async () => {
+		seed({ enabled: true, attempts: 0, healing: false });
+		h.invoke.mockRejectedValueOnce(new Error("logs unavailable"));
+		fireCiFailed();
+		await flush();
+
+		expect(h.sendCommand).not.toHaveBeenCalled();
+		expect(h.repoState.repositories["/repo"].branches.main.ciAutoHeal).toEqual({
+			enabled: true,
+			attempts: 0,
+			healing: false,
+		});
+	});
+
+	it("does not consume an attempt when prompt delivery fails", async () => {
+		seed({ enabled: true, attempts: 1, healing: false });
+		h.sendCommand.mockRejectedValueOnce(new Error("PTY disconnected"));
+		fireCiFailed();
+		await flush();
+
+		expect(h.repoState.repositories["/repo"].branches.main.ciAutoHeal).toEqual({
+			enabled: true,
+			attempts: 1,
+			healing: false,
+		});
+	});
+
 	it("re-entry guard: a second CI failure while healing does not start a second heal", async () => {
 		seed({ enabled: true, attempts: 0, healing: false });
 		fireCiFailed(); // adds key to `healing`, begins triggerHeal synchronously up to first await

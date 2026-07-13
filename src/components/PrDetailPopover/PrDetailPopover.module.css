@@ -26,6 +26,17 @@
   top: calc(var(--toolbar-height, 38px) + 4px);
 }
 
+/* Only the check list absorbs overflow; every other row keeps its intrinsic
+   height. Without this, a tall PR (many CI checks) makes flexbox shrink every
+   row proportionally — clipping the repo/title text at the top edge. */
+.popover > * {
+  flex-shrink: 0;
+}
+
+.popover > .checks {
+  flex-shrink: 1;
+}
+
 .repo {
   /* top padding clears the popover's radius-xl (8px) rounded corner so the
      owner/repo line isn't clipped against the top edge */

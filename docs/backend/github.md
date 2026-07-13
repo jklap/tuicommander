@@ -249,7 +249,9 @@ PR diff reads use the GitHub REST diff representation first. If GitHub returns t
 
 ### CI Auto-Heal (`fetch_ci_failure_logs`)
 
-Fetches the latest failure logs from a GitHub Actions run. Used by the CI auto-heal hook (`useCiHeal`) to inject failure context into agent terminals for automatic fix cycles (up to 3 attempts per cycle).
+Lists workflow runs for the branch's latest head commit, inspects their jobs, and downloads logs for every completed failed job through the GitHub Actions jobs API. Job-level retrieval works while sibling jobs are still running, before the containing workflow has a final `failure` conclusion. Used by the CI auto-heal hook (`useCiHeal`) to inject failure context into agent terminals for automatic fix cycles (up to 3 delivered attempts per cycle).
+
+**GitHub Actions only.** The aggregated PR check summary (which triggers `ci_failed`) also counts external CI — CircleCI, Codacy, etc. — but this fetcher reads only GitHub Actions logs. When the red checks are all external, it returns a clear error naming them (`… failing checks run on external CI (not supported): ci/circleci: lint-blades, on_pr …`) instead of the misleading "no jobs found". The auto-heal hook surfaces that message as a warn toast and does **not** consume an attempt (attempts increment only after a fix prompt is delivered). Provider is classified from the check's detail link (`is_github_actions_link`: GHA links contain `/actions/runs/`).
 
 ## Stale PR Filtering
 

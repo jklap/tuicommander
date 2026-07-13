@@ -388,8 +388,7 @@ describe("useAgentPolling", () => {
 			});
 		});
 
-		it("clears agentSessionId on agent→null transition and allows re-discovery", async () => {
-			// NULL_THRESHOLD is 3: need 3 consecutive idle-source null detections before clearing.
+		it("clears agentSessionId on the first definitive idle transition and allows re-discovery", async () => {
 			// Only source="idle" can clear — polls never clear (sticky agentType fix).
 			let phase: "active1" | "idle" | "active2" = "active1";
 			let discoverCount = 0;
@@ -416,11 +415,9 @@ describe("useAgentPolling", () => {
 				await tick(30_000); // poll 2: still claude + re-discover (same uuid)
 				expect(store.get(id)?.agentSessionId).toBe("uuid-1");
 
-				// Idle-source detections can clear agentType after NULL_THRESHOLD consecutive nulls
+				// A shell-idle transition means the prompt has returned, so clear immediately.
 				phase = "idle";
-				await detectAgentForTerminal(id, "idle"); // idle 1: null streak 1 — still holding
-				await detectAgentForTerminal(id, "idle"); // idle 2: null streak 2 — still holding
-				await detectAgentForTerminal(id, "idle"); // idle 3: null streak 3 → cleared
+				await detectAgentForTerminal(id, "idle");
 				expect(store.get(id)?.agentType).toBeNull();
 				expect(store.get(id)?.agentSessionId).toBeNull();
 

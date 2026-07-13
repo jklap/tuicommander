@@ -9,12 +9,6 @@ import { terminalsStore } from "../stores/terminals";
 const POLL_INTERVAL_MS = 30_000;
 
 /**
- * Number of consecutive null detections on shell-idle required before clearing a detected agent.
- * Prevents flickering when the shell briefly reports idle during agent subprocess transitions.
- */
-const NULL_THRESHOLD = 3;
-
-/**
  * Detection trigger source — determines whether the call can clear an existing agentType.
  * - "idle": Shell-state transitioned to idle (prompt returned). This is the ONLY source
  *   that can clear a previously detected agent, because it means the foreground process
@@ -30,9 +24,6 @@ function toAgentType(value: string | null): AgentType | null {
 	return (AGENT_TYPES as readonly string[]).includes(value) ? (value as AgentType) : null;
 }
 
-// Module-level state shared between pollAll and event-driven detection
-const nullStreak = new Map<string, number>();
-
 /**
  * Detect the foreground agent for a single terminal and update the store.
  * Called on shell-state transitions (event-driven) and by the fallback poll.
@@ -44,8 +35,6 @@ const nullStreak = new Map<string, number>();
 export async function detectAgentForTerminal(termId: string, source: DetectionSource = "poll"): Promise<void> {
 	const current = terminalsStore.get(termId);
 	if (!current) {
-		// Terminal removed — clean up module-level tracking state
-		nullStreak.delete(termId);
 		return;
 	}
 	if (!current.sessionId) return;
@@ -66,15 +55,10 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 	// Agent→null transition: only allowed from "idle" source (shell prompt returned).
 	// Poll and busy sources can only discover agents, never clear them — foreground
 	// process sampling is too flaky during subprocess transitions (git, node, etc.).
+	// An idle transition is definitive, though: waiting for further idle events leaves
+	// agentType stuck after an agent exits, because a normal shell emits just one.
 	if (prevAgentType !== null && agentType === null) {
 		if (source !== "idle") return; // Not a reliable clearing signal — skip
-		const streak = (nullStreak.get(termId) ?? 0) + 1;
-		nullStreak.set(termId, streak);
-		if (streak < NULL_THRESHOLD) return;
-	}
-
-	if (agentType !== null) {
-		nullStreak.delete(termId);
 	}
 
 	if (prevAgentType !== agentType) {
@@ -96,9 +80,6 @@ export async function detectAgentForTerminal(termId: string, source: DetectionSo
 		// Reset agent-specific state carried over from the previous agent.
 		if (prevAgentType !== null) {
 			terminalsStore.update(termId, { agentSessionId: null });
-			if (agentType === null) {
-				nullStreak.delete(termId);
-			}
 		}
 
 		// Notify start of new agent AFTER updating the store so filtered plugins

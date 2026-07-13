@@ -139,12 +139,13 @@ export function useCiHeal(): void {
 		if (!branchState?.ciAutoHeal) return;
 
 		const attempt = (branchState.ciAutoHeal.attempts ?? 0) + 1;
-		appLogger.info("ci-heal", `Auto-heal (${kind}) attempt ${attempt}/${MAX_ATTEMPTS} for ${branch}`);
+		appLogger.info("ci-heal", `Auto-heal (${kind}) starting attempt ${attempt}/${MAX_ATTEMPTS} for ${branch}`);
 
-		// Mark as healing and increment attempts
+		// Mark the operation as in-flight, but do not consume the attempt until the
+		// fix prompt has actually reached the agent. Log-fetch, terminal, or PTY
+		// failures are delivery failures rather than heal attempts.
 		repositoriesStore.setCiAutoHeal(repoPath, branch, {
 			...branchState.ciAutoHeal,
-			attempts: attempt,
 			healing: true,
 		});
 
@@ -180,8 +181,26 @@ export function useCiHeal(): void {
 				terminal.agentType,
 				shellFamily,
 			);
+
+			const delivered = repositoriesStore.state.repositories[repoPath]?.branches[branch]?.ciAutoHeal;
+			if (delivered) {
+				repositoriesStore.setCiAutoHeal(repoPath, branch, {
+					...delivered,
+					attempts: attempt,
+				});
+			}
+			appLogger.info("ci-heal", `Auto-heal (${kind}) delivered attempt ${attempt}/${MAX_ATTEMPTS} for ${branch}`);
 		} catch (err) {
 			appLogger.error("ci-heal", `Auto-heal failed for ${branch}`, err);
+			// Surface WHY it couldn't proceed — the attempt isn't consumed (attempts
+			// only increment after successful delivery), so without this the user
+			// sees nothing. Common case: failing checks are on external CI (CircleCI,
+			// Codacy) whose logs auto-heal can't fetch — the backend error names them.
+			toastsStore.add(
+				t("ciHeal.failedTitle", "Auto-heal couldn't run"),
+				`${branch}: ${err instanceof Error ? err.message : String(err)}`,
+				"warn",
+			);
 		} finally {
 			// Clear healing flag (keep attempts)
 			const current = repositoriesStore.state.repositories[repoPath]?.branches[branch]?.ciAutoHeal;
