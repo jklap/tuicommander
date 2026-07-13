@@ -303,6 +303,11 @@ MCP `repo action=worktree_remove` returns `{ "ok": true, "branch_delete_warning"
 
 TUICommander can proxy upstream MCP servers (stdio or HTTP) and aggregate their tools into its own `tools/list` response. Configuration lives in `mcp-servers.json`.
 
+The desktop boot thread owns the always-on Unix-socket/named-pipe listener and
+its one-time background tasks for the lifetime of the process. A configuration
+save may stop and replace the TCP listener, but the boot runtime remains parked
+after that shutdown so dropping it cannot silently kill local bridge IPC.
+
 ### Stdio transport
 
 `StdioMcpClient` spawns a child process and communicates via newline-delimited JSON-RPC over stdin/stdout. The handshake is: `initialize` → `notifications/initialized` → `tools/list`.

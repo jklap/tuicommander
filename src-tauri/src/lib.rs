@@ -926,6 +926,17 @@ fn restart_server(state: &Arc<AppState>) {
     });
 }
 
+/// Run the initial server future without letting its owning Tokio runtime die
+/// after a TCP restart. Always-on IPC/background tasks are children of that
+/// runtime and must live for the process lifetime.
+async fn keep_server_owner_runtime_alive<F>(server: F)
+where
+    F: std::future::Future,
+{
+    let _ = server.await;
+    std::future::pending::<()>().await;
+}
+
 /// Re-detect Tailscale daemon status and restart server if HTTPS availability changed.
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -1162,7 +1173,13 @@ pub fn run() {
                 });
 
                 let srv_state = server_state.clone();
-                mcp_http::start_server(srv_state, true, remote_enabled, tls_config).await;
+                keep_server_owner_runtime_alive(mcp_http::start_server(
+                    srv_state,
+                    true,
+                    remote_enabled,
+                    tls_config,
+                ))
+                .await;
             });
         });
     }
@@ -2219,6 +2236,22 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn initial_server_runtime_stays_alive_after_tcp_shutdown() {
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+        let owner = tokio::spawn(keep_server_owner_runtime_alive(async move {
+            let _ = shutdown_rx.await;
+        }));
+
+        shutdown_tx.send(()).unwrap();
+        tokio::task::yield_now().await;
+        assert!(
+            !owner.is_finished(),
+            "the runtime owner must remain parked after start_server returns"
+        );
+        owner.abort();
+    }
 
     #[test]
     fn build_connect_url_ipv4() {
