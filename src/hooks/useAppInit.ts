@@ -41,7 +41,7 @@ export interface AppInitDeps {
 	setCurrentRepoPath: (path: string | undefined) => void;
 	setCurrentBranch: (branch: string | null) => void;
 	handleBranchSelect: (repoPath: string, branchName: string) => Promise<void>;
-	refreshAllBranchStats: () => Promise<void> | void;
+	refreshAllBranchStats: (scopeRepoPath?: string) => Promise<void> | void;
 	handleWorktreeCreateFailed: (payload: { repoPath: string; branch: string; reason: string }) => void;
 	getDefaultFontSize: () => number;
 	stores: {
@@ -228,15 +228,21 @@ export async function initApp(deps: AppInitDeps) {
 		githubStore.pollRepo(repo_path);
 	}).catch((err) => appLogger.error("app", "Failed to register head-changed listener", err));
 
-	// Listen for .git/ directory changes (index, refs, etc.) to refresh panels
-	let branchStatsTimer: ReturnType<typeof setTimeout> | null = null;
-	// Track the in-flight refresh so we can extend the debounce window when
-	// another repo-changed arrives while one is already running. FSEvents often
-	// fires a burst (worktree delete hits both .git/worktrees/ and the removed
-	// directory), and back-to-back refreshes would double-close terminals and
-	// thrash store subscriptions. Extended debounce + dedup (in refreshAllBranchStats)
-	// collapses the burst into a single run without forcing a UI reset.
-	let activeRefresh: Promise<void> | null = null;
+	// Listen for .git/ directory changes (index, refs, etc.) to refresh panels.
+	// Debounce + in-flight tracking are keyed PER REPO: a `repo-changed` event
+	// names the single repo that changed, so we refresh only that repo instead
+	// of re-scanning every open repo in unison (which slowed the whole system
+	// as the repo count grew). Per-repo keying also means each repo's fresh
+	// stats land as soon as that repo finishes — results arrive incrementally,
+	// not gated on the slowest repo in a batch.
+	const branchStatsTimers = new Map<string, ReturnType<typeof setTimeout>>();
+	// Track the in-flight refresh per repo so we can extend that repo's debounce
+	// window when another change for it arrives mid-run. FSEvents often fires a
+	// burst (worktree delete hits both .git/worktrees/ and the removed dir), and
+	// back-to-back refreshes would double-close terminals and thrash store
+	// subscriptions. Extended debounce + the refreshGeneration guard collapse the
+	// burst into a single run per repo without forcing a UI reset.
+	const activeRefreshes = new Map<string, Promise<void>>();
 	// Coalesce revision bumps to at most one per repo per animation frame. A real
 	// change can still arrive as a same-frame burst (index + refs, or several
 	// repos), and each synchronous bump fires the full ~20-effect SolidJS flush.
@@ -256,20 +262,29 @@ export async function initApp(deps: AppInitDeps) {
 		// (Not folded into the branchStatsTimer below — that setTimeout is cleared
 		// on each event, which would drop bumps and leave panels stale, story 1277-31a0.)
 		revisionCoalescer.bump(repo_path);
-		// Discover external worktree changes. Use 500ms when idle, 1000ms when a
-		// refresh is already running so the next one doesn't race it. Only the
-		// branch-stats refresh is debounced; the revision bump above is not.
-		const delay = activeRefresh !== null ? 1000 : 500;
-		if (branchStatsTimer) clearTimeout(branchStatsTimer);
-		branchStatsTimer = setTimeout(() => {
-			branchStatsTimer = null;
-			const result = deps.refreshAllBranchStats();
-			if (result && typeof (result as Promise<void>).then === "function") {
-				activeRefresh = (result as Promise<void>).finally(() => {
-					activeRefresh = null;
-				});
-			}
-		}, delay);
+		// Discover external worktree changes for THIS repo only. Use 500ms when
+		// idle, 1000ms when this repo's refresh is already running so the next
+		// scoped run doesn't race it. Only the branch-stats refresh is debounced;
+		// the revision bump above is not. At most one refresh runs per repo, so
+		// concurrency is bounded by the number of repos changing in the window —
+		// the common single-repo case does one refresh, not N.
+		const delay = activeRefreshes.has(repo_path) ? 1000 : 500;
+		const existingTimer = branchStatsTimers.get(repo_path);
+		if (existingTimer) clearTimeout(existingTimer);
+		branchStatsTimers.set(
+			repo_path,
+			setTimeout(() => {
+				branchStatsTimers.delete(repo_path);
+				const result = deps.refreshAllBranchStats(repo_path);
+				if (result && typeof (result as Promise<void>).then === "function") {
+					const inflight = (result as Promise<void>).finally(() => {
+						// Only clear if this is still the tracked run (a newer one may have replaced it).
+						if (activeRefreshes.get(repo_path) === inflight) activeRefreshes.delete(repo_path);
+					});
+					activeRefreshes.set(repo_path, inflight);
+				}
+			}, delay),
+		);
 	}).catch((err) => appLogger.error("app", "Failed to register repo-changed listener", err));
 
 	// Worktree background recreation failed — clear the pending placeholder,

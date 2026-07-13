@@ -12,6 +12,7 @@ import { appLogger } from "../stores/appLogger";
 import { pluginStore } from "../stores/pluginStore";
 import { terminalsStore } from "../stores/terminals";
 import { isTauri } from "../transport";
+import { updateAppConfig } from "../utils/updateAppConfig";
 import { pluginRegistry } from "./pluginRegistry";
 import type { TuiPlugin } from "./types";
 
@@ -139,17 +140,12 @@ export function isPluginDisabled(id: string): boolean {
  */
 export async function setPluginEnabled(id: string, enabled: boolean): Promise<void> {
 	// Update Rust config
-	const config = await invoke<Record<string, unknown>>("load_config");
-	const list = new Set<string>((config.disabled_plugin_ids as string[]) ?? []);
-
-	if (enabled) {
-		list.delete(id);
-	} else {
-		list.add(id);
-	}
-
-	await invoke("save_config", {
-		config: { ...config, disabled_plugin_ids: [...list] },
+	let list = new Set<string>();
+	await updateAppConfig<Record<string, unknown>>((config) => {
+		list = new Set<string>((config.disabled_plugin_ids as string[]) ?? []);
+		if (enabled) list.delete(id);
+		else list.add(id);
+		config.disabled_plugin_ids = [...list];
 	});
 
 	disabledPluginIds = list;

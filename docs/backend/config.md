@@ -28,6 +28,11 @@ pub fn save_json_config<T: Serialize>(filename: &str, config: &T) -> Result<(), 
 
 **Type:** `AppConfig`
 
+Frontend surfaces that update this full-document configuration use the shared
+`updateAppConfig()` queue. It serializes each fresh load → owned-field mutation
+→ save sequence so simultaneous General, Services, and plugin changes cannot
+overwrite one another with stale snapshots.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `shell` | `Option<String>` | `None` | Shell override (platform default if None) |

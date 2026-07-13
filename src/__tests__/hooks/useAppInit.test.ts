@@ -428,6 +428,55 @@ describe("initApp", () => {
 		expect(deps.refreshAllBranchStats).toHaveBeenCalledTimes(2);
 	});
 
+	it("repo-changed scopes the refresh to the repo that changed (no full fan-out)", async () => {
+		// Regression: a change to ONE repo must not re-scan every open repo. The
+		// debounced refresh is called with the changed repo's path so the fan-out
+		// stays bounded to that repo.
+		const listenMock = vi.mocked(listen);
+		let repoChangedCallback: ((event: { payload: { repo_path: string } }) => void) | null = null;
+		listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "repo-changed") {
+				repoChangedCallback = handler as typeof repoChangedCallback;
+			}
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+
+		const deps = createMockDeps();
+		await initApp(deps);
+		vi.mocked(deps.refreshAllBranchStats).mockClear();
+
+		repoChangedCallback!({ payload: { repo_path: "/repo-a" } });
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(deps.refreshAllBranchStats).toHaveBeenCalledTimes(1);
+		expect(deps.refreshAllBranchStats).toHaveBeenCalledWith("/repo-a");
+	});
+
+	it("repo-changed debounces each repo independently — one change never delays another", async () => {
+		// Two different repos changing within the same window each get their own
+		// scoped refresh; they are NOT coalesced into a single all-repos scan.
+		const listenMock = vi.mocked(listen);
+		let repoChangedCallback: ((event: { payload: { repo_path: string } }) => void) | null = null;
+		listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "repo-changed") {
+				repoChangedCallback = handler as typeof repoChangedCallback;
+			}
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+
+		const deps = createMockDeps();
+		await initApp(deps);
+		vi.mocked(deps.refreshAllBranchStats).mockClear();
+
+		repoChangedCallback!({ payload: { repo_path: "/repo-a" } });
+		repoChangedCallback!({ payload: { repo_path: "/repo-b" } });
+		await vi.advanceTimersByTimeAsync(500);
+
+		expect(deps.refreshAllBranchStats).toHaveBeenCalledTimes(2);
+		expect(deps.refreshAllBranchStats).toHaveBeenCalledWith("/repo-a");
+		expect(deps.refreshAllBranchStats).toHaveBeenCalledWith("/repo-b");
+	});
+
 	it("repo-changed debounce coalesces rapid events", async () => {
 		const listenMock = vi.mocked(listen);
 		let repoChangedCallback: ((event: { payload: { repo_path: string } }) => void) | null = null;

@@ -2,6 +2,7 @@ import { createStore } from "solid-js/store";
 import { setLocale } from "../i18n";
 import { invoke } from "../invoke";
 import type { IssueFilterMode } from "../types";
+import { runSerializedConfigWrite, updateAppConfig } from "../utils/updateAppConfig";
 import { appLogger } from "./appLogger";
 import { toastsStore } from "./toasts";
 
@@ -514,10 +515,10 @@ function createSettingsStore() {
 	 *  rather than risk writing a partial config. */
 	async function persist(): Promise<void> {
 		try {
-			const base = await invoke<RustAppConfig>("load_config");
-			const config = applyOwnedFields(base ?? ({} as RustAppConfig));
+			const config = await updateAppConfig<RustAppConfig>((fresh) => {
+				applyOwnedFields(fresh);
+			});
 			baseConfig = config; // keep the cache (loadFontFromConfig) current
-			await invoke("save_config", { config });
 		} catch (err) {
 			appLogger.error("config", "Failed to save config", err);
 		}
@@ -547,9 +548,9 @@ function createSettingsStore() {
 				const legacyIde = localStorage.getItem(LEGACY_KEYS.IDE);
 				if (legacyIde) {
 					try {
-						const config = await invoke<RustAppConfig>("load_config");
-						config.ide = legacyIde;
-						await invoke("save_config", { config });
+						await updateAppConfig<RustAppConfig>((config) => {
+							config.ide = legacyIde;
+						});
 					} catch {
 						/* ignore migration failure */
 					}
@@ -875,7 +876,7 @@ function createSettingsStore() {
 			const prevValue = state.globalHotkey;
 			setState("globalHotkey", combo);
 			try {
-				await invoke("set_global_hotkey", { combo });
+				await runSerializedConfigWrite(() => invoke("set_global_hotkey", { combo }));
 			} catch (err) {
 				appLogger.error("config", "Failed to set global hotkey", err);
 				setState("globalHotkey", prevValue);
