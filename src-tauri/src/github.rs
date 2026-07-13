@@ -3318,7 +3318,10 @@ fn list_failing_checks_cli(gh: &str, repo_slug: &str, branch: &str) -> Vec<Faili
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or("failed check")
                 .to_string();
-            let link = c.get("link").and_then(serde_json::Value::as_str).unwrap_or("");
+            let link = c
+                .get("link")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
             FailingCheck {
                 name,
                 is_github_actions: is_github_actions_link(link),
