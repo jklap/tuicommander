@@ -377,6 +377,16 @@ const STALE_QUESTION_CHUNKS: u32 = 10;
 /// turn end (no retry) — 5s is enough to rule out a same-chunk recovery.
 const SILENCE_TOOL_ERROR_THRESHOLD: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How long a retry line ("Retrying … attempt N/M", "Unable to connect to API")
+/// holds the agent BUSY after it was last seen. During an API connection-retry
+/// loop the agent is mid-turn but its TUI freezes between attempts (the spinner
+/// stops repainting while the network call blocks), producing no changed rows —
+/// so the movement-based BUSY evidence (#446-596f) drops and the silence/ready
+/// path would flip the session idle mid-retry. Each new attempt line re-arms the
+/// hold; once retries stop (recovery or final failure) the hold self-expires and
+/// idle detection resumes. Long enough to bridge a stalled TCP connect (~10s).
+const AGENT_RETRY_HOLD: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Detect a turn-ending tool-failure line like Claude Code's
 /// `⎿  Error: Exit code 1`. Anchored to line-start with only non-letter,
 /// non-quote prefix characters (whitespace, box-drawing glyphs) so source
@@ -389,6 +399,21 @@ fn is_tool_error_line(line: &str) -> bool {
             regex::Regex::new(r#"^[^A-Za-z"]*Error:\s*Exit code\s+\d+"#).unwrap();
     }
     TOOL_ERROR_RE.is_match(line)
+}
+
+/// Detect an in-flight API connection-retry line, e.g. Claude's subagent SDK
+/// `Unable to connect to API (ECONNRESET) · Retrying in 0s · attempt 6/10` or
+/// the stream-error `retrying 5/5` form. Presence of such a line means the agent
+/// is still mid-turn (auto-retrying), not idle — see `AGENT_RETRY_HOLD`. The
+/// `attempt N/M` / `N/M` counter is required so plain prose mentioning "retrying"
+/// or a code line containing the string does not latch the session busy.
+fn is_retry_line(line: &str) -> bool {
+    lazy_static::lazy_static! {
+        static ref RETRY_RE: regex::Regex = regex::Regex::new(
+            r"(?i)(unable to connect to api|retrying\b[^\n]{0,40}attempt\s+\d+\s*/\s*\d+|retrying\s+\d+\s*/\s*\d+)"
+        ).unwrap();
+    }
+    RETRY_RE.is_match(line)
 }
 
 /// How often the timer thread wakes up to check for silence.
@@ -722,6 +747,11 @@ pub(crate) struct SilenceState {
     /// Strong activity (real output or Working marker) was observed after that
     /// submission. Until then, the old ready prompt is not proof of completion.
     turn_activity_seen: bool,
+    /// Deadline until which an in-flight API connection-retry holds the agent
+    /// BUSY. Armed by `mark_api_retry` when `is_retry_line` matches a changed
+    /// row; blocks both the ready-screen and silence idle paths until it expires
+    /// or is cleared by recovery/user input. See `AGENT_RETRY_HOLD`.
+    api_retry_hold_until: Option<std::time::Instant>,
 }
 
 impl SilenceState {
@@ -751,6 +781,7 @@ impl SilenceState {
             interrupt_requested_at: None,
             turn_started_by_input: false,
             turn_activity_seen: false,
+            api_retry_hold_until: None,
         }
     }
 
@@ -800,7 +831,10 @@ impl SilenceState {
     }
 
     fn note_ready_screen(&mut self) -> bool {
-        if self.hook_busy || (self.turn_started_by_input && !self.turn_activity_seen) {
+        if self.hook_busy
+            || (self.turn_started_by_input && !self.turn_activity_seen)
+            || self.is_api_retry_active()
+        {
             self.ready_since = None;
             return false;
         }
@@ -1077,6 +1111,21 @@ impl SilenceState {
         self.pending_tool_error = Some(line);
     }
 
+    /// Arm (or re-arm) the API connection-retry BUSY hold. Called when
+    /// `is_retry_line` matches a changed row: the agent is auto-retrying a failed
+    /// API call and is still mid-turn even though its TUI has frozen between
+    /// attempts. See `AGENT_RETRY_HOLD` for why this is needed.
+    pub(crate) fn mark_api_retry(&mut self) {
+        self.api_retry_hold_until = Some(std::time::Instant::now() + AGENT_RETRY_HOLD);
+    }
+
+    /// True while an in-flight API retry holds the agent BUSY. Consulted by the
+    /// ready-screen and silence idle paths to suppress a premature idle flip.
+    pub(crate) fn is_api_retry_active(&self) -> bool {
+        self.api_retry_hold_until
+            .is_some_and(|deadline| std::time::Instant::now() < deadline)
+    }
+
     /// Called on every real-output chunk that is NOT an error line. Clears the
     /// pending tool-error candidate: if the agent produced real output after an
     /// error, it recovered (e.g. retry) and the error is not turn-ending.
@@ -1086,6 +1135,9 @@ impl SilenceState {
     /// must survive it and only reset on explicit user input.
     pub(crate) fn clear_tool_error_on_recovery(&mut self) {
         self.pending_tool_error = None;
+        // Real non-error, non-retry output means the agent recovered from the
+        // connection-retry loop — release the BUSY hold so idle detection resumes.
+        self.api_retry_hold_until = None;
     }
 
     /// Clear the "already surfaced" memory so the next occurrence of any error
@@ -1095,6 +1147,7 @@ impl SilenceState {
     pub(crate) fn reset_tool_error_memory(&mut self) {
         self.pending_tool_error = None;
         self.surfaced_tool_errors.clear();
+        self.api_retry_hold_until = None;
     }
 
     /// Called by the timer thread. Returns the error text if the silence
@@ -1854,7 +1907,7 @@ fn spawn_silence_timer(
                 .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY)
                 .unwrap_or(false);
             if is_busy && screen_activity != AgentScreenActivity::Working {
-                let (explicit_busy, hold_for_ready_confirmation) = {
+                let (explicit_busy, hold_for_ready_confirmation, api_retry_active) = {
                     let sl = silence.lock();
                     (
                         sl.explicit_busy,
@@ -1862,11 +1915,16 @@ fn spawn_silence_timer(
                             screen_activity,
                             AgentScreenActivity::Ready | AgentScreenActivity::Interrupted
                         ) && !screen_confirms_idle,
+                        sl.is_api_retry_active(),
                     )
                 };
                 let decision = if screen_confirms_idle {
                     IdleDecision::YES
-                } else if explicit_busy || hold_for_ready_confirmation {
+                } else if explicit_busy || hold_for_ready_confirmation || api_retry_active {
+                    // An in-flight API retry keeps the agent BUSY across the frozen
+                    // gap between attempts (note_ready_screen already refuses to
+                    // confirm idle while it is active, so screen_confirms_idle is
+                    // false here too).
                     IdleDecision::NO
                 } else {
                     should_transition_idle(&state, &session_id)
@@ -3100,15 +3158,23 @@ impl ChunkProcessor {
             // Fires playError() via silence_timer when followed only by chrome
             // until SILENCE_TOOL_ERROR_THRESHOLD elapses (= turn ended on error).
             let mut error_line: Option<String> = None;
+            let mut retry_seen = false;
             for row in changed_rows.iter() {
-                if is_tool_error_line(&row.text) {
+                if is_retry_line(&row.text) {
+                    retry_seen = true;
+                } else if is_tool_error_line(&row.text) {
                     error_line = Some(row.text.trim().to_string());
                 }
             }
-            if let Some(line) = error_line {
+            if retry_seen {
+                // Agent is auto-retrying a failed API call — hold BUSY across the
+                // frozen gap between attempts. Takes precedence over the recovery
+                // clear below: the retry line IS real output but is not recovery.
+                sl.mark_api_retry();
+            } else if let Some(line) = error_line {
                 sl.mark_tool_error_candidate(line);
             } else if !chrome_only {
-                // Real output without an error line → agent recovered/continued.
+                // Real output without an error/retry line → agent recovered/continued.
                 sl.clear_tool_error_on_recovery();
             }
         }
@@ -7194,6 +7260,77 @@ mod tests {
             Some("Error: Exit code 1".to_string()),
             "after user input, same error text must be allowed to notify again"
         );
+    }
+
+    #[test]
+    fn test_is_retry_line_matches_connection_retries() {
+        // Claude subagent SDK retry loop (the reported false-idle scenario).
+        assert!(is_retry_line(
+            "  Unable to connect to API (ECONNRESET) · Retrying in 0s · attempt 6/10"
+        ));
+        assert!(is_retry_line(
+            "Teammate @spinach-mail-validate failed: API Error: Unable to connect to API (ConnectionRefused)"
+        ));
+        // Goose/Aider stream-error retry form.
+        assert!(is_retry_line(
+            "⚠  stream error: exceeded retry limit, last status: 401; retrying 5/5 in 3s…"
+        ));
+        // Non-retry prose / code must NOT latch busy — the N/M counter is required.
+        assert!(!is_retry_line(
+            "I'll be retrying the request in a moment if it fails."
+        ));
+        assert!(!is_retry_line("let retrying = true; // attempt to reconnect"));
+        assert!(!is_retry_line("Successfully connected to the API endpoint."));
+    }
+
+    #[test]
+    fn test_api_retry_hold_active_then_expires() {
+        let mut s = SilenceState::new();
+        assert!(!s.is_api_retry_active(), "no hold armed initially");
+        s.mark_api_retry();
+        assert!(s.is_api_retry_active(), "hold active right after arming");
+        // Simulate the hold window elapsing.
+        s.api_retry_hold_until =
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
+        assert!(!s.is_api_retry_active(), "hold self-expires after AGENT_RETRY_HOLD");
+    }
+
+    #[test]
+    fn test_api_retry_blocks_ready_screen_confirm() {
+        // Claude Code keeps its `❯` prompt visible while auto-retrying, so a stable
+        // ready screen would otherwise confirm idle after AGENT_READY_CONFIRM. The
+        // retry hold must refuse that confirmation.
+        let mut s = SilenceState::new();
+        s.mark_api_retry();
+        // Force the ready prompt to look long-stable.
+        s.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM * 2);
+        assert!(
+            !s.note_ready_screen(),
+            "ready screen must not confirm idle while an API retry is in flight"
+        );
+
+        // Once the hold expires, the same stable ready prompt confirms idle.
+        s.api_retry_hold_until =
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
+        s.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM * 2);
+        assert!(
+            s.note_ready_screen(),
+            "ready screen confirms idle after the retry hold expires"
+        );
+    }
+
+    #[test]
+    fn test_api_retry_hold_cleared_on_recovery_and_user_input() {
+        let mut s = SilenceState::new();
+        s.mark_api_retry();
+        // Real non-error output → agent recovered.
+        s.clear_tool_error_on_recovery();
+        assert!(!s.is_api_retry_active(), "recovery releases the retry hold");
+
+        s.mark_api_retry();
+        // User re-engages (submitted a line / Ctrl+C).
+        s.reset_tool_error_memory();
+        assert!(!s.is_api_retry_active(), "user input releases the retry hold");
     }
 
     #[test]
