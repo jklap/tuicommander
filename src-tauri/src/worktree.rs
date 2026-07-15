@@ -1311,10 +1311,24 @@ pub(crate) fn get_remote_default_branch(repo_path: &str) -> Result<String, Strin
     Ok("main".to_string())
 }
 
-/// Fetch a remote ref if the ref name looks like a remote tracking branch (e.g. "origin/main").
+/// Fetch a remote ref if the ref name is a remote tracking branch (e.g. "origin/main").
 /// Local refs are a no-op. Returns Ok(()) on success or if the ref is local.
 pub(crate) fn fetch_if_remote(repo_path: &str, ref_name: &str) -> Result<(), String> {
-    // Remote refs contain a "/" and start with a remote name (e.g. "origin/branch")
+    // A "/" alone does NOT mean remote — local branches routinely contain slashes
+    // (e.g. "POC-0001/merge-radar", "feature/foo"). Only fetch when the ref actually
+    // resolves as a remote-tracking ref under refs/remotes/.
+    let is_remote_ref = git_cmd(Path::new(repo_path))
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/remotes/{ref_name}"),
+        ])
+        .run_silent()
+        .is_some();
+    if !is_remote_ref {
+        return Ok(());
+    }
     if let Some(slash_pos) = ref_name.find('/') {
         let remote = &ref_name[..slash_pos];
         let branch = &ref_name[slash_pos + 1..];
@@ -3223,6 +3237,27 @@ branch refs/heads/feat
         // A local ref like "main" should not trigger a fetch (no-op)
         let result = fetch_if_remote(&path, "main");
         assert!(result.is_ok(), "local ref should not fail: {:?}", result);
+    }
+
+    #[test]
+    fn test_fetch_local_branch_with_slash_is_noop() {
+        let repo = setup_test_repo();
+        let path = repo.path().to_string_lossy().to_string();
+
+        // A local branch name can legitimately contain a slash (e.g. Jira-style
+        // "POC-0001/merge-radar"). It must NOT be mistaken for a remote ref and
+        // fetched — otherwise git treats "POC-0001" as a remote and fails.
+        git_cmd(repo.path())
+            .args(["branch", "POC-0001/merge-radar"])
+            .run()
+            .expect("Failed to create slashed local branch");
+
+        let result = fetch_if_remote(&path, "POC-0001/merge-radar");
+        assert!(
+            result.is_ok(),
+            "slashed local branch should be a no-op, not a failed fetch: {:?}",
+            result
+        );
     }
 
     /// Get the current branch name in a test repo (could be main or master)
