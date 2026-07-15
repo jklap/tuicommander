@@ -6,10 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-07-15
+
 ### Added
 - **Dictation live microphone meter** — The floating dictation preview now includes a compact centered spectrum meter whose bars widen outward from the center with your voice, so you can confirm that the selected microphone is receiving speech before the first partial transcription appears.
 
 ### Fixed
+- **Status bar crash during Claude usage rotation** — The agent badge could crash the app (`undefined is not an object … claudeTicker().priority`) when the Claude usage ticker expired at the exact moment it was being rendered. The badge now uses a scoped match so a mid-render removal can no longer dereference a missing message.
+- **Create Branch from a branch whose name contains a slash** — Basing a new branch on a local branch with a slash in its name (e.g. `POC-0001/merge-radar`) no longer fails with `'POC-0001' does not appear to be a git repository`. Such refs are correctly treated as local instead of being mistaken for a remote to fetch.
+- **Agents no longer flip idle mid API-retry** — During an API connection-retry loop (e.g. `Unable to connect to API · Retrying · attempt N/M`) the agent's TUI freezes between attempts, which previously looked like completion. The session is now held busy across the retry gap until the agent recovers, the retries stop, or you re-engage.
 - **CI auto-heal on partially completed workflows** — A failed job now reaches the branch agent immediately even when sibling jobs keep the overall GitHub Actions workflow running. Failed log lookup or PTY delivery no longer consumes one of the three heal attempts.
 - **MCP upstream authentication editor** — Switching an HTTP upstream from Bearer to OAuth now clears the incompatible stored token, persists DCR mode when the client ID is blank, and reconnects with the selected method instead of silently remaining on Bearer.
 - **Concurrent settings saves** — Frontend configuration writers now share one serialized load-modify-save queue, preventing overlapping General, Services, and plugin writes from losing each other's fields.

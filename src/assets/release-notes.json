@@ -82,5 +82,18 @@
         "author": "jklap"
       }
     ]
+  },
+  "1.6.1": {
+    "highlights": [
+      "Dictation preview now shows a live microphone meter so you can confirm your mic is picking up speech before transcription starts.",
+      "The status bar no longer crashes when the Claude usage badge rotates out at the moment it's being drawn.",
+      "Creating a branch based on a local branch whose name contains a slash (e.g. POC-0001/merge-radar) now works.",
+      "Agents stay marked busy through API connection-retry loops instead of falsely appearing idle between attempts.",
+      "CI auto-heal reaches the branch agent immediately on a failed job even while sibling jobs keep the workflow running.",
+      "Switching an MCP HTTP upstream from Bearer to OAuth now clears the old token and reconnects with the chosen method.",
+      "Saving settings no longer loses fields between panels or silently disables the Remote Access web server and global hotkey.",
+      "Restarting the remote HTTP server keeps stdio MCP clients like Claude connected with their tools instead of dropping to zero."
+    ],
+    "date": "2026-07-15"
   }
 }
