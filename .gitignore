@@ -83,3 +83,6 @@ test-width.txt
 
 # Scratch planning / triage docs (local only)
 PR.md
+
+# Scratch worktree consolidation / temp working dir (local only)
+.tmp/
