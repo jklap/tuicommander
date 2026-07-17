@@ -570,7 +570,19 @@ export const BranchItem: Component<{
 					>
 						+
 					</button>
-					<Show when={!props.branch.isMain && props.branch.worktreePath && props.canRemove}>
+					{/* Only linked worktrees can be removed — never the main checkout, whose
+					    worktreePath IS the repo root. `isMain` is name-based (main/master/
+					    develop) so it misses a main checkout sitting on a differently-named
+					    branch; the worktreePath !== repoPath test is the reliable signal and
+					    mirrors the context-menu `isLinkedWorktree` predicate. */}
+					<Show
+						when={
+							!props.branch.isMain &&
+							props.branch.worktreePath &&
+							props.branch.worktreePath !== props.repoPath &&
+							props.canRemove
+						}
+					>
 						<button
 							class={s.branchRemoveBtn}
 							disabled={props.isRemoving}
