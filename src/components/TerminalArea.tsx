@@ -9,7 +9,7 @@ import { repoSettingsStore } from "../stores/repoSettings";
 import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
-import { containsShellMetacharacters } from "../utils/sendCommand";
+import { shouldAutoSubmitSuggestion } from "../utils/sendCommand";
 import { sendTextToSession } from "../utils/sendToActiveTerminal";
 import { CodeEditorTab } from "./CodeEditorPanel";
 import { DiffTab } from "./DiffTab";
@@ -49,9 +49,11 @@ const SuggestOverlayContainer: Component = () => {
 							terminalsStore.dismissSuggestedActions(capturedId);
 							if (capturedSid) {
 								// OSC 7770 `suggest=` is emittable by any (untrusted) output; withhold
-								// auto-Enter for metacharacter-bearing chips so a click cannot silently
-								// execute a chained/redirected command — the user reviews it first.
-								await sendTextToSession(capturedSid, text, !containsShellMetacharacters(text));
+								// auto-Enter for metacharacter-bearing chips on a SHELL so a click cannot
+								// silently execute a chained/redirected command. On an AGENT a chip is
+								// just prompt text and must submit — see shouldAutoSubmitSuggestion.
+								const agentType = terminalsStore.getAgentTypeForSession(capturedSid);
+								await sendTextToSession(capturedSid, text, shouldAutoSubmitSuggestion(agentType, text));
 							}
 						}}
 						onDismiss={() => {
