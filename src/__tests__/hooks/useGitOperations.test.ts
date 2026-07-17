@@ -1179,6 +1179,43 @@ describe("useGitOperations", () => {
 			expect(branch?.deletions).toBe(3);
 		});
 
+		it("git init: carries shell-branch terminals into the new git branch instead of orphaning them", async () => {
+			// Repro: a clean shell-only repo with two open terminals; `git init` used to
+			// remove the shell branch and create an empty git branch, orphaning the
+			// terminals so they vanished from the view until a later branch-select.
+			const t1 = terminalsStore.add(makeTerminal({ name: "t1" }));
+			const t2 = terminalsStore.add(makeTerminal({ name: "t2" }));
+			repositoriesStore.add({ path: "/shell-repo", displayName: "Shell", isGitRepo: false });
+			repositoriesStore.setBranch("/shell-repo", "shell", {
+				worktreePath: "/shell-repo",
+				isMain: true,
+				isShell: true,
+			});
+			repositoriesStore.addTerminalToBranch("/shell-repo", "shell", t1);
+			repositoriesStore.addTerminalToBranch("/shell-repo", "shell", t2);
+			repositoriesStore.setBranch("/shell-repo", "shell", { lastActiveTerminal: t2 });
+			repositoriesStore.setActiveBranch("/shell-repo", "shell");
+
+			mockRepo.getInfo.mockResolvedValue({
+				path: "/shell-repo",
+				name: "shell-repo",
+				initials: "SR",
+				branch: "main",
+				status: "clean",
+				is_git_repo: true,
+			});
+
+			await gitOps.refreshAllBranchStats("/shell-repo");
+
+			const repo = repositoriesStore.get("/shell-repo");
+			expect(repo?.isGitRepo).toBe(true);
+			expect(repo?.activeBranch).toBe("main");
+			expect(repo?.branches["shell"]).toBeUndefined();
+			// Both terminals carried over (not orphaned) + last-active preserved.
+			expect(repo?.branches["main"]?.terminals).toEqual([t1, t2]);
+			expect(repo?.branches["main"]?.lastActiveTerminal).toBe(t2);
+		});
+
 		it("scopes to a single repo when a path is given — other repos untouched", async () => {
 			repositoriesStore.add({ path: "/repo-a", displayName: "A" });
 			repositoriesStore.setBranch("/repo-a", "main", { worktreePath: "/repo-a" });

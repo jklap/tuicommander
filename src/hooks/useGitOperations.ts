@@ -314,13 +314,29 @@ export function useGitOperations(deps: GitOperationsDeps) {
 					try {
 						const info = await deps.repo.getInfo(repoPath);
 						if (info.is_git_repo && info.branch) {
-							// Directory gained .git — transition to git mode
+							// Directory gained .git — transition to git mode. Carry the shell
+							// branch's terminals (and its last-active) into the new git branch:
+							// otherwise `git init` removes the shell branch and creates an empty
+							// git branch, orphaning the open terminals so they vanish from the
+							// view until a later branch-select re-adopts them by cwd.
 							batch(() => {
+								const carriedTerminals: string[] = [];
+								let carriedActive: string | null = null;
 								for (const branch of Object.values(repo.branches)) {
+									carriedTerminals.push(...branch.terminals);
+									if (branch.lastActiveTerminal) carriedActive = branch.lastActiveTerminal;
 									repositoriesStore.removeBranch(repoPath, branch.name);
 								}
 								repositoriesStore.setIsGitRepo(repoPath, true);
-								repositoriesStore.setBranch(repoPath, info.branch, { worktreePath: repoPath });
+								repositoriesStore.setBranch(repoPath, info.branch, {
+									worktreePath: repoPath,
+									lastActiveTerminal: carriedActive,
+								});
+								// addTerminalToBranch (not setBranch terminals) keeps the
+								// terminalToRepo inverse index consistent.
+								for (const tid of carriedTerminals) {
+									repositoriesStore.addTerminalToBranch(repoPath, info.branch, tid);
+								}
 								repositoriesStore.setActiveBranch(repoPath, info.branch);
 							});
 							// Restart the repo watcher so it registers the now-present .git
