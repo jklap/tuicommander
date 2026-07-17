@@ -10,6 +10,7 @@ import { writeClipboard } from "../../utils/clipboard";
 import { formatRelativeTime } from "../../utils/formatRelativeTime";
 import { ensureKeyboardViewportTracking, keyboardOcclusion } from "../../utils/keyboardViewport";
 import { handleOpenUrl } from "../../utils/openUrl";
+import { isPerfDebug } from "../../utils/perfDebug";
 import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { installTouchHandlers } from "./canvasTerminalTouch";
@@ -1038,6 +1039,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// (reconcileDelay caps the trailing debounce at RECONCILE_MAX_WAIT_MS, so
 	// sustained partial-frame output can't starve the self-heal forever).
 	let reconcileBurstStart: number | null = null;
+	// [dup] desync detector (perfDebug only): set when scheduleReconcile fires a
+	// forced full-frame request, consumed by the next full frame in onFrame to diff
+	// the partial-accumulated rowMap against the authoritative grid. See onFrame.
+	let reconcileHealPending = false;
 	function scheduleReconcile() {
 		const now = Date.now();
 		if (reconcileBurstStart == null) reconcileBurstStart = now;
@@ -1051,6 +1056,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				if (!fire) {
 					return;
 				}
+				// [dup] arm the desync detector: the frame this request pulls back is a
+				// full grid snapshot at rest, so the next full frame's diff against the
+				// partial-accumulated rowMap reveals any stranded stale rows.
+				if (isPerfDebug()) reconcileHealPending = true;
 				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 			},
 			reconcileDelay(now, reconcileBurstStart),
@@ -1369,8 +1378,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			}
 		}
 
+		// [dup] desync detector (perfDebug): if this full frame is the one pulled by a
+		// reconcile at rest (no scroll/geom change), snapshot the partial-accumulated
+		// rowMap BEFORE it's replaced. Any viewport row that differs from the grid below
+		// was stale on the canvas — a stranded row the partial frames never carried
+		// (alacritty damage under-report on in-place TUI redraws). Logged after the merge.
+		let dupHealSnapshot: Map<number, string> | null = null;
+		if (reconcileHealPending && decision.fullReplace && !decision.geomChanged && !decision.scrollChanged) {
+			dupHealSnapshot = new Map();
+			for (const [idx, row] of rowMap) dupHealSnapshot.set(idx, rowToText(row));
+		}
+
 		// When backend sends all screen rows, replace rowMap to discard stale entries
 		if (decision.fullReplace) {
+			reconcileHealPending = false;
 			rowMap.clear();
 			clearDetectedLinks();
 
@@ -1391,6 +1412,28 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			rowMap.set(row.index, row);
 			pendingDirtyRows.add(row.index);
 			scanRowForLinks(row.index);
+		}
+
+		// [dup] desync detector: diff the pre-heal snapshot against the now-authoritative
+		// rowMap. Diverging rows were stale on the canvas until this reconcile healed them.
+		if (dupHealSnapshot) {
+			const diverged: number[] = [];
+			for (const [idx, oldText] of dupHealSnapshot) {
+				const nr = rowMap.get(idx);
+				const newText = nr ? rowToText(nr) : "";
+				if (oldText !== newText) diverged.push(idx);
+			}
+			if (diverged.length > 0) {
+				const sample = diverged.slice(0, 5).map((i) => {
+					const nr = rowMap.get(i);
+					return `#${i}: "${(dupHealSnapshot?.get(i) ?? "").slice(0, 40)}" => "${(nr ? rowToText(nr) : "").slice(0, 40)}"`;
+				});
+				appLogger.warn("terminal", `[dup] canvas desync healed: ${diverged.length} stale viewport row(s)`, {
+					sessionId: props.sessionId,
+					divergedRows: diverged,
+					sample,
+				});
+			}
 		}
 
 		currentFrame = frame;
