@@ -878,6 +878,12 @@ pub struct AgentMessage {
 /// Max messages per agent inbox before FIFO eviction.
 pub(crate) const AGENT_INBOX_CAPACITY: usize = 100;
 
+/// Message-id prefix marking auto-generated lifecycle/system notifications
+/// (child exited/idle/died). These are low-volume and critical — losing one
+/// silently strands the orchestrator waiting on a child it thinks is alive —
+/// so `push_agent_inbox` protects them from eviction by chatty peer `send`s.
+pub(crate) const LIFECYCLE_MSG_ID_PREFIX: &str = "tuic-auto-";
+
 /// Max message body size in bytes (64 KB).
 pub(crate) const AGENT_MESSAGE_MAX_BYTES: usize = 64 * 1024;
 
@@ -1238,6 +1244,33 @@ impl AppState {
             let _ = tx.send(event.clone());
         }
         let _ = self.event_bus.send(event);
+    }
+
+    /// Buffer a message into `recipient`'s inbox with bounded, lifecycle-aware
+    /// FIFO eviction. Single source of truth for BOTH push sites (peer `send`
+    /// and auto lifecycle notifications) so the two can't drift in how they
+    /// handle overflow.
+    ///
+    /// On overflow we evict the oldest *non-lifecycle* message first, so peer
+    /// chatter can never silently drop a `tuic-auto-*` lifecycle notification;
+    /// we only fall back to evicting the oldest message overall when the inbox
+    /// is entirely lifecycle notifications (orchestrator badly stuck). Every
+    /// genuine eviction bumps `agent_inbox_evictions`, surfaced as
+    /// `missed_count` on the next `inbox` read — nothing is dropped silently.
+    pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) {
+        let mut inbox = self.agent_inbox.entry(recipient.to_string()).or_default();
+        if inbox.len() >= AGENT_INBOX_CAPACITY {
+            let evict_idx = inbox
+                .iter()
+                .position(|m| !m.id.starts_with(LIFECYCLE_MSG_ID_PREFIX))
+                .unwrap_or(0);
+            inbox.remove(evict_idx);
+            *self
+                .agent_inbox_evictions
+                .entry(recipient.to_string())
+                .or_insert(0) += 1;
+        }
+        inbox.push_back(msg);
     }
 
     /// Acquire one slot in the monitoring-git concurrency limit. Hold the
@@ -2747,6 +2780,64 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_msg(id: &str) -> AgentMessage {
+        AgentMessage {
+            id: id.to_string(),
+            from_tuic_session: "sender".to_string(),
+            from_name: "sender".to_string(),
+            content: "x".to_string(),
+            timestamp: 1,
+            delivered_via_channel: false,
+        }
+    }
+
+    // ── push_agent_inbox: lifecycle notifications survive peer-send flooding ──
+
+    #[test]
+    fn push_agent_inbox_protects_lifecycle_from_send_eviction() {
+        let state = tests_support::make_test_app_state();
+        let rcpt = "orchestrator";
+
+        // A single critical lifecycle notification arrives first.
+        state.push_agent_inbox(rcpt, make_msg("tuic-auto-child-exit-1"));
+
+        // Then a peer floods the inbox well past capacity with chatter.
+        for i in 0..(AGENT_INBOX_CAPACITY + 50) {
+            state.push_agent_inbox(rcpt, make_msg(&format!("send-{i}")));
+        }
+
+        let inbox = state.agent_inbox.get(rcpt).expect("inbox exists");
+        // Hard bound respected …
+        assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
+        // … but the lifecycle message was NOT the one evicted.
+        assert!(
+            inbox.iter().any(|m| m.id == "tuic-auto-child-exit-1"),
+            "lifecycle notification must survive send flooding"
+        );
+        // Evictions are counted (nothing dropped silently).
+        assert!(
+            *state.agent_inbox_evictions.get(rcpt).unwrap() > 0,
+            "genuine evictions must bump the missed-count counter"
+        );
+    }
+
+    #[test]
+    fn push_agent_inbox_falls_back_to_oldest_when_all_lifecycle() {
+        let state = tests_support::make_test_app_state();
+        let rcpt = "orchestrator";
+
+        // Inbox entirely lifecycle: fallback evicts the oldest to keep the bound.
+        for i in 0..(AGENT_INBOX_CAPACITY + 1) {
+            state.push_agent_inbox(rcpt, make_msg(&format!("tuic-auto-{i}")));
+        }
+
+        let inbox = state.agent_inbox.get(rcpt).expect("inbox exists");
+        assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
+        // Oldest (index 0) evicted; the newest is retained.
+        assert_eq!(inbox.front().unwrap().id, "tuic-auto-1");
+        assert_eq!(inbox.back().unwrap().id, format!("tuic-auto-{AGENT_INBOX_CAPACITY}"));
+    }
 
     // ── emit_pty_event: per-session channel + global-bus parity (story 140) ──
 

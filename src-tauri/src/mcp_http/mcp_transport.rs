@@ -1888,6 +1888,19 @@ fn handle_agent(
             // Effective prompt: preamble prepended for swarm spawns, unchanged otherwise.
             let effective_prompt = build_spawn_prompt(&prompt, caller_tuic.as_deref(), &session_id);
 
+            // Effective cwd: an explicit `cwd` arg wins; otherwise inherit the SPAWNING
+            // agent's working dir (its PTY session's cwd). Without this the child runs in
+            // the TUIC process's own cwd AND its session carries no cwd, so the frontend
+            // `session-created` handler can't match it to the parent's repo and drops the
+            // tab into whatever repo the desktop user has focused (the active-repo
+            // fallback). Inheriting the parent cwd lands both the process and the tab in
+            // the parent agent's repo.
+            let effective_cwd: Option<String> = args["cwd"].as_str().map(|s| s.to_string()).or_else(|| {
+                caller_tuic
+                    .as_ref()
+                    .and_then(|parent| state.sessions.get(parent).and_then(|e| e.lock().cwd.clone()))
+            });
+
             let mut cmd = CommandBuilder::new(&binary_path);
 
             // Inject swarm env vars so spawned agents know their identity and parent.
@@ -1986,7 +1999,7 @@ fn handle_agent(
                 }
                 cmd.arg(&effective_prompt);
             }
-            if let Some(cwd) = args["cwd"].as_str() {
+            if let Some(ref cwd) = effective_cwd {
                 cmd.cwd(crate::cli::expand_tilde(cwd));
             }
 
@@ -2018,7 +2031,7 @@ fn handle_agent(
                     _child: child,
                     paused: paused.clone(),
                     worktree: None,
-                    cwd: args["cwd"].as_str().map(|s| s.to_string()),
+                    cwd: effective_cwd.clone(),
                     display_name: None,
                     shell: binary_path.clone(),
                 }),
@@ -2070,7 +2083,7 @@ fn handle_agent(
             state.grid_watch.insert(session_id.clone(), grid_watch_tx);
 
             // Broadcast session-created to SSE/WebSocket consumers
-            let cwd_str = args["cwd"].as_str().map(|s| s.to_string());
+            let cwd_str = effective_cwd.clone();
             let agent_type_str = args["agent_type"].as_str().map(|s| s.to_string());
             let _ = state
                 .event_bus
@@ -2110,7 +2123,7 @@ fn handle_agent(
                         tuic_session: session_id.clone(),
                         mcp_session_id: String::new(), // filled when child connects via MCP
                         name: "agent".to_string(),
-                        project: args["cwd"].as_str().map(|s| s.to_string()),
+                        project: effective_cwd.clone(),
                         registered_at: now_ms,
                     },
                 );
@@ -2361,17 +2374,8 @@ fn handle_messaging(
                 }
             }
 
-            // Always buffer in recipient's inbox with FIFO eviction
-            let mut inbox = state.agent_inbox.entry(to.to_string()).or_default();
-            if inbox.len() >= crate::state::AGENT_INBOX_CAPACITY {
-                inbox.pop_front();
-                *state
-                    .agent_inbox_evictions
-                    .entry(to.to_string())
-                    .or_insert(0) += 1;
-            }
-            inbox.push_back(msg);
-            drop(inbox);
+            // Always buffer in recipient's inbox with lifecycle-aware eviction.
+            state.push_agent_inbox(to, msg);
             #[cfg(unix)]
             if let Err(e) = crate::pty::wake_session(state, to) {
                 tracing::debug!(session = %to, error = %e, "Wake on message delivery failed");

@@ -3461,14 +3461,7 @@ fn push_state_change_to_parent(state: &AppState, session_id: &str, payload: serd
         timestamp: now_ms,
         delivered_via_channel: false,
     };
-    {
-        let mut inbox = state.agent_inbox.entry(parent_id.clone()).or_default();
-        if inbox.len() >= crate::state::AGENT_INBOX_CAPACITY {
-            inbox.pop_front();
-            // eviction counting intentionally skipped for system messages (no orchestrator opt-in needed)
-        }
-        inbox.push_back(msg);
-    }
+    state.push_agent_inbox(&parent_id, msg);
     // Wake the orchestrator: an idle parent won't poll its inbox, so surface the
     // lifecycle change directly in its terminal. Uses a compact human line — the
     // full JSON payload stays in the inbox for programmatic reads.
@@ -3564,29 +3557,58 @@ fn injection_payload(text: &str) -> String {
     }
 }
 
+/// Real-time gap inserted between the payload write and the Enter write of an
+/// injection. Ink/raw-mode agents (Codex, Claude Code) only treat the trailing
+/// CR as a submit when it arrives in a SEPARATE `read()` from the text; a
+/// microsecond-apart back-to-back write — even with a flush in between — is
+/// coalesced into one read and the CR is swallowed as part of the typed buffer,
+/// so the message just sits at the prompt unsubmitted (verified live against
+/// Codex: back-to-back hangs, CR after a gap submits). The frontend
+/// `sendCommand.ts` recipe gets this gap for free — its two `writeFn` calls are
+/// separate IPC round-trips — so this native path must reproduce it explicitly.
+/// 50ms comfortably clears the child's read-scheduling latency while staying
+/// imperceptible for a wake message.
+const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
+
 /// Type a framed line into a session's PTY as if the user submitted it, waking an
-/// idle agent so it processes the message on its next turn. Split-write (payload
-/// flush, then CR flush) with the `injection_payload` framing that Ink/raw-mode
-/// agents require — a concatenated Enter is missed, and unbracketed multiline
-/// text never submits. Best-effort: a dead PTY is logged and ignored (the inbox
-/// still holds the message).
+/// idle agent so it processes the message on its next turn. Split-write with the
+/// `injection_payload` framing that Ink/raw-mode agents require, and — critically —
+/// a REAL time gap between the payload and the Enter (see `INJECT_ENTER_GAP`): a
+/// concatenated or merely back-to-back Enter is missed, and unbracketed multiline
+/// text never submits. The session lock is released across the gap so a concurrent
+/// writer to the same session is never blocked by the delay. Best-effort: a dead
+/// PTY is logged and ignored (the inbox still holds the message).
 pub(crate) fn inject_text_into_pty(state: &AppState, session_id: &str, text: &str) {
-    let Some(entry) = state.sessions.get(session_id) else {
-        return;
-    };
-    let mut session = entry.lock();
-    if let Err(e) = session.writer.write_all(injection_payload(text).as_bytes()) {
-        tracing::debug!(session = %session_id, error = %e, "inject text write failed");
-        return;
+    {
+        let Some(entry) = state.sessions.get(session_id) else {
+            return;
+        };
+        let mut session = entry.lock();
+        if let Err(e) = session.writer.write_all(injection_payload(text).as_bytes()) {
+            tracing::debug!(session = %session_id, error = %e, "inject text write failed");
+            return;
+        }
+        let _ = session.writer.flush();
+    } // lock released before the gap
+
+    // DEFERRED (2026-07-17) — this blocks the calling thread (sometimes a tokio
+    // worker: session-state accumulator / agent-send dispatch) for INJECT_ENTER_GAP.
+    // Acceptable because injection is low-frequency (peer messages, idle-transition
+    // wakes). If a hot path ever calls this, move the sequence onto a detached
+    // thread — that needs Arc<AppState> threaded through deliver/flush (wider refactor).
+    std::thread::sleep(INJECT_ENTER_GAP);
+
+    {
+        let Some(entry) = state.sessions.get(session_id) else {
+            return; // session vanished during the gap — CR is moot
+        };
+        let mut session = entry.lock();
+        if let Err(e) = session.writer.write_all(b"\r") {
+            tracing::debug!(session = %session_id, error = %e, "inject CR write failed");
+            return;
+        }
+        let _ = session.writer.flush();
     }
-    let _ = session.writer.flush();
-    if let Err(e) = session.writer.write_all(b"\r") {
-        tracing::debug!(session = %session_id, error = %e, "inject CR write failed");
-        return;
-    }
-    let _ = session.writer.flush();
-    drop(session);
-    drop(entry);
     note_submitted_input(state, session_id);
 }
 
