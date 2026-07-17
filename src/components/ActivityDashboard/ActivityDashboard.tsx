@@ -1,6 +1,7 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { activityDashboardStore } from "../../stores/activityDashboard";
 import { globalWorkspaceStore } from "../../stores/globalWorkspace";
+import { registerModal } from "../../stores/modalStack";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
@@ -93,20 +94,11 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 		onCleanup(() => clearInterval(interval));
 	});
 
-	// Keyboard navigation
+	// Escape-to-close is handled centrally (stores/modalStack): registering routes
+	// Escape to the dashboard close AND stops it reaching the terminal underneath.
 	createEffect(() => {
 		if (!isOpen()) return;
-
-		const handleKeydown = (e: KeyboardEvent) => {
-			if (e.key === "Escape") {
-				e.preventDefault();
-				e.stopPropagation();
-				activityDashboardStore.close();
-			}
-		};
-
-		document.addEventListener("keydown", handleKeydown, true);
-		onCleanup(() => document.removeEventListener("keydown", handleKeydown, true));
+		registerModal(() => activityDashboardStore.close());
 	});
 
 	const handleRowClick = (termId: string) => {

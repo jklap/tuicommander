@@ -2,6 +2,7 @@ import { type Component, createSignal, Match, onCleanup, onMount, Switch } from 
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { registerModal } from "../../stores/modalStack";
 import { writeClipboard } from "../../utils/clipboard";
 import { downloadText } from "../../utils/downloadText";
 import s from "./ChangelogModal.module.css";
@@ -17,6 +18,10 @@ export const ChangelogModal: Component<{ repoPath: string; onClose: () => void }
 	const [markdown, setMarkdown] = createSignal("");
 	const [error, setError] = createSignal<string | null>(null);
 	const [copied, setCopied] = createSignal(false);
+
+	// Escape-to-close handled centrally (stores/modalStack): closes this modal and
+	// keeps Escape from reaching the terminal underneath.
+	registerModal(props.onClose);
 
 	onMount(async () => {
 		try {

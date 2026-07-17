@@ -2,6 +2,7 @@ import { type Component, createSignal, Match, onMount, Switch } from "solid-js";
 import { t } from "../../i18n";
 import { invoke } from "../../invoke";
 import { appLogger } from "../../stores/appLogger";
+import { registerModal } from "../../stores/modalStack";
 import s from "./AutofixDialog.module.css";
 
 /** Backend `get_issue_detail` response. `autofix_prompt` is a pre-built,
@@ -52,6 +53,10 @@ export const AutofixDialog: Component<{
 		props.onConfirm(prompt());
 		props.onClose();
 	};
+
+	// Escape-to-close is handled centrally (stores/modalStack): registering routes
+	// Escape to props.onClose AND stops it reaching the terminal underneath.
+	registerModal(props.onClose);
 
 	return (
 		<div class={s.overlay} onClick={props.onClose}>
