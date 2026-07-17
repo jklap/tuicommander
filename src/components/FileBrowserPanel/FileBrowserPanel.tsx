@@ -161,6 +161,9 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 	// instance persists across repo switches (only props.repoPath changes), so a
 	// component-scoped map survives. (#72)
 	const rootToSubdir = new Map<string, string>();
+	// Per-root search filter memory: the filter is scoped to each repo, never shared
+	// across them. Saved/restored alongside the subdir on root switch. (#72)
+	const rootToSearchQuery = new Map<string, string>();
 	let contentRef: HTMLDivElement | undefined;
 	let searchInputRef: HTMLInputElement | undefined;
 	let pendingScrollRestore: string | null = null;
@@ -278,15 +281,21 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		// Restore subdir when root changes (merged from separate effect to avoid double fetch)
 		if (fsRoot !== lastRepoPath) {
 			// Remember where we were in the previous root before switching away. (#72)
-			if (lastRepoPath !== null)
+			if (lastRepoPath !== null) {
 				rootToSubdir.set(
 					lastRepoPath,
 					untrack(() => currentSubdir()),
 				);
+				rootToSearchQuery.set(
+					lastRepoPath,
+					untrack(() => searchQuery()),
+				);
+			}
 			lastRepoPath = fsRoot;
 			scrollCache.clear();
 			pendingScrollRestore = null;
 			setCurrentSubdir(rootToSubdir.get(fsRoot) ?? ".");
+			setSearchQuery(rootToSearchQuery.get(fsRoot) ?? "");
 		}
 
 		const subdir = currentSubdir();
