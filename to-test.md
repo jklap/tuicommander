@@ -1475,3 +1475,8 @@ worktree build's HTTP API on :9877 or the desktop app._
 ## CI auto-heal with a partially completed workflow (2026-07-13)
 
 - [x] A failed job is selected and its log is downloadable while a sibling job leaves the workflow `in_progress`; failed log retrieval or PTY delivery leaves the attempt count unchanged. _(verified: GitHub CLI probe against `Lansweeper/wiz-agents` run `29193902748` returned failed job `86653322376` logs while sibling job `86653322370` was still running; Rust parser tests and `useCiHeal.hook.test.ts` cover job selection and attempt accounting.)_
+
+## Markdown preview: inline comments anchor + highlight correctly (2026-07-15)
+
+- [ ] [VISUAL] Commenting a word that repeats many times in the doc (e.g. "reason" ×18) highlights the ACTUAL selected occurrence, not the first one. _(root cause: `findSourceMatch` used first-occurrence `indexOf`; fixed with DOM occurrence-ordinal → Nth source occurrence. Logic verified in `tweakComments.test.ts` incl. real-file offsets; visual anchor position needs an eye.)_
+- [ ] [VISUAL] Selecting text overlapping an existing highlight hides the "Add comment" button; keyboard-selecting over one and saving shows "That text already has a comment" instead of silently nesting/vanishing. _(logic verified: overlap-rejection + OverlappingCommentError; DOM pre-filter `rangeIntersectsHighlight` needs a visual check.)_
