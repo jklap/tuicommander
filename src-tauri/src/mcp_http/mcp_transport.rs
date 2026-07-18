@@ -8,8 +8,8 @@ use axum::response::IntoResponse;
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock};
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
 use uuid::Uuid;
@@ -135,6 +135,16 @@ fn now_unix_ms() -> u64 {
         .as_millis() as u64
 }
 
+/// Peer ownership spans several DashMaps, so registration/reconnect takeover
+/// must update them as one critical section rather than racing map-by-map.
+static PEER_IDENTITY_BIND_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+/// A bridge checks liveness every three seconds. A session is an active owner
+/// while it has a real SSE subscriber, or while requests arrived recently enough
+/// to cover one missed health tick. Mere presence in `mcp_sessions` is not
+/// liveness: entries intentionally remain for up to one hour.
+const MCP_OWNER_ACTIVITY_GRACE: std::time::Duration = std::time::Duration::from_secs(6);
+
 /// Cap for a peer message typed into a terminal. Longer messages become a
 /// pointer to the inbox rather than flooding the recipient's screen.
 const INJECT_MAX_BYTES: usize = 2048;
@@ -218,6 +228,42 @@ fn bind_peer_identity(
     project: Option<String>,
     registered_at: u64,
 ) {
+    let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+    bind_peer_identity_locked(state, mcp_sid, tuic_session, name, project, registered_at);
+}
+
+fn bind_peer_identity_locked(
+    state: &AppState,
+    mcp_sid: &str,
+    tuic_session: &str,
+    name: String,
+    project: Option<String>,
+    registered_at: u64,
+) {
+    let prior_mcp = state
+        .peer_agents
+        .get(tuic_session)
+        .map(|peer| peer.mcp_session_id.clone())
+        .filter(|prior| !prior.is_empty() && prior != mcp_sid);
+
+    // A reconnect changes the protocol-session id. Retire the old routing
+    // entries before publishing the replacement so inbox ownership cannot be
+    // split between the stale and current bridge.
+    if let Some(prior_mcp) = prior_mcp {
+        state
+            .mcp_to_session
+            .remove_if(&prior_mcp, |_, mapped| mapped == tuic_session);
+        let remove_reverse = if let Some(mut reverse) = state.session_to_mcp.get_mut(tuic_session) {
+            reverse.retain(|sid| sid != &prior_mcp);
+            reverse.is_empty()
+        } else {
+            false
+        };
+        if remove_reverse {
+            state.session_to_mcp.remove(tuic_session);
+        }
+    }
+
     state.peer_agents.insert(
         tuic_session.to_string(),
         crate::state::PeerAgent {
@@ -238,6 +284,46 @@ fn bind_peer_identity(
     if !reverse.iter().any(|s| s == mcp_sid) {
         reverse.push(mcp_sid.to_string());
     }
+}
+
+fn mcp_session_has_live_owner(state: &AppState, mcp_sid: &str) -> bool {
+    let has_sse_subscriber = state
+        .messaging_channels
+        .get(mcp_sid)
+        .is_some_and(|sender| sender.receiver_count() > 0);
+    if has_sse_subscriber {
+        return true;
+    }
+    state
+        .mcp_sessions
+        .get(mcp_sid)
+        .is_some_and(|meta| meta.last_activity.elapsed() <= MCP_OWNER_ACTIVITY_GRACE)
+}
+
+fn register_peer_identity(
+    state: &AppState,
+    mcp_sid: &str,
+    tuic_session: &str,
+    name: String,
+    project: Option<String>,
+    registered_at: u64,
+) -> Result<Option<String>, String> {
+    let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+    let prior_mcp = state
+        .peer_agents
+        .get(tuic_session)
+        .map(|peer| peer.mcp_session_id.clone())
+        .filter(|prior| !prior.is_empty() && prior != mcp_sid);
+
+    if prior_mcp
+        .as_deref()
+        .is_some_and(|prior| mcp_session_has_live_owner(state, prior))
+    {
+        return Err("tuic_session is already registered to another active MCP session".into());
+    }
+
+    bind_peer_identity_locked(state, mcp_sid, tuic_session, name, project, registered_at);
+    Ok(prior_mcp)
 }
 
 /// Auto-bind an MCP session to its PTY identity from the `x-tuic-session` header
@@ -2444,30 +2530,35 @@ fn handle_messaging(
                     return serde_json::json!({"error": "No MCP session — send an initialize request first"});
                 }
             };
-            // Don't let one MCP session claim a tuic_session that another, still-live
-            // session already owns — that would silently re-route the victim's inbox to
-            // the claimant. Re-registering from the same session (reconnect/rename) and
-            // taking over a stale binding whose session is gone are both still allowed.
-            if let Some(existing) = state.peer_agents.get(tuic_session) {
-                let prior_mcp = existing.mcp_session_id.clone();
-                if prior_mcp != mcp_sid
-                    && !prior_mcp.is_empty()
-                    && state.mcp_sessions.contains_key(&prior_mcp)
-                {
-                    return serde_json::json!({
-                        "error": "tuic_session is already registered to another active MCP session"
-                    });
-                }
-            }
             let name = args["name"].as_str().unwrap_or("agent").to_string();
             let project = args["project"].as_str().map(|s| s.to_string());
             let now_ms = now_unix_ms();
 
-            // Upsert peer + reverse indices via the shared binder (same path the
-            // initialize auto-bind uses, so the two never drift). Explicit
-            // register sets name/project verbatim; the guard above already
-            // prevented hijacking another live session's identity.
-            bind_peer_identity(state, &mcp_sid, tuic_session, name.clone(), project, now_ms);
+            // Presence in mcp_sessions is not proof of liveness: protocol sessions
+            // have a one-hour TTL. Reconnect may reclaim a stale owner, but not an
+            // actually subscribed/recently active one. The check and routing-map
+            // replacement share one lock to prevent concurrent takeovers.
+            let prior_mcp = match register_peer_identity(
+                state,
+                &mcp_sid,
+                tuic_session,
+                name.clone(),
+                project,
+                now_ms,
+            ) {
+                Ok(prior) => prior,
+                Err(error) => return serde_json::json!({"error": error}),
+            };
+            if let Some(prior_mcp) = prior_mcp {
+                tracing::warn!(
+                    source = "agent_msg",
+                    event = "stale_binding_takeover",
+                    tuic_session = %tuic_session,
+                    prior_mcp_session = %prior_mcp,
+                    mcp_session = %mcp_sid,
+                    "Reclaimed stale MCP peer binding after reconnect"
+                );
+            }
             let linked_children = link_pending_children_to_parent(state, &mcp_sid, tuic_session);
             // Identity bindings are security-relevant; record them (no message content).
             tracing::info!(
@@ -3421,6 +3512,31 @@ pub(super) async fn mcp_post(
         }
 
         "notifications/initialized" => StatusCode::ACCEPTED.into_response(),
+
+        // Standard MCP liveness request. The bridge uses this instead of
+        // rebuilding and serializing the complete tools/list payload every
+        // three seconds per terminal.
+        "ping" => {
+            if let Some(sid) = headers
+                .get(MCP_SESSION_HEADER)
+                .and_then(|v| v.to_str().ok())
+            {
+                refresh_mcp_session(
+                    &state,
+                    sid,
+                    detect_claude_code_from_headers(&headers),
+                    headers
+                        .get(TUIC_SESSION_HEADER)
+                        .and_then(|v| v.to_str().ok()),
+                );
+            }
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {}
+            }))
+            .into_response()
+        }
 
         "tools/list" => {
             let list_session_id = headers
@@ -4928,6 +5044,49 @@ mod tests {
         );
         assert_eq!(r["ok"], true);
         assert_eq!(state.peer_agents.get(tuic).unwrap().mcp_session_id, "mcp-2");
+    }
+
+    #[test]
+    fn mcp_regression_reconnect_reclaims_ttl_entry_and_retires_old_routing() {
+        let state = test_state();
+        let tuic = "550e8400-e29b-41d4-a716-446655440a01";
+        let first = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": tuic, "name": "lead"}),
+            Some("mcp-old"),
+        );
+        assert_eq!(first["ok"], true);
+        state.mcp_sessions.insert(
+            "mcp-old".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now()
+                    - MCP_OWNER_ACTIVITY_GRACE
+                    - std::time::Duration::from_secs(1),
+                is_claude_code: true,
+                has_sse_stream: true, // historical flag alone is not live ownership
+                repo_path: None,
+            },
+        );
+
+        let reconnected = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": tuic, "name": "lead"}),
+            Some("mcp-new"),
+        );
+
+        assert_eq!(reconnected["ok"], true, "{reconnected}");
+        assert_eq!(
+            state.peer_agents.get(tuic).unwrap().mcp_session_id,
+            "mcp-new"
+        );
+        assert!(
+            state.mcp_to_session.get("mcp-old").is_none(),
+            "stale protocol session must lose inbox ownership"
+        );
+        assert_eq!(
+            state.session_to_mcp.get(tuic).map(|entry| entry.clone()),
+            Some(vec!["mcp-new".to_string()])
+        );
     }
 
     #[test]

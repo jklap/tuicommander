@@ -5319,12 +5319,20 @@ pub(crate) async fn write_pty(
         stamp_input_ms(&state, &session_id);
 
         // Feed input through the line buffer to reconstruct user-typed lines
-        let input_entry = state
-            .input_buffers
-            .entry(session_id.clone())
-            .or_insert_with(|| parking_lot::Mutex::new(InputLineBuffer::new()));
-        let mut buf = input_entry.lock();
-        let actions = buf.feed(&data);
+        // Release both the inner mutex and DashMap entry guard before callbacks
+        // below. In particular, flush_pending_injections -> should_inject_now
+        // reads input_buffers again; retaining input_entry there self-deadlocks
+        // this shard and can park the entire IPC Tokio runtime under load.
+        let (actions, buffer_content) = {
+            let input_entry = state
+                .input_buffers
+                .entry(session_id.clone())
+                .or_insert_with(|| parking_lot::Mutex::new(InputLineBuffer::new()));
+            let mut buf = input_entry.lock();
+            let actions = buf.feed(&data);
+            let buffer_content = buf.content();
+            (actions, buffer_content)
+        };
         let mut line_submitted = false;
         for action in actions {
             match action {
@@ -5398,7 +5406,7 @@ pub(crate) async fn write_pty(
         let in_slash = if line_submitted {
             false
         } else {
-            buf.content().starts_with('/') || (buf.content().is_empty() && data == "/")
+            buffer_content.starts_with('/') || (buffer_content.is_empty() && data == "/")
         };
         state
             .slash_mode
@@ -5406,9 +5414,7 @@ pub(crate) async fn write_pty(
             .or_insert_with(|| std::sync::atomic::AtomicBool::new(false))
             .store(in_slash, std::sync::atomic::Ordering::Relaxed);
 
-        let composer_empty = buf.content().is_empty();
-        drop(buf);
-        if composer_empty {
+        if buffer_content.is_empty() {
             flush_pending_injections(&state, &session_id);
         }
 
@@ -11555,9 +11561,7 @@ mod tests {
             "the suggest drain must publish completed instead of an earlier idle"
         );
         let silence = state.silence_states.get(child_id).unwrap().clone();
-        assert!(emit_pending_suggest_if_idle(
-            &state, &silence, child_id
-        ));
+        assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
         let inbox = state.agent_inbox.get(parent_id).unwrap();
         assert_eq!(inbox.len(), 1);
         let content: serde_json::Value =

@@ -1532,6 +1532,14 @@ pub async fn start_server(
         .ipc_started
         .swap(true, std::sync::atomic::Ordering::AcqRel);
 
+    tracing::info!(
+        source = "mcp_http",
+        first_start,
+        mcp_enabled,
+        remote_enabled,
+        "HTTP server lifecycle starting"
+    );
+
     if first_start {
         // Spawn MCP session reaper: evicts stale protocol sessions every 60s (1h TTL)
         let reaper_state = state.clone();
@@ -1855,6 +1863,12 @@ pub async fn start_server(
 
     // Wait for shutdown signal
     let _ = shutdown_rx.await;
+
+    tracing::info!(
+        source = "mcp_http",
+        remote_enabled,
+        "TCP server lifecycle stopping; local MCP IPC remains active"
+    );
 
     // Abort only TCP-bound listeners — IPC listeners, reaper, and health
     // checker persist across restarts. Socket-file cleanup is deferred to the
@@ -2998,6 +3012,42 @@ mod tests {
         assert!(names.contains(&"ai_terminal_send_input"));
         // Count = base native tools + ai_terminal_* tools (may grow over time)
         assert_eq!(tools.len(), names.len());
+    }
+
+    #[tokio::test]
+    async fn mcp_regression_ping_is_lightweight_and_refreshes_session() {
+        let state = test_state();
+        state.mcp_sessions.insert(
+            "ping-session".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now() - std::time::Duration::from_secs(60),
+                is_claude_code: true,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
+        let app = build_router(state.clone(), false, true);
+        let body = serde_json::json!({"jsonrpc": "2.0", "id": 9, "method": "ping"});
+
+        let resp = app
+            .oneshot(mcp_post_with_session("/mcp", &body, "ping-session"))
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(json["result"], serde_json::json!({}));
+        assert!(
+            state
+                .mcp_sessions
+                .get("ping-session")
+                .unwrap()
+                .last_activity
+                .elapsed()
+                < std::time::Duration::from_secs(1)
+        );
     }
 
     #[tokio::test]

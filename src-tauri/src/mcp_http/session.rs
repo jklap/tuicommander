@@ -174,14 +174,22 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
 
     // Feed input through InputLineBuffer FSM to track slash_mode accurately.
     // The old substring heuristic false-positived on pastes starting with '/'.
-    let input_entry = state
-        .input_buffers
-        .entry(session_id.to_string())
-        .or_insert_with(|| {
-            parking_lot::Mutex::new(crate::input_line_buffer::InputLineBuffer::new())
-        });
-    let mut buf = input_entry.lock();
-    let actions = buf.feed(data);
+    // Copy the FSM result and composer content, then release BOTH the inner
+    // mutex and DashMap entry guard before any transition/delivery callback.
+    // `flush_pending_injections` re-reads input_buffers; retaining the entry
+    // guard across that call self-deadlocks its DashMap shard.
+    let (actions, buffer_content) = {
+        let input_entry = state
+            .input_buffers
+            .entry(session_id.to_string())
+            .or_insert_with(|| {
+                parking_lot::Mutex::new(crate::input_line_buffer::InputLineBuffer::new())
+            });
+        let mut buf = input_entry.lock();
+        let actions = buf.feed(data);
+        let buffer_content = buf.content();
+        (actions, buffer_content)
+    };
     let interrupted = actions
         .iter()
         .any(|a| matches!(a, crate::input_line_buffer::InputAction::Interrupt));
@@ -207,7 +215,7 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
     // unreliable. Use multiple signals:
     let in_slash = if line_submitted {
         false
-    } else if buf.content().starts_with('/') {
+    } else if buffer_content.starts_with('/') {
         true
     } else if data == "/" {
         // Fresh slash keystroke from PWA/MCP — always enters slash mode
@@ -225,7 +233,7 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
     };
     tracing::trace!(
         "write_pty slash_mode: in_slash={in_slash} buf='{}' data='{}'",
-        buf.content(),
+        buffer_content,
         data
     );
     state
@@ -233,9 +241,7 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
         .entry(session_id.to_string())
         .or_insert_with(|| std::sync::atomic::AtomicBool::new(false))
         .store(in_slash, std::sync::atomic::Ordering::Relaxed);
-    let composer_empty = buf.content().is_empty();
-    drop(buf);
-    if composer_empty {
+    if buffer_content.is_empty() {
         crate::pty::flush_pending_injections(state, session_id);
     }
 }
@@ -1756,6 +1762,34 @@ pub(super) async fn terminal_request_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mcp_regression_input_bookkeeping_releases_guard_before_pending_delivery() {
+        let state = super::super::tests::test_state();
+        let session_id = "deadlock-regression";
+        state.session_states.insert(
+            session_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                ..Default::default()
+            },
+        );
+        state
+            .pending_injections
+            .entry(session_id.to_string())
+            .or_default()
+            .push_back("queued message".to_string());
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            apply_input_bookkeeping(&state, session_id, "\r");
+            let _ = done_tx.send(());
+        });
+
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .expect("input bookkeeping must not self-deadlock while checking pending delivery");
+    }
 
     // is_separator_line tests live in chrome.rs (canonical location)
 

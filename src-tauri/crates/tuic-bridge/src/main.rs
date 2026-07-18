@@ -417,7 +417,7 @@ fn emit_offline_response(method: &str, id: &Value) {
         "tools/call" => emit(&serde_json::json!({
             "jsonrpc": "2.0", "id": id,
             "result": {
-                "content": [{ "type": "text", "text": "TUICommander is not running. Start it to use MCP tools." }],
+                "content": [{ "type": "text", "text": "TUICommander MCP is unavailable. The app may still be running; enable its MCP server and retry." }],
                 "isError": true
             }
         })),
@@ -447,13 +447,16 @@ async fn main() {
     });
 
     // Try initial connection
-    if let Ok((sid, _)) = server_initialize().await {
-        eprintln!("tuic-bridge: connected to TUIC");
-        *state.session_id.lock().unwrap() = Some(sid);
-        state.connected.store(true, Ordering::Release);
-        start_sse_listener(&state);
-    } else {
-        eprintln!("tuic-bridge: TUIC not running, will retry in background");
+    match server_initialize().await {
+        Ok((sid, _)) => {
+            eprintln!("tuic-bridge: connected to TUIC");
+            *state.session_id.lock().unwrap() = Some(sid);
+            state.connected.store(true, Ordering::Release);
+            start_sse_listener(&state);
+        }
+        Err(error) => {
+            eprintln!("tuic-bridge: MCP endpoint unavailable, will retry in background: {error}");
+        }
     }
 
     // Background reconnection loop. Hysteresis: disconnect only after N consecutive
@@ -469,7 +472,7 @@ async fn main() {
                 let sid = bg_state.session_id.lock().unwrap().clone();
                 let health = post_mcp(
                     &serde_json::to_string(
-                        &serde_json::json!({"jsonrpc":"2.0","id":0,"method":"tools/list"}),
+                        &serde_json::json!({"jsonrpc":"2.0","id":0,"method":"ping"}),
                     )
                     .unwrap(),
                     sid.as_deref(),

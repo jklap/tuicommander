@@ -13,6 +13,8 @@ The server has two independent listeners:
 
 The `mcp_server_enabled` config flag controls whether the `/mcp` protocol route is active (MCP tool discovery and invocation), not whether the server itself starts. The HTTP API endpoints (sessions, git, config, etc.) are always available on the IPC listener.
 
+The local IPC listener is independent from the **Remote Access** TCP toggle. Turning remote access on or off only starts or stops the authenticated TCP listener; it does not disable `mcp.sock` or the local MCP route. Lifecycle logs state whether a transition affects TCP or the always-on IPC listener.
+
 Configuration via Settings > Services, or `config.json`:
 
 ```json
@@ -152,6 +154,10 @@ Client ──DELETE─> /mcp  (end session, pass Mcp-Session-Id header)
 ```
 
 The `GET /mcp` SSE stream emits `notifications/tools/list_changed` whenever the available tool set changes (e.g., native tools are enabled/disabled via config, or upstream MCP servers connect/disconnect). The bridge sidecar subscribes to this stream and forwards the notification to the AI agent.
+
+The bridge uses the standard MCP `ping` request for its three-second liveness check. This keeps health traffic constant-size as terminal count grows; it does not rebuild or serialize the complete tool catalog. If IPC is reachable but `/mcp` is unavailable, the bridge reports that the MCP endpoint is unavailable instead of incorrectly claiming the desktop process is not running.
+
+On reconnect, a peer may reclaim its stable TUIC identity after the prior MCP protocol session has no live SSE subscriber and has missed the bridge activity grace period. The takeover retires the old forward and reverse routing entries atomically. A currently subscribed or recently active owner cannot be replaced.
 
 ### Lazy Tool Discovery (`collapse_tools`)
 

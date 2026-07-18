@@ -264,7 +264,7 @@ fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Re
     }
 
     if server_changed {
-        restart_server(state.inner());
+        restart_server(state.inner(), "remote-access configuration changed");
     }
 
     Ok(())
@@ -909,10 +909,22 @@ async fn provision_tls_config(
 
 #[cfg(feature = "desktop")]
 /// Restart the HTTP/MCP server with fresh TLS config (reuses the shutdown/spawn pattern from save_config).
-fn restart_server(state: &Arc<AppState>) {
+fn restart_server(state: &Arc<AppState>, reason: &'static str) {
+    tracing::info!(
+        source = "mcp_http",
+        reason,
+        remote_enabled = state.config.read().services.server.enabled,
+        "HTTP server reconfiguration requested; local MCP IPC remains active"
+    );
     // Shutdown existing server
     if let Some(tx) = state.server_shutdown.lock().take() {
-        let _ = tx.send(());
+        if tx.send(()).is_err() {
+            tracing::warn!(
+                source = "mcp_http",
+                reason,
+                "Previous TCP server lifecycle had already stopped"
+            );
+        }
     }
     let remote_enabled = state.config.read().services.server.enabled;
     let state_arc = state.clone();
@@ -973,7 +985,7 @@ async fn recheck_tailscale_status(
             new_https,
             "HTTPS state changed, restarting server"
         );
-        restart_server(&state);
+        restart_server(&state, "Tailscale HTTPS availability changed");
     }
 
     Ok(new_state)

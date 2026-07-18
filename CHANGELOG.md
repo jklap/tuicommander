@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Fixed local MCP socket stalls under multi-agent load caused by re-entering an `input_buffers` DashMap shard while its entry guard was still held; bridge health checks now use constant-size MCP `ping`, report endpoint availability accurately, and safely reclaim stale peer bindings after reconnect.
+
 ### Fixed
 - **Agent completion is no longer reported as generic idle** — Session list/status and HTTP session state now expose task-level `agent_state` separately from PTY `shell_state`. The explicit `suggest:` end marker reports `completed`; silence without that marker remains `idle`, and spawned-agent lifecycle mail preserves the same distinction.
 - **Autonomous agent delivery no longer corrupts active turns** — Idle-to-busy injection now uses an atomic composer claim, publishes the idle event before any queued wake-up can make the session busy again, and submits at most one queued message per agent turn. The MCP bridge reads bounded HTTP response bodies instead of waiting for socket EOF, preserves a valid identity across one-off transport errors, and repairs identity bindings on subsequent calls. The CLI now bounds IPC waits and submits agent messages as separate framed payload and Enter writes.
