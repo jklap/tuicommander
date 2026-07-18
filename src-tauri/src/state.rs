@@ -217,6 +217,10 @@ pub(crate) struct SessionState {
     /// Computed on-the-fly when serializing; None for sessions with no output yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shell_state: Option<String>,
+    /// Agent task lifecycle, distinct from PTY activity. `completed` requires
+    /// the explicit `suggest:` protocol marker; silence alone remains `idle`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_state: Option<String>,
     /// Timestamp of last activity (any event for this session).
     /// Excluded from PartialEq — telemetry field, not logical state.
     pub last_activity_ms: u64,
@@ -275,6 +279,7 @@ impl PartialEq for SessionState {
             && self.retry_after_ms == other.retry_after_ms
             && self.usage_limit_pct == other.usage_limit_pct
             && self.shell_state == other.shell_state
+            && self.agent_state == other.agent_state
             && self.agent_type == other.agent_type
             && self.last_error == other.last_error
             && self.agent_intent == other.agent_intent
@@ -1997,6 +2002,24 @@ impl AppState {
                 crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed))
                     .to_string()
             });
+            state.agent_state = if state.agent_type.is_none() {
+                None
+            } else if state.awaiting_input || state.choice_prompt.is_some() {
+                Some("awaiting_input".to_string())
+            } else if state.shell_state.as_deref() == Some("busy") {
+                Some("working".to_string())
+            } else if state.suggested_actions.is_some()
+                || self
+                    .silence_states
+                    .get(session_id)
+                    .is_some_and(|silence| silence.lock().completion_declared())
+            {
+                Some("completed".to_string())
+            } else if state.shell_state.as_deref() == Some("idle") {
+                Some("idle".to_string())
+            } else {
+                Some("starting".to_string())
+            };
             state
         })
     }

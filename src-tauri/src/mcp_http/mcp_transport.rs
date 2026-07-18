@@ -460,7 +460,7 @@ fn native_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta poll: since_cursor=<previous cursor> returns only new lines — very cheap, use for monitoring. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Shell state for a session: {shell_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}. Use to poll agent progress without streaming output.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state, exit_code}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns shell_state (PTY activity) and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker).\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta poll: since_cursor=<previous cursor> returns only new lines — very cheap, use for monitoring. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state: {shell_state, agent_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state, exit_code}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats" },
                 "session_id": { "type": "string", "description": "Session ID (required for input, output, resize, close, pause, resume, wait)" },
@@ -1246,9 +1246,13 @@ fn handle_session(
                 let process_name = pgid.and_then(|p| crate::pty::process_name_from_pid(p as u32));
                 #[cfg(windows)]
                 let process_name = pgid.and_then(crate::pty::process_name_from_pid);
-                let shell_state = state.shell_states.get(&id).map(|atom| {
-                    crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed))
-                });
+                let session_state = state.session_state_with_shell(&id);
+                let shell_state = session_state
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.shell_state.clone());
+                let agent_state = session_state
+                    .as_ref()
+                    .and_then(|snapshot| snapshot.agent_state.clone());
                 let alias = state.term_aliases.get(&id).map(|e| e.value().clone());
                 #[cfg(unix)]
                 let standby = state.standby_sessions.contains_key(id.as_str());
@@ -1264,6 +1268,7 @@ fn handle_session(
                     "foreground_pgid": pgid,
                     "foreground_process": process_name,
                     "shell_state": shell_state,
+                    "agent_state": agent_state,
                     "standby": standby,
                 })
             }).collect();
@@ -1625,6 +1630,7 @@ fn handle_session(
                     serde_json::json!({
                         "session_id": session_id,
                         "shell_state": ss.shell_state,
+                        "agent_state": ss.agent_state,
                         "agent_type": ss.agent_type,
                         "awaiting_input": ss.awaiting_input,
                         "rate_limited": ss.rate_limited,
@@ -2492,7 +2498,7 @@ fn handle_messaging(
                     "spawn_same_repo": "agent action=spawn prompt=<task> cwd=<repo_path> — returns {session_id, monitor_with, peer_monitor_with?, wait_with}. As orchestrator, prefer wait/inbox over raw session output to avoid token burn.",
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
                     "monitor": "PREFER blocking waits over polling: agent action=wait since=<last_ms> (wakes on new mail) or session action=wait session_id=<id> until=idle|exited. Each returns {met, timed_out}; on timed_out just call again. NEVER session output on peers (token burn).",
-                    "auto_state_change": "Spawned peers auto-post {type:state_change, state:idle|exited, session_id, exit_code?} to your inbox AND wake your terminal — no manual send needed for lifecycle.",
+                    "auto_state_change": "Spawned peers auto-post {type:state_change, state:idle|completed|exited, session_id, exit_code?} to your inbox AND wake your terminal — completed requires the explicit suggest marker.",
                     "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is always buffered in the inbox and is TYPED into an idle peer's terminal so it acts immediately; a busy peer gets it on its next idle transition. Response `accepted=true` confirms delivery acceptance; `delivered_via_channel` only reports the optional SSE path.",
                     "list_peers": "agent action=list_peers project=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
@@ -7382,6 +7388,36 @@ mod tests {
         assert!(
             result["shell_state"].as_str().is_some(),
             "shell_state must be in status response: {result}"
+        );
+    }
+
+    #[test]
+    fn session_status_distinguishes_declared_completion_from_idle() {
+        let state = test_state();
+        let sid = "s-completed-test";
+        state.session_states.insert(
+            sid.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                suggested_actions: Some(vec!["Review result".to_string()]),
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+
+        let result = handle_session(
+            &state,
+            &serde_json::json!({"action": "status", "session_id": sid}),
+            None,
+        );
+
+        assert_eq!(result["shell_state"], "idle");
+        assert_eq!(
+            result["agent_state"], "completed",
+            "an explicit suggest marker is task completion, not generic idle: {result}"
         );
     }
 

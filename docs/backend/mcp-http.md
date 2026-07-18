@@ -256,9 +256,16 @@ registerDebugSnapshot("storeName", () => ({ /* fields to expose */ }));
 
 ### MCP Tool: `session` Output
 
-The `session` tool's `action=output` strips ANSI escape codes by default, returning clean text suitable for AI consumption. Pass `format="raw"` to preserve escape sequences (e.g. for terminal rendering). The `action=list` response includes process details per session: `child_pid`, `foreground_pgid`, and `foreground_process`.
+The `session` tool's `action=output` strips ANSI escape codes by default, returning clean text suitable for AI consumption. Pass `format="raw"` to preserve escape sequences (e.g. for terminal rendering). The `action=list` response includes process details per session: `child_pid`, `foreground_pgid`, `foreground_process`, `shell_state`, and `agent_state`.
 
 `Global overview: session action=list` — one call; no per-session `status` fan-out.
+
+`shell_state` is PTY activity (`busy` or `idle`); it is not task completion.
+For detected agents, `agent_state` is `starting`, `working`, `awaiting_input`,
+`idle`, or `completed`. Completion requires the explicit end-of-task
+`suggest: [ ... ]` protocol marker. A quiet ready prompt without that marker
+remains `idle`. Spawned-agent lifecycle mail uses `completed` for the same
+marker and reserves `idle` for an unclassified ready state.
 
 | Param | Default | Description |
 |-------|---------|-------------|

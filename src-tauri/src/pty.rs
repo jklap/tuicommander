@@ -718,6 +718,11 @@ pub(crate) struct SilenceState {
     /// diagnostics only — the flush decision is driven by `last_output_at`,
     /// not the park time.
     pending_suggest_at: Option<std::time::Instant>,
+    /// The agent emitted the protocol's explicit end-of-task marker for the
+    /// current input epoch. Unlike the pending item payload, this survives the
+    /// one-shot Suggest event drain so status/list can distinguish completed
+    /// work from a merely quiet ready prompt.
+    completion_declared: bool,
     /// True after an explicit OSC 133 / OSC 7770 busy marker and until an
     /// explicit idle marker or a confirmed ready screen. Silence alone must not
     /// override this state: hooks are stronger evidence than output timing.
@@ -781,6 +786,7 @@ impl SilenceState {
             surfaced_tool_errors: std::collections::HashSet::new(),
             pending_suggest_items: None,
             pending_suggest_at: None,
+            completion_declared: false,
             explicit_busy: false,
             hook_busy: false,
             explicit_idle: false,
@@ -955,6 +961,7 @@ impl SilenceState {
 
     pub(crate) fn note_user_submission(&mut self, has_ready_adapter: bool) {
         self.interrupt_requested_at = None;
+        self.completion_declared = false;
         self.note_busy_evidence();
         if has_ready_adapter {
             self.explicit_busy = true;
@@ -1242,6 +1249,7 @@ impl SilenceState {
         if items.is_empty() {
             return;
         }
+        self.completion_declared = true;
         self.pending_suggest_items = Some(items);
         self.pending_suggest_at = Some(std::time::Instant::now());
     }
@@ -1261,6 +1269,11 @@ impl SilenceState {
     pub(crate) fn reset_suggest_memory(&mut self) {
         self.pending_suggest_items = None;
         self.pending_suggest_at = None;
+        self.completion_declared = false;
+    }
+
+    pub(crate) fn completion_declared(&self) -> bool {
+        self.completion_declared
     }
 
     /// Returns true if the session has been silent long enough and the spinner
@@ -1343,7 +1356,11 @@ fn try_shell_transition(
                 .get(session_id)
                 .map(|s| s.agent_type.is_some())
                 .unwrap_or(false);
-            if is_agent {
+            let completion_declared = state
+                .silence_states
+                .get(session_id)
+                .is_some_and(|silence| silence.lock().completion_declared());
+            if is_agent && !completion_declared {
                 push_state_change_to_parent(
                     state,
                     session_id,
@@ -2057,24 +2074,7 @@ fn spawn_silence_timer(
             // (see write_pty's emit loop); gating the drain on shell_state ==
             // IDLE makes the frontend's `pendingSuggest` race impossible —
             // the event physically cannot reach the UI before idle.
-            let shell_is_idle = state
-                .shell_states
-                .get(&session_id)
-                .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_IDLE)
-                .unwrap_or(false);
-            if shell_is_idle && let Some(items) = silence.lock().drain_pending_suggest() {
-                let parsed = ParsedEvent::Suggest { items };
-                if let Ok(json) = serde_json::to_value(&parsed) {
-                    #[cfg(feature = "desktop")]
-                    if let Some(app) = state.app_handle.read().as_ref() {
-                        let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
-                    }
-                    state.emit_pty_event(crate::state::AppEvent::PtyParsed {
-                        session_id: session_id.clone(),
-                        parsed: json,
-                    });
-                }
-            }
+            emit_pending_suggest_if_idle(&state, &silence, &session_id);
 
             // Check temporal conditions first (shared by both strategies).
             let is_silent = silence.lock().is_silent();
@@ -2169,6 +2169,48 @@ fn spawn_silence_timer(
             }
         }
     });
+}
+
+/// Publish the explicit end-of-task marker only after the shell has settled.
+/// A completed lifecycle event is emitted from the same drain point, so an
+/// orchestrator never has to reinterpret an ambiguous BUSY→IDLE transition.
+fn emit_pending_suggest_if_idle(
+    state: &AppState,
+    silence: &Arc<Mutex<SilenceState>>,
+    session_id: &str,
+) -> bool {
+    let shell_is_idle = state
+        .shell_states
+        .get(session_id)
+        .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_IDLE)
+        .unwrap_or(false);
+    if !shell_is_idle {
+        return false;
+    }
+    let Some(items) = silence.lock().drain_pending_suggest() else {
+        return false;
+    };
+    let parsed = ParsedEvent::Suggest { items };
+    if let Ok(json) = serde_json::to_value(&parsed) {
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
+        }
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: json,
+        });
+    }
+    push_state_change_to_parent(
+        state,
+        session_id,
+        serde_json::json!({
+            "type": "state_change",
+            "state": "completed",
+            "session_id": session_id,
+        }),
+    );
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -11475,6 +11517,52 @@ mod tests {
             serde_json::from_str(&msg.content).expect("content must be valid JSON");
         assert_eq!(content["type"], "state_change");
         assert_eq!(content["state"], "idle");
+    }
+
+    #[test]
+    fn declared_completion_does_not_emit_ambiguous_idle_lifecycle() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "child-completed-sess";
+        let parent_id = "parent-completed-sess";
+
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+        state.session_states.insert(
+            child_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            child_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+        );
+        let mut silence = SilenceState::new();
+        silence.mark_suggest_candidate(vec!["Review result".to_string()]);
+        state
+            .silence_states
+            .insert(child_id.to_string(), Arc::new(Mutex::new(silence)));
+
+        assert!(try_shell_transition(
+            &state, child_id, SHELL_BUSY, SHELL_IDLE, true
+        ));
+
+        assert!(
+            state.agent_inbox.get(parent_id).unwrap().is_empty(),
+            "the suggest drain must publish completed instead of an earlier idle"
+        );
+        let silence = state.silence_states.get(child_id).unwrap().clone();
+        assert!(emit_pending_suggest_if_idle(
+            &state, &silence, child_id
+        ));
+        let inbox = state.agent_inbox.get(parent_id).unwrap();
+        assert_eq!(inbox.len(), 1);
+        let content: serde_json::Value =
+            serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+        assert_eq!(content["state"], "completed");
     }
 
     #[test]
