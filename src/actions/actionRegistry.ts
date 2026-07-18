@@ -9,7 +9,6 @@ import type { ShortcutHandlers } from "../hooks/useKeyboardShortcuts";
 import type { ActionName } from "../keybindingDefaults";
 import { keybindingsStore } from "../stores/keybindings";
 import { settingsStore } from "../stores/settings";
-import { terminalsStore } from "../stores/terminals";
 import { tunnelPanelStore } from "../stores/tunnelPanel";
 import { comboToDisplay } from "../utils/hotkey";
 
@@ -113,10 +112,7 @@ export function getActionEntries(handlers: ShortcutHandlers): ActionEntry[] {
 
 	const handlerMap: Partial<Record<ActionName, () => void>> = {
 		"new-terminal": handlers.createNewTerminal,
-		"close-terminal": () => {
-			const activeId = terminalsStore.state.activeId;
-			if (activeId) handlers.closeTerminal(activeId);
-		},
+		"close-terminal": handlers.closeActiveTabOrPane,
 		"reopen-closed-tab": handlers.reopenClosedTab,
 		"clear-terminal": handlers.clearTerminal,
 		"refresh-terminal": handlers.refreshTerminal,

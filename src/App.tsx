@@ -424,6 +424,19 @@ const App: Component = () => {
 
 	const splitPanes = useSplitPanes();
 
+	// Single decision for every "close terminal / close tab" entry point
+	// (keyboard, command palette, native menu). In split mode close the active
+	// pane — which cancels a freshly-split empty pane instead of destroying a
+	// terminal; otherwise close the active terminal tab.
+	const closeActiveTabOrPane = () => {
+		if (paneLayoutStore.isSplit()) {
+			splitPanes.closeActivePane();
+		} else {
+			const activeId = terminalsStore.state.activeId;
+			if (activeId) terminalLifecycle.closeTerminal(activeId);
+		}
+	};
+
 	// Register pane tab auto-assignment hook (must be after store imports)
 	initPaneTabAssignment();
 
@@ -1415,10 +1428,7 @@ const App: Component = () => {
 		{
 			label: "Close Terminal",
 			shortcut: keyFor("close-terminal"),
-			action: () => {
-				const activeId = terminalsStore.state.activeId;
-				if (activeId) terminalLifecycle.closeTerminal(activeId);
-			},
+			action: closeActiveTabOrPane,
 			separator: true,
 		},
 	];
@@ -1768,6 +1778,7 @@ const App: Component = () => {
 		toggleZoomPane: splitPanes.toggleZoomPane,
 		toggleFocusMode: uiStore.toggleFocusMode,
 		closeActivePane: splitPanes.closeActivePane,
+		closeActiveTabOrPane,
 		terminalIds: terminalLifecycle.terminalIds,
 		handleTerminalSelect: terminalLifecycle.handleTerminalSelect,
 		handleSplit: splitPanes.handleSplit,
@@ -2225,12 +2236,7 @@ const App: Component = () => {
 					gitOps.handleNewTab();
 					break;
 				case "close-tab": {
-					if (paneLayoutStore.isSplit()) {
-						splitPanes.closeActivePane();
-					} else {
-						const activeId = terminalsStore.state.activeId;
-						if (activeId) terminalLifecycle.closeTerminal(activeId);
-					}
+					closeActiveTabOrPane();
 					break;
 				}
 				case "reopen-closed-tab":
