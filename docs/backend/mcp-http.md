@@ -258,6 +258,8 @@ registerDebugSnapshot("storeName", () => ({ /* fields to expose */ }));
 
 The `session` tool's `action=output` strips ANSI escape codes by default, returning clean text suitable for AI consumption. Pass `format="raw"` to preserve escape sequences (e.g. for terminal rendering). The `action=list` response includes process details per session: `child_pid`, `foreground_pgid`, and `foreground_process`.
 
+`Global overview: session action=list` — one call; no per-session `status` fan-out.
+
 | Param | Default | Description |
 |-------|---------|-------------|
 | `limit` | `8192` | Max bytes to read |
@@ -265,9 +267,12 @@ The `session` tool's `action=output` strips ANSI escape codes by default, return
 | `since_cursor` | (none) | Cursor from a previous response — returns only new scrollback lines since this position |
 
 `session action=input` and HTTP `POST /sessions/:id/write` share the same PTY
-write path: each write is flushed, stamps `last_input_ms`, and feeds the
-`InputLineBuffer` so slash-mode tracking stays identical for MCP and remote web
-clients.
+bookkeeping: each write stamps `last_input_ms` and feeds the `InputLineBuffer`
+so slash-mode tracking stays identical for MCP and remote web clients. When a
+combined text + Enter request targets a prefill-only agent such as Codex or
+OpenCode, MCP uses the canonical agent-submit sequence (Ctrl-U, bracketed paste
+for multiline text, a flushed scheduling gap, then CR). Other text/key pairs,
+including Claude's established input path, retain raw pair semantics.
 
 **Delta reads:** The non-raw output path returns a `cursor` field (monotonic scrollback position). Pass `since_cursor` on subsequent calls to receive only new lines since that position, avoiding full re-reads. The `total_written` field is kept alongside `cursor` for backwards compatibility. When `since_cursor` is provided, screen rows are excluded — only scrollback log lines are returned.
 
@@ -394,6 +399,51 @@ OAuth callbacks arrive exclusively through the OS-level `tuic://` deep link — 
 
 The `agent` tool's messaging actions (`register`, `list_peers`, `send`, `inbox`) enable coordination between multiple AI agents connected to TUICommander.
 
+For `agent action=spawn`, `prompt` is always delivered. Caller-supplied `args`
+that contain `{prompt}` remain authoritative and receive direct substitution.
+Flags-only `args` keep their order; normal CLIs receive the prompt as the final
+positional argument, while prefill-only interactive TUIs receive it through the
+deferred PTY-injection path after their ready prompt appears.
+
+`name` optionally assigns a non-empty peer and PTY display name at spawn time.
+The parent-assigned name is stored before prompt delivery, returned in the spawn
+response, exposed by `list_peers`, and preserved when the child later auto-binds
+its MCP connection. This avoids making identity depend on the child successfully
+executing a registration instruction in its initial prompt.
+
+Every managed child is registered server-side and receives an inbox immediately,
+even when the caller has no bound peer identity. A registered parent additionally
+creates the bidirectional relationship: the child prompt receives its parent ID
+and send instruction, while the spawn response returns `communication_ready`,
+`send_to`, and `parent_session_id`. An unregistered caller receives
+`communication_ready=false` plus a warning instead of a false two-way guarantee.
+The spawn still records the caller's MCP session as a pending parent: a later
+`register` call links existing children to the stable parent UUID and migrates
+any lifecycle notifications emitted before registration.
+
+Deferred initial prompts use a one-shot internal watchdog. Successful PTY
+submission removes the marker silently. A prompt still pending after 30 seconds
+emits one `prompt_delivery_failed` message to the parent; there is no success
+event, delivery polling, or public delivery-state machine.
+
+PTY wake-up injection is allowed only when the recipient is idle, its composer
+buffer is empty, and no confident question or approval is active. Busy agents
+and recipients with partially typed input keep the message queued. Clearing or
+submitting the composer rechecks the queue; an active `agent wait` wakes from the
+inbox instead of requiring terminal injection or client polling.
+
+The final injection decision atomically claims `idle -> busy`, closing the race
+between observing a ready screen and writing to the PTY. Idle is published before
+the queued-message flush, and each idle transition submits at most one queued
+message; remaining messages wait for later turns. This keeps backend state and UI
+events ordered and prevents lifecycle reports from overwriting an active composer.
+
+The stdio bridge reads each IPC HTTP response through its declared
+`Content-Length` rather than waiting for connection EOF. A single transport error
+does not discard the current MCP identity; subsequent authenticated calls refresh
+the session-to-terminal binding. This avoids ten-second stalls and false
+unregistered states when the IPC server keeps sockets alive.
+
 ### Protocol
 
 0. **Auto-identity** *(no call needed)*: `tuic-bridge` inherits `$TUIC_SESSION` from the agent
@@ -405,6 +455,9 @@ The `agent` tool's messaging actions (`register`, `list_peers`, `send`, `inbox`)
 1. **Register** *(optional)*: sets a friendly name/project on the already-bound identity.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by project).
 3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
+   `accepted=true` and `buffered_in_inbox=true` acknowledge success;
+   `delivered_via_channel` describes only the optional SSE path, while
+   `delivery_path` distinguishes SSE from terminal-or-queued delivery.
 4. **Receive** — three layers, most-immediate first:
    - **Channel push**: real-time `notifications/claude/channel` when the recipient holds an SSE stream (CC + channels flag).
    - **PTY injection**: for any idle agent without a live channel, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it acts on its next turn without polling. A busy recipient's message is queued and flushed on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead.
@@ -413,6 +466,14 @@ The `agent` tool's messaging actions (`register`, `list_peers`, `send`, `inbox`)
    `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. Server-side
    100 ms poll, default 5 s / cap 8 s (kept under the bridge's 10 s read timeout). Returns
    `{met, timed_out}`; re-call on `timed_out`.
+
+Blocking waits and terminal wake-up use a per-recipient delivery lease. Each
+message is atomically assigned to exactly one wake-up owner: an active waiter,
+or SSE/PTY delivery. The deadline path performs its final inbox check while
+releasing the lease, and cancellation hands unobserved waiter-owned messages
+back to terminal delivery. This removes both duplicate inbox+terminal turns and
+the missed-wake race at the wait timeout boundary; inbox visibility itself is
+unchanged and remains backward compatible.
 
 Spawned peers additionally auto-post a `state_change` (`idle` / `exited`) to the parent's inbox
 **and** wake the parent's terminal, so an orchestrator never polls for child lifecycle.

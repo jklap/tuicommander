@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Autonomous agent delivery no longer corrupts active turns** — Idle-to-busy injection now uses an atomic composer claim, publishes the idle event before any queued wake-up can make the session busy again, and submits at most one queued message per agent turn. The MCP bridge reads bounded HTTP response bodies instead of waiting for socket EOF, preserves a valid identity across one-off transport errors, and repairs identity bindings on subsequent calls. The CLI now bounds IPC waits and submits agent messages as separate framed payload and Enter writes.
+- **Codex MCP spawn and submit reliability** — `agent action=spawn` no longer drops the required task when callers pass flags through explicit `args`; interactive Codex/OpenCode sessions defer that task through the existing ready-screen injection path. Combined MCP `session input` text + Enter now uses the required split-write gap for those prefill-only TUIs instead of leaving text unsubmitted in the composer. Claude's established input path and default spawn argv remain unchanged.
+- **Spawned-agent communication bootstrap** — Every MCP-spawned child is now registered server-side with an inbox before prompt delivery. Registered parents and children receive explicit reciprocal addressing, while callers without a bound peer identity get a warning instead of a false bidirectional guarantee. If that caller registers later, existing children and any early lifecycle messages are linked to the new parent identity. Send acknowledgments now distinguish accepted inbox delivery from the optional SSE channel path. Deferred prompts emit a single parent error only if still undelivered after the internal timeout; successful delivery remains silent and requires no polling.
+- **Peer messages no longer overwrite partially typed input** — Terminal wake-up injection now requires an idle recipient with an empty composer and no active question or approval. Messages remain queued while the user or agent has draft input; clearing or submitting the composer safely rechecks delivery, while `agent wait` continues to wake directly from the inbox.
+- **Peer delivery no longer leaves ghost busy sessions or races blocking waits** — Idle composer claims now roll back only when PTY delivery provably wrote no bytes; partial or ambiguous writes remain conservatively busy and surface `delivery_uncertain` without an automatic duplicate retry. Per-message delivery leases atomically hand each wake-up to either `agent wait` or SSE/PTY delivery, including deadline and cancellation races.
+
+### Added
+- **Names for MCP-spawned agents** — `agent action=spawn` accepts an optional `name`, assigns it to both the peer identity and PTY session before prompt delivery, returns it in the spawn response, and preserves it when the child later auto-binds its MCP connection.
+
 ## [1.6.1] - 2026-07-15
 
 ### Added

@@ -875,6 +875,27 @@ pub struct AgentMessage {
     pub delivered_via_channel: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentDeliveryOwner {
+    Waiter,
+    WaiterObserved,
+    TerminalPending,
+    TerminalDispatched,
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct AgentDeliveryGate {
+    next_lease: u64,
+    active_waiters: std::collections::HashSet<u64>,
+    owners: HashMap<String, AgentDeliveryOwner>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct AgentWaitFinish {
+    pub fresh_count: usize,
+    pub terminal_handoff: Vec<String>,
+}
+
 /// Max messages per agent inbox before FIFO eviction.
 pub(crate) const AGENT_INBOX_CAPACITY: usize = 100;
 
@@ -1126,6 +1147,14 @@ pub struct AppState {
     /// arrives for a busy/awaiting agent; drained by `flush_pending_injections`.
     /// The inbox always holds the authoritative copy — this is only the wake-up path.
     pub(crate) pending_injections: DashMap<String, VecDeque<String>>,
+    /// Initial prompts awaiting successful PTY submission. Used only by the
+    /// one-shot delivery watchdog; successful delivery removes the marker and
+    /// emits nothing, while timeout emits one parent notification.
+    pub(crate) pending_initial_prompts: DashMap<String, String>,
+    /// Per-peer atomic handoff between blocking waiters and terminal delivery.
+    /// Each message has exactly one wake-up owner while remaining visible in
+    /// the authoritative inbox for backward-compatible reads.
+    pub(crate) active_agent_waiters: DashMap<String, Mutex<AgentDeliveryGate>>,
     /// HTML tab IDs (pluginIds) created by each session (tuic_session → [tab_id]).
     /// Populated by ui(tab) calls from registered agents; cleared on session exit
     /// so orphan tabs can be auto-closed by the frontend.
@@ -1258,19 +1287,164 @@ impl AppState {
     /// genuine eviction bumps `agent_inbox_evictions`, surfaced as
     /// `missed_count` on the next `inbox` read — nothing is dropped silently.
     pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) {
-        let mut inbox = self.agent_inbox.entry(recipient.to_string()).or_default();
-        if inbox.len() >= AGENT_INBOX_CAPACITY {
-            let evict_idx = inbox
-                .iter()
-                .position(|m| !m.id.starts_with(LIFECYCLE_MSG_ID_PREFIX))
-                .unwrap_or(0);
-            inbox.remove(evict_idx);
+        let evicted_id = {
+            let mut inbox = self.agent_inbox.entry(recipient.to_string()).or_default();
+            let evicted = if inbox.len() >= AGENT_INBOX_CAPACITY {
+                let evict_idx = inbox
+                    .iter()
+                    .position(|m| !m.id.starts_with(LIFECYCLE_MSG_ID_PREFIX))
+                    .unwrap_or(0);
+                inbox.remove(evict_idx).map(|message| message.id)
+            } else {
+                None
+            };
+            inbox.push_back(msg);
+            evicted
+        };
+        if let Some(evicted_id) = evicted_id {
             *self
                 .agent_inbox_evictions
                 .entry(recipient.to_string())
                 .or_insert(0) += 1;
+            if let Some(gate) = self.active_agent_waiters.get(recipient) {
+                gate.lock().owners.remove(&evicted_id);
+            }
         }
-        inbox.push_back(msg);
+    }
+
+    pub(crate) fn begin_agent_wait(&self, tuic_session: &str) -> u64 {
+        let gate = self
+            .active_agent_waiters
+            .entry(tuic_session.to_string())
+            .or_default();
+        let mut gate = gate.lock();
+        gate.next_lease = gate.next_lease.wrapping_add(1).max(1);
+        let lease = gate.next_lease;
+        gate.active_waiters.insert(lease);
+        lease
+    }
+
+    pub(crate) fn finish_agent_wait(
+        &self,
+        tuic_session: &str,
+        lease: u64,
+        since: u64,
+        observed: bool,
+    ) -> AgentWaitFinish {
+        let Some(gate) = self.active_agent_waiters.get(tuic_session) else {
+            return AgentWaitFinish::default();
+        };
+        let mut gate = gate.lock();
+        gate.active_waiters.remove(&lease);
+        let last_waiter = gate.active_waiters.is_empty();
+        let fresh_ids: std::collections::HashSet<String> = self
+            .agent_inbox
+            .get(tuic_session)
+            .map(|inbox| {
+                inbox
+                    .iter()
+                    .filter(|message| message.timestamp > since)
+                    .map(|message| message.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut finish = AgentWaitFinish::default();
+        for (message_id, owner) in &mut gate.owners {
+            if !fresh_ids.contains(message_id) || *owner != AgentDeliveryOwner::Waiter {
+                continue;
+            }
+            if observed {
+                *owner = AgentDeliveryOwner::WaiterObserved;
+                finish.fresh_count += 1;
+            } else if last_waiter {
+                *owner = AgentDeliveryOwner::TerminalPending;
+                finish.terminal_handoff.push(message_id.clone());
+            }
+        }
+        finish
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_active_agent_waiter(&self, tuic_session: &str) -> bool {
+        self.active_agent_waiters
+            .get(tuic_session)
+            .is_some_and(|gate| !gate.lock().active_waiters.is_empty())
+    }
+
+    pub(crate) fn assign_agent_delivery(&self, tuic_session: &str, message_id: &str) -> bool {
+        let gate = self
+            .active_agent_waiters
+            .entry(tuic_session.to_string())
+            .or_default();
+        let mut gate = gate.lock();
+        let terminal_owned = gate.active_waiters.is_empty();
+        gate.owners.insert(
+            message_id.to_string(),
+            if terminal_owned {
+                AgentDeliveryOwner::TerminalPending
+            } else {
+                AgentDeliveryOwner::Waiter
+            },
+        );
+        terminal_owned
+    }
+
+    pub(crate) fn waiter_fresh_message_count(&self, tuic_session: &str, since: u64) -> usize {
+        let gate = self
+            .active_agent_waiters
+            .entry(tuic_session.to_string())
+            .or_default();
+        let mut gate = gate.lock();
+        let fresh: Vec<String> = self
+            .agent_inbox
+            .get(tuic_session)
+            .map(|inbox| {
+                inbox
+                    .iter()
+                    .filter(|message| message.timestamp > since)
+                    .map(|message| message.id.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let waiter_active = !gate.active_waiters.is_empty();
+        fresh
+            .into_iter()
+            .filter(|message_id| match gate.owners.get(message_id).copied() {
+                Some(
+                    AgentDeliveryOwner::TerminalPending | AgentDeliveryOwner::TerminalDispatched,
+                ) => false,
+                Some(AgentDeliveryOwner::Waiter | AgentDeliveryOwner::WaiterObserved) => true,
+                None if waiter_active => {
+                    gate.owners
+                        .insert(message_id.clone(), AgentDeliveryOwner::Waiter);
+                    true
+                }
+                None => false,
+            })
+            .count()
+    }
+
+    pub(crate) fn mark_terminal_delivery_dispatched(&self, tuic_session: &str, message_id: &str) {
+        if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
+            let mut gate = gate.lock();
+            if gate.owners.get(message_id) == Some(&AgentDeliveryOwner::TerminalPending) {
+                gate.owners.insert(
+                    message_id.to_string(),
+                    AgentDeliveryOwner::TerminalDispatched,
+                );
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn agent_delivery_owner(
+        &self,
+        tuic_session: &str,
+        message_id: &str,
+    ) -> Option<AgentDeliveryOwner> {
+        self.active_agent_waiters
+            .get(tuic_session)
+            .and_then(|gate| gate.lock().owners.get(message_id).copied())
     }
 
     /// Acquire one slot in the monitoring-git concurrency limit. Hold the
@@ -1379,6 +1553,8 @@ impl AppState {
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             pending_injections: DashMap::new(),
+            pending_initial_prompts: DashMap::new(),
+            active_agent_waiters: DashMap::new(),
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),
@@ -2836,7 +3012,87 @@ mod tests {
         assert_eq!(inbox.len(), AGENT_INBOX_CAPACITY);
         // Oldest (index 0) evicted; the newest is retained.
         assert_eq!(inbox.front().unwrap().id, "tuic-auto-1");
-        assert_eq!(inbox.back().unwrap().id, format!("tuic-auto-{AGENT_INBOX_CAPACITY}"));
+        assert_eq!(
+            inbox.back().unwrap().id,
+            format!("tuic-auto-{AGENT_INBOX_CAPACITY}")
+        );
+    }
+
+    #[test]
+    fn active_agent_waiters_are_reference_counted() {
+        let state = tests_support::make_test_app_state();
+        let first = state.begin_agent_wait("peer");
+        let second = state.begin_agent_wait("peer");
+        assert!(state.has_active_agent_waiter("peer"));
+        state.finish_agent_wait("peer", first, 0, true);
+        assert!(state.has_active_agent_waiter("peer"));
+        state.finish_agent_wait("peer", second, 0, true);
+        assert!(!state.has_active_agent_waiter("peer"));
+    }
+
+    #[test]
+    fn waiter_send_handoff_assigns_exactly_one_owner_in_both_deadline_orders() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+
+        let lease = state.begin_agent_wait(recipient);
+        state.push_agent_inbox(recipient, make_msg("during-wait"));
+        assert!(!state.assign_agent_delivery(recipient, "during-wait"));
+        assert_eq!(state.waiter_fresh_message_count(recipient, 0), 1);
+        let finish = state.finish_agent_wait(recipient, lease, 0, true);
+        assert_eq!(finish.fresh_count, 1);
+        assert!(finish.terminal_handoff.is_empty());
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "during-wait"),
+            Some(AgentDeliveryOwner::WaiterObserved)
+        );
+
+        let lease = state.begin_agent_wait(recipient);
+        assert!(
+            state
+                .finish_agent_wait(recipient, lease, 1, false)
+                .terminal_handoff
+                .is_empty()
+        );
+        state.push_agent_inbox(
+            recipient,
+            AgentMessage {
+                timestamp: 2,
+                ..make_msg("after-timeout")
+            },
+        );
+        assert!(state.assign_agent_delivery(recipient, "after-timeout"));
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "after-timeout"),
+            Some(AgentDeliveryOwner::TerminalPending)
+        );
+    }
+
+    #[test]
+    fn cancelled_last_waiter_hands_unobserved_message_to_terminal_once() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+        let lease = state.begin_agent_wait(recipient);
+        state.push_agent_inbox(recipient, make_msg("cancel-race"));
+        assert!(!state.assign_agent_delivery(recipient, "cancel-race"));
+
+        assert_eq!(
+            state
+                .finish_agent_wait(recipient, lease, 0, false)
+                .terminal_handoff,
+            vec!["cancel-race".to_string()]
+        );
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "cancel-race"),
+            Some(AgentDeliveryOwner::TerminalPending)
+        );
+        assert!(
+            state
+                .finish_agent_wait(recipient, lease, 0, false)
+                .terminal_handoff
+                .is_empty(),
+            "releasing the same lease twice must not duplicate terminal handoff"
+        );
     }
 
     // ── emit_pty_event: per-session channel + global-bus parity (story 140) ──
@@ -3628,6 +3884,8 @@ mod tests {
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             pending_injections: DashMap::new(),
+            pending_initial_prompts: DashMap::new(),
+            active_agent_waiters: DashMap::new(),
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),
@@ -4245,7 +4503,7 @@ mod tests {
     }
 
     #[test]
-    fn test_user_input_unblock_flushes_pending_injections() {
+    fn test_user_input_unblock_requeues_when_test_pty_is_missing() {
         // A peer message queued while a confident question blocked injection must
         // drain when the user answers (user-input) and the agent stays idle —
         // there is no BUSY→IDLE transition on that path (story 091 unblock flush).
@@ -4269,8 +4527,8 @@ mod tests {
         apply(&state, &ui);
         assert_eq!(
             state.pending_injections.get("s1").map(|q| q.len()),
-            Some(0),
-            "user-input while idle must drain queued peer messages"
+            Some(1),
+            "missing PTY lookup must roll back and keep the unblocked message retryable"
         );
     }
 

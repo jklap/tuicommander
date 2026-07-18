@@ -139,6 +139,52 @@ fn now_unix_ms() -> u64 {
 /// pointer to the inbox rather than flooding the recipient's screen.
 const INJECT_MAX_BYTES: usize = 2048;
 
+/// One-shot guard for a deferred initial prompt. No success event is emitted;
+/// only a prompt still pending after this interval notifies the parent.
+const INITIAL_PROMPT_DELIVERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Placeholder stored in `session_parent` when a caller spawns before binding
+/// its MCP connection to a TUIC peer identity. The later `register` call swaps
+/// this for the stable TUIC session UUID and migrates any early lifecycle mail.
+const PENDING_PARENT_PREFIX: &str = "pending-mcp:";
+
+fn pending_parent_id(mcp_session_id: &str) -> String {
+    format!("{PENDING_PARENT_PREFIX}{mcp_session_id}")
+}
+
+fn link_pending_children_to_parent(
+    state: &AppState,
+    mcp_session_id: &str,
+    parent_tuic_session: &str,
+) -> usize {
+    let pending_parent = pending_parent_id(mcp_session_id);
+    let children: Vec<String> = state
+        .session_parent
+        .iter()
+        .filter(|entry| entry.value() == &pending_parent)
+        .map(|entry| entry.key().clone())
+        .collect();
+    for child in &children {
+        state
+            .session_parent
+            .insert(child.clone(), parent_tuic_session.to_string());
+    }
+
+    if let Some((_, messages)) = state.agent_inbox.remove(&pending_parent) {
+        for message in messages {
+            state.push_agent_inbox(parent_tuic_session, message);
+        }
+    }
+    if let Some((_, missed)) = state.agent_inbox_evictions.remove(&pending_parent) {
+        *state
+            .agent_inbox_evictions
+            .entry(parent_tuic_session.to_string())
+            .or_default() += missed;
+    }
+
+    children.len()
+}
+
 /// Frame a peer message as a single line to type into the recipient's terminal.
 /// Newlines are collapsed to spaces (a multi-line paste into a TUI is fragile);
 /// oversized bodies become a pointer to the inbox. The full, untouched content
@@ -218,6 +264,32 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
     };
     bind_peer_identity(state, mcp_sid, tuic, name, project, registered_at);
     true
+}
+
+/// Refresh a protocol session and re-assert its PTY identity on every request.
+/// Both maps are in-memory and disappear on a TUIC restart; a long-lived bridge
+/// may keep its old MCP session id, so merely recreating `mcp_sessions` is not
+/// enough to keep `agent send` registered.
+fn refresh_mcp_session(
+    state: &AppState,
+    mcp_sid: &str,
+    is_claude_code: bool,
+    tuic_session_header: Option<&str>,
+) {
+    if let Some(mut meta) = state.mcp_sessions.get_mut(mcp_sid) {
+        meta.last_activity = std::time::Instant::now();
+    } else {
+        state.mcp_sessions.insert(
+            mcp_sid.to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
+    }
+    apply_initialize_identity(state, mcp_sid, tuic_session_header);
 }
 
 /// Build server instructions for the MCP initialize response.
@@ -388,7 +460,7 @@ fn native_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: Active sessions with cwd, process info. Call first to discover IDs.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta poll: since_cursor=<previous cursor> returns only new lines — very cheap, use for monitoring. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Shell state for a session: {shell_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}. Use to poll agent progress without streaming output.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state, exit_code}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta poll: since_cursor=<previous cursor> returns only new lines — very cheap, use for monitoring. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Shell state for a session: {shell_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}. Use to poll agent progress without streaming output.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state, exit_code}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats" },
                 "session_id": { "type": "string", "description": "Session ID (required for input, output, resize, close, pause, resume, wait)" },
@@ -408,7 +480,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. Spawn agents (Claude Code, Codex, Aider, Goose) in managed PTYs, detect installed agents, and peer-to-peer messaging.\n\nOrchestration in 5 lines:\n1. Identity is automatic — you are already registered as $TUIC_SESSION (no register call needed).\n2. Spawn a peer: spawn prompt=<task> [agent_type=codex|gemini|...] → {session_id}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle: spawned peers auto-notify you (idle/exited) — you get woken, no polling.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Returns {session_id, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>) or a session reaches a state. Returns {met, timed_out}.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Optional rename/project-set (identity already auto-bound). Pass your $TUIC_SESSION.\n- list_peers: List peers. Optional: project filter.\n- send: Message a peer (requires to, message).\n- inbox: Read messages. Optional: limit, since (unix millis).",
+            "description": "AI agent orchestration. Spawn agents (Claude Code, Codex, Aider, Goose) in managed PTYs, detect installed agents, and peer-to-peer messaging.\n\nOrchestration in 5 lines:\n1. Identity is automatic — you are already registered as $TUIC_SESSION (no register call needed).\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle: spawned peers auto-notify you (idle/exited) — you get woken, no polling.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>) or a session reaches a state. Returns {met, timed_out}.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Optional rename/project-set (identity already auto-bound). Pass your $TUIC_SESSION.\n- list_peers: List peers. Optional: project filter.\n- send: Message a peer (requires to, message).\n- inbox: Read messages. Optional: limit, since (unix millis).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "description": "Max wait in ms (action=wait; default 5000, capped 8000). On timeout returns {timed_out:true} — call again to keep waiting." },
@@ -423,7 +495,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "rows": { "type": "integer", "description": "Terminal rows (action=spawn)" },
                 "cols": { "type": "integer", "description": "Terminal cols (action=spawn)" },
                 "tuic_session": { "type": "string", "description": "Your $TUIC_SESSION env var value (action=register, required)" },
-                "name": { "type": "string", "description": "Display name (action=register, default: 'agent')" },
+                "name": { "type": "string", "description": "Non-empty peer/session display name (action=spawn optional; action=register optional; default: 'agent')" },
                 "project": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
                 "to": { "type": "string", "description": "Recipient tuic_session UUID (action=send, required)" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
@@ -681,6 +753,10 @@ fn translate_special_key(key: &str) -> Option<&'static str> {
         "ctrl+n" => Some("\x0e"),
         _ => None,
     }
+}
+
+fn uses_agent_command_injection(agent_type: Option<&str>, key_seq: Option<&str>) -> bool {
+    agent_type.is_some_and(crate::agent::prompt_prefill_only) && key_seq == Some("\r")
 }
 
 /// Extract action from args, returning a guidance error if missing
@@ -1042,6 +1118,68 @@ async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) ->
 /// `agent action=wait` — block until the caller's inbox has a message newer than
 /// `since` (unix ms), or the timeout elapses. The caller must be registered
 /// (identity auto-binds at initialize, so this is normally already true).
+struct ActiveAgentWaitGuard {
+    state: Arc<AppState>,
+    tuic_session: String,
+    lease: u64,
+    since: u64,
+    finished: bool,
+}
+
+impl ActiveAgentWaitGuard {
+    fn new(state: &Arc<AppState>, tuic_session: &str, since: u64) -> Self {
+        let lease = state.begin_agent_wait(tuic_session);
+        Self {
+            state: Arc::clone(state),
+            tuic_session: tuic_session.to_string(),
+            lease,
+            since,
+            finished: false,
+        }
+    }
+
+    fn finish(&mut self, observe_fresh: bool) -> crate::state::AgentWaitFinish {
+        if self.finished {
+            return crate::state::AgentWaitFinish::default();
+        }
+        let finish =
+            self.state
+                .finish_agent_wait(&self.tuic_session, self.lease, self.since, observe_fresh);
+        dispatch_waiter_handoff(&self.state, &self.tuic_session, &finish.terminal_handoff);
+        self.finished = true;
+        finish
+    }
+}
+
+impl Drop for ActiveAgentWaitGuard {
+    fn drop(&mut self) {
+        self.finish(false);
+    }
+}
+
+fn dispatch_waiter_handoff(state: &AppState, recipient: &str, message_ids: &[String]) {
+    if message_ids.is_empty() {
+        return;
+    }
+    let wanted: std::collections::HashSet<&str> = message_ids.iter().map(String::as_str).collect();
+    let messages: Vec<crate::state::AgentMessage> = state
+        .agent_inbox
+        .get(recipient)
+        .map(|inbox| {
+            inbox
+                .iter()
+                .filter(|message| wanted.contains(message.id.as_str()))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    for message in messages {
+        let framed = frame_peer_message(&message.from_name, &message.content);
+        crate::pty::deliver_message_to_pty(state, recipient, &framed);
+        state.mark_terminal_delivery_dispatched(recipient, &message.id);
+    }
+}
+
 async fn handle_agent_wait(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -1056,23 +1194,30 @@ async fn handle_agent_wait(
         }
     };
     let since = args["since"].as_u64().unwrap_or(0);
+    let mut active_wait = ActiveAgentWaitGuard::new(state, &caller_tuic, since);
     let timeout_ms = clamp_wait_timeout(args["timeout_ms"].as_u64());
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     loop {
-        let fresh = state
-            .agent_inbox
-            .get(&caller_tuic)
-            .map(|q| q.iter().filter(|m| m.timestamp > since).count())
-            .unwrap_or(0);
+        let fresh = state.waiter_fresh_message_count(&caller_tuic, since);
         if fresh > 0 {
+            let finish = active_wait.finish(true);
             return serde_json::json!({
                 "met": true,
                 "timed_out": false,
-                "new_messages": fresh,
+                "new_messages": finish.fresh_count,
                 "hint": "New mail — read it with agent action=inbox since=<last_ms>.",
             });
         }
         if std::time::Instant::now() >= deadline {
+            let finish = active_wait.finish(true);
+            if finish.fresh_count > 0 {
+                return serde_json::json!({
+                    "met": true,
+                    "timed_out": false,
+                    "new_messages": finish.fresh_count,
+                    "hint": "New mail arrived at the wait deadline — read it with agent action=inbox since=<last_ms>.",
+                });
+            }
             return serde_json::json!({"met": false, "timed_out": true, "new_messages": 0});
         }
         tokio::time::sleep(std::time::Duration::from_millis(WAIT_POLL_MS)).await;
@@ -1170,13 +1315,26 @@ fn handle_session(
             if text.is_empty() && key_seq.is_none() {
                 return serde_json::json!({"error": "Action 'input' requires 'input' (text) and/or 'special_key'"});
             }
-            // Write text and special_key as separate writes (not concatenated
-            // into one buffer) when both are present. Ink/raw-mode apps (Claude
-            // Code) process input character-by-character; concatenating text +
-            // "\r" into one write causes Enter to be missed. Both writes still
-            // go out under a single PTY lock acquisition (write_pty_input_pair)
-            // so a concurrent writer on the same session can't interleave
-            // between the text and the Enter keystroke.
+            let agent_type = state
+                .session_states
+                .get(session_id)
+                .and_then(|s| s.agent_type.clone());
+
+            // Submitting text to a prefill-only agent is not a generic text+key
+            // pair. Codex/OpenCode require Ctrl-U framing, bracketed paste for
+            // multiline prompts, and a real scheduling gap before CR. Reuse the
+            // peer-injection recipe without changing Claude's working input path.
+            if !text.is_empty() && uses_agent_command_injection(agent_type.as_deref(), key_seq) {
+                if let Err(e) = crate::pty::write_agent_command_to_pty(state, session_id, text) {
+                    return serde_json::json!({"error": e});
+                }
+                super::session::apply_input_bookkeeping(state, session_id, text);
+                super::session::apply_input_bookkeeping(state, session_id, "\r");
+                return serde_json::json!({"ok": true});
+            }
+
+            // Non-agent sessions and non-Enter special keys retain raw pair
+            // semantics under one lock so concurrent writers cannot interleave.
             match (text.is_empty(), key_seq) {
                 (false, Some(seq)) => {
                     if let Err(e) =
@@ -1455,6 +1613,11 @@ fn handle_session(
                     };
                     let is_idle = ss.shell_state.as_deref() == Some("idle");
                     let is_busy = ss.shell_state.as_deref() == Some("busy");
+                    let delivery_uncertain = state
+                        .silence_states
+                        .get(session_id)
+                        .map(|silence| silence.lock().injection_delivery_uncertain)
+                        .unwrap_or(false);
                     #[cfg(unix)]
                     let standby = state.standby_sessions.contains_key(session_id);
                     #[cfg(not(unix))]
@@ -1465,6 +1628,7 @@ fn handle_session(
                         "agent_type": ss.agent_type,
                         "awaiting_input": ss.awaiting_input,
                         "rate_limited": ss.rate_limited,
+                        "delivery_uncertain": delivery_uncertain,
                         "last_activity_ms": ss.last_activity_ms,
                         "exit_code": exit_code,
                         "idle_since_ms": if is_idle && elapsed > 0 { serde_json::json!(elapsed) } else { serde_json::Value::Null },
@@ -1773,18 +1937,26 @@ async fn handle_worktree(
 /// Prepends a swarm preamble when the caller is a registered peer so the child
 /// knows its identity and how to communicate back. Returns the original prompt
 /// unchanged when called outside a swarm context (`parent_tuic` is `None`).
-fn build_spawn_prompt(prompt: &str, parent_tuic: Option<&str>, session_id: &str) -> String {
+fn build_spawn_prompt(
+    prompt: &str,
+    parent_tuic: Option<&str>,
+    session_id: &str,
+    peer_name: &str,
+) -> String {
     let Some(parent) = parent_tuic else {
         return prompt.to_string();
     };
     format!(
         "## TUICommander Swarm Context\n\
          You are operating as part of a multi-agent swarm.\n\
+         - You are pre-registered as peer `{peer_name}`.\n\
          - Your session ID (`$TUIC_SESSION`): `{session_id}`\n\
          - Your parent agent session: `{parent}`\n\n\
-         Register yourself immediately so peers can message you:\n\
-         `agent action=register tuic_session=\"{session_id}\"`\n\n\
-         When your task is complete, notify your parent:\n\
+         TUICommander already created your peer identity and inbox. If an MCP\n\
+         reconnect reports that you are unregistered, repair the binding with:\n\
+         `agent action=register tuic_session=\"{session_id}\" name=\"{peer_name}\"`\n\n\
+         You can communicate with your parent at any time, and must report task\n\
+         completion or a real blocker with:\n\
          `agent action=send to=\"{parent}\" message=\"<done summary>\"`\n\n\
          ## Your Task\n\n\
          {prompt}"
@@ -1868,6 +2040,19 @@ fn handle_agent(
                 .map(|rc| rc.agent_type.clone())
                 .or_else(|| args["agent_type"].as_str().map(|s| s.to_string()));
 
+            let requested_name = match args.get("name") {
+                Some(value) => match value.as_str().map(str::trim) {
+                    Some("") | None => {
+                        return serde_json::json!({"error": "Action 'spawn' requires 'name' to be a non-empty string when provided"});
+                    }
+                    Some(name) => Some(name.to_string()),
+                },
+                None => None,
+            };
+            let peer_name = requested_name
+                .clone()
+                .unwrap_or_else(|| "agent".to_string());
+
             let session_id = Uuid::new_v4().to_string();
             let pty_system = native_pty_system();
             let pair = match pty_system.openpty(PtySize {
@@ -1886,7 +2071,8 @@ fn handle_agent(
                 .and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()));
 
             // Effective prompt: preamble prepended for swarm spawns, unchanged otherwise.
-            let effective_prompt = build_spawn_prompt(&prompt, caller_tuic.as_deref(), &session_id);
+            let effective_prompt =
+                build_spawn_prompt(&prompt, caller_tuic.as_deref(), &session_id, &peer_name);
 
             // Effective cwd: an explicit `cwd` arg wins; otherwise inherit the SPAWNING
             // agent's working dir (its PTY session's cwd). Without this the child runs in
@@ -1895,11 +2081,15 @@ fn handle_agent(
             // tab into whatever repo the desktop user has focused (the active-repo
             // fallback). Inheriting the parent cwd lands both the process and the tab in
             // the parent agent's repo.
-            let effective_cwd: Option<String> = args["cwd"].as_str().map(|s| s.to_string()).or_else(|| {
-                caller_tuic
-                    .as_ref()
-                    .and_then(|parent| state.sessions.get(parent).and_then(|e| e.lock().cwd.clone()))
-            });
+            let effective_cwd: Option<String> =
+                args["cwd"].as_str().map(|s| s.to_string()).or_else(|| {
+                    caller_tuic.as_ref().and_then(|parent| {
+                        state
+                            .sessions
+                            .get(parent)
+                            .and_then(|e| e.lock().cwd.clone())
+                    })
+                });
 
             let mut cmd = CommandBuilder::new(&binary_path);
 
@@ -1921,11 +2111,23 @@ fn handle_agent(
             let mut deferred_initial_prompt: Option<String> = None;
 
             if let Some(raw_args) = args.get("args").and_then(|a| a.as_array()) {
-                // Explicit args from caller override everything
-                for arg in raw_args {
-                    if let Some(s) = arg.as_str() {
-                        cmd.arg(s);
-                    }
+                // Explicit args remain authoritative when they contain
+                // `{prompt}` (for example `codex exec {prompt}`). When they are
+                // flags only, the required spawn prompt must still be delivered:
+                // append it for normal CLIs, or defer it through PTY injection
+                // for prefill-only TUIs such as interactive Codex.
+                let explicit_args: Vec<String> = raw_args
+                    .iter()
+                    .filter_map(|arg| arg.as_str().map(ToOwned::to_owned))
+                    .collect();
+                let (final_args, deferred) = finalize_explicit_spawn_args(
+                    effective_agent_type.as_deref().unwrap_or_default(),
+                    &explicit_args,
+                    &effective_prompt,
+                );
+                deferred_initial_prompt = deferred;
+                for arg in &final_args {
+                    cmd.arg(arg);
                 }
             } else if let Some(ref rc) = resolved {
                 if let Some(ref rc_args) = rc.args {
@@ -2032,7 +2234,7 @@ fn handle_agent(
                     paused: paused.clone(),
                     worktree: None,
                     cwd: effective_cwd.clone(),
-                    display_name: None,
+                    display_name: requested_name,
                     shell: binary_path.clone(),
                 }),
             );
@@ -2071,6 +2273,9 @@ fn handle_agent(
             // flush_pending_injections requires agent_type to treat this session as
             // an injectable agent. Same delivery path as peer messages (story 091).
             if let Some(initial_prompt) = deferred_initial_prompt {
+                state
+                    .pending_initial_prompts
+                    .insert(session_id.clone(), initial_prompt.clone());
                 state
                     .pending_injections
                     .entry(session_id.clone())
@@ -2111,26 +2316,40 @@ fn handle_agent(
             }
             spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
 
-            // Auto-register child as peer + pre-init inbox when spawned in swarm context.
-            if let Some(ref parent_id) = caller_tuic {
-                let now_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64;
-                state.peer_agents.insert(
-                    session_id.clone(),
-                    crate::state::PeerAgent {
-                        tuic_session: session_id.clone(),
-                        mcp_session_id: String::new(), // filled when child connects via MCP
-                        name: "agent".to_string(),
-                        project: effective_cwd.clone(),
-                        registered_at: now_ms,
-                    },
-                );
-                state.agent_inbox.entry(session_id.clone()).or_default();
-                state
-                    .session_parent
-                    .insert(session_id.clone(), parent_id.clone());
+            // Every managed child is a peer immediately, independent of whether
+            // its initial prompt runs or its own MCP bridge has connected yet.
+            state.peer_agents.insert(
+                session_id.clone(),
+                crate::state::PeerAgent {
+                    tuic_session: session_id.clone(),
+                    mcp_session_id: String::new(), // filled when child connects via MCP
+                    name: peer_name.clone(),
+                    project: effective_cwd.clone(),
+                    registered_at: now_unix_ms(),
+                },
+            );
+            state.agent_inbox.entry(session_id.clone()).or_default();
+
+            // Bidirectional communication additionally needs an identified
+            // parent. The child receives TUIC_PARENT + the spawn preamble; the
+            // parent receives the child target in the response below.
+            if let Some(parent_id) = caller_tuic
+                .clone()
+                .or_else(|| mcp_session_id.map(pending_parent_id))
+            {
+                state.session_parent.insert(session_id.clone(), parent_id);
+
+                if state.pending_initial_prompts.contains_key(&session_id) {
+                    let watchdog_state = Arc::clone(state);
+                    let watchdog_session = session_id.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(INITIAL_PROMPT_DELIVERY_TIMEOUT).await;
+                        crate::pty::notify_initial_prompt_timeout_if_pending(
+                            &watchdog_state,
+                            &watchdog_session,
+                        );
+                    });
+                }
             }
 
             let spawn_ts = std::time::SystemTime::now()
@@ -2146,6 +2365,11 @@ fn handle_agent(
             // lives in agent(register).workflow, not in this response.
             let mut response = serde_json::json!({
                 "session_id": session_id,
+                "name": peer_name,
+                "peer_registered": true,
+                "communication_ready": caller_tuic.is_some(),
+                "send_to": session_id,
+                "parent_session_id": caller_tuic.clone(),
                 "server_ts": spawn_ts,
                 "monitor_with": format!("session(action=output, session_id={session_id})"),
                 "status_with": format!("session(action=status, session_id={session_id})"),
@@ -2163,6 +2387,11 @@ fn handle_agent(
                     serde_json::json!(format!(
                         "agent(action=wait, since={spawn_ts}) — blocks until this peer messages you; it auto-notifies on idle/exit"
                     )),
+                );
+            } else if let Some(obj) = response.as_object_mut() {
+                obj.insert(
+                    "communication_warning".to_string(),
+                    serde_json::json!("Caller has no bound TUIC peer identity; child can receive messages, but child-to-parent messaging is unavailable until the parent registers."),
                 );
             }
             response
@@ -2233,6 +2462,7 @@ fn handle_messaging(
             // register sets name/project verbatim; the guard above already
             // prevented hijacking another live session's identity.
             bind_peer_identity(state, &mcp_sid, tuic_session, name.clone(), project, now_ms);
+            let linked_children = link_pending_children_to_parent(state, &mcp_sid, tuic_session);
             // Identity bindings are security-relevant; record them (no message content).
             tracing::info!(
                 source = "agent_msg",
@@ -2256,13 +2486,14 @@ fn handle_messaging(
                 "ok": true,
                 "tuic_session": tuic_session,
                 "name": name,
+                "linked_children": linked_children,
                 "identity": "Automatic — you were bound to $TUIC_SESSION at connect. register is only needed to set a friendly name/project; spawn/send/inbox/wait work without it.",
                 "workflow": {
                     "spawn_same_repo": "agent action=spawn prompt=<task> cwd=<repo_path> — returns {session_id, monitor_with, peer_monitor_with?, wait_with}. As orchestrator, prefer wait/inbox over raw session output to avoid token burn.",
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
                     "monitor": "PREFER blocking waits over polling: agent action=wait since=<last_ms> (wakes on new mail) or session action=wait session_id=<id> until=idle|exited. Each returns {met, timed_out}; on timed_out just call again. NEVER session output on peers (token burn).",
                     "auto_state_change": "Spawned peers auto-post {type:state_change, state:idle|exited, session_id, exit_code?} to your inbox AND wake your terminal — no manual send needed for lifecycle.",
-                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is TYPED into an idle peer's terminal so it acts immediately; a busy peer gets it on its next idle transition. Response {delivered_via_channel: bool} — false just means not via SSE, NOT a failure.",
+                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is always buffered in the inbox and is TYPED into an idle peer's terminal so it acts immediately; a busy peer gets it on its next idle transition. Response `accepted=true` confirms delivery acceptance; `delivered_via_channel` only reports the optional SSE path.",
                     "list_peers": "agent action=list_peers project=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "Automatic on MCP session close (tombstone_transient_cleanup). Peer state + inbox drained; PTY reaped."
@@ -2332,7 +2563,7 @@ fn handle_messaging(
                 .unwrap_or_default()
                 .as_millis() as u64;
             let (sender_tuic, sender_name) = sender;
-            let mut msg = crate::state::AgentMessage {
+            let msg = crate::state::AgentMessage {
                 id: uuid::Uuid::new_v4().to_string(),
                 from_tuic_session: sender_tuic.clone(),
                 from_name: sender_name.clone(),
@@ -2342,10 +2573,16 @@ fn handle_messaging(
             };
             let msg_id = msg.id.clone();
 
+            // Buffer first, then atomically assign exactly one wake-up owner.
+            // A blocking waiter owns inbox notification; otherwise channel/PTY
+            // delivery owns the wake-up. The inbox remains authoritative either way.
+            state.push_agent_inbox(to, msg);
+            let terminal_owned = state.assign_agent_delivery(to, &msg_id);
+
             // Try channel push if recipient has SSE stream
             let recipient_mcp_sid = state.peer_agents.get(to).map(|p| p.mcp_session_id.clone());
             let mut pushed = false;
-            if let Some(ref mcp_sid) = recipient_mcp_sid {
+            if terminal_owned && let Some(ref mcp_sid) = recipient_mcp_sid {
                 let has_sse = state
                     .mcp_sessions
                     .get(mcp_sid)
@@ -2369,13 +2606,15 @@ fn handle_messaging(
                         .is_ok()
                     {
                         pushed = true;
-                        msg.delivered_via_channel = true;
+                        if let Some(mut inbox) = state.agent_inbox.get_mut(to)
+                            && let Some(message) = inbox.iter_mut().find(|m| m.id == msg_id)
+                        {
+                            message.delivered_via_channel = true;
+                        }
                     }
                 }
             }
 
-            // Always buffer in recipient's inbox with lifecycle-aware eviction.
-            state.push_agent_inbox(to, msg);
             #[cfg(unix)]
             if let Err(e) = crate::pty::wake_session(state, to) {
                 tracing::debug!(session = %to, error = %e, "Wake on message delivery failed");
@@ -2384,9 +2623,12 @@ fn handle_messaging(
             // so it acts without polling. Skip when already pushed over the SSE
             // channel (CC agents receive it as a synthetic turn — injecting too
             // would double-deliver). The inbox always holds the authoritative copy.
-            if !pushed {
+            if terminal_owned && !pushed {
                 let framed = frame_peer_message(&sender_name, message);
                 crate::pty::deliver_message_to_pty(state, to, &framed);
+            }
+            if terminal_owned {
+                state.mark_terminal_delivery_dispatched(to, &msg_id);
             }
             // Forensic trail: sender, recipient, size, and delivery path — but never the
             // content (it can be up to 64 KB and may carry sensitive coordination text).
@@ -2401,7 +2643,20 @@ fn handle_messaging(
                 message_id = %msg_id,
                 "Peer message delivered"
             );
-            serde_json::json!({"ok": true, "message_id": msg_id, "delivered_via_channel": pushed})
+            serde_json::json!({
+                "ok": true,
+                "accepted": true,
+                "message_id": msg_id,
+                "buffered_in_inbox": true,
+                "delivered_via_channel": pushed,
+                "delivery_path": if !terminal_owned {
+                    "waiter_and_inbox"
+                } else if pushed {
+                    "sse_channel_and_inbox"
+                } else {
+                    "terminal_or_queued_and_inbox"
+                },
+            })
         }
         "inbox" => {
             // Resolve caller's tuic_session via O(1) mcp_to_session reverse map (RUST-3/PERF-2).
@@ -3165,10 +3420,15 @@ pub(super) async fn mcp_post(
             let list_session_id = headers
                 .get(MCP_SESSION_HEADER)
                 .and_then(|v| v.to_str().ok());
-            if let Some(sid) = list_session_id
-                && let Some(mut meta) = state.mcp_sessions.get_mut(sid)
-            {
-                meta.last_activity = std::time::Instant::now();
+            if let Some(sid) = list_session_id {
+                refresh_mcp_session(
+                    &state,
+                    sid,
+                    detect_claude_code_from_headers(&headers),
+                    headers
+                        .get(TUIC_SESSION_HEADER)
+                        .and_then(|v| v.to_str().ok()),
+                );
             }
             // On the first list after boot, wait (bounded) for upstream MCP
             // servers to finish connecting so their proxied tools are included.
@@ -3205,30 +3465,15 @@ pub(super) async fn mcp_post(
                 .get(MCP_SESSION_HEADER)
                 .and_then(|v| v.to_str().ok())
                 .map(|sid| {
-                    if let Some(mut meta) = state.mcp_sessions.get_mut(sid) {
-                        meta.last_activity = std::time::Instant::now();
-                        true
-                    } else {
-                        // Auto-recover: re-register the stale session ID. We don't have
-                        // the original clientInfo, but User-Agent is usually enough to
-                        // keep cc_agent_hint working for long-lived Claude Code clients.
-                        let recovered_cc = is_cc_ua;
-                        tracing::warn!(
-                            "MCP session auto-recovered (stale session_id: {sid}); \
-                             is_claude_code={recovered_cc} (from User-Agent)"
-                        );
-                        let now = std::time::Instant::now();
-                        state.mcp_sessions.insert(
-                            sid.to_string(),
-                            crate::state::McpSessionMeta {
-                                last_activity: now,
-                                is_claude_code: recovered_cc,
-                                has_sse_stream: false,
-                                repo_path: None,
-                            },
-                        );
-                        true
-                    }
+                    refresh_mcp_session(
+                        &state,
+                        sid,
+                        is_cc_ua,
+                        headers
+                            .get(TUIC_SESSION_HEADER)
+                            .and_then(|v| v.to_str().ok()),
+                    );
+                    true
                 })
                 .unwrap_or(false);
             if !session_valid {
@@ -3754,6 +3999,25 @@ fn substitute_prompt_in_args(args: &[String], prompt: &str) -> Vec<String> {
     }
 }
 
+/// Finalize caller-supplied argv without silently dropping the required task.
+/// A `{prompt}` placeholder is an explicit delivery decision and is preserved
+/// verbatim after substitution. Flags-only argv inherits the built-in behavior:
+/// prefill-only agents receive the task through deferred PTY injection; other
+/// agents receive it as the final positional argument.
+fn finalize_explicit_spawn_args(
+    agent_type: &str,
+    explicit: &[String],
+    prompt: &str,
+) -> (Vec<String>, Option<String>) {
+    if explicit.iter().any(|arg| arg.contains("{prompt}")) {
+        return (substitute_prompt_in_args(explicit, prompt), None);
+    }
+    if crate::agent::prompt_prefill_only(agent_type) {
+        return (explicit.to_vec(), Some(prompt.to_string()));
+    }
+    (substitute_prompt_in_args(explicit, prompt), None)
+}
+
 /// Final argv + optional deferred initial prompt for an orchestrated agent spawn.
 ///
 /// For prefill-only TUIs (`crate::agent::prompt_prefill_only`, e.g. codex) the
@@ -3965,6 +4229,8 @@ mod tests {
             agent_inbox: dashmap::DashMap::new(),
             agent_inbox_evictions: dashmap::DashMap::new(),
             pending_injections: dashmap::DashMap::new(),
+            pending_initial_prompts: dashmap::DashMap::new(),
+            active_agent_waiters: dashmap::DashMap::new(),
             session_html_tabs: dashmap::DashMap::new(),
             mcp_to_session: dashmap::DashMap::new(),
             session_to_mcp: dashmap::DashMap::new(),
@@ -4230,6 +4496,31 @@ mod tests {
             "worker-1",
             "auto-bind must not clobber a registered display name"
         );
+    }
+
+    #[test]
+    fn refresh_mcp_session_repairs_lost_peer_binding() {
+        let state = test_state();
+        state.mcp_sessions.insert(
+            "mcp-stale".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: false,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
+
+        refresh_mcp_session(&state, "mcp-stale", false, Some(TEST_UUID_A));
+
+        assert_eq!(
+            state
+                .mcp_to_session
+                .get("mcp-stale")
+                .map(|entry| entry.value().clone()),
+            Some(TEST_UUID_A.to_string())
+        );
+        assert!(state.peer_agents.contains_key(TEST_UUID_A));
     }
 
     #[test]
@@ -5784,6 +6075,20 @@ mod tests {
     }
 
     #[test]
+    fn session_description_requires_list_for_global_overview() {
+        let defs = native_tool_definitions();
+        let session = defs
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|tool| tool["name"] == "session")
+            .unwrap();
+        let description = session["description"].as_str().unwrap();
+        assert!(description.contains("All active sessions and states in one call"));
+        assert!(description.contains("never fan out per-session status calls"));
+    }
+
+    #[test]
     fn print_mode_description_clarifies_visible_vs_headless() {
         let defs = native_tool_definitions();
         let agent = defs
@@ -6676,13 +6981,13 @@ mod tests {
 
     #[test]
     fn build_spawn_prompt_no_parent_returns_original() {
-        let result = build_spawn_prompt("do the task", None, "child-123");
+        let result = build_spawn_prompt("do the task", None, "child-123", "worker");
         assert_eq!(result, "do the task");
     }
 
     #[test]
     fn build_spawn_prompt_with_parent_prepends_preamble() {
-        let result = build_spawn_prompt("do the task", Some("parent-456"), "child-123");
+        let result = build_spawn_prompt("do the task", Some("parent-456"), "child-123", "worker");
         assert!(
             result.contains("parent-456"),
             "preamble must mention parent"
@@ -6695,13 +7000,14 @@ mod tests {
         assert!(preamble_end > 0, "preamble must precede prompt");
         assert!(
             result.contains("register"),
-            "preamble must instruct register"
+            "preamble must include the reconnect registration fallback"
         );
+        assert!(result.contains("pre-registered as peer `worker`"));
     }
 
     #[test]
     fn build_spawn_prompt_with_parent_includes_send_instruction() {
-        let result = build_spawn_prompt("my task", Some("orch-789"), "child-abc");
+        let result = build_spawn_prompt("my task", Some("orch-789"), "child-abc", "worker");
         assert!(
             result.contains("orch-789"),
             "preamble must include parent session for send target"
@@ -6764,6 +7070,94 @@ mod tests {
             sessions.contains(&session_id),
             "child {session_id} not in list_peers: {sessions:?}"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_name_is_applied_to_peer_session_and_response() {
+        let state = test_state();
+        let addr = "127.0.0.1:0".parse().unwrap();
+        register_peer(
+            &state,
+            "550e8400-e29b-41d4-a716-446655440b01",
+            "orchestrator",
+            "mcp-orch",
+        );
+
+        let result = handle_agent(
+            &state,
+            addr,
+            &serde_json::json!({
+                "action": "spawn",
+                "name": "linux-primary",
+                "prompt": "hello",
+                "binary_path": "/usr/bin/true",
+                "cwd": "/tmp",
+            }),
+            Some("mcp-orch"),
+        );
+        if result
+            .get("error")
+            .and_then(|e| e.as_str())
+            .is_some_and(|e| e.contains("Failed to open PTY"))
+        {
+            eprintln!("Skipping: PTY not available in this environment");
+            return;
+        }
+
+        assert!(result.get("error").is_none(), "spawn failed: {result}");
+        assert_eq!(result["name"], "linux-primary");
+        let session_id = result["session_id"].as_str().unwrap();
+        assert_eq!(result["peer_registered"], true);
+        assert_eq!(result["communication_ready"], true);
+        assert_eq!(result["send_to"], session_id);
+        assert_eq!(
+            result["parent_session_id"],
+            "550e8400-e29b-41d4-a716-446655440b01"
+        );
+        assert_eq!(
+            state.peer_agents.get(session_id).unwrap().name,
+            "linux-primary"
+        );
+        assert_eq!(
+            state
+                .sessions
+                .get(session_id)
+                .unwrap()
+                .lock()
+                .display_name
+                .as_deref(),
+            Some("linux-primary")
+        );
+
+        apply_initialize_identity(&state, "child-mcp", Some(session_id));
+        assert_eq!(
+            state.peer_agents.get(session_id).unwrap().name,
+            "linux-primary",
+            "child auto-bind must preserve the parent-assigned name"
+        );
+    }
+
+    #[test]
+    fn spawn_rejects_empty_name_before_opening_pty() {
+        let state = test_state();
+        let result = handle_agent(
+            &state,
+            "127.0.0.1:0".parse().unwrap(),
+            &serde_json::json!({
+                "action": "spawn",
+                "name": "   ",
+                "prompt": "hello",
+                "binary_path": "/usr/bin/true",
+            }),
+            None,
+        );
+
+        assert_eq!(
+            result["error"],
+            "Action 'spawn' requires 'name' to be a non-empty string when provided"
+        );
+        assert!(state.sessions.is_empty());
     }
 
     #[cfg(unix)]
@@ -7041,6 +7435,96 @@ mod tests {
             result.get("peer_monitor_with").is_none(),
             "standalone spawn must not include peer_monitor_with: {result}"
         );
+        assert_eq!(result["peer_registered"], true);
+        assert_eq!(result["communication_ready"], false);
+        assert!(result["communication_warning"].as_str().is_some());
+
+        let session_id = result["session_id"].as_str().unwrap();
+        assert!(
+            state.peer_agents.contains_key(session_id),
+            "every managed child must be registered even when the caller has no peer identity"
+        );
+        assert!(
+            state.agent_inbox.contains_key(session_id),
+            "every managed child must have an inbox immediately after spawn"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn parent_registration_after_spawn_links_existing_child() {
+        let state = test_state();
+        let addr = "127.0.0.1:0".parse().unwrap();
+        let parent_mcp = "mcp-late-parent";
+        let parent_tuic = "550e8400-e29b-41d4-a716-446655440bb1";
+
+        let spawned = handle_agent(
+            &state,
+            addr,
+            &serde_json::json!({
+                "action": "spawn",
+                "prompt": "hello",
+                "binary_path": "/usr/bin/true",
+                "cwd": "/tmp",
+            }),
+            Some(parent_mcp),
+        );
+        if spawned.get("error").is_some() {
+            eprintln!("Skipping: PTY not available in this environment");
+            return;
+        }
+        let child = spawned["session_id"].as_str().unwrap();
+        assert_eq!(spawned["communication_ready"], false);
+        let pending_parent = pending_parent_id(parent_mcp);
+        state.push_agent_inbox(
+            &pending_parent,
+            crate::state::AgentMessage {
+                id: "tuic-auto-before-parent-registration".to_string(),
+                from_tuic_session: child.to_string(),
+                from_name: "tuic".to_string(),
+                content: r#"{"type":"state_change","state":"idle"}"#.to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+
+        state.mcp_sessions.insert(
+            parent_mcp.to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: false,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
+        let registered = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register",
+                "tuic_session": parent_tuic,
+                "name": "orchestrator",
+            }),
+            Some(parent_mcp),
+        );
+
+        assert_eq!(registered["ok"], true, "registration failed: {registered}");
+        assert_eq!(registered["linked_children"], 1);
+        assert_eq!(
+            state
+                .session_parent
+                .get(child)
+                .map(|entry| entry.value().clone()),
+            Some(parent_tuic.to_string()),
+            "late parent registration must restore child lifecycle/message routing"
+        );
+        assert_eq!(
+            state
+                .agent_inbox
+                .get(parent_tuic)
+                .map(|messages| messages.len()),
+            Some(1),
+            "lifecycle mail emitted before parent registration must be preserved"
+        );
     }
 
     #[cfg(unix)]
@@ -7243,6 +7727,9 @@ mod tests {
             Some(true),
             "send must succeed: {result}"
         );
+        assert_eq!(result["accepted"], true);
+        assert_eq!(result["buffered_in_inbox"], true);
+        assert_eq!(result["delivery_path"], "terminal_or_queued_and_inbox");
         let inbox = state
             .agent_inbox
             .get(recipient_tuic)
@@ -7472,11 +7959,63 @@ mod tests {
     }
 
     #[test]
+    fn explicit_codex_flags_keep_flags_and_defer_prompt() {
+        let explicit = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
+        let (argv, deferred) = finalize_explicit_spawn_args("codex", &explicit, "perform the task");
+
+        assert_eq!(argv, explicit);
+        assert_eq!(deferred.as_deref(), Some("perform the task"));
+    }
+
+    #[test]
+    fn explicit_codex_placeholder_remains_authoritative() {
+        let explicit = vec!["exec".to_string(), "{prompt}".to_string()];
+        let (argv, deferred) = finalize_explicit_spawn_args("codex", &explicit, "perform the task");
+
+        assert_eq!(argv, vec!["exec", "perform the task"]);
+        assert!(deferred.is_none());
+    }
+
+    #[test]
+    fn explicit_non_prefill_flags_append_prompt() {
+        let explicit = vec!["--verbose".to_string()];
+        let (argv, deferred) =
+            finalize_explicit_spawn_args("claude", &explicit, "perform the task");
+
+        assert_eq!(argv, vec!["--verbose", "perform the task"]);
+        assert!(deferred.is_none());
+    }
+
+    #[test]
+    fn explicit_claude_placeholder_remains_authoritative() {
+        let explicit = vec![
+            "--model".to_string(),
+            "opus".to_string(),
+            "{prompt}".to_string(),
+        ];
+        let (argv, deferred) =
+            finalize_explicit_spawn_args("claude", &explicit, "perform the task");
+
+        assert_eq!(argv, vec!["--model", "opus", "perform the task"]);
+        assert!(deferred.is_none());
+    }
+
+    #[test]
     fn finalize_other_agents_substitute_as_before() {
         let merged = vec!["session".to_string(), "{prompt}".to_string()];
         let (argv, deferred) = finalize_spawn_args("goose", &merged, "do it");
         assert_eq!(argv, vec!["session", "do it"]);
         assert!(deferred.is_none(), "non-prefill agents keep argv delivery");
+    }
+
+    #[test]
+    fn agent_enter_uses_command_injection_but_other_inputs_stay_raw() {
+        assert!(uses_agent_command_injection(Some("codex"), Some("\r")));
+        assert!(uses_agent_command_injection(Some("opencode"), Some("\r")));
+        assert!(!uses_agent_command_injection(Some("claude"), Some("\r")));
+        assert!(!uses_agent_command_injection(None, Some("\r")));
+        assert!(!uses_agent_command_injection(Some("codex"), Some("\t")));
+        assert!(!uses_agent_command_injection(Some("codex"), None));
     }
 
     #[test]

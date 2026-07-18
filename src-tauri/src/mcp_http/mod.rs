@@ -2006,6 +2006,8 @@ mod tests {
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             pending_injections: DashMap::new(),
+            pending_initial_prompts: DashMap::new(),
+            active_agent_waiters: DashMap::new(),
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),

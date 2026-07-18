@@ -167,7 +167,7 @@ pub(crate) fn write_pty_input_pair(
 /// `write_pty_input_pair`: stamps last-input time and feeds the
 /// InputLineBuffer FSM to track slash_mode accurately. Runs once per input
 /// part, after the PTY lock for that part's write has already been released.
-fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) {
+pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) {
     // Stamp last-input time (same as desktop write_pty) so the grid ticker
     // throttles frames for remote/PWA typing under CPU saturation too.
     crate::pty::stamp_input_ms(state, session_id);
@@ -233,6 +233,11 @@ fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) 
         .entry(session_id.to_string())
         .or_insert_with(|| std::sync::atomic::AtomicBool::new(false))
         .store(in_slash, std::sync::atomic::Ordering::Relaxed);
+    let composer_empty = buf.content().is_empty();
+    drop(buf);
+    if composer_empty {
+        crate::pty::flush_pending_injections(state, session_id);
+    }
 }
 
 pub(super) async fn set_session_name(

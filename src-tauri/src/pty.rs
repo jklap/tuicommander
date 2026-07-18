@@ -747,6 +747,15 @@ pub(crate) struct SilenceState {
     /// Strong activity (real output or Working marker) was observed after that
     /// submission. Until then, the old ready prompt is not proof of completion.
     turn_activity_seen: bool,
+    /// Monotonic owner for an IDLE→BUSY transition reserved by terminal
+    /// injection. The saved bool is the confirmed-idle value to restore only
+    /// when no PTY byte was written and this claim still owns the state.
+    active_injection_claim: Option<(u64, bool)>,
+    next_injection_claim: u64,
+    /// A payload may have been partially written or flushed without a complete
+    /// Enter. Such sessions remain conservatively BUSY and are surfaced in
+    /// status; automatic retry would risk duplicate or corrupted input.
+    pub(crate) injection_delivery_uncertain: bool,
     /// Deadline until which an in-flight API connection-retry holds the agent
     /// BUSY. Armed by `mark_api_retry` when `is_retry_line` matches a changed
     /// row; blocks both the ready-screen and silence idle paths until it expires
@@ -781,11 +790,65 @@ impl SilenceState {
             interrupt_requested_at: None,
             turn_started_by_input: false,
             turn_activity_seen: false,
+            active_injection_claim: None,
+            next_injection_claim: 0,
+            injection_delivery_uncertain: false,
             api_retry_hold_until: None,
         }
     }
 
+    fn begin_injection_claim(&mut self, prior_idle_confirmed: bool) -> u64 {
+        self.next_injection_claim = self.next_injection_claim.wrapping_add(1).max(1);
+        let token = self.next_injection_claim;
+        self.active_injection_claim = Some((token, prior_idle_confirmed));
+        self.injection_delivery_uncertain = false;
+        token
+    }
+
+    fn commit_injection_claim(&mut self, token: u64) -> bool {
+        if self
+            .active_injection_claim
+            .is_some_and(|(owner, _)| owner == token)
+        {
+            self.active_injection_claim = None;
+            self.injection_delivery_uncertain = false;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn rollback_injection_claim(&mut self, token: u64) -> Option<bool> {
+        let (_, prior_idle_confirmed) = self
+            .active_injection_claim
+            .filter(|(owner, _)| *owner == token)?;
+        if self.turn_activity_seen || self.hook_busy {
+            self.active_injection_claim = None;
+            return None;
+        }
+        self.active_injection_claim = None;
+        self.injection_delivery_uncertain = false;
+        self.idle_confirmed = prior_idle_confirmed;
+        Some(prior_idle_confirmed)
+    }
+
+    fn mark_injection_uncertain(&mut self, token: u64) {
+        if self
+            .active_injection_claim
+            .is_some_and(|(owner, _)| owner == token)
+        {
+            self.active_injection_claim = None;
+            self.injection_delivery_uncertain = true;
+        }
+    }
+
+    fn invalidate_injection_claim(&mut self) {
+        self.active_injection_claim = None;
+        self.injection_delivery_uncertain = false;
+    }
+
     fn note_explicit_state(&mut self, state: u8, hook_state: bool) {
+        self.invalidate_injection_claim();
         self.hook_state_seen |= hook_state;
         self.ready_since = None;
         match state {
@@ -817,6 +880,7 @@ impl SilenceState {
     }
 
     fn note_working_screen(&mut self) {
+        self.invalidate_injection_claim();
         self.note_busy_evidence();
         self.turn_activity_seen = true;
         // Keep silence-based question/tool-error detection aligned with shell
@@ -826,12 +890,14 @@ impl SilenceState {
     }
 
     fn note_real_activity(&mut self) {
+        self.invalidate_injection_claim();
         self.note_busy_evidence();
         self.turn_activity_seen = true;
     }
 
     fn note_ready_screen(&mut self) -> bool {
-        if self.hook_busy
+        if self.injection_delivery_uncertain
+            || self.hook_busy
             || (self.turn_started_by_input && !self.turn_activity_seen)
             || self.is_api_retry_active()
         {
@@ -1289,11 +1355,6 @@ fn try_shell_transition(
                 );
             }
         }
-        // Now that this session is idle, deliver any peer messages that
-        // arrived while it was busy. Safe for shells too (no pending → no-op).
-        if new == SHELL_IDLE {
-            flush_pending_injections(state, session_id);
-        }
     }
     ok
 }
@@ -1627,6 +1688,12 @@ fn transition_explicit_shell_state(
     };
     if prev != target && try_shell_transition(state, session_id, prev, target, true) {
         emit_shell_state(state, session_id, label);
+        // Publish IDLE before a queued delivery claims IDLE→BUSY again. Reversing
+        // this order leaves the backend BUSY while the frontend's last event is
+        // the stale IDLE emitted by this caller.
+        if target == SHELL_IDLE {
+            flush_pending_injections(state, session_id);
+        }
     }
 }
 
@@ -1954,6 +2021,7 @@ fn spawn_silence_timer(
                             "Shell state → idle"
                         );
                         emit_shell_state(&state, &session_id, "idle");
+                        flush_pending_injections(&state, &session_id);
                         record_inferred_outcome_if_no_osc133(&state, &session_id);
                     }
                 }
@@ -3425,6 +3493,11 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
     state.shell_state_since_ms.remove(session_id);
     state.pending_injections.remove(session_id);
+    state.pending_initial_prompts.remove(session_id);
+    state.active_agent_waiters.remove(session_id);
+    state.peer_agents.remove(session_id);
+    state.agent_inbox.remove(session_id);
+    state.agent_inbox_evictions.remove(session_id);
     #[cfg(unix)]
     state.standby_sessions.remove(session_id);
     state.session_parent.remove(session_id);
@@ -3461,7 +3534,11 @@ fn push_state_change_to_parent(state: &AppState, session_id: &str, payload: serd
         timestamp: now_ms,
         delivered_via_channel: false,
     };
+    let message_id = msg.id.clone();
     state.push_agent_inbox(&parent_id, msg);
+    if !state.assign_agent_delivery(&parent_id, &message_id) {
+        return;
+    }
     // Wake the orchestrator: an idle parent won't poll its inbox, so surface the
     // lifecycle change directly in its terminal. Uses a compact human line — the
     // full JSON payload stays in the inbox for programmatic reads.
@@ -3483,6 +3560,55 @@ fn push_state_change_to_parent(state: &AppState, session_id: &str, payload: serd
         ),
     };
     deliver_message_to_pty(state, &parent_id, &framed);
+    state.mark_terminal_delivery_dispatched(&parent_id, &message_id);
+}
+
+/// Emit the single exceptional-path notification for an initial prompt that
+/// never completed PTY submission. Removing the marker first makes the
+/// operation idempotent: a watchdog can fire at most once per spawned child.
+pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session_id: &str) -> bool {
+    if state.pending_initial_prompts.remove(session_id).is_none() {
+        return false;
+    }
+    let Some(parent_id) = state
+        .session_parent
+        .get(session_id)
+        .map(|entry| entry.value().clone())
+    else {
+        tracing::warn!(session = %session_id, "Initial prompt delivery timed out without a registered parent");
+        return false;
+    };
+    let now_ms = now_epoch_ms();
+    let payload = serde_json::json!({
+        "type": "prompt_delivery_failed",
+        "reason": "timeout",
+        "session_id": session_id,
+    });
+    let message_id = format!("tuic-auto-prompt-{session_id}-{now_ms}");
+    state.push_agent_inbox(
+        &parent_id,
+        crate::state::AgentMessage {
+            id: message_id.clone(),
+            from_tuic_session: session_id.to_string(),
+            from_name: "tuic".to_string(),
+            content: serde_json::to_string(&payload).unwrap_or_default(),
+            timestamp: now_ms,
+            delivered_via_channel: false,
+        },
+    );
+    if !state.assign_agent_delivery(&parent_id, &message_id) {
+        return true;
+    }
+    deliver_message_to_pty(
+        state,
+        &parent_id,
+        &format!(
+            "[TUIC] child agent {} initial prompt delivery timed out",
+            short_session(session_id)
+        ),
+    );
+    state.mark_terminal_delivery_dispatched(&parent_id, &message_id);
+    true
 }
 
 /// First 8 chars of a session UUID, for compact human-facing labels.
@@ -3540,7 +3666,66 @@ pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
         .get(session_id)
         .map(|s| s.question_confident)
         .unwrap_or(false);
-    idle && idle_is_confirmed(state, session_id) && !blocked_on_question
+    let has_partial_user_input = state
+        .input_buffers
+        .get(session_id)
+        .is_some_and(|buffer| !buffer.lock().content().is_empty());
+    idle && idle_is_confirmed(state, session_id) && !blocked_on_question && !has_partial_user_input
+}
+
+/// Reserve an idle agent composer for one injected command.
+///
+/// `should_inject_now` is only a snapshot. The agent may become busy between
+/// that read and the PTY write, so the final IDLE→BUSY transition must be an
+/// atomic compare-exchange. A lost race leaves the message queued instead of
+/// typing it into an active composer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct InjectionClaim {
+    token: u64,
+}
+
+fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<InjectionClaim> {
+    if !should_inject_now(state, session_id) {
+        return None;
+    }
+    let prior_idle_confirmed = state
+        .silence_states
+        .get(session_id)
+        .map(|silence| silence.lock().idle_confirmed)
+        .unwrap_or(false);
+    if !try_shell_transition(state, session_id, SHELL_IDLE, SHELL_BUSY, true) {
+        return None;
+    }
+    let token = state
+        .silence_states
+        .get(session_id)
+        .map(|silence| silence.lock().begin_injection_claim(prior_idle_confirmed))
+        .unwrap_or(0);
+    emit_shell_state(state, session_id, "busy");
+    Some(InjectionClaim { token })
+}
+
+fn rollback_injection_claim(state: &AppState, session_id: &str, claim: InjectionClaim) -> bool {
+    let owns_claim = state
+        .silence_states
+        .get(session_id)
+        .and_then(|silence| silence.lock().rollback_injection_claim(claim.token))
+        .is_some();
+    if !owns_claim {
+        return false;
+    }
+    if try_shell_transition(state, session_id, SHELL_BUSY, SHELL_IDLE, true) {
+        emit_shell_state(state, session_id, "idle");
+        true
+    } else {
+        false
+    }
+}
+
+fn mark_injection_uncertain(state: &AppState, session_id: &str, claim: InjectionClaim) {
+    if let Some(silence) = state.silence_states.get(session_id) {
+        silence.lock().mark_injection_uncertain(claim.token);
+    }
 }
 
 /// Build the first write of an injection: Ctrl-U clears any pending input, and
@@ -3578,17 +3763,29 @@ const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(5
 /// text never submits. The session lock is released across the gap so a concurrent
 /// writer to the same session is never blocked by the delay. Best-effort: a dead
 /// PTY is logged and ignored (the inbox still holds the message).
-pub(crate) fn inject_text_into_pty(state: &AppState, session_id: &str, text: &str) {
+/// Write prompt text and a submitting Enter to an agent PTY using the exact
+/// framing and timing required by raw-mode TUIs. The caller owns bookkeeping:
+/// peer delivery records a synthetic submission, while MCP session input feeds
+/// the original text and Enter through its input-state FSM.
+pub(crate) fn write_agent_command_to_pty(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+) -> Result<(), String> {
     {
-        let Some(entry) = state.sessions.get(session_id) else {
-            return;
-        };
+        let entry = state
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| "Session not found".to_string())?;
         let mut session = entry.lock();
-        if let Err(e) = session.writer.write_all(injection_payload(text).as_bytes()) {
-            tracing::debug!(session = %session_id, error = %e, "inject text write failed");
-            return;
-        }
-        let _ = session.writer.flush();
+        session
+            .writer
+            .write_all(injection_payload(text).as_bytes())
+            .map_err(|e| format!("Write failed: {e}"))?;
+        session
+            .writer
+            .flush()
+            .map_err(|e| format!("Flush failed: {e}"))?;
     } // lock released before the gap
 
     // DEFERRED (2026-07-17) — this blocks the calling thread (sometimes a tokio
@@ -3599,17 +3796,161 @@ pub(crate) fn inject_text_into_pty(state: &AppState, session_id: &str, text: &st
     std::thread::sleep(INJECT_ENTER_GAP);
 
     {
-        let Some(entry) = state.sessions.get(session_id) else {
-            return; // session vanished during the gap — CR is moot
+        let entry = state
+            .sessions
+            .get(session_id)
+            .ok_or_else(|| "Session vanished before Enter injection".to_string())?;
+        let mut session = entry.lock();
+        session
+            .writer
+            .write_all(b"\r")
+            .map_err(|e| format!("Write failed: {e}"))?;
+        session
+            .writer
+            .flush()
+            .map_err(|e| format!("Flush failed: {e}"))?;
+    }
+
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum InjectionOutcome {
+    Submitted,
+    NotStarted(String),
+    Uncertain(String),
+}
+
+fn write_all_with_progress(
+    writer: &mut dyn Write,
+    bytes: &[u8],
+    prior_bytes_written: usize,
+) -> Result<(), (usize, String)> {
+    let mut written = 0usize;
+    while written < bytes.len() {
+        match writer.write(&bytes[written..]) {
+            Ok(0) => {
+                return Err((
+                    prior_bytes_written + written,
+                    "Write failed: writer returned zero bytes".to_string(),
+                ));
+            }
+            Ok(n) => written += n,
+            Err(error) => {
+                return Err((
+                    prior_bytes_written + written,
+                    format!("Write failed: {error}"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn write_claimed_agent_command(state: &AppState, session_id: &str, text: &str) -> InjectionOutcome {
+    let payload = injection_payload(text);
+    {
+        let entry = match state.sessions.get(session_id) {
+            Some(entry) => entry,
+            None => return InjectionOutcome::NotStarted("Session not found".to_string()),
         };
         let mut session = entry.lock();
-        if let Err(e) = session.writer.write_all(b"\r") {
-            tracing::debug!(session = %session_id, error = %e, "inject CR write failed");
-            return;
+        if let Err((written, error)) =
+            write_all_with_progress(session.writer.as_mut(), payload.as_bytes(), 0)
+        {
+            return if written == 0 {
+                InjectionOutcome::NotStarted(error)
+            } else {
+                InjectionOutcome::Uncertain(error)
+            };
         }
-        let _ = session.writer.flush();
+        if let Err(error) = session.writer.flush() {
+            return InjectionOutcome::Uncertain(format!("Flush failed: {error}"));
+        }
     }
-    note_submitted_input(state, session_id);
+
+    std::thread::sleep(INJECT_ENTER_GAP);
+
+    {
+        let entry = match state.sessions.get(session_id) {
+            Some(entry) => entry,
+            None => {
+                return InjectionOutcome::Uncertain(
+                    "Session vanished before Enter injection".to_string(),
+                );
+            }
+        };
+        let mut session = entry.lock();
+        if let Err((_, error)) =
+            write_all_with_progress(session.writer.as_mut(), b"\r", payload.len())
+        {
+            return InjectionOutcome::Uncertain(error);
+        }
+        if let Err(error) = session.writer.flush() {
+            return InjectionOutcome::Uncertain(format!("Flush failed: {error}"));
+        }
+    }
+
+    InjectionOutcome::Submitted
+}
+
+fn commit_injection_claim(state: &AppState, session_id: &str, claim: InjectionClaim) {
+    let committed = state
+        .silence_states
+        .get(session_id)
+        .map(|silence| silence.lock().commit_injection_claim(claim.token))
+        .unwrap_or(false);
+    if committed {
+        note_submitted_input(state, session_id);
+    }
+}
+
+fn run_claimed_injection(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+    claim: InjectionClaim,
+) -> InjectionOutcome {
+    let outcome = write_claimed_agent_command(state, session_id, text);
+    apply_claimed_injection_outcome(state, session_id, text, claim, outcome)
+}
+
+fn apply_claimed_injection_outcome(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+    claim: InjectionClaim,
+    outcome: InjectionOutcome,
+) -> InjectionOutcome {
+    match &outcome {
+        InjectionOutcome::Submitted => {
+            commit_injection_claim(state, session_id, claim);
+            if state
+                .pending_initial_prompts
+                .get(session_id)
+                .is_some_and(|prompt| prompt.as_str() == text)
+            {
+                state.pending_initial_prompts.remove(session_id);
+            }
+        }
+        InjectionOutcome::NotStarted(error) => {
+            tracing::debug!(session = %session_id, error, "agent command injection did not start");
+            rollback_injection_claim(state, session_id, claim);
+        }
+        InjectionOutcome::Uncertain(error) => {
+            tracing::warn!(session = %session_id, error, "agent command injection outcome uncertain; preserving busy state");
+            mark_injection_uncertain(state, session_id, claim);
+        }
+    }
+    outcome
+}
+
+fn requeue_injection_front(state: &AppState, session_id: &str, text: &str) {
+    state
+        .pending_injections
+        .entry(session_id.to_string())
+        .or_default()
+        .push_front(text.to_string());
 }
 
 /// Deliver a framed peer message into a recipient's terminal, waking it. Injects
@@ -3626,8 +3967,13 @@ pub(crate) fn deliver_message_to_pty(state: &AppState, session_id: &str, framed:
     if !is_agent {
         return;
     }
-    if should_inject_now(state, session_id) {
-        inject_text_into_pty(state, session_id, framed);
+    if let Some(claim) = claim_idle_for_injection(state, session_id) {
+        if matches!(
+            run_claimed_injection(state, session_id, framed, claim),
+            InjectionOutcome::NotStarted(_)
+        ) {
+            requeue_injection_front(state, session_id, framed);
+        }
     } else {
         state
             .pending_injections
@@ -3654,15 +4000,28 @@ pub(crate) fn deliver_message_to_pty(state: &AppState, session_id: &str, framed:
 /// from the BUSY→IDLE transition, the post-enqueue race re-check, and the
 /// unblock path when a confident question clears while the agent is idle.
 pub(crate) fn flush_pending_injections(state: &AppState, session_id: &str) {
-    if !should_inject_now(state, session_id) {
+    if !state
+        .pending_injections
+        .get(session_id)
+        .is_some_and(|pending| !pending.is_empty())
+    {
         return;
     }
-    let pending: Vec<String> = match state.pending_injections.get_mut(session_id) {
-        Some(mut q) => q.drain(..).collect(),
+    let claim = match claim_idle_for_injection(state, session_id) {
+        Some(claim) => claim,
         None => return,
     };
-    for text in pending {
-        inject_text_into_pty(state, session_id, &text);
+    let pending = match state.pending_injections.get_mut(session_id) {
+        Some(mut q) => q.pop_front(),
+        None => return,
+    };
+    if let Some(text) = pending {
+        if matches!(
+            run_claimed_injection(state, session_id, &text, claim),
+            InjectionOutcome::NotStarted(_)
+        ) {
+            requeue_injection_front(state, session_id, &text);
+        }
     }
 }
 
@@ -5004,6 +5363,12 @@ pub(crate) async fn write_pty(
             .entry(session_id.clone())
             .or_insert_with(|| std::sync::atomic::AtomicBool::new(false))
             .store(in_slash, std::sync::atomic::Ordering::Relaxed);
+
+        let composer_empty = buf.content().is_empty();
+        drop(buf);
+        if composer_empty {
+            flush_pending_injections(&state, &session_id);
+        }
 
         Ok(())
     } else {
@@ -7301,8 +7666,12 @@ mod tests {
         assert!(!is_retry_line(
             "I'll be retrying the request in a moment if it fails."
         ));
-        assert!(!is_retry_line("let retrying = true; // attempt to reconnect"));
-        assert!(!is_retry_line("Successfully connected to the API endpoint."));
+        assert!(!is_retry_line(
+            "let retrying = true; // attempt to reconnect"
+        ));
+        assert!(!is_retry_line(
+            "Successfully connected to the API endpoint."
+        ));
     }
 
     #[test]
@@ -7314,7 +7683,10 @@ mod tests {
         // Simulate the hold window elapsing.
         s.api_retry_hold_until =
             Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
-        assert!(!s.is_api_retry_active(), "hold self-expires after AGENT_RETRY_HOLD");
+        assert!(
+            !s.is_api_retry_active(),
+            "hold self-expires after AGENT_RETRY_HOLD"
+        );
     }
 
     #[test]
@@ -7352,7 +7724,10 @@ mod tests {
         s.mark_api_retry();
         // User re-engages (submitted a line / Ctrl+C).
         s.reset_tool_error_memory();
-        assert!(!s.is_api_retry_active(), "user input releases the retry hold");
+        assert!(
+            !s.is_api_retry_active(),
+            "user input releases the retry hold"
+        );
     }
 
     #[test]
@@ -8657,6 +9032,100 @@ mod tests {
             ("aider", aider_ready, AgentScreenActivity::Ready),
         ] {
             assert_eq!(detect_agent_screen_activity(Some(agent), &rows), expected);
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum SanitizedTraceStep {
+        Submit,
+        RealActivity,
+        WorkingScreen,
+        ReadyScreen,
+        UnknownScreen,
+    }
+
+    fn replay_sanitized_agent_trace(agent: &str, steps: &[SanitizedTraceStep]) -> SilenceState {
+        let mut silence = SilenceState::new();
+        silence.confirm_idle();
+        for step in steps {
+            match step {
+                SanitizedTraceStep::Submit => silence.note_user_submission(true),
+                SanitizedTraceStep::RealActivity => silence.note_real_activity(),
+                SanitizedTraceStep::WorkingScreen => {
+                    let rows = if agent == "codex" {
+                        vec!["• Working".to_string(), "› sanitized prompt".to_string()]
+                    } else {
+                        vec!["sanitized animated output".to_string()]
+                    };
+                    if detect_agent_screen_activity(Some(agent), &rows)
+                        == AgentScreenActivity::Working
+                    {
+                        silence.note_working_screen();
+                    }
+                }
+                SanitizedTraceStep::ReadyScreen => {
+                    let rows = match agent {
+                        "codex" => vec!["sanitized final".into(), "› sanitized prompt".into()],
+                        "claude" => vec!["sanitized final".into(), "❯".into()],
+                        "gemini" => vec!["> Type your message".into()],
+                        "aider" => vec![">".into()],
+                        _ => Vec::new(),
+                    };
+                    if detect_agent_screen_activity(Some(agent), &rows)
+                        == AgentScreenActivity::Ready
+                    {
+                        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+                        silence.note_ready_screen();
+                    }
+                }
+                SanitizedTraceStep::UnknownScreen => silence.note_unknown_screen(),
+            }
+        }
+        silence
+    }
+
+    #[test]
+    fn sanitized_codex_and_claude_trace_replay_requires_post_submit_consumption() {
+        // Sanitized from the 2026-07-18 live sequence: ready prompt → injected
+        // checkpoint → working/real output → final protocol text → ready prompt.
+        // Repository paths, prompts, and response content are intentionally omitted.
+        for agent in ["codex", "claude"] {
+            let completed = replay_sanitized_agent_trace(
+                agent,
+                &[
+                    SanitizedTraceStep::Submit,
+                    SanitizedTraceStep::WorkingScreen,
+                    SanitizedTraceStep::RealActivity,
+                    SanitizedTraceStep::ReadyScreen,
+                ],
+            );
+            assert!(completed.idle_confirmed, "{agent} completed trace");
+
+            let silent = replay_sanitized_agent_trace(
+                agent,
+                &[
+                    SanitizedTraceStep::Submit,
+                    SanitizedTraceStep::ReadyScreen,
+                    SanitizedTraceStep::ReadyScreen,
+                ],
+            );
+            assert!(
+                !silent.idle_confirmed,
+                "{agent} silent/no-op submission must remain conservative without positive consumption"
+            );
+
+            let partial_redraw = replay_sanitized_agent_trace(
+                agent,
+                &[
+                    SanitizedTraceStep::Submit,
+                    SanitizedTraceStep::UnknownScreen,
+                    SanitizedTraceStep::ReadyScreen,
+                ],
+            );
+            assert!(
+                !partial_redraw.idle_confirmed,
+                "{agent} partial/alternate-screen redraw must not prove consumption"
+            );
         }
     }
 
@@ -11009,6 +11478,32 @@ mod tests {
     }
 
     #[test]
+    fn pending_initial_prompt_timeout_notifies_parent_once() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "child-prompt-timeout";
+        let parent_id = "parent-prompt-timeout";
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+        state
+            .pending_initial_prompts
+            .insert(child_id.to_string(), "do the task".to_string());
+
+        assert!(notify_initial_prompt_timeout_if_pending(&state, child_id));
+        assert!(!notify_initial_prompt_timeout_if_pending(&state, child_id));
+
+        let inbox = state.agent_inbox.get(parent_id).unwrap();
+        assert_eq!(inbox.len(), 1, "timeout notification must be emitted once");
+        let content: serde_json::Value =
+            serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+        assert_eq!(content["type"], "prompt_delivery_failed");
+        assert_eq!(content["reason"], "timeout");
+        assert_eq!(content["session_id"], child_id);
+        assert!(!state.pending_initial_prompts.contains_key(child_id));
+    }
+
+    #[test]
     fn try_shell_transition_non_agent_session_does_not_push_idle_notification() {
         let state = crate::state::tests_support::make_test_app_state();
         let child_id = "non-agent-sess";
@@ -11068,7 +11563,7 @@ mod tests {
 
     #[test]
     fn tombstone_transient_cleanup_removes_swarm_maps() {
-        // F3: session_parent, shell_state_since_ms, mcp_to_session must all be cleaned on exit.
+        // F3: all per-child swarm state must be cleaned on exit.
         let state = crate::state::tests_support::make_test_app_state();
         let sid = "sess-cleanup";
         let mcp_sid = "mcp-sess-cleanup";
@@ -11085,6 +11580,18 @@ mod tests {
         state
             .session_to_mcp
             .insert(sid.to_string(), vec![mcp_sid.to_string()]);
+        state.peer_agents.insert(
+            sid.to_string(),
+            crate::state::PeerAgent {
+                tuic_session: sid.to_string(),
+                mcp_session_id: mcp_sid.to_string(),
+                name: "worker".to_string(),
+                project: None,
+                registered_at: 1,
+            },
+        );
+        state.agent_inbox.entry(sid.to_string()).or_default();
+        state.agent_inbox_evictions.insert(sid.to_string(), 2);
 
         tombstone_transient_cleanup(sid, &state);
 
@@ -11104,6 +11611,9 @@ mod tests {
             !state.session_to_mcp.contains_key(sid),
             "session_to_mcp entry must be removed"
         );
+        assert!(!state.peer_agents.contains_key(sid));
+        assert!(!state.agent_inbox.contains_key(sid));
+        assert!(!state.agent_inbox_evictions.contains_key(sid));
     }
 
     // ── PTY-injection message delivery (Step 2) ─────────────────────
@@ -11127,6 +11637,16 @@ mod tests {
             .insert(sid.to_string(), Arc::new(Mutex::new(silence)));
     }
 
+    fn flush_one_pending_as_submitted(state: &crate::state::AppState, sid: &str) {
+        let claim = claim_idle_for_injection(state, sid).expect("idle claim");
+        let text = state
+            .pending_injections
+            .get_mut(sid)
+            .and_then(|mut queue| queue.pop_front())
+            .expect("pending message");
+        apply_claimed_injection_outcome(state, sid, &text, claim, InjectionOutcome::Submitted);
+    }
+
     #[test]
     fn should_inject_now_only_for_idle_agent() {
         let state = crate::state::tests_support::make_test_app_state();
@@ -11143,6 +11663,26 @@ mod tests {
         assert!(
             !should_inject_now(&state, "unknown"),
             "unknown session → never inject"
+        );
+    }
+
+    #[test]
+    fn injection_claim_rechecks_idle_atomically_after_delivery_decision() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "race-agent", SHELL_IDLE);
+        assert!(should_inject_now(&state, "race-agent"));
+
+        assert!(try_shell_transition(
+            &state,
+            "race-agent",
+            SHELL_IDLE,
+            SHELL_BUSY,
+            false,
+        ));
+
+        assert!(
+            claim_idle_for_injection(&state, "race-agent").is_none(),
+            "a sender that observed idle before the agent became busy must queue instead of writing into the active composer"
         );
     }
 
@@ -11244,6 +11784,73 @@ mod tests {
     }
 
     #[test]
+    fn idle_flush_submits_only_one_queued_message_per_turn() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "idle", SHELL_IDLE);
+        state.pending_injections.insert(
+            "idle".to_string(),
+            std::collections::VecDeque::from(["first".to_string(), "second".to_string()]),
+        );
+
+        flush_one_pending_as_submitted(&state, "idle");
+
+        assert_eq!(
+            state
+                .pending_injections
+                .get("idle")
+                .map(|queue| queue.iter().cloned().collect::<Vec<_>>()),
+            Some(vec!["second".to_string()]),
+            "submitting the first message makes the agent busy; later messages must wait for its next idle transition"
+        );
+    }
+
+    #[test]
+    fn deliver_queues_for_idle_agent_with_partial_user_input() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "typing", SHELL_IDLE);
+        let mut input = crate::input_line_buffer::InputLineBuffer::new();
+        input.feed("draft in progress");
+        state
+            .input_buffers
+            .insert("typing".to_string(), Mutex::new(input));
+
+        assert!(
+            !should_inject_now(&state, "typing"),
+            "partial composer input must block terminal injection"
+        );
+        deliver_message_to_pty(&state, "typing", "[TUIC message from child] done");
+        let pending = state.pending_injections.get("typing").unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front().unwrap(), "[TUIC message from child] done");
+    }
+
+    #[test]
+    fn delivery_gate_assigns_waiter_without_touching_terminal_queue() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "waiting", SHELL_IDLE);
+        let lease = state.begin_agent_wait("waiting");
+        state.push_agent_inbox(
+            "waiting",
+            crate::state::AgentMessage {
+                id: "wait-owned".to_string(),
+                from_tuic_session: "sender".to_string(),
+                from_name: "sender".to_string(),
+                content: "done".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+
+        assert!(!state.assign_agent_delivery("waiting", "wait-owned"));
+
+        assert!(
+            !state.pending_injections.contains_key("waiting"),
+            "active wait owns delivery; terminal injection must not be queued"
+        );
+        state.finish_agent_wait("waiting", lease, 0, true);
+    }
+
+    #[test]
     fn deliver_noop_for_non_agent() {
         let state = crate::state::tests_support::make_test_app_state();
         // No session_states entry → not an agent.
@@ -11255,16 +11862,112 @@ mod tests {
     }
 
     #[test]
-    fn deliver_idle_agent_does_not_queue() {
-        // Idle agent → inject path (no live PTY here, so best-effort no-op), but
-        // critically it must NOT sit in the pending queue.
+    fn failed_not_started_injection_rolls_back_claim_and_requeues() {
+        // The test state has no live PTY session, so composer lookup fails before
+        // any byte can be written. The delivery claim must be rolled back and the
+        // message kept pending instead of leaving a false BUSY state.
         let state = crate::state::tests_support::make_test_app_state();
         agent_session(&state, "idle", SHELL_IDLE);
         deliver_message_to_pty(&state, "idle", "now");
         assert!(
-            !state.pending_injections.contains_key("idle"),
-            "idle agent message is injected, not queued"
+            state
+                .shell_states
+                .get("idle")
+                .is_some_and(|state| state.load(Ordering::Acquire) == SHELL_IDLE),
+            "a claim that never reached PTY I/O must restore IDLE"
         );
+        assert_eq!(
+            state
+                .pending_injections
+                .get("idle")
+                .and_then(|queue| queue.front().cloned()),
+            Some("now".to_string()),
+            "a not-started delivery must remain retryable"
+        );
+    }
+
+    #[test]
+    fn real_activity_invalidates_injection_rollback_ownership() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "active", SHELL_IDLE);
+        let claim = claim_idle_for_injection(&state, "active").expect("claim");
+        state
+            .silence_states
+            .get("active")
+            .unwrap()
+            .lock()
+            .note_real_activity();
+
+        assert!(!rollback_injection_claim(&state, "active", claim));
+        assert!(
+            state
+                .shell_states
+                .get("active")
+                .is_some_and(|value| value.load(Ordering::Acquire) == SHELL_BUSY),
+            "rollback must not erase genuine post-claim activity"
+        );
+    }
+
+    #[test]
+    fn partial_write_is_uncertain_not_not_started() {
+        struct PartialThenError {
+            wrote_once: bool,
+        }
+        impl std::io::Write for PartialThenError {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                if self.wrote_once {
+                    Err(std::io::Error::other("injected failure"))
+                } else {
+                    self.wrote_once = true;
+                    Ok(bytes.len().min(2))
+                }
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut writer = PartialThenError { wrote_once: false };
+        let failure = write_all_with_progress(&mut writer, b"payload", 0).unwrap_err();
+        assert_eq!(failure.0, 2, "partial progress must be retained");
+        assert!(failure.1.contains("injected failure"));
+    }
+
+    #[test]
+    fn uncertain_injection_preserves_busy_and_surfaces_status_flag() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "uncertain", SHELL_IDLE);
+        let claim = claim_idle_for_injection(&state, "uncertain").expect("claim");
+        mark_injection_uncertain(&state, "uncertain", claim);
+
+        assert!(
+            state
+                .shell_states
+                .get("uncertain")
+                .is_some_and(|value| value.load(Ordering::Acquire) == SHELL_BUSY)
+        );
+        assert!(
+            state
+                .silence_states
+                .get("uncertain")
+                .unwrap()
+                .lock()
+                .injection_delivery_uncertain
+        );
+        assert!(!state.pending_injections.contains_key("uncertain"));
+    }
+
+    #[test]
+    fn uncertain_injection_cannot_be_cleared_by_a_stale_ready_screen() {
+        let mut silence = SilenceState::new();
+        let token = silence.begin_injection_claim(true);
+        silence.mark_injection_uncertain(token);
+        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+
+        assert!(!silence.note_ready_screen());
+        assert!(silence.injection_delivery_uncertain);
+        assert!(!silence.idle_confirmed);
     }
 
     #[test]
@@ -11277,7 +11980,8 @@ mod tests {
         // and the transition+flush complete with the session ending idle, the queue MUST
         // be empty (message delivered) regardless of interleaving. Pre-fix this fails in
         // the bug window (sender reads busy, timer flushes empty, sender enqueues with no
-        // recovery); post-fix the assertion holds on every interleaving.
+        // recovery). With no live PTY in this unit test, the recovered delivery
+        // must remain queued exactly once rather than being lost or duplicated.
         use std::sync::{Arc, Barrier};
         let state = Arc::new(crate::state::tests_support::make_test_app_state());
         for i in 0..500 {
@@ -11296,6 +12000,8 @@ mod tests {
                 // Silence timer: BUSY→IDLE also runs flush_pending_injections on idle.
                 s2.silence_states.get("race").unwrap().lock().idle_confirmed = true;
                 try_shell_transition(&s2, "race", SHELL_BUSY, SHELL_IDLE, false);
+                emit_shell_state(&s2, "race", "idle");
+                flush_pending_injections(&s2, "race");
             });
             sender.join().unwrap();
             timer.join().unwrap();
@@ -11305,10 +12011,7 @@ mod tests {
                 .get("race")
                 .map(|q| q.len())
                 .unwrap_or(0);
-            assert_eq!(
-                queued, 0,
-                "iteration {i}: message left deferred in queue after busy→idle race"
-            );
+            assert_eq!(queued, 1, "iteration {i}: message lost or duplicated");
         }
     }
 
@@ -11467,7 +12170,7 @@ mod tests {
     }
 
     #[test]
-    fn flush_drains_pending_on_idle_transition() {
+    fn idle_transition_emits_before_submitting_one_pending_message() {
         use std::collections::VecDeque;
         let state = crate::state::tests_support::make_test_app_state();
         agent_session(&state, "sess", SHELL_BUSY);
@@ -11485,19 +12188,32 @@ mod tests {
             .lock()
             .confirm_idle();
 
-        // BUSY→IDLE must drain the queue (inject is best-effort; drain is the
-        // observable invariant — no message is stranded).
+        let mut events = state.event_bus.subscribe();
         assert!(try_shell_transition(
             &state, "sess", SHELL_BUSY, SHELL_IDLE, false
         ));
-        assert!(
-            state
-                .pending_injections
-                .get("sess")
-                .map(|q| q.is_empty())
-                .unwrap_or(true),
-            "pending must be drained after idle transition"
+        emit_shell_state(&state, "sess", "idle");
+        flush_one_pending_as_submitted(&state, "sess");
+
+        assert_eq!(
+            state.pending_injections.get("sess").map(|q| q.len()),
+            Some(1),
+            "only one queued message may be submitted per idle turn"
         );
+        let states: Vec<String> = std::iter::from_fn(|| events.try_recv().ok())
+            .filter_map(|event| match event {
+                crate::state::AppEvent::PtyParsed { parsed, .. }
+                    if parsed.get("type").and_then(|v| v.as_str()) == Some("shell-state") =>
+                {
+                    parsed
+                        .get("state")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(states, vec!["idle", "busy"]);
     }
 
     #[test]
@@ -11533,6 +12249,8 @@ mod tests {
             .confirm_idle();
 
         try_shell_transition(&state, "sess", SHELL_BUSY, SHELL_IDLE, false);
+        emit_shell_state(&state, "sess", "idle");
+        flush_pending_injections(&state, "sess");
         assert_eq!(
             state.pending_injections.get("sess").map(|q| q.len()),
             Some(1),
@@ -11546,11 +12264,11 @@ mod tests {
             .get_mut("sess")
             .unwrap()
             .question_confident = false;
-        flush_pending_injections(&state, "sess");
+        flush_one_pending_as_submitted(&state, "sess");
         assert_eq!(
             state.pending_injections.get("sess").map(|q| q.len()),
             Some(0),
-            "unblock flush must drain once the confident question clears"
+            "unblock flush must submit once the confident question clears"
         );
     }
 
@@ -11592,7 +12310,7 @@ mod tests {
     }
 
     #[test]
-    fn deliver_injects_for_ready_prompt_awaiting_only() {
+    fn ready_prompt_delivery_attempts_and_requeues_when_pty_is_missing() {
         // codex idles at its ready prompt with awaiting_input=true (low-confidence
         // silence heuristic) — delivery must inject, not queue forever (story 091).
         use std::sync::atomic::AtomicU8;
@@ -11615,9 +12333,13 @@ mod tests {
             .silence_states
             .insert("codex".to_string(), Arc::new(Mutex::new(silence)));
         deliver_message_to_pty(&state, "codex", "[TUIC message from lead] go");
-        assert!(
-            !state.pending_injections.contains_key("codex"),
-            "ready-prompt agent message is injected, not queued"
+        assert_eq!(
+            state
+                .pending_injections
+                .get("codex")
+                .and_then(|queue| queue.front().cloned()),
+            Some("[TUIC message from lead] go".to_string()),
+            "ready-prompt delivery must stay retryable when PTY lookup fails"
         );
     }
 
