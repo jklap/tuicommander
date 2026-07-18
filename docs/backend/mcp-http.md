@@ -417,6 +417,7 @@ that contain `{prompt}` remain authoritative and receive direct substitution.
 Flags-only `args` keep their order; normal CLIs receive the prompt as the final
 positional argument, while prefill-only interactive TUIs receive it through the
 deferred PTY-injection path after their ready prompt appears.
+Structured `model` is composed with `args`; Codex spawns include the approval-bypass default.
 
 `name` optionally assigns a non-empty peer and PTY display name at spawn time.
 The parent-assigned name is stored before prompt delivery, returned in the spawn

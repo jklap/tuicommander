@@ -572,12 +572,12 @@ fn native_tool_definitions() -> serde_json::Value {
                 "timeout_ms": { "type": "integer", "description": "Max wait in ms (action=wait; default 5000, capped 8000). On timeout returns {timed_out:true} — call again to keep waiting." },
                 "prompt": { "type": "string", "description": "Task prompt for the agent (action=spawn)" },
                 "cwd": { "type": "string", "description": "Working directory (action=spawn)" },
-                "model": { "type": "string", "description": "Model override (action=spawn)" },
+                "model": { "type": "string", "description": "Structured model flag; preserved when args is also set (action=spawn)" },
                 "print_mode": { "type": "boolean", "description": "false (default): visible TUI tab, observable via agent(inbox). true: headless, no tab. (action=spawn)" },
                 "output_format": { "type": "string", "description": "Output format, e.g. 'json' (action=spawn)" },
                 "agent_type": { "type": "string", "description": "Agent type OR run config name. Resolved as: (1) run config name match across enabled agents, (2) agent binary name (claude, codex, aider, goose, gemini, ...). Case-insensitive. (action=spawn)" },
                 "binary_path": { "type": "string", "description": "Override agent binary path (action=spawn)" },
-                "args": { "type": "array", "items": { "type": "string" }, "description": "Raw CLI args (action=spawn)" },
+                "args": { "type": "array", "items": { "type": "string" }, "description": "Additional CLI args; composed with structured flags and agent defaults (action=spawn)" },
                 "rows": { "type": "integer", "description": "Terminal rows (action=spawn)" },
                 "cols": { "type": "integer", "description": "Terminal cols (action=spawn)" },
                 "tuic_session": { "type": "string", "description": "Your $TUIC_SESSION env var value (action=register, required)" },
@@ -2212,11 +2212,20 @@ fn handle_agent(
                     .iter()
                     .filter_map(|arg| arg.as_str().map(ToOwned::to_owned))
                     .collect();
-                let (final_args, deferred) = finalize_explicit_spawn_args(
-                    effective_agent_type.as_deref().unwrap_or_default(),
+                let agent_type = effective_agent_type.as_deref().unwrap_or_default();
+                let merged = match merge_mcp_params_into_args(
+                    agent_type,
                     &explicit_args,
-                    &effective_prompt,
-                );
+                    args["model"].as_str(),
+                    args["print_mode"].as_bool().unwrap_or(false),
+                    args["output_format"].as_str(),
+                    false,
+                ) {
+                    Ok(m) => m,
+                    Err(e) => return serde_json::json!({"error": e}),
+                };
+                let (final_args, deferred) =
+                    finalize_explicit_spawn_args(agent_type, &merged, &effective_prompt);
                 deferred_initial_prompt = deferred;
                 for arg in &final_args {
                     cmd.arg(arg);
@@ -4193,7 +4202,13 @@ fn merge_mcp_params_into_args(
     output_format: Option<&str>,
     default_template: bool,
 ) -> Result<Vec<String>, String> {
+    const CODEX_BYPASS_ARG: &str = "--dangerously-bypass-approvals-and-sandbox";
+
     let is_claude = agent_type == "claude";
+    let mut base_args = args.to_vec();
+    if agent_type == "codex" && !base_args.iter().any(|arg| arg == CODEX_BYPASS_ARG) {
+        base_args.insert(0, CODEX_BYPASS_ARG.to_string());
+    }
     let mut flags: Vec<String> = Vec::new();
 
     if print_mode {
@@ -4202,7 +4217,7 @@ fn merge_mcp_params_into_args(
                 agent_type,
                 "Dropping Claude-only MCP param print_mode (--print) for non-claude agent"
             );
-        } else if !args.iter().any(|a| a.starts_with("--print")) {
+        } else if !base_args.iter().any(|a| a.starts_with("--print")) {
             flags.push("--print".to_string());
         }
     }
@@ -4214,7 +4229,7 @@ fn merge_mcp_params_into_args(
                 output_format = fmt,
                 "Dropping Claude-only MCP param output_format (--output-format) for non-claude agent"
             );
-        } else if args.iter().any(|a| a.starts_with("--output-format")) {
+        } else if base_args.iter().any(|a| a.starts_with("--output-format")) {
             return Err(format!(
                 "Conflict: run config already contains --output-format but MCP param output_format=\"{}\" was also passed",
                 fmt
@@ -4226,7 +4241,7 @@ fn merge_mcp_params_into_args(
     }
 
     if let Some(model_val) = model {
-        if args.iter().any(|a| a.starts_with("--model")) {
+        if base_args.iter().any(|a| a.starts_with("--model")) {
             return Err(format!(
                 "Conflict: run config already contains --model but MCP param model=\"{}\" was also passed",
                 model_val
@@ -4238,10 +4253,10 @@ fn merge_mcp_params_into_args(
 
     let merged = if is_claude && default_template {
         let mut m = flags;
-        m.extend(args.iter().cloned());
+        m.extend(base_args);
         m
     } else {
-        let mut m = args.to_vec();
+        let mut m = base_args;
         m.extend(flags);
         m
     };
@@ -8163,6 +8178,50 @@ mod tests {
     }
 
     #[test]
+    fn codex_spawn_composition_preserves_model_with_explicit_args() {
+        let explicit = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
+        let merged = merge_mcp_params_into_args(
+            "codex",
+            &explicit,
+            Some("gpt-5.6-terra"),
+            false,
+            None,
+            false,
+        )
+        .unwrap();
+        let (argv, deferred) = finalize_explicit_spawn_args("codex", &merged, "perform the task");
+
+        assert_eq!(
+            argv,
+            vec![
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--model",
+                "gpt-5.6-terra"
+            ]
+        );
+        assert_eq!(deferred.as_deref(), Some("perform the task"));
+    }
+
+    #[test]
+    fn codex_spawn_composition_adds_default_bypass() {
+        let template = crate::agent::default_prompt_args("codex").unwrap();
+        let merged =
+            merge_mcp_params_into_args("codex", &template, Some("gpt-5.6-luna"), false, None, true)
+                .unwrap();
+        let (argv, deferred) = finalize_spawn_args("codex", &merged, "perform the task");
+
+        assert_eq!(
+            argv,
+            vec![
+                "--dangerously-bypass-approvals-and-sandbox",
+                "--model",
+                "gpt-5.6-luna"
+            ]
+        );
+        assert_eq!(deferred.as_deref(), Some("perform the task"));
+    }
+
+    #[test]
     fn explicit_codex_placeholder_remains_authoritative() {
         let explicit = vec!["exec".to_string(), "{prompt}".to_string()];
         let (argv, deferred) = finalize_explicit_spawn_args("codex", &explicit, "perform the task");
@@ -8338,8 +8397,10 @@ mod tests {
         );
         assert_eq!(
             result,
-            vec!["{prompt}".to_string()],
-            "args otherwise unchanged"
+            vec![
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+                "{prompt}".to_string()
+            ]
         );
     }
 
@@ -8362,14 +8423,26 @@ mod tests {
             merge_mcp_params_into_args("codex", &args, None, true, Some("json"), false).unwrap();
         assert!(!result.contains(&"--print".to_string()));
         assert!(!result.contains(&"--output-format".to_string()));
-        assert_eq!(result, vec!["{prompt}".to_string()]);
+        assert_eq!(
+            result,
+            vec![
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+                "{prompt}".to_string()
+            ]
+        );
     }
 
     #[test]
-    fn merge_params_codex_neither_is_noop() {
+    fn merge_params_codex_applies_default_bypass() {
         let args = vec!["{prompt}".to_string()];
         let result = merge_mcp_params_into_args("codex", &args, None, false, None, false).unwrap();
-        assert_eq!(result, vec!["{prompt}".to_string()]);
+        assert_eq!(
+            result,
+            vec![
+                "--dangerously-bypass-approvals-and-sandbox".to_string(),
+                "{prompt}".to_string()
+            ]
+        );
     }
 
     #[test]
