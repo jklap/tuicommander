@@ -96,11 +96,11 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 Frame emission is decoupled from PTY reading via a per-session **frame ticker** thread (display-link style pacing):
 
 1. **Reader thread**: processes PTY data into the alacritty VT grid, sets a `grid_frame_dirty` AtomicBool flag
-2. **Ticker thread**: every 8ms, checks the dirty flag → if set, serializes dirty rows via `serialize_dirty_rows()` → sends frame via `send_grid_frame()` (respects `grid_frame_in_flight` backpressure)
+2. **Ticker thread**: every 16ms, checks the dirty flag → if set, serializes dirty rows via `serialize_dirty_rows()` → sends frame via `send_grid_frame()` (respects `grid_frame_in_flight` backpressure)
 3. **Frontend**: coalesces paint triggers via `requestAnimationFrame` (~60fps)
-4. **Ack handler**: on frontend ack, flushes any remaining dirty rows accumulated while in-flight
+4. **Ack handler**: clears only the in-flight flag; the ticker sends any dirty rows accumulated while the prior frame was in flight
 
-This coalesces rapid writes (e.g. spinner CR+erase+rewrite within 8ms) into a single frame, eliminating flicker from intermediate erase states. Max added latency is 8ms — imperceptible. The ticker exits when the reader's `running` flag clears, with a final flush to avoid losing the last frame.
+This coalesces rapid writes (e.g. spinner CR+erase+rewrite within 16ms) into a single frame, eliminating flicker from intermediate erase states. The ticker exits when the reader's `running` flag clears, with a final flush to avoid losing the last frame.
 
 ### Headless Reader Thread
 
@@ -338,6 +338,15 @@ PTY is quiet; it does not prove that the assigned task finished. An agent's
 `agent_state=completed` plus a `state_change: completed` parent notification.
 Submitting new user or peer input starts a new task epoch immediately, clearing
 the prior completion marker and its stale suggested actions before new output arrives.
+SSE peer delivery reserves that epoch before channel visibility and rolls it back
+only when the broadcast proves that no receiver accepted the notification. Idle
+CAS and parent lifecycle notification share the same per-session lifecycle lock;
+submitted epoch mutation and its IDLE-to-BUSY transition hold that lock as one
+critical section, so a new turn cannot inherit a stale idle notification. The
+authoritative parent inbox enqueue occurs under the child lock; parent terminal
+wake/dispatch runs only after release, avoiding cross-session lock ordering. A
+queued BUSY-to-IDLE transition also carries the task epoch observed before it
+waited for the lock and is discarded if a new submitted turn won first.
 Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 
 **Transactional peer injection:** Reserving an idle composer creates an ownership token before the PTY write. A failure proven to occur before any byte was written rolls the synthetic BUSY state back to the prior confirmed IDLE state and keeps the message queued. Once any byte may have escaped, failure is `delivery_uncertain`: the session remains conservatively BUSY, the authoritative inbox remains readable, and TUIC does not automatically retry into the terminal. Real output, a Working screen, or an explicit state marker invalidates rollback ownership so a late error cannot erase genuine activity. `session status` exposes the additive `delivery_uncertain` flag.

@@ -215,23 +215,8 @@ fn frame_peer_message(sender_name: &str, content: &str) -> String {
 const TUIC_SESSION_HEADER: &str = "x-tuic-session";
 
 /// Bind an MCP session to a PTY (tuic) session identity: upsert `peer_agents`
-/// and the `mcp_to_session` / `session_to_mcp` reverse indices. Shared by the
-/// explicit `agent register` action and the initialize `x-tuic-session`
-/// auto-bind so the two never drift. Last-writer-wins on the forward map
-/// (`mcp_to_session`); the reverse map is deduped so a reconnecting bridge that
-/// mints fresh MCP session ids does not accumulate stale entries.
-fn bind_peer_identity(
-    state: &AppState,
-    mcp_sid: &str,
-    tuic_session: &str,
-    name: String,
-    project: Option<String>,
-    registered_at: u64,
-) {
-    let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
-    bind_peer_identity_locked(state, mcp_sid, tuic_session, name, project, registered_at);
-}
-
+/// and the `mcp_to_session` / `session_to_mcp` reverse indices. Callers hold
+/// `PEER_IDENTITY_BIND_LOCK` after applying the shared live-owner policy below.
 fn bind_peer_identity_locked(
     state: &AppState,
     mcp_sid: &str,
@@ -300,15 +285,14 @@ fn mcp_session_has_live_owner(state: &AppState, mcp_sid: &str) -> bool {
         .is_some_and(|meta| meta.last_activity.elapsed() <= MCP_OWNER_ACTIVITY_GRACE)
 }
 
-fn register_peer_identity(
+/// Return the prior owner that may be reclaimed, or reject takeover while it is
+/// still live. The caller must hold `PEER_IDENTITY_BIND_LOCK` so the liveness
+/// decision and routing-map replacement form one critical section.
+fn reclaimable_prior_peer_owner_locked(
     state: &AppState,
     mcp_sid: &str,
     tuic_session: &str,
-    name: String,
-    project: Option<String>,
-    registered_at: u64,
 ) -> Result<Option<String>, String> {
-    let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
     let prior_mcp = state
         .peer_agents
         .get(tuic_session)
@@ -322,6 +306,19 @@ fn register_peer_identity(
         return Err("tuic_session is already registered to another active MCP session".into());
     }
 
+    Ok(prior_mcp)
+}
+
+fn register_peer_identity(
+    state: &AppState,
+    mcp_sid: &str,
+    tuic_session: &str,
+    name: String,
+    project: Option<String>,
+    registered_at: u64,
+) -> Result<Option<String>, String> {
+    let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+    let prior_mcp = reclaimable_prior_peer_owner_locked(state, mcp_sid, tuic_session)?;
     bind_peer_identity_locked(state, mcp_sid, tuic_session, name, project, registered_at);
     Ok(prior_mcp)
 }
@@ -331,8 +328,9 @@ fn register_peer_identity(
 /// Makes swarm identity automatic — no explicit `agent register` needed, which
 /// matters for clients that never surface initialize `instructions` (e.g. Codex).
 /// Ignored unless the header is a well-formed UUID. Preserves an existing peer's
-/// display name/project across a bridge reconnect (only `register` renames);
-/// last-writer-wins on the MCP→session mapping. Returns whether a bind happened.
+/// display name/project across a bridge reconnect (only `register` renames).
+/// A fresh MCP session may reclaim a stale owner, but cannot replace another
+/// subscribed or recently active bridge. Returns whether a bind happened.
 fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&str>) -> bool {
     let Some(tuic) = header.filter(|s| !s.is_empty()) else {
         return false;
@@ -340,6 +338,21 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
     if !is_valid_uuid(tuic) {
         return false;
     }
+    let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+    let prior_mcp = match reclaimable_prior_peer_owner_locked(state, mcp_sid, tuic) {
+        Ok(prior) => prior,
+        Err(error) => {
+            tracing::warn!(
+                source = "mcp_initialize",
+                event = "live_binding_takeover_rejected",
+                tuic_session = %tuic,
+                mcp_session = %mcp_sid,
+                error = %error,
+                "Rejected initialize identity takeover from a second live bridge"
+            );
+            return false;
+        }
+    };
     let (name, project, registered_at) = match state.peer_agents.get(tuic) {
         Some(existing) => (
             existing.name.clone(),
@@ -348,7 +361,17 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
         ),
         None => ("agent".to_string(), None, now_unix_ms()),
     };
-    bind_peer_identity(state, mcp_sid, tuic, name, project, registered_at);
+    bind_peer_identity_locked(state, mcp_sid, tuic, name, project, registered_at);
+    if let Some(prior_mcp) = prior_mcp {
+        tracing::warn!(
+            source = "mcp_initialize",
+            event = "stale_binding_takeover",
+            tuic_session = %tuic,
+            prior_mcp_session = %prior_mcp,
+            mcp_session = %mcp_sid,
+            "Reclaimed stale MCP peer binding during initialize"
+        );
+    }
     true
 }
 
@@ -2122,15 +2145,18 @@ fn handle_agent(
                 return serde_json::json!({"error": msg});
             }
 
-            // Canonical agent type for this spawn: the run config's key when one
-            // resolved, otherwise the raw agent_type param. Pre-set below so the
-            // PTY reader's agent_active gate turns on immediately and intent/suggest
-            // protocol tokens are parsed from the first line — headless spawns have
-            // no frontend foreground polling to flip the gate on later.
-            let effective_agent_type: Option<String> = resolved
+            // Canonical agent type for this spawn: a resolved direct Codex
+            // executable wins over the configured bucket; otherwise use the run
+            // config key or raw agent_type. Pre-set below so argv finalization,
+            // parser gates, hooks, and session events share one CLI identity.
+            let configured_agent_type: Option<String> = resolved
                 .as_ref()
                 .map(|rc| rc.agent_type.clone())
                 .or_else(|| args["agent_type"].as_str().map(|s| s.to_string()));
+            let effective_agent_type =
+                resolve_spawn_agent_type(&binary_path, configured_agent_type.as_deref());
+            let codex_wrapper_warning =
+                codex_wrapper_launch_warning(effective_agent_type.as_deref(), &binary_path);
 
             let requested_name = match args.get("name") {
                 Some(value) => match value.as_str().map(str::trim) {
@@ -2213,9 +2239,11 @@ fn handle_agent(
                     .filter_map(|arg| arg.as_str().map(ToOwned::to_owned))
                     .collect();
                 let agent_type = effective_agent_type.as_deref().unwrap_or_default();
-                let merged = match merge_mcp_params_into_args(
+                let (final_args, deferred) = match compose_mcp_spawn_args(
                     agent_type,
+                    &binary_path,
                     &explicit_args,
+                    &effective_prompt,
                     args["model"].as_str(),
                     args["print_mode"].as_bool().unwrap_or(false),
                     args["output_format"].as_str(),
@@ -2224,31 +2252,30 @@ fn handle_agent(
                     Ok(m) => m,
                     Err(e) => return serde_json::json!({"error": e}),
                 };
-                let (final_args, deferred) =
-                    finalize_explicit_spawn_args(agent_type, &merged, &effective_prompt);
                 deferred_initial_prompt = deferred;
                 for arg in &final_args {
                     cmd.arg(arg);
                 }
             } else if let Some(ref rc) = resolved {
                 if let Some(ref rc_args) = rc.args {
-                    // Run config matched: merge MCP params, then substitute {prompt}.
-                    // User-authored args are authoritative — flags keep their legacy
-                    // appended placement and the prompt rides argv verbatim (no
-                    // prefill-only deferral): a config like codex ["exec","{prompt}"]
-                    // must not be rewritten behind the user's back.
-                    let merged = match merge_mcp_params_into_args(
-                        &rc.agent_type,
+                    // Run config matched: user-authored argv remains authoritative.
+                    // Merge structured MCP params, apply only executable-safe
+                    // defaults, then preserve the established prompt substitution
+                    // or positional append semantics. In particular, wrapper and
+                    // subcommand configs must not be rewritten into PTY delivery.
+                    let agent_type = effective_agent_type.as_deref().unwrap_or_default();
+                    let final_args = match compose_mcp_run_config_args(
+                        agent_type,
+                        &binary_path,
                         rc_args,
+                        &effective_prompt,
                         args["model"].as_str(),
                         args["print_mode"].as_bool().unwrap_or(false),
                         args["output_format"].as_str(),
-                        false,
                     ) {
                         Ok(m) => m,
                         Err(e) => return serde_json::json!({"error": e}),
                     };
-                    let final_args = substitute_prompt_in_args(&merged, &effective_prompt);
                     for arg in &final_args {
                         cmd.arg(arg);
                     }
@@ -2259,11 +2286,14 @@ fn handle_agent(
                     // with a copy-pasteable example. Claude rides the same table
                     // (story 092) — merge's claude flags-first rule keeps its
                     // argv byte-identical to the retired dedicated branch.
-                    match crate::agent::default_prompt_args(&rc.agent_type) {
+                    let agent_type = effective_agent_type.as_deref().unwrap_or_default();
+                    match crate::agent::default_prompt_args(agent_type) {
                         Some(template) => {
-                            let merged = match merge_mcp_params_into_args(
-                                &rc.agent_type,
+                            let (final_args, deferred) = match compose_mcp_spawn_args(
+                                agent_type,
+                                &binary_path,
                                 &template,
+                                &effective_prompt,
                                 args["model"].as_str(),
                                 args["print_mode"].as_bool().unwrap_or(false),
                                 args["output_format"].as_str(),
@@ -2272,8 +2302,6 @@ fn handle_agent(
                                 Ok(m) => m,
                                 Err(e) => return serde_json::json!({"error": e}),
                             };
-                            let (final_args, deferred) =
-                                finalize_spawn_args(&rc.agent_type, &merged, &effective_prompt);
                             deferred_initial_prompt = deferred;
                             for arg in &final_args {
                                 cmd.arg(arg);
@@ -2289,18 +2317,39 @@ fn handle_agent(
                 }
             } else {
                 // No run config, no explicit args — default MCP param logic
-                if args["print_mode"].as_bool().unwrap_or(false) {
-                    cmd.arg("--print");
+                if is_direct_codex_executable(&binary_path) {
+                    let template = crate::agent::default_prompt_args("codex").unwrap_or_default();
+                    let (final_args, deferred) = match compose_mcp_spawn_args(
+                        "codex",
+                        &binary_path,
+                        &template,
+                        &effective_prompt,
+                        args["model"].as_str(),
+                        args["print_mode"].as_bool().unwrap_or(false),
+                        args["output_format"].as_str(),
+                        true,
+                    ) {
+                        Ok(m) => m,
+                        Err(e) => return serde_json::json!({"error": e}),
+                    };
+                    deferred_initial_prompt = deferred;
+                    for arg in &final_args {
+                        cmd.arg(arg);
+                    }
+                } else {
+                    if args["print_mode"].as_bool().unwrap_or(false) {
+                        cmd.arg("--print");
+                    }
+                    if let Some(format) = args["output_format"].as_str() {
+                        cmd.arg("--output-format");
+                        cmd.arg(format);
+                    }
+                    if let Some(model) = args["model"].as_str() {
+                        cmd.arg("--model");
+                        cmd.arg(model);
+                    }
+                    cmd.arg(&effective_prompt);
                 }
-                if let Some(format) = args["output_format"].as_str() {
-                    cmd.arg("--output-format");
-                    cmd.arg(format);
-                }
-                if let Some(model) = args["model"].as_str() {
-                    cmd.arg("--model");
-                    cmd.arg(model);
-                }
-                cmd.arg(&effective_prompt);
             }
             if let Some(ref cwd) = effective_cwd {
                 cmd.cwd(crate::cli::expand_tilde(cwd));
@@ -2363,7 +2412,7 @@ fn handle_agent(
             if effective_agent_type.is_some() {
                 session_state.hook_instrumented =
                     crate::pty::hook_instrumented_for(&agents_cfg, effective_agent_type.as_deref());
-                session_state.agent_type = effective_agent_type;
+                session_state.agent_type = effective_agent_type.clone();
             }
             state
                 .session_states
@@ -2390,7 +2439,7 @@ fn handle_agent(
 
             // Broadcast session-created to SSE/WebSocket consumers
             let cwd_str = effective_cwd.clone();
-            let agent_type_str = args["agent_type"].as_str().map(|s| s.to_string());
+            let agent_type_str = effective_agent_type.clone();
             let _ = state
                 .event_bus
                 .send(crate::state::AppEvent::SessionCreated {
@@ -2404,7 +2453,7 @@ fn handle_agent(
                 let print_mode = args["print_mode"].as_bool().unwrap_or(false);
                 let app_handle = state.app_handle.read().clone();
                 if !print_mode && let Some(ref app) = app_handle {
-                    let agent_type_val = args["agent_type"].as_str();
+                    let agent_type_val = effective_agent_type.as_deref();
                     let _ = app.emit(
                         "session-created",
                         serde_json::json!({
@@ -2476,6 +2525,11 @@ fn handle_agent(
                 "status_with": format!("session(action=status, session_id={session_id})"),
                 "wait_with": format!("session(action=wait, session_id={session_id}, until=idle) — blocks instead of polling"),
             });
+            if let Some(warning) = codex_wrapper_warning
+                && let Some(obj) = response.as_object_mut()
+            {
+                obj.insert("launch_warning".to_string(), serde_json::json!(warning));
+            }
             if caller_tuic.is_some()
                 && let Some(obj) = response.as_object_mut()
             {
@@ -2707,10 +2761,10 @@ fn handle_messaging(
                             }
                         }
                     });
-                    if tx
-                        .send(serde_json::to_string(&notification).unwrap_or_default())
-                        .is_ok()
-                    {
+                    let notification = serde_json::to_string(&notification).unwrap_or_default();
+                    if crate::pty::deliver_with_reserved_submitted_turn(state, to, || {
+                        tx.send(notification).is_ok()
+                    }) {
                         pushed = true;
                         if let Some(mut inbox) = state.agent_inbox.get_mut(to)
                             && let Some(message) = inbox.iter_mut().find(|m| m.id == msg_id)
@@ -4194,6 +4248,91 @@ fn finalize_spawn_args(
 /// positional prompt (story 092). Everything else — every other agent AND every
 /// user-authored run config (whose args may start with a wrapper subcommand
 /// flags must not precede) — keeps flags appended, as before.
+const CODEX_BYPASS_ARG: &str = "--dangerously-bypass-approvals-and-sandbox";
+
+fn is_direct_codex_executable(binary_path: &str) -> bool {
+    let file_name = binary_path
+        .rsplit(|ch| ch == '/' || ch == '\\')
+        .next()
+        .unwrap_or(binary_path);
+    std::path::Path::new(file_name)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("codex"))
+}
+
+fn apply_direct_codex_defaults(binary_path: &str, mut args: Vec<String>) -> Vec<String> {
+    let has_active_bypass = args
+        .iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg == CODEX_BYPASS_ARG);
+    if is_direct_codex_executable(binary_path) && !has_active_bypass {
+        args.insert(0, CODEX_BYPASS_ARG.to_string());
+    }
+    args
+}
+
+fn resolve_spawn_agent_type(binary_path: &str, configured: Option<&str>) -> Option<String> {
+    if is_direct_codex_executable(binary_path) {
+        Some("codex".to_string())
+    } else {
+        configured.map(str::to_string)
+    }
+}
+
+fn codex_wrapper_launch_warning(
+    effective_agent_type: Option<&str>,
+    binary_path: &str,
+) -> Option<String> {
+    (effective_agent_type == Some("codex") && !is_direct_codex_executable(binary_path)).then(|| {
+        format!(
+            "Codex run config command '{}' is a wrapper; TUIC did not inject {CODEX_BYPASS_ARG} and cannot validate whether the wrapper enables it internally.",
+            binary_path
+        )
+    })
+}
+
+fn compose_mcp_spawn_args(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+    prompt: &str,
+    model: Option<&str>,
+    print_mode: bool,
+    output_format: Option<&str>,
+    default_template: bool,
+) -> Result<(Vec<String>, Option<String>), String> {
+    let merged = merge_mcp_params_into_args(
+        agent_type,
+        args,
+        model,
+        print_mode,
+        output_format,
+        default_template,
+    )?;
+    let merged = apply_direct_codex_defaults(binary_path, merged);
+    if default_template {
+        Ok(finalize_spawn_args(agent_type, &merged, prompt))
+    } else {
+        Ok(finalize_explicit_spawn_args(agent_type, &merged, prompt))
+    }
+}
+
+fn compose_mcp_run_config_args(
+    agent_type: &str,
+    binary_path: &str,
+    args: &[String],
+    prompt: &str,
+    model: Option<&str>,
+    print_mode: bool,
+    output_format: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let merged =
+        merge_mcp_params_into_args(agent_type, args, model, print_mode, output_format, false)?;
+    let merged = apply_direct_codex_defaults(binary_path, merged);
+    Ok(substitute_prompt_in_args(&merged, prompt))
+}
+
 fn merge_mcp_params_into_args(
     agent_type: &str,
     args: &[String],
@@ -4202,13 +4341,8 @@ fn merge_mcp_params_into_args(
     output_format: Option<&str>,
     default_template: bool,
 ) -> Result<Vec<String>, String> {
-    const CODEX_BYPASS_ARG: &str = "--dangerously-bypass-approvals-and-sandbox";
-
     let is_claude = agent_type == "claude";
-    let mut base_args = args.to_vec();
-    if agent_type == "codex" && !base_args.iter().any(|arg| arg == CODEX_BYPASS_ARG) {
-        base_args.insert(0, CODEX_BYPASS_ARG.to_string());
-    }
+    let base_args = args.to_vec();
     let mut flags: Vec<String> = Vec::new();
 
     if print_mode {
@@ -4587,25 +4721,90 @@ mod tests {
     }
 
     #[test]
-    fn initialize_identity_rebind_last_writer_wins() {
+    fn initialize_identity_rejects_takeover_of_live_owner() {
         let state = test_state();
-        apply_initialize_identity(&state, "mcp-old", Some(TEST_UUID_A));
-        // Bridge reconnect: same agent, fresh mcp-session-id.
-        apply_initialize_identity(&state, "mcp-new", Some(TEST_UUID_A));
+        assert!(apply_initialize_identity(
+            &state,
+            "mcp-live",
+            Some(TEST_UUID_A)
+        ));
+        live_mcp_session(&state, "mcp-live");
+
+        assert!(
+            !apply_initialize_identity(&state, "mcp-claimant", Some(TEST_UUID_A)),
+            "a second bridge must not steal a live TUIC identity during initialize"
+        );
         assert_eq!(
             state.peer_agents.get(TEST_UUID_A).unwrap().mcp_session_id,
-            "mcp-new",
-            "peer must point at the newest mcp session"
+            "mcp-live"
         );
-        // Reverse index accumulates both until cleanup, but must be deduped per id.
-        let reverse = state.session_to_mcp.get(TEST_UUID_A).unwrap();
-        assert!(reverse.contains(&"mcp-new".to_string()));
+        assert_eq!(
+            state
+                .mcp_to_session
+                .get("mcp-live")
+                .map(|entry| entry.value().clone()),
+            Some(TEST_UUID_A.to_string())
+        );
+        assert!(
+            state.mcp_to_session.get("mcp-claimant").is_none(),
+            "rejected claimant must gain no forward route"
+        );
+        assert_eq!(
+            state
+                .session_to_mcp
+                .get(TEST_UUID_A)
+                .map(|entry| entry.clone()),
+            Some(vec!["mcp-live".to_string()])
+        );
     }
 
     #[test]
-    fn initialize_identity_dedupes_reverse_index_on_same_session() {
+    fn initialize_identity_reclaims_stale_owner_and_retires_old_routing() {
+        let state = test_state();
+        assert!(apply_initialize_identity(
+            &state,
+            "mcp-old",
+            Some(TEST_UUID_A)
+        ));
+        state.mcp_sessions.insert(
+            "mcp-old".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now()
+                    - MCP_OWNER_ACTIVITY_GRACE
+                    - std::time::Duration::from_secs(1),
+                is_claude_code: false,
+                has_sse_stream: true,
+                repo_path: None,
+            },
+        );
+
+        assert!(apply_initialize_identity(
+            &state,
+            "mcp-new",
+            Some(TEST_UUID_A)
+        ));
+        assert_eq!(
+            state.peer_agents.get(TEST_UUID_A).unwrap().mcp_session_id,
+            "mcp-new"
+        );
+        assert!(
+            state.mcp_to_session.get("mcp-old").is_none(),
+            "stale owner must lose its forward route"
+        );
+        assert_eq!(
+            state
+                .session_to_mcp
+                .get(TEST_UUID_A)
+                .map(|entry| entry.clone()),
+            Some(vec!["mcp-new".to_string()])
+        );
+    }
+
+    #[test]
+    fn initialize_identity_refreshes_same_live_session_without_duplicate_route() {
         let state = test_state();
         apply_initialize_identity(&state, "mcp-dup", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-dup");
         apply_initialize_identity(&state, "mcp-dup", Some(TEST_UUID_A));
         let reverse = state.session_to_mcp.get(TEST_UUID_A).unwrap();
         assert_eq!(
@@ -4662,7 +4861,7 @@ mod tests {
 
     #[test]
     fn register_still_binds_after_refactor() {
-        // Guards the DRY refactor of register onto bind_peer_identity.
+        // Guards explicit register on the shared locked live-owner policy.
         let state = test_state();
         let r = handle_messaging(
             &state,
@@ -5239,6 +5438,94 @@ mod tests {
         assert_eq!(
             msgs[0]["from_tuic_session"],
             "550e8400-e29b-41d4-a716-446655440a01"
+        );
+    }
+
+    #[test]
+    fn messaging_sse_delivery_starts_new_turn_for_completed_recipient() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.mcp_sessions.insert(
+            "mcp-recipient".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                has_sse_stream: true,
+                repo_path: None,
+            },
+        );
+        let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
+        state
+            .messaging_channels
+            .insert("mcp-recipient".to_string(), channel);
+        state.session_states.insert(
+            TEST_UUID_B.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                suggested_actions: Some(vec!["old completion".to_string()]),
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            TEST_UUID_B.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        let mut silence = crate::pty::SilenceState::new();
+        silence.confirm_idle();
+        silence.mark_suggest_candidate(vec!["old completion".to_string()], 0);
+        state.silence_states.insert(
+            TEST_UUID_B.to_string(),
+            std::sync::Arc::new(parking_lot::Mutex::new(silence)),
+        );
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": TEST_UUID_B,
+                "message": "start the next task",
+            }),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(result["delivered_via_channel"], true);
+        assert_eq!(result["delivery_path"], "sse_channel_and_inbox");
+        assert!(
+            receiver.try_recv().is_ok(),
+            "SSE notification must be sent once"
+        );
+        assert!(
+            matches!(
+                receiver.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "successful SSE delivery must not duplicate the notification"
+        );
+        let message_id = result["message_id"].as_str().unwrap();
+        assert_eq!(
+            state.agent_delivery_owner(TEST_UUID_B, message_id),
+            Some(crate::state::AgentDeliveryOwner::TerminalDispatched)
+        );
+        assert!(
+            state
+                .pending_injections
+                .get(TEST_UUID_B)
+                .is_none_or(|pending| pending.is_empty()),
+            "successful SSE delivery must not also queue PTY injection"
+        );
+        let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
+        assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+        assert!(snapshot.suggested_actions.is_none());
+        assert_eq!(snapshot.turn_epoch, 1);
+        assert!(
+            !state
+                .silence_states
+                .get(TEST_UUID_B)
+                .unwrap()
+                .lock()
+                .completion_declared()
         );
     }
 
@@ -8180,16 +8467,17 @@ mod tests {
     #[test]
     fn codex_spawn_composition_preserves_model_with_explicit_args() {
         let explicit = vec!["--dangerously-bypass-approvals-and-sandbox".to_string()];
-        let merged = merge_mcp_params_into_args(
+        let (argv, deferred) = compose_mcp_spawn_args(
             "codex",
+            "/usr/local/bin/codex",
             &explicit,
+            "perform the task",
             Some("gpt-5.6-terra"),
             false,
             None,
             false,
         )
         .unwrap();
-        let (argv, deferred) = finalize_explicit_spawn_args("codex", &merged, "perform the task");
 
         assert_eq!(
             argv,
@@ -8203,12 +8491,43 @@ mod tests {
     }
 
     #[test]
-    fn codex_spawn_composition_adds_default_bypass() {
+    fn direct_codex_explicit_args_without_agent_type_use_codex_semantics() {
+        let explicit = vec!["--search".to_string()];
+        let agent_type = resolve_spawn_agent_type("/usr/local/bin/codex", None).unwrap();
+        let (argv, deferred) = compose_mcp_spawn_args(
+            &agent_type,
+            "/usr/local/bin/codex",
+            &explicit,
+            "perform the task",
+            None,
+            false,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(
+            argv,
+            vec!["--dangerously-bypass-approvals-and-sandbox", "--search"]
+        );
+        assert_eq!(deferred.as_deref(), Some("perform the task"));
+    }
+
+    #[test]
+    fn direct_codex_binary_path_without_args_defers_prompt() {
+        let agent_type = resolve_spawn_agent_type("/usr/local/bin/codex", None).unwrap();
         let template = crate::agent::default_prompt_args("codex").unwrap();
-        let merged =
-            merge_mcp_params_into_args("codex", &template, Some("gpt-5.6-luna"), false, None, true)
-                .unwrap();
-        let (argv, deferred) = finalize_spawn_args("codex", &merged, "perform the task");
+        let (argv, deferred) = compose_mcp_spawn_args(
+            &agent_type,
+            "/usr/local/bin/codex",
+            &template,
+            "perform the task",
+            Some("gpt-5.6-luna"),
+            false,
+            None,
+            true,
+        )
+        .unwrap();
 
         assert_eq!(
             argv,
@@ -8395,13 +8714,7 @@ mod tests {
             !result.contains(&"--print".to_string()),
             "codex must not receive --print"
         );
-        assert_eq!(
-            result,
-            vec![
-                "--dangerously-bypass-approvals-and-sandbox".to_string(),
-                "{prompt}".to_string()
-            ]
-        );
+        assert_eq!(result, vec!["{prompt}".to_string()]);
     }
 
     #[test]
@@ -8423,6 +8736,14 @@ mod tests {
             merge_mcp_params_into_args("codex", &args, None, true, Some("json"), false).unwrap();
         assert!(!result.contains(&"--print".to_string()));
         assert!(!result.contains(&"--output-format".to_string()));
+        assert_eq!(result, vec!["{prompt}".to_string()]);
+    }
+
+    #[test]
+    fn direct_codex_defaults_apply_bypass_after_merge() {
+        let args = vec!["{prompt}".to_string()];
+        let result = merge_mcp_params_into_args("codex", &args, None, false, None, false).unwrap();
+        let result = apply_direct_codex_defaults("codex", result);
         assert_eq!(
             result,
             vec![
@@ -8433,16 +8754,149 @@ mod tests {
     }
 
     #[test]
-    fn merge_params_codex_applies_default_bypass() {
-        let args = vec!["{prompt}".to_string()];
-        let result = merge_mcp_params_into_args("codex", &args, None, false, None, false).unwrap();
+    fn direct_codex_bypass_after_option_terminator_does_not_satisfy_default() {
+        let args = vec![
+            "--".to_string(),
+            CODEX_BYPASS_ARG.to_string(),
+            "task text".to_string(),
+        ];
+        let result = apply_direct_codex_defaults("codex", args);
+
         assert_eq!(
             result,
-            vec![
-                "--dangerously-bypass-approvals-and-sandbox".to_string(),
-                "{prompt}".to_string()
-            ]
+            vec![CODEX_BYPASS_ARG, "--", CODEX_BYPASS_ARG, "task text"]
         );
+    }
+
+    #[test]
+    fn direct_codex_executable_identity_is_exact_and_cross_platform() {
+        assert!(is_direct_codex_executable("/usr/local/bin/codex"));
+        assert!(is_direct_codex_executable("C:\\tools\\codex.exe"));
+        assert!(is_direct_codex_executable("C:\\tools\\codex.cmd"));
+        assert!(is_direct_codex_executable("/opt/tools/CODEX"));
+        assert!(!is_direct_codex_executable(
+            "/opt/company/bin/codex-wrapper"
+        ));
+    }
+
+    #[test]
+    fn named_codex_run_config_preserves_existing_bypass() {
+        let args = vec![
+            "--dangerously-bypass-approvals-and-sandbox".to_string(),
+            "--search".to_string(),
+        ];
+        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
+        let result = compose_mcp_run_config_args(
+            &agent_type,
+            "codex",
+            &args,
+            "perform the task",
+            None,
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            vec![CODEX_BYPASS_ARG, "--search", "perform the task"],
+            "authored run-config argv must remain the prefix of the legacy positional prompt"
+        );
+    }
+
+    #[test]
+    fn named_codex_run_config_missing_bypass_gets_direct_default() {
+        let args = vec!["--search".to_string()];
+        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
+        let result = compose_mcp_run_config_args(
+            &agent_type,
+            "codex",
+            &args,
+            "perform the task",
+            None,
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(
+            result,
+            vec![CODEX_BYPASS_ARG, "--search", "perform the task"]
+        );
+    }
+
+    #[test]
+    fn named_codex_exec_run_config_preserves_positional_prompt() {
+        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
+        let result = compose_mcp_run_config_args(
+            &agent_type,
+            "codex",
+            &["exec".to_string()],
+            "perform the task",
+            None,
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result, vec![CODEX_BYPASS_ARG, "exec", "perform the task"]);
+    }
+
+    #[test]
+    fn named_codex_placeholder_run_config_remains_authoritative() {
+        let agent_type = resolve_spawn_agent_type("codex", Some("codex")).unwrap();
+        let result = compose_mcp_run_config_args(
+            &agent_type,
+            "codex",
+            &["exec".to_string(), "{prompt}".to_string()],
+            "perform the task",
+            None,
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result, vec![CODEX_BYPASS_ARG, "exec", "perform the task"]);
+    }
+
+    #[test]
+    fn named_codex_wrapper_preserves_positional_prompt_and_is_warned() {
+        let args = vec!["launch-codex".to_string()];
+        let command = "/opt/company/bin/agent-wrapper";
+        let agent_type = resolve_spawn_agent_type(command, Some("codex")).unwrap();
+        let result = compose_mcp_run_config_args(
+            &agent_type,
+            command,
+            &args,
+            "perform the task",
+            None,
+            false,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result, vec!["launch-codex", "perform the task"]);
+        assert!(codex_wrapper_launch_warning(Some(agent_type.as_str()), command).is_some());
+    }
+
+    #[test]
+    fn direct_codex_executable_overrides_mismatched_bucket_semantics() {
+        let agent_type = resolve_spawn_agent_type("/usr/local/bin/codex", Some("claude")).unwrap();
+        assert_eq!(agent_type, "codex");
+
+        let (argv, deferred) = compose_mcp_spawn_args(
+            &agent_type,
+            "/usr/local/bin/codex",
+            &["--search".to_string()],
+            "perform the task",
+            None,
+            false,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(argv, vec![CODEX_BYPASS_ARG, "--search"]);
+        assert_eq!(deferred.as_deref(), Some("perform the task"));
     }
 
     #[test]

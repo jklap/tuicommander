@@ -659,6 +659,7 @@ pub(crate) fn find_last_chat_question(screen_rows: &[String]) -> Option<String> 
 }
 
 /// Shared state between the PTY reader thread and the silence-detection timer thread.
+#[derive(Clone)]
 pub(crate) struct SilenceState {
     /// When the last chunk of output was received from the PTY.
     pub(crate) last_output_at: std::time::Instant,
@@ -714,6 +715,8 @@ pub(crate) struct SilenceState {
     /// elapsed since the last real output chunk). Eliminates the frontend
     /// `pendingSuggest` race: the event never reaches the UI before idle.
     pending_suggest_items: Option<Vec<String>>,
+    /// Input-turn epoch associated with `pending_suggest_items`.
+    pending_suggest_turn_epoch: u64,
     /// Timestamp when `pending_suggest_items` was parked. Currently for
     /// diagnostics only — the flush decision is driven by `last_output_at`,
     /// not the park time.
@@ -723,6 +726,8 @@ pub(crate) struct SilenceState {
     /// one-shot Suggest event drain so status/list can distinguish completed
     /// work from a merely quiet ready prompt.
     completion_declared: bool,
+    /// Input-turn epoch that declared completion.
+    completion_turn_epoch: u64,
     /// True after an explicit OSC 133 / OSC 7770 busy marker and until an
     /// explicit idle marker or a confirmed ready screen. Silence alone must not
     /// override this state: hooks are stronger evidence than output timing.
@@ -785,8 +790,10 @@ impl SilenceState {
             pending_tool_error: None,
             surfaced_tool_errors: std::collections::HashSet::new(),
             pending_suggest_items: None,
+            pending_suggest_turn_epoch: 0,
             pending_suggest_at: None,
             completion_declared: false,
+            completion_turn_epoch: 0,
             explicit_busy: false,
             hook_busy: false,
             explicit_idle: false,
@@ -1245,13 +1252,22 @@ impl SilenceState {
     /// is the single source of truth for "turn ended". A newer set overwrites
     /// an older pending set: if the agent updates its suggestions mid-turn,
     /// we deliver the latest.
-    pub(crate) fn mark_suggest_candidate(&mut self, items: Vec<String>) {
+    pub(crate) fn mark_suggest_candidate(&mut self, items: Vec<String>, turn_epoch: u64) {
         if items.is_empty() {
             return;
         }
         self.completion_declared = true;
+        self.completion_turn_epoch = turn_epoch;
         self.pending_suggest_items = Some(items);
+        self.pending_suggest_turn_epoch = turn_epoch;
         self.pending_suggest_at = Some(std::time::Instant::now());
+    }
+
+    fn drain_pending_suggest_with_epoch(&mut self) -> Option<(u64, Vec<String>)> {
+        self.pending_suggest_at = None;
+        self.pending_suggest_items
+            .take()
+            .map(|items| (self.pending_suggest_turn_epoch, items))
     }
 
     /// Drain parked suggest items. No gates — trust the caller to invoke only
@@ -1259,8 +1275,8 @@ impl SilenceState {
     /// Returns the items once and clears the park slot; a second call returns
     /// `None` until new items are parked.
     pub(crate) fn drain_pending_suggest(&mut self) -> Option<Vec<String>> {
-        self.pending_suggest_at = None;
-        self.pending_suggest_items.take()
+        self.drain_pending_suggest_with_epoch()
+            .map(|(_, items)| items)
     }
 
     /// Drop any parked suggest on user input. Parallels `reset_tool_error_memory`:
@@ -1268,12 +1284,18 @@ impl SilenceState {
     /// must not fire after a new input cycle starts.
     pub(crate) fn reset_suggest_memory(&mut self) {
         self.pending_suggest_items = None;
+        self.pending_suggest_turn_epoch = 0;
         self.pending_suggest_at = None;
         self.completion_declared = false;
+        self.completion_turn_epoch = 0;
     }
 
     pub(crate) fn completion_declared(&self) -> bool {
         self.completion_declared
+    }
+
+    pub(crate) fn completion_declared_for_epoch(&self, turn_epoch: u64) -> bool {
+        self.completion_declared && self.completion_turn_epoch == turn_epoch
     }
 
     /// Returns true if the session has been silent long enough and the spinner
@@ -1319,6 +1341,130 @@ fn try_shell_transition(
     new: u8,
     notify_parent: bool,
 ) -> bool {
+    let observed_turn_epoch = state
+        .session_states
+        .get(session_id)
+        .map(|session| session.turn_epoch);
+    try_shell_transition_for_epoch(
+        state,
+        session_id,
+        expected,
+        new,
+        notify_parent,
+        observed_turn_epoch,
+    )
+}
+
+fn try_shell_transition_for_epoch(
+    state: &crate::state::AppState,
+    session_id: &str,
+    expected: u8,
+    new: u8,
+    notify_parent: bool,
+    observed_turn_epoch: Option<u64>,
+) -> bool {
+    try_shell_transition_with_hooks(
+        state,
+        session_id,
+        expected,
+        new,
+        notify_parent,
+        observed_turn_epoch,
+        || {},
+        || {},
+        || {},
+    )
+}
+
+fn try_shell_transition_with_hook<F: FnOnce()>(
+    state: &crate::state::AppState,
+    session_id: &str,
+    expected: u8,
+    new: u8,
+    notify_parent: bool,
+    after_cas: F,
+) -> bool {
+    let observed_turn_epoch = state
+        .session_states
+        .get(session_id)
+        .map(|session| session.turn_epoch);
+    try_shell_transition_with_hooks(
+        state,
+        session_id,
+        expected,
+        new,
+        notify_parent,
+        observed_turn_epoch,
+        || {},
+        after_cas,
+        || {},
+    )
+}
+
+fn try_shell_transition_with_hooks<B: FnOnce(), A: FnOnce(), D: FnOnce()>(
+    state: &crate::state::AppState,
+    session_id: &str,
+    expected: u8,
+    new: u8,
+    notify_parent: bool,
+    observed_turn_epoch: Option<u64>,
+    after_epoch_snapshot: B,
+    after_cas: A,
+    before_parent_dispatch: D,
+) -> bool {
+    // One lifecycle lock covers CAS through the authoritative parent inbox
+    // enqueue. Submitted-turn reservations take the same lock, so a new epoch
+    // cannot begin between an IDLE CAS and the preceding turn's notification.
+    after_epoch_snapshot();
+    let silence = state
+        .silence_states
+        .get(session_id)
+        .map(|entry| Arc::clone(entry.value()));
+    let (transitioned, parent_dispatch) = {
+        let mut silence_guard = silence.as_ref().map(|silence| silence.lock());
+        let silence_state = silence_guard.as_mut().map(|guard| &mut **guard);
+        try_shell_transition_locked(
+            state,
+            session_id,
+            expected,
+            new,
+            notify_parent,
+            silence_state,
+            observed_turn_epoch,
+            after_cas,
+        )
+    };
+    if let Some(dispatch) = parent_dispatch {
+        before_parent_dispatch();
+        dispatch_parent_lifecycle(state, dispatch);
+    }
+    transitioned
+}
+
+/// Perform a shell transition while the caller owns the lifecycle lock.
+/// `note_submitted_input` uses this form so epoch mutation and IDLE→BUSY are
+/// one critical section instead of recursively acquiring `SilenceState`.
+fn try_shell_transition_locked<F: FnOnce()>(
+    state: &crate::state::AppState,
+    session_id: &str,
+    expected: u8,
+    new: u8,
+    notify_parent: bool,
+    mut silence_state: Option<&mut SilenceState>,
+    observed_turn_epoch: Option<u64>,
+    after_cas: F,
+) -> (bool, Option<ParentLifecycleDispatch>) {
+    if expected == SHELL_BUSY
+        && new == SHELL_IDLE
+        && observed_turn_epoch.is_some_and(|observed| {
+            state
+                .session_states
+                .get(session_id)
+                .is_some_and(|session| session.turn_epoch != observed)
+        })
+    {
+        return (false, None);
+    }
     let ok = match state.shell_states.get(session_id) {
         Some(atom) => atom
             .compare_exchange(
@@ -1328,14 +1474,18 @@ fn try_shell_transition(
                 std::sync::atomic::Ordering::Relaxed,
             )
             .is_ok(),
-        None => return false,
+        None => return (false, None),
     };
+    let mut parent_dispatch = None;
+    if ok {
+        after_cas();
+    }
     // Ref dropped here — post-transition work below re-enters shell_states.
     if ok {
         if new == SHELL_BUSY
-            && let Some(sl) = state.silence_states.get(session_id)
+            && let Some(silence) = silence_state.as_mut()
         {
-            sl.lock().note_busy_evidence();
+            silence.note_busy_evidence();
         }
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1351,17 +1501,18 @@ fn try_shell_transition(
         // Notify orchestrator when an agent goes idle (BUSY→IDLE only).
         // Plain shell sessions are excluded — only registered agent sessions qualify.
         if notify_parent && expected == SHELL_BUSY && new == SHELL_IDLE {
-            let is_agent = state
+            let session_lifecycle = state
                 .session_states
                 .get(session_id)
-                .map(|s| s.agent_type.is_some())
-                .unwrap_or(false);
-            let completion_declared = state
-                .silence_states
-                .get(session_id)
-                .is_some_and(|silence| silence.lock().completion_declared());
+                .map(|s| (s.agent_type.is_some(), s.turn_epoch));
+            let completion_declared = session_lifecycle.is_some_and(|(_, turn_epoch)| {
+                silence_state
+                    .as_ref()
+                    .is_some_and(|silence| silence.completion_declared_for_epoch(turn_epoch))
+            });
+            let is_agent = session_lifecycle.is_some_and(|(is_agent, _)| is_agent);
             if is_agent && !completion_declared {
-                push_state_change_to_parent(
+                parent_dispatch = enqueue_state_change_to_parent(
                     state,
                     session_id,
                     serde_json::json!({
@@ -1373,7 +1524,7 @@ fn try_shell_transition(
             }
         }
     }
-    ok
+    (ok, parent_dispatch)
 }
 
 /// Decision from `should_transition_idle`.
@@ -1385,17 +1536,23 @@ fn try_shell_transition(
 struct IdleDecision {
     should_transition: bool,
     force_cleared_subtasks: bool,
+    turn_epoch: Option<u64>,
 }
 
 impl IdleDecision {
     const NO: Self = Self {
         should_transition: false,
         force_cleared_subtasks: false,
+        turn_epoch: None,
     };
-    const YES: Self = Self {
-        should_transition: true,
-        force_cleared_subtasks: false,
-    };
+
+    const fn yes(turn_epoch: Option<u64>) -> Self {
+        Self {
+            should_transition: true,
+            force_cleared_subtasks: false,
+            turn_epoch,
+        }
+    }
 }
 
 /// Current wall-clock time as milliseconds since the Unix epoch.
@@ -1411,18 +1568,24 @@ fn now_epoch_ms() -> u64 {
 /// Agent sessions use a longer threshold (AGENT_IDLE_MS) because AI agents
 /// produce output in bursts with natural thinking pauses between them.
 fn should_transition_idle(state: &crate::state::AppState, session_id: &str) -> IdleDecision {
-    let last_ms = state
-        .last_output_ms
-        .get(session_id)
-        .map(|ts| ts.load(std::sync::atomic::Ordering::Relaxed))
-        .unwrap_or(0);
-    if last_ms == 0 {
-        return IdleDecision::NO;
-    }
-    // Read snapshot in a scoped block so the DashMap shard read-lock is
+    should_transition_idle_with_hook(state, session_id, || {})
+}
+
+fn should_transition_idle_with_hook<F: FnOnce()>(
+    state: &crate::state::AppState,
+    session_id: &str,
+    after_silence_evidence: F,
+) -> IdleDecision {
+    // Capture the originating turn before reading the silence evidence. A new
+    // submission updates the epoch before stamping last_output_ms; either this
+    // decision sees the fresh timestamp, or the transition rejects its stale
+    // epoch. Reading these in the opposite order can pair old silence with the
+    // new turn and immediately idle a just-submitted task.
+    //
+    // Read the snapshot in a scoped block so the DashMap shard read-lock is
     // released before we take a write-lock below — same shard would otherwise
     // deadlock the runtime in the force-clear branch.
-    let (is_agent, sub_tasks) = {
+    let (is_agent, sub_tasks, turn_epoch) = {
         let session = state.session_states.get(session_id);
         (
             session
@@ -1430,8 +1593,18 @@ fn should_transition_idle(state: &crate::state::AppState, session_id: &str) -> I
                 .map(|s| s.agent_type.is_some())
                 .unwrap_or(false),
             session.as_ref().map(|s| s.active_sub_tasks).unwrap_or(0),
+            session.as_ref().map(|s| s.turn_epoch),
         )
     };
+    let last_ms = state
+        .last_output_ms
+        .get(session_id)
+        .map(|ts| ts.load(std::sync::atomic::Ordering::Relaxed))
+        .unwrap_or(0);
+    after_silence_evidence();
+    if last_ms == 0 {
+        return IdleDecision::NO;
+    }
     let threshold = if is_agent {
         AGENT_IDLE_MS
     } else {
@@ -1446,7 +1619,7 @@ fn should_transition_idle(state: &crate::state::AppState, session_id: &str) -> I
         return IdleDecision::NO;
     }
     if sub_tasks == 0 {
-        return IdleDecision::YES;
+        return IdleDecision::yes(turn_epoch);
     }
     // Sub-tasks are active but no output for SUBTASK_STALE_MS — the mode-line
     // disappeared without emitting count=0 (agent exited, user cleared, etc.).
@@ -1458,6 +1631,7 @@ fn should_transition_idle(state: &crate::state::AppState, session_id: &str) -> I
         return IdleDecision {
             should_transition: true,
             force_cleared_subtasks: true,
+            turn_epoch,
         };
     }
     IdleDecision::NO
@@ -1625,37 +1799,193 @@ fn apply_working_evidence(
 /// first model token or spinner repaint. Adapter-backed agents hold that state
 /// until a ready screen/explicit Stop; unknown agents retain the timing fallback.
 pub(crate) fn note_submitted_input(state: &AppState, session_id: &str) {
+    note_submitted_input_with_hook(state, session_id, || {});
+}
+
+fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &str, after_epoch: F) {
     let agent_type = state
         .session_states
         .get(session_id)
         .and_then(|s| s.agent_type.clone());
-    let is_agent = agent_type.is_some();
-    if let Some(sl) = state.silence_states.get(session_id) {
-        sl.lock()
-            .note_user_submission(has_ready_screen_adapter(agent_type.as_deref()));
-    }
-    if !is_agent {
+    let Some(agent_type) = agent_type else {
+        if let Some(sl) = state.silence_states.get(session_id) {
+            let mut silence = sl.lock();
+            silence.note_user_submission(false);
+            silence.reset_suggest_memory();
+        }
         return;
-    }
-    if let Some(mut session) = state.session_states.get_mut(session_id) {
-        session.suggested_actions = None;
-    }
-    stamp_last_output_now(state, session_id, now_epoch_ms());
-    let prev = state
-        .shell_states
-        .get(session_id)
-        .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
-    if let Some(prev) = prev
-        && prev != SHELL_BUSY
-        && try_shell_transition(state, session_id, prev, SHELL_BUSY, true)
-    {
+    };
+
+    let silence = state
+        .silence_states
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
+        .clone();
+    let transitioned_busy = {
+        // Lock order for submitted turns is SilenceState → SessionState → shell
+        // atomics. Completion drains and Suggest parsing use the same order.
+        let mut silence = silence.lock();
+        if let Some(mut session) = state.session_states.get_mut(session_id) {
+            session.turn_epoch = session.turn_epoch.wrapping_add(1);
+            session.suggested_actions = None;
+        }
+        after_epoch();
+        silence.note_user_submission(has_ready_screen_adapter(Some(&agent_type)));
+        silence.reset_suggest_memory();
+        stamp_last_output_now(state, session_id, now_epoch_ms());
+        let prev = state
+            .shell_states
+            .get(session_id)
+            .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
+        let transitioned = prev.is_some_and(|prev| {
+            prev != SHELL_BUSY
+                && try_shell_transition_locked(
+                    state,
+                    session_id,
+                    prev,
+                    SHELL_BUSY,
+                    true,
+                    Some(&mut silence),
+                    None,
+                    || {},
+                )
+                .0
+        });
+        if transitioned {
+            emit_shell_state(state, session_id, "busy");
+        }
+        transitioned
+    };
+    if transitioned_busy {
         tracing::debug!(
             session_id,
             activity_source = "user-submit",
             "Shell state → busy"
         );
-        emit_shell_state(state, session_id, "busy");
     }
+}
+
+/// Reserve a synthetic submitted turn before making channel delivery visible.
+/// A broadcast send with no receivers is a proven zero-delivery and restores
+/// the prior lifecycle exactly before the caller falls back to PTY delivery.
+pub(crate) fn deliver_with_reserved_submitted_turn<F>(
+    state: &AppState,
+    session_id: &str,
+    deliver: F,
+) -> bool
+where
+    F: FnOnce() -> bool,
+{
+    let silence = state
+        .silence_states
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
+        .clone();
+    let mut silence_state = silence.lock();
+    let Some(mut session) = state.session_states.get_mut(session_id) else {
+        drop(silence_state);
+        return deliver();
+    };
+    let Some(agent_type) = session.agent_type.clone() else {
+        drop(session);
+        drop(silence_state);
+        return deliver();
+    };
+
+    let prior_turn_epoch = session.turn_epoch;
+    let prior_suggested_actions = session.suggested_actions.clone();
+    let prior_silence = silence_state.clone();
+    let prior_last_output = state
+        .last_output_ms
+        .get(session_id)
+        .map(|value| value.load(std::sync::atomic::Ordering::Acquire));
+    let prior_shell = state
+        .shell_states
+        .get(session_id)
+        .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire));
+    let prior_shell_since = state
+        .shell_state_since_ms
+        .get(session_id)
+        .map(|value| value.load(std::sync::atomic::Ordering::Acquire));
+
+    let reserved_epoch = prior_turn_epoch.wrapping_add(1);
+    session.turn_epoch = reserved_epoch;
+    session.suggested_actions = None;
+    drop(session);
+
+    silence_state.note_user_submission(has_ready_screen_adapter(Some(&agent_type)));
+    silence_state.reset_suggest_memory();
+
+    stamp_last_output_now(state, session_id, now_epoch_ms());
+    let transitioned_busy = prior_shell.is_some_and(|prior| {
+        prior != SHELL_BUSY
+            && try_shell_transition_locked(
+                state,
+                session_id,
+                prior,
+                SHELL_BUSY,
+                true,
+                Some(&mut silence_state),
+                None,
+                || {},
+            )
+            .0
+    });
+
+    if deliver() {
+        if transitioned_busy {
+            emit_shell_state(state, session_id, "busy");
+        }
+        return true;
+    }
+
+    // The reserved epoch is the rollback ownership token. A proven zero-
+    // receiver send may restore the snapshot only while it still owns the
+    // session lifecycle; an unexpected ownership loss stays conservatively BUSY.
+    let owns_reservation = state
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.turn_epoch == reserved_epoch);
+    if !owns_reservation {
+        return false;
+    }
+    if let Some(mut session) = state.session_states.get_mut(session_id) {
+        session.turn_epoch = prior_turn_epoch;
+        session.suggested_actions = prior_suggested_actions;
+    }
+    *silence_state = prior_silence;
+    match prior_last_output {
+        Some(value) => {
+            if let Some(last_output) = state.last_output_ms.get(session_id) {
+                last_output.store(value, std::sync::atomic::Ordering::Release);
+            }
+        }
+        None => {
+            state.last_output_ms.remove(session_id);
+        }
+    }
+    if transitioned_busy
+        && let Some(prior) = prior_shell
+        && let Some(shell) = state.shell_states.get(session_id)
+    {
+        let _ = shell.compare_exchange(
+            SHELL_BUSY,
+            prior,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+    }
+    match prior_shell_since {
+        Some(value) => {
+            if let Some(since) = state.shell_state_since_ms.get(session_id) {
+                since.store(value, std::sync::atomic::Ordering::Release);
+            }
+        }
+        None => {
+            state.shell_state_since_ms.remove(session_id);
+        }
+    }
+    false
 }
 
 /// Emit a ShellState parsed event via both event bus and Tauri IPC.
@@ -1692,21 +2022,66 @@ fn transition_explicit_shell_state(
     label: &str,
     hook_state: bool,
 ) {
-    if let Some(sl) = state.silence_states.get(session_id) {
-        sl.lock().note_explicit_state(target, hook_state);
-    }
-    if target == SHELL_BUSY {
-        stamp_last_output_now(state, session_id, now_epoch_ms());
-    }
-    // Load `prev` and DROP the shell_states Ref before calling try_shell_transition,
-    // which re-gets the same key: holding a Ref across that second get can deadlock
-    // under parking_lot writer-fairness if a session create/destroy writes the shard
-    // in the window between the two reads (CONC-C, story 099-6526).
-    let prev = match state.shell_states.get(session_id) {
-        Some(atom) => atom.load(std::sync::atomic::Ordering::Acquire),
-        None => return,
+    transition_explicit_shell_state_with_hook(state, session_id, target, label, hook_state, || {});
+}
+
+fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
+    state: &crate::state::AppState,
+    session_id: &str,
+    target: u8,
+    label: &str,
+    hook_state: bool,
+    before_transaction: F,
+) {
+    let evidence_turn_epoch = state
+        .session_states
+        .get(session_id)
+        .map(|session| session.turn_epoch);
+    before_transaction();
+    let silence = state
+        .silence_states
+        .get(session_id)
+        .map(|entry| Arc::clone(entry.value()));
+    let (transitioned, parent_dispatch) = {
+        let mut silence_guard = silence.as_ref().map(|silence| silence.lock());
+        if target == SHELL_IDLE
+            && evidence_turn_epoch.is_some_and(|observed| {
+                state
+                    .session_states
+                    .get(session_id)
+                    .is_some_and(|session| session.turn_epoch != observed)
+            })
+        {
+            return;
+        }
+        if let Some(silence) = silence_guard.as_mut() {
+            silence.note_explicit_state(target, hook_state);
+        }
+        if target == SHELL_BUSY {
+            stamp_last_output_now(state, session_id, now_epoch_ms());
+        }
+        let prev = match state.shell_states.get(session_id) {
+            Some(atom) => atom.load(std::sync::atomic::Ordering::Acquire),
+            None => return,
+        };
+        if prev == target {
+            return;
+        }
+        try_shell_transition_locked(
+            state,
+            session_id,
+            prev,
+            target,
+            true,
+            silence_guard.as_mut().map(|guard| &mut **guard),
+            evidence_turn_epoch,
+            || {},
+        )
     };
-    if prev != target && try_shell_transition(state, session_id, prev, target, true) {
+    if let Some(dispatch) = parent_dispatch {
+        dispatch_parent_lifecycle(state, dispatch);
+    }
+    if transitioned {
         emit_shell_state(state, session_id, label);
         // Publish IDLE before a queued delivery claims IDLE→BUSY again. Reversing
         // this order leaves the backend BUSY while the frontend's last event is
@@ -1894,6 +2269,107 @@ fn record_inferred_outcome_if_no_osc133(state: &AppState, session_id: &str) {
 /// question several rows above the prompt box.
 const SCREEN_VERIFY_ROWS: usize = 20;
 
+struct TimerIdleTransition {
+    transitioned: bool,
+    force_cleared_subtasks: bool,
+    screen_confirms_idle: bool,
+}
+
+fn try_timer_idle_transition(
+    state: &AppState,
+    silence: &Arc<Mutex<SilenceState>>,
+    session_id: &str,
+    screen_activity: AgentScreenActivity,
+    agent_type: Option<&str>,
+    evidence_turn_epoch: Option<u64>,
+) -> TimerIdleTransition {
+    let (transitioned, force_cleared_subtasks, screen_confirms_idle, parent_dispatch) = {
+        let mut silence = silence.lock();
+        if evidence_turn_epoch.is_some_and(|observed| {
+            state
+                .session_states
+                .get(session_id)
+                .is_some_and(|session| session.turn_epoch != observed)
+        }) {
+            return TimerIdleTransition {
+                transitioned: false,
+                force_cleared_subtasks: false,
+                screen_confirms_idle: false,
+            };
+        }
+
+        let screen_confirms_idle = match screen_activity {
+            AgentScreenActivity::Ready => silence.note_ready_screen(),
+            AgentScreenActivity::Interrupted => silence.note_interrupted_screen(),
+            AgentScreenActivity::Unknown => {
+                silence.note_unknown_screen();
+                false
+            }
+            AgentScreenActivity::Working => false,
+        };
+        let is_busy = state
+            .shell_states
+            .get(session_id)
+            .is_some_and(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY);
+        if !is_busy || screen_activity == AgentScreenActivity::Working {
+            return TimerIdleTransition {
+                transitioned: false,
+                force_cleared_subtasks: false,
+                screen_confirms_idle,
+            };
+        }
+
+        let hold_for_ready_confirmation = matches!(
+            screen_activity,
+            AgentScreenActivity::Ready | AgentScreenActivity::Interrupted
+        ) && !screen_confirms_idle;
+        let decision = if screen_confirms_idle {
+            IdleDecision::yes(evidence_turn_epoch)
+        } else if silence.explicit_busy
+            || hold_for_ready_confirmation
+            || silence.is_api_retry_active()
+        {
+            IdleDecision::NO
+        } else {
+            should_transition_idle(state, session_id)
+        };
+        if !decision.should_transition {
+            return TimerIdleTransition {
+                transitioned: false,
+                force_cleared_subtasks: false,
+                screen_confirms_idle,
+            };
+        }
+        if !screen_confirms_idle {
+            silence.idle_confirmed = agent_type.is_none();
+        }
+        let (transitioned, parent_dispatch) = try_shell_transition_locked(
+            state,
+            session_id,
+            SHELL_BUSY,
+            SHELL_IDLE,
+            true,
+            Some(&mut silence),
+            decision.turn_epoch,
+            || {},
+        );
+        (
+            transitioned,
+            decision.force_cleared_subtasks,
+            screen_confirms_idle,
+            parent_dispatch,
+        )
+    };
+    if let Some(dispatch) = parent_dispatch {
+        dispatch_parent_lifecycle(state, dispatch);
+    }
+    TimerIdleTransition {
+        transitioned,
+        force_cleared_subtasks,
+        screen_confirms_idle,
+    }
+}
+
 /// Spawn the silence-detection timer thread. Shared by desktop and headless readers.
 ///
 /// Two strategies run in priority order:
@@ -1955,6 +2431,10 @@ fn spawn_silence_timer(
             // runs regardless of current state so it repairs an already-false-
             // idle session instead of merely keeping a pre-existing BUSY alive.
             // Claude/Gemini/Aider BUSY is movement-driven in the reader.
+            let idle_evidence_turn_epoch = state
+                .session_states
+                .get(&session_id)
+                .map(|session| session.turn_epoch);
             let agent_type = state
                 .session_states
                 .get(&session_id)
@@ -1966,84 +2446,41 @@ fn spawn_silence_timer(
                     detect_agent_screen_activity(agent_type.as_deref(), &vt.lock().screen_rows())
                 })
                 .unwrap_or(AgentScreenActivity::Unknown);
-            let screen_confirms_idle = match screen_activity {
-                AgentScreenActivity::Working => {
-                    apply_working_evidence(
-                        &state,
-                        &silence,
-                        &session_id,
-                        epoch_now,
-                        "working-screen",
+            if screen_activity == AgentScreenActivity::Working {
+                apply_working_evidence(&state, &silence, &session_id, epoch_now, "working-screen");
+            } else {
+                // Evidence mutation, silence decision, and BUSY→IDLE CAS share
+                // one lifecycle transaction. A new submitted epoch therefore
+                // wins before any stale Ready/Interrupted/Unknown evidence can
+                // alter its SilenceState.
+                let transition = try_timer_idle_transition(
+                    &state,
+                    &silence,
+                    &session_id,
+                    screen_activity,
+                    agent_type.as_deref(),
+                    idle_evidence_turn_epoch,
+                );
+                if transition.transitioned {
+                    if transition.force_cleared_subtasks {
+                        emit_active_subtasks(&state, &session_id, 0, "");
+                    }
+                    if let Some(vt) = state.vt_log_buffers.get(&session_id) {
+                        vt.lock().process(b"\x1b[?25h");
+                    }
+                    tracing::debug!(
+                        session_id,
+                        activity_source = if transition.screen_confirms_idle {
+                            "agent-ready-screen"
+                        } else {
+                            "silence"
+                        },
+                        idle_confirmed = silence.lock().idle_confirmed,
+                        "Shell state → idle"
                     );
-                    false
-                }
-                AgentScreenActivity::Ready => silence.lock().note_ready_screen(),
-                AgentScreenActivity::Interrupted => silence.lock().note_interrupted_screen(),
-                AgentScreenActivity::Unknown => {
-                    silence.lock().note_unknown_screen();
-                    false
-                }
-            };
-
-            // Sole heuristic idle path: only this timer transitions busy → idle
-            // without an explicit OSC marker. A stable ready screen is stronger
-            // than timing; an explicit BUSY marker blocks timing until Stop/ready.
-            let is_busy = state
-                .shell_states
-                .get(&session_id)
-                .map(|atom| atom.load(std::sync::atomic::Ordering::Acquire) == SHELL_BUSY)
-                .unwrap_or(false);
-            if is_busy && screen_activity != AgentScreenActivity::Working {
-                let (explicit_busy, hold_for_ready_confirmation, api_retry_active) = {
-                    let sl = silence.lock();
-                    (
-                        sl.explicit_busy,
-                        matches!(
-                            screen_activity,
-                            AgentScreenActivity::Ready | AgentScreenActivity::Interrupted
-                        ) && !screen_confirms_idle,
-                        sl.is_api_retry_active(),
-                    )
-                };
-                let decision = if screen_confirms_idle {
-                    IdleDecision::YES
-                } else if explicit_busy || hold_for_ready_confirmation || api_retry_active {
-                    // An in-flight API retry keeps the agent BUSY across the frozen
-                    // gap between attempts (note_ready_screen already refuses to
-                    // confirm idle while it is active, so screen_confirms_idle is
-                    // false here too).
-                    IdleDecision::NO
-                } else {
-                    should_transition_idle(&state, &session_id)
-                };
-                if decision.should_transition {
-                    // Silence-only idle is sufficient for a plain shell, but not
-                    // for an agent: standby/injection require hook or ready-screen
-                    // confirmation for the latter.
-                    if !screen_confirms_idle {
-                        silence.lock().idle_confirmed = agent_type.is_none();
-                    }
-                    if try_shell_transition(&state, &session_id, SHELL_BUSY, SHELL_IDLE, true) {
-                        if decision.force_cleared_subtasks {
-                            emit_active_subtasks(&state, &session_id, 0, "");
-                        }
-                        if let Some(vt) = state.vt_log_buffers.get(&session_id) {
-                            vt.lock().process(b"\x1b[?25h");
-                        }
-                        tracing::debug!(
-                            session_id,
-                            activity_source = if screen_confirms_idle {
-                                "agent-ready-screen"
-                            } else {
-                                "silence"
-                            },
-                            idle_confirmed = silence.lock().idle_confirmed,
-                            "Shell state → idle"
-                        );
-                        emit_shell_state(&state, &session_id, "idle");
-                        flush_pending_injections(&state, &session_id);
-                        record_inferred_outcome_if_no_osc133(&state, &session_id);
-                    }
+                    emit_shell_state(&state, &session_id, "idle");
+                    flush_pending_injections(&state, &session_id);
+                    record_inferred_outcome_if_no_osc133(&state, &session_id);
                 }
             }
 
@@ -2190,11 +2627,30 @@ fn emit_pending_suggest_if_idle(
     if !shell_is_idle {
         return false;
     }
-    let Some(items) = silence.lock().drain_pending_suggest() else {
+    // Serialize completion emission against note_submitted_input, which takes
+    // this same lock before advancing SessionState.turn_epoch and clearing the
+    // old turn. Whichever owns the lock first defines the lifecycle order.
+    let mut silence_state = silence.lock();
+    let current_turn_epoch = state
+        .session_states
+        .get(session_id)
+        .map(|session| session.turn_epoch)
+        .unwrap_or(0);
+    let Some((turn_epoch, items)) = silence_state.drain_pending_suggest_with_epoch() else {
         return false;
     };
+    if turn_epoch != current_turn_epoch {
+        if silence_state.completion_turn_epoch == turn_epoch {
+            silence_state.completion_declared = false;
+            silence_state.completion_turn_epoch = 0;
+        }
+        return false;
+    }
     let parsed = ParsedEvent::Suggest { items };
-    if let Ok(json) = serde_json::to_value(&parsed) {
+    if let Ok(mut json) = serde_json::to_value(&parsed) {
+        if let Some(object) = json.as_object_mut() {
+            object.insert("_turn_epoch".to_string(), turn_epoch.into());
+        }
         #[cfg(feature = "desktop")]
         if let Some(app) = state.app_handle.read().as_ref() {
             let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
@@ -2204,7 +2660,7 @@ fn emit_pending_suggest_if_idle(
             parsed: json,
         });
     }
-    push_state_change_to_parent(
+    let parent_dispatch = enqueue_state_change_to_parent(
         state,
         session_id,
         serde_json::json!({
@@ -2213,6 +2669,10 @@ fn emit_pending_suggest_if_idle(
             "session_id": session_id,
         }),
     );
+    drop(silence_state);
+    if let Some(dispatch) = parent_dispatch {
+        dispatch_parent_lifecycle(state, dispatch);
+    }
     true
 }
 
@@ -3119,7 +3579,13 @@ impl ChunkProcessor {
             // before `shell-state: idle`; gating the emission backend-side
             // removes the race and simplifies the Terminal event handler.
             if let ParsedEvent::Suggest { items } = event {
-                silence.lock().mark_suggest_candidate(items.clone());
+                let mut silence_state = silence.lock();
+                let turn_epoch = state
+                    .session_states
+                    .get(session_id)
+                    .map(|session| session.turn_epoch)
+                    .unwrap_or(0);
+                silence_state.mark_suggest_candidate(items.clone(), turn_epoch);
                 continue;
             }
 
@@ -3556,17 +4022,30 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     }
 }
 
-/// Tombstone a session after its process exited.
-/// Push a state_change message to the parent's inbox if this session has a registered parent.
-/// Used for automatic orchestrator notifications on exit and idle transitions.
-fn push_state_change_to_parent(state: &AppState, session_id: &str, payload: serde_json::Value) {
+struct ParentLifecycleDispatch {
+    parent_id: String,
+    message_id: String,
+    framed: String,
+}
+
+/// Enqueue the authoritative parent lifecycle message without touching the
+/// parent's PTY lifecycle lock. BUSY→IDLE and completed paths call this while
+/// holding the child's SilenceState transaction lock.
+fn enqueue_state_change_to_parent(
+    state: &AppState,
+    session_id: &str,
+    payload: serde_json::Value,
+) -> Option<ParentLifecycleDispatch> {
     let Some(parent_id) = state
         .session_parent
         .get(session_id)
         .map(|e| e.value().clone())
     else {
-        return;
+        return None;
     };
+    if parent_id == session_id {
+        return None;
+    }
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -3582,11 +4061,8 @@ fn push_state_change_to_parent(state: &AppState, session_id: &str, payload: serd
     let message_id = msg.id.clone();
     state.push_agent_inbox(&parent_id, msg);
     if !state.assign_agent_delivery(&parent_id, &message_id) {
-        return;
+        return None;
     }
-    // Wake the orchestrator: an idle parent won't poll its inbox, so surface the
-    // lifecycle change directly in its terminal. Uses a compact human line — the
-    // full JSON payload stays in the inbox for programmatic reads.
     let state_desc = payload
         .get("state")
         .and_then(|s| s.as_str())
@@ -3604,8 +4080,26 @@ fn push_state_change_to_parent(state: &AppState, session_id: &str, payload: serd
             state_desc
         ),
     };
-    deliver_message_to_pty(state, &parent_id, &framed);
-    state.mark_terminal_delivery_dispatched(&parent_id, &message_id);
+    Some(ParentLifecycleDispatch {
+        parent_id,
+        message_id,
+        framed,
+    })
+}
+
+/// Wake/dispatch only after the child lifecycle lock has been released. This
+/// may acquire the parent's SilenceState lock through terminal delivery.
+fn dispatch_parent_lifecycle(state: &AppState, dispatch: ParentLifecycleDispatch) {
+    deliver_message_to_pty(state, &dispatch.parent_id, &dispatch.framed);
+    state.mark_terminal_delivery_dispatched(&dispatch.parent_id, &dispatch.message_id);
+}
+
+/// Push a state_change message and wake the parent when no child lifecycle
+/// transaction is active (for example, process exit and direct test helpers).
+fn push_state_change_to_parent(state: &AppState, session_id: &str, payload: serde_json::Value) {
+    if let Some(dispatch) = enqueue_state_change_to_parent(state, session_id, payload) {
+        dispatch_parent_lifecycle(state, dispatch);
+    }
 }
 
 /// Emit the single exceptional-path notification for an initial prompt that
@@ -6939,9 +7433,9 @@ pub(crate) fn subscribe_terminal_grid(
 
 /// Acknowledge that the frontend has painted the last grid frame.
 /// Clears the in-flight flag so the ticker can send the next frame.
-/// The ticker (8ms interval) is the sole frame sender — the ack path only
-/// releases the backpressure gate. This caps frame rate at ~125Hz and prevents
-/// the tight ack→flush→ack loop that saturated the main thread.
+/// The ticker (16ms interval) is the sole normal damage-driven frame sender.
+/// The ack path only releases the backpressure gate. This caps frame rate at
+/// ~60Hz and prevents the tight ack→flush→ack loop that saturated the main thread.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn ack_terminal_frame(state: State<'_, Arc<AppState>>, session_id: String) {
@@ -7845,7 +8339,7 @@ mod tests {
     #[test]
     fn test_suggest_drain_returns_parked_items() {
         let mut s = SilenceState::new();
-        s.mark_suggest_candidate(vec!["alpha".to_string(), "beta".to_string()]);
+        s.mark_suggest_candidate(vec!["alpha".to_string(), "beta".to_string()], 0);
         assert_eq!(
             s.drain_pending_suggest(),
             Some(vec!["alpha".to_string(), "beta".to_string()])
@@ -7855,7 +8349,7 @@ mod tests {
     #[test]
     fn test_suggest_drain_consumes_items() {
         let mut s = SilenceState::new();
-        s.mark_suggest_candidate(vec!["a".to_string()]);
+        s.mark_suggest_candidate(vec!["a".to_string()], 0);
         let _ = s.drain_pending_suggest();
         assert!(
             s.drain_pending_suggest().is_none(),
@@ -7872,8 +8366,8 @@ mod tests {
     #[test]
     fn test_suggest_newer_items_overwrite_older() {
         let mut s = SilenceState::new();
-        s.mark_suggest_candidate(vec!["old".to_string()]);
-        s.mark_suggest_candidate(vec!["new1".to_string(), "new2".to_string()]);
+        s.mark_suggest_candidate(vec!["old".to_string()], 0);
+        s.mark_suggest_candidate(vec!["new1".to_string(), "new2".to_string()], 0);
         assert_eq!(
             s.drain_pending_suggest(),
             Some(vec!["new1".to_string(), "new2".to_string()]),
@@ -7884,7 +8378,7 @@ mod tests {
     #[test]
     fn test_suggest_reset_on_user_input() {
         let mut s = SilenceState::new();
-        s.mark_suggest_candidate(vec!["stale".to_string()]);
+        s.mark_suggest_candidate(vec!["stale".to_string()], 0);
         s.reset_suggest_memory();
         assert!(
             s.drain_pending_suggest().is_none(),
@@ -7895,7 +8389,7 @@ mod tests {
     #[test]
     fn test_suggest_empty_items_ignored() {
         let mut s = SilenceState::new();
-        s.mark_suggest_candidate(vec![]);
+        s.mark_suggest_candidate(vec![], 0);
         assert!(
             s.pending_suggest_items.is_none(),
             "empty items must not park"
@@ -11550,7 +12044,7 @@ mod tests {
             std::sync::atomic::AtomicU8::new(SHELL_BUSY),
         );
         let mut silence = SilenceState::new();
-        silence.mark_suggest_candidate(vec!["Review result".to_string()]);
+        silence.mark_suggest_candidate(vec!["Review result".to_string()], 0);
         state
             .silence_states
             .insert(child_id.to_string(), Arc::new(Mutex::new(silence)));
@@ -11751,7 +12245,21 @@ mod tests {
             .get(sid)
             .unwrap()
             .lock()
-            .mark_suggest_candidate(vec!["Review result".to_string()]);
+            .mark_suggest_candidate(vec!["Review result".to_string()], 0);
+    }
+
+    fn assert_new_turn_silence_evidence(silence: &SilenceState) {
+        assert!(silence.explicit_busy);
+        assert!(!silence.hook_busy);
+        assert!(!silence.explicit_idle);
+        assert!(!silence.idle_confirmed);
+        assert!(silence.last_status_line_at.is_some());
+        assert!(silence.ready_since.is_none());
+        assert!(silence.interrupt_requested_at.is_none());
+        assert!(silence.turn_started_by_input);
+        assert!(!silence.turn_activity_seen);
+        assert!(!silence.completion_declared);
+        assert!(silence.pending_suggest_items.is_none());
     }
 
     #[test]
@@ -11777,6 +12285,416 @@ mod tests {
                 .lock()
                 .completion_declared()
         );
+    }
+
+    #[test]
+    fn submitted_epoch_and_busy_transition_are_one_critical_section() {
+        use std::sync::atomic::Ordering;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let session_id = "submitted-atomic";
+        completed_agent_session(&state, session_id);
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (lock_held_tx, lock_held_rx) = std::sync::mpsc::channel();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let observer_state = Arc::clone(&state);
+        let observer = std::thread::spawn(move || {
+            start_rx.recv().unwrap();
+            let silence = observer_state
+                .silence_states
+                .get(session_id)
+                .unwrap()
+                .clone();
+            lock_held_tx.send(silence.try_lock().is_none()).unwrap();
+            let transitioned =
+                try_shell_transition(&observer_state, session_id, SHELL_IDLE, SHELL_IDLE, false);
+            finished_tx.send(transitioned).unwrap();
+        });
+
+        note_submitted_input_with_hook(&state, session_id, || {
+            assert_eq!(state.session_states.get(session_id).unwrap().turn_epoch, 1);
+            start_tx.send(()).unwrap();
+            assert!(
+                lock_held_rx.recv().unwrap(),
+                "epoch mutation must retain the lifecycle lock until BUSY"
+            );
+        });
+
+        assert!(
+            !finished_rx.recv().unwrap(),
+            "observer must see BUSY after the submitted-turn reservation"
+        );
+        observer.join().unwrap();
+        assert_eq!(
+            state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_BUSY
+        );
+    }
+
+    #[test]
+    fn channel_delivery_reserves_new_turn_before_receiver_visibility() {
+        use std::sync::atomic::Ordering;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let session_id = "channel-reserve";
+        completed_agent_session(&state, session_id);
+        let (channel, mut receiver) = tokio::sync::broadcast::channel(1);
+        let (observed_tx, observed_rx) = std::sync::mpsc::channel();
+        let consumer_state = Arc::clone(&state);
+        let consumer = std::thread::spawn(move || {
+            receiver.blocking_recv().expect("channel delivery");
+            let session = consumer_state.session_states.get(session_id).unwrap();
+            let epoch = session.turn_epoch;
+            let suggestions_cleared = session.suggested_actions.is_none();
+            drop(session);
+            let shell = consumer_state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(Ordering::Acquire);
+            observed_tx
+                .send((epoch, suggestions_cleared, shell))
+                .unwrap();
+        });
+
+        let delivered = deliver_with_reserved_submitted_turn(&state, session_id, || {
+            channel.send("next turn".to_string()).is_ok()
+                && observed_rx
+                    .recv()
+                    .is_ok_and(|observed| observed == (1, true, SHELL_BUSY))
+        });
+
+        consumer.join().unwrap();
+        assert!(delivered, "receiver must observe the reserved new turn");
+    }
+
+    #[test]
+    fn channel_delivery_with_no_receivers_rolls_back_lifecycle_exactly() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "channel-rollback";
+        completed_agent_session(&state, session_id);
+        state
+            .last_output_ms
+            .insert(session_id.to_string(), AtomicU64::new(123));
+        state
+            .shell_state_since_ms
+            .insert(session_id.to_string(), AtomicU64::new(456));
+        let (channel, receiver) = tokio::sync::broadcast::channel::<String>(1);
+        drop(receiver);
+
+        assert!(!deliver_with_reserved_submitted_turn(
+            &state,
+            session_id,
+            || channel.send("undelivered".to_string()).is_ok(),
+        ));
+
+        let session = state.session_states.get(session_id).unwrap();
+        assert_eq!(session.turn_epoch, 0);
+        assert_eq!(
+            session.suggested_actions.as_ref(),
+            Some(&vec!["Review result".to_string()])
+        );
+        drop(session);
+        assert_eq!(
+            state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_IDLE
+        );
+        assert_eq!(
+            state
+                .last_output_ms
+                .get(session_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            123
+        );
+        assert_eq!(
+            state
+                .shell_state_since_ms
+                .get(session_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            456
+        );
+        let silence = state.silence_states.get(session_id).unwrap();
+        let silence = silence.lock();
+        assert!(silence.completion_declared_for_epoch(0));
+        assert_eq!(
+            silence.pending_suggest_items.as_ref(),
+            Some(&vec!["Review result".to_string()])
+        );
+        drop(silence);
+        assert!(
+            claim_idle_for_injection(&state, session_id).is_some(),
+            "zero-receiver rollback must leave the PTY fallback claimable"
+        );
+    }
+
+    #[test]
+    fn idle_parent_notification_finishes_before_new_turn_reservation() {
+        use std::sync::atomic::Ordering;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let child_id = "idle-race-child";
+        let parent_id = "idle-race-parent";
+        agent_session(&state, child_id, SHELL_BUSY);
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (lock_held_tx, lock_held_rx) = std::sync::mpsc::channel();
+        let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+        let submitter_state = Arc::clone(&state);
+        let submitter = std::thread::spawn(move || {
+            start_rx.recv().unwrap();
+            let silence = submitter_state
+                .silence_states
+                .get(child_id)
+                .unwrap()
+                .clone();
+            lock_held_tx.send(silence.try_lock().is_none()).unwrap();
+            note_submitted_input(&submitter_state, child_id);
+            finished_tx.send(()).unwrap();
+        });
+
+        assert!(try_shell_transition_with_hook(
+            &state,
+            child_id,
+            SHELL_BUSY,
+            SHELL_IDLE,
+            true,
+            || {
+                start_tx.send(()).unwrap();
+                assert!(
+                    lock_held_rx.recv().unwrap(),
+                    "BUSY→IDLE must retain the lifecycle lock through parent enqueue"
+                );
+            },
+        ));
+        finished_rx.recv().unwrap();
+        submitter.join().unwrap();
+
+        assert_eq!(
+            state
+                .shell_states
+                .get(child_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_BUSY
+        );
+        assert_eq!(state.session_states.get(child_id).unwrap().turn_epoch, 1);
+        let inbox = state.agent_inbox.get(parent_id).unwrap();
+        assert_eq!(inbox.len(), 1);
+        let payload: serde_json::Value =
+            serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+        assert_eq!(payload["state"], "idle");
+    }
+
+    #[test]
+    fn new_turn_wins_before_queued_old_idle_transition() {
+        use std::sync::atomic::Ordering;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let child_id = "inverse-idle-child";
+        let parent_id = "inverse-idle-parent";
+        agent_session(&state, child_id, SHELL_BUSY);
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+
+        let (snapshotted_tx, snapshotted_rx) = std::sync::mpsc::channel();
+        let (continue_tx, continue_rx) = std::sync::mpsc::channel();
+        let old_transition_state = Arc::clone(&state);
+        let old_transition = std::thread::spawn(move || {
+            let observed_turn_epoch = old_transition_state
+                .session_states
+                .get(child_id)
+                .map(|session| session.turn_epoch);
+            try_shell_transition_with_hooks(
+                &old_transition_state,
+                child_id,
+                SHELL_BUSY,
+                SHELL_IDLE,
+                true,
+                observed_turn_epoch,
+                || {
+                    snapshotted_tx.send(()).unwrap();
+                    continue_rx.recv().unwrap();
+                },
+                || {},
+                || {},
+            )
+        });
+
+        snapshotted_rx.recv().unwrap();
+        note_submitted_input(&state, child_id);
+        continue_tx.send(()).unwrap();
+
+        assert!(
+            !old_transition.join().unwrap(),
+            "an idle transition from the prior epoch must not publish"
+        );
+        assert_eq!(state.session_states.get(child_id).unwrap().turn_epoch, 1);
+        assert_eq!(
+            state
+                .shell_states
+                .get(child_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_BUSY
+        );
+        assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn explicit_idle_evidence_from_prior_turn_cannot_idle_new_submission() {
+        use std::sync::atomic::Ordering;
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "explicit-idle-epoch";
+        agent_session(&state, session_id, SHELL_BUSY);
+
+        transition_explicit_shell_state_with_hook(
+            &state,
+            session_id,
+            SHELL_IDLE,
+            "idle",
+            true,
+            || note_submitted_input(&state, session_id),
+        );
+
+        assert_eq!(state.session_states.get(session_id).unwrap().turn_epoch, 1);
+        assert_new_turn_silence_evidence(&state.silence_states.get(session_id).unwrap().lock());
+        assert_eq!(
+            state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_BUSY,
+            "an explicit idle marker observed before the new input must be discarded"
+        );
+    }
+
+    #[test]
+    fn timer_idle_evidence_from_prior_turn_cannot_mutate_new_submission() {
+        use std::sync::atomic::Ordering;
+
+        for (session_id, activity) in [
+            ("ready-idle-epoch", AgentScreenActivity::Ready),
+            ("interrupted-idle-epoch", AgentScreenActivity::Interrupted),
+            ("unknown-idle-epoch", AgentScreenActivity::Unknown),
+        ] {
+            let state = crate::state::tests_support::make_test_app_state();
+            agent_session(&state, session_id, SHELL_BUSY);
+            let evidence_turn_epoch = Some(0);
+            note_submitted_input(&state, session_id);
+
+            let transition = try_timer_idle_transition(
+                &state,
+                &state.silence_states.get(session_id).unwrap().clone(),
+                session_id,
+                activity,
+                Some("claude"),
+                evidence_turn_epoch,
+            );
+
+            assert!(!transition.transitioned);
+            assert_new_turn_silence_evidence(&state.silence_states.get(session_id).unwrap().lock());
+            assert_eq!(
+                state
+                    .shell_states
+                    .get(session_id)
+                    .unwrap()
+                    .load(Ordering::Acquire),
+                SHELL_BUSY
+            );
+        }
+    }
+
+    #[test]
+    fn silence_idle_decision_from_prior_turn_cannot_idle_new_submission() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "silence-idle-epoch";
+        agent_session(&state, session_id, SHELL_BUSY);
+        state.last_output_ms.insert(
+            session_id.to_string(),
+            AtomicU64::new(now_epoch_ms().saturating_sub(AGENT_IDLE_MS + 1)),
+        );
+
+        let decision = should_transition_idle_with_hook(&state, session_id, || {
+            note_submitted_input(&state, session_id);
+        });
+        assert!(decision.should_transition);
+        assert_eq!(decision.turn_epoch, Some(0));
+
+        assert!(!try_shell_transition_for_epoch(
+            &state,
+            session_id,
+            SHELL_BUSY,
+            SHELL_IDLE,
+            true,
+            decision.turn_epoch,
+        ));
+        assert_eq!(state.session_states.get(session_id).unwrap().turn_epoch, 1);
+        assert_new_turn_silence_evidence(&state.silence_states.get(session_id).unwrap().lock());
+        assert_eq!(
+            state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_BUSY
+        );
+    }
+
+    #[test]
+    fn parent_dispatch_runs_after_child_lifecycle_lock_release() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "dispatch-child";
+        let parent_id = "dispatch-parent";
+        agent_session(&state, child_id, SHELL_BUSY);
+        agent_session(&state, parent_id, SHELL_IDLE);
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        let observed_turn_epoch = state
+            .session_states
+            .get(child_id)
+            .map(|session| session.turn_epoch);
+
+        assert!(try_shell_transition_with_hooks(
+            &state,
+            child_id,
+            SHELL_BUSY,
+            SHELL_IDLE,
+            true,
+            observed_turn_epoch,
+            || {},
+            || {},
+            || {
+                let silence = state.silence_states.get(child_id).unwrap().clone();
+                assert!(
+                    silence.try_lock().is_some(),
+                    "child lifecycle lock must be released before parent PTY dispatch"
+                );
+            },
+        ));
+        assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 1);
     }
 
     #[test]

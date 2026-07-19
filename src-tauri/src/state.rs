@@ -253,6 +253,10 @@ pub(crate) struct SessionState {
     /// Suggested follow-up actions from the agent (from `suggest: ...` tokens)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_actions: Option<Vec<String>>,
+    /// Monotonic input-turn epoch. Suggest events carry the epoch in which they
+    /// were parsed so the async accumulator cannot restore prior-turn completion.
+    #[serde(skip)]
+    pub(crate) turn_epoch: u64,
     /// Slash command menu items (from slash-menu parsed events)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub slash_menu_items: Option<Vec<crate::output_parser::SlashMenuItem>>,
@@ -1996,32 +2000,33 @@ impl AppState {
                 entry.rate_limit_set_ms = 0;
             }
         }
-        self.session_states.get(session_id).map(|s| {
-            let mut state = s.clone();
-            state.shell_state = self.shell_states.get(session_id).map(|atom| {
-                crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed))
-                    .to_string()
-            });
-            state.agent_state = if state.agent_type.is_none() {
-                None
-            } else if state.awaiting_input || state.choice_prompt.is_some() {
-                Some("awaiting_input".to_string())
-            } else if state.shell_state.as_deref() == Some("busy") {
-                Some("working".to_string())
-            } else if state.suggested_actions.is_some()
-                || self
-                    .silence_states
-                    .get(session_id)
-                    .is_some_and(|silence| silence.lock().completion_declared())
-            {
-                Some("completed".to_string())
-            } else if state.shell_state.as_deref() == Some("idle") {
-                Some("idle".to_string())
-            } else {
-                Some("starting".to_string())
-            };
-            state
-        })
+        // Clone before consulting SilenceState so no session_states shard guard
+        // is held across that mutex. Completion emission uses the inverse order
+        // to serialize against a newly submitted input epoch.
+        let mut state = self.session_states.get(session_id).map(|s| s.clone())?;
+        state.shell_state = self.shell_states.get(session_id).map(|atom| {
+            crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed)).to_string()
+        });
+        state.agent_state = if state.agent_type.is_none() {
+            None
+        } else if state.awaiting_input || state.choice_prompt.is_some() {
+            Some("awaiting_input".to_string())
+        } else if state.shell_state.as_deref() == Some("busy") {
+            Some("working".to_string())
+        } else if state.suggested_actions.is_some()
+            || self.silence_states.get(session_id).is_some_and(|silence| {
+                silence
+                    .lock()
+                    .completion_declared_for_epoch(state.turn_epoch)
+            })
+        {
+            Some("completed".to_string())
+        } else if state.shell_state.as_deref() == Some("idle") {
+            Some("idle".to_string())
+        } else {
+            Some("starting".to_string())
+        };
+        Some(state)
     }
 
     /// Spawn a background task that subscribes to the event bus and updates
@@ -2092,6 +2097,7 @@ impl AppState {
             }
             AppEvent::PtyParsed { session_id, parsed } => {
                 let event_type = parsed.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                let event_turn_epoch = parsed.get("_turn_epoch").and_then(|v| v.as_u64());
 
                 // Collect push notification data outside the DashMap lock
                 let mut push_data: Option<(String, String)> = None;
@@ -2207,7 +2213,9 @@ impl AppState {
                                     .and_then(|v| v.as_str())
                                     .map(|t| t.to_string());
                             }
-                            "suggest" => {
+                            "suggest"
+                                if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) =>
+                            {
                                 s.suggested_actions =
                                     parsed.get("items").and_then(|v| v.as_array()).map(|arr| {
                                         arr.iter()
@@ -4458,6 +4466,53 @@ mod tests {
             s.suggested_actions,
             Some(vec!["Run tests".to_string(), "Review diff".to_string()])
         );
+    }
+
+    #[tokio::test]
+    async fn queued_prior_turn_suggest_cannot_restore_completion_after_submission() {
+        let state = fresh_state();
+        state.session_states.get_mut("s1").unwrap().agent_type = Some("codex".to_string());
+        state.shell_states.insert(
+            "s1".to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        let queued_suggest = make_parsed(
+            "suggest",
+            serde_json::json!({
+                "items": ["stale action"],
+                "_turn_epoch": 0,
+            }),
+        );
+
+        AppState::spawn_session_state_accumulator(state.clone());
+        state.emit_pty_event(queued_suggest);
+        // No await above: the Suggest is queued in the async accumulator when
+        // the new input advances the turn epoch.
+        crate::pty::note_submitted_input(&state, "s1");
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            loop {
+                if state
+                    .session_states
+                    .get("s1")
+                    .is_some_and(|session| session.last_activity_ms > 0)
+                {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("queued Suggest must drain through the accumulator");
+        state
+            .shell_states
+            .get("s1")
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, std::sync::atomic::Ordering::Release);
+
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.turn_epoch, 1);
+        assert!(snapshot.suggested_actions.is_none());
+        assert_eq!(snapshot.agent_state.as_deref(), Some("idle"));
     }
 
     #[test]

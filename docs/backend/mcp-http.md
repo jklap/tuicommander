@@ -417,7 +417,10 @@ that contain `{prompt}` remain authoritative and receive direct substitution.
 Flags-only `args` keep their order; normal CLIs receive the prompt as the final
 positional argument, while prefill-only interactive TUIs receive it through the
 deferred PTY-injection path after their ready prompt appears.
-Structured `model` is composed with `args`; Codex spawns include the approval-bypass default.
+Configured run-config argv retains its established authoritative behavior:
+`{prompt}` is substituted where authored, otherwise the prompt is appended as
+the final positional argument rather than converted to deferred PTY delivery.
+Structured `model` is composed with `args`; direct Codex commands include the approval-bypass default. Outside authoritative run-config argv, direct executable identity also selects Codex prompt deferral and parser state, even when `agent_type` is omitted or disagrees. That bypass-default step leaves canonical Codex wrapper run-config argv untouched and adds `launch_warning` because TUIC cannot validate the wrapper's internal Codex flags. Structured parameters retain their established composition independently, including appending a caller-supplied `model`.
 
 `name` optionally assigns a non-empty peer and PTY display name at spawn time.
 The parent-assigned name is stored before prompt delivery, returned in the spawn
@@ -463,9 +466,10 @@ unregistered states when the IPC server keeps sockets alive.
 0. **Auto-identity** *(no call needed)*: `tuic-bridge` inherits `$TUIC_SESSION` from the agent
    PTY and sends it as the `x-tuic-session` header on the initialize `POST /mcp`. The server
    validates the UUID and binds the MCP session to that tuic session (`apply_initialize_identity`
-   → shared `bind_peer_identity`), auto-registering the peer. `agent action=register` becomes an
-   optional rename. Last-writer-wins across a bridge reconnect (fresh MCP session id); an
-   existing peer's display name is preserved.
+   → the shared locked live-owner policy), auto-registering the peer. `agent action=register`
+   becomes an optional rename. The same MCP session may refresh its binding, and a fresh session
+   may reclaim a stale owner; a subscribed or recently active owner rejects takeover. An existing
+   peer's display name is preserved.
 1. **Register** *(optional)*: sets a friendly name/project on the already-bound identity.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by project).
 3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
@@ -495,6 +499,8 @@ Spawned peers additionally auto-post a `state_change` (`idle` / `exited`) to the
 ### Channel Push Delivery
 
 When a recipient has an active SSE stream (`GET /mcp`), messages are pushed as `notifications/claude/channel` JSON-RPC notifications:
+
+A channel delivery reserves the recipient's new task epoch before the notification becomes visible to the SSE consumer, matching successful PTY delivery. A broadcast send with no receiver proves zero delivery; the reserved epoch token restores the prior lifecycle exactly and leaves the existing PTY-or-queue fallback claimable.
 
 ```json
 {
