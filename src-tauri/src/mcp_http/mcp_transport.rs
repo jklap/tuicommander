@@ -375,6 +375,27 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
     true
 }
 
+/// Resolve the cwd of the managed PTY asserted by the bridge header without
+/// changing peer ownership or routing. Spawn uses this only as a cwd hint when
+/// identity binding is legitimately unavailable (for example, a live-owner
+/// conflict); messaging continues to rely exclusively on the binding maps.
+fn managed_parent_cwd_from_header(
+    state: &AppState,
+    mcp_session_id: Option<&str>,
+    header: Option<&str>,
+) -> Option<String> {
+    let tuic_session = header.filter(|value| is_valid_uuid(value))?;
+    if let Some(bound_tuic) = mcp_session_id.and_then(|sid| state.mcp_to_session.get(sid))
+        && bound_tuic.value() != tuic_session
+    {
+        return None;
+    }
+    state
+        .sessions
+        .get(tuic_session)
+        .and_then(|session| session.lock().cwd.clone())
+}
+
 /// Refresh a protocol session and re-assert its PTY identity on every request.
 /// Both maps are in-memory and disappear on a TUIC restart; a long-lived bridge
 /// may keep its old MCP session id, so merely recreating `mcp_sessions` is not
@@ -1010,6 +1031,7 @@ async fn handle_call_tool(
     addr: SocketAddr,
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
+    managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
     let tool_name = match args["tool_name"].as_str() {
         Some(n) if !n.trim().is_empty() => n.to_string(),
@@ -1049,12 +1071,13 @@ async fn handle_call_tool(
         }
     } else {
         // Recursive async dispatch requires Box::pin. Meta names are blocked above.
-        Box::pin(handle_mcp_tool_call(
+        Box::pin(handle_mcp_tool_call_with_context(
             state,
             addr,
             &tool_name,
             &tool_args,
             mcp_session_id,
+            managed_parent_cwd,
         ))
         .await
     }
@@ -1068,6 +1091,17 @@ pub(crate) async fn handle_mcp_tool_call(
     name: &str,
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    handle_mcp_tool_call_with_context(state, addr, name, args, mcp_session_id, None).await
+}
+
+async fn handle_mcp_tool_call_with_context(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    name: &str,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
     // Enforce disabled_native_tools on every call path (not just the call_tool meta-tool).
     // Read-guard does not span an await and is released at the end of the `if` expression.
@@ -1118,7 +1152,13 @@ pub(crate) async fn handle_mcp_tool_call(
             if args["action"].as_str() == Some("wait") {
                 handle_agent_wait(state, args, mcp_session_id).await
             } else {
-                handle_agent_unified(state, addr, args, mcp_session_id)
+                handle_agent_unified_with_parent_cwd(
+                    state,
+                    addr,
+                    args,
+                    mcp_session_id,
+                    managed_parent_cwd,
+                )
             }
         }
         "repo" => handle_repo(state, args, is_claude_code).await,
@@ -1130,7 +1170,9 @@ pub(crate) async fn handle_mcp_tool_call(
         "debug" => handle_debug_unified(state, addr, args),
         "search_tools" => handle_search_tools(state, args),
         "get_tool_schema" => handle_get_tool_schema(state, args),
-        "call_tool" => handle_call_tool(state, addr, args, mcp_session_id).await,
+        "call_tool" => {
+            handle_call_tool(state, addr, args, mcp_session_id, managed_parent_cwd).await
+        }
         n if super::ai_terminal::is_ai_terminal_tool(n) => {
             if !state.config.read().ai_terminal_mcp_enabled {
                 return serde_json::json!({
@@ -2084,11 +2126,55 @@ fn build_spawn_prompt(
     )
 }
 
+fn resolve_effective_spawn_cwd(
+    state: &AppState,
+    explicit_cwd: Option<&str>,
+    managed_parent_cwd: Option<&str>,
+    caller_tuic: Option<&str>,
+    mcp_session_id: Option<&str>,
+) -> Option<String> {
+    explicit_cwd
+        .map(str::to_string)
+        .or_else(|| {
+            caller_tuic.and_then(|parent| {
+                state
+                    .sessions
+                    .get(parent)
+                    .and_then(|session| session.lock().cwd.clone())
+            })
+        })
+        // The bridge header identifies the actual managed PTY when no verified
+        // caller binding exists. A conflicting bound caller rejects this hint
+        // before resolution reaches this function.
+        .or_else(|| managed_parent_cwd.map(str::to_string))
+        // Non-managed clients have no PTY header; initialize roots remain the
+        // final repo-scoped fallback.
+        .or_else(|| {
+            mcp_session_id.and_then(|sid| {
+                state
+                    .mcp_sessions
+                    .get(sid)
+                    .and_then(|meta| meta.repo_path.clone())
+            })
+        })
+}
+
+#[cfg(test)]
 fn handle_agent(
     state: &Arc<AppState>,
     addr: SocketAddr,
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    handle_agent_with_parent_cwd(state, addr, args, mcp_session_id, None)
+}
+
+fn handle_agent_with_parent_cwd(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    managed_parent_cwd: Option<&str>,
 ) -> serde_json::Value {
     let action = match require_action(args, "agent", LEGACY_AGENT_ACTIONS) {
         Ok(a) => a,
@@ -2205,15 +2291,13 @@ fn handle_agent(
             // tab into whatever repo the desktop user has focused (the active-repo
             // fallback). Inheriting the parent cwd lands both the process and the tab in
             // the parent agent's repo.
-            let effective_cwd: Option<String> =
-                args["cwd"].as_str().map(|s| s.to_string()).or_else(|| {
-                    caller_tuic.as_ref().and_then(|parent| {
-                        state
-                            .sessions
-                            .get(parent)
-                            .and_then(|e| e.lock().cwd.clone())
-                    })
-                });
+            let effective_cwd = resolve_effective_spawn_cwd(
+                state,
+                args["cwd"].as_str(),
+                managed_parent_cwd,
+                caller_tuic.as_deref(),
+                mcp_session_id,
+            );
 
             let mut cmd = CommandBuilder::new(&binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
@@ -3693,6 +3777,13 @@ pub(super) async fn mcp_post(
                 .get(MCP_SESSION_HEADER)
                 .and_then(|v| v.to_str().ok())
                 .map(|s| s.to_string());
+            let managed_parent_cwd = managed_parent_cwd_from_header(
+                &state,
+                session_id_str.as_deref(),
+                headers
+                    .get(TUIC_SESSION_HEADER)
+                    .and_then(|value| value.to_str().ok()),
+            );
 
             // Route upstream-prefixed tools ({upstream}__{tool}) via the proxy registry.
             // Native tools (no "__") go through the sync handler via spawn_blocking.
@@ -3707,12 +3798,13 @@ pub(super) async fn mcp_post(
                     Err(e) => (serde_json::json!({"error": e}), true),
                 }
             } else {
-                let result = handle_mcp_tool_call(
+                let result = handle_mcp_tool_call_with_context(
                     &state,
                     addr,
                     &tool_name,
                     &args,
                     session_id_str.as_deref(),
+                    managed_parent_cwd.as_deref(),
                 )
                 .await;
                 let is_error = result.get("error").is_some();
@@ -3922,20 +4014,35 @@ async fn handle_repo(
 }
 
 /// Merged agent tool: original agent actions + messaging actions.
+#[cfg(test)]
 fn handle_agent_unified(
     state: &Arc<AppState>,
     addr: SocketAddr,
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
+    handle_agent_unified_with_parent_cwd(state, addr, args, mcp_session_id, None)
+}
+
+fn handle_agent_unified_with_parent_cwd(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+    managed_parent_cwd: Option<&str>,
+) -> serde_json::Value {
     let action = match require_action(args, "agent", AGENT_ACTIONS) {
         Ok(a) => a,
         Err(e) => return e,
     };
     match action {
-        "spawn" | "detect" | "stats" | "metrics" => {
-            handle_agent(state, addr, &remap_action(args, action), mcp_session_id)
-        }
+        "spawn" | "detect" | "stats" | "metrics" => handle_agent_with_parent_cwd(
+            state,
+            addr,
+            &remap_action(args, action),
+            mcp_session_id,
+            managed_parent_cwd,
+        ),
         "register" | "list_peers" | "send" | "inbox" => {
             // Inter-agent messaging is same-machine coordination only, so it carries
             // the same loopback restriction as `spawn`. Without this, a non-loopback
@@ -4688,6 +4795,39 @@ mod tests {
 
     const TEST_UUID_A: &str = "550e8400-e29b-41d4-a716-446655440a01";
     const TEST_UUID_B: &str = "550e8400-e29b-41d4-a716-446655440a02";
+
+    #[cfg(unix)]
+    fn insert_managed_test_session(state: &Arc<AppState>, session_id: &str, cwd: &str) {
+        use crate::state::PtySession;
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open test PTY");
+        let child = pair
+            .slave
+            .spawn_command(CommandBuilder::new("true"))
+            .expect("spawn test PTY child");
+        let writer = pair.master.take_writer().expect("open test PTY writer");
+        state.sessions.insert(
+            session_id.to_string(),
+            parking_lot::Mutex::new(PtySession {
+                writer,
+                master: pair.master,
+                _child: child,
+                paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                worktree: None,
+                cwd: Some(cwd.to_string()),
+                display_name: None,
+                shell: "true".to_string(),
+            }),
+        );
+    }
 
     #[test]
     fn initialize_identity_auto_binds_from_header() {
@@ -6221,7 +6361,7 @@ mod tests {
     #[tokio::test]
     async fn call_tool_requires_tool_name() {
         let state = test_state();
-        let r = handle_call_tool(&state, loopback_addr(), &serde_json::json!({}), None).await;
+        let r = handle_call_tool(&state, loopback_addr(), &serde_json::json!({}), None, None).await;
         assert!(r["error"].as_str().unwrap().contains("tool_name"));
     }
 
@@ -6233,6 +6373,7 @@ mod tests {
                 &state,
                 loopback_addr(),
                 &serde_json::json!({ "tool_name": meta, "arguments": { "query": "x" } }),
+                None,
                 None,
             )
             .await;
@@ -6253,6 +6394,7 @@ mod tests {
             loopback_addr(),
             &serde_json::json!({ "tool_name": "workspace", "arguments": { "action": "active" } }),
             None,
+            None,
         )
         .await;
         assert!(r["error"].as_str().unwrap().contains("disabled"));
@@ -6265,6 +6407,7 @@ mod tests {
             &state,
             loopback_addr(),
             &serde_json::json!({ "tool_name": "nonsense_xyz", "arguments": {} }),
+            None,
             None,
         )
         .await;
@@ -6281,6 +6424,7 @@ mod tests {
             &state,
             loopback_addr(),
             &serde_json::json!({ "tool_name": "session", "arguments": {} }),
+            None,
             None,
         )
         .await;
@@ -6304,6 +6448,7 @@ mod tests {
                 "arguments": { "action": "save", "config": {} }
             }),
             None,
+            None,
         )
         .await;
         let err = r["error"].as_str().unwrap();
@@ -6323,6 +6468,7 @@ mod tests {
             loopback_addr(),
             &serde_json::json!({ "tool_name": "session" }),
             None,
+            None,
         )
         .await;
         assert!(r["error"].as_str().unwrap().contains("action"));
@@ -6338,6 +6484,7 @@ mod tests {
             &state,
             loopback_addr(),
             &serde_json::json!({ "tool_name": "fake_upstream__some_tool", "arguments": {} }),
+            None,
             None,
         )
         .await;
@@ -7492,6 +7639,80 @@ mod tests {
         assert!(
             result.contains("send"),
             "preamble must instruct send on completion"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn absent_spawn_cwd_uses_unbound_managed_header_and_rejects_bound_mismatch() {
+        let state = test_state();
+        insert_managed_test_session(&state, TEST_UUID_A, "/tmp");
+        insert_managed_test_session(&state, TEST_UUID_B, "/");
+
+        let unbound_hint =
+            managed_parent_cwd_from_header(&state, Some("mcp-unbound"), Some(TEST_UUID_A));
+        assert!(state.mcp_to_session.get("mcp-unbound").is_none());
+        assert_eq!(
+            resolve_effective_spawn_cwd(
+                &state,
+                None,
+                unbound_hint.as_deref(),
+                None,
+                Some("mcp-unbound"),
+            )
+            .as_deref(),
+            Some("/tmp"),
+            "an unbound managed bridge may use its asserted PTY cwd"
+        );
+
+        let mut events = state.event_bus.subscribe();
+        let spawned = handle_mcp_tool_call_with_context(
+            &state,
+            "127.0.0.1:0".parse().unwrap(),
+            "agent",
+            &serde_json::json!({
+                "action": "spawn",
+                "name": "cwd-regression-child",
+                "prompt": "verify cwd",
+                "binary_path": "/usr/bin/true",
+            }),
+            Some("mcp-unbound"),
+            unbound_hint.as_deref(),
+        )
+        .await;
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        let created = events.try_recv().expect("spawn must emit session-created");
+        match created {
+            crate::state::AppEvent::SessionCreated { cwd, .. } => {
+                assert_eq!(cwd.as_deref(), Some("/tmp"));
+            }
+            other => panic!("expected session-created, got {other:?}"),
+        }
+
+        state
+            .mcp_to_session
+            .insert("mcp-bound".to_string(), TEST_UUID_A.to_string());
+        let mismatched_hint =
+            managed_parent_cwd_from_header(&state, Some("mcp-bound"), Some(TEST_UUID_B));
+        assert_eq!(
+            mismatched_hint, None,
+            "a bound caller rejects a spoofed header"
+        );
+        assert_eq!(
+            resolve_effective_spawn_cwd(
+                &state,
+                None,
+                mismatched_hint.as_deref(),
+                Some(TEST_UUID_A),
+                Some("mcp-bound"),
+            )
+            .as_deref(),
+            Some("/tmp"),
+            "the verified caller binding remains authoritative"
+        );
+        assert!(
+            state.mcp_to_session.get("mcp-unbound").is_none(),
+            "cwd fallback must not repair the missing identity binding"
         );
     }
 
