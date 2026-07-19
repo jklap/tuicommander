@@ -2289,7 +2289,7 @@ fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActivity {
     let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
     let prompt_present = rows[chrome_start..content_end]
         .iter()
-        .any(|row| row.trim_start().starts_with('\u{276F}'));
+        .any(|row| row.trim() == "\u{276F}");
     if prompt_present {
         AgentScreenActivity::Ready
     } else {
@@ -9987,8 +9987,9 @@ mod tests {
     }
 
     /// The classifier no longer distinguishes summary from live spinner — it
-    /// does not look at glyphs at all. A visible prompt is Ready regardless of
-    /// what static decoration sits above it; the idle path is always reachable.
+    /// does not look at glyphs at all. A visible empty composer is Ready
+    /// regardless of what static decoration sits above it; the idle path is
+    /// always reachable.
     #[test]
     fn claude_classifier_is_prompt_based_never_working() {
         for mid in [
@@ -10002,7 +10003,7 @@ mod tests {
             assert_eq!(
                 detect_claude_screen_activity(&screen),
                 AgentScreenActivity::Ready,
-                "{mid:?}: a visible ❯ prompt is Ready — no glyph can mask it"
+                "{mid:?}: a visible empty ❯ composer is Ready — no glyph can mask it"
             );
         }
     }
@@ -10022,6 +10023,29 @@ mod tests {
             detect_claude_screen_activity(&screen),
             AgentScreenActivity::Unknown
         );
+    }
+
+    /// Live 2026-07-19 regression: Claude echoes the submitted argv prompt as a
+    /// `❯ task` transcript row. While the turn is still running that historical
+    /// row can remain inside the bottom scan window beside an animated spinner;
+    /// it is not the empty composer and must never confirm idle.
+    #[test]
+    fn claude_submitted_prompt_row_is_not_a_ready_composer() {
+        for prompt in [
+            "❯ Read-only review the Windows native smoke scope",
+            "  ❯ draft text not yet submitted",
+        ] {
+            let screen = vec![
+                prompt.to_string(),
+                "⏺ Reading 1 file…".into(),
+                "✻ Boogieing…".into(),
+            ];
+            assert_eq!(
+                detect_claude_screen_activity(&screen),
+                AgentScreenActivity::Unknown,
+                "only Claude's empty composer is Ready: {prompt:?}"
+            );
+        }
     }
 
     /// THE core invariant of the movement design: a byte-identical repaint of a
