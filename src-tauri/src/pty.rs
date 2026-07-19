@@ -1896,6 +1896,7 @@ fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
     }
 }
 
+#[cfg(any(windows, test))]
 fn valid_process_snapshot(
     enumeration_succeeded: bool,
     processes: Vec<ProcessTreeEntry>,
