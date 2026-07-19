@@ -1530,7 +1530,12 @@ fn try_shell_transition_locked<F: FnOnce()>(
                 .session_states
                 .get(session_id)
                 .is_some_and(|session| session.background_work);
-            if is_agent && !completion_declared && !has_background_work {
+            let background_probe_pending =
+                state.session_states.get(session_id).is_some_and(|session| {
+                    session.background_probe_turn_epoch == Some(session.turn_epoch)
+                });
+            if is_agent && !completion_declared && !has_background_work && !background_probe_pending
+            {
                 parent_dispatch = enqueue_state_change_to_parent(
                     state,
                     session_id,
@@ -1963,7 +1968,7 @@ fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
     {
         return false;
     }
-    if session.background_probe_turn_epoch == Some(observed_turn_epoch) {
+    let reconciled_probe = if session.background_probe_turn_epoch == Some(observed_turn_epoch) {
         let Some(boundary) = session.background_probe_after_generation else {
             return false;
         };
@@ -1973,14 +1978,20 @@ fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
         session.background_probe_turn_epoch = None;
         session.background_probe_after_generation = None;
         session.background_probe_satisfied_turn_epoch = Some(observed_turn_epoch);
+        true
     } else if !session.background_work {
         return false;
-    }
+    } else {
+        false
+    };
     session.background_snapshot_generation = snapshot_generation;
     if session.background_work == active {
-        return true;
+        if !reconciled_probe || active {
+            return true;
+        }
+    } else {
+        session.background_work = active;
     }
-    session.background_work = active;
     drop(session);
 
     let mut parent_dispatch = None;
@@ -2057,6 +2068,18 @@ fn ready_probe_satisfied_or_requested(
         session.background_probe_after_generation = Some(state.process_snapshot_cache.generation());
     }
     false
+}
+
+fn arm_explicit_idle_background_probe(state: &AppState, session_id: &str, turn_epoch: u64) {
+    let Some(mut session) = state.session_states.get_mut(session_id) else {
+        return;
+    };
+    if session.agent_type.is_none() || session.turn_epoch != turn_epoch {
+        return;
+    }
+    session.background_probe_turn_epoch = Some(turn_epoch);
+    session.background_probe_after_generation = Some(state.process_snapshot_cache.generation());
+    session.background_probe_satisfied_turn_epoch = None;
 }
 
 fn refresh_background_work(state: &AppState, session_id: &str) {
@@ -2561,9 +2584,6 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         .session_states
         .get(session_id)
         .map(|session| session.turn_epoch);
-    if target == SHELL_IDLE {
-        refresh_background_work(state, session_id);
-    }
     before_transaction();
     let silence = state
         .silence_states
@@ -2593,6 +2613,12 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         };
         if prev == target {
             return;
+        }
+        if prev == SHELL_BUSY
+            && target == SHELL_IDLE
+            && let Some(turn_epoch) = evidence_turn_epoch
+        {
+            arm_explicit_idle_background_probe(state, session_id, turn_epoch);
         }
         try_shell_transition_locked(
             state,
@@ -10588,6 +10614,181 @@ mod tests {
         let content: serde_json::Value =
             serde_json::from_str(&inbox.front().unwrap().content).unwrap();
         assert_eq!(content["state"], "completed");
+    }
+
+    #[test]
+    fn explicit_agent_idle_waits_for_newer_snapshot_and_repairs_working() {
+        for (session_id, hook_state) in [
+            ("background-hook-idle", true),
+            ("background-osc133-idle", false),
+        ] {
+            let state = crate::state::tests_support::make_test_app_state();
+            let parent_id = format!("{session_id}-parent");
+            agent_session(&state, session_id, SHELL_BUSY);
+            state.session_states.get_mut(session_id).unwrap().agent_type = Some("codex".into());
+            state
+                .session_parent
+                .insert(session_id.to_string(), parent_id.clone());
+            state.agent_inbox.entry(parent_id.clone()).or_default();
+            state
+                .process_snapshot_cache
+                .store(Some(vec![process(10, 1, "codex", "codex")]));
+
+            transition_explicit_shell_state_with_hook(
+                &state,
+                session_id,
+                SHELL_IDLE,
+                "idle",
+                hook_state,
+                || {},
+            );
+
+            assert_eq!(
+                state
+                    .shell_states
+                    .get(session_id)
+                    .unwrap()
+                    .load(Ordering::Acquire),
+                SHELL_IDLE
+            );
+            assert!(state.agent_inbox.get(&parent_id).unwrap().is_empty());
+            assert!(!refresh_background_work_from_cached_snapshot(
+                &state,
+                session_id,
+                10,
+                "codex",
+                0,
+                state.process_snapshot_cache.load(),
+            ));
+            assert!(state.agent_inbox.get(&parent_id).unwrap().is_empty());
+
+            state.process_snapshot_cache.store(Some(vec![
+                process(10, 1, "codex", "codex"),
+                process(11, 10, "cargo", "cargo test --locked"),
+            ]));
+            assert!(refresh_background_work_from_cached_snapshot(
+                &state,
+                session_id,
+                10,
+                "codex",
+                0,
+                state.process_snapshot_cache.load(),
+            ));
+            let snapshot = state.session_state_with_shell(session_id).unwrap();
+            assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+            assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+            assert!(snapshot.background_work);
+            assert!(state.agent_inbox.get(&parent_id).unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn explicit_agent_idle_child_absent_notifies_once_after_newer_snapshot() {
+        for (session_id, declare_completion, expected_state) in [
+            ("background-explicit-idle", false, "idle"),
+            ("background-explicit-completed", true, "completed"),
+        ] {
+            let state = crate::state::tests_support::make_test_app_state();
+            let parent_id = format!("{session_id}-parent");
+            agent_session(&state, session_id, SHELL_BUSY);
+            state.session_states.get_mut(session_id).unwrap().agent_type = Some("codex".into());
+            state
+                .session_parent
+                .insert(session_id.to_string(), parent_id.clone());
+            state.agent_inbox.entry(parent_id.clone()).or_default();
+            if declare_completion {
+                state
+                    .silence_states
+                    .get(session_id)
+                    .unwrap()
+                    .lock()
+                    .mark_suggest_candidate(vec!["Review result".to_string()], 0);
+            }
+            state
+                .process_snapshot_cache
+                .store(Some(vec![process(10, 1, "codex", "codex")]));
+
+            transition_explicit_shell_state_with_hook(
+                &state,
+                session_id,
+                SHELL_IDLE,
+                "idle",
+                true,
+                || {},
+            );
+            assert!(state.agent_inbox.get(&parent_id).unwrap().is_empty());
+
+            state
+                .process_snapshot_cache
+                .store(Some(vec![process(10, 1, "codex", "codex")]));
+            assert!(refresh_background_work_from_cached_snapshot(
+                &state,
+                session_id,
+                10,
+                "codex",
+                0,
+                state.process_snapshot_cache.load(),
+            ));
+            let inbox = state.agent_inbox.get(&parent_id).unwrap();
+            assert_eq!(inbox.len(), 1);
+            let content: serde_json::Value =
+                serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+            assert_eq!(content["state"], expected_state);
+            drop(inbox);
+
+            state
+                .process_snapshot_cache
+                .store(Some(vec![process(10, 1, "codex", "codex")]));
+            assert!(!refresh_background_work_from_cached_snapshot(
+                &state,
+                session_id,
+                10,
+                "codex",
+                0,
+                state.process_snapshot_cache.load(),
+            ));
+            assert_eq!(state.agent_inbox.get(&parent_id).unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn explicit_non_agent_idle_keeps_immediate_shell_semantics() {
+        for (session_id, hook_state) in [("plain-hook-idle", true), ("plain-osc133-idle", false)] {
+            let state = crate::state::tests_support::make_test_app_state();
+            state.session_states.insert(
+                session_id.to_string(),
+                crate::state::SessionState::default(),
+            );
+            state.shell_states.insert(
+                session_id.to_string(),
+                std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+            );
+            state.silence_states.insert(
+                session_id.to_string(),
+                Arc::new(Mutex::new(SilenceState::new())),
+            );
+
+            transition_explicit_shell_state_with_hook(
+                &state,
+                session_id,
+                SHELL_IDLE,
+                "idle",
+                hook_state,
+                || {},
+            );
+
+            assert_eq!(
+                state
+                    .shell_states
+                    .get(session_id)
+                    .unwrap()
+                    .load(Ordering::Acquire),
+                SHELL_IDLE
+            );
+            let session = state.session_states.get(session_id).unwrap();
+            assert_eq!(session.background_probe_turn_epoch, None);
+            assert_eq!(session.background_probe_after_generation, None);
+        }
     }
 
     #[test]

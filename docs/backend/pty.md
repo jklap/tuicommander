@@ -350,8 +350,9 @@ do not count as work; Unix classification checks both `comm` and the executable
 argv path from unlimited-width `ps` output. Parent `idle` lifecycle mail is
 deferred until the real descendant exits, while confirmed-ready message
 delivery keeps using the terminal-readiness gate. The first confirmed-ready
-observation arms a generation boundary: idle/completed lifecycle output waits
-until a process snapshot newer than that observation has been reconciled. One
+observation and every explicit agent IDLE marker arm a generation boundary:
+idle/completed lifecycle output waits until a process snapshot newer than that
+observation or marker has been reconciled. One
 app-wide process snapshot is collected at most once per second on Tokio's
 blocking pool and shared by every session. The refresher runs only while a
 ready probe or tracked background process needs it, skips missed interval ticks,

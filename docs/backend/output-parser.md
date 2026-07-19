@@ -312,6 +312,9 @@ When native hook instrumentation is configured, heuristic `Question` events are
 suppressed only after the session actually emits an OSC 7770 `state=` marker.
 The runtime handshake avoids trusting a stale flag when hook installation or an
 agent upgrade has broken delivery. Hook `busy` is authoritative over silence;
-hook `idle`, a confirmed interrupted screen, or process exit ends it. Other
-parsed events continue unchanged. See `suppress_heuristic_question()` and the
+hook `idle`, a confirmed interrupted screen, or process exit ends it. For known
+agents, explicit IDLE waits for a process snapshot newer than the marker before
+publishing parent idle/completed lifecycle mail, so background descendants remain
+working even while the shell is ready. Other parsed events continue unchanged.
+See `suppress_heuristic_question()` and the
 explicit-state fields in `SilenceState` (`src-tauri/src/pty.rs`).
