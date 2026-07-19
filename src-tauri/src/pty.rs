@@ -4310,7 +4310,11 @@ impl ChunkProcessor {
         let all_chrome_markers = changed_rows.iter().all(|r| is_chrome_row(&r.text));
         let has_suggest = events
             .iter()
-            .any(|e| matches!(e, ParsedEvent::Suggest { .. }));
+            .any(|e| matches!(e, ParsedEvent::Suggest { .. }))
+            || rows.iter().any(|row| {
+                self.parser
+                    .is_complete_suggest(&row.text, agent_active_for_parse)
+            });
         let no_real_output = changed_rows.iter().all(|r| {
             is_chrome_row(&r.text)
                 || r.text.trim().is_empty()
@@ -4412,6 +4416,21 @@ impl ChunkProcessor {
                 invalidate_background_probe_boundary_locked(state, session_id);
             }
             stamp_last_output_now(state, session_id, now_epoch_ms());
+        }
+
+        // Suggest dedup is intentionally not reset on submission: the previous
+        // marker may repaint while still visible. Once this turn has real
+        // working evidence, however, an identical terminal marker is a valid
+        // new completion. Update the parser after this chunk was parsed so a
+        // stale marker repainted alongside the first activity remains ignored.
+        if !explicit_idle_in_chunk
+            && (screen_activity == AgentScreenActivity::Working || !chrome_only || has_spinner)
+            && let Some(turn_epoch) = state
+                .session_states
+                .get(session_id)
+                .map(|session| session.turn_epoch)
+        {
+            self.parser.begin_suggest_working_turn(turn_epoch);
         }
 
         // SIGWINCH reflow repaints content rows for longer than the initial 1s
@@ -13606,6 +13625,58 @@ mod tests {
         let snapshot = state.session_state_with_shell(child_id).unwrap();
         assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
         assert!(!snapshot.background_work);
+    }
+
+    #[test]
+    fn identical_suggest_reopens_only_after_fresh_work_in_a_new_turn() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "suggest-multiple-turns";
+        agent_session(&state, child_id, SHELL_IDLE);
+        state.vt_log_buffers.insert(
+            child_id.to_string(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+        let silence = state.silence_states.get(child_id).unwrap().clone();
+        let mut processor = ChunkProcessor::new(None, None);
+        let marker = "suggest: [ lifecycle fixed | close smoke | continue parity ]";
+
+        processor.process_chunk("first response\r\n", &silence, child_id, &state);
+        processor.process_chunk(marker, &silence, child_id, &state);
+        assert_eq!(
+            silence.lock().drain_pending_suggest(),
+            Some(vec![
+                "lifecycle fixed".to_string(),
+                "close smoke".to_string(),
+                "continue parity".to_string(),
+            ])
+        );
+
+        note_submitted_input(&state, child_id);
+        assert_eq!(state.session_states.get(child_id).unwrap().turn_epoch, 1);
+
+        // A previous-turn row can repaint as the input scrolls. Submission by
+        // itself must not reopen the content deduplication boundary.
+        processor.process_chunk(&format!("\r\n{marker}"), &silence, child_id, &state);
+        assert_eq!(silence.lock().drain_pending_suggest(), None);
+        processor.process_chunk(&format!("\r\n{marker}"), &silence, child_id, &state);
+        assert_eq!(silence.lock().drain_pending_suggest(), None);
+
+        // Real output proves the next response started. The identical marker
+        // is now a valid completion, but a second repaint in the same turn is
+        // still suppressed.
+        processor.process_chunk("\r\nsecond response\r\n", &silence, child_id, &state);
+        processor.process_chunk(marker, &silence, child_id, &state);
+        assert_eq!(
+            silence.lock().drain_pending_suggest(),
+            Some(vec![
+                "lifecycle fixed".to_string(),
+                "close smoke".to_string(),
+                "continue parity".to_string(),
+            ])
+        );
+        processor.process_chunk(&format!("\r\n{marker}"), &silence, child_id, &state);
+        assert_eq!(silence.lock().drain_pending_suggest(), None);
+        assert!(silence.lock().completion_declared_for_epoch(1));
     }
 
     #[test]

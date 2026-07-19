@@ -186,6 +186,11 @@ pub struct OutputParser {
     api_error_patterns: &'static [ApiErrorPattern],
     /// Dedup: last emitted suggest items to suppress re-emission on scroll.
     last_suggest_items: Option<Vec<String>>,
+    /// Input-turn epoch whose real working evidence reopened suggest dedup.
+    /// A submission alone is insufficient because the previous suggest row can
+    /// repaint while it is still visible; fresh work proves a new response has
+    /// actually started and may legitimately end with identical suggestions.
+    suggest_working_turn_epoch: Option<u64>,
     /// Dedup: last emitted api-error matched text to suppress re-emission
     /// when the same error remains visible in the terminal buffer.
     last_api_error_match: Option<String>,
@@ -228,6 +233,7 @@ impl OutputParser {
             rate_limit_patterns: &RATE_LIMIT_PATTERNS,
             api_error_patterns: &API_ERROR_PATTERNS,
             last_suggest_items: None,
+            suggest_working_turn_epoch: None,
             last_api_error_match: None,
             session_conflict_fired: false,
         }
@@ -442,6 +448,16 @@ impl OutputParser {
     /// This deliberately does not touch emission deduplication state.
     pub(crate) fn is_complete_suggest(&self, text: &str, agent_active: bool) -> bool {
         parse_suggest_with_line(text, agent_active).is_some()
+    }
+
+    /// Reopen suggest emission once for a turn that has produced real working
+    /// evidence. Keeping this separate from user submission prevents a stale
+    /// previous-turn row repaint from recreating completed chips.
+    pub(crate) fn begin_suggest_working_turn(&mut self, turn_epoch: u64) {
+        if self.suggest_working_turn_epoch != Some(turn_epoch) {
+            self.suggest_working_turn_epoch = Some(turn_epoch);
+            self.last_suggest_items = None;
+        }
     }
 
     fn parse_rate_limit(&self, text: &str) -> Option<ParsedEvent> {
