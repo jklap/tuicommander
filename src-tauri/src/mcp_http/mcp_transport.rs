@@ -569,7 +569,7 @@ fn native_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns shell_state (PTY activity) and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker).\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta poll: since_cursor=<previous cursor> returns only new lines — very cheap, use for monitoring. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state: {shell_state, agent_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state, exit_code}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker).\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta poll: since_cursor=<previous cursor> returns only new lines — very cheap, use for monitoring. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state: {shell_state, agent_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state, exit_code}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats" },
                 "session_id": { "type": "string", "description": "Session ID (required for input, output, resize, close, pause, resume, wait)" },
@@ -1370,6 +1370,7 @@ fn handle_session(
                 serde_json::json!({
                     "session_id": id,
                     "alias": alias,
+                    "display_name": s.display_name.clone(),
                     "cwd": s.cwd,
                     "worktree_path": s.worktree.as_ref().map(|w| w.path.to_string_lossy().to_string()),
                     "worktree_branch": s.worktree.as_ref().and_then(|w| w.branch.clone()),
@@ -2210,6 +2211,7 @@ fn handle_agent(
                 });
 
             let mut cmd = CommandBuilder::new(&binary_path);
+            crate::pty::sanitize_pty_parent_env(&mut cmd);
 
             // Inject swarm env vars so spawned agents know their identity and parent.
             cmd.env("TUIC_SESSION", &session_id);
@@ -7596,6 +7598,22 @@ mod tests {
                 .as_deref(),
             Some("linux-primary")
         );
+
+        let listed = handle_session(&state, &serde_json::json!({"action": "list"}), None);
+        let listed_session = listed
+            .as_array()
+            .and_then(|sessions| {
+                sessions
+                    .iter()
+                    .find(|session| session["session_id"] == session_id)
+            })
+            .expect("named spawned session must appear in session action=list");
+        assert_eq!(listed_session["display_name"], "linux-primary");
+        assert!(
+            listed_session["alias"].as_str().is_some(),
+            "independent short alias must remain available"
+        );
+        assert_ne!(listed_session["alias"], listed_session["display_name"]);
 
         apply_initialize_identity(&state, "child-mcp", Some(session_id));
         assert_eq!(

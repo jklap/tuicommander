@@ -424,9 +424,12 @@ Structured `model` is composed with `args`; direct Codex commands include the ap
 
 `name` optionally assigns a non-empty peer and PTY display name at spawn time.
 The parent-assigned name is stored before prompt delivery, returned in the spawn
-response, exposed by `list_peers`, and preserved when the child later auto-binds
-its MCP connection. This avoids making identity depend on the child successfully
+response, exposed as `name` by `agent action=list_peers` and as `display_name`
+by `session action=list`, and preserved when the child later auto-binds its MCP
+connection. This avoids making identity depend on the child successfully
 executing a registration instruction in its initial prompt.
+The session list's `alias` remains a separate repo-derived short address and is
+not replaced by the display name.
 
 Every managed child is registered server-side and receives an inbox immediately,
 even when the caller has no bound peer identity. A registered parent additionally

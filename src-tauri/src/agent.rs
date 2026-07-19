@@ -902,6 +902,7 @@ pub(crate) async fn spawn_agent(
 
     // Build agent command
     let mut cmd = CommandBuilder::new(&binary_path);
+    crate::pty::sanitize_pty_parent_env(&mut cmd);
 
     // If custom args are provided, use them directly
     if let Some(ref args) = agent_config.args {

@@ -66,6 +66,17 @@ pub(crate) fn is_wsl_shell(shell: &str) -> bool {
     stem.eq_ignore_ascii_case("wsl")
 }
 
+/// Remove parent-process preferences that must not become defaults for a new
+/// independent PTY. Call this immediately after constructing the command so an
+/// explicit per-agent environment may still restore the variable deliberately.
+pub(crate) fn sanitize_pty_parent_env(cmd: &mut CommandBuilder) {
+    // TUICommander may itself be launched from Codex, whose NO_COLOR belongs
+    // to that parent process. Do not leak the opt-out into independent PTY
+    // sessions. Commands can still request monochrome output through their own
+    // explicit CLI flags or per-command environment.
+    cmd.env_remove("NO_COLOR");
+}
+
 /// Inject the Unix-style env vars that Claude Code / Ink need to detect
 /// terminal capabilities (color, kitty keyboard protocol, etc.).
 fn inject_unix_terminal_env(cmd: &mut CommandBuilder) {
@@ -110,6 +121,7 @@ pub(crate) fn build_shell_command(shell: &str) -> CommandBuilder {
     let exe = parts.next().unwrap_or(shell);
     #[allow(unused_mut)]
     let mut cmd = CommandBuilder::new(exe);
+    sanitize_pty_parent_env(&mut cmd);
     for arg in parts {
         cmd.arg(arg);
     }
@@ -11906,6 +11918,34 @@ mod tests {
         let cmd = super::build_shell_command("/bin/zsh");
         let argv = cmd.as_unix_command_line().unwrap();
         assert!(argv.contains("/bin/zsh"), "Expected /bin/zsh in: {}", argv);
+    }
+
+    #[test]
+    fn pty_parent_env_sanitizer_removes_no_color_and_allows_override() {
+        let mut cmd = CommandBuilder::new("/bin/sh");
+        // Simulate CommandBuilder's inherited parent snapshot without mutating
+        // the process-global environment used by other tests.
+        cmd.env("TERM", "xterm-256color");
+        cmd.env("COLORTERM", "truecolor");
+        cmd.env("NO_COLOR", "1");
+
+        sanitize_pty_parent_env(&mut cmd);
+
+        assert_eq!(
+            cmd.get_env("TERM"),
+            Some(std::ffi::OsStr::new("xterm-256color"))
+        );
+        assert_eq!(
+            cmd.get_env("COLORTERM"),
+            Some(std::ffi::OsStr::new("truecolor"))
+        );
+        assert_eq!(cmd.get_env("NO_COLOR"), None);
+
+        cmd.env("NO_COLOR", "intentional");
+        assert_eq!(
+            cmd.get_env("NO_COLOR"),
+            Some(std::ffi::OsStr::new("intentional"))
+        );
     }
 
     // --- windows_to_wsl_path tests ---

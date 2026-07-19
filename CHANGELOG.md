@@ -18,6 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - **Names for MCP-spawned agents** — `agent action=spawn` accepts an optional `name`, assigns it to both the peer identity and PTY session before prompt delivery, returns it in the spawn response, and preserves it when the child later auto-binds its MCP connection.
+- **Independent PTY color environment** — New PTY sessions no longer inherit a Codex parent's `NO_COLOR`; terminal capability variables remain present, while explicit per-command color flags remain authoritative. MCP `session action=list` now exposes the assigned `display_name` alongside the independent repo-derived `alias`.
 
 ## [1.6.1] - 2026-07-15
 

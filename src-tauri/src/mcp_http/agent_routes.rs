@@ -336,6 +336,7 @@ pub(super) async fn spawn_agent_session(
     };
 
     let mut cmd = CommandBuilder::new(&binary_path);
+    crate::pty::sanitize_pty_parent_env(&mut cmd);
 
     if let Some(ref args) = body.args {
         for arg in args {
