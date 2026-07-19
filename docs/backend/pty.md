@@ -352,8 +352,12 @@ deferred until the real descendant exits, while confirmed-ready message
 delivery keeps using the terminal-readiness gate. The first confirmed-ready
 observation and every explicit agent IDLE marker arm a generation boundary:
 idle/completed lifecycle output waits until a process snapshot newer than that
-observation or marker has been reconciled. One
-app-wide process snapshot is collected at most once per second on Tokio's
+observation or marker has been reconciled. Fresh working evidence starts a new
+readiness episode even within the same task epoch: it invalidates only the
+satisfied or pending snapshot boundary, so the next ready observation must
+reconcile a newer snapshot while preserving tracked background work and the
+snapshot generation. One app-wide process snapshot is collected at most once
+per second on Tokio's
 blocking pool and shared by every session. The refresher runs only while a
 ready probe or tracked background process needs it, skips missed interval ticks,
 and stops scanning stable idle sessions. Enumeration or parse failures preserve

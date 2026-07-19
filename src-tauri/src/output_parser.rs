@@ -1297,6 +1297,31 @@ fn parse_plan_file(clean: &str) -> Option<ParsedEvent> {
 /// parsed. Char-class body only (no surrounding `[ ]`) so callers write `[{…}]`.
 const AGENT_LINE_BULLETS: &str = r"\x{25CF}\x{23FA}\x{2022}\x{25E6}";
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StructuredTokenAnchor {
+    Intent,
+    Suggest,
+}
+
+/// Identify a structured token at the start of a logical terminal line.
+/// Keep this shared with the parser grammar so grid filtering accepts exactly
+/// the same optional agent bullets as the authoritative token regexes.
+pub(crate) fn structured_token_anchor(clean: &str) -> Option<StructuredTokenAnchor> {
+    lazy_static::lazy_static! {
+        static ref STRUCTURED_TOKEN_ANCHOR_RE: regex::Regex = regex::Regex::new(&format!(
+            r"^[\t ]*(?:[{b}][\t ]+)?(intent|suggest):",
+            b = AGENT_LINE_BULLETS
+        ))
+        .unwrap();
+    }
+    let captures = STRUCTURED_TOKEN_ANCHOR_RE.captures(clean)?;
+    match captures.get(1)?.as_str() {
+        "intent" => Some(StructuredTokenAnchor::Intent),
+        "suggest" => Some(StructuredTokenAnchor::Suggest),
+        _ => None,
+    }
+}
+
 /// Detect agent-declared intent tokens: `intent: <text>` or `intent: <text> (<title>)`
 /// at column 0. Only parsed when an agent is active — prevents false positives from
 /// prose like "The intent: of this code".

@@ -1501,6 +1501,7 @@ fn try_shell_transition_locked<F: FnOnce()>(
             && let Some(silence) = silence_state.as_mut()
         {
             silence.note_busy_evidence();
+            invalidate_background_probe_boundary_locked(state, session_id);
         }
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -2070,6 +2071,17 @@ fn ready_probe_satisfied_or_requested(
     false
 }
 
+/// Invalidate only the process-snapshot boundary for the current working
+/// episode. The caller must hold this session's SilenceState lifecycle lock.
+fn invalidate_background_probe_boundary_locked(state: &AppState, session_id: &str) {
+    let Some(mut session) = state.session_states.get_mut(session_id) else {
+        return;
+    };
+    session.background_probe_turn_epoch = None;
+    session.background_probe_after_generation = None;
+    session.background_probe_satisfied_turn_epoch = None;
+}
+
 fn arm_explicit_idle_background_probe(state: &AppState, session_id: &str, turn_epoch: u64) {
     let Some(mut session) = state.session_states.get_mut(session_id) else {
         return;
@@ -2325,6 +2337,7 @@ fn apply_working_evidence(
             return;
         }
         sl.note_working_screen();
+        invalidate_background_probe_boundary_locked(state, session_id);
     }
     stamp_last_output_now(state, session_id, now_ms);
     let prev = state
@@ -2601,6 +2614,9 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         }
         if let Some(silence) = silence_guard.as_mut() {
             silence.note_explicit_state(target, hook_state);
+            if target == SHELL_BUSY {
+                invalidate_background_probe_boundary_locked(state, session_id);
+            }
         }
         if target == SHELL_BUSY {
             stamp_last_output_now(state, session_id, now_epoch_ms());
@@ -3700,8 +3716,18 @@ impl ChunkProcessor {
             vt_log_oldest,
             term_events,
             screen_cache,
+            cursor_row,
             logical_prefix,
             history_size,
+        ): (
+            Vec<crate::state::ChangedRow>,
+            Option<usize>,
+            Option<usize>,
+            Vec<crate::terminal_grid::TermEvent>,
+            Option<Vec<String>>,
+            Option<usize>,
+            Option<crate::terminal_grid::LogicalPrefix>,
+            usize,
         ) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
             let changed = vt.process(data.as_bytes());
@@ -3738,6 +3764,7 @@ impl ChunkProcessor {
 
             // Single owned snapshot for downstream parsers (slash-menu, choice-prompt).
             let screen = vt.screen_rows();
+            let cursor_row = vt.cursor_point().0;
             let logical_prefix = vt.logical_prefix_at_cursor();
 
             (
@@ -3746,11 +3773,12 @@ impl ChunkProcessor {
                 Some(oldest),
                 tevts,
                 Some(screen),
+                Some(cursor_row),
                 logical_prefix,
                 hist,
             )
         } else {
-            (Vec::new(), None, None, Vec::new(), None, None, 0)
+            (Vec::new(), None, None, Vec::new(), None, None, None, 0)
         };
 
         // Did this chunk grow the scrollback (genuine new output) or merely
@@ -4004,15 +4032,11 @@ impl ChunkProcessor {
             let intersects = changed_rows
                 .iter()
                 .any(|row| (prefix.start_row..=prefix.end_row).contains(&row.row_index));
-            let trimmed = prefix.text.trim_start();
-            let suggest_text = trimmed
-                .strip_prefix('●')
-                .or_else(|| trimmed.strip_prefix('⏺'))
-                .map(str::trim_start)
-                .unwrap_or(trimmed);
-            let is_suggest = suggest_text.starts_with("suggest:");
-            if intersects && (is_suggest || trimmed.starts_with("intent:")) {
-                let complete_suggest = is_suggest
+            if intersects
+                && let Some(anchor) = crate::output_parser::structured_token_anchor(&prefix.text)
+            {
+                let complete_suggest = anchor
+                    == crate::output_parser::StructuredTokenAnchor::Suggest
                     && self
                         .parser
                         .is_complete_suggest(&prefix.text, agent_active_for_parse);
@@ -4030,6 +4054,19 @@ impl ChunkProcessor {
                 }
                 structured_rows = Some(rows);
             }
+        } else if let Some(cursor_row) = cursor_row
+            && changed_rows.iter().any(|row| {
+                row.row_index == cursor_row
+                    && crate::output_parser::structured_token_anchor(&row.text).is_some()
+            })
+        {
+            structured_rows = Some(
+                changed_rows
+                    .iter()
+                    .filter(|row| row.row_index != cursor_row)
+                    .cloned()
+                    .collect(),
+            );
         }
         let rows = structured_rows.as_deref().unwrap_or(&changed_rows);
         events.extend(
@@ -4372,6 +4409,7 @@ impl ChunkProcessor {
                 } else {
                     sl.note_real_activity();
                 }
+                invalidate_background_probe_boundary_locked(state, session_id);
             }
             stamp_last_output_now(state, session_id, now_epoch_ms());
         }
@@ -10553,6 +10591,221 @@ mod tests {
     }
 
     #[test]
+    fn same_epoch_working_evidence_requires_a_new_ready_probe_boundary() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "background-same-epoch-ready";
+        let parent_id = "background-same-epoch-parent";
+        agent_session(&state, child_id, SHELL_BUSY);
+        state.session_states.get_mut(child_id).unwrap().agent_type = Some("codex".into());
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+        let silence = state.silence_states.get(child_id).unwrap().clone();
+
+        state
+            .process_snapshot_cache
+            .store(Some(vec![process(10, 1, "codex", "codex")]));
+        silence.lock().ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(
+            !try_timer_idle_transition(
+                &state,
+                &silence,
+                child_id,
+                AgentScreenActivity::Ready,
+                Some("codex"),
+                Some(0),
+            )
+            .transitioned
+        );
+
+        state
+            .process_snapshot_cache
+            .store(Some(vec![process(10, 1, "codex", "codex")]));
+        assert!(refresh_background_work_from_cached_snapshot(
+            &state,
+            child_id,
+            10,
+            "codex",
+            0,
+            state.process_snapshot_cache.load(),
+        ));
+        assert!(
+            try_timer_idle_transition(
+                &state,
+                &silence,
+                child_id,
+                AgentScreenActivity::Ready,
+                Some("codex"),
+                Some(0),
+            )
+            .transitioned
+        );
+        assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 1);
+        assert_eq!(
+            state
+                .session_states
+                .get(child_id)
+                .unwrap()
+                .background_probe_satisfied_turn_epoch,
+            Some(0)
+        );
+
+        apply_working_evidence(&state, &silence, child_id, now_epoch_ms(), "working-screen");
+        {
+            let session = state.session_states.get(child_id).unwrap();
+            assert_eq!(session.background_probe_satisfied_turn_epoch, None);
+            assert_eq!(session.background_probe_turn_epoch, None);
+            assert_eq!(session.background_probe_after_generation, None);
+            assert_eq!(session.background_snapshot_generation, 2);
+            assert!(!session.background_work);
+        }
+
+        silence.lock().ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(
+            !try_timer_idle_transition(
+                &state,
+                &silence,
+                child_id,
+                AgentScreenActivity::Ready,
+                Some("codex"),
+                Some(0),
+            )
+            .transitioned
+        );
+        {
+            let session = state.session_states.get(child_id).unwrap();
+            assert_eq!(session.background_probe_turn_epoch, Some(0));
+            assert_eq!(session.background_probe_after_generation, Some(2));
+            assert_eq!(session.background_probe_satisfied_turn_epoch, None);
+        }
+
+        state.process_snapshot_cache.store(Some(vec![
+            process(10, 1, "codex", "codex"),
+            process(11, 10, "rtk", "rtk cargo test"),
+            process(12, 11, "cargo", "cargo test"),
+            process(13, 12, "rustc", "rustc --crate-name tuicommander"),
+        ]));
+        assert!(refresh_background_work_from_cached_snapshot(
+            &state,
+            child_id,
+            10,
+            "codex",
+            0,
+            state.process_snapshot_cache.load(),
+        ));
+        let working = state.session_state_with_shell(child_id).unwrap();
+        assert_eq!(working.agent_state.as_deref(), Some("working"));
+        assert!(working.background_work);
+
+        assert!(
+            try_timer_idle_transition(
+                &state,
+                &silence,
+                child_id,
+                AgentScreenActivity::Ready,
+                Some("codex"),
+                Some(0),
+            )
+            .transitioned
+        );
+        assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 1);
+
+        state
+            .process_snapshot_cache
+            .store(Some(vec![process(10, 1, "codex", "codex")]));
+        assert!(refresh_background_work_from_cached_snapshot(
+            &state,
+            child_id,
+            10,
+            "codex",
+            0,
+            state.process_snapshot_cache.load(),
+        ));
+        assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 2);
+        let content: serde_json::Value = serde_json::from_str(
+            &state
+                .agent_inbox
+                .get(parent_id)
+                .unwrap()
+                .back()
+                .unwrap()
+                .content,
+        )
+        .unwrap();
+        assert_eq!(content["state"], "idle");
+
+        state
+            .process_snapshot_cache
+            .store(Some(vec![process(10, 1, "codex", "codex")]));
+        assert!(!refresh_background_work_from_cached_snapshot(
+            &state,
+            child_id,
+            10,
+            "codex",
+            0,
+            state.process_snapshot_cache.load(),
+        ));
+        assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 2);
+    }
+
+    #[test]
+    fn already_busy_working_evidence_invalidates_only_probe_boundaries() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "background-already-busy";
+        agent_session(&state, child_id, SHELL_BUSY);
+        {
+            let mut session = state.session_states.get_mut(child_id).unwrap();
+            session.agent_type = Some("codex".into());
+            session.background_work = true;
+            session.background_snapshot_generation = 9;
+            session.background_probe_turn_epoch = Some(0);
+            session.background_probe_after_generation = Some(8);
+            session.background_probe_satisfied_turn_epoch = Some(0);
+        }
+        let silence = state.silence_states.get(child_id).unwrap().clone();
+
+        apply_working_evidence(&state, &silence, child_id, now_epoch_ms(), "working-screen");
+        {
+            let session = state.session_states.get(child_id).unwrap();
+            assert_eq!(session.background_probe_turn_epoch, None);
+            assert_eq!(session.background_probe_after_generation, None);
+            assert_eq!(session.background_probe_satisfied_turn_epoch, None);
+            assert!(session.background_work);
+            assert_eq!(session.background_snapshot_generation, 9);
+        }
+
+        {
+            let mut session = state.session_states.get_mut(child_id).unwrap();
+            session.background_probe_turn_epoch = Some(0);
+            session.background_probe_after_generation = Some(9);
+            session.background_probe_satisfied_turn_epoch = Some(0);
+        }
+        transition_explicit_shell_state_with_hook(
+            &state,
+            child_id,
+            SHELL_BUSY,
+            "busy",
+            true,
+            || {},
+        );
+        let session = state.session_states.get(child_id).unwrap();
+        assert_eq!(session.background_probe_turn_epoch, None);
+        assert_eq!(session.background_probe_after_generation, None);
+        assert_eq!(session.background_probe_satisfied_turn_epoch, None);
+        assert!(session.background_work);
+        assert_eq!(session.background_snapshot_generation, 9);
+        assert_eq!(
+            state
+                .shell_states
+                .get(child_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_BUSY
+        );
+    }
+
+    #[test]
     fn background_snapshot_child_absent_releases_declared_completion() {
         let state = crate::state::tests_support::make_test_app_state();
         let child_id = "background-ready-completed";
@@ -13357,50 +13610,118 @@ mod tests {
 
     #[test]
     fn cursor_prefix_rejects_stale_suffix_then_emits_real_completion_once() {
-        let state = crate::state::tests_support::make_test_app_state();
-        let child_id = "cursor-stale-suffix";
-        agent_session(&state, child_id, SHELL_IDLE);
-        state.vt_log_buffers.insert(
-            child_id.to_string(),
-            Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
-        );
-        let silence = state.silence_states.get(child_id).unwrap().clone();
-        let mut processor = ChunkProcessor::new(None, None);
+        for (index, bullet) in ["●", "⏺", "•", "◦"].into_iter().enumerate() {
+            let state = crate::state::tests_support::make_test_app_state();
+            let child_id = format!("cursor-stale-suffix-{index}");
+            agent_session(&state, &child_id, SHELL_IDLE);
+            state.vt_log_buffers.insert(
+                child_id.clone(),
+                Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+            );
+            let silence = state.silence_states.get(&child_id).unwrap().clone();
+            let mut processor = ChunkProcessor::new(None, None);
 
-        processor.process_chunk("........................| C ]", &silence, child_id, &state);
-        processor.process_chunk("\rsuggest: [ A | B", &silence, child_id, &state);
-        assert_eq!(silence.lock().drain_pending_suggest(), None);
+            processor.process_chunk(
+                "............................| C ]",
+                &silence,
+                &child_id,
+                &state,
+            );
+            processor.process_chunk(
+                &format!("\r{bullet} suggest: [ A | B"),
+                &silence,
+                &child_id,
+                &state,
+            );
+            assert_eq!(silence.lock().drain_pending_suggest(), None, "{bullet}");
 
-        processor.process_chunk("\r\x1b[Ksuggest: [ A | B | C ]", &silence, child_id, &state);
-        assert_eq!(
-            silence.lock().drain_pending_suggest(),
-            Some(vec!["A".to_string(), "B".to_string(), "C".to_string()])
-        );
+            processor.process_chunk("\r\x1b[", &silence, &child_id, &state);
+            assert_eq!(silence.lock().drain_pending_suggest(), None, "{bullet}");
+            processor.process_chunk(
+                &format!("K{bullet} suggest: [ A | B | C ]"),
+                &silence,
+                &child_id,
+                &state,
+            );
+            assert_eq!(
+                silence.lock().drain_pending_suggest(),
+                Some(vec!["A".to_string(), "B".to_string(), "C".to_string()]),
+                "{bullet}"
+            );
 
-        processor.process_chunk("\r\x1b[Ksuggest: [ A | B | C ]", &silence, child_id, &state);
-        assert_eq!(silence.lock().drain_pending_suggest(), None);
+            processor.process_chunk(
+                &format!("\r\x1b[K{bullet} suggest: [ A | B | C ]"),
+                &silence,
+                &child_id,
+                &state,
+            );
+            assert_eq!(silence.lock().drain_pending_suggest(), None, "{bullet}");
+        }
     }
 
     #[test]
     fn wrapped_suggest_reconstructs_unchanged_anchor_across_chunks() {
-        let state = crate::state::tests_support::make_test_app_state();
-        let child_id = "wrapped-suggest-across-chunks";
-        agent_session(&state, child_id, SHELL_IDLE);
-        state.vt_log_buffers.insert(
-            child_id.to_string(),
-            Mutex::new(crate::state::VtLogBuffer::new(24, 12, 1000)),
-        );
-        let silence = state.silence_states.get(child_id).unwrap().clone();
-        let mut processor = ChunkProcessor::new(None, None);
+        for (index, bullet) in ["●", "⏺", "•", "◦"].into_iter().enumerate() {
+            let state = crate::state::tests_support::make_test_app_state();
+            let child_id = format!("wrapped-suggest-across-chunks-{index}");
+            agent_session(&state, &child_id, SHELL_IDLE);
+            state.vt_log_buffers.insert(
+                child_id.clone(),
+                Mutex::new(crate::state::VtLogBuffer::new(24, 14, 1000)),
+            );
+            let silence = state.silence_states.get(&child_id).unwrap().clone();
+            let mut processor = ChunkProcessor::new(None, None);
 
-        processor.process_chunk("suggest: [ A", &silence, child_id, &state);
-        assert_eq!(silence.lock().drain_pending_suggest(), None);
-        processor.process_chunk("界 | B | C ]", &silence, child_id, &state);
+            processor.process_chunk(
+                &format!("{bullet} suggest: [ A"),
+                &silence,
+                &child_id,
+                &state,
+            );
+            assert_eq!(silence.lock().drain_pending_suggest(), None, "{bullet}");
+            processor.process_chunk("界 | B | C ]", &silence, &child_id, &state);
 
-        assert_eq!(
-            silence.lock().drain_pending_suggest(),
-            Some(vec!["A界".to_string(), "B".to_string(), "C".to_string()])
-        );
+            assert_eq!(
+                silence.lock().drain_pending_suggest(),
+                Some(vec!["A界".to_string(), "B".to_string(), "C".to_string()]),
+                "{bullet}"
+            );
+        }
+    }
+
+    #[test]
+    fn bounded_cursor_prefix_refusal_suppresses_structured_completion() {
+        for (child_id, columns, token) in [
+            (
+                "cursor-prefix-over-512-bytes",
+                700,
+                format!("suggest: [ A | B | C ]{}", "x".repeat(520)),
+            ),
+            (
+                "cursor-prefix-over-four-wraps",
+                20,
+                format!(
+                    "suggest: [ {} | {} | {} | {} ]",
+                    "a".repeat(30),
+                    "b".repeat(30),
+                    "c".repeat(30),
+                    "d".repeat(30)
+                ),
+            ),
+        ] {
+            let state = crate::state::tests_support::make_test_app_state();
+            agent_session(&state, child_id, SHELL_IDLE);
+            state.vt_log_buffers.insert(
+                child_id.to_string(),
+                Mutex::new(crate::state::VtLogBuffer::new(24, columns, 1000)),
+            );
+            let silence = state.silence_states.get(child_id).unwrap().clone();
+            let mut processor = ChunkProcessor::new(None, None);
+
+            processor.process_chunk(&token, &silence, child_id, &state);
+
+            assert_eq!(silence.lock().drain_pending_suggest(), None, "{child_id}");
+        }
     }
 
     #[test]

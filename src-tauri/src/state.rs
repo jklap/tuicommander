@@ -2767,6 +2767,10 @@ impl VtLogBuffer {
         self.grid.screen_text_rows_ref()
     }
 
+    pub(crate) fn cursor_point(&self) -> (usize, usize) {
+        self.grid.cursor_point()
+    }
+
     pub(crate) fn logical_prefix_at_cursor(&self) -> Option<crate::terminal_grid::LogicalPrefix> {
         self.grid.logical_prefix_at_cursor()
     }
