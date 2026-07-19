@@ -3995,24 +3995,21 @@ impl ChunkProcessor {
             .map(|s| s.agent_type.is_some())
             .unwrap_or(false);
         // Cursor-completeness guard: exclude rows at the cursor position that
-        // look like suggest/intent tokens still being written. This prevents
-        // cross-chunk partial parsing without needing suggest_line_buf hacks.
-        // Only clone+filter when a partial token is actually present at the cursor.
-        let has_partial_token = changed_rows.iter().any(|r| {
-            r.row_index == cursor_row && {
-                let t = r.text.trim_start();
-                t.starts_with("suggest:") || t.starts_with("intent:")
-            }
-        });
+        // look like suggest/intent tokens still being written. A closing `]`
+        // makes a suggest token complete even while the cursor remains there;
+        // deferring that row would lose it when the next chunk only paints the
+        // prompt and the completed row is no longer part of `changed_rows`.
+        let cursor_token_is_incomplete = |text: &str| {
+            let text = text.trim_start();
+            text.starts_with("intent:") || (text.starts_with("suggest:") && !text.contains(']'))
+        };
+        let has_partial_token = changed_rows
+            .iter()
+            .any(|r| r.row_index == cursor_row && { cursor_token_is_incomplete(&r.text) });
         if has_partial_token {
             let filtered: Vec<_> = changed_rows
                 .iter()
-                .filter(|r| {
-                    r.row_index != cursor_row || {
-                        let t = r.text.trim_start();
-                        !(t.starts_with("suggest:") || t.starts_with("intent:"))
-                    }
-                })
+                .filter(|r| r.row_index != cursor_row || !cursor_token_is_incomplete(&r.text))
                 .cloned()
                 .collect();
             events.extend(
@@ -13299,6 +13296,40 @@ mod tests {
             serde_json::from_str(&inbox.front().unwrap().content).unwrap();
         assert_eq!(content["state"], "completed");
         assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
+    }
+
+    #[test]
+    fn completion_marker_at_cursor_during_background_work_completes_after_clear() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "child-background-cursor-completed";
+        agent_session(&state, child_id, SHELL_IDLE);
+        state
+            .session_states
+            .get_mut(child_id)
+            .unwrap()
+            .background_work = true;
+        state.vt_log_buffers.insert(
+            child_id.to_string(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+        let silence = state.silence_states.get(child_id).unwrap().clone();
+        let mut processor = ChunkProcessor::new(None, None);
+
+        processor.process_chunk("suggest: [ A | B", &silence, child_id, &state);
+        assert!(!silence.lock().completion_declared_for_epoch(0));
+        processor.process_chunk("\rsuggest: [ A | B | C ]", &silence, child_id, &state);
+
+        assert!(silence.lock().completion_declared_for_epoch(0));
+        assert!(try_shell_transition(
+            &state, child_id, SHELL_BUSY, SHELL_IDLE, false
+        ));
+        let deferred = state.session_state_with_shell(child_id).unwrap();
+        assert_eq!(deferred.agent_state.as_deref(), Some("working"));
+        assert!(deferred.background_work);
+        assert!(set_background_work_for_epoch(&state, child_id, 0, 1, false));
+        let snapshot = state.session_state_with_shell(child_id).unwrap();
+        assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
+        assert!(!snapshot.background_work);
     }
 
     #[test]

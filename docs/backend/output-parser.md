@@ -155,7 +155,7 @@ ParsedEvent::Suggest {
 
 Detected as a single-line plain-prefix token at column 0: `suggest: [ A | B | C ]`.
 
-The whole token must sit on one row and the bracketed content may not contain a nested `[`/`]`. These two constraints make a false capture impossible: a wrapped line lacks the closing `]` on the same row, and a mermaid/markdown line carries a nested `[`, so neither matches. Items are pipe-delimited (2–4 per the protocol). Parsing is agent-gated; the raw token is stripped from the log delivered to PWA/REST consumers by `strip_structural_tokens`, and concealed on the desktop canvas by the frontend overlay.
+The whole token must sit on one row and the bracketed content may not contain a nested `[`/`]`. These two constraints make a false capture impossible: a wrapped line lacks the closing `]` on the same row, and a mermaid/markdown line carries a nested `[`, so neither matches. A token with its closing `]` is complete and parsed even while the terminal cursor remains on that row; an incomplete cursor row is deferred. Items are pipe-delimited (2–4 per the protocol). Parsing is agent-gated; the raw token is stripped from the log delivered to PWA/REST consumers by `strip_structural_tokens`, and concealed on the desktop canvas by the frontend overlay.
 
 ### UsageLimit
 
