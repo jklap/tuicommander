@@ -14,7 +14,7 @@ import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri } from "../transport";
 import type { SavedTerminal } from "../types";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
-import { isAbsolutePath, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
+import { isAbsolutePath, normalizeSep, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -97,10 +97,71 @@ function collectTerminalSnapshots(): Map<string, Map<string, SavedTerminal[]>> {
 	return snapshots;
 }
 
+/** Attach a backend PTY session to the best matching repo/branch.
+ * Remote sessions may use a cwd below a repo or outside every configured repo,
+ * so reconnect must use the same ancestor matching and active-branch fallback
+ * as the live session-created path. */
+function assignSessionToRepoBranch(sessionId: string, terminalId: string, cwd: string | null): void {
+	let assigned = false;
+	if (cwd) {
+		const candidates: Array<{ repoPath: string; branchName: string | null; normalizedPath: string }> = [];
+		for (const repoPath of repositoriesStore.getPaths()) {
+			if (pathStartsWith(cwd, repoPath)) {
+				candidates.push({ repoPath, branchName: null, normalizedPath: normalizeSep(repoPath).replace(/\/+$/, "") });
+			}
+			const repoState = repositoriesStore.get(repoPath);
+			if (!repoState) continue;
+			for (const branch of Object.values(repoState.branches)) {
+				if (branch.worktreePath && pathStartsWith(cwd, branch.worktreePath)) {
+					candidates.push({
+						repoPath,
+						branchName: branch.name,
+						normalizedPath: normalizeSep(branch.worktreePath).replace(/\/+$/, ""),
+					});
+				}
+			}
+		}
+
+		const matched = candidates.sort(
+			(left, right) =>
+				right.normalizedPath.length - left.normalizedPath.length ||
+				Number(normalizeSep(right.repoPath).replace(/\/+$/, "") === right.normalizedPath) -
+					Number(normalizeSep(left.repoPath).replace(/\/+$/, "") === left.normalizedPath) ||
+				Number(right.branchName !== null) - Number(left.branchName !== null),
+		)[0];
+
+		if (matched) {
+			const repoState = repositoriesStore.get(matched.repoPath);
+			const branchName = matched.branchName || repoState?.activeBranch;
+
+			if (branchName) {
+				repositoriesStore.addTerminalToBranch(matched.repoPath, branchName, terminalId);
+				assigned = true;
+			}
+		}
+	}
+
+	if (assigned) return;
+
+	const fallbackRepo = repositoriesStore.state.activeRepoPath;
+	const fallbackState = fallbackRepo ? repositoriesStore.get(fallbackRepo) : undefined;
+	const fallbackBranch = fallbackState?.activeBranch;
+	if (fallbackRepo && fallbackBranch) {
+		appLogger.warn(
+			"app",
+			`Remote session ${sessionId}: cwd "${cwd ?? "(null)"}" did not match any repo — falling back to active repo/branch`,
+		);
+		repositoriesStore.addTerminalToBranch(fallbackRepo, fallbackBranch, terminalId);
+	} else {
+		appLogger.error("app", `Remote session ${sessionId}: no repo/branch to assign tab to — tab will be invisible`);
+	}
+}
+
 /** App initialization: hydrate stores, reconnect PTY sessions, restore state */
 export async function initApp(deps: AppInitDeps) {
 	appLogger.info("app", `initApp called — existing terminals: [${terminalsStore.getIds().join(", ")}]`);
 	appLogger.debug("app", "SolidJS App mounted");
+	const preInitTerminalIds = terminalsStore.getIds();
 
 	const platform = deps.applyPlatformClass();
 	appLogger.debug("app", `Platform detected: ${platform}`);
@@ -320,44 +381,7 @@ export async function initApp(deps: AppInitDeps) {
 		});
 		remoteSessionTabs.set(session_id, id);
 
-		// Match to repo/branch by cwd (ancestor path matching)
-		let assigned = false;
-		if (cwd) {
-			const matchedRepo = repositoriesStore.getPaths().find((repoPath) => {
-				if (pathStartsWith(cwd, repoPath)) return true;
-				const repoState = repositoriesStore.get(repoPath);
-				if (!repoState) return false;
-				return Object.values(repoState.branches).some((b) => b.worktreePath && pathStartsWith(cwd, b.worktreePath));
-			});
-
-			if (matchedRepo) {
-				const repoState = repositoriesStore.get(matchedRepo);
-				const branchName =
-					Object.values(repoState?.branches || {}).find((b) => b.worktreePath && pathStartsWith(cwd, b.worktreePath))
-						?.name || repoState?.activeBranch;
-
-				if (branchName) {
-					repositoriesStore.addTerminalToBranch(matchedRepo, branchName, id);
-					assigned = true;
-				}
-			}
-		}
-
-		// Fallback: no repo matched cwd — assign to the currently active repo/branch
-		if (!assigned) {
-			const fallbackRepo = repositoriesStore.state.activeRepoPath;
-			const fallbackState = fallbackRepo ? repositoriesStore.get(fallbackRepo) : undefined;
-			const fallbackBranch = fallbackState?.activeBranch;
-			if (fallbackRepo && fallbackBranch) {
-				appLogger.warn(
-					"app",
-					`Remote session ${session_id}: cwd "${cwd ?? "(null)"}" did not match any repo — falling back to active repo/branch`,
-				);
-				repositoriesStore.addTerminalToBranch(fallbackRepo, fallbackBranch, id);
-			} else {
-				appLogger.error("app", `Remote session ${session_id}: no repo/branch to assign tab to — tab will be invisible`);
-			}
-		}
+		assignSessionToRepoBranch(session_id, id, cwd);
 
 		// Auto-focus agent-spawned tabs so swarm workers are immediately visible.
 		// Only activate when agent_type is present (MCP agent spawn), not for
@@ -540,8 +564,9 @@ export async function initApp(deps: AppInitDeps) {
 		appLogger.warn("app", "Failed to list active sessions (server unreachable or auth failure)", err);
 	}
 
-	// Clear stale terminal IDs from previous session
-	for (const id of terminalsStore.getIds()) {
+	// Clear only terminal IDs that existed before initialization. A session-created
+	// event may have added a valid remote tab while listActiveSessions was pending.
+	for (const id of preInitTerminalIds) {
 		terminalsStore.remove(id);
 	}
 
@@ -549,6 +574,11 @@ export async function initApp(deps: AppInitDeps) {
 	if (survivingSessions.length > 0) {
 		appLogger.info("app", `PTY reconnect: found ${survivingSessions.length} surviving session(s)`);
 		for (const session of survivingSessions) {
+			const existingId = terminalsStore.getTerminalForSession(session.session_id);
+			if (existingId) {
+				assignSessionToRepoBranch(session.session_id, existingId, session.cwd);
+				continue;
+			}
 			const id = terminalsStore.add({
 				sessionId: session.session_id,
 				fontSize: deps.getDefaultFontSize(),
@@ -558,24 +588,7 @@ export async function initApp(deps: AppInitDeps) {
 				awaitingInput: null,
 			});
 
-			// Match session to repo/branch by cwd
-			const matchedRepo = repositoriesStore.getPaths().find((repoPath) => {
-				if (session.cwd === repoPath) return true;
-				const repoState = repositoriesStore.get(repoPath);
-				if (!repoState) return false;
-				return Object.values(repoState.branches).some((b) => b.worktreePath && session.cwd === b.worktreePath);
-			});
-
-			if (matchedRepo) {
-				const repoState = repositoriesStore.get(matchedRepo);
-				const branchName =
-					Object.values(repoState?.branches || {}).find((b) => b.worktreePath && session.cwd === b.worktreePath)
-						?.name || repoState?.activeBranch;
-
-				if (branchName) {
-					repositoriesStore.addTerminalToBranch(matchedRepo, branchName, id);
-				}
-			}
+			assignSessionToRepoBranch(session.session_id, id, session.cwd);
 		}
 		terminalsStore.setActive(terminalsStore.getIds()[0]);
 	}

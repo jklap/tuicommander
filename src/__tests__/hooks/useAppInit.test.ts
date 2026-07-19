@@ -126,6 +126,121 @@ describe("initApp", () => {
 		expect(branch?.terminals.length).toBe(1);
 	});
 
+	it("matches a surviving session whose cwd is nested below the repo", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-nested", cwd: "/repo/packages/app" }]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const branch = repositoriesStore.get("/repo")?.branches["main"];
+		expect(branch?.terminals).toHaveLength(1);
+		expect(terminalsStore.get(branch!.terminals[0])?.sessionId).toBe("sess-nested");
+	});
+
+	it("assigns a surviving session to the most-specific nested repo", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Outer" });
+		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setBranch("/repo", "embedded", { worktreePath: "/repo/packages/app/" });
+		repositoriesStore.add({ path: "/repo/packages/app", displayName: "Nested" });
+		repositoriesStore.setBranch("/repo/packages/app", "main", { worktreePath: null });
+		repositoriesStore.setActiveBranch("/repo/packages/app", "main");
+
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi
+					.fn()
+					.mockResolvedValue([{ session_id: "sess-nested-repo", cwd: "/repo/packages/app/src" }]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		expect(repositoriesStore.get("/repo")?.branches["main"].terminals).toHaveLength(0);
+		expect(repositoriesStore.get("/repo")?.branches["embedded"].terminals).toHaveLength(0);
+		const nestedBranch = repositoriesStore.get("/repo/packages/app")?.branches["main"];
+		expect(nestedBranch?.terminals).toHaveLength(1);
+		expect(terminalsStore.get(nestedBranch!.terminals[0])?.sessionId).toBe("sess-nested-repo");
+	});
+
+	it("prefers a longer external worktree over an enclosing repo root", async () => {
+		repositoriesStore.add({ path: "/external", displayName: "External" });
+		repositoriesStore.setBranch("/external", "main", { worktreePath: "/external" });
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/external/feature" });
+
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi
+					.fn()
+					.mockResolvedValue([{ session_id: "sess-external-worktree", cwd: "/external/feature/src" }]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		expect(repositoriesStore.get("/external")?.branches["main"].terminals).toHaveLength(0);
+		const feature = repositoriesStore.get("/repo")?.branches["feature"];
+		expect(feature?.terminals).toHaveLength(1);
+		expect(terminalsStore.get(feature!.terminals[0])?.sessionId).toBe("sess-external-worktree");
+	});
+
+	it("deduplicates a session-created event while the surviving-session list is pending", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActive("/repo");
+
+		let sessionCreated: ((event: {
+			payload: { session_id: string; cwd: string | null; agent_type?: string | null };
+		}) => void) | null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") {
+				sessionCreated = handler as typeof sessionCreated;
+			}
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+
+		let markListStarted!: () => void;
+		const listStarted = new Promise<void>((resolve) => {
+			markListStarted = resolve;
+		});
+		let resolveSessions!: (sessions: Array<{ session_id: string; cwd: string | null }>) => void;
+		const sessions = new Promise<Array<{ session_id: string; cwd: string | null }>>((resolve) => {
+			resolveSessions = resolve;
+		});
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn(() => {
+					markListStarted();
+					return sessions;
+				}),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		const initializing = initApp(deps);
+		await listStarted;
+		sessionCreated!({ payload: { session_id: "sess-race", cwd: "/repo", agent_type: "codex" } });
+		resolveSessions([{ session_id: "sess-race", cwd: "/repo" }]);
+		await initializing;
+
+		const branch = repositoriesStore.get("/repo")?.branches["main"];
+		expect(terminalsStore.getCount()).toBe(1);
+		expect(branch?.terminals).toHaveLength(1);
+		expect(new Set(branch?.terminals).size).toBe(1);
+		expect(terminalsStore.get(branch!.terminals[0])?.sessionId).toBe("sess-race");
+	});
+
 	it("restores active repo/branch and eagerly calls handleBranchSelect", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
@@ -224,12 +339,12 @@ describe("initApp", () => {
 		expect(ids.length).toBe(1);
 	});
 
-	it("calls handleBranchSelect when surviving sessions have no valid terminals", async () => {
+	it("assigns an unmatched surviving session to the active branch without replacement", async () => {
 		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
 		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActive("/repo");
 
-		// Surviving session CWD doesn't match the branch
 		const deps = createMockDeps({
 			pty: {
 				listActiveSessions: vi.fn().mockResolvedValue([{ session_id: "sess-1", cwd: "/other" }]),
@@ -239,9 +354,11 @@ describe("initApp", () => {
 
 		await initApp(deps);
 
-		// The session is adopted but not matched to main branch terminals
-		// So handleBranchSelect should be called to create a proper terminal
-		expect(deps.handleBranchSelect).toHaveBeenCalledWith("/repo", "main");
+		const branch = repositoriesStore.get("/repo")?.branches["main"];
+		expect(branch?.terminals).toHaveLength(1);
+		expect(terminalsStore.get(branch!.terminals[0])?.sessionId).toBe("sess-1");
+		expect(terminalsStore.getCount()).toBe(1);
+		expect(deps.handleBranchSelect).not.toHaveBeenCalled();
 	});
 
 	it("snapshots agentSessionId into savedTerminals on beforeunload", async () => {
