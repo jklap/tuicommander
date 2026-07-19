@@ -348,7 +348,11 @@ remains `idle` because terminal input readiness is a separate fact. Persistent
 integration helpers (`mdkb`, `tuic-bridge`, and `node_repl`) and their subtrees
 do not count as work. Parent `idle` lifecycle mail is deferred until the real
 descendant exits, while confirmed-ready message delivery keeps using the
-terminal-readiness gate.
+terminal-readiness gate. One app-wide process snapshot is collected once per
+second on Tokio's blocking pool and shared by every session; enumeration or
+parse failures preserve the prior `background_work` value. On Windows, where
+Toolhelp does not provide command lines, generic `node.exe` processes are kept
+as meaningful work rather than guessed to be `node_repl` helpers.
 Submitting new user or peer input starts a new task epoch immediately, clearing
 the prior completion marker and its stale suggested actions before new output arrives.
 SSE peer delivery reserves that epoch before channel visibility and rolls it back

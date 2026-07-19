@@ -1541,6 +1541,8 @@ pub async fn start_server(
     );
 
     if first_start {
+        crate::pty::spawn_process_snapshot_refresher(Arc::clone(&state));
+
         // Spawn MCP session reaper: evicts stale protocol sessions every 60s (1h TTL)
         let reaper_state = state.clone();
         tokio::spawn(async move {
@@ -2066,6 +2068,7 @@ mod tests {
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
             standby_sessions: DashMap::new(),
+            process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
         });
         // Override default disabled_native_tools so all 8 tools are visible in tests

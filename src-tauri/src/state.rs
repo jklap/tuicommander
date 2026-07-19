@@ -1262,6 +1262,8 @@ pub struct AppState {
     /// Sessions currently in standby (SIGSTOP'd). session_id → epoch ms when stopped.
     #[cfg(unix)]
     pub(crate) standby_sessions: DashMap<String, u64>,
+    /// App-wide process-tree snapshot shared by agent lifecycle polling.
+    pub(crate) process_snapshot_cache: crate::pty::ProcessSnapshotCache,
     /// Repos with active terminals — used to throttle watcher/polling for cold repos.
     pub(crate) hot_repo_paths: parking_lot::RwLock<std::collections::HashSet<String>>,
 }
@@ -1602,6 +1604,7 @@ impl AppState {
             screenshot_responses: DashMap::new(),
             #[cfg(unix)]
             standby_sessions: DashMap::new(),
+            process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
         }
     }
@@ -3967,6 +3970,7 @@ mod tests {
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
             standby_sessions: DashMap::new(),
+            process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
         }
     }

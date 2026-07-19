@@ -163,7 +163,7 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 
 Idle, unfocused terminals are suspended to stop them consuming CPU and battery. A background checker (every 30s) sends `SIGSTOP` to the entire process group of a session — `kill(-pgid, …)`, so children (dev servers, agent processes) are paused too, not just the shell.
 
-- **Entry conditions (all required)** — timeout enabled (`> 0`), tab not focused, shell state idle, idle for at least the timeout, session startup settled, and not already in standby. Claude/Codex/Gemini/Aider additionally require confirmed idle (explicit lifecycle marker or stable ready screen); silence-only idle cannot suspend them.
+- **Entry conditions (all required)** — timeout enabled (`> 0`), tab not focused, shell state idle, no tracked agent background work, idle for at least the timeout, session startup settled, and not already in standby. Claude/Codex/Gemini/Aider additionally require confirmed idle (explicit lifecycle marker or stable ready screen); silence-only idle cannot suspend them.
 - **Wake** — `SIGCONT` fires the instant the tab is focused or a message arrives for the agent; the process resumes exactly where it stopped (no session loss, no restart)
 - **Safety** — the process-group id is validated before signalling; an unsafe pgid is refused rather than risking a stop sent to the wrong group
 - **Pause badge** — suspended tabs show a pause indicator in the tab bar

@@ -4555,6 +4555,7 @@ mod tests {
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: dashmap::DashMap::new(),
             standby_sessions: dashmap::DashMap::new(),
+            process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
         });
         // Tests start with all native tools enabled (override production default

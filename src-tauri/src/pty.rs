@@ -1672,20 +1672,64 @@ struct ProcessTreeEntry {
     command: String,
 }
 
-fn is_persistent_agent_helper(process: &ProcessTreeEntry) -> bool {
-    let name = process
-        .name
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(&process.name)
-        .to_ascii_lowercase();
-    let name = name.trim_end_matches(".exe");
-    let command = process.command.to_ascii_lowercase();
-    matches!(name, "mdkb" | "tuic-bridge" | "node_repl")
-        || (matches!(name, "node" | "nodejs") && command.contains("node_repl"))
+#[derive(Default)]
+pub(crate) struct ProcessSnapshotCache {
+    current: parking_lot::RwLock<Option<Arc<Vec<ProcessTreeEntry>>>>,
+    generation: AtomicU64,
 }
 
-fn agent_process_root(session_root: u32, agent_type: &str, processes: &[ProcessTreeEntry]) -> u32 {
+impl ProcessSnapshotCache {
+    fn store(&self, snapshot: Option<Vec<ProcessTreeEntry>>) {
+        *self.current.write() = snapshot.map(Arc::new);
+        self.generation.fetch_add(1, Ordering::Release);
+    }
+
+    fn load(&self) -> Option<(u64, Arc<Vec<ProcessTreeEntry>>)> {
+        let snapshot = self.current.read().clone()?;
+        Some((self.generation.load(Ordering::Acquire), snapshot))
+    }
+}
+
+fn normalized_process_name(value: &str) -> &str {
+    value
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(value)
+        .trim_end_matches(".exe")
+}
+
+/// Apply the same basename/path convention used by `process_name_from_pid`.
+/// Claude's installer notably uses a version number as the executable basename,
+/// so the containing `claude/versions/` path is authoritative.
+fn classify_agent_name_or_path(value: &str) -> Option<&'static str> {
+    let normalized = value.to_ascii_lowercase();
+    let basename = normalized_process_name(&normalized);
+    classify_agent(basename)
+        .or_else(|| normalized.split(['/', '\\']).rev().find_map(classify_agent))
+}
+
+fn is_persistent_agent_helper(process: &ProcessTreeEntry) -> bool {
+    is_persistent_agent_helper_with_command_line(process, cfg!(not(windows)))
+}
+
+fn is_persistent_agent_helper_with_command_line(
+    process: &ProcessTreeEntry,
+    command_line_authoritative: bool,
+) -> bool {
+    let name = process.name.to_ascii_lowercase();
+    let name = normalized_process_name(&name);
+    let command = process.command.to_ascii_lowercase();
+    matches!(name, "mdkb" | "tuic-bridge" | "node_repl")
+        || (command_line_authoritative
+            && matches!(name, "node" | "nodejs")
+            && command.contains("node_repl"))
+}
+
+fn agent_process_root(
+    session_root: u32,
+    agent_type: &str,
+    processes: &[ProcessTreeEntry],
+) -> Option<u32> {
     let mut children = std::collections::HashMap::<u32, Vec<&ProcessTreeEntry>>::new();
     let mut by_pid = std::collections::HashMap::<u32, &ProcessTreeEntry>::new();
     for process in processes {
@@ -1695,25 +1739,25 @@ fn agent_process_root(session_root: u32, agent_type: &str, processes: &[ProcessT
             .push(process);
         by_pid.insert(process.pid, process);
     }
-    let mut stack = vec![session_root];
-    while let Some(pid) = stack.pop() {
+    by_pid.get(&session_root)?;
+    let mut queue = std::collections::VecDeque::from([session_root]);
+    while let Some(pid) = queue.pop_front() {
         if let Some(process) = by_pid.get(&pid) {
-            let name = process
-                .name
-                .rsplit(['/', '\\'])
-                .next()
-                .unwrap_or(&process.name)
-                .to_ascii_lowercase();
-            let name = name.trim_end_matches(".exe");
-            if classify_agent(name) == Some(agent_type) {
-                return pid;
+            let executable_arg = process.command.split_whitespace().next().unwrap_or("");
+            if classify_agent_name_or_path(&process.name) == Some(agent_type)
+                || classify_agent_name_or_path(executable_arg) == Some(agent_type)
+            {
+                return Some(pid);
             }
         }
         if let Some(descendants) = children.get(&pid) {
-            stack.extend(descendants.iter().map(|process| process.pid));
+            queue.extend(descendants.iter().map(|process| process.pid));
         }
     }
-    session_root
+    // A configured custom alias may have no classifiable executable path. The
+    // process-group leader is then the established foreground-process fallback;
+    // descendants, rather than the alias process itself, represent background work.
+    Some(session_root)
 }
 
 /// Return whether `root_pid` owns at least one meaningful live descendant.
@@ -1742,26 +1786,46 @@ fn has_meaningful_descendant(root_pid: u32, processes: &[ProcessTreeEntry]) -> b
     false
 }
 
+fn background_work_from_snapshot(
+    session_root: u32,
+    agent_type: &str,
+    processes: &[ProcessTreeEntry],
+) -> Option<bool> {
+    let agent_root = agent_process_root(session_root, agent_type, processes)?;
+    Some(has_meaningful_descendant(agent_root, processes))
+}
+
 #[cfg(not(windows))]
 fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
     let output = std::process::Command::new("ps")
         .args(["-axo", "pid=,ppid=,comm=,args="])
         .output()
         .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    Some(
-        text.lines()
-            .filter_map(|line| {
-                let mut fields = line.split_whitespace();
-                Some(ProcessTreeEntry {
-                    pid: fields.next()?.parse().ok()?,
-                    parent_pid: fields.next()?.parse().ok()?,
-                    name: fields.next()?.to_string(),
-                    command: line.to_string(),
-                })
-            })
-            .collect(),
+    parse_process_tree_snapshot(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
     )
+}
+
+#[cfg(not(windows))]
+fn parse_process_tree_snapshot(success: bool, text: &str) -> Option<Vec<ProcessTreeEntry>> {
+    if !success {
+        return None;
+    }
+    let mut result = Vec::new();
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() < 3 {
+            return None;
+        }
+        result.push(ProcessTreeEntry {
+            pid: fields[0].parse().ok()?,
+            parent_pid: fields[1].parse().ok()?,
+            name: fields[2].to_string(),
+            command: fields[3..].join(" "),
+        });
+    }
+    (!result.is_empty()).then_some(result)
 }
 
 #[cfg(windows)]
@@ -1779,66 +1843,126 @@ fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
         let mut result = Vec::new();
         let mut entry: PROCESSENTRY32 = std::mem::zeroed();
         entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
-        if Process32First(snapshot, &mut entry) != 0 {
-            loop {
-                let name_bytes: Vec<u8> = entry
-                    .szExeFile
-                    .iter()
-                    .take_while(|&&byte| byte != 0)
-                    .map(|&byte| byte as u8)
-                    .collect();
-                let name = String::from_utf8_lossy(&name_bytes).into_owned();
-                result.push(ProcessTreeEntry {
-                    pid: entry.th32ProcessID,
-                    parent_pid: entry.th32ParentProcessID,
-                    command: name.clone(),
-                    name,
-                });
-                if Process32Next(snapshot, &mut entry) == 0 {
-                    break;
-                }
+        if Process32First(snapshot, &mut entry) == 0 {
+            CloseHandle(snapshot);
+            return valid_process_snapshot(false, result);
+        }
+        loop {
+            let name_bytes: Vec<u8> = entry
+                .szExeFile
+                .iter()
+                .take_while(|&&byte| byte != 0)
+                .map(|&byte| byte as u8)
+                .collect();
+            let name = String::from_utf8_lossy(&name_bytes).into_owned();
+            result.push(ProcessTreeEntry {
+                pid: entry.th32ProcessID,
+                parent_pid: entry.th32ParentProcessID,
+                command: String::new(),
+                name,
+            });
+            if Process32Next(snapshot, &mut entry) == 0 {
+                break;
             }
         }
         CloseHandle(snapshot);
-        Some(result)
+        valid_process_snapshot(true, result)
     }
 }
 
-fn set_background_work(state: &AppState, session_id: &str, active: bool) {
-    let changed = state
-        .session_states
-        .get_mut(session_id)
-        .filter(|session| session.background_work != active)
-        .map(|mut session| session.background_work = active)
-        .is_some();
-    if !changed || active {
-        return;
+fn valid_process_snapshot(
+    enumeration_succeeded: bool,
+    processes: Vec<ProcessTreeEntry>,
+) -> Option<Vec<ProcessTreeEntry>> {
+    (enumeration_succeeded && !processes.is_empty()).then_some(processes)
+}
+
+fn emit_suggest_event(state: &AppState, session_id: &str, turn_epoch: u64, items: Vec<String>) {
+    let parsed = ParsedEvent::Suggest { items };
+    if let Ok(mut json) = serde_json::to_value(&parsed) {
+        if let Some(object) = json.as_object_mut() {
+            object.insert("_turn_epoch".to_string(), turn_epoch.into());
+        }
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
+        }
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: json,
+        });
     }
-    let shell_is_idle = state
-        .shell_states
-        .get(session_id)
-        .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_IDLE);
-    let turn_epoch = state
-        .session_states
-        .get(session_id)
-        .map(|session| session.turn_epoch);
-    let completion_declared = turn_epoch.is_some_and(|turn_epoch| {
-        state
-            .silence_states
+}
+
+fn set_background_work_for_epoch(
+    state: &AppState,
+    session_id: &str,
+    observed_turn_epoch: u64,
+    active: bool,
+) -> bool {
+    let silence = state
+        .silence_states
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
+        .clone();
+    let mut silence_state = silence.lock();
+    let Some(mut session) = state.session_states.get_mut(session_id) else {
+        return false;
+    };
+    if session.turn_epoch != observed_turn_epoch {
+        return false;
+    }
+    if session.background_work == active {
+        return true;
+    }
+    session.background_work = active;
+    drop(session);
+
+    let mut parent_dispatch = None;
+    if !active
+        && state
+            .shell_states
             .get(session_id)
-            .is_some_and(|silence| silence.lock().completion_declared_for_epoch(turn_epoch))
-    });
-    if shell_is_idle && !completion_declared {
-        push_state_change_to_parent(
-            state,
-            session_id,
-            serde_json::json!({
-                "type": "state_change",
-                "state": "idle",
-                "session_id": session_id,
-            }),
-        );
+            .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_IDLE)
+    {
+        let completion = silence_state.drain_pending_suggest_with_epoch();
+        match completion {
+            Some((turn_epoch, items)) if turn_epoch == observed_turn_epoch => {
+                emit_suggest_event(state, session_id, turn_epoch, items);
+                parent_dispatch = enqueue_state_change_to_parent(
+                    state,
+                    session_id,
+                    serde_json::json!({
+                        "type": "state_change",
+                        "state": "completed",
+                        "session_id": session_id,
+                    }),
+                );
+            }
+            Some((turn_epoch, _)) => {
+                if silence_state.completion_turn_epoch == turn_epoch {
+                    silence_state.completion_declared = false;
+                    silence_state.completion_turn_epoch = 0;
+                }
+            }
+            None => {
+                parent_dispatch = enqueue_state_change_to_parent(
+                    state,
+                    session_id,
+                    serde_json::json!({
+                        "type": "state_change",
+                        "state": "idle",
+                        "session_id": session_id,
+                    }),
+                );
+            }
+        }
     }
+    drop(silence_state);
+    if let Some(dispatch) = parent_dispatch {
+        dispatch_parent_lifecycle(state, dispatch);
+    }
+    true
 }
 
 fn refresh_background_work(state: &AppState, session_id: &str) {
@@ -1846,6 +1970,10 @@ fn refresh_background_work(state: &AppState, session_id: &str) {
         .session_states
         .get(session_id)
         .and_then(|session| session.agent_type.clone());
+    let observed_turn_epoch = state
+        .session_states
+        .get(session_id)
+        .map(|session| session.turn_epoch);
     let root_pid = state.sessions.get(session_id).and_then(|entry| {
         let session = entry.value().lock();
         #[cfg(not(windows))]
@@ -1857,14 +1985,51 @@ fn refresh_background_work(state: &AppState, session_id: &str) {
             session._child.process_id()
         }
     });
-    let (Some(root_pid), Some(agent_type), Some(processes)) =
-        (root_pid, agent_type, process_tree_snapshot())
+    let (Some(root_pid), Some(agent_type), Some(observed_turn_epoch)) =
+        (root_pid, agent_type, observed_turn_epoch)
     else {
         return;
     };
-    let agent_root = agent_process_root(root_pid, &agent_type, &processes);
-    let active = has_meaningful_descendant(agent_root, &processes);
-    set_background_work(state, session_id, active);
+    refresh_background_work_from_cached_snapshot(
+        state,
+        session_id,
+        root_pid,
+        &agent_type,
+        observed_turn_epoch,
+        state.process_snapshot_cache.load(),
+    );
+}
+
+fn refresh_background_work_from_cached_snapshot(
+    state: &AppState,
+    session_id: &str,
+    root_pid: u32,
+    agent_type: &str,
+    observed_turn_epoch: u64,
+    cached: Option<(u64, Arc<Vec<ProcessTreeEntry>>)>,
+) -> bool {
+    let Some((_, processes)) = cached else {
+        return false;
+    };
+    let Some(active) = background_work_from_snapshot(root_pid, agent_type, &processes) else {
+        return false;
+    };
+    set_background_work_for_epoch(state, session_id, observed_turn_epoch, active)
+}
+
+/// Enumerate the OS process table once per lifecycle cadence on Tokio's
+/// blocking pool. Every session reads the resulting app-wide cache.
+pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            let snapshot = tokio::task::spawn_blocking(process_tree_snapshot)
+                .await
+                .unwrap_or(None);
+            state.process_snapshot_cache.store(snapshot);
+        }
+    });
 }
 
 /// Inspect Codex's live prompt neighborhood on the UNFILTERED screen.
@@ -2861,13 +3026,6 @@ fn emit_pending_suggest_if_idle(
     silence: &Arc<Mutex<SilenceState>>,
     session_id: &str,
 ) -> bool {
-    if state
-        .session_states
-        .get(session_id)
-        .is_some_and(|session| session.background_work)
-    {
-        return false;
-    }
     let shell_is_idle = state
         .shell_states
         .get(session_id)
@@ -2880,11 +3038,16 @@ fn emit_pending_suggest_if_idle(
     // this same lock before advancing SessionState.turn_epoch and clearing the
     // old turn. Whichever owns the lock first defines the lifecycle order.
     let mut silence_state = silence.lock();
-    let current_turn_epoch = state
+    let Some((current_turn_epoch, background_work)) = state
         .session_states
         .get(session_id)
-        .map(|session| session.turn_epoch)
-        .unwrap_or(0);
+        .map(|session| (session.turn_epoch, session.background_work))
+    else {
+        return false;
+    };
+    if background_work {
+        return false;
+    }
     let Some((turn_epoch, items)) = silence_state.drain_pending_suggest_with_epoch() else {
         return false;
     };
@@ -2895,20 +3058,7 @@ fn emit_pending_suggest_if_idle(
         }
         return false;
     }
-    let parsed = ParsedEvent::Suggest { items };
-    if let Ok(mut json) = serde_json::to_value(&parsed) {
-        if let Some(object) = json.as_object_mut() {
-            object.insert("_turn_epoch".to_string(), turn_epoch.into());
-        }
-        #[cfg(feature = "desktop")]
-        if let Some(app) = state.app_handle.read().as_ref() {
-            let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
-        }
-        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
-            session_id: session_id.to_string(),
-            parsed: json,
-        });
-    }
+    emit_suggest_event(state, session_id, turn_epoch, items);
     let parent_dispatch = enqueue_state_change_to_parent(
         state,
         session_id,
@@ -6485,6 +6635,17 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                     );
                     continue;
                 }
+                if state
+                    .session_states
+                    .get(session_id.as_str())
+                    .is_some_and(|session| session.background_work)
+                {
+                    tracing::trace!(
+                        session_id = session_id.as_str(),
+                        "Standby skipped: agent owns background work"
+                    );
+                    continue;
+                }
 
                 let idle_since = state
                     .shell_state_since_ms
@@ -6523,6 +6684,21 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
 #[cfg(unix)]
 pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool, String> {
     if state.standby_sessions.contains_key(session_id) {
+        return Ok(false);
+    }
+    // Serialize the final eligibility check with background-work updates. This
+    // closes the gap between the periodic check above and the actual SIGSTOP.
+    let silence = state
+        .silence_states
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
+        .clone();
+    let _lifecycle_guard = silence.lock();
+    if state
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.background_work)
+    {
         return Ok(false);
     }
     let pgid = {
@@ -6869,22 +7045,10 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
         return None;
     }
     let path = std::str::from_utf8(&buf[..ret as usize]).ok()?;
-    // Extract just the binary name from the full path
-    let basename = path.rsplit('/').next().unwrap_or(path);
-
-    // Some agents install versioned binaries where the filename is a version number
-    // (e.g. claude: ~/.local/share/claude/versions/2.1.87). When the basename
-    // doesn't look like a program name, check the path for known agent directories.
-    if classify_agent(basename).is_some() {
-        return Some(basename.to_string());
+    if let Some(agent_type) = classify_agent_name_or_path(path) {
+        return Some(agent_type.to_string());
     }
-    // Fall back: match parent directory names against known agents
-    for segment in path.rsplit('/').skip(1) {
-        if classify_agent(segment).is_some() {
-            return Some(segment.to_string());
-        }
-    }
-    Some(basename.to_string())
+    Some(normalized_process_name(path).to_string())
 }
 
 #[cfg(target_os = "linux")]
@@ -9959,7 +10123,7 @@ mod tests {
                     "target/debug/deps/agent2_core-test",
                 ),
             ];
-            let root = agent_process_root(session_root, agent, &processes);
+            let root = agent_process_root(session_root, agent, &processes).unwrap();
             assert_eq!(root, agent_pid, "{agent} adapter root");
             assert!(
                 has_meaningful_descendant(root, &processes),
@@ -10018,6 +10182,104 @@ mod tests {
         let mut with_real_child = processes;
         with_real_child.push(process(20, 10, "cargo", "cargo test --locked"));
         assert!(has_meaningful_descendant(10, &with_real_child));
+    }
+
+    #[test]
+    fn version_named_claude_path_is_the_agent_root() {
+        let processes = vec![
+            process(10, 1, "zsh", "zsh"),
+            process(
+                11,
+                10,
+                "/Users/test/.local/share/claude/versions/2.1.87",
+                "2.1.87",
+            ),
+            process(12, 11, "cargo", "cargo test"),
+        ];
+        assert_eq!(agent_process_root(10, "claude", &processes), Some(11));
+        assert_eq!(
+            background_work_from_snapshot(10, "claude", &processes),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn wrapper_is_not_counted_as_permanent_agent_work() {
+        let idle = vec![
+            process(20, 1, "claude-wrapper", "claude-wrapper"),
+            process(21, 20, "/opt/claude/versions/2.1.87", "2.1.87"),
+        ];
+        assert_eq!(agent_process_root(20, "claude", &idle), Some(21));
+        assert_eq!(
+            background_work_from_snapshot(20, "claude", &idle),
+            Some(false)
+        );
+
+        let custom_alias = vec![
+            process(30, 1, "C2", "C2"),
+            process(31, 30, "mdkb", "mdkb serve"),
+        ];
+        assert_eq!(agent_process_root(30, "claude", &custom_alias), Some(30));
+        assert_eq!(
+            background_work_from_snapshot(30, "claude", &custom_alias),
+            Some(false)
+        );
+        let mut active_alias = custom_alias;
+        active_alias.push(process(32, 30, "cargo", "cargo test"));
+        assert_eq!(
+            background_work_from_snapshot(30, "claude", &active_alias),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn windows_helper_classification_does_not_guess_node_arguments() {
+        let node = process(40, 10, "node.exe", "node.exe node_repl.js");
+        assert!(is_persistent_agent_helper_with_command_line(&node, true));
+        assert!(
+            !is_persistent_agent_helper_with_command_line(&node, false),
+            "Toolhelp exposes only the executable name, so node.exe remains meaningful"
+        );
+        let dedicated = process(41, 10, "node_repl.exe", "");
+        assert!(is_persistent_agent_helper_with_command_line(
+            &dedicated, false
+        ));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn process_snapshot_rejects_nonzero_and_malformed_output() {
+        assert!(parse_process_tree_snapshot(false, "10 1 zsh zsh").is_none());
+        assert!(parse_process_tree_snapshot(true, "10 invalid zsh zsh").is_none());
+        assert!(parse_process_tree_snapshot(true, "10 1").is_none());
+    }
+
+    #[test]
+    fn failed_first_process_entry_is_not_a_valid_snapshot() {
+        assert!(valid_process_snapshot(false, vec![process(10, 1, "zsh", "zsh")]).is_none());
+        assert!(valid_process_snapshot(true, Vec::new()).is_none());
+    }
+
+    #[test]
+    fn process_snapshot_cache_is_shared_across_sessions() {
+        let cache = ProcessSnapshotCache::default();
+        cache.store(Some(vec![
+            process(10, 1, "codex", "codex"),
+            process(11, 10, "cargo", "cargo test"),
+            process(20, 1, "claude", "claude"),
+        ]));
+        let (first_generation, first) = cache.load().unwrap();
+        let (second_generation, second) = cache.load().unwrap();
+        assert_eq!(first_generation, second_generation);
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            background_work_from_snapshot(10, "codex", &first),
+            Some(true)
+        );
+        assert_eq!(
+            background_work_from_snapshot(20, "claude", &second),
+            Some(false)
+        );
     }
 
     // --- Staleness counter tests ---
@@ -12426,7 +12688,7 @@ mod tests {
             "a ready composer must not announce autonomous completion"
         );
 
-        set_background_work(&state, child_id, false);
+        assert!(set_background_work_for_epoch(&state, child_id, 0, false));
         let inbox = state.agent_inbox.get(parent_id).unwrap();
         assert_eq!(inbox.len(), 1);
         let content: serde_json::Value =
@@ -12463,17 +12725,137 @@ mod tests {
             .insert(child_id.to_string(), silence.clone());
 
         assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
-        set_background_work(&state, child_id, false);
-        assert!(
-            state.agent_inbox.get(parent_id).unwrap().is_empty(),
-            "completion marker must suppress an intermediate generic idle"
-        );
-        assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
+        assert!(set_background_work_for_epoch(&state, child_id, 0, false));
         let inbox = state.agent_inbox.get(parent_id).unwrap();
         assert_eq!(inbox.len(), 1);
         let content: serde_json::Value =
             serde_json::from_str(&inbox.front().unwrap().content).unwrap();
         assert_eq!(content["state"], "completed");
+        assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
+    }
+
+    #[test]
+    fn stale_background_clear_cannot_emit_after_new_turn() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "child-background-race";
+        let parent_id = "parent-background-race";
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+        state.session_states.insert(
+            child_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                background_work: true,
+                turn_epoch: 7,
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            child_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+        );
+        state.silence_states.insert(
+            child_id.to_string(),
+            Arc::new(Mutex::new(SilenceState::new())),
+        );
+
+        note_submitted_input(&state, child_id);
+        assert!(!set_background_work_for_epoch(&state, child_id, 7, false));
+        assert!(state.session_states.get(child_id).unwrap().background_work);
+        assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn failed_or_invalid_cached_snapshot_preserves_background_work() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "background-snapshot-failure";
+        state.session_states.insert(
+            session_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                background_work: true,
+                turn_epoch: 3,
+                ..Default::default()
+            },
+        );
+
+        assert!(!refresh_background_work_from_cached_snapshot(
+            &state, session_id, 10, "codex", 3, None,
+        ));
+        let invalid = Arc::new(vec![process(20, 1, "codex", "codex")]);
+        assert!(!refresh_background_work_from_cached_snapshot(
+            &state,
+            session_id,
+            10,
+            "codex",
+            3,
+            Some((1, invalid)),
+        ));
+        assert!(
+            state
+                .session_states
+                .get(session_id)
+                .unwrap()
+                .background_work
+        );
+    }
+
+    #[test]
+    fn cached_snapshot_detects_background_process_exit() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "child-background-exit";
+        let parent_id = "parent-background-exit";
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+        state.session_states.insert(
+            child_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                background_work: true,
+                turn_epoch: 4,
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            child_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+        );
+        let exited = Arc::new(vec![process(10, 1, "codex", "codex")]);
+
+        assert!(refresh_background_work_from_cached_snapshot(
+            &state,
+            child_id,
+            10,
+            "codex",
+            4,
+            Some((2, exited)),
+        ));
+        assert!(!state.session_states.get(child_id).unwrap().background_work);
+        let inbox = state.agent_inbox.get(parent_id).unwrap();
+        let content: serde_json::Value =
+            serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+        assert_eq!(content["state"], "idle");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn standby_refuses_session_with_background_work() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "background-standby";
+        state.session_states.insert(
+            session_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                background_work: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(standby_session(&state, session_id), Ok(false));
+        assert!(!state.standby_sessions.contains_key(session_id));
     }
 
     #[test]

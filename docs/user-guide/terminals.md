@@ -71,6 +71,12 @@ message delivery. Pressing Ctrl-C or Escape requests interruption but does not
 turn the dot green until the agent confirms the interruption, returns to its
 prompt, or exits.
 
+A ready prompt means the terminal can accept input; it does not necessarily
+mean the agent's turn is finished. If the agent still owns a background command,
+the activity indicator remains working, parent-agent idle/completed notifications
+are deferred, and auto-standby will not pause the session. Persistent integration
+helpers are ignored, so they do not keep a completed turn active indefinitely.
+
 ### Tab Shortcuts
 
 Hover a tab to see its shortcut badge: "Terminal N (Cmd+N)". Use `Cmd+1` through `Cmd+9` to jump directly. `Ctrl+Tab` / `Ctrl+Shift+Tab` — Next / previous tab.
