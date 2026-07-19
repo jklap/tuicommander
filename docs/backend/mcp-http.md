@@ -137,7 +137,7 @@ Client ──WebSocket──> /sessions/{session_id}/stream
 
 When sessions are created or closed (via HTTP, MCP, or PTY exit), the server broadcasts events through the SSE event bus:
 
-- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id` and `cwd`. Frontend uses this to auto-add terminal tabs for remotely spawned agents.
+- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, and the optional stable `display_name`. Frontend uses this to auto-add terminal tabs for remotely spawned agents and treats a supplied display name as custom so transient OSC/intent titles cannot replace it.
 - **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Frontend uses this to update tab tooltips.
 - **`session-closed`** — Emitted when a session exits. Carries `session_id`. Frontend uses this for cleanup.
 

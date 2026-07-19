@@ -301,8 +301,8 @@ export async function initApp(deps: AppInitDeps) {
 	}).catch((err) => appLogger.error("app", "Failed to register mcp-toast listener", err));
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
-	listen<{ session_id: string; cwd: string | null; agent_type?: string | null }>("session-created", (event) => {
-		const { session_id, cwd, agent_type } = event.payload;
+	listen<{ session_id: string; cwd: string | null; agent_type?: string | null; display_name?: string | null }>("session-created", (event) => {
+		const { session_id, cwd, agent_type, display_name } = event.payload;
 		// Skip if this session was created by the local browser client or is already tracked
 		if (browserCreatedSessions.has(session_id)) return;
 		const existing = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === session_id);
@@ -312,7 +312,8 @@ export async function initApp(deps: AppInitDeps) {
 		const id = terminalsStore.add({
 			sessionId: session_id,
 			fontSize: deps.getDefaultFontSize(),
-			name: `PTY: Session ${terminalsStore.getCount() + 1}`,
+			name: display_name || `PTY: Session ${terminalsStore.getCount() + 1}`,
+			nameIsCustom: Boolean(display_name),
 			cwd: cwd ?? null,
 			awaitingInput: null,
 			isRemote: true,
@@ -552,6 +553,7 @@ export async function initApp(deps: AppInitDeps) {
 				sessionId: session.session_id,
 				fontSize: deps.getDefaultFontSize(),
 				name: session.display_name || terminalsStore.nextDefaultName(),
+				nameIsCustom: Boolean(session.display_name),
 				cwd: session.cwd,
 				awaitingInput: null,
 			});

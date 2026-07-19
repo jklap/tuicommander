@@ -216,7 +216,7 @@ Broadcasts server-side events to all browser/mobile clients. Supports optional `
 
 | Event | Payload | Description |
 |-------|---------|-------------|
-| `session-created` | `{session_id, cwd}` | New session started |
+| `session-created` | `{session_id, cwd, agent_type, display_name}` | New session started; `display_name` is the optional stable assigned name |
 | `session-closed` | `{session_id}` | Session ended |
 | `repo-changed` | `{repo_path}` | Git repository state changed |
 | `head-changed` | `{repo_path, branch}` | Git HEAD changed (branch switch) |

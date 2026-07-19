@@ -1286,6 +1286,7 @@ impl SilenceState {
     /// when the shell state is IDLE (the silence timer does exactly that).
     /// Returns the items once and clears the park slot; a second call returns
     /// `None` until new items are parked.
+    #[cfg(test)]
     pub(crate) fn drain_pending_suggest(&mut self) -> Option<Vec<String>> {
         self.drain_pending_suggest_with_epoch()
             .map(|(_, items)| items)
@@ -1302,6 +1303,7 @@ impl SilenceState {
         self.completion_turn_epoch = 0;
     }
 
+    #[cfg(test)]
     pub(crate) fn completion_declared(&self) -> bool {
         self.completion_declared
     }
@@ -1388,6 +1390,7 @@ fn try_shell_transition_for_epoch(
     )
 }
 
+#[cfg(test)]
 fn try_shell_transition_with_hook<F: FnOnce()>(
     state: &crate::state::AppState,
     session_id: &str,
@@ -5523,7 +5526,7 @@ pub(crate) async fn spawn_session_for_agent(
             paused: paused.clone(),
             worktree: None,
             cwd,
-            display_name,
+            display_name: display_name.clone(),
             shell: shell.clone(),
         }),
     );
@@ -5566,6 +5569,7 @@ pub(crate) async fn spawn_session_for_agent(
                 .get(&session_id)
                 .and_then(|s| s.lock().cwd.clone()),
             agent_type: None,
+            display_name: display_name.clone(),
         });
     #[cfg(feature = "desktop")]
     if let Some(ref a) = *state.app_handle.read() {
@@ -5573,6 +5577,7 @@ pub(crate) async fn spawn_session_for_agent(
             "session-created",
             serde_json::json!({
                 "session_id": session_id,
+                "display_name": display_name,
             }),
         );
     }

@@ -112,6 +112,7 @@ type TerminalCreateData = Omit<
 > & {
 	tuicSession?: string | null;
 	isRemote?: boolean;
+	nameIsCustom?: boolean;
 	agentType?: AgentType | null;
 	agentSessionId?: string | null;
 	agentLaunchCommand?: string | null;

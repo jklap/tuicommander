@@ -106,6 +106,11 @@ This coalesces rapid writes (e.g. spinner CR+erase+rewrite within 16ms) into a s
 
 `spawn_headless_reader_thread()` — used for HTTP-created sessions (no Tauri app handle). Same pipeline but skips Tauri event emission; only writes to ring buffer and WebSocket. Includes `extract_question_line()` for silence-based question detection, session lifecycle events (`session-created`, `session-closed`), and full output parser integration.
 
+Named agent sessions propagate their stable `display_name` through the
+`session-created` event. Desktop and browser clients mark that initial tab name
+as custom, preserving it across OSC title and structured intent updates as well
+as frontend reconnection. Unnamed tabs retain the normal dynamic-title behavior.
+
 ## Shell Resolution
 
 ```rust

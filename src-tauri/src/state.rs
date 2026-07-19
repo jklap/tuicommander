@@ -32,6 +32,7 @@ pub enum AppEvent {
         session_id: String,
         cwd: Option<String>,
         agent_type: Option<String>,
+        display_name: Option<String>,
     },
     #[serde(rename = "session-closed")]
     SessionClosed { session_id: String, reason: String },

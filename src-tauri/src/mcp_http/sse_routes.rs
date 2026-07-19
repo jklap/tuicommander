@@ -126,8 +126,14 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             session_id,
             cwd,
             agent_type,
+            display_name,
         } => {
-            serde_json::json!({ "session_id": session_id, "cwd": cwd, "agent_type": agent_type })
+            serde_json::json!({
+                "session_id": session_id,
+                "cwd": cwd,
+                "agent_type": agent_type,
+                "display_name": display_name,
+            })
         }
         AppEvent::SessionClosed { session_id, reason } => {
             serde_json::json!({ "session_id": session_id, "reason": reason })
@@ -254,6 +260,23 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_created_preserves_stable_display_name() {
+        let event = AppEvent::SessionCreated {
+            session_id: "session-1".into(),
+            cwd: Some("/repo".into()),
+            agent_type: Some("codex".into()),
+            display_name: Some("linux-primary".into()),
+        };
+
+        assert_eq!(event_type_name(&event), "session-created");
+        let body = event_payload(&event);
+        assert_eq!(body["session_id"], "session-1");
+        assert_eq!(body["cwd"], "/repo");
+        assert_eq!(body["agent_type"], "codex");
+        assert_eq!(body["display_name"], "linux-primary");
+    }
 
     /// The three GitHub Ops lifecycle events share a `{repo_path, payload}` shape.
     /// Each must map to its own SSE `event:` name and round-trip the payload

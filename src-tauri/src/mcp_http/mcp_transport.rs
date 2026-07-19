@@ -2386,7 +2386,7 @@ fn handle_agent(
                     paused: paused.clone(),
                     worktree: None,
                     cwd: effective_cwd.clone(),
-                    display_name: requested_name,
+                    display_name: requested_name.clone(),
                     shell: binary_path.clone(),
                 }),
             );
@@ -2448,6 +2448,7 @@ fn handle_agent(
                     session_id: session_id.clone(),
                     cwd: cwd_str.clone(),
                     agent_type: agent_type_str,
+                    display_name: requested_name.clone(),
                 });
 
             #[cfg(feature = "desktop")]
@@ -2462,6 +2463,7 @@ fn handle_agent(
                             "session_id": session_id,
                             "cwd": cwd_str,
                             "agent_type": agent_type_val,
+                            "display_name": requested_name,
                         }),
                     );
                 }
@@ -7552,6 +7554,7 @@ mod tests {
             "orchestrator",
             "mcp-orch",
         );
+        let mut events = state.event_bus.subscribe();
 
         let result = handle_agent(
             &state,
@@ -7577,6 +7580,20 @@ mod tests {
         assert!(result.get("error").is_none(), "spawn failed: {result}");
         assert_eq!(result["name"], "linux-primary");
         let session_id = result["session_id"].as_str().unwrap();
+        let created = events
+            .try_recv()
+            .expect("named spawn must emit session-created");
+        match created {
+            crate::state::AppEvent::SessionCreated {
+                session_id: event_session_id,
+                display_name,
+                ..
+            } => {
+                assert_eq!(event_session_id, session_id);
+                assert_eq!(display_name.as_deref(), Some("linux-primary"));
+            }
+            other => panic!("expected session-created, got {other:?}"),
+        }
         assert_eq!(result["peer_registered"], true);
         assert_eq!(result["communication_ready"], true);
         assert_eq!(result["send_to"], session_id);

@@ -89,6 +89,24 @@ describe("initApp", () => {
 		const ids = terminalsStore.getIds();
 		expect(terminalsStore.get(ids[0])?.sessionId).toBe("sess-1");
 		expect(terminalsStore.get(ids[1])?.sessionId).toBe("sess-2");
+		expect(terminalsStore.get(ids[0])?.nameIsCustom).toBe(false);
+	});
+
+	it("preserves a surviving session display name as custom", async () => {
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi
+					.fn()
+					.mockResolvedValue([{ session_id: "sess-named", cwd: "/repo", display_name: "linux-primary" }]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const terminal = terminalsStore.getIds().map((id) => terminalsStore.get(id))[0];
+		expect(terminal?.name).toBe("linux-primary");
+		expect(terminal?.nameIsCustom).toBe(true);
 	});
 
 	it("matches surviving sessions to repos by cwd", async () => {
@@ -796,7 +814,12 @@ describe("initApp", () => {
 	});
 
 	describe("session-closed auto-close path", () => {
-		type SessionCreatedPayload = { session_id: string; cwd: string | null; agent_type?: string | null };
+		type SessionCreatedPayload = {
+			session_id: string;
+			cwd: string | null;
+			agent_type?: string | null;
+			display_name?: string | null;
+		};
 		type SessionClosedPayload = { session_id: string; reason: string; agent_type?: string | null };
 
 		/** Captures both session-created and session-closed callbacks in a single mock pass. */
@@ -907,7 +930,12 @@ describe("initApp", () => {
 	});
 
 	describe("session-created event (agent tab activation)", () => {
-		type SessionCreatedPayload = { session_id: string; cwd: string | null; agent_type?: string | null };
+		type SessionCreatedPayload = {
+			session_id: string;
+			cwd: string | null;
+			agent_type?: string | null;
+			display_name?: string | null;
+		};
 
 		function captureSessionCreated() {
 			const listenMock = vi.mocked(listen);
@@ -960,6 +988,28 @@ describe("initApp", () => {
 			const newId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "new-sess");
 			expect(newId).toBeDefined();
 			expect(terminalsStore.state.activeId).toBe(newId);
+			expect(terminalsStore.get(newId!)?.nameIsCustom).toBe(false);
+		});
+
+		it("preserves a spawned agent display name as custom", async () => {
+			const { getCallback } = captureSessionCreated();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			getCallback()!({
+				payload: {
+					session_id: "named-sess",
+					cwd: "/repo",
+					agent_type: "codex",
+					display_name: "windows-primary",
+				},
+			});
+
+			const terminalId = terminalsStore
+				.getIds()
+				.find((id) => terminalsStore.get(id)?.sessionId === "named-sess");
+			expect(terminalsStore.get(terminalId!)?.name).toBe("windows-primary");
+			expect(terminalsStore.get(terminalId!)?.nameIsCustom).toBe(true);
 		});
 
 		it("setActiveGroup called with first leaf when split but no active group", async () => {

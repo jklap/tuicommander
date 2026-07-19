@@ -542,6 +542,7 @@ pub(super) fn spawn_pty_session(
             session_id: session_id.clone(),
             cwd: cwd.clone(),
             agent_type: None,
+            display_name: None,
         });
 
     #[cfg(feature = "desktop")]
@@ -555,6 +556,7 @@ pub(super) fn spawn_pty_session(
             serde_json::json!({
                 "session_id": session_id,
                 "cwd": cwd,
+                "display_name": null,
             }),
         );
     }
