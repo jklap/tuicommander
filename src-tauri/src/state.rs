@@ -222,6 +222,11 @@ pub(crate) struct SessionState {
     /// the explicit `suggest:` protocol marker; silence alone remains `idle`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_state: Option<String>,
+    /// True while the agent owns a meaningful background descendant even if
+    /// its terminal composer is ready for input. Persistent integration helpers
+    /// are excluded by the PTY process-tree classifier.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub background_work: bool,
     /// Timestamp of last activity (any event for this session).
     /// Excluded from PartialEq — telemetry field, not logical state.
     pub last_activity_ms: u64,
@@ -285,6 +290,7 @@ impl PartialEq for SessionState {
             && self.usage_limit_pct == other.usage_limit_pct
             && self.shell_state == other.shell_state
             && self.agent_state == other.agent_state
+            && self.background_work == other.background_work
             && self.agent_type == other.agent_type
             && self.last_error == other.last_error
             && self.agent_intent == other.agent_intent
@@ -2012,7 +2018,7 @@ impl AppState {
             None
         } else if state.awaiting_input || state.choice_prompt.is_some() {
             Some("awaiting_input".to_string())
-        } else if state.shell_state.as_deref() == Some("busy") {
+        } else if state.background_work || state.shell_state.as_deref() == Some("busy") {
             Some("working".to_string())
         } else if state.suggested_actions.is_some()
             || self.silence_states.get(session_id).is_some_and(|silence| {

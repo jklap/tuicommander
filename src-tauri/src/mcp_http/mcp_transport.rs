@@ -1362,6 +1362,9 @@ fn handle_session(
                 let agent_state = session_state
                     .as_ref()
                     .and_then(|snapshot| snapshot.agent_state.clone());
+                let background_work = session_state
+                    .as_ref()
+                    .is_some_and(|snapshot| snapshot.background_work);
                 let alias = state.term_aliases.get(&id).map(|e| e.value().clone());
                 #[cfg(unix)]
                 let standby = state.standby_sessions.contains_key(id.as_str());
@@ -1379,6 +1382,7 @@ fn handle_session(
                     "foreground_process": process_name,
                     "shell_state": shell_state,
                     "agent_state": agent_state,
+                    "background_work": background_work,
                     "standby": standby,
                 })
             }).collect();
@@ -1741,6 +1745,7 @@ fn handle_session(
                         "session_id": session_id,
                         "shell_state": ss.shell_state,
                         "agent_state": ss.agent_state,
+                        "background_work": ss.background_work,
                         "agent_type": ss.agent_type,
                         "awaiting_input": ss.awaiting_input,
                         "rate_limited": ss.rate_limited,

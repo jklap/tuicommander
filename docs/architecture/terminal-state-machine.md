@@ -30,6 +30,7 @@ Rust-side per-session state:
 | `active_sub_tasks` | `AppState.session_states` | Sub-agent count per session |
 | `shell_states` | `AppState.shell_states` | `DashMap<String, AtomicU8>`: 0=null, 1=busy, 2=idle. Transitions use `compare_exchange` to prevent duplicate events when reader thread and silence timer race. |
 | `last_output_ms` | `AppState.last_output_ms` | Epoch ms of last **real** output (not chrome-only). Stamped only when `!chrome_only`. |
+| `SessionState.background_work` | `AppState.session_states` | Meaningful live agent descendant; persistent integration-helper subtrees are excluded. Keeps task lifecycle working without changing terminal readiness. |
 
 ## 1. Tab Indicator — Visual Priority
 

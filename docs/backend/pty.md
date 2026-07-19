@@ -341,6 +341,14 @@ single source of truth — the frontend does not derive activity from raw PTY da
 PTY is quiet; it does not prove that the assigned task finished. An agent's
 `suggest: [ ... ]` marker explicitly closes the current task epoch and produces
 `agent_state=completed` plus a `state_change: completed` parent notification.
+Likewise, a visible ready composer may coexist with an autonomous background
+command. While a meaningful descendant of the agent is alive, session state
+reports `background_work=true` and keeps `agent_state=working`; `shell_state`
+remains `idle` because terminal input readiness is a separate fact. Persistent
+integration helpers (`mdkb`, `tuic-bridge`, and `node_repl`) and their subtrees
+do not count as work. Parent `idle` lifecycle mail is deferred until the real
+descendant exits, while confirmed-ready message delivery keeps using the
+terminal-readiness gate.
 Submitting new user or peer input starts a new task epoch immediately, clearing
 the prior completion marker and its stale suggested actions before new output arrives.
 SSE peer delivery reserves that epoch before channel visibility and rolls it back

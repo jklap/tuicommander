@@ -1526,7 +1526,11 @@ fn try_shell_transition_locked<F: FnOnce()>(
                     .is_some_and(|silence| silence.completion_declared_for_epoch(turn_epoch))
             });
             let is_agent = session_lifecycle.is_some_and(|(is_agent, _)| is_agent);
-            if is_agent && !completion_declared {
+            let has_background_work = state
+                .session_states
+                .get(session_id)
+                .is_some_and(|session| session.background_work);
+            if is_agent && !completion_declared && !has_background_work {
                 parent_dispatch = enqueue_state_change_to_parent(
                     state,
                     session_id,
@@ -1658,6 +1662,209 @@ enum AgentScreenActivity {
     Ready,
     Interrupted,
     Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProcessTreeEntry {
+    pid: u32,
+    parent_pid: u32,
+    name: String,
+    command: String,
+}
+
+fn is_persistent_agent_helper(process: &ProcessTreeEntry) -> bool {
+    let name = process
+        .name
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(&process.name)
+        .to_ascii_lowercase();
+    let name = name.trim_end_matches(".exe");
+    let command = process.command.to_ascii_lowercase();
+    matches!(name, "mdkb" | "tuic-bridge" | "node_repl")
+        || (matches!(name, "node" | "nodejs") && command.contains("node_repl"))
+}
+
+fn agent_process_root(session_root: u32, agent_type: &str, processes: &[ProcessTreeEntry]) -> u32 {
+    let mut children = std::collections::HashMap::<u32, Vec<&ProcessTreeEntry>>::new();
+    let mut by_pid = std::collections::HashMap::<u32, &ProcessTreeEntry>::new();
+    for process in processes {
+        children
+            .entry(process.parent_pid)
+            .or_default()
+            .push(process);
+        by_pid.insert(process.pid, process);
+    }
+    let mut stack = vec![session_root];
+    while let Some(pid) = stack.pop() {
+        if let Some(process) = by_pid.get(&pid) {
+            let name = process
+                .name
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap_or(&process.name)
+                .to_ascii_lowercase();
+            let name = name.trim_end_matches(".exe");
+            if classify_agent(name) == Some(agent_type) {
+                return pid;
+            }
+        }
+        if let Some(descendants) = children.get(&pid) {
+            stack.extend(descendants.iter().map(|process| process.pid));
+        }
+    }
+    session_root
+}
+
+/// Return whether `root_pid` owns at least one meaningful live descendant.
+/// Helper roots and their entire subtrees are ignored: integration daemons are
+/// session plumbing, not evidence that the agent still owns autonomous work.
+fn has_meaningful_descendant(root_pid: u32, processes: &[ProcessTreeEntry]) -> bool {
+    let mut children = std::collections::HashMap::<u32, Vec<&ProcessTreeEntry>>::new();
+    for process in processes {
+        children
+            .entry(process.parent_pid)
+            .or_default()
+            .push(process);
+    }
+    let mut stack = vec![root_pid];
+    while let Some(parent) = stack.pop() {
+        let Some(descendants) = children.get(&parent) else {
+            continue;
+        };
+        for descendant in descendants {
+            if is_persistent_agent_helper(descendant) {
+                continue;
+            }
+            return true;
+        }
+    }
+    false
+}
+
+#[cfg(not(windows))]
+fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
+    let output = std::process::Command::new("ps")
+        .args(["-axo", "pid=,ppid=,comm=,args="])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    Some(
+        text.lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                Some(ProcessTreeEntry {
+                    pid: fields.next()?.parse().ok()?,
+                    parent_pid: fields.next()?.parse().ok()?,
+                    name: fields.next()?.to_string(),
+                    command: line.to_string(),
+                })
+            })
+            .collect(),
+    )
+}
+
+#[cfg(windows)]
+fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, PROCESSENTRY32, Process32First, Process32Next, TH32CS_SNAPPROCESS,
+    };
+
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snapshot == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            return None;
+        }
+        let mut result = Vec::new();
+        let mut entry: PROCESSENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32>() as u32;
+        if Process32First(snapshot, &mut entry) != 0 {
+            loop {
+                let name_bytes: Vec<u8> = entry
+                    .szExeFile
+                    .iter()
+                    .take_while(|&&byte| byte != 0)
+                    .map(|&byte| byte as u8)
+                    .collect();
+                let name = String::from_utf8_lossy(&name_bytes).into_owned();
+                result.push(ProcessTreeEntry {
+                    pid: entry.th32ProcessID,
+                    parent_pid: entry.th32ParentProcessID,
+                    command: name.clone(),
+                    name,
+                });
+                if Process32Next(snapshot, &mut entry) == 0 {
+                    break;
+                }
+            }
+        }
+        CloseHandle(snapshot);
+        Some(result)
+    }
+}
+
+fn set_background_work(state: &AppState, session_id: &str, active: bool) {
+    let changed = state
+        .session_states
+        .get_mut(session_id)
+        .filter(|session| session.background_work != active)
+        .map(|mut session| session.background_work = active)
+        .is_some();
+    if !changed || active {
+        return;
+    }
+    let shell_is_idle = state
+        .shell_states
+        .get(session_id)
+        .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_IDLE);
+    let turn_epoch = state
+        .session_states
+        .get(session_id)
+        .map(|session| session.turn_epoch);
+    let completion_declared = turn_epoch.is_some_and(|turn_epoch| {
+        state
+            .silence_states
+            .get(session_id)
+            .is_some_and(|silence| silence.lock().completion_declared_for_epoch(turn_epoch))
+    });
+    if shell_is_idle && !completion_declared {
+        push_state_change_to_parent(
+            state,
+            session_id,
+            serde_json::json!({
+                "type": "state_change",
+                "state": "idle",
+                "session_id": session_id,
+            }),
+        );
+    }
+}
+
+fn refresh_background_work(state: &AppState, session_id: &str) {
+    let agent_type = state
+        .session_states
+        .get(session_id)
+        .and_then(|session| session.agent_type.clone());
+    let root_pid = state.sessions.get(session_id).and_then(|entry| {
+        let session = entry.value().lock();
+        #[cfg(not(windows))]
+        {
+            session.master.process_group_leader().map(|pid| pid as u32)
+        }
+        #[cfg(windows)]
+        {
+            session._child.process_id()
+        }
+    });
+    let (Some(root_pid), Some(agent_type), Some(processes)) =
+        (root_pid, agent_type, process_tree_snapshot())
+    else {
+        return;
+    };
+    let agent_root = agent_process_root(root_pid, &agent_type, &processes);
+    let active = has_meaningful_descendant(agent_root, &processes);
+    set_background_work(state, session_id, active);
 }
 
 /// Inspect Codex's live prompt neighborhood on the UNFILTERED screen.
@@ -2052,6 +2259,9 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         .session_states
         .get(session_id)
         .map(|session| session.turn_epoch);
+    if target == SHELL_IDLE {
+        refresh_background_work(state, session_id);
+    }
     before_transaction();
     let silence = state
         .silence_states
@@ -2461,6 +2671,23 @@ fn spawn_silence_timer(
                     detect_agent_screen_activity(agent_type.as_deref(), &vt.lock().screen_rows())
                 })
                 .unwrap_or(AgentScreenActivity::Unknown);
+            let tracked_background_work = state
+                .session_states
+                .get(&session_id)
+                .is_some_and(|session| session.background_work);
+            let shell_is_busy = state
+                .shell_states
+                .get(&session_id)
+                .is_some_and(|shell| shell.load(Ordering::Acquire) == SHELL_BUSY);
+            if tracked_background_work
+                || (shell_is_busy
+                    && matches!(
+                        screen_activity,
+                        AgentScreenActivity::Ready | AgentScreenActivity::Interrupted
+                    ))
+            {
+                refresh_background_work(&state, &session_id);
+            }
             if screen_activity == AgentScreenActivity::Working {
                 apply_working_evidence(&state, &silence, &session_id, epoch_now, "working-screen");
             } else {
@@ -2634,6 +2861,13 @@ fn emit_pending_suggest_if_idle(
     silence: &Arc<Mutex<SilenceState>>,
     session_id: &str,
 ) -> bool {
+    if state
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.background_work)
+    {
+        return false;
+    }
     let shell_is_idle = state
         .shell_states
         .get(session_id)
@@ -9691,6 +9925,101 @@ mod tests {
         }
     }
 
+    fn process(pid: u32, parent_pid: u32, name: &str, command: &str) -> ProcessTreeEntry {
+        ProcessTreeEntry {
+            pid,
+            parent_pid,
+            name: name.to_string(),
+            command: command.to_string(),
+        }
+    }
+
+    #[test]
+    fn sanitized_background_command_keeps_agent_working_across_adapters() {
+        // Sanitized from the 2026-07-19 live Codex sequence. The same lifecycle
+        // contract applies to Claude: a ready composer is not proof that an
+        // autonomous background command has completed.
+        for (index, agent) in ["codex", "claude"].into_iter().enumerate() {
+            let session_root = 100 + index as u32 * 100;
+            let agent_pid = session_root + 1;
+            let processes = vec![
+                process(session_root, 1, "zsh", "zsh"),
+                process(agent_pid, session_root, agent, agent),
+                process(
+                    agent_pid + 1,
+                    agent_pid,
+                    "rtk",
+                    "rtk env CARGO_BUILD_JOBS=4 cargo test --locked -p agent2-core",
+                ),
+                process(agent_pid + 2, agent_pid + 1, "cargo", "cargo test --locked"),
+                process(
+                    agent_pid + 3,
+                    agent_pid + 2,
+                    "agent2_core-test",
+                    "target/debug/deps/agent2_core-test",
+                ),
+            ];
+            let root = agent_process_root(session_root, agent, &processes);
+            assert_eq!(root, agent_pid, "{agent} adapter root");
+            assert!(
+                has_meaningful_descendant(root, &processes),
+                "{agent} must retain autonomous work while cargo descendants live"
+            );
+
+            let silence = replay_sanitized_agent_trace(
+                agent,
+                &[
+                    SanitizedTraceStep::Submit,
+                    SanitizedTraceStep::RealActivity,
+                    SanitizedTraceStep::ReadyScreen,
+                ],
+            );
+            assert!(silence.idle_confirmed, "{agent} composer is terminal-ready");
+
+            let state = crate::state::tests_support::make_test_app_state();
+            let sid = format!("background-{agent}");
+            state.session_states.insert(
+                sid.clone(),
+                crate::state::SessionState {
+                    agent_type: Some(agent.to_string()),
+                    background_work: true,
+                    ..Default::default()
+                },
+            );
+            state
+                .shell_states
+                .insert(sid.clone(), std::sync::atomic::AtomicU8::new(SHELL_IDLE));
+            state
+                .silence_states
+                .insert(sid.clone(), Arc::new(Mutex::new(silence)));
+
+            let snapshot = state.session_state_with_shell(&sid).unwrap();
+            assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+            assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+            assert!(
+                should_inject_now(&state, &sid),
+                "terminal-ready must remain usable independently of task lifecycle"
+            );
+        }
+    }
+
+    #[test]
+    fn persistent_helpers_are_not_background_work() {
+        let processes = vec![
+            process(10, 1, "codex", "codex"),
+            process(11, 10, "tuic-bridge", "tuic-bridge"),
+            process(12, 10, "mdkb", "mdkb serve"),
+            process(13, 10, "node", "node /opt/codex/node_repl.js"),
+            // Descendants owned by helper plumbing are ignored with the helper.
+            process(14, 12, "sqlite-worker", "sqlite-worker"),
+        ];
+        assert!(!has_meaningful_descendant(10, &processes));
+
+        let mut with_real_child = processes;
+        with_real_child.push(process(20, 10, "cargo", "cargo test --locked"));
+        assert!(has_meaningful_descendant(10, &with_real_child));
+    }
+
     // --- Staleness counter tests ---
 
     #[test]
@@ -12065,6 +12394,86 @@ mod tests {
             serde_json::from_str(&msg.content).expect("content must be valid JSON");
         assert_eq!(content["type"], "state_change");
         assert_eq!(content["state"], "idle");
+    }
+
+    #[test]
+    fn background_work_defers_parent_idle_until_descendants_finish() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "child-background-sess";
+        let parent_id = "parent-background-sess";
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+        state.session_states.insert(
+            child_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                background_work: true,
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            child_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_BUSY),
+        );
+
+        assert!(try_shell_transition(
+            &state, child_id, SHELL_BUSY, SHELL_IDLE, true
+        ));
+        assert!(
+            state.agent_inbox.get(parent_id).unwrap().is_empty(),
+            "a ready composer must not announce autonomous completion"
+        );
+
+        set_background_work(&state, child_id, false);
+        let inbox = state.agent_inbox.get(parent_id).unwrap();
+        assert_eq!(inbox.len(), 1);
+        let content: serde_json::Value =
+            serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+        assert_eq!(content["state"], "idle");
+    }
+
+    #[test]
+    fn background_work_defers_declared_completion_without_generic_idle() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "child-background-completed";
+        let parent_id = "parent-background-completed";
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+        state.session_states.insert(
+            child_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                background_work: true,
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            child_id.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+        );
+        let mut silence = SilenceState::new();
+        silence.mark_suggest_candidate(vec!["Review result".to_string()], 0);
+        let silence = Arc::new(Mutex::new(silence));
+        state
+            .silence_states
+            .insert(child_id.to_string(), silence.clone());
+
+        assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
+        set_background_work(&state, child_id, false);
+        assert!(
+            state.agent_inbox.get(parent_id).unwrap().is_empty(),
+            "completion marker must suppress an intermediate generic idle"
+        );
+        assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
+        let inbox = state.agent_inbox.get(parent_id).unwrap();
+        assert_eq!(inbox.len(), 1);
+        let content: serde_json::Value =
+            serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+        assert_eq!(content["state"], "completed");
     }
 
     #[test]
@@ -14470,6 +14879,17 @@ mod tests {
         assert!(
             collect_descendant_pids(std::process::id()).is_some(),
             "walking the process table for a live pid must succeed"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn process_tree_snapshot_reports_own_process() {
+        let own = std::process::id();
+        let snapshot = process_tree_snapshot().expect("ps process-tree snapshot");
+        assert!(
+            snapshot.iter().any(|process| process.pid == own),
+            "the process-tree parser must preserve live PIDs"
         );
     }
 

@@ -1796,6 +1796,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 
 ### 20.10 Process Monitor
 - Reports CPU% and resident memory (RSS) for TUIC and every child process tree, each row attributed to the session that owns it
+- Agent lifecycle also classifies the owning process tree: meaningful background descendants keep `agent_state=working` while an input-ready terminal may remain `shell_state=idle`; persistent `mdkb`, `tuic-bridge`, and `node_repl` helper subtrees are excluded
 - Unix: a single batched `ps -o pid,rss,%cpu` query across all PIDs (not one stat per process); Windows: per-process working-set size via the platform API
 - Three surfaces over the same data: MCP `session action=process_stats`, HTTP `GET /process/stats` (JSON `{ session_id, name, pid, rss_kb, cpu_pct }`), and `GET /process/monitor` (a self-contained HTML dashboard with no build step or external assets)
 - Frontend `ProcessManagerModal` opens the dashboard in-app

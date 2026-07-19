@@ -24,7 +24,9 @@ Returns array of active session info (ID, cwd, worktree path, branch, and
 nested state). For detected agents, `state.agent_state` distinguishes PTY
 silence (`idle`) from explicit protocol completion (`completed`); the latter
 requires a parsed `suggest: [ ... ]` marker. Other values are `starting`,
-`working`, and `awaiting_input`.
+`working`, and `awaiting_input`. `state.background_work` is true when meaningful
+non-helper descendants keep autonomous work alive despite an input-ready
+terminal (`state.shell_state == "idle"`).
 
 ### Create Session
 
