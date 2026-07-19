@@ -1637,6 +1637,9 @@ pub(crate) fn note_submitted_input(state: &AppState, session_id: &str) {
     if !is_agent {
         return;
     }
+    if let Some(mut session) = state.session_states.get_mut(session_id) {
+        session.suggested_actions = None;
+    }
     stamp_last_output_now(state, session_id, now_epoch_ms());
     let prev = state
         .shell_states
@@ -11737,6 +11740,95 @@ mod tests {
             .and_then(|mut queue| queue.pop_front())
             .expect("pending message");
         apply_claimed_injection_outcome(state, sid, &text, claim, InjectionOutcome::Submitted);
+    }
+
+    fn completed_agent_session(state: &crate::state::AppState, sid: &str) {
+        agent_session(state, sid, SHELL_IDLE);
+        state.session_states.get_mut(sid).unwrap().suggested_actions =
+            Some(vec!["Review result".to_string()]);
+        state
+            .silence_states
+            .get(sid)
+            .unwrap()
+            .lock()
+            .mark_suggest_candidate(vec!["Review result".to_string()]);
+    }
+
+    #[test]
+    fn submitted_input_lifecycle_peer_injection_starts_new_turn_and_clears_completion() {
+        let state = crate::state::tests_support::make_test_app_state();
+        completed_agent_session(&state, "completed");
+        state.pending_injections.insert(
+            "completed".to_string(),
+            std::collections::VecDeque::from(["follow up".to_string()]),
+        );
+
+        flush_one_pending_as_submitted(&state, "completed");
+
+        let snapshot = state.session_state_with_shell("completed").unwrap();
+        assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+        assert!(snapshot.suggested_actions.is_none());
+        assert!(
+            !state
+                .silence_states
+                .get("completed")
+                .unwrap()
+                .lock()
+                .completion_declared()
+        );
+    }
+
+    #[test]
+    fn submitted_input_lifecycle_ready_before_status_line_is_not_stale_completed() {
+        let state = crate::state::tests_support::make_test_app_state();
+        completed_agent_session(&state, "quick-turn");
+        state.pending_injections.insert(
+            "quick-turn".to_string(),
+            std::collections::VecDeque::from(["quick follow up".to_string()]),
+        );
+        flush_one_pending_as_submitted(&state, "quick-turn");
+
+        state
+            .silence_states
+            .get("quick-turn")
+            .unwrap()
+            .lock()
+            .confirm_idle();
+        assert!(try_shell_transition(
+            &state,
+            "quick-turn",
+            SHELL_BUSY,
+            SHELL_IDLE,
+            false,
+        ));
+
+        let snapshot = state.session_state_with_shell("quick-turn").unwrap();
+        assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+        assert_eq!(snapshot.agent_state.as_deref(), Some("idle"));
+        assert!(snapshot.suggested_actions.is_none());
+    }
+
+    #[test]
+    fn submitted_input_lifecycle_no_new_input_retains_completion() {
+        let state = crate::state::tests_support::make_test_app_state();
+        completed_agent_session(&state, "unchanged");
+
+        let snapshot = state.session_state_with_shell("unchanged").unwrap();
+        assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+        assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
+        assert_eq!(
+            snapshot.suggested_actions,
+            Some(vec!["Review result".to_string()])
+        );
+        assert!(
+            state
+                .silence_states
+                .get("unchanged")
+                .unwrap()
+                .lock()
+                .completion_declared()
+        );
     }
 
     #[test]

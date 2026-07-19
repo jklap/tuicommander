@@ -336,8 +336,9 @@ single source of truth — the frontend does not derive activity from raw PTY da
 PTY is quiet; it does not prove that the assigned task finished. An agent's
 `suggest: [ ... ]` marker explicitly closes the current task epoch and produces
 `agent_state=completed` plus a `state_change: completed` parent notification.
-Without that marker the state remains `idle`. Submitting new input clears the
-completion epoch before the shell returns to busy.
+Submitting new user or peer input starts a new task epoch immediately, clearing
+the prior completion marker and its stale suggested actions before new output arrives.
+Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 
 **Transactional peer injection:** Reserving an idle composer creates an ownership token before the PTY write. A failure proven to occur before any byte was written rolls the synthetic BUSY state back to the prior confirmed IDLE state and keeps the message queued. Once any byte may have escaped, failure is `delivery_uncertain`: the session remains conservatively BUSY, the authoritative inbox remains readable, and TUIC does not automatically retry into the terminal. Real output, a Working screen, or an explicit state marker invalidates rollback ownership so a late error cannot erase genuine activity. `session status` exposes the additive `delivery_uncertain` flag.
 
