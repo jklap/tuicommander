@@ -1195,7 +1195,8 @@ All data persisted to platform config directory via Rust:
 - `notification_config.json` — sound settings
 - `ui_prefs.json` — sidebar visibility/width
 - `repo_settings.json` — per-repo worktree/script settings
-- `repositories.json` — repository list, groups, branches
+- `repositories.json` — repository list, groups, branches (debug builds use an
+  independently seeded `~/.tuicommander-dev/repositories.json`)
 - `agents.json` — per-agent run configurations
 - `prompt_library.json` — saved prompts
 - `notes.json` — ideas panel data
@@ -1796,7 +1797,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 
 ### 20.10 Process Monitor
 - Reports CPU% and resident memory (RSS) for TUIC and every child process tree, each row attributed to the session that owns it
-- Agent lifecycle also classifies the owning process tree: meaningful background descendants keep `agent_state=working` while an input-ready terminal may remain `shell_state=idle`; persistent `mdkb`, `tuic-bridge`, and `node_repl` helper subtrees are excluded by executable name or argv path. A ready observation waits for a newer shared process snapshot, and polling stops once no probe or background work remains
+- Agent lifecycle also classifies the owning process tree: meaningful background descendants keep `agent_state=working` while an input-ready terminal may remain `shell_state=idle`; persistent `mdkb`, `tuic-bridge`, and `node_repl` helper subtrees plus Claude's standalone timed `caffeinate -i -t <seconds>` assertion are excluded by executable name or authoritative argv path. A `caffeinate` invocation that wraps a command remains meaningful. A ready observation waits for a newer shared process snapshot, and polling stops once no probe or background work remains
 - Unix: a single batched `ps -o pid,rss,%cpu` query across all PIDs (not one stat per process); Windows: per-process working-set size via the platform API
 - Three surfaces over the same data: MCP `session action=process_stats`, HTTP `GET /process/stats` (JSON `{ session_id, name, pid, rss_kb, cpu_pct }`), and `GET /process/monitor` (a self-contained HTML dashboard with no build step or external assets)
 - Frontend `ProcessManagerModal` opens the dashboard in-app

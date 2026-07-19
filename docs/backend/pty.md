@@ -345,9 +345,11 @@ Likewise, a visible ready composer may coexist with an autonomous background
 command. While a meaningful descendant of the agent is alive, session state
 reports `background_work=true` and keeps `agent_state=working`; `shell_state`
 remains `idle` because terminal input readiness is a separate fact. Persistent
-integration helpers (`mdkb`, `tuic-bridge`, and `node_repl`) and their subtrees
-do not count as work; Unix classification checks both `comm` and the executable
-argv path from unlimited-width `ps` output. Parent `idle` lifecycle mail is
+integration helpers (`mdkb`, `tuic-bridge`, and `node_repl`) and Claude's
+standalone timed `caffeinate -i -t <seconds>` assertion do not count as work;
+Unix classification checks both `comm` and the authoritative argv path from
+unlimited-width `ps` output. A `caffeinate` invocation that wraps a command
+remains meaningful background work. Parent `idle` lifecycle mail is
 deferred until the real descendant exits, while confirmed-ready message
 delivery keeps using the terminal-readiness gate. The first confirmed-ready
 observation and every explicit agent IDLE marker arm a generation boundary:

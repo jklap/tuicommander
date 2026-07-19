@@ -1728,6 +1728,23 @@ fn is_persistent_agent_helper(process: &ProcessTreeEntry) -> bool {
     is_persistent_agent_helper_with_command_line(process, cfg!(not(windows)))
 }
 
+fn is_standalone_timed_caffeinate(command: &str) -> bool {
+    let mut argv = command.split_whitespace();
+    let executable = argv.next().map(normalized_process_name).unwrap_or("");
+    if executable != "caffeinate" {
+        return false;
+    }
+    let first = argv.next();
+    let second = argv.next();
+    let third = argv.next();
+    if argv.next().is_some() {
+        return false;
+    }
+    let positive_timeout = |value: &str| value.parse::<u64>().is_ok_and(|seconds| seconds > 0);
+    matches!((first, second, third), (Some("-i"), Some("-t"), Some(value)) if positive_timeout(value))
+        || matches!((first, second, third), (Some("-t"), Some(value), Some("-i")) if positive_timeout(value))
+}
+
 fn is_persistent_agent_helper_with_command_line(
     process: &ProcessTreeEntry,
     command_line_authoritative: bool,
@@ -1742,7 +1759,8 @@ fn is_persistent_agent_helper_with_command_line(
         || (command_line_authoritative
             && (matches!(executable, "mdkb" | "tuic-bridge" | "node_repl")
                 || (matches!(executable, "node" | "nodejs")
-                    && script.trim_end_matches(".js") == "node_repl")))
+                    && script.trim_end_matches(".js") == "node_repl")
+                || is_standalone_timed_caffeinate(&command)))
 }
 
 fn agent_process_root(
@@ -10440,6 +10458,42 @@ mod tests {
 
     #[cfg(not(windows))]
     #[test]
+    fn timed_caffeinate_is_not_background_work_with_authoritative_argv() {
+        let processes = vec![
+            process(10, 1, "claude", "claude"),
+            process(11, 10, "caffeinate", "caffeinate -i -t 300"),
+        ];
+        assert!(!has_meaningful_descendant(10, &processes));
+    }
+
+    #[test]
+    fn timed_caffeinate_helper_does_not_hide_wrapped_work() {
+        for command in ["caffeinate -i -t 300", "/usr/bin/caffeinate -t 300 -i"] {
+            assert!(is_standalone_timed_caffeinate(command));
+            assert!(is_persistent_agent_helper_with_command_line(
+                &process(11, 10, "caffeinate", command),
+                true
+            ));
+        }
+        for command in [
+            "caffeinate -i -t 0",
+            "caffeinate -i",
+            "caffeinate -i cargo test",
+            "caffeinate -i -t 300 cargo test",
+        ] {
+            assert!(!is_standalone_timed_caffeinate(command));
+        }
+
+        let wrapped_work = vec![
+            process(10, 1, "claude", "claude"),
+            process(11, 10, "caffeinate", "caffeinate -i cargo test"),
+            process(12, 11, "cargo", "cargo test"),
+        ];
+        assert!(has_meaningful_descendant(10, &wrapped_work));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
     fn background_snapshot_macos_truncated_comm_fixture_excludes_helpers() {
         // Sanitized from macOS `ps -ww -axo pid=,ppid=,comm=,args=` output.
         // Darwin may truncate `comm` while unlimited-width `args` retains the
@@ -10913,6 +10967,64 @@ mod tests {
         let silence = state.silence_states.get(child_id).unwrap().clone();
         assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
         let inbox = state.agent_inbox.get(parent_id).unwrap();
+        let content: serde_json::Value =
+            serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+        assert_eq!(content["state"], "completed");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn claude_timed_caffeinate_does_not_delay_declared_completion() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "background-claude-caffeinate-completed";
+        let parent_id = "background-claude-caffeinate-completed-parent";
+        agent_session(&state, child_id, SHELL_BUSY);
+        state.session_states.get_mut(child_id).unwrap().agent_type = Some("claude".into());
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+        state
+            .silence_states
+            .get(child_id)
+            .unwrap()
+            .lock()
+            .mark_suggest_candidate(vec!["Review result".to_string()], 0);
+        state
+            .process_snapshot_cache
+            .store(Some(vec![process(10, 1, "claude", "claude")]));
+
+        transition_explicit_shell_state_with_hook(
+            &state,
+            child_id,
+            SHELL_IDLE,
+            "idle",
+            true,
+            || {},
+        );
+        assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
+
+        state.process_snapshot_cache.store(Some(vec![
+            process(10, 1, "claude", "claude"),
+            process(11, 10, "mdkb", "mdkb mcp"),
+            process(12, 10, "tuic-bridge", "tuic-bridge"),
+            process(13, 10, "caffeinate", "caffeinate -i -t 300"),
+        ]));
+        assert!(refresh_background_work_from_cached_snapshot(
+            &state,
+            child_id,
+            10,
+            "claude",
+            0,
+            state.process_snapshot_cache.load(),
+        ));
+
+        let resolved = state.session_state_with_shell(child_id).unwrap();
+        assert_eq!(resolved.shell_state.as_deref(), Some("idle"));
+        assert_eq!(resolved.agent_state.as_deref(), Some("completed"));
+        assert!(!resolved.background_work);
+        let inbox = state.agent_inbox.get(parent_id).unwrap();
+        assert_eq!(inbox.len(), 1);
         let content: serde_json::Value =
             serde_json::from_str(&inbox.front().unwrap().content).unwrap();
         assert_eq!(content["state"], "completed");
