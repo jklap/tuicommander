@@ -2767,6 +2767,10 @@ impl VtLogBuffer {
         self.grid.screen_text_rows_ref()
     }
 
+    pub(crate) fn logical_prefix_at_cursor(&self) -> Option<crate::terminal_grid::LogicalPrefix> {
+        self.grid.logical_prefix_at_cursor()
+    }
+
     /// Current visible screen rows as styled LogLines (with ANSI color attributes).
     /// Used by mobile/REST to render screen content with colors.
     pub fn screen_log_lines(&self) -> Vec<LogLine> {
@@ -2902,10 +2906,6 @@ impl VtLogBuffer {
 
     pub(crate) fn grid_get_cursor_line(&self) -> String {
         self.grid.get_cursor_row_text()
-    }
-
-    pub(crate) fn cursor_point(&self) -> (usize, usize) {
-        self.grid.cursor_point()
     }
 
     pub(crate) fn grid_get_selection_text(

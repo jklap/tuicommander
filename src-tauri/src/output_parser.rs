@@ -404,10 +404,10 @@ impl OutputParser {
         if let Some(evt) = parse_intent(&joined, agent_active) {
             events.push(evt);
         }
-        // Suggest follow-up actions: `suggest: [ A | B | C ]` on a single row.
-        // The token is fully self-contained (bounded by `[ … ]`), so there is no
-        // cross-chunk reassembly — dedup against the last emission to avoid
-        // re-firing while the same suggest stays on screen.
+        // Suggest follow-up actions: `suggest: [ A | B | C ]` on one bounded
+        // logical line. The token is fully self-contained (bounded by `[ … ]`),
+        // so there is no parser-owned cross-chunk buffer — dedup against the last
+        // emission to avoid re-firing while the same suggest stays on screen.
         if let Some((evt, _canonical)) = parse_suggest_with_line(&joined, agent_active)
             && let ParsedEvent::Suggest { ref items } = evt
             && self.last_suggest_items.as_ref() != Some(items)
@@ -436,6 +436,12 @@ impl OutputParser {
         }
 
         events
+    }
+
+    /// Whether the existing suggest grammar accepts a complete token.
+    /// This deliberately does not touch emission deduplication state.
+    pub(crate) fn is_complete_suggest(&self, text: &str, agent_active: bool) -> bool {
+        parse_suggest_with_line(text, agent_active).is_some()
     }
 
     fn parse_rate_limit(&self, text: &str) -> Option<ParsedEvent> {
@@ -1374,19 +1380,16 @@ lazy_static::lazy_static! {
 }
 
 /// Detect suggested follow-up actions: `suggest: [ A | B | C ]` at column 0.
-/// The whole token lives on one row and its bracketed content holds no nested
-/// brackets, so stray pipes/brackets in surrounding output (mermaid, markdown
-/// tables, prose) can never be captured. Inner items are pipe-separated, 2–4
-/// per the TUIC protocol. Only parsed when an agent is active.
+/// The whole token lives on one bounded logical line and its bracketed content
+/// holds no nested brackets, so stray pipes/brackets in surrounding output
+/// (mermaid, markdown tables, prose) can never be captured. Inner items are
+/// pipe-separated, 2–4 per the TUIC protocol. Only parsed when an agent is active.
 #[cfg(test)]
 fn parse_suggest(clean: &str, agent_active: bool) -> Option<ParsedEvent> {
     parse_suggest_with_line(clean, agent_active).map(|(evt, _)| evt)
 }
 
-/// Like [`parse_suggest`] but also returns the canonical `suggest: …` line that
-/// started the match. The caller can persist this line across chunks so a
-/// later PTY chunk that only carries a wrapped continuation (e.g. a naked
-/// last-item tail word) can be re-joined and re-parsed into complete items.
+/// Like [`parse_suggest`] but also returns the canonical `suggest: …` line.
 fn parse_suggest_with_line(clean: &str, agent_active: bool) -> Option<(ParsedEvent, String)> {
     if !agent_active {
         return None;
@@ -1424,8 +1427,7 @@ fn parse_suggest_with_line(clean: &str, agent_active: bool) -> Option<(ParsedEve
         return None;
     }
 
-    // Canonical, normalized form. The caller persists it so a spinner-tick chunk
-    // that re-renders the row can re-parse and re-dedup the same event.
+    // Canonical, normalized form for callers that need the matched token text.
     let canonical_line = format!("suggest: [ {} ]", items.join(" | "));
     Some((ParsedEvent::Suggest { items }, canonical_line))
 }

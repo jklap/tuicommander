@@ -156,6 +156,14 @@ pub struct BufferSearchMatch {
     pub match_end: usize,
 }
 
+/// Bounded logical line prefix ending at the current cursor position.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LogicalPrefix {
+    pub text: String,
+    pub start_row: usize,
+    pub end_row: usize,
+}
+
 // Attrs byte bit positions for binary cell encoding.
 const ATTR_BOLD: u8 = 0b0000_0001;
 const ATTR_ITALIC: u8 = 0b0000_0010;
@@ -590,6 +598,61 @@ impl TerminalGrid {
     pub fn cursor_point(&self) -> (usize, usize) {
         let point = self.term.grid().cursor.point;
         (point.line.0.max(0) as usize, point.column.0)
+    }
+
+    /// Reconstruct the logical line prefix through the cursor from grid cells.
+    ///
+    /// Only terminal soft-wraps are followed. The bounded result is intended for
+    /// structured-token parsing, not general scrollback reconstruction.
+    pub(crate) fn logical_prefix_at_cursor(&self) -> Option<LogicalPrefix> {
+        const MAX_WRAP_TRANSITIONS: usize = 4;
+        const MAX_BYTES: usize = 512;
+
+        let grid = self.term.grid();
+        let cursor = grid.cursor.point;
+        if cursor.line.0 < 0 {
+            return None;
+        }
+        let (end_row, cursor_col) = self.cursor_point();
+        if end_row >= grid.screen_lines() {
+            return None;
+        }
+
+        let mut start_row = end_row;
+        let mut wrap_transitions = 0;
+        while start_row > 0 && self.row_wrapped(Line(start_row as i32 - 1)) {
+            if wrap_transitions == MAX_WRAP_TRANSITIONS {
+                return None;
+            }
+            start_row -= 1;
+            wrap_transitions += 1;
+        }
+
+        let mut text = String::new();
+        for row in start_row..=end_row {
+            let limit = if row == end_row {
+                (cursor_col + usize::from(grid.cursor.input_needs_wrap)).min(grid.columns())
+            } else {
+                grid.columns()
+            };
+            for col in 0..limit {
+                let cell = &grid[Line(row as i32)][Column(col)];
+                if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                    continue;
+                }
+                let ch = if cell.c == '\0' { ' ' } else { cell.c };
+                if text.len() + ch.len_utf8() > MAX_BYTES {
+                    return None;
+                }
+                text.push(ch);
+            }
+        }
+
+        Some(LogicalPrefix {
+            text,
+            start_row,
+            end_row,
+        })
     }
 
     /// Return the text of the row the cursor is currently on.
@@ -1807,6 +1870,30 @@ mod tests {
         let (line, col) = grid.cursor_point();
         assert_eq!(line, 1);
         assert_eq!(col, 3);
+    }
+
+    #[test]
+    fn logical_prefix_stops_at_cursor_and_skips_wide_spacers() {
+        let mut grid = TerminalGrid::new(5, 40, 100);
+        let _ = grid.process(b"........................| C ]");
+        let _ = grid.process("\rsuggest: [ A界 | B".as_bytes());
+
+        let prefix = grid.logical_prefix_at_cursor().unwrap();
+        assert_eq!(prefix.start_row, 0);
+        assert_eq!(prefix.end_row, 0);
+        assert_eq!(prefix.text, "suggest: [ A界 | B");
+    }
+
+    #[test]
+    fn logical_prefix_enforces_wrap_and_byte_bounds() {
+        let mut too_many_wraps = TerminalGrid::new(10, 4, 100);
+        let _ = too_many_wraps.process(b"123456789012345678901");
+        assert_eq!(too_many_wraps.logical_prefix_at_cursor(), None);
+
+        let mut too_many_bytes = TerminalGrid::new(10, 128, 100);
+        let data = "x".repeat(513);
+        let _ = too_many_bytes.process(data.as_bytes());
+        assert_eq!(too_many_bytes.logical_prefix_at_cursor(), None);
     }
 
     #[test]

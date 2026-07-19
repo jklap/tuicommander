@@ -3700,7 +3700,7 @@ impl ChunkProcessor {
             vt_log_oldest,
             term_events,
             screen_cache,
-            cursor_row,
+            logical_prefix,
             history_size,
         ) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
@@ -3738,7 +3738,7 @@ impl ChunkProcessor {
 
             // Single owned snapshot for downstream parsers (slash-menu, choice-prompt).
             let screen = vt.screen_rows();
-            let cursor_row = vt.cursor_point().0;
+            let logical_prefix = vt.logical_prefix_at_cursor();
 
             (
                 changed,
@@ -3746,11 +3746,11 @@ impl ChunkProcessor {
                 Some(oldest),
                 tevts,
                 Some(screen),
-                cursor_row,
+                logical_prefix,
                 hist,
             )
         } else {
-            (Vec::new(), None, None, Vec::new(), None, 0, 0)
+            (Vec::new(), None, None, Vec::new(), None, None, 0)
         };
 
         // Did this chunk grow the scrollback (genuine new output) or merely
@@ -3994,38 +3994,50 @@ impl ChunkProcessor {
             .get(session_id)
             .map(|s| s.agent_type.is_some())
             .unwrap_or(false);
-        // Cursor-completeness guard: exclude rows at the cursor position that
-        // look like suggest/intent tokens still being written. A closing `]`
-        // makes a suggest token complete even while the cursor remains there;
-        // deferring that row would lose it when the next chunk only paints the
-        // prompt and the completed row is no longer part of `changed_rows`.
-        let cursor_token_is_incomplete = |text: &str| {
-            let text = text.trim_start();
-            text.starts_with("intent:") || (text.starts_with("suggest:") && !text.contains(']'))
-        };
-        let has_partial_token = changed_rows
-            .iter()
-            .any(|r| r.row_index == cursor_row && { cursor_token_is_incomplete(&r.text) });
-        if has_partial_token {
-            let filtered: Vec<_> = changed_rows
+        // Cursor-completeness guard: parse a suggest token from the bounded grid
+        // prefix through the cursor, never from stale cells to its right. When a
+        // soft-wrapped continuation changes in a later chunk, replace its whole
+        // physical range with one synthetic logical row so the unchanged anchor
+        // remains available to the existing parser. Intent deferral is unchanged.
+        let mut structured_rows = None;
+        if let Some(prefix) = logical_prefix {
+            let intersects = changed_rows
                 .iter()
-                .filter(|r| r.row_index != cursor_row || !cursor_token_is_incomplete(&r.text))
-                .cloned()
-                .collect();
-            events.extend(
-                self.parser
-                    .parse_clean_lines(&filtered, agent_active_for_parse)
-                    .into_iter()
-                    .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
-            );
-        } else {
-            events.extend(
-                self.parser
-                    .parse_clean_lines(&changed_rows, agent_active_for_parse)
-                    .into_iter()
-                    .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
-            );
+                .any(|row| (prefix.start_row..=prefix.end_row).contains(&row.row_index));
+            let trimmed = prefix.text.trim_start();
+            let suggest_text = trimmed
+                .strip_prefix('●')
+                .or_else(|| trimmed.strip_prefix('⏺'))
+                .map(str::trim_start)
+                .unwrap_or(trimmed);
+            let is_suggest = suggest_text.starts_with("suggest:");
+            if intersects && (is_suggest || trimmed.starts_with("intent:")) {
+                let complete_suggest = is_suggest
+                    && self
+                        .parser
+                        .is_complete_suggest(&prefix.text, agent_active_for_parse);
+                let mut rows: Vec<_> = changed_rows
+                    .iter()
+                    .filter(|row| !(prefix.start_row..=prefix.end_row).contains(&row.row_index))
+                    .cloned()
+                    .collect();
+                if complete_suggest {
+                    rows.push(crate::state::ChangedRow {
+                        row_index: prefix.start_row,
+                        text: prefix.text,
+                    });
+                    rows.sort_by_key(|row| row.row_index);
+                }
+                structured_rows = Some(rows);
+            }
         }
+        let rows = structured_rows.as_deref().unwrap_or(&changed_rows);
+        events.extend(
+            self.parser
+                .parse_clean_lines(rows, agent_active_for_parse)
+                .into_iter()
+                .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
+        );
 
         // Heuristic agent-block detection for Claude Code tool calls.
         // CC renders tool calls as `⏺ ToolName(args)` — detect these and
@@ -13299,7 +13311,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_marker_at_cursor_during_background_work_completes_after_clear() {
+    fn cursor_prefix_completion_preserves_background_epoch_release() {
         let state = crate::state::tests_support::make_test_app_state();
         let child_id = "child-background-cursor-completed";
         agent_session(&state, child_id, SHELL_IDLE);
@@ -13315,11 +13327,22 @@ mod tests {
         let silence = state.silence_states.get(child_id).unwrap().clone();
         let mut processor = ChunkProcessor::new(None, None);
 
-        processor.process_chunk("suggest: [ A | B", &silence, child_id, &state);
+        processor.process_chunk("........................| C ]", &silence, child_id, &state);
+        processor.process_chunk("\rsuggest: [ A | B", &silence, child_id, &state);
         assert!(!silence.lock().completion_declared_for_epoch(0));
-        processor.process_chunk("\rsuggest: [ A | B | C ]", &silence, child_id, &state);
+        processor.process_chunk("\r\x1b[", &silence, child_id, &state);
+        assert!(!silence.lock().completion_declared_for_epoch(0));
+        processor.process_chunk("Ksuggest: [ A | B | C ]", &silence, child_id, &state);
 
-        assert!(silence.lock().completion_declared_for_epoch(0));
+        {
+            let guard = silence.lock();
+            assert!(guard.completion_declared_for_epoch(0));
+            assert_eq!(
+                guard.pending_suggest_items.as_deref(),
+                Some(&["A".to_string(), "B".to_string(), "C".to_string()][..])
+            );
+            assert_eq!(guard.pending_suggest_turn_epoch, 0);
+        }
         assert!(try_shell_transition(
             &state, child_id, SHELL_BUSY, SHELL_IDLE, false
         ));
@@ -13330,6 +13353,76 @@ mod tests {
         let snapshot = state.session_state_with_shell(child_id).unwrap();
         assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
         assert!(!snapshot.background_work);
+    }
+
+    #[test]
+    fn cursor_prefix_rejects_stale_suffix_then_emits_real_completion_once() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "cursor-stale-suffix";
+        agent_session(&state, child_id, SHELL_IDLE);
+        state.vt_log_buffers.insert(
+            child_id.to_string(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+        let silence = state.silence_states.get(child_id).unwrap().clone();
+        let mut processor = ChunkProcessor::new(None, None);
+
+        processor.process_chunk("........................| C ]", &silence, child_id, &state);
+        processor.process_chunk("\rsuggest: [ A | B", &silence, child_id, &state);
+        assert_eq!(silence.lock().drain_pending_suggest(), None);
+
+        processor.process_chunk("\r\x1b[Ksuggest: [ A | B | C ]", &silence, child_id, &state);
+        assert_eq!(
+            silence.lock().drain_pending_suggest(),
+            Some(vec!["A".to_string(), "B".to_string(), "C".to_string()])
+        );
+
+        processor.process_chunk("\r\x1b[Ksuggest: [ A | B | C ]", &silence, child_id, &state);
+        assert_eq!(silence.lock().drain_pending_suggest(), None);
+    }
+
+    #[test]
+    fn wrapped_suggest_reconstructs_unchanged_anchor_across_chunks() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "wrapped-suggest-across-chunks";
+        agent_session(&state, child_id, SHELL_IDLE);
+        state.vt_log_buffers.insert(
+            child_id.to_string(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 12, 1000)),
+        );
+        let silence = state.silence_states.get(child_id).unwrap().clone();
+        let mut processor = ChunkProcessor::new(None, None);
+
+        processor.process_chunk("suggest: [ A", &silence, child_id, &state);
+        assert_eq!(silence.lock().drain_pending_suggest(), None);
+        processor.process_chunk("界 | B | C ]", &silence, child_id, &state);
+
+        assert_eq!(
+            silence.lock().drain_pending_suggest(),
+            Some(vec!["A界".to_string(), "B".to_string(), "C".to_string()])
+        );
+    }
+
+    #[test]
+    fn wrapped_suggest_requires_complete_non_nested_prefix() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "wrapped-suggest-incomplete";
+        agent_session(&state, child_id, SHELL_IDLE);
+        state.vt_log_buffers.insert(
+            child_id.to_string(),
+            Mutex::new(crate::state::VtLogBuffer::new(24, 10, 1000)),
+        );
+        let silence = state.silence_states.get(child_id).unwrap().clone();
+        let mut processor = ChunkProcessor::new(None, None);
+
+        processor.process_chunk("suggest: [", &silence, child_id, &state);
+        processor.process_chunk(" A | B", &silence, child_id, &state);
+        assert_eq!(silence.lock().drain_pending_suggest(), None);
+
+        processor.process_chunk("\r\x1b[2K\x1b[1A\r\x1b[2K", &silence, child_id, &state);
+        processor.process_chunk("suggest: [", &silence, child_id, &state);
+        processor.process_chunk(" A | EP[\"node\"] | C ]", &silence, child_id, &state);
+        assert_eq!(silence.lock().drain_pending_suggest(), None);
     }
 
     #[test]
