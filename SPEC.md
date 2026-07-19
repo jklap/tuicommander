@@ -242,7 +242,12 @@ Features:
 
 ## Persistence
 
-All stores persist to localStorage:
+Repository state is persisted by the Rust backend in `repositories.json`.
+Release builds use the platform config directory; debug builds use a one-time
+production-seeded `~/.tuicommander-dev/repositories.json` to avoid collisions
+with an installed app. No other backend config path is changed by this rule.
+
+Some frontend-only stores persist to localStorage:
 
 | Key | Store | Content |
 |-----|-------|---------|

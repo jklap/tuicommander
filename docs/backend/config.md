@@ -181,6 +181,13 @@ Default values applied to new repositories when no per-repo override exists.
 
 **Type:** `serde_json::Value` (flexible JSON, shape defined by frontend)
 
+Release builds store this file in the normal platform config directory. Debug
+builds use `~/.tuicommander-dev/repositories.json` so a concurrently running
+development frontend cannot overwrite the installed app's repository list. On
+the first debug run only, the production file is copied atomically as a seed;
+an existing development file always wins. This repository-specific isolation
+does not change any other config path.
+
 **Commands:** `load_repositories()`, `save_repositories(config)`
 
 ### Prompt Library (`prompt-library.json`)
