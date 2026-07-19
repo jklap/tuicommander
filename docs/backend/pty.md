@@ -346,13 +346,19 @@ command. While a meaningful descendant of the agent is alive, session state
 reports `background_work=true` and keeps `agent_state=working`; `shell_state`
 remains `idle` because terminal input readiness is a separate fact. Persistent
 integration helpers (`mdkb`, `tuic-bridge`, and `node_repl`) and their subtrees
-do not count as work. Parent `idle` lifecycle mail is deferred until the real
-descendant exits, while confirmed-ready message delivery keeps using the
-terminal-readiness gate. One app-wide process snapshot is collected once per
-second on Tokio's blocking pool and shared by every session; enumeration or
-parse failures preserve the prior `background_work` value. On Windows, where
-Toolhelp does not provide command lines, generic `node.exe` processes are kept
-as meaningful work rather than guessed to be `node_repl` helpers.
+do not count as work; Unix classification checks both `comm` and the executable
+argv path from unlimited-width `ps` output. Parent `idle` lifecycle mail is
+deferred until the real descendant exits, while confirmed-ready message
+delivery keeps using the terminal-readiness gate. The first confirmed-ready
+observation arms a generation boundary: idle/completed lifecycle output waits
+until a process snapshot newer than that observation has been reconciled. One
+app-wide process snapshot is collected at most once per second on Tokio's
+blocking pool and shared by every session. The refresher runs only while a
+ready probe or tracked background process needs it, skips missed interval ticks,
+and stops scanning stable idle sessions. Enumeration or parse failures preserve
+the prior `background_work` value. On Windows, where Toolhelp does not provide
+command lines, generic `node.exe` processes are kept as meaningful work rather
+than guessed to be `node_repl` helpers.
 Submitting new user or peer input starts a new task epoch immediately, clearing
 the prior completion marker and its stale suggested actions before new output arrives.
 SSE peer delivery reserves that epoch before channel visibility and rolls it back

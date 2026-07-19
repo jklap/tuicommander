@@ -1673,20 +1673,30 @@ struct ProcessTreeEntry {
 }
 
 #[derive(Default)]
+struct ProcessSnapshotState {
+    generation: u64,
+    current: Option<Arc<Vec<ProcessTreeEntry>>>,
+}
+
+#[derive(Default)]
 pub(crate) struct ProcessSnapshotCache {
-    current: parking_lot::RwLock<Option<Arc<Vec<ProcessTreeEntry>>>>,
-    generation: AtomicU64,
+    state: parking_lot::RwLock<ProcessSnapshotState>,
 }
 
 impl ProcessSnapshotCache {
     fn store(&self, snapshot: Option<Vec<ProcessTreeEntry>>) {
-        *self.current.write() = snapshot.map(Arc::new);
-        self.generation.fetch_add(1, Ordering::Release);
+        let mut state = self.state.write();
+        state.generation = state.generation.wrapping_add(1);
+        state.current = snapshot.map(Arc::new);
     }
 
     fn load(&self) -> Option<(u64, Arc<Vec<ProcessTreeEntry>>)> {
-        let snapshot = self.current.read().clone()?;
-        Some((self.generation.load(Ordering::Acquire), snapshot))
+        let state = self.state.read();
+        Some((state.generation, Arc::clone(state.current.as_ref()?)))
+    }
+
+    fn generation(&self) -> u64 {
+        self.state.read().generation
     }
 }
 
@@ -1719,10 +1729,14 @@ fn is_persistent_agent_helper_with_command_line(
     let name = process.name.to_ascii_lowercase();
     let name = normalized_process_name(&name);
     let command = process.command.to_ascii_lowercase();
+    let mut argv = command.split_whitespace();
+    let executable = argv.next().map(normalized_process_name).unwrap_or("");
+    let script = argv.next().map(normalized_process_name).unwrap_or("");
     matches!(name, "mdkb" | "tuic-bridge" | "node_repl")
         || (command_line_authoritative
-            && matches!(name, "node" | "nodejs")
-            && command.contains("node_repl"))
+            && (matches!(executable, "mdkb" | "tuic-bridge" | "node_repl")
+                || (matches!(executable, "node" | "nodejs")
+                    && script.trim_end_matches(".js") == "node_repl")))
 }
 
 fn agent_process_root(
@@ -1798,7 +1812,7 @@ fn background_work_from_snapshot(
 #[cfg(not(windows))]
 fn process_tree_snapshot() -> Option<Vec<ProcessTreeEntry>> {
     let output = std::process::Command::new("ps")
-        .args(["-axo", "pid=,ppid=,comm=,args="])
+        .args(["-ww", "-axo", "pid=,ppid=,comm=,args="])
         .output()
         .ok()?;
     parse_process_tree_snapshot(
@@ -1814,18 +1828,24 @@ fn parse_process_tree_snapshot(success: bool, text: &str) -> Option<Vec<ProcessT
     }
     let mut result = Vec::new();
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        let fields: Vec<&str> = line.split_whitespace().collect();
-        if fields.len() < 3 {
-            return None;
-        }
+        let (pid, rest) = take_process_snapshot_field(line)?;
+        let (parent_pid, rest) = take_process_snapshot_field(rest)?;
+        let (name, command) = take_process_snapshot_field(rest)?;
         result.push(ProcessTreeEntry {
-            pid: fields[0].parse().ok()?,
-            parent_pid: fields[1].parse().ok()?,
-            name: fields[2].to_string(),
-            command: fields[3..].join(" "),
+            pid: pid.parse().ok()?,
+            parent_pid: parent_pid.parse().ok()?,
+            name: name.to_string(),
+            command: command.trim_start().to_string(),
         });
     }
     (!result.is_empty()).then_some(result)
+}
+
+#[cfg(not(windows))]
+fn take_process_snapshot_field(value: &str) -> Option<(&str, &str)> {
+    let value = value.trim_start();
+    let end = value.find(char::is_whitespace).unwrap_or(value.len());
+    (end > 0).then(|| (&value[..end], &value[end..]))
 }
 
 #[cfg(windows)]
@@ -1898,20 +1918,65 @@ fn set_background_work_for_epoch(
     state: &AppState,
     session_id: &str,
     observed_turn_epoch: u64,
+    snapshot_generation: u64,
     active: bool,
 ) -> bool {
-    let silence = state
+    set_background_work_for_epoch_with_hook(
+        state,
+        session_id,
+        observed_turn_epoch,
+        snapshot_generation,
+        active,
+        || {},
+    )
+}
+
+fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
+    state: &AppState,
+    session_id: &str,
+    observed_turn_epoch: u64,
+    snapshot_generation: u64,
+    active: bool,
+    after_lifecycle_snapshot: F,
+) -> bool {
+    let Some(silence) = state
         .silence_states
-        .entry(session_id.to_string())
-        .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
-        .clone();
+        .get(session_id)
+        .map(|entry| Arc::clone(entry.value()))
+    else {
+        return false;
+    };
+    after_lifecycle_snapshot();
     let mut silence_state = silence.lock();
+    let still_owns_lifecycle = state
+        .silence_states
+        .get(session_id)
+        .is_some_and(|current| Arc::ptr_eq(current.value(), &silence));
+    if !still_owns_lifecycle || !state.shell_states.contains_key(session_id) {
+        return false;
+    }
     let Some(mut session) = state.session_states.get_mut(session_id) else {
         return false;
     };
-    if session.turn_epoch != observed_turn_epoch {
+    if session.turn_epoch != observed_turn_epoch
+        || snapshot_generation <= session.background_snapshot_generation
+    {
         return false;
     }
+    if session.background_probe_turn_epoch == Some(observed_turn_epoch) {
+        let Some(boundary) = session.background_probe_after_generation else {
+            return false;
+        };
+        if snapshot_generation <= boundary {
+            return false;
+        }
+        session.background_probe_turn_epoch = None;
+        session.background_probe_after_generation = None;
+        session.background_probe_satisfied_turn_epoch = Some(observed_turn_epoch);
+    } else if !session.background_work {
+        return false;
+    }
+    session.background_snapshot_generation = snapshot_generation;
     if session.background_work == active {
         return true;
     }
@@ -1965,6 +2030,35 @@ fn set_background_work_for_epoch(
     true
 }
 
+fn ready_probe_satisfied_or_requested(
+    state: &AppState,
+    session_id: &str,
+    silence: &Arc<Mutex<SilenceState>>,
+) -> bool {
+    let still_owns_lifecycle = state
+        .silence_states
+        .get(session_id)
+        .is_some_and(|current| Arc::ptr_eq(current.value(), silence));
+    if !still_owns_lifecycle || !state.shell_states.contains_key(session_id) {
+        return false;
+    }
+    let Some(mut session) = state.session_states.get_mut(session_id) else {
+        return false;
+    };
+    if session.agent_type.is_none() {
+        return true;
+    }
+    let turn_epoch = session.turn_epoch;
+    if session.background_probe_satisfied_turn_epoch == Some(turn_epoch) {
+        return true;
+    }
+    if session.background_probe_turn_epoch != Some(turn_epoch) {
+        session.background_probe_turn_epoch = Some(turn_epoch);
+        session.background_probe_after_generation = Some(state.process_snapshot_cache.generation());
+    }
+    false
+}
+
 fn refresh_background_work(state: &AppState, session_id: &str) {
     let agent_type = state
         .session_states
@@ -2008,26 +2102,69 @@ fn refresh_background_work_from_cached_snapshot(
     observed_turn_epoch: u64,
     cached: Option<(u64, Arc<Vec<ProcessTreeEntry>>)>,
 ) -> bool {
-    let Some((_, processes)) = cached else {
+    let Some((generation, processes)) = cached else {
         return false;
     };
     let Some(active) = background_work_from_snapshot(root_pid, agent_type, &processes) else {
         return false;
     };
-    set_background_work_for_epoch(state, session_id, observed_turn_epoch, active)
+    set_background_work_for_epoch(state, session_id, observed_turn_epoch, generation, active)
 }
 
-/// Enumerate the OS process table once per lifecycle cadence on Tokio's
-/// blocking pool. Every session reads the resulting app-wide cache.
+fn process_snapshot_is_demanded(state: &AppState) -> bool {
+    state.session_states.iter().any(|session| {
+        session.agent_type.is_some()
+            && (session.background_probe_turn_epoch == Some(session.turn_epoch)
+                || session.background_work)
+            && state.silence_states.contains_key(session.key())
+            && state.shell_states.contains_key(session.key())
+    })
+}
+
+fn reconcile_process_snapshot_demand(state: &AppState) {
+    let sessions: Vec<String> = state
+        .session_states
+        .iter()
+        .filter(|session| {
+            session.agent_type.is_some()
+                && (session.background_probe_turn_epoch == Some(session.turn_epoch)
+                    || session.background_work)
+                && state.silence_states.contains_key(session.key())
+                && state.shell_states.contains_key(session.key())
+        })
+        .map(|session| session.key().clone())
+        .collect();
+    for session_id in sessions {
+        refresh_background_work(state, &session_id);
+    }
+}
+
+fn refresh_process_snapshot_if_demanded<F>(state: &AppState, enumerate: F) -> bool
+where
+    F: FnOnce() -> Option<Vec<ProcessTreeEntry>>,
+{
+    if !process_snapshot_is_demanded(state) {
+        return false;
+    }
+    state.process_snapshot_cache.store(enumerate());
+    reconcile_process_snapshot_demand(state);
+    true
+}
+
+/// Enumerate the OS process table at most once per lifecycle cadence on
+/// Tokio's blocking pool while a probe or tracked child needs reconciliation.
+/// Every demanding session reads the resulting app-wide cache.
 pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             interval.tick().await;
-            let snapshot = tokio::task::spawn_blocking(process_tree_snapshot)
-                .await
-                .unwrap_or(None);
-            state.process_snapshot_cache.store(snapshot);
+            let refresh_state = Arc::clone(&state);
+            let _ = tokio::task::spawn_blocking(move || {
+                refresh_process_snapshot_if_demanded(&refresh_state, process_tree_snapshot)
+            })
+            .await;
         }
     });
 }
@@ -2673,6 +2810,7 @@ fn try_timer_idle_transition(
     agent_type: Option<&str>,
     evidence_turn_epoch: Option<u64>,
 ) -> TimerIdleTransition {
+    let lifecycle = Arc::clone(silence);
     let (transitioned, force_cleared_subtasks, screen_confirms_idle, parent_dispatch) = {
         let mut silence = silence.lock();
         if evidence_turn_epoch.is_some_and(|observed| {
@@ -2713,9 +2851,12 @@ fn try_timer_idle_transition(
             screen_activity,
             AgentScreenActivity::Ready | AgentScreenActivity::Interrupted
         ) && !screen_confirms_idle;
-        let decision = if screen_confirms_idle {
+        let ready_probe_satisfied = !screen_confirms_idle
+            || ready_probe_satisfied_or_requested(state, session_id, &lifecycle);
+        let decision = if screen_confirms_idle && ready_probe_satisfied {
             IdleDecision::yes(evidence_turn_epoch)
-        } else if silence.explicit_busy
+        } else if screen_confirms_idle
+            || silence.explicit_busy
             || hold_for_ready_confirmation
             || silence.is_api_retry_active()
         {
@@ -10184,6 +10325,25 @@ mod tests {
         assert!(has_meaningful_descendant(10, &with_real_child));
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn background_snapshot_macos_truncated_comm_fixture_excludes_helpers() {
+        // Sanitized from macOS `ps -ww -axo pid=,ppid=,comm=,args=` output.
+        // Darwin may truncate `comm` while unlimited-width `args` retains the
+        // executable path needed to identify persistent integration helpers.
+        const MACOS_PS: &str = r#"
+  700     1 /bin/zsh         /bin/zsh
+  701   700 /Applications/C  /Applications/Codex.app/Contents/MacOS/codex
+  702   701 /Users/boss/.lo  /Users/boss/.local/bin/mdkb serve
+  703   701 /Users/boss/.ca  /Users/boss/.cache/tuic/tuic-bridge --stdio
+  704   701 /opt/homebrew/b  /opt/homebrew/bin/node /Users/boss/.cache/tuic/node_repl.js
+  705   702 sqlite-worker    sqlite-worker
+"#;
+        let processes = parse_process_tree_snapshot(true, MACOS_PS).unwrap();
+        assert_eq!(agent_process_root(700, "codex", &processes), Some(701));
+        assert!(!has_meaningful_descendant(701, &processes));
+    }
+
     #[test]
     fn version_named_claude_path_is_the_agent_root() {
         let processes = vec![
@@ -10280,6 +10440,199 @@ mod tests {
             background_work_from_snapshot(20, "claude", &second),
             Some(false)
         );
+    }
+
+    #[test]
+    fn background_snapshot_ready_waits_for_newer_generation_and_repairs_working() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "background-ready-generation";
+        let parent_id = "background-ready-parent";
+        agent_session(&state, child_id, SHELL_BUSY);
+        state.session_states.get_mut(child_id).unwrap().agent_type = Some("codex".into());
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+        state
+            .process_snapshot_cache
+            .store(Some(vec![process(10, 1, "codex", "codex")]));
+        state
+            .silence_states
+            .get(child_id)
+            .unwrap()
+            .lock()
+            .ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+
+        let first_ready = try_timer_idle_transition(
+            &state,
+            &state.silence_states.get(child_id).unwrap().clone(),
+            child_id,
+            AgentScreenActivity::Ready,
+            Some("codex"),
+            Some(0),
+        );
+        assert!(!first_ready.transitioned);
+        assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
+
+        state.process_snapshot_cache.store(Some(vec![
+            process(10, 1, "codex", "codex"),
+            process(11, 10, "cargo", "cargo test --locked"),
+        ]));
+        assert!(refresh_background_work_from_cached_snapshot(
+            &state,
+            child_id,
+            10,
+            "codex",
+            0,
+            state.process_snapshot_cache.load(),
+        ));
+        let snapshot = state.session_state_with_shell(child_id).unwrap();
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+        assert!(snapshot.background_work);
+        assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
+
+        let reconciled_ready = try_timer_idle_transition(
+            &state,
+            &state.silence_states.get(child_id).unwrap().clone(),
+            child_id,
+            AgentScreenActivity::Ready,
+            Some("codex"),
+            Some(0),
+        );
+        assert!(reconciled_ready.transitioned);
+        assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
+
+        state
+            .process_snapshot_cache
+            .store(Some(vec![process(10, 1, "codex", "codex")]));
+        assert!(refresh_background_work_from_cached_snapshot(
+            &state,
+            child_id,
+            10,
+            "codex",
+            0,
+            state.process_snapshot_cache.load(),
+        ));
+        let inbox = state.agent_inbox.get(parent_id).unwrap();
+        let content: serde_json::Value =
+            serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+        assert_eq!(content["state"], "idle");
+    }
+
+    #[test]
+    fn background_snapshot_child_absent_releases_declared_completion() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "background-ready-completed";
+        let parent_id = "background-ready-completed-parent";
+        agent_session(&state, child_id, SHELL_BUSY);
+        state.session_states.get_mut(child_id).unwrap().agent_type = Some("codex".into());
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+        state
+            .silence_states
+            .get(child_id)
+            .unwrap()
+            .lock()
+            .mark_suggest_candidate(vec!["Review result".to_string()], 0);
+        state
+            .process_snapshot_cache
+            .store(Some(vec![process(10, 1, "codex", "codex")]));
+        state
+            .silence_states
+            .get(child_id)
+            .unwrap()
+            .lock()
+            .ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+
+        assert!(
+            !try_timer_idle_transition(
+                &state,
+                &state.silence_states.get(child_id).unwrap().clone(),
+                child_id,
+                AgentScreenActivity::Ready,
+                Some("codex"),
+                Some(0),
+            )
+            .transitioned
+        );
+        assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
+
+        state
+            .process_snapshot_cache
+            .store(Some(vec![process(10, 1, "codex", "codex")]));
+        assert!(refresh_background_work_from_cached_snapshot(
+            &state,
+            child_id,
+            10,
+            "codex",
+            0,
+            state.process_snapshot_cache.load(),
+        ));
+        assert!(
+            try_timer_idle_transition(
+                &state,
+                &state.silence_states.get(child_id).unwrap().clone(),
+                child_id,
+                AgentScreenActivity::Ready,
+                Some("codex"),
+                Some(0),
+            )
+            .transitioned
+        );
+        assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
+        let silence = state.silence_states.get(child_id).unwrap().clone();
+        assert!(emit_pending_suggest_if_idle(&state, &silence, child_id));
+        let inbox = state.agent_inbox.get(parent_id).unwrap();
+        let content: serde_json::Value =
+            serde_json::from_str(&inbox.front().unwrap().content).unwrap();
+        assert_eq!(content["state"], "completed");
+    }
+
+    #[test]
+    fn background_snapshot_refresher_is_demand_gated_without_sleeping() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        assert!(!refresh_process_snapshot_if_demanded(&state, || {
+            calls.fetch_add(1, Ordering::Relaxed);
+            None
+        }));
+        assert_eq!(calls.load(Ordering::Relaxed), 0);
+
+        let session_id = "background-demand";
+        agent_session(&state, session_id, SHELL_BUSY);
+        state.session_states.get_mut(session_id).unwrap().agent_type = Some("codex".into());
+        state
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .background_probe_turn_epoch = Some(0);
+        state
+            .session_states
+            .get_mut(session_id)
+            .unwrap()
+            .background_probe_after_generation = Some(0);
+
+        assert!(refresh_process_snapshot_if_demanded(&state, || {
+            calls.fetch_add(1, Ordering::Relaxed);
+            Some(vec![process(10, 1, "codex", "codex")])
+        }));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert!(refresh_background_work_from_cached_snapshot(
+            &state,
+            session_id,
+            10,
+            "codex",
+            0,
+            state.process_snapshot_cache.load(),
+        ));
+        assert!(!process_snapshot_is_demanded(&state));
+        assert!(!refresh_process_snapshot_if_demanded(&state, || {
+            calls.fetch_add(1, Ordering::Relaxed);
+            None
+        }));
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
     }
 
     // --- Staleness counter tests ---
@@ -12639,6 +12992,10 @@ mod tests {
             child_id.to_string(),
             std::sync::atomic::AtomicU8::new(SHELL_BUSY),
         );
+        state.silence_states.insert(
+            child_id.to_string(),
+            Arc::new(Mutex::new(SilenceState::new())),
+        );
 
         let transitioned = try_shell_transition(&state, child_id, SHELL_BUSY, SHELL_IDLE, true);
         assert!(transitioned, "transition must succeed");
@@ -12679,6 +13036,10 @@ mod tests {
             child_id.to_string(),
             std::sync::atomic::AtomicU8::new(SHELL_BUSY),
         );
+        state.silence_states.insert(
+            child_id.to_string(),
+            Arc::new(Mutex::new(SilenceState::new())),
+        );
 
         assert!(try_shell_transition(
             &state, child_id, SHELL_BUSY, SHELL_IDLE, true
@@ -12688,7 +13049,7 @@ mod tests {
             "a ready composer must not announce autonomous completion"
         );
 
-        assert!(set_background_work_for_epoch(&state, child_id, 0, false));
+        assert!(set_background_work_for_epoch(&state, child_id, 0, 1, false));
         let inbox = state.agent_inbox.get(parent_id).unwrap();
         assert_eq!(inbox.len(), 1);
         let content: serde_json::Value =
@@ -12725,7 +13086,7 @@ mod tests {
             .insert(child_id.to_string(), silence.clone());
 
         assert!(!emit_pending_suggest_if_idle(&state, &silence, child_id));
-        assert!(set_background_work_for_epoch(&state, child_id, 0, false));
+        assert!(set_background_work_for_epoch(&state, child_id, 0, 1, false));
         let inbox = state.agent_inbox.get(parent_id).unwrap();
         assert_eq!(inbox.len(), 1);
         let content: serde_json::Value =
@@ -12762,8 +13123,42 @@ mod tests {
         );
 
         note_submitted_input(&state, child_id);
-        assert!(!set_background_work_for_epoch(&state, child_id, 7, false));
+        assert!(!set_background_work_for_epoch(
+            &state, child_id, 7, 1, false
+        ));
         assert!(state.session_states.get(child_id).unwrap().background_work);
+        assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn background_snapshot_teardown_does_not_recreate_lifecycle_or_notify() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let child_id = "background-teardown";
+        let parent_id = "background-teardown-parent";
+        agent_session(&state, child_id, SHELL_IDLE);
+        state
+            .session_states
+            .get_mut(child_id)
+            .unwrap()
+            .background_work = true;
+        state
+            .session_parent
+            .insert(child_id.to_string(), parent_id.to_string());
+        state.agent_inbox.entry(parent_id.to_string()).or_default();
+
+        assert!(!set_background_work_for_epoch_with_hook(
+            &state,
+            child_id,
+            0,
+            1,
+            false,
+            || {
+                state.silence_states.remove(child_id);
+                state.shell_states.remove(child_id);
+                state.session_states.remove(child_id);
+            },
+        ));
+        assert!(!state.silence_states.contains_key(child_id));
         assert!(state.agent_inbox.get(parent_id).unwrap().is_empty());
     }
 
@@ -12823,6 +13218,10 @@ mod tests {
         state.shell_states.insert(
             child_id.to_string(),
             std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+        );
+        state.silence_states.insert(
+            child_id.to_string(),
+            Arc::new(Mutex::new(SilenceState::new())),
         );
         let exited = Arc::new(vec![process(10, 1, "codex", "codex")]);
 

@@ -227,6 +227,20 @@ pub(crate) struct SessionState {
     /// are excluded by the PTY process-tree classifier.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub background_work: bool,
+    /// Turn whose confirmed-ready observation is waiting for a process snapshot
+    /// newer than `background_probe_after_generation`.
+    #[serde(skip)]
+    pub(crate) background_probe_turn_epoch: Option<u64>,
+    /// Snapshot generation visible when the ready observation was made.
+    #[serde(skip)]
+    pub(crate) background_probe_after_generation: Option<u64>,
+    /// Turn whose ready probe has been reconciled against a newer snapshot.
+    #[serde(skip)]
+    pub(crate) background_probe_satisfied_turn_epoch: Option<u64>,
+    /// Last process snapshot applied to this session. Prevents repeated work
+    /// from one shared cache generation.
+    #[serde(skip)]
+    pub(crate) background_snapshot_generation: u64,
     /// Timestamp of last activity (any event for this session).
     /// Excluded from PartialEq — telemetry field, not logical state.
     pub last_activity_ms: u64,
