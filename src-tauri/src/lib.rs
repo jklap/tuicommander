@@ -917,14 +917,14 @@ fn restart_server(state: &Arc<AppState>, reason: &'static str) {
         "HTTP server reconfiguration requested; local MCP IPC remains active"
     );
     // Shutdown existing server
-    if let Some(tx) = state.server_shutdown.lock().take() {
-        if tx.send(()).is_err() {
-            tracing::warn!(
-                source = "mcp_http",
-                reason,
-                "Previous TCP server lifecycle had already stopped"
-            );
-        }
+    if let Some(tx) = state.server_shutdown.lock().take()
+        && tx.send(()).is_err()
+    {
+        tracing::warn!(
+            source = "mcp_http",
+            reason,
+            "Previous TCP server lifecycle had already stopped"
+        );
     }
     let remote_enabled = state.config.read().services.server.enabled;
     let state_arc = state.clone();

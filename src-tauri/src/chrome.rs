@@ -251,24 +251,18 @@ pub fn find_chrome_cutoff(rows: &[&str]) -> Option<usize> {
         (None, None) => None,
     };
 
-    let cutoff = match anchor {
-        Some(mut idx) => {
-            // Extend cutoff up past separators, empty lines, and task list
-            // rows (⎿ ◻ ✔) above the anchor. Note: is_chrome_row is NOT
-            // included here — spinners above the separator are agent output
-            // indicators (e.g. Gemini braille), not footer chrome.
-            while idx > 0 {
-                let above = rows[idx - 1].trim();
-                if above.is_empty() || is_separator_line(above) || is_task_list_row(above) {
-                    idx -= 1;
-                } else {
-                    break;
-                }
-            }
-            idx
+    let mut cutoff = anchor?;
+    // Extend cutoff up past separators, empty lines, and task list rows (⎿ ◻ ✔)
+    // above the anchor. Note: is_chrome_row is NOT included here — spinners above
+    // the separator are agent output indicators (e.g. Gemini braille), not footer chrome.
+    while cutoff > 0 {
+        let above = rows[cutoff - 1].trim();
+        if above.is_empty() || is_separator_line(above) || is_task_list_row(above) {
+            cutoff -= 1;
+        } else {
+            break;
         }
-        None => return None,
-    };
+    }
 
     Some(cutoff)
 }

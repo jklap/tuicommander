@@ -1378,15 +1378,19 @@ fn try_shell_transition_for_epoch(
     observed_turn_epoch: Option<u64>,
 ) -> bool {
     try_shell_transition_with_hooks(
-        state,
-        session_id,
-        expected,
-        new,
-        notify_parent,
-        observed_turn_epoch,
-        || {},
-        || {},
-        || {},
+        ShellTransitionRequest {
+            state,
+            session_id,
+            expected,
+            new,
+            notify_parent,
+            observed_turn_epoch,
+        },
+        ShellTransitionHooks {
+            after_epoch_snapshot: || {},
+            after_cas: || {},
+            before_parent_dispatch: || {},
+        },
     )
 }
 
@@ -1404,54 +1408,59 @@ fn try_shell_transition_with_hook<F: FnOnce()>(
         .get(session_id)
         .map(|session| session.turn_epoch);
     try_shell_transition_with_hooks(
-        state,
-        session_id,
-        expected,
-        new,
-        notify_parent,
-        observed_turn_epoch,
-        || {},
-        after_cas,
-        || {},
-    )
-}
-
-fn try_shell_transition_with_hooks<B: FnOnce(), A: FnOnce(), D: FnOnce()>(
-    state: &crate::state::AppState,
-    session_id: &str,
-    expected: u8,
-    new: u8,
-    notify_parent: bool,
-    observed_turn_epoch: Option<u64>,
-    after_epoch_snapshot: B,
-    after_cas: A,
-    before_parent_dispatch: D,
-) -> bool {
-    // One lifecycle lock covers CAS through the authoritative parent inbox
-    // enqueue. Submitted-turn reservations take the same lock, so a new epoch
-    // cannot begin between an IDLE CAS and the preceding turn's notification.
-    after_epoch_snapshot();
-    let silence = state
-        .silence_states
-        .get(session_id)
-        .map(|entry| Arc::clone(entry.value()));
-    let (transitioned, parent_dispatch) = {
-        let mut silence_guard = silence.as_ref().map(|silence| silence.lock());
-        let silence_state = silence_guard.as_mut().map(|guard| &mut **guard);
-        try_shell_transition_locked(
+        ShellTransitionRequest {
             state,
             session_id,
             expected,
             new,
             notify_parent,
-            silence_state,
             observed_turn_epoch,
+        },
+        ShellTransitionHooks {
+            after_epoch_snapshot: || {},
             after_cas,
-        )
+            before_parent_dispatch: || {},
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct ShellTransitionRequest<'a> {
+    state: &'a crate::state::AppState,
+    session_id: &'a str,
+    expected: u8,
+    new: u8,
+    notify_parent: bool,
+    observed_turn_epoch: Option<u64>,
+}
+
+struct ShellTransitionHooks<B: FnOnce(), A: FnOnce(), D: FnOnce()> {
+    after_epoch_snapshot: B,
+    after_cas: A,
+    before_parent_dispatch: D,
+}
+
+fn try_shell_transition_with_hooks<B: FnOnce(), A: FnOnce(), D: FnOnce()>(
+    transition: ShellTransitionRequest<'_>,
+    hooks: ShellTransitionHooks<B, A, D>,
+) -> bool {
+    // One lifecycle lock covers CAS through the authoritative parent inbox
+    // enqueue. Submitted-turn reservations take the same lock, so a new epoch
+    // cannot begin between an IDLE CAS and the preceding turn's notification.
+    (hooks.after_epoch_snapshot)();
+    let silence = transition
+        .state
+        .silence_states
+        .get(transition.session_id)
+        .map(|entry| Arc::clone(entry.value()));
+    let (transitioned, parent_dispatch) = {
+        let mut silence_guard = silence.as_ref().map(|silence| silence.lock());
+        let silence_state = silence_guard.as_deref_mut();
+        try_shell_transition_locked(transition, silence_state, hooks.after_cas)
     };
     if let Some(dispatch) = parent_dispatch {
-        before_parent_dispatch();
-        dispatch_parent_lifecycle(state, dispatch);
+        (hooks.before_parent_dispatch)();
+        dispatch_parent_lifecycle(transition.state, dispatch);
     }
     transitioned
 }
@@ -1460,15 +1469,18 @@ fn try_shell_transition_with_hooks<B: FnOnce(), A: FnOnce(), D: FnOnce()>(
 /// `note_submitted_input` uses this form so epoch mutation and IDLE→BUSY are
 /// one critical section instead of recursively acquiring `SilenceState`.
 fn try_shell_transition_locked<F: FnOnce()>(
-    state: &crate::state::AppState,
-    session_id: &str,
-    expected: u8,
-    new: u8,
-    notify_parent: bool,
+    transition: ShellTransitionRequest<'_>,
     mut silence_state: Option<&mut SilenceState>,
-    observed_turn_epoch: Option<u64>,
     after_cas: F,
 ) -> (bool, Option<ParentLifecycleDispatch>) {
+    let ShellTransitionRequest {
+        state,
+        session_id,
+        expected,
+        new,
+        notify_parent,
+        observed_turn_epoch,
+    } = transition;
     if expected == SHELL_BUSY
         && new == SHELL_IDLE
         && observed_turn_epoch.is_some_and(|observed| {
@@ -2417,13 +2429,15 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         let transitioned = prev.is_some_and(|prev| {
             prev != SHELL_BUSY
                 && try_shell_transition_locked(
-                    state,
-                    session_id,
-                    prev,
-                    SHELL_BUSY,
-                    true,
+                    ShellTransitionRequest {
+                        state,
+                        session_id,
+                        expected: prev,
+                        new: SHELL_BUSY,
+                        notify_parent: true,
+                        observed_turn_epoch: None,
+                    },
                     Some(&mut silence),
-                    None,
                     || {},
                 )
                 .0
@@ -2497,13 +2511,15 @@ where
     let transitioned_busy = prior_shell.is_some_and(|prior| {
         prior != SHELL_BUSY
             && try_shell_transition_locked(
-                state,
-                session_id,
-                prior,
-                SHELL_BUSY,
-                true,
+                ShellTransitionRequest {
+                    state,
+                    session_id,
+                    expected: prior,
+                    new: SHELL_BUSY,
+                    notify_parent: true,
+                    observed_turn_epoch: None,
+                },
                 Some(&mut silence_state),
-                None,
                 || {},
             )
             .0
@@ -2654,13 +2670,15 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
             arm_explicit_idle_background_probe(state, session_id, turn_epoch);
         }
         try_shell_transition_locked(
-            state,
-            session_id,
-            prev,
-            target,
-            true,
-            silence_guard.as_mut().map(|guard| &mut **guard),
-            evidence_turn_epoch,
+            ShellTransitionRequest {
+                state,
+                session_id,
+                expected: prev,
+                new: target,
+                notify_parent: true,
+                observed_turn_epoch: evidence_turn_epoch,
+            },
+            silence_guard.as_deref_mut(),
             || {},
         )
     };
@@ -2934,13 +2952,15 @@ fn try_timer_idle_transition(
             silence.idle_confirmed = agent_type.is_none();
         }
         let (transitioned, parent_dispatch) = try_shell_transition_locked(
-            state,
-            session_id,
-            SHELL_BUSY,
-            SHELL_IDLE,
-            true,
+            ShellTransitionRequest {
+                state,
+                session_id,
+                expected: SHELL_BUSY,
+                new: SHELL_IDLE,
+                notify_parent: true,
+                observed_turn_epoch: decision.turn_epoch,
+            },
             Some(&mut silence),
-            decision.turn_epoch,
             || {},
         );
         (
@@ -3739,17 +3759,7 @@ impl ChunkProcessor {
             logical_prefix,
             physical_prefix,
             history_size,
-        ): (
-            Vec<crate::state::ChangedRow>,
-            Option<usize>,
-            Option<usize>,
-            Vec<crate::terminal_grid::TermEvent>,
-            Option<Vec<String>>,
-            Option<usize>,
-            Option<crate::terminal_grid::LogicalPrefix>,
-            Option<crate::terminal_grid::LogicalPrefix>,
-            usize,
-        ) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
+        ): VtProcessResult = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
             let changed = vt.process(data.as_bytes());
             let total = vt.total_lines();
@@ -4699,6 +4709,18 @@ struct ParentLifecycleDispatch {
     framed: String,
 }
 
+type VtProcessResult = (
+    Vec<crate::state::ChangedRow>,
+    Option<usize>,
+    Option<usize>,
+    Vec<crate::terminal_grid::TermEvent>,
+    Option<Vec<String>>,
+    Option<usize>,
+    Option<crate::terminal_grid::LogicalPrefix>,
+    Option<crate::terminal_grid::LogicalPrefix>,
+    usize,
+);
+
 /// Enqueue the authoritative parent lifecycle message without touching the
 /// parent's PTY lifecycle lock. BUSY→IDLE and completed paths call this while
 /// holding the child's SilenceState transaction lock.
@@ -4707,13 +4729,10 @@ fn enqueue_state_change_to_parent(
     session_id: &str,
     payload: serde_json::Value,
 ) -> Option<ParentLifecycleDispatch> {
-    let Some(parent_id) = state
+    let parent_id = state
         .session_parent
         .get(session_id)
-        .map(|e| e.value().clone())
-    else {
-        return None;
-    };
+        .map(|e| e.value().clone())?;
     if parent_id == session_id {
         return None;
     }
@@ -5210,10 +5229,10 @@ pub(crate) fn deliver_message_to_pty(state: &AppState, session_id: &str, framed:
 /// from the BUSY→IDLE transition, the post-enqueue race re-check, and the
 /// unblock path when a confident question clears while the agent is idle.
 pub(crate) fn flush_pending_injections(state: &AppState, session_id: &str) {
-    if !state
+    if state
         .pending_injections
         .get(session_id)
-        .is_some_and(|pending| !pending.is_empty())
+        .is_none_or(|pending| pending.is_empty())
     {
         return;
     }
@@ -5225,13 +5244,13 @@ pub(crate) fn flush_pending_injections(state: &AppState, session_id: &str) {
         Some(mut q) => q.pop_front(),
         None => return,
     };
-    if let Some(text) = pending {
-        if matches!(
+    if let Some(text) = pending
+        && matches!(
             run_claimed_injection(state, session_id, &text, claim),
             InjectionOutcome::NotStarted(_)
-        ) {
-            requeue_injection_front(state, session_id, &text);
-        }
+        )
+    {
+        requeue_injection_front(state, session_id, &text);
     }
 }
 
@@ -14700,18 +14719,22 @@ mod tests {
                 .get(child_id)
                 .map(|session| session.turn_epoch);
             try_shell_transition_with_hooks(
-                &old_transition_state,
-                child_id,
-                SHELL_BUSY,
-                SHELL_IDLE,
-                true,
-                observed_turn_epoch,
-                || {
-                    snapshotted_tx.send(()).unwrap();
-                    continue_rx.recv().unwrap();
+                ShellTransitionRequest {
+                    state: &old_transition_state,
+                    session_id: child_id,
+                    expected: SHELL_BUSY,
+                    new: SHELL_IDLE,
+                    notify_parent: true,
+                    observed_turn_epoch,
                 },
-                || {},
-                || {},
+                ShellTransitionHooks {
+                    after_epoch_snapshot: || {
+                        snapshotted_tx.send(()).unwrap();
+                        continue_rx.recv().unwrap();
+                    },
+                    after_cas: || {},
+                    before_parent_dispatch: || {},
+                },
             )
         });
 
@@ -14855,20 +14878,24 @@ mod tests {
             .map(|session| session.turn_epoch);
 
         assert!(try_shell_transition_with_hooks(
-            &state,
-            child_id,
-            SHELL_BUSY,
-            SHELL_IDLE,
-            true,
-            observed_turn_epoch,
-            || {},
-            || {},
-            || {
-                let silence = state.silence_states.get(child_id).unwrap().clone();
-                assert!(
-                    silence.try_lock().is_some(),
-                    "child lifecycle lock must be released before parent PTY dispatch"
-                );
+            ShellTransitionRequest {
+                state: &state,
+                session_id: child_id,
+                expected: SHELL_BUSY,
+                new: SHELL_IDLE,
+                notify_parent: true,
+                observed_turn_epoch,
+            },
+            ShellTransitionHooks {
+                after_epoch_snapshot: || {},
+                after_cas: || {},
+                before_parent_dispatch: || {
+                    let silence = state.silence_states.get(child_id).unwrap().clone();
+                    assert!(
+                        silence.try_lock().is_some(),
+                        "child lifecycle lock must be released before parent PTY dispatch"
+                    );
+                },
             },
         ));
         assert_eq!(state.agent_inbox.get(parent_id).unwrap().len(), 1);
