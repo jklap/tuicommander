@@ -1530,10 +1530,10 @@ fn try_shell_transition_locked<F: FnOnce()>(
                 .session_states
                 .get(session_id)
                 .is_some_and(|session| session.background_work);
-            let background_probe_pending =
-                state.session_states.get(session_id).is_some_and(|session| {
-                    session.background_probe_turn_epoch == Some(session.turn_epoch)
-                });
+            let background_probe_pending = state
+                .session_states
+                .get(session_id)
+                .is_some_and(|session| session.has_pending_background_probe());
             if is_agent && !completion_declared && !has_background_work && !background_probe_pending
             {
                 parent_dispatch = enqueue_state_change_to_parent(
@@ -1968,7 +1968,7 @@ fn set_background_work_for_epoch_with_hook<F: FnOnce()>(
     {
         return false;
     }
-    let reconciled_probe = if session.background_probe_turn_epoch == Some(observed_turn_epoch) {
+    let reconciled_probe = if session.has_pending_background_probe() {
         let Some(boundary) = session.background_probe_after_generation else {
             return false;
         };
@@ -2063,7 +2063,7 @@ fn ready_probe_satisfied_or_requested(
     if session.background_probe_satisfied_turn_epoch == Some(turn_epoch) {
         return true;
     }
-    if session.background_probe_turn_epoch != Some(turn_epoch) {
+    if !session.has_pending_background_probe() {
         session.background_probe_turn_epoch = Some(turn_epoch);
         session.background_probe_after_generation = Some(state.process_snapshot_cache.generation());
     }
@@ -2137,8 +2137,7 @@ fn refresh_background_work_from_cached_snapshot(
 fn process_snapshot_is_demanded(state: &AppState) -> bool {
     state.session_states.iter().any(|session| {
         session.agent_type.is_some()
-            && (session.background_probe_turn_epoch == Some(session.turn_epoch)
-                || session.background_work)
+            && (session.has_pending_background_probe() || session.background_work)
             && state.silence_states.contains_key(session.key())
             && state.shell_states.contains_key(session.key())
     })
@@ -2150,8 +2149,7 @@ fn reconcile_process_snapshot_demand(state: &AppState) {
         .iter()
         .filter(|session| {
             session.agent_type.is_some()
-                && (session.background_probe_turn_epoch == Some(session.turn_epoch)
-                    || session.background_work)
+                && (session.has_pending_background_probe() || session.background_work)
                 && state.silence_states.contains_key(session.key())
                 && state.shell_states.contains_key(session.key())
         })
@@ -6737,6 +6735,14 @@ pub(crate) fn resume_pty(
 /// 5. not already in standby
 /// 6. startup_settled == true
 #[cfg(unix)]
+fn background_activity_blocks_standby(state: &AppState, session_id: &str) -> bool {
+    state
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.background_work || session.has_pending_background_probe())
+}
+
+#[cfg(unix)]
 pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
     use std::time::Duration;
     tokio::spawn(async move {
@@ -6802,14 +6808,10 @@ pub(crate) fn spawn_standby_checker(state: Arc<AppState>) {
                     );
                     continue;
                 }
-                if state
-                    .session_states
-                    .get(session_id.as_str())
-                    .is_some_and(|session| session.background_work)
-                {
+                if background_activity_blocks_standby(&state, session_id.as_str()) {
                     tracing::trace!(
                         session_id = session_id.as_str(),
-                        "Standby skipped: agent owns background work"
+                        "Standby skipped: background work or probe pending"
                     );
                     continue;
                 }
@@ -6861,11 +6863,7 @@ pub(crate) fn standby_session(state: &AppState, session_id: &str) -> Result<bool
         .or_insert_with(|| Arc::new(Mutex::new(SilenceState::new())))
         .clone();
     let _lifecycle_guard = silence.lock();
-    if state
-        .session_states
-        .get(session_id)
-        .is_some_and(|session| session.background_work)
-    {
+    if background_activity_blocks_standby(state, session_id) {
         return Ok(false);
     }
     let pgid = {
@@ -10683,7 +10681,7 @@ mod tests {
     }
 
     #[test]
-    fn explicit_agent_idle_child_absent_notifies_once_after_newer_snapshot() {
+    fn explicit_agent_idle_child_absent_restores_api_state_and_notifies_once() {
         for (session_id, declare_completion, expected_state) in [
             ("background-explicit-idle", false, "idle"),
             ("background-explicit-completed", true, "completed"),
@@ -10717,6 +10715,10 @@ mod tests {
                 || {},
             );
             assert!(state.agent_inbox.get(&parent_id).unwrap().is_empty());
+            let pending = state.session_state_with_shell(session_id).unwrap();
+            assert_eq!(pending.shell_state.as_deref(), Some("idle"));
+            assert_eq!(pending.agent_state.as_deref(), Some("working"));
+            assert!(pending.has_pending_background_probe());
 
             state
                 .process_snapshot_cache
@@ -10729,6 +10731,9 @@ mod tests {
                 0,
                 state.process_snapshot_cache.load(),
             ));
+            let resolved = state.session_state_with_shell(session_id).unwrap();
+            assert_eq!(resolved.agent_state.as_deref(), Some(expected_state));
+            assert!(!resolved.has_pending_background_probe());
             let inbox = state.agent_inbox.get(&parent_id).unwrap();
             assert_eq!(inbox.len(), 1);
             let content: serde_json::Value =
@@ -13454,6 +13459,26 @@ mod tests {
                 ..Default::default()
             },
         );
+        assert_eq!(standby_session(&state, session_id), Ok(false));
+        assert!(!state.standby_sessions.contains_key(session_id));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn standby_refuses_session_with_pending_background_probe() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "background-probe-standby";
+        state.session_states.insert(
+            session_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                background_probe_turn_epoch: Some(3),
+                turn_epoch: 3,
+                ..Default::default()
+            },
+        );
+
+        assert!(background_activity_blocks_standby(&state, session_id));
         assert_eq!(standby_session(&state, session_id), Ok(false));
         assert!(!state.standby_sessions.contains_key(session_id));
     }

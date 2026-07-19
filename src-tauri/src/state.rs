@@ -292,6 +292,12 @@ pub(crate) struct SessionState {
     pub last_push_ms: Option<u64>,
 }
 
+impl SessionState {
+    pub(crate) fn has_pending_background_probe(&self) -> bool {
+        self.background_probe_turn_epoch == Some(self.turn_epoch)
+    }
+}
+
 /// PartialEq excludes last_activity_ms (telemetry, not logical state).
 /// Used by WS dedup to avoid sending identical state frames.
 impl PartialEq for SessionState {
@@ -2035,7 +2041,10 @@ impl AppState {
             None
         } else if state.awaiting_input || state.choice_prompt.is_some() {
             Some("awaiting_input".to_string())
-        } else if state.background_work || state.shell_state.as_deref() == Some("busy") {
+        } else if state.has_pending_background_probe()
+            || state.background_work
+            || state.shell_state.as_deref() == Some("busy")
+        {
             Some("working".to_string())
         } else if state.suggested_actions.is_some()
             || self.silence_states.get(session_id).is_some_and(|silence| {
