@@ -113,6 +113,8 @@ pub(super) async fn plugin_fs_rename(
 pub(super) struct ScanBody {
     #[serde(rename = "repoPaths")]
     pub repo_paths: Vec<String>,
+    #[serde(default, rename = "forceRefresh")]
+    pub force_refresh: bool,
 }
 
 pub(super) async fn plugin_scan_build_artifacts(
@@ -121,7 +123,13 @@ pub(super) async fn plugin_scan_build_artifacts(
     Json(body): Json<ScanBody>,
 ) -> Response {
     json_result(
-        crate::plugin_fs::scan_build_artifacts_impl(&state, body.repo_paths, plugin_id).await,
+        crate::plugin_fs::scan_build_artifacts_impl(
+            &state,
+            body.repo_paths,
+            plugin_id,
+            body.force_refresh,
+        )
+        .await,
     )
 }
 

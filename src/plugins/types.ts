@@ -679,7 +679,7 @@ export interface PluginHost {
 	 * @param repoPaths - Absolute repo roots to scan; each is $HOME-scoped and
 	 *        silently skipped if it fails validation.
 	 */
-	scanBuildArtifacts(repoPaths: string[]): Promise<ArtifactEntry[]>;
+	scanBuildArtifacts(repoPaths: string[], options?: { forceRefresh?: boolean }): Promise<ArtifactEntry[]>;
 
 	/**
 	 * Delete a build-artifact directory. Destructive; gated by "fs:delete".

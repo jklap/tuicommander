@@ -1117,6 +1117,12 @@ describe("transport", () => {
 			expect(scan.method).toBe("POST");
 			expect(scan.path).toBe("/api/plugins/build-cleaner/build-artifacts/scan");
 			expect(scan.body).toEqual({ repoPaths: ["/home/user/repoA", "/home/user/repoB"] });
+			const forcedScan = mapCommandToHttp("scan_build_artifacts", {
+				pluginId: "build-cleaner",
+				repoPaths: ["/home/user/repoA"],
+				forceRefresh: true,
+			});
+			expect(forcedScan.body).toEqual({ repoPaths: ["/home/user/repoA"], forceRefresh: true });
 
 			// delete_build_artifact
 			const del = mapCommandToHttp("delete_build_artifact", {

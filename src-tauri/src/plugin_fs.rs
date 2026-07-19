@@ -6,8 +6,10 @@
 
 use crate::AppState;
 use notify::{Event, RecommendedWatcher, RecursiveMode, Watcher};
+use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 #[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter, State};
 
@@ -812,13 +814,199 @@ const MAX_SIZE_DEPTH: u8 = 64;
 /// One matched build-artifact directory: its absolute path, tool kind, total
 /// on-disk size, last-build age (max mtime of direct children, as Unix secs),
 /// and the repo root it was found under.
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 pub struct ArtifactEntry {
     pub path: String,
     pub kind: String,
     pub size_bytes: u64,
     pub last_modified_secs: u64,
     pub repo: String,
+}
+
+/// Reuse the expensive all-repo artifact walk across frontend reloads. A short
+/// TTL keeps filesystem changes fresh while covering HMR's repeated plugin
+/// `onload` calls. Explicit dashboard refreshes bypass ready entries.
+const BUILD_ARTIFACT_SCAN_TTL: Duration = Duration::from_secs(30);
+const BUILD_ARTIFACT_SCAN_MAX_READY: usize = 8;
+
+enum ArtifactScanCacheEntry {
+    Running {
+        invalidated: bool,
+    },
+    Ready {
+        completed_at: Instant,
+        last_accessed: Instant,
+        result: Vec<ArtifactEntry>,
+    },
+}
+
+struct ArtifactScanCache {
+    entries: parking_lot::Mutex<HashMap<Vec<PathBuf>, ArtifactScanCacheEntry>>,
+    changed: parking_lot::Condvar,
+    #[cfg(test)]
+    waiter_count: std::sync::atomic::AtomicUsize,
+}
+
+impl ArtifactScanCache {
+    fn new() -> Self {
+        Self {
+            entries: parking_lot::Mutex::new(HashMap::new()),
+            changed: parking_lot::Condvar::new(),
+            #[cfg(test)]
+            waiter_count: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn get_or_scan<F>(
+        &self,
+        key: Vec<PathBuf>,
+        ttl: Duration,
+        force_refresh: bool,
+        scan: F,
+    ) -> Vec<ArtifactEntry>
+    where
+        F: Fn() -> Vec<ArtifactEntry>,
+    {
+        let mut waited_for_running = false;
+
+        loop {
+            let mut entries = self.entries.lock();
+            if !waited_for_running {
+                Self::prune_expired(&mut entries, ttl);
+            }
+            match entries.get_mut(&key) {
+                Some(ArtifactScanCacheEntry::Running { .. }) => {
+                    waited_for_running = true;
+                    #[cfg(test)]
+                    self.waiter_count
+                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    self.changed.wait(&mut entries);
+                    #[cfg(test)]
+                    self.waiter_count
+                        .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    continue;
+                }
+                Some(ArtifactScanCacheEntry::Ready {
+                    completed_at,
+                    last_accessed,
+                    result,
+                }) if waited_for_running || (!force_refresh && completed_at.elapsed() < ttl) => {
+                    *last_accessed = Instant::now();
+                    return result.clone();
+                }
+                _ => {
+                    entries.insert(
+                        key.clone(),
+                        ArtifactScanCacheEntry::Running { invalidated: false },
+                    );
+                    break;
+                }
+            }
+        }
+
+        loop {
+            // A panic must not leave the key permanently stuck in Running.
+            // Preserve it so spawn_blocking still reports its normal JoinError.
+            let scanned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&scan));
+            let mut entries = self.entries.lock();
+            match scanned {
+                Ok(result) => {
+                    if matches!(
+                        entries.get(&key),
+                        Some(ArtifactScanCacheEntry::Running { invalidated: true })
+                    ) {
+                        entries.insert(
+                            key.clone(),
+                            ArtifactScanCacheEntry::Running { invalidated: false },
+                        );
+                        drop(entries);
+                        continue;
+                    }
+
+                    let now = Instant::now();
+                    entries.insert(
+                        key.clone(),
+                        ArtifactScanCacheEntry::Ready {
+                            completed_at: now,
+                            last_accessed: now,
+                            result: result.clone(),
+                        },
+                    );
+                    Self::enforce_ready_bound(&mut entries);
+                    self.changed.notify_all();
+                    return result;
+                }
+                Err(payload) => {
+                    entries.remove(&key);
+                    self.changed.notify_all();
+                    drop(entries);
+                    std::panic::resume_unwind(payload);
+                }
+            }
+        }
+    }
+
+    fn prune_expired(entries: &mut HashMap<Vec<PathBuf>, ArtifactScanCacheEntry>, ttl: Duration) {
+        entries.retain(|_, entry| match entry {
+            ArtifactScanCacheEntry::Running { .. } => true,
+            ArtifactScanCacheEntry::Ready { completed_at, .. } => completed_at.elapsed() < ttl,
+        });
+    }
+
+    fn enforce_ready_bound(entries: &mut HashMap<Vec<PathBuf>, ArtifactScanCacheEntry>) {
+        while entries
+            .values()
+            .filter(|entry| matches!(entry, ArtifactScanCacheEntry::Ready { .. }))
+            .count()
+            > BUILD_ARTIFACT_SCAN_MAX_READY
+        {
+            let oldest = entries
+                .iter()
+                .filter_map(|(key, entry)| match entry {
+                    ArtifactScanCacheEntry::Ready { last_accessed, .. } => {
+                        Some((key.clone(), *last_accessed))
+                    }
+                    ArtifactScanCacheEntry::Running { .. } => None,
+                })
+                .min_by_key(|(_, last_accessed)| *last_accessed)
+                .map(|(key, _)| key);
+            if let Some(key) = oldest {
+                entries.remove(&key);
+            } else {
+                break;
+            }
+        }
+    }
+
+    fn invalidate_path(&self, path: &std::path::Path) {
+        let mut entries = self.entries.lock();
+        entries.retain(|roots, entry| {
+            if !roots.iter().any(|root| path.starts_with(root)) {
+                return true;
+            }
+            match entry {
+                ArtifactScanCacheEntry::Running { invalidated } => {
+                    *invalidated = true;
+                    true
+                }
+                ArtifactScanCacheEntry::Ready { .. } => false,
+            }
+        });
+    }
+
+    #[cfg(test)]
+    fn wait_until_waiter_is_blocked(&self) {
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while self.waiter_count.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+            assert!(Instant::now() < deadline, "expected a blocked cache waiter");
+            std::thread::yield_now();
+        }
+    }
+}
+
+fn artifact_scan_cache() -> &'static ArtifactScanCache {
+    static CACHE: OnceLock<ArtifactScanCache> = OnceLock::new();
+    CACHE.get_or_init(ArtifactScanCache::new)
 }
 
 /// Recursively sum sizes of regular files under `dir`. Does not follow symlinks
@@ -933,6 +1121,26 @@ fn registered_repo_roots() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+/// Canonicalize, authorize, sort, and deduplicate the requested roots. The
+/// resulting exact path set is the scan-cache key, so argument order and
+/// duplicates share work while a changed registered path set does not.
+fn normalized_scan_roots(repo_paths: &[String]) -> Vec<PathBuf> {
+    let registered = registered_repo_roots();
+    normalize_root_set(
+        repo_paths
+            .iter()
+            .filter_map(|raw| validate_within_home(raw).ok())
+            .filter(|root| is_within_registered_repo(root, &registered))
+            .collect(),
+    )
+}
+
+fn normalize_root_set(mut roots: Vec<PathBuf>) -> Vec<PathBuf> {
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
 /// Whether `path` is itself a genuinely registered repo root, or nested
 /// inside one. Guards `fs:scan`/`fs:delete` against a plugin widening its
 /// containment by passing an arbitrary `repo_paths` entry (e.g. `$HOME`)
@@ -952,35 +1160,48 @@ fn is_within_registered_repo(path: &std::path::Path, registered: &[PathBuf]) -> 
 pub async fn scan_build_artifacts(
     repo_paths: Vec<String>,
     plugin_id: String,
+    force_refresh: Option<bool>,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<Vec<ArtifactEntry>, String> {
-    scan_build_artifacts_impl(&state, repo_paths, plugin_id).await
+    scan_build_artifacts_impl(
+        &state,
+        repo_paths,
+        plugin_id,
+        force_refresh.unwrap_or(false),
+    )
+    .await
 }
 
 pub(crate) async fn scan_build_artifacts_impl(
     state: &std::sync::Arc<crate::AppState>,
     repo_paths: Vec<String>,
     plugin_id: String,
+    force_refresh: bool,
 ) -> Result<Vec<ArtifactEntry>, String> {
     crate::plugins::check_plugin_capability(state, &plugin_id, "fs:scan")?;
-    scan_build_artifacts_inner(repo_paths).await
+    scan_build_artifacts_inner(repo_paths, force_refresh).await
 }
 
-async fn scan_build_artifacts_inner(repo_paths: Vec<String>) -> Result<Vec<ArtifactEntry>, String> {
+async fn scan_build_artifacts_inner(
+    repo_paths: Vec<String>,
+    force_refresh: bool,
+) -> Result<Vec<ArtifactEntry>, String> {
     spawn_blocking_fs(move || {
-        let registered = registered_repo_roots();
-        let mut out = Vec::new();
-        for raw in &repo_paths {
-            let Ok(root) = validate_within_home(raw) else {
-                continue;
-            };
-            if !is_within_registered_repo(&root, &registered) {
-                continue;
-            }
-            let repo = root.to_string_lossy().to_string();
-            walk_artifacts(&root, &repo, MAX_SCAN_DEPTH, &mut out);
-        }
-        Ok(out)
+        let roots = normalized_scan_roots(&repo_paths);
+        let key = roots.clone();
+        Ok(artifact_scan_cache().get_or_scan(
+            key,
+            BUILD_ARTIFACT_SCAN_TTL,
+            force_refresh,
+            move || {
+                let mut out = Vec::new();
+                for root in &roots {
+                    let repo = root.to_string_lossy().to_string();
+                    walk_artifacts(root, &repo, MAX_SCAN_DEPTH, &mut out);
+                }
+                out
+            },
+        ))
     })
     .await
 }
@@ -1084,7 +1305,9 @@ async fn delete_build_artifact_inner(path: String, repo_paths: Vec<String>) -> R
 
         assert_deletable(&canonical, &roots)?;
 
-        std::fs::remove_dir_all(&canonical).map_err(|e| format!("Failed to remove: {e}"))
+        std::fs::remove_dir_all(&canonical).map_err(|e| format!("Failed to remove: {e}"))?;
+        artifact_scan_cache().invalidate_path(&canonical);
+        Ok(())
     })
     .await
 }
@@ -1653,10 +1876,13 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let out = rt
-            .block_on(scan_build_artifacts_inner(vec![
-                repo.to_string_lossy().to_string(),
-                "/outside/home/repo".to_string(), // invalid → skipped, not fatal
-            ]))
+            .block_on(scan_build_artifacts_inner(
+                vec![
+                    repo.to_string_lossy().to_string(),
+                    "/outside/home/repo".to_string(), // invalid → skipped, not fatal
+                ],
+                false,
+            ))
             .unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].size_bytes, 42);
@@ -1679,11 +1905,333 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let out = rt
-            .block_on(scan_build_artifacts_inner(vec![
-                repo.to_string_lossy().to_string(),
-            ]))
+            .block_on(scan_build_artifacts_inner(
+                vec![repo.to_string_lossy().to_string()],
+                false,
+            ))
             .unwrap();
         assert!(out.is_empty(), "unregistered repo path must be skipped");
+    }
+
+    fn cached_artifact(label: &str) -> Vec<ArtifactEntry> {
+        vec![ArtifactEntry {
+            path: format!("/{label}"),
+            kind: "test".into(),
+            size_bytes: 1,
+            last_modified_secs: 1,
+            repo: "/repo".into(),
+        }]
+    }
+
+    #[test]
+    fn artifact_scan_cache_deduplicates_concurrent_scan() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = Arc::new(ArtifactScanCache::new());
+        let scans = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let key = vec![PathBuf::from("/repo")];
+
+        let first = {
+            let cache = Arc::clone(&cache);
+            let scans = Arc::clone(&scans);
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            let key = key.clone();
+            std::thread::spawn(move || {
+                cache.get_or_scan(key, Duration::from_secs(60), false, || {
+                    scans.fetch_add(1, Ordering::SeqCst);
+                    entered.wait();
+                    release.wait();
+                    cached_artifact("shared")
+                })
+            })
+        };
+
+        entered.wait();
+        let second = {
+            let cache = Arc::clone(&cache);
+            let scans = Arc::clone(&scans);
+            let key = key.clone();
+            std::thread::spawn(move || {
+                cache.get_or_scan(key, Duration::from_secs(60), false, || {
+                    scans.fetch_add(1, Ordering::SeqCst);
+                    cached_artifact("duplicate")
+                })
+            })
+        };
+        cache.wait_until_waiter_is_blocked();
+        release.wait();
+
+        assert_eq!(first.join().unwrap()[0].path, "/shared");
+        assert_eq!(second.join().unwrap()[0].path, "/shared");
+        assert_eq!(scans.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn artifact_scan_cache_reuses_fresh_ttl_result() {
+        let cache = ArtifactScanCache::new();
+        let key = vec![PathBuf::from("/repo")];
+        let scans = std::sync::atomic::AtomicUsize::new(0);
+
+        let first = cache.get_or_scan(key.clone(), Duration::from_secs(60), false, || {
+            scans.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            cached_artifact("first")
+        });
+        let second = cache.get_or_scan(key, Duration::from_secs(60), false, || {
+            scans.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            cached_artifact("second")
+        });
+
+        assert_eq!(first[0].path, "/first");
+        assert_eq!(second[0].path, "/first");
+        assert_eq!(scans.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn artifact_scan_cache_key_change_runs_new_scan() {
+        let cache = ArtifactScanCache::new();
+        let scans = std::sync::atomic::AtomicUsize::new(0);
+
+        cache.get_or_scan(
+            vec![PathBuf::from("/repo-a")],
+            Duration::from_secs(60),
+            false,
+            || {
+                scans.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                cached_artifact("a")
+            },
+        );
+        let changed = cache.get_or_scan(
+            vec![PathBuf::from("/repo-b")],
+            Duration::from_secs(60),
+            false,
+            || {
+                scans.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                cached_artifact("b")
+            },
+        );
+
+        assert_eq!(changed[0].path, "/b");
+        assert_eq!(scans.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn artifact_scan_cache_force_refresh_bypasses_ready_result() {
+        let cache = ArtifactScanCache::new();
+        let key = vec![PathBuf::from("/repo")];
+
+        cache.get_or_scan(key.clone(), Duration::from_secs(60), false, || {
+            cached_artifact("cached")
+        });
+        let refreshed = cache.get_or_scan(key, Duration::from_secs(60), true, || {
+            cached_artifact("refreshed")
+        });
+
+        assert_eq!(refreshed[0].path, "/refreshed");
+    }
+
+    #[test]
+    fn artifact_scan_cache_expired_result_is_pruned() {
+        let cache = ArtifactScanCache::new();
+        let key = vec![PathBuf::from("/repo")];
+
+        cache.get_or_scan(key.clone(), Duration::from_secs(60), false, || {
+            cached_artifact("expired")
+        });
+        let fresh = cache.get_or_scan(key, Duration::ZERO, false, || cached_artifact("fresh"));
+
+        assert_eq!(fresh[0].path, "/fresh");
+        assert_eq!(cache.entries.lock().len(), 1);
+    }
+
+    #[test]
+    fn artifact_scan_cache_bounds_ready_entries() {
+        let cache = ArtifactScanCache::new();
+        let running_key = vec![PathBuf::from("/running")];
+        cache.entries.lock().insert(
+            running_key.clone(),
+            ArtifactScanCacheEntry::Running { invalidated: false },
+        );
+        for index in 0..(BUILD_ARTIFACT_SCAN_MAX_READY + 3) {
+            cache.get_or_scan(
+                vec![PathBuf::from(format!("/repo-{index}"))],
+                Duration::from_secs(60),
+                false,
+                || cached_artifact(&index.to_string()),
+            );
+        }
+
+        let entries = cache.entries.lock();
+        assert_eq!(
+            entries
+                .values()
+                .filter(|entry| matches!(entry, ArtifactScanCacheEntry::Ready { .. }))
+                .count(),
+            BUILD_ARTIFACT_SCAN_MAX_READY
+        );
+        assert!(matches!(
+            entries.get(&running_key),
+            Some(ArtifactScanCacheEntry::Running { .. })
+        ));
+    }
+
+    #[test]
+    fn artifact_scan_cache_panic_wakes_waiter_and_allows_recovery() {
+        let cache = Arc::new(ArtifactScanCache::new());
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let key = vec![PathBuf::from("/repo")];
+
+        let first = {
+            let cache = Arc::clone(&cache);
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            let key = key.clone();
+            std::thread::spawn(move || {
+                cache.get_or_scan(key, Duration::from_secs(60), false, || {
+                    entered.wait();
+                    release.wait();
+                    panic!("scan failed");
+                })
+            })
+        };
+
+        entered.wait();
+        let waiter = {
+            let cache = Arc::clone(&cache);
+            let key = key.clone();
+            std::thread::spawn(move || {
+                cache.get_or_scan(key, Duration::from_secs(60), false, || {
+                    cached_artifact("recovered")
+                })
+            })
+        };
+        cache.wait_until_waiter_is_blocked();
+        release.wait();
+
+        assert!(first.join().is_err());
+        assert_eq!(waiter.join().unwrap()[0].path, "/recovered");
+        assert!(matches!(
+            cache.entries.lock().get(&key),
+            Some(ArtifactScanCacheEntry::Ready { .. })
+        ));
+    }
+
+    #[test]
+    fn normalized_scan_key_ignores_order_and_duplicates() {
+        let a = PathBuf::from("/repo-a");
+        let b = PathBuf::from("/repo-b");
+        assert_eq!(
+            normalize_root_set(vec![b.clone(), a.clone(), a.clone()]),
+            normalize_root_set(vec![a, b])
+        );
+    }
+
+    #[test]
+    fn artifact_scan_cache_concurrent_forced_waiter_shares_refresh() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = Arc::new(ArtifactScanCache::new());
+        let key = vec![PathBuf::from("/repo")];
+        cache.get_or_scan(key.clone(), Duration::from_secs(60), false, || {
+            cached_artifact("old")
+        });
+
+        let scans = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let first = {
+            let cache = Arc::clone(&cache);
+            let scans = Arc::clone(&scans);
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            let key = key.clone();
+            std::thread::spawn(move || {
+                cache.get_or_scan(key, Duration::from_secs(60), true, || {
+                    scans.fetch_add(1, Ordering::SeqCst);
+                    entered.wait();
+                    release.wait();
+                    cached_artifact("forced")
+                })
+            })
+        };
+
+        entered.wait();
+        let waiter = {
+            let cache = Arc::clone(&cache);
+            let scans = Arc::clone(&scans);
+            let key = key.clone();
+            std::thread::spawn(move || {
+                cache.get_or_scan(key, Duration::from_secs(60), true, || {
+                    scans.fetch_add(1, Ordering::SeqCst);
+                    cached_artifact("duplicate-force")
+                })
+            })
+        };
+        cache.wait_until_waiter_is_blocked();
+        release.wait();
+
+        assert_eq!(first.join().unwrap()[0].path, "/forced");
+        assert_eq!(waiter.join().unwrap()[0].path, "/forced");
+        assert_eq!(scans.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn artifact_scan_cache_invalidation_discards_running_result() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let cache = Arc::new(ArtifactScanCache::new());
+        let scans = Arc::new(AtomicUsize::new(0));
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let worker = {
+            let cache = Arc::clone(&cache);
+            let scans = Arc::clone(&scans);
+            let entered = Arc::clone(&entered);
+            let release = Arc::clone(&release);
+            std::thread::spawn(move || {
+                cache.get_or_scan(
+                    vec![PathBuf::from("/repo")],
+                    Duration::from_secs(60),
+                    false,
+                    || {
+                        let attempt = scans.fetch_add(1, Ordering::SeqCst);
+                        if attempt == 0 {
+                            entered.wait();
+                            release.wait();
+                            cached_artifact("stale")
+                        } else {
+                            cached_artifact("fresh")
+                        }
+                    },
+                )
+            })
+        };
+
+        entered.wait();
+        cache.invalidate_path(Path::new("/repo/target"));
+        release.wait();
+
+        assert_eq!(worker.join().unwrap()[0].path, "/fresh");
+        assert_eq!(scans.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn artifact_scan_cache_invalidation_removes_ready_result() {
+        let cache = ArtifactScanCache::new();
+        let key = vec![PathBuf::from("/repo")];
+        cache.get_or_scan(key.clone(), Duration::from_secs(60), false, || {
+            cached_artifact("deleted")
+        });
+
+        cache.invalidate_path(Path::new("/repo/target"));
+        let result = cache.get_or_scan(key, Duration::from_secs(60), false, || {
+            cached_artifact("after-delete")
+        });
+
+        assert_eq!(result[0].path, "/after-delete");
     }
 
     // -- delete_build_artifact tests --
@@ -1818,6 +2366,20 @@ mod tests {
         }))
         .unwrap();
 
+        let cache_key = vec![repo.canonicalize().unwrap()];
+        artifact_scan_cache().get_or_scan(
+            cache_key.clone(),
+            Duration::from_secs(60),
+            false,
+            || cached_artifact("before-delete"),
+        );
+        assert!(
+            artifact_scan_cache()
+                .entries
+                .lock()
+                .contains_key(&cache_key)
+        );
+
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(delete_build_artifact_inner(
             target.to_string_lossy().to_string(),
@@ -1826,6 +2388,13 @@ mod tests {
         assert!(result.is_ok(), "delete failed: {:?}", result);
         assert!(!target.exists(), "target should be removed");
         assert!(repo.exists(), "repo root must survive");
+        assert!(
+            !artifact_scan_cache()
+                .entries
+                .lock()
+                .contains_key(&cache_key),
+            "successful deletion must invalidate the affected cached scan"
+        );
     }
 
     #[test]

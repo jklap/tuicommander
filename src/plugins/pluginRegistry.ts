@@ -518,9 +518,13 @@ function createPluginRegistry() {
 				await invoke("plugin_rename_path", { from, to, pluginId });
 			},
 
-			async scanBuildArtifacts(repoPaths: string[]): Promise<ArtifactEntry[]> {
+			async scanBuildArtifacts(repoPaths: string[], options?: { forceRefresh?: boolean }): Promise<ArtifactEntry[]> {
 				requireCapability(pluginId, capabilities, "fs:scan");
-				return invoke<ArtifactEntry[]>("scan_build_artifacts", { repoPaths, pluginId });
+				return invoke<ArtifactEntry[]>("scan_build_artifacts", {
+					repoPaths,
+					pluginId,
+					forceRefresh: options?.forceRefresh ?? false,
+				});
 			},
 
 			async deleteBuildArtifact(path: string, repoPaths: string[]): Promise<void> {

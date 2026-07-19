@@ -1229,7 +1229,7 @@ GET  /api/plugins/:plugin_id/fs/tail?path=<p>&maxBytes=<n>        -> string     
 GET  /api/plugins/:plugin_id/fs/list?path=<p>&pattern=&sortBy=    -> string[]      (plugin_list_directory)
 POST /api/plugins/:plugin_id/fs/write    { path, content }        -> { ok }        (plugin_write_file)
 POST /api/plugins/:plugin_id/fs/rename   { from, to }             -> { ok }        (plugin_rename_path)
-POST /api/plugins/:plugin_id/build-artifacts/scan   { repoPaths } -> BuildArtifact[]
+POST /api/plugins/:plugin_id/build-artifacts/scan   { repoPaths, forceRefresh? } -> BuildArtifact[]
 POST /api/plugins/:plugin_id/build-artifacts/delete { path, repoPaths } -> { ok }
 POST /api/plugins/:plugin_id/exec        { binary, args, cwd? }   -> string        (plugin_exec_cli)
 POST /api/plugins/:plugin_id/http        { url, method?, headers?, body?, allowedUrls } -> HttpResponse
@@ -1238,6 +1238,10 @@ POST /api/plugins/:plugin_id/register    { capabilities }         -> { ok }
 POST /api/plugins/:plugin_id/unregister                           -> { ok }
 GET  /api/plugins/:plugin_id/readme                               -> string | null
 ```
+
+Build-artifact scans normalize the root set, share an in-flight scan across callers,
+and reuse completed results for 30 seconds. Set `forceRefresh: true` to bypass a
+completed cached result; a scan already running for the same roots remains shared.
 
 Intentionally **not** mapped (native/host-only, stay Tauri-only): `plugin_watch_path` /
 `plugin_unwatch` (change events need AppHandle/WS delivery), `plugin_read_credential`

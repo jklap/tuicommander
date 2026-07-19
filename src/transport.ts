@@ -1737,7 +1737,10 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args, p) => ({
 			method: "POST",
 			path: `/api/plugins/${p("pluginId")}/build-artifacts/scan`,
-			body: { repoPaths: args.repoPaths },
+			body: {
+				repoPaths: args.repoPaths,
+				...(args.forceRefresh ? { forceRefresh: true } : {}),
+			},
 		}),
 	},
 	delete_build_artifact: {

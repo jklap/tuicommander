@@ -6,7 +6,7 @@
  * the default plugin object, so we import and test the REAL implementation.
  * The plugin loader only reads `.default`, so these named exports are runtime-inert.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 // @ts-expect-error — untyped plugin JS module (submodule), imported for its pure exports.
 import * as plugin from "../../../plugins/build-cleaner/main.js";
 
@@ -44,6 +44,11 @@ const {
 const GIB = 1024 * 1024 * 1024;
 const HOUR = 3600;
 const NOW = 1_000_000_000; // fixed clock
+
+const buildCleanerPlugin = plugin.default as {
+	onload: (host: Record<string, unknown>) => Promise<void>;
+	onunload: () => void;
+};
 
 /** Every kind the scanner can emit — mirrors ALL_KINDS in main.js. */
 const KINDS = [
@@ -276,6 +281,98 @@ describe("build-cleaner pure helpers", () => {
 			const html = buildPanelHtml([evil], CFG, NOW);
 			expect(html).not.toContain("<script>alert(1)</script>");
 			expect(html).toContain("&lt;script&gt;");
+		});
+	});
+
+	describe("lifecycle", () => {
+		it("forces only an explicit dashboard refresh", async () => {
+			vi.useFakeTimers();
+			let openDashboard: (() => Promise<void>) | undefined;
+			let handlePanelMessage: ((message: unknown) => Promise<void>) | undefined;
+			const panel = { update: vi.fn() };
+			const host = {
+				getRepos: vi.fn(() => [{ path: "/repo" }]),
+				scanBuildArtifacts: vi.fn(async () => []),
+				invoke: vi.fn(async () => null),
+				registerSection: vi.fn(),
+				registerDashboard: vi.fn((dashboard: { open: () => Promise<void> }) => {
+					openDashboard = dashboard.open;
+				}),
+				openPanel: vi.fn((options: { onMessage: (message: unknown) => Promise<void> }) => {
+					handlePanelMessage = options.onMessage;
+					return panel;
+				}),
+				clearTicker: vi.fn(),
+				removeItem: vi.fn(),
+				addItem: vi.fn(),
+				setTicker: vi.fn(),
+				log: vi.fn(),
+			};
+
+			try {
+				await buildCleanerPlugin.onload(host);
+				await Promise.resolve();
+				expect(host.scanBuildArtifacts).toHaveBeenLastCalledWith(["/repo"], {
+					forceRefresh: false,
+				});
+
+				host.scanBuildArtifacts.mockClear();
+				await openDashboard?.();
+				expect(host.scanBuildArtifacts).toHaveBeenLastCalledWith(["/repo"], {
+					forceRefresh: false,
+				});
+
+				host.scanBuildArtifacts.mockClear();
+				await handlePanelMessage?.({ action: "refresh" });
+				expect(host.scanBuildArtifacts).toHaveBeenCalledOnce();
+				expect(host.scanBuildArtifacts).toHaveBeenLastCalledWith(["/repo"], {
+					forceRefresh: true,
+				});
+			} finally {
+				buildCleanerPlugin.onunload();
+				vi.useRealTimers();
+			}
+		});
+
+		it("does not update the unloaded host after an in-flight poll completes", async () => {
+			vi.useFakeTimers();
+			let resolveScan: ((entries: unknown[]) => void) | undefined;
+			const scanResult = new Promise<unknown[]>((resolve) => {
+				resolveScan = resolve;
+			});
+			const host = {
+				getRepos: vi.fn(() => [{ path: "/repo" }]),
+				scanBuildArtifacts: vi.fn(() => scanResult),
+				invoke: vi.fn(async () => null),
+				registerSection: vi.fn(),
+				registerDashboard: vi.fn(),
+				clearTicker: vi.fn(),
+				removeItem: vi.fn(),
+				addItem: vi.fn(),
+				setTicker: vi.fn(),
+				log: vi.fn(),
+			};
+
+			try {
+				await buildCleanerPlugin.onload(host);
+				expect(host.scanBuildArtifacts).toHaveBeenCalledOnce();
+
+				buildCleanerPlugin.onunload();
+				const clearCallsAfterUnload = host.clearTicker.mock.calls.length;
+				const removeCallsAfterUnload = host.removeItem.mock.calls.length;
+
+				resolveScan?.([]);
+				await Promise.resolve();
+				await Promise.resolve();
+
+				expect(host.clearTicker).toHaveBeenCalledTimes(clearCallsAfterUnload);
+				expect(host.removeItem).toHaveBeenCalledTimes(removeCallsAfterUnload);
+				expect(host.addItem).not.toHaveBeenCalled();
+				expect(host.setTicker).not.toHaveBeenCalled();
+			} finally {
+				buildCleanerPlugin.onunload();
+				vi.useRealTimers();
+			}
 		});
 	});
 });

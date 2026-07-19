@@ -524,14 +524,17 @@ await host.renamePath(
 );
 ```
 
-#### `host.scanBuildArtifacts(repoPaths) -> Promise<ArtifactEntry[]>`
+#### `host.scanBuildArtifacts(repoPaths, options?) -> Promise<ArtifactEntry[]>`
 
-Recursively scan the given repo roots for build-artifact directories (Rust/Maven `target/`, `node_modules/`, JS framework caches like `.next`/`.turbo`, Python `.venv`/`__pycache__`/tool caches, .NET `obj`/`bin`, Gradle/CMake/Flutter `build/`, SwiftPM `.build`/`Pods`, `.terraform`, Elixir `_build`, Zig, Haskell, Composer `vendor/`). Read-only. Unlike `listDirectory`, this **ignores `.gitignore`** (artifact dirs are gitignored by design) and stops descending on a match, so a nested `node_modules` is folded into the outer entry — never double counted. Ambiguously-named dirs (`target`, `bin`/`obj`, `build`, `vendor`, …) only count when a toolchain marker sits beside them (e.g. `Cargo.toml` or `pom.xml` for `target`; a `.csproj`/`.fsproj`/`.vbproj`/`.sln`/`.slnx` for `bin`/`obj`; `build.gradle`/`CMakeLists.txt`/`pubspec.yaml` for `build`; `composer.json` for `vendor`) — a Go sysroot `bin` or an Xcode `PIFCache/target` is walked like any other dir, not claimed. The full rule table is `ARTIFACT_RULES` in `src-tauri/src/plugin_fs.rs`. Each `repoPaths` entry is `$HOME`-scoped **and intersected server-side with the app's actual registered-repository list** — a path that isn't equal to or nested under a genuinely registered repo root is silently dropped, so a plugin cannot widen its scan surface by passing arbitrary `$HOME` paths. **Requires `"fs:scan"` capability.**
+Recursively scan the given repo roots for build-artifact directories (Rust/Maven `target/`, `node_modules/`, JS framework caches like `.next`/`.turbo`, Python `.venv`/`__pycache__`/tool caches, .NET `obj`/`bin`, Gradle/CMake/Flutter `build/`, SwiftPM `.build`/`Pods`, `.terraform`, Elixir `_build`, Zig, Haskell, Composer `vendor/`). Read-only. Unlike `listDirectory`, this **ignores `.gitignore`** (artifact dirs are gitignored by design) and stops descending on a match, so a nested `node_modules` is folded into the outer entry — never double counted. Ambiguously-named dirs (`target`, `bin`/`obj`, `build`, `vendor`, …) only count when a toolchain marker sits beside them (e.g. `Cargo.toml` or `pom.xml` for `target`; a `.csproj`/`.fsproj`/`.vbproj`/`.sln`/`.slnx` for `bin`/`obj`; `build.gradle`/`CMakeLists.txt`/`pubspec.yaml` for `build`; `composer.json` for `vendor`) — a Go sysroot `bin` or an Xcode `PIFCache/target` is walked like any other dir, not claimed. The full rule table is `ARTIFACT_RULES` in `src-tauri/src/plugin_fs.rs`. Each `repoPaths` entry is `$HOME`-scoped **and intersected server-side with the app's actual registered-repository list** — a path that isn't equal to or nested under a genuinely registered repo root is silently dropped, so a plugin cannot widen its scan surface by passing arbitrary `$HOME` paths. Results for the same normalized set of roots are shared across concurrent callers and reused for 30 seconds. Pass `{ forceRefresh: true }` to bypass a completed cached result; an already-running scan for the same roots is still shared. **Requires `"fs:scan"` capability.**
 
 Each `ArtifactEntry` is `{ path, kind, size_bytes, last_modified_secs, repo }` — `kind` is one of `rust | maven | node | jscache | python | dotnet | gradle | cmake | swift | flutter | terraform | elixir | zig | haskell | php`, `last_modified_secs` is the max mtime of the dir's direct children (a "last build" signal).
 
 ```typescript
 const entries = await host.scanBuildArtifacts(host.getRepos().map((r) => r.path));
+const refreshed = await host.scanBuildArtifacts(host.getRepos().map((r) => r.path), {
+  forceRefresh: true,
+});
 ```
 
 #### `host.deleteBuildArtifact(path, repoPaths) -> Promise<void>`

@@ -241,7 +241,7 @@ host.getGitDiff(repoPath, scope?)       // unified diff string (scope: "staged" 
 | `await host.readCredential(serviceName: string): Promise<string \| null>` | `credentials:read` |
 | `await host.writeFile(absolutePath: string, content: string): Promise<void>` | `fs:write` |
 | `await host.renamePath(from: string, to: string): Promise<void>` | `fs:rename` |
-| `await host.scanBuildArtifacts(repoPaths: string[]): Promise<ArtifactEntry[]>` | `fs:scan` |
+| `await host.scanBuildArtifacts(repoPaths: string[], options?: { forceRefresh?: boolean }): Promise<ArtifactEntry[]>` | `fs:scan` |
 | `await host.deleteBuildArtifact(path: string, repoPaths: string[]): Promise<void>` | `fs:delete` |
 | `await host.httpFetch(url: string, options?): Promise<HttpResponse>` | `net:http` |
 | `host.registerTerminalAction({ id, label, action(ctx), disabled?(ctx) }): Disposable` | `ui:context-menu` |
