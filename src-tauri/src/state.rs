@@ -2775,6 +2775,10 @@ impl VtLogBuffer {
         self.grid.logical_prefix_at_cursor()
     }
 
+    pub(crate) fn physical_prefix_at_cursor(&self) -> Option<crate::terminal_grid::LogicalPrefix> {
+        self.grid.physical_prefix_at_cursor()
+    }
+
     /// Current visible screen rows as styled LogLines (with ANSI color attributes).
     /// Used by mobile/REST to render screen content with colors.
     pub fn screen_log_lines(&self) -> Vec<LogLine> {

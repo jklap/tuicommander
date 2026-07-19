@@ -3719,6 +3719,7 @@ impl ChunkProcessor {
             screen_cache,
             cursor_row,
             logical_prefix,
+            physical_prefix,
             history_size,
         ): (
             Vec<crate::state::ChangedRow>,
@@ -3727,6 +3728,7 @@ impl ChunkProcessor {
             Vec<crate::terminal_grid::TermEvent>,
             Option<Vec<String>>,
             Option<usize>,
+            Option<crate::terminal_grid::LogicalPrefix>,
             Option<crate::terminal_grid::LogicalPrefix>,
             usize,
         ) = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
@@ -3767,6 +3769,7 @@ impl ChunkProcessor {
             let screen = vt.screen_rows();
             let cursor_row = vt.cursor_point().0;
             let logical_prefix = vt.logical_prefix_at_cursor();
+            let physical_prefix = vt.physical_prefix_at_cursor();
 
             (
                 changed,
@@ -3776,10 +3779,21 @@ impl ChunkProcessor {
                 Some(screen),
                 Some(cursor_row),
                 logical_prefix,
+                physical_prefix,
                 hist,
             )
         } else {
-            (Vec::new(), None, None, Vec::new(), None, None, None, 0)
+            (
+                Vec::new(),
+                None,
+                None,
+                Vec::new(),
+                None,
+                None,
+                None,
+                None,
+                0,
+            )
         };
 
         // Did this chunk grow the scrollback (genuine new output) or merely
@@ -4029,7 +4043,15 @@ impl ChunkProcessor {
         // physical range with one synthetic logical row so the unchanged anchor
         // remains available to the existing parser. Intent deferral is unchanged.
         let mut structured_rows = None;
-        if let Some(prefix) = logical_prefix {
+        let structured_prefix = logical_prefix
+            .filter(|prefix| crate::output_parser::structured_token_anchor(&prefix.text).is_some())
+            .or_else(|| {
+                physical_prefix.filter(|prefix| {
+                    self.parser
+                        .is_complete_suggest(&prefix.text, agent_active_for_parse)
+                })
+            });
+        if let Some(prefix) = structured_prefix {
             let intersects = changed_rows
                 .iter()
                 .any(|row| (prefix.start_row..=prefix.end_row).contains(&row.row_index));
@@ -13626,6 +13648,71 @@ mod tests {
         let snapshot = state.session_state_with_shell(child_id).unwrap();
         assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
         assert!(!snapshot.background_work);
+    }
+
+    #[test]
+    fn physical_cursor_suggest_completes_after_wrapped_background_probe_clears() {
+        for wrap_count in 1..=5 {
+            let state = crate::state::tests_support::make_test_app_state();
+            let child_id = format!("wrapped-background-physical-suggest-{wrap_count}");
+            agent_session(&state, &child_id, SHELL_IDLE);
+            state.vt_log_buffers.insert(
+                child_id.clone(),
+                Mutex::new(crate::state::VtLogBuffer::new(10, 80, 1000)),
+            );
+            let silence = state.silence_states.get(&child_id).unwrap().clone();
+            let mut processor = ChunkProcessor::new(None, None);
+
+            note_submitted_input(&state, &child_id);
+            processor.process_chunk(
+                &"x".repeat(wrap_count * 80 + 1),
+                &silence,
+                &child_id,
+                &state,
+            );
+            {
+                let mut session = state.session_states.get_mut(&child_id).unwrap();
+                session.background_probe_turn_epoch = Some(1);
+                session.background_probe_after_generation = Some(0);
+            }
+            assert!(set_background_work_for_epoch(&state, &child_id, 1, 1, true));
+            assert!(state.session_states.get(&child_id).unwrap().background_work);
+
+            assert!(try_shell_transition(
+                &state, &child_id, SHELL_BUSY, SHELL_IDLE, false,
+            ));
+            assert!(set_background_work_for_epoch(
+                &state, &child_id, 1, 2, false
+            ));
+            assert_eq!(
+                state
+                    .session_state_with_shell(&child_id)
+                    .unwrap()
+                    .agent_state
+                    .as_deref(),
+                Some("idle"),
+                "wrap_count={wrap_count}"
+            );
+
+            processor.process_chunk(
+                "\r\x1b[2Ksuggest: [ background cleared | lifecycle complete | close smoke ]",
+                &silence,
+                &child_id,
+                &state,
+            );
+
+            let snapshot = state.session_state_with_shell(&child_id).unwrap();
+            assert_eq!(
+                snapshot.agent_state.as_deref(),
+                Some("completed"),
+                "wrap_count={wrap_count}"
+            );
+            assert!(!snapshot.background_work, "wrap_count={wrap_count}");
+            assert!(
+                silence.lock().completion_declared_for_epoch(1),
+                "wrap_count={wrap_count}"
+            );
+        }
     }
 
     #[test]

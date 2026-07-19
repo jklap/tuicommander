@@ -655,6 +655,41 @@ impl TerminalGrid {
         })
     }
 
+    /// Read only the current physical row through the cursor. This is the
+    /// bounded fallback for a self-contained structured token when reconstructing
+    /// the preceding soft-wrap chain is intentionally refused.
+    pub(crate) fn physical_prefix_at_cursor(&self) -> Option<LogicalPrefix> {
+        const MAX_BYTES: usize = 512;
+
+        let grid = self.term.grid();
+        let cursor = grid.cursor.point;
+        if cursor.line.0 < 0 {
+            return None;
+        }
+        let (row, cursor_col) = self.cursor_point();
+        if row >= grid.screen_lines() {
+            return None;
+        }
+        let limit = (cursor_col + usize::from(grid.cursor.input_needs_wrap)).min(grid.columns());
+        let mut text = String::new();
+        for col in 0..limit {
+            let cell = &grid[Line(row as i32)][Column(col)];
+            if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+                continue;
+            }
+            let ch = if cell.c == '\0' { ' ' } else { cell.c };
+            if text.len() + ch.len_utf8() > MAX_BYTES {
+                return None;
+            }
+            text.push(ch);
+        }
+        Some(LogicalPrefix {
+            text,
+            start_row: row,
+            end_row: row,
+        })
+    }
+
     /// Return the text of the row the cursor is currently on.
     pub fn get_cursor_row_text(&self) -> String {
         let cursor_line = self.term.grid().cursor.point.line;
@@ -1894,6 +1929,22 @@ mod tests {
         let data = "x".repeat(513);
         let _ = too_many_bytes.process(data.as_bytes());
         assert_eq!(too_many_bytes.logical_prefix_at_cursor(), None);
+    }
+
+    #[test]
+    fn physical_suggest_prefix_survives_a_refused_soft_wrap_chain() {
+        let mut grid = TerminalGrid::new(5, 80, 100);
+        let _ = grid.process(b"........................................ stale suffix");
+        let _ = grid.process(b"\rsuggest: [ A | B ]");
+
+        assert_eq!(
+            grid.physical_prefix_at_cursor(),
+            Some(LogicalPrefix {
+                text: "suggest: [ A | B ]".to_string(),
+                start_row: 0,
+                end_row: 0,
+            })
+        );
     }
 
     #[test]
