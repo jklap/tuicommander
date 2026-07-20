@@ -22,6 +22,67 @@ fn to_json_or_error<T: serde::Serialize>(value: T) -> serde_json::Value {
     }
 }
 
+fn serialize_tool_result(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_default()
+}
+
+/// Private transport marker used to carry a proxied `tools/call` result through
+/// the collapsed `call_tool` meta-path without confusing it with a native
+/// handler value. The marker is removed before any public response is emitted.
+const UPSTREAM_TOOL_RESULT_MARKER: &str = "__tuic_upstream_tool_result";
+
+fn mark_upstream_tool_result(value: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({ UPSTREAM_TOOL_RESULT_MARKER: value })
+}
+
+fn unmark_upstream_tool_result(value: serde_json::Value) -> serde_json::Value {
+    value
+        .as_object()
+        .filter(|object| object.len() == 1)
+        .and_then(|object| object.get(UPSTREAM_TOOL_RESULT_MARKER))
+        .cloned()
+        .unwrap_or(value)
+}
+
+fn upstream_tool_result(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    value
+        .as_object()
+        .filter(|object| object.len() == 1)
+        .and_then(|object| object.get(UPSTREAM_TOOL_RESULT_MARKER))
+}
+
+/// Produce the JSON-RPC `result` for a `tools/call` response.
+///
+/// A successful upstream call already speaks the MCP CallToolResult contract,
+/// so preserve a valid object field-for-field at the JSON value level. Malformed
+/// upstream values and every native TUIC value retain the compact text fallback.
+fn format_tool_call_result(result: &serde_json::Value, is_error: bool) -> serde_json::Value {
+    if let Some(upstream) = upstream_tool_result(result)
+        && upstream
+            .as_object()
+            .and_then(|object| object.get("content"))
+            .is_some_and(serde_json::Value::is_array)
+    {
+        return upstream.clone();
+    }
+
+    let fallback = upstream_tool_result(result).unwrap_or(result);
+    serde_json::json!({
+        "content": [{ "type": "text", "text": serialize_tool_result(fallback) }],
+        "isError": is_error
+    })
+}
+
+fn insert_optional_value(
+    object: &mut serde_json::Map<String, serde_json::Value>,
+    key: &str,
+    value: Option<serde_json::Value>,
+) {
+    if let Some(value) = value {
+        object.insert(key.to_string(), value);
+    }
+}
+
 /// Single source of truth for detecting Claude Code (or tuic-bridge) clients.
 fn detect_claude_code_client(client_name: Option<&str>) -> bool {
     client_name.is_some_and(|n| n.contains("claude") || n.contains("tuic-bridge"))
@@ -605,7 +666,7 @@ fn native_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker).\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state: {shell_state, agent_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state, exit_code}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker). Absent optional fields are omitted, not null.\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state; absent optional fields are omitted.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state?, exit_code?}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats" },
                 "session_id": { "type": "string", "description": "Session ID (required for input, output, resize, close, pause, resume, wait)" },
@@ -625,7 +686,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>). Returns {met, timed_out}.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection.\n- list_peers: List peers. Optional: project filter.\n- send: Message a peer (requires to, message).\n- inbox: Read messages. Optional: limit, since (unix millis).",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order plus next_since.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection.\n- list_peers: List peers. Optional: project filter. Absent project is omitted.\n- send: Message a peer (requires to, message). Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Optional: limit, since (logical unix-millis cursor).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000, capped 300000). On timeout returns {timed_out:true}." },
@@ -644,7 +705,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "project": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
                 "to": { "type": "string", "description": "Recipient tuic_session UUID (action=send, required)" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
-                "since": { "type": "integer", "description": "Unix millis — return messages after this (action=inbox), or wake on mail newer than this (action=wait)" }
+                "since": { "type": "integer", "description": "Logical unix-millis cursor — return messages after this (action=inbox), or wake on mail newer than this (action=wait)" }
             }, "required": ["action"] }
         },
         {
@@ -1081,7 +1142,7 @@ async fn handle_call_tool(
             .proxy_tool_call_for_repo(&tool_name, tool_args, allowed.as_deref())
             .await
         {
-            Ok(v) => v,
+            Ok(v) => mark_upstream_tool_result(v),
             Err(e) => serde_json::json!({ "error": e }),
         }
     } else {
@@ -1107,7 +1168,9 @@ pub(crate) async fn handle_mcp_tool_call(
     args: &serde_json::Value,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
-    handle_mcp_tool_call_with_context(state, addr, name, args, mcp_session_id, None).await
+    unmark_upstream_tool_result(
+        handle_mcp_tool_call_with_context(state, addr, name, args, mcp_session_id, None).await,
+    )
 }
 
 async fn handle_mcp_tool_call_with_context(
@@ -1259,20 +1322,34 @@ async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) ->
                 .shell_states
                 .get(&session_id)
                 .map(|a| crate::pty::shell_state_str(a.load(std::sync::atomic::Ordering::Relaxed)));
-            return serde_json::json!({
+            let mut response = serde_json::json!({
                 "met": true,
                 "timed_out": false,
                 "until": until,
-                "shell_state": shell_state,
-                "exit_code": state.exit_codes.get(&session_id).map(|e| *e.value()),
             });
+            let object = response
+                .as_object_mut()
+                .expect("session wait response is an object");
+            insert_optional_value(
+                object,
+                "shell_state",
+                shell_state.map(|state| serde_json::Value::String(state.to_string())),
+            );
+            insert_optional_value(
+                object,
+                "exit_code",
+                state
+                    .exit_codes
+                    .get(&session_id)
+                    .map(|entry| serde_json::Value::from(*entry.value())),
+            );
+            return response;
         }
         if std::time::Instant::now() >= deadline {
             return serde_json::json!({
                 "met": false,
                 "timed_out": true,
                 "until": until,
-                "hint": "Condition not met within timeout — call wait again to keep waiting, or inspect with session action=status.",
             });
         }
         tokio::time::sleep(std::time::Duration::from_millis(WAIT_POLL_MS)).await;
@@ -1339,9 +1416,41 @@ fn dispatch_waiter_handoff(state: &AppState, recipient: &str, message_ids: &[Str
         .unwrap_or_default();
     for message in messages {
         let framed = frame_peer_message(&message.from_name, &message.content);
-        crate::pty::deliver_message_to_pty(state, recipient, &framed);
-        state.mark_terminal_delivery_dispatched(recipient, &message.id);
+        if crate::pty::deliver_message_to_managed_pty(state, recipient, &framed) {
+            state.mark_terminal_delivery_dispatched(recipient, &message.id);
+        } else {
+            state.release_terminal_delivery(recipient, &message.id);
+        }
     }
+}
+
+const AGENT_WAIT_INLINE_LIMIT: usize = crate::state::AGENT_INBOX_CAPACITY;
+
+fn bounded_agent_messages<'a>(
+    messages: impl DoubleEndedIterator<Item = &'a crate::state::AgentMessage>,
+    limit: usize,
+) -> Vec<crate::state::AgentMessage> {
+    let mut page: Vec<_> = messages.rev().take(limit).cloned().collect();
+    page.reverse();
+    page
+}
+
+fn agent_wait_success_response(finish: crate::state::AgentWaitFinish) -> serde_json::Value {
+    let messages = bounded_agent_messages(finish.messages.iter(), AGENT_WAIT_INLINE_LIMIT);
+    let next_since = messages.iter().map(|message| message.timestamp).max();
+    let mut response = serde_json::json!({
+        "met": true,
+        "timed_out": false,
+        "new_messages": finish.fresh_count,
+        "messages": messages,
+    });
+    let object = response
+        .as_object_mut()
+        .expect("wait response is an object");
+    if let Some(next_since) = next_since {
+        object.insert("next_since".to_string(), serde_json::json!(next_since));
+    }
+    response
 }
 
 async fn handle_agent_wait(
@@ -1365,22 +1474,12 @@ async fn handle_agent_wait(
         let fresh = state.waiter_fresh_message_count(&caller_tuic, since);
         if fresh > 0 {
             let finish = active_wait.finish(true);
-            return serde_json::json!({
-                "met": true,
-                "timed_out": false,
-                "new_messages": finish.fresh_count,
-                "hint": "New mail — read it with agent action=inbox since=<last_ms>.",
-            });
+            return agent_wait_success_response(finish);
         }
         if std::time::Instant::now() >= deadline {
             let finish = active_wait.finish(true);
             if finish.fresh_count > 0 {
-                return serde_json::json!({
-                    "met": true,
-                    "timed_out": false,
-                    "new_messages": finish.fresh_count,
-                    "hint": "New mail arrived at the wait deadline — read it with agent action=inbox since=<last_ms>.",
-                });
+                return agent_wait_success_response(finish);
             }
             return serde_json::json!({"met": false, "timed_out": true, "new_messages": 0});
         }
@@ -1402,49 +1501,100 @@ fn handle_session(
             let caller_tuic = mcp_session_id
                 .and_then(|sid| state.mcp_to_session.get(sid))
                 .map(|entry| entry.value().clone());
-            let sessions: Vec<serde_json::Value> = state.sessions.iter().map(|entry| {
-                let id = entry.key().clone();
-                let s = entry.value().lock();
-                #[cfg(not(windows))]
-                let pgid = s.master.process_group_leader();
-                #[cfg(windows)]
-                let pgid = s._child.process_id();
-                #[cfg(not(windows))]
-                let process_name = pgid.and_then(|p| crate::pty::process_name_from_pid(p as u32));
-                #[cfg(windows)]
-                let process_name = pgid.and_then(crate::pty::process_name_from_pid);
-                let session_state = state.session_state_with_shell(&id);
-                let shell_state = session_state
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.shell_state.clone());
-                let agent_state = session_state
-                    .as_ref()
-                    .and_then(|snapshot| snapshot.agent_state.clone());
-                let background_work = session_state
-                    .as_ref()
-                    .is_some_and(|snapshot| snapshot.background_work);
-                let alias = state.term_aliases.get(&id).map(|e| e.value().clone());
-                #[cfg(unix)]
-                let standby = state.standby_sessions.contains_key(id.as_str());
-                #[cfg(not(unix))]
-                let standby = false;
-                serde_json::json!({
-                    "session_id": id,
-                    "alias": alias,
-                    "display_name": s.display_name.clone(),
-                    "cwd": s.cwd,
-                    "worktree_path": s.worktree.as_ref().map(|w| w.path.to_string_lossy().to_string()),
-                    "worktree_branch": s.worktree.as_ref().and_then(|w| w.branch.clone()),
-                    "child_pid": s._child.process_id(),
-                    "foreground_pgid": pgid,
-                    "foreground_process": process_name,
-                    "shell_state": shell_state,
-                    "agent_state": agent_state,
-                    "background_work": background_work,
-                    "standby": standby,
-                    "is_caller": caller_tuic.as_deref() == Some(id.as_str()),
+            let sessions: Vec<serde_json::Value> = state
+                .sessions
+                .iter()
+                .map(|entry| {
+                    let id = entry.key().clone();
+                    let s = entry.value().lock();
+                    #[cfg(not(windows))]
+                    let pgid = s.master.process_group_leader();
+                    #[cfg(windows)]
+                    let pgid = s._child.process_id();
+                    #[cfg(not(windows))]
+                    let process_name =
+                        pgid.and_then(|p| crate::pty::process_name_from_pid(p as u32));
+                    #[cfg(windows)]
+                    let process_name = pgid.and_then(crate::pty::process_name_from_pid);
+                    let session_state = state.session_state_with_shell(&id);
+                    let shell_state = session_state
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.shell_state.clone());
+                    let agent_state = session_state
+                        .as_ref()
+                        .and_then(|snapshot| snapshot.agent_state.clone());
+                    let background_work = session_state
+                        .as_ref()
+                        .is_some_and(|snapshot| snapshot.background_work);
+                    let alias = state.term_aliases.get(&id).map(|e| e.value().clone());
+                    let child_pid = s._child.process_id();
+                    #[cfg(unix)]
+                    let standby = state.standby_sessions.contains_key(id.as_str());
+                    #[cfg(not(unix))]
+                    let standby = false;
+                    let mut session = serde_json::json!({
+                        "session_id": id,
+                        "background_work": background_work,
+                        "standby": standby,
+                        "is_caller": caller_tuic.as_deref() == Some(id.as_str()),
+                    });
+                    let object = session
+                        .as_object_mut()
+                        .expect("session list entry is an object");
+                    insert_optional_value(
+                        object,
+                        "child_pid",
+                        child_pid.map(serde_json::Value::from),
+                    );
+                    insert_optional_value(object, "alias", alias.map(serde_json::Value::String));
+                    insert_optional_value(
+                        object,
+                        "display_name",
+                        s.display_name.clone().map(serde_json::Value::String),
+                    );
+                    insert_optional_value(
+                        object,
+                        "cwd",
+                        s.cwd.clone().map(serde_json::Value::String),
+                    );
+                    insert_optional_value(
+                        object,
+                        "worktree_path",
+                        s.worktree.as_ref().map(|worktree| {
+                            serde_json::Value::String(worktree.path.to_string_lossy().to_string())
+                        }),
+                    );
+                    insert_optional_value(
+                        object,
+                        "worktree_branch",
+                        s.worktree
+                            .as_ref()
+                            .and_then(|worktree| worktree.branch.clone())
+                            .map(serde_json::Value::String),
+                    );
+                    insert_optional_value(
+                        object,
+                        "foreground_pgid",
+                        pgid.map(serde_json::Value::from),
+                    );
+                    insert_optional_value(
+                        object,
+                        "foreground_process",
+                        process_name.map(serde_json::Value::String),
+                    );
+                    insert_optional_value(
+                        object,
+                        "shell_state",
+                        shell_state.map(serde_json::Value::String),
+                    );
+                    insert_optional_value(
+                        object,
+                        "agent_state",
+                        agent_state.map(serde_json::Value::String),
+                    );
+                    session
                 })
-            }).collect();
+                .collect();
             serde_json::json!(sessions)
         }
         "create" => {
@@ -1581,10 +1731,6 @@ fn handle_session(
                 (false, None)
             };
             drop(session_entry);
-            let exit_code_json = exit_code
-                .map(serde_json::Value::from)
-                .unwrap_or(serde_json::Value::Null);
-
             // Default: serve clean rows from VtLogBuffer (no strip_ansi needed).
             // Pass format="raw" to get the raw ring buffer content with ANSI.
             if args["format"].as_str() != Some("raw") {
@@ -1607,7 +1753,15 @@ fn handle_session(
                     let (log_lines, new_cursor) = buf.lines_since_owned(since, limit);
                     let data: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
                     let data = data.join("\n");
-                    return serde_json::json!({"data": data, "data_length": data.len(), "cursor": new_cursor, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited, "exit_code": exit_code_json});
+                    let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": new_cursor, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
+                    insert_optional_value(
+                        response
+                            .as_object_mut()
+                            .expect("output response is an object"),
+                        "exit_code",
+                        exit_code.map(serde_json::Value::from),
+                    );
+                    return response;
                 }
 
                 // Absolute positioning: from_line overrides the default tail window.
@@ -1628,7 +1782,15 @@ fn handle_session(
                     all_lines.extend(screen);
                 }
                 let data = all_lines.join("\n");
-                return serde_json::json!({"data": data, "data_length": data.len(), "cursor": total, "total_written": total, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited, "exit_code": exit_code_json});
+                let mut response = serde_json::json!({"data": data, "data_length": data.len(), "cursor": total, "total_written": total, "scrollback_lines": scrollback_lines, "oldest_offset": oldest, "exited": exited});
+                insert_optional_value(
+                    response
+                        .as_object_mut()
+                        .expect("output response is an object"),
+                    "exit_code",
+                    exit_code.map(serde_json::Value::from),
+                );
+                return response;
             }
             let ring = match state.output_buffers.get(session_id) {
                 Some(r) => r,
@@ -1641,7 +1803,15 @@ fn handle_session(
             };
             let (bytes, total_written) = ring.lock().read_last(limit);
             let data = String::from_utf8_lossy(&bytes).to_string();
-            serde_json::json!({"data": data, "data_length": data.len(), "total_written": total_written, "exited": exited, "exit_code": exit_code_json})
+            let mut response = serde_json::json!({"data": data, "data_length": data.len(), "total_written": total_written, "exited": exited});
+            insert_optional_value(
+                response
+                    .as_object_mut()
+                    .expect("output response is an object"),
+                "exit_code",
+                exit_code.map(serde_json::Value::from),
+            );
+            response
         }
         "resize" => {
             let session_id = match require_session_id(args, "resize") {
@@ -1800,21 +1970,49 @@ fn handle_session(
                     let standby = state.standby_sessions.contains_key(session_id);
                     #[cfg(not(unix))]
                     let standby = false;
-                    serde_json::json!({
+                    let mut response = serde_json::json!({
                         "session_id": session_id,
-                        "shell_state": ss.shell_state,
-                        "agent_state": ss.agent_state,
                         "background_work": ss.background_work,
-                        "agent_type": ss.agent_type,
                         "awaiting_input": ss.awaiting_input,
                         "rate_limited": ss.rate_limited,
                         "delivery_uncertain": delivery_uncertain,
                         "last_activity_ms": ss.last_activity_ms,
-                        "exit_code": exit_code,
-                        "idle_since_ms": if is_idle && elapsed > 0 { serde_json::json!(elapsed) } else { serde_json::Value::Null },
-                        "busy_duration_ms": if is_busy && elapsed > 0 { serde_json::json!(elapsed) } else { serde_json::Value::Null },
                         "standby": standby,
-                    })
+                    });
+                    let object = response
+                        .as_object_mut()
+                        .expect("session status response is an object");
+                    insert_optional_value(
+                        object,
+                        "shell_state",
+                        ss.shell_state.map(serde_json::Value::String),
+                    );
+                    insert_optional_value(
+                        object,
+                        "agent_state",
+                        ss.agent_state.map(serde_json::Value::String),
+                    );
+                    insert_optional_value(
+                        object,
+                        "agent_type",
+                        ss.agent_type.map(serde_json::Value::String),
+                    );
+                    insert_optional_value(
+                        object,
+                        "exit_code",
+                        exit_code.map(serde_json::Value::from),
+                    );
+                    insert_optional_value(
+                        object,
+                        "idle_since_ms",
+                        (is_idle && elapsed > 0).then(|| serde_json::json!(elapsed)),
+                    );
+                    insert_optional_value(
+                        object,
+                        "busy_duration_ms",
+                        (is_busy && elapsed > 0).then(|| serde_json::json!(elapsed)),
+                    );
+                    response
                 }
                 None => serde_json::json!({"error": format!("Session '{}' not found", session_id)}),
             }
@@ -1977,6 +2175,18 @@ fn create_session_in_dir(state: &Arc<AppState>, cwd: &str) -> Result<String, Str
     })
 }
 
+fn worktree_remove_success_response(branch_delete_warning: Option<String>) -> serde_json::Value {
+    let mut response = serde_json::json!({"ok": true});
+    insert_optional_value(
+        response
+            .as_object_mut()
+            .expect("worktree remove response is an object"),
+        "branch_delete_warning",
+        branch_delete_warning.map(serde_json::Value::String),
+    );
+    response
+}
+
 async fn handle_worktree(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -2037,7 +2247,7 @@ async fn handle_worktree(
                     let branch_name = created.branch;
                     let mut response = serde_json::json!({
                         "worktree_path": &wt_path,
-                        "branch": created.worktree.branch,
+                        "branch": &branch_name,
                     });
                     // Optionally spawn a PTY session in the new worktree
                     if args["spawn_session"].as_bool().unwrap_or(false) {
@@ -2099,10 +2309,7 @@ async fn handle_worktree(
             ) {
                 Ok(outcome) => {
                     state.invalidate_repo_caches(&path);
-                    serde_json::json!({
-                        "ok": true,
-                        "branch_delete_warning": outcome.branch_delete_warning,
-                    })
+                    worktree_remove_success_response(outcome.branch_delete_warning)
                 }
                 Err(e) => serde_json::json!({"error": e}),
             }
@@ -2630,7 +2837,6 @@ fn handle_agent_with_parent_cwd(
                 "peer_registered": true,
                 "communication_ready": caller_tuic.is_some(),
                 "send_to": session_id,
-                "parent_session_id": caller_tuic.clone(),
                 "server_ts": spawn_ts,
                 "monitor_with": format!("session(action=output, session_id={session_id}) — anomaly fallback only if the child fails to send its result"),
                 "status_with": format!("session(action=status, session_id={session_id})"),
@@ -2644,6 +2850,10 @@ fn handle_agent_with_parent_cwd(
             if caller_tuic.is_some()
                 && let Some(obj) = response.as_object_mut()
             {
+                obj.insert(
+                    "parent_session_id".to_string(),
+                    serde_json::json!(caller_tuic),
+                );
                 obj.insert(
                     "peer_monitor_with".to_string(),
                     serde_json::json!(format!("agent(action=inbox, since={spawn_ts})")),
@@ -2705,6 +2915,25 @@ fn resolve_registration_identity(
         return Ok((current, false));
     }
     Ok((Uuid::new_v4().to_string(), true))
+}
+
+fn managed_recipient_state(state: &AppState, tuic_session: &str) -> Option<serde_json::Value> {
+    let _session = state.sessions.get(tuic_session)?;
+    let snapshot = state.session_state_with_shell(tuic_session);
+    let mut summary = serde_json::Map::new();
+    if let Some(snapshot) = snapshot {
+        insert_optional_value(
+            &mut summary,
+            "shell_state",
+            snapshot.shell_state.map(serde_json::Value::String),
+        );
+        insert_optional_value(
+            &mut summary,
+            "agent_state",
+            snapshot.agent_state.map(serde_json::Value::String),
+        );
+    }
+    Some(serde_json::Value::Object(summary))
 }
 
 fn handle_messaging(
@@ -2826,12 +3055,17 @@ fn handle_messaging(
                 })
                 .map(|entry| {
                     let p = entry.value();
-                    serde_json::json!({
+                    let mut peer = serde_json::json!({
                         "tuic_session": p.tuic_session,
                         "name": p.name,
-                        "project": p.project,
                         "registered_at": p.registered_at,
-                    })
+                    });
+                    insert_optional_value(
+                        peer.as_object_mut().expect("peer entry is an object"),
+                        "project",
+                        p.project.clone().map(serde_json::Value::String),
+                    );
+                    peer
                 })
                 .collect();
             serde_json::json!({"peers": peers, "count": peers.len()})
@@ -2885,62 +3119,84 @@ fn handle_messaging(
             };
             let msg_id = msg.id.clone();
 
-            // Buffer first, then atomically assign exactly one wake-up owner.
-            // A blocking waiter owns inbox notification; otherwise channel/PTY
-            // delivery owns the wake-up. The inbox remains authoritative either way.
+            // Buffer first, then assign exactly one wake-up owner. Assignment preserves
+            // a claim made by a concurrent waiter between these two operations.
+            // External peers without a live SSE subscriber remain inbox-only.
             state.push_agent_inbox(to, msg);
-            let terminal_owned = state.assign_agent_delivery(to, &msg_id);
-
-            // Try channel push if recipient has SSE stream
+            let managed_recipient = state.sessions.contains_key(to);
             let recipient_mcp_sid = state.peer_agents.get(to).map(|p| p.mcp_session_id.clone());
-            let mut pushed = false;
-            if terminal_owned && let Some(ref mcp_sid) = recipient_mcp_sid {
-                let has_sse = state
-                    .mcp_sessions
-                    .get(mcp_sid)
-                    .map(|m| m.has_sse_stream)
-                    .unwrap_or(false);
-                if has_sse && let Some(tx) = state.messaging_channels.get(mcp_sid) {
-                    let notification = serde_json::json!({
-                        "jsonrpc": "2.0",
-                        "method": "notifications/claude/channel",
-                        "params": {
-                            "content": format!("Message from {}: {}", sender_name, message),
-                            "meta": {
-                                "from_tuic_session": sender_tuic,
-                                "from_name": sender_name,
-                                "message_id": msg_id,
-                            }
-                        }
-                    });
-                    let notification = serde_json::to_string(&notification).unwrap_or_default();
-                    if crate::pty::deliver_with_reserved_submitted_turn(state, to, || {
-                        tx.send(notification).is_ok()
-                    }) {
-                        pushed = true;
-                        if let Some(mut inbox) = state.agent_inbox.get_mut(to)
-                            && let Some(message) = inbox.iter_mut().find(|m| m.id == msg_id)
-                        {
-                            message.delivered_via_channel = true;
-                        }
+            let notification = serde_json::json!({
+                "jsonrpc": "2.0",
+                "method": "notifications/claude/channel",
+                "params": {
+                    "content": format!("Message from {}: {}", sender_name, message),
+                    "meta": {
+                        "from_tuic_session": sender_tuic,
+                        "from_name": sender_name,
+                        "message_id": msg_id,
                     }
                 }
+            });
+            let notification = serde_json::to_string(&notification).unwrap_or_default();
+            let (delivery_assignment, pushed) = state.assign_agent_delivery_with_terminal_attempt(
+                to,
+                &msg_id,
+                managed_recipient,
+                || {
+                    let Some(mcp_sid) = recipient_mcp_sid.as_ref() else {
+                        return false;
+                    };
+                    let has_sse = state
+                        .mcp_sessions
+                        .get(mcp_sid)
+                        .is_some_and(|session| session.has_sse_stream);
+                    if !has_sse {
+                        return false;
+                    }
+                    let Some(channel) = state.messaging_channels.get(mcp_sid) else {
+                        return false;
+                    };
+                    crate::pty::deliver_with_reserved_submitted_turn(state, to, || {
+                        channel.send(notification).is_ok()
+                    })
+                },
+            );
+            let waiter_owned = matches!(
+                delivery_assignment,
+                crate::state::AgentDeliveryAssignment::Waiter
+            );
+            let terminal_owned = matches!(
+                delivery_assignment,
+                crate::state::AgentDeliveryAssignment::Terminal
+            );
+            let mut inbox_only = matches!(
+                delivery_assignment,
+                crate::state::AgentDeliveryAssignment::InboxOnly
+            );
+            if pushed
+                && let Some(mut inbox) = state.agent_inbox.get_mut(to)
+                && let Some(message) = inbox.iter_mut().find(|m| m.id == msg_id)
+            {
+                message.delivered_via_channel = true;
             }
 
             #[cfg(unix)]
-            if let Err(e) = crate::pty::wake_session(state, to) {
+            if managed_recipient && let Err(e) = crate::pty::wake_session(state, to) {
                 tracing::debug!(session = %to, error = %e, "Wake on message delivery failed");
             }
             // Event-driven wake: type the message into an idle recipient's terminal
             // so it acts without polling. Skip when already pushed over the SSE
             // channel (CC agents receive it as a synthetic turn — injecting too
             // would double-deliver). The inbox always holds the authoritative copy.
-            if terminal_owned && !pushed {
+            let pty_dispatched = terminal_owned && !pushed && {
                 let framed = frame_peer_message(&sender_name, message);
-                crate::pty::deliver_message_to_pty(state, to, &framed);
-            }
-            if terminal_owned {
+                crate::pty::deliver_message_to_managed_pty(state, to, &framed)
+            };
+            if pty_dispatched {
                 state.mark_terminal_delivery_dispatched(to, &msg_id);
+            } else if terminal_owned && !pushed {
+                state.release_terminal_delivery(to, &msg_id);
+                inbox_only = true;
             }
             // Forensic trail: sender, recipient, size, and delivery path — but never the
             // content (it can be up to 64 KB and may carry sensitive coordination text).
@@ -2955,20 +3211,30 @@ fn handle_messaging(
                 message_id = %msg_id,
                 "Peer message delivered"
             );
-            serde_json::json!({
+            let mut response = serde_json::json!({
                 "ok": true,
                 "accepted": true,
                 "message_id": msg_id,
                 "buffered_in_inbox": true,
                 "delivered_via_channel": pushed,
-                "delivery_path": if !terminal_owned {
+                "delivery_path": if waiter_owned {
                     "waiter_and_inbox"
                 } else if pushed {
                     "sse_channel_and_inbox"
+                } else if inbox_only {
+                    "inbox_only"
                 } else {
                     "terminal_or_queued_and_inbox"
                 },
-            })
+            });
+            insert_optional_value(
+                response
+                    .as_object_mut()
+                    .expect("send response is an object"),
+                "recipient_state",
+                managed_recipient_state(state, to),
+            );
+            response
         }
         "inbox" => {
             // Resolve caller's tuic_session via O(1) mcp_to_session reverse map (RUST-3/PERF-2).
@@ -2983,29 +3249,14 @@ fn handle_messaging(
             };
             let limit = args["limit"].as_u64().unwrap_or(50) as usize;
             let since = args["since"].as_u64().unwrap_or(0);
-            let messages: Vec<serde_json::Value> = state
+            let messages: Vec<crate::state::AgentMessage> = state
                 .agent_inbox
                 .get(&tuic_session)
                 .map(|inbox| {
-                    inbox
-                        .iter()
-                        .filter(|m| m.timestamp > since)
-                        .rev() // newest first
-                        .take(limit)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev() // restore chronological order
-                        .map(|m| {
-                            serde_json::json!({
-                                "id": m.id,
-                                "from_tuic_session": m.from_tuic_session,
-                                "from_name": m.from_name,
-                                "content": m.content,
-                                "timestamp": m.timestamp,
-                                "delivered_via_channel": m.delivered_via_channel,
-                            })
-                        })
-                        .collect()
+                    bounded_agent_messages(
+                        inbox.iter().filter(|message| message.timestamp > since),
+                        limit,
+                    )
                 })
                 .unwrap_or_default();
             // Consume and reset eviction counter (so caller knows since last read)
@@ -3861,7 +4112,7 @@ pub(super) async fn mcp_post(
                     .proxy_tool_call_for_repo(&tool_name, args.clone(), allowed.as_deref())
                     .await
                 {
-                    Ok(v) => (v, false),
+                    Ok(v) => (mark_upstream_tool_result(v), false),
                     Err(e) => (serde_json::json!({"error": e}), true),
                 }
             } else {
@@ -3877,14 +4128,11 @@ pub(super) async fn mcp_post(
                 let is_error = result.get("error").is_some();
                 (result, is_error)
             };
-            let text = serde_json::to_string_pretty(&result).unwrap_or_default();
+            let tool_result = format_tool_call_result(&result, is_error);
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": {
-                    "content": [{ "type": "text", "text": text }],
-                    "isError": is_error
-                }
+                "result": tool_result
             });
             let mut resp = Json(response).into_response();
             if let Some(sid) = headers
@@ -4230,8 +4478,7 @@ async fn handle_screenshot(
                 serde_json::json!({
                     "ok": true,
                     "path": path.to_string_lossy(),
-                    "size_bytes": bytes.len(),
-                    "hint": "Read the path to view."
+                    "size_bytes": bytes.len()
                 })
             }
             Ok(Ok(None)) => {
@@ -4622,6 +4869,236 @@ mod tests {
     use super::*;
     use base64::Engine;
 
+    fn upstream_passthrough_result() -> serde_json::Value {
+        serde_json::json!({
+            "content": [
+                {"type": "text", "text": "upstream text"},
+                {"type": "resource", "resource": {"uri": "file:///tmp/result", "text": "body"}}
+            ],
+            "isError": true,
+            "structuredContent": {"answer": 42},
+            "_meta": {"trace": "opaque"}
+        })
+    }
+
+    async fn upstream_passthrough_mock(
+        Json(body): Json<serde_json::Value>,
+    ) -> Json<serde_json::Value> {
+        Json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": body.get("id").cloned().unwrap_or(serde_json::Value::Null),
+            "result": upstream_passthrough_result()
+        }))
+    }
+
+    async fn spawn_upstream_passthrough_mock() -> String {
+        let app = axum::Router::new().route("/mcp", axum::routing::post(upstream_passthrough_mock));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        format!("http://127.0.0.1:{port}/mcp")
+    }
+
+    async fn post_test_tool_call(
+        state: Arc<AppState>,
+        session_id: &str,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> serde_json::Value {
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, session_id.parse().unwrap());
+        let response = mcp_post(
+            State(state),
+            ConnectInfo(loopback_addr()),
+            headers,
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 92,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}
+            })),
+        )
+        .await
+        .into_response();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
+    #[test]
+    fn tool_result_text_is_compact_and_semantically_lossless() {
+        let examples = [
+            serde_json::json!({
+                "sessions": [{"session_id": "one", "shell_state": "idle"}],
+                "count": 1,
+            }),
+            serde_json::json!({
+                "upstream_result": {"content": [{"type": "text", "text": "ok"}]},
+                "meta": null,
+            }),
+        ];
+
+        for value in examples {
+            let encoded = serialize_tool_result(&value);
+            assert!(!encoded.contains('\n'), "tool result must be one line");
+            assert!(
+                !encoded.contains(": "),
+                "tool result must omit pretty whitespace"
+            );
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&encoded).unwrap(),
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn valid_upstream_call_tool_result_passes_through_unchanged() {
+        let upstream = upstream_passthrough_result();
+        let marked = mark_upstream_tool_result(upstream.clone());
+
+        assert_eq!(format_tool_call_result(&marked, false), upstream);
+        assert_eq!(unmark_upstream_tool_result(marked), upstream);
+    }
+
+    #[test]
+    fn malformed_upstream_result_uses_compact_text_fallback() {
+        let upstream = serde_json::json!({
+            "content": {"type": "text", "text": "not an array"},
+            "isError": true,
+            "structuredContent": {"kept": true}
+        });
+        let formatted =
+            format_tool_call_result(&mark_upstream_tool_result(upstream.clone()), false);
+
+        assert_eq!(formatted["isError"], false);
+        let text = formatted["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains('\n'));
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(text).unwrap(),
+            upstream
+        );
+    }
+
+    #[test]
+    fn native_tool_result_always_uses_compact_text_envelope() {
+        let native = serde_json::json!({
+            "content": [{"type": "text", "text": "native-shaped value"}],
+            "isError": true,
+            "structuredContent": {"must": "remain nested"}
+        });
+        let formatted = format_tool_call_result(&native, false);
+
+        assert_eq!(formatted["isError"], false);
+        assert_eq!(formatted["content"][0]["type"], "text");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(
+                formatted["content"][0]["text"].as_str().unwrap()
+            )
+            .unwrap(),
+            native
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_post_collapsed_native_call_keeps_compact_text_envelope() {
+        let state = test_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, "mcp-native-envelope".parse().unwrap());
+
+        let response = mcp_post(
+            State(state),
+            ConnectInfo(loopback_addr()),
+            headers,
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 91,
+                "method": "tools/call",
+                "params": {
+                    "name": "call_tool",
+                    "arguments": {
+                        "tool_name": "session",
+                        "arguments": {}
+                    }
+                }
+            })),
+        )
+        .await
+        .into_response();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(body["result"]["isError"], true);
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(!text.contains('\n'));
+        assert!(
+            serde_json::from_str::<serde_json::Value>(text).unwrap()["error"]
+                .as_str()
+                .unwrap()
+                .contains("action")
+        );
+    }
+
+    #[tokio::test]
+    async fn successful_upstream_result_passes_through_direct_and_collapsed_http_paths() {
+        let state = test_state();
+        let upstream_url = spawn_upstream_passthrough_mock().await;
+        state.mcp_upstream_registry.inject_ready_http_upstream(
+            "passthrough",
+            &upstream_url,
+            &["inspect"],
+        );
+        let expected = upstream_passthrough_result();
+
+        let direct = post_test_tool_call(
+            Arc::clone(&state),
+            "mcp-upstream-direct",
+            "passthrough__inspect",
+            serde_json::json!({"mode": "direct"}),
+        )
+        .await;
+        assert_eq!(direct["result"], expected);
+        assert!(
+            !serde_json::to_string(&direct)
+                .unwrap()
+                .contains(UPSTREAM_TOOL_RESULT_MARKER),
+            "the private marker must not leak through the direct path"
+        );
+
+        let collapsed = post_test_tool_call(
+            state,
+            "mcp-upstream-collapsed",
+            "call_tool",
+            serde_json::json!({
+                "tool_name": "passthrough__inspect",
+                "arguments": {"mode": "collapsed"}
+            }),
+        )
+        .await;
+        assert_eq!(collapsed["result"], expected);
+        assert!(
+            !serde_json::to_string(&collapsed)
+                .unwrap()
+                .contains(UPSTREAM_TOOL_RESULT_MARKER),
+            "the private marker must not leak through the collapsed path"
+        );
+    }
+
+    #[test]
+    fn worktree_remove_success_omits_absent_warning() {
+        let clean = worktree_remove_success_response(None);
+        assert_eq!(clean["ok"], true);
+        assert!(clean.get("branch_delete_warning").is_none());
+
+        let warned = worktree_remove_success_response(Some("branch retained".to_string()));
+        assert_eq!(warned["branch_delete_warning"], "branch retained");
+    }
+
     fn test_state() -> Arc<AppState> {
         let state = Arc::new(AppState {
             sessions: dashmap::DashMap::new(),
@@ -4795,6 +5272,45 @@ mod tests {
             }
             other => panic!("Expected SessionCreated, got: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn session_list_omits_absent_optional_fields() {
+        let state = test_state();
+        let created = handle_session(&state, &serde_json::json!({"action": "create"}), None);
+        if created.get("error").is_some() {
+            eprintln!("Skipping: PTY not available in this environment");
+            return;
+        }
+        let session_id = created["session_id"].as_str().unwrap();
+        let listed = handle_session(&state, &serde_json::json!({"action": "list"}), None);
+        let entry = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["session_id"] == session_id)
+            .unwrap()
+            .as_object()
+            .unwrap();
+
+        for absent in [
+            "display_name",
+            "cwd",
+            "worktree_path",
+            "worktree_branch",
+            "agent_state",
+        ] {
+            assert!(!entry.contains_key(absent), "{absent} must be omitted");
+        }
+        assert!(entry.contains_key("background_work"));
+        assert!(entry.contains_key("standby"));
+        assert!(entry.contains_key("is_caller"));
+
+        let _ = handle_session(
+            &state,
+            &serde_json::json!({"action": "kill", "session_id": session_id}),
+            None,
+        );
     }
 
     #[tokio::test]
@@ -5415,6 +5931,107 @@ mod tests {
         .await;
         assert_eq!(r["met"], true);
         assert_eq!(r["new_messages"], 1);
+        assert_eq!(r["next_since"], 5_000);
+        assert_eq!(r["messages"][0]["id"], "m1");
+        assert_eq!(r["messages"][0]["from_tuic_session"], "lead");
+        assert_eq!(r["messages"][0]["from_name"], "lead");
+        assert_eq!(r["messages"][0]["content"], "go");
+        assert_eq!(r["messages"][0]["timestamp"], 5_000);
+        assert_eq!(r["messages"][0]["delivered_via_channel"], false);
+        assert!(
+            r.get("hint").is_none(),
+            "steady-state success needs no hint"
+        );
+        assert!(r.get("overflow").is_none());
+        assert!(r.get("truncated").is_none());
+    }
+
+    #[tokio::test]
+    async fn agent_wait_replayed_cursor_times_out_after_message_was_observed() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-w-replay", Some(TEST_UUID_A));
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: "m-replay".into(),
+                from_tuic_session: "lead".into(),
+                from_name: "lead".into(),
+                content: "once".into(),
+                timestamp: 5_000,
+                delivered_via_channel: false,
+            },
+        );
+
+        let first = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "since": 0, "timeout_ms": 1}),
+            Some("mcp-w-replay"),
+        )
+        .await;
+        assert_eq!(first["met"], true);
+        assert_eq!(first["new_messages"], 1);
+        assert_eq!(first["next_since"], 5_000);
+
+        let replay = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "since": 0, "timeout_ms": 1}),
+            Some("mcp-w-replay"),
+        )
+        .await;
+        assert_eq!(replay["met"], false);
+        assert_eq!(replay["timed_out"], true);
+        assert_eq!(replay["new_messages"], 0);
+        assert!(replay.get("messages").is_none());
+        assert!(replay.get("next_since").is_none());
+    }
+
+    #[tokio::test]
+    async fn agent_wait_inlines_full_retained_equal_millisecond_burst() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-w-overflow", Some(TEST_UUID_A));
+        for index in 1..=crate::state::AGENT_INBOX_CAPACITY {
+            state.push_agent_inbox(
+                TEST_UUID_A,
+                crate::state::AgentMessage {
+                    id: format!("m{index:03}"),
+                    from_tuic_session: "lead".into(),
+                    from_name: "lead".into(),
+                    content: format!("body-{index:03}"),
+                    timestamp: 5_000,
+                    delivered_via_channel: false,
+                },
+            );
+        }
+
+        let response = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "since": 0}),
+            Some("mcp-w-overflow"),
+        )
+        .await;
+
+        assert_eq!(response["met"], true);
+        assert_eq!(response["timed_out"], false);
+        assert_eq!(response["new_messages"], crate::state::AGENT_INBOX_CAPACITY);
+        assert_eq!(
+            response["messages"].as_array().unwrap().len(),
+            crate::state::AGENT_INBOX_CAPACITY
+        );
+        assert_eq!(response["messages"][0]["id"], "m001");
+        assert_eq!(response["messages"][99]["id"], "m100");
+        assert_eq!(response["next_since"], 5_099);
+        assert!(response.get("overflow").is_none());
+        assert!(response.get("truncated").is_none());
+        assert!(response.get("hint").is_none());
+
+        let retained = state.agent_inbox.get(TEST_UUID_A).unwrap();
+        assert_eq!(
+            retained.len(),
+            crate::state::AGENT_INBOX_CAPACITY,
+            "wait must not consume inbox messages"
+        );
+        assert_eq!(retained.front().unwrap().id, "m001");
+        assert_eq!(retained.back().unwrap().id, "m100");
     }
 
     #[tokio::test]
@@ -5708,6 +6325,15 @@ mod tests {
             Some("mcp-1"),
         );
         assert_eq!(r["name"], "agent");
+        let peers = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "list_peers"}),
+            Some("mcp-1"),
+        );
+        assert!(
+            peers["peers"][0].get("project").is_none(),
+            "absent optional peer project must not serialize as null"
+        );
     }
 
     fn register_peer(state: &Arc<AppState>, tuic: &str, name: &str, mcp: &str) {
@@ -7669,6 +8295,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn session_output_omits_unknown_exit_code() {
+        use crate::OutputRingBuffer;
+
+        let state = test_state();
+        let sid = "tombstone-without-exit-code";
+        let mut ring = OutputRingBuffer::new(4096);
+        ring.write(b"final output\n");
+        state
+            .output_buffers
+            .insert(sid.to_string(), parking_lot::Mutex::new(ring));
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({"action": "output", "session_id": sid, "format": "raw"}),
+            None,
+        );
+
+        assert_eq!(response["exited"], true);
+        assert!(
+            response.get("exit_code").is_none(),
+            "unknown optional exit_code must be omitted: {response}"
+        );
+    }
+
+    #[tokio::test]
+    async fn session_wait_timeout_has_no_redundant_hint() {
+        let state = test_state();
+        let response = handle_session_wait(
+            &state,
+            &serde_json::json!({
+                "action": "wait",
+                "session_id": "missing-session",
+                "timeout_ms": 1,
+            }),
+        )
+        .await;
+
+        assert_eq!(response["met"], false);
+        assert_eq!(response["timed_out"], true);
+        assert!(response.get("hint").is_none());
+    }
+
     /// `session output` response includes `cursor` field (== total VtLog lines)
     /// and `total_written` remains present for backwards compat.
     #[test]
@@ -8238,6 +8907,10 @@ mod tests {
             "unregistered caller spawn must succeed: {result}"
         );
         assert!(result["session_id"].as_str().is_some());
+        assert!(
+            result.get("parent_session_id").is_none(),
+            "unregistered spawn must omit the absent parent"
+        );
     }
 
     // ---- Layer 2: session(status) enrichment + spawn response (#1163-7599) ----
@@ -8255,6 +8928,35 @@ mod tests {
             err.contains("not found"),
             "expected 'not found' error, got: {result}"
         );
+    }
+
+    #[test]
+    fn session_status_omits_absent_optional_fields() {
+        let state = test_state();
+        let session_id = "status-compact";
+        state.session_states.insert(
+            session_id.to_string(),
+            crate::state::SessionState::default(),
+        );
+
+        let response = handle_session(
+            &state,
+            &serde_json::json!({"action": "status", "session_id": session_id}),
+            None,
+        );
+        let object = response.as_object().unwrap();
+        for absent in [
+            "shell_state",
+            "agent_state",
+            "agent_type",
+            "exit_code",
+            "idle_since_ms",
+            "busy_duration_ms",
+        ] {
+            assert!(!object.contains_key(absent), "{absent} must be omitted");
+        }
+        assert!(object.contains_key("background_work"));
+        assert!(object.contains_key("awaiting_input"));
     }
 
     #[test]
@@ -8787,7 +9489,11 @@ mod tests {
         );
         assert_eq!(result["accepted"], true);
         assert_eq!(result["buffered_in_inbox"], true);
-        assert_eq!(result["delivery_path"], "terminal_or_queued_and_inbox");
+        assert_eq!(result["delivery_path"], "inbox_only");
+        assert!(
+            result.get("recipient_state").is_none(),
+            "generated/external peers have no PTY state"
+        );
         let inbox = state
             .agent_inbox
             .get(recipient_tuic)
@@ -8795,6 +9501,96 @@ mod tests {
         assert_eq!(inbox.len(), 1, "recipient should have 1 buffered message");
         assert_eq!(inbox[0].from_tuic_session, sender_tuic);
         assert_eq!(inbox[0].from_name, "alice");
+    }
+
+    #[tokio::test]
+    async fn external_peer_wait_observes_message_sent_before_wait() {
+        let state = test_state();
+        let sender_mcp = "mcp-prewait-sender";
+        let sender_tuic = "550e8400-e29b-41d4-a716-446655440020";
+        let recipient_mcp = "mcp-prewait-recipient";
+        let recipient_tuic = "550e8400-e29b-41d4-a716-446655440021";
+        register_peer(&state, sender_tuic, "alice", sender_mcp);
+        register_peer(&state, recipient_tuic, "root", recipient_mcp);
+
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": recipient_tuic,
+                "message": "completed",
+            }),
+            Some(sender_mcp),
+        );
+        assert_eq!(sent["delivery_path"], "inbox_only");
+        assert_eq!(
+            state.agent_delivery_owner(recipient_tuic, sent["message_id"].as_str().unwrap()),
+            None
+        );
+
+        let received = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "since": 0, "timeout_ms": 1}),
+            Some(recipient_mcp),
+        )
+        .await;
+        assert_eq!(received["met"], true);
+        assert_eq!(received["new_messages"], 1);
+        assert_eq!(received["messages"][0]["content"], "completed");
+    }
+
+    #[tokio::test]
+    async fn agent_send_includes_managed_recipient_shell_and_agent_state_only() {
+        let state = test_state();
+        #[cfg(unix)]
+        let stable_shell = "/bin/cat";
+        #[cfg(windows)]
+        let stable_shell = "cmd.exe";
+        let created = handle_session(
+            &state,
+            &serde_json::json!({"action": "create", "shell": stable_shell}),
+            None,
+        );
+        if created.get("error").is_some() {
+            eprintln!("Skipping: PTY not available in this environment");
+            return;
+        }
+        let recipient = created["session_id"].as_str().unwrap();
+        state.session_states.insert(
+            recipient.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                awaiting_input: true,
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            recipient.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-managed-sender");
+        register_peer(&state, recipient, "recipient", "mcp-managed-recipient");
+
+        let response = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": recipient,
+                "message": "state summary",
+            }),
+            Some("mcp-managed-sender"),
+        );
+
+        let recipient_state = response["recipient_state"].as_object().unwrap();
+        assert_eq!(recipient_state.len(), 2);
+        assert!(recipient_state["shell_state"].as_str().is_some());
+        assert_eq!(recipient_state["agent_state"], "awaiting_input");
+
+        let _ = handle_session(
+            &state,
+            &serde_json::json!({"action": "kill", "session_id": recipient}),
+            None,
+        );
     }
 
     #[test]

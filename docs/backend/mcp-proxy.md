@@ -292,3 +292,11 @@ if tool_name.contains("__") {
 The `tools/list` response merges native tools with upstream tools via `merged_tool_definitions()`.
 
 The `build_mcp_instructions()` function supplies TUIC protocol and orchestration context once in the initialize response. Proxied upstream descriptions remain upstream-owned and do not repeat that preamble.
+
+Successful proxied `tools/call` responses that are valid MCP `CallToolResult` objects
+(an object with a `content` array) pass through as the downstream JSON-RPC result.
+TUIC does not re-wrap or mutate their `content`, `isError`, `structuredContent`, or
+extension fields. The same passthrough is used when `collapse_tools` routes an upstream
+call through the `call_tool` meta-tool. If an upstream returns a malformed result, TUIC
+falls back to a compact JSON text content envelope; native TUIC tools always use that
+compact envelope.

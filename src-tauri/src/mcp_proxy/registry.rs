@@ -249,24 +249,25 @@ impl UpstreamRegistry {
     /// Insert a fake Ready upstream with the given tools. Test-only.
     #[cfg(test)]
     pub(crate) fn inject_ready_upstream(&self, name: &str, tool_names: &[&str]) {
+        self.inject_ready_http_upstream(name, &format!("http://127.0.0.1:1/{name}"), tool_names);
+    }
+
+    /// Insert a Ready HTTP upstream backed by a caller-supplied test server.
+    #[cfg(test)]
+    pub(crate) fn inject_ready_http_upstream(&self, name: &str, url: &str, tool_names: &[&str]) {
         use crate::mcp_proxy::http_client::{HttpMcpClient, UpstreamToolDef};
         let config = UpstreamMcpServer {
             id: uuid::Uuid::new_v4().to_string(),
             name: name.to_string(),
             transport: UpstreamTransport::Http {
-                url: format!("http://127.0.0.1:1/{name}"),
+                url: url.to_string(),
             },
             enabled: true,
             timeout_secs: 10,
             tool_filter: None,
             auth: None,
         };
-        let client = HttpMcpClient::new(
-            name.to_string(),
-            format!("http://127.0.0.1:1/{name}"),
-            10,
-            false,
-        );
+        let client = HttpMcpClient::new(name.to_string(), url.to_string(), 10, false);
         let entry = Arc::new(UpstreamEntry::new(
             config,
             UpstreamClient::Http(Box::new(tokio::sync::RwLock::new(client))),

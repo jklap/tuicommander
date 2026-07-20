@@ -4750,7 +4750,12 @@ fn enqueue_state_change_to_parent(
     };
     let message_id = msg.id.clone();
     state.push_agent_inbox(&parent_id, msg);
-    if !state.assign_agent_delivery(&parent_id, &message_id) {
+    if state.assign_agent_delivery(
+        &parent_id,
+        &message_id,
+        state.sessions.contains_key(&parent_id),
+    ) != crate::state::AgentDeliveryAssignment::Terminal
+    {
         return None;
     }
     let state_desc = payload
@@ -4780,8 +4785,11 @@ fn enqueue_state_change_to_parent(
 /// Wake/dispatch only after the child lifecycle lock has been released. This
 /// may acquire the parent's SilenceState lock through terminal delivery.
 fn dispatch_parent_lifecycle(state: &AppState, dispatch: ParentLifecycleDispatch) {
-    deliver_message_to_pty(state, &dispatch.parent_id, &dispatch.framed);
-    state.mark_terminal_delivery_dispatched(&dispatch.parent_id, &dispatch.message_id);
+    if deliver_message_to_managed_pty(state, &dispatch.parent_id, &dispatch.framed) {
+        state.mark_terminal_delivery_dispatched(&dispatch.parent_id, &dispatch.message_id);
+    } else {
+        state.release_terminal_delivery(&dispatch.parent_id, &dispatch.message_id);
+    }
 }
 
 /// Push a state_change message and wake the parent when no child lifecycle
@@ -4825,10 +4833,15 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
             delivered_via_channel: false,
         },
     );
-    if !state.assign_agent_delivery(&parent_id, &message_id) {
+    if state.assign_agent_delivery(
+        &parent_id,
+        &message_id,
+        state.sessions.contains_key(&parent_id),
+    ) != crate::state::AgentDeliveryAssignment::Terminal
+    {
         return true;
     }
-    deliver_message_to_pty(
+    let delivered = deliver_message_to_managed_pty(
         state,
         &parent_id,
         &format!(
@@ -4836,7 +4849,11 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
             short_session(session_id)
         ),
     );
-    state.mark_terminal_delivery_dispatched(&parent_id, &message_id);
+    if delivered {
+        state.mark_terminal_delivery_dispatched(&parent_id, &message_id);
+    } else {
+        state.release_terminal_delivery(&parent_id, &message_id);
+    }
     true
 }
 
@@ -5220,6 +5237,26 @@ pub(crate) fn deliver_message_to_pty(state: &AppState, session_id: &str, framed:
         // an empty queue.
         flush_pending_injections(state, session_id);
     }
+}
+
+/// Deliver only while the recipient still has a managed PTY and agent state.
+/// Returns false when teardown won the race so the caller can release wake
+/// ownership and leave the authoritative inbox copy available to `agent wait`.
+pub(crate) fn deliver_message_to_managed_pty(
+    state: &AppState,
+    session_id: &str,
+    framed: &str,
+) -> bool {
+    let available = state.sessions.contains_key(session_id)
+        && state
+            .session_states
+            .get(session_id)
+            .is_some_and(|session| session.agent_type.is_some());
+    if !available {
+        return false;
+    }
+    deliver_message_to_pty(state, session_id, framed);
+    state.sessions.contains_key(session_id)
 }
 
 /// Drain and inject any messages queued for a session that can receive them now.
@@ -15171,7 +15208,10 @@ mod tests {
             },
         );
 
-        assert!(!state.assign_agent_delivery("waiting", "wait-owned"));
+        assert_eq!(
+            state.assign_agent_delivery("waiting", "wait-owned", true),
+            crate::state::AgentDeliveryAssignment::Waiter
+        );
 
         assert!(
             !state.pending_injections.contains_key("waiting"),
@@ -15189,6 +15229,17 @@ mod tests {
             !state.pending_injections.contains_key("ghost"),
             "non-agent must never queue"
         );
+    }
+
+    #[test]
+    fn managed_delivery_rejects_stale_agent_state_without_pty() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "vanished", SHELL_BUSY);
+
+        assert!(!deliver_message_to_managed_pty(
+            &state, "vanished", "message"
+        ));
+        assert!(!state.pending_injections.contains_key("vanished"));
     }
 
     #[test]
@@ -15674,9 +15725,10 @@ mod tests {
     }
 
     #[test]
-    fn state_change_to_parent_queues_wake_for_busy_parent() {
-        // A child going idle must both inbox-notify AND wake an idle/busy parent.
-        // Here the parent is busy → the wake is queued into its pending injections.
+    fn state_change_to_parent_without_managed_pty_stays_inbox_only() {
+        // Logical agent state alone is not proof of a managed PTY. A child state
+        // change must remain available in the inbox without creating a phantom
+        // terminal injection for an external peer.
         let state = crate::state::tests_support::make_test_app_state();
         agent_session(&state, "parent", SHELL_BUSY);
         state
@@ -15695,12 +15747,19 @@ mod tests {
             Some(1),
             "parent inbox must receive the state_change"
         );
-        // …and a human wake line was queued for the busy parent's terminal.
-        let pending = state.pending_injections.get("parent").expect("queued wake");
         assert!(
-            pending.front().unwrap().contains("is now idle"),
-            "wake line must describe the child state"
+            !state.pending_injections.contains_key("parent"),
+            "an external peer without a managed PTY must not receive terminal input"
         );
+        let message_id = state
+            .agent_inbox
+            .get("parent")
+            .unwrap()
+            .front()
+            .unwrap()
+            .id
+            .clone();
+        assert_eq!(state.agent_delivery_owner("parent", &message_id), None);
     }
 
     #[test]

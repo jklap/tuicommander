@@ -121,7 +121,9 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
 > **Prefer blocking waits over polling.** `agent action=wait since=<ms>` returns as soon
 > as new mail arrives; `session action=wait session_id=<id> until=idle|exited` blocks on a
 > peer's lifecycle. Both default to 60 seconds, cap at 300000 ms, and return
-> `{met, timed_out}`. Incoming messages are also **typed into an idle peer's terminal**, so a waiting
+> `{met, timed_out}`. A successful agent wait also returns every retained fresh message (up to the
+> 100-message inbox capacity) and a per-recipient logical `next_since` cursor, so the normal path
+> needs no separate inbox call. Incoming messages are also **typed into an idle peer's terminal**, so a waiting
 > orchestrator is woken by its children without any poll loop.
 
 1. **Register** *(optional — sets name/project)* — the agent reads its `$TUIC_SESSION`:
@@ -140,11 +142,20 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
    agent action=send to="<recipient-tuic-session>" message="PR review done, 3 issues found"
    ```
 
-4. **Check inbox** — Read buffered messages (useful if channel push was missed):
+4. **Wait for and receive messages** — one blocking call returns the message bodies:
+   ```
+   agent action=wait since=1712000000000
+   ```
+   Pass the returned `next_since` to the next wait.
+
+5. **Check inbox directly** — useful after a reported FIFO eviction or if channel push was missed:
    ```
    agent action=inbox
    agent action=inbox limit=10 since=1712000000000
    ```
+
+`agent action=send` also returns `recipient_state` with the recipient's `shell_state` and
+`agent_state` when the recipient is a managed PTY. External generated peers omit this field.
 
 Automatic lifecycle notifications contain state only (`idle`, `completed`, or `exited`). They do
 not contain the worker's result. Every worker reports completed output or a real blocker with

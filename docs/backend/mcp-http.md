@@ -194,6 +194,17 @@ Seven native tools, organized by domain. Two (`config`, `debug`) are hidden by d
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
 
+Native responses omit optional values when they are unavailable. In particular,
+`session action=output` includes `exit_code` only after an exit status is known, and
+blocking wait timeouts return only the condition state without a repeated follow-up hint.
+Native tool values are wrapped as compact JSON text in the MCP `content` envelope.
+A proxied upstream value that is already a valid MCP `CallToolResult` object (an object
+with a `content` array) instead becomes the JSON-RPC result directly, preserving its
+`content`, `isError`, `structuredContent`, and any extension fields without mutation.
+This applies both to direct `{upstream}__{tool}` calls and to the collapsed `call_tool`
+meta-path. A malformed upstream value falls back to the native compact JSON text
+envelope so the response remains protocol-valid and inspectable.
+
 #### `ui` tool — `tab` URL schemes
 
 The `url` param of `action=tab` supports three schemes:
@@ -263,7 +274,7 @@ registerDebugSnapshot("storeName", () => ({ /* fields to expose */ }));
 
 ### MCP Tool: `session` Output
 
-The `session` tool's `action=output` strips ANSI escape codes by default, returning clean text suitable for AI consumption. Pass `format="raw"` to preserve escape sequences (e.g. for terminal rendering). For managed peers, task results travel through `agent action=send`; raw session output is only the anomaly fallback when a child failed to send its result. The `action=list` response includes process details per session: `child_pid`, `foreground_pgid`, `foreground_process`, `shell_state`, `agent_state`, `background_work`, and `is_caller`. `is_caller=true` identifies the managed PTY that owns the current MCP connection so an orchestrator does not close itself.
+The `session` tool's `action=output` strips ANSI escape codes by default, returning clean text suitable for AI consumption. Pass `format="raw"` to preserve escape sequences (e.g. for terminal rendering). For managed peers, task results travel through `agent action=send`; raw session output is only the anomaly fallback when a child failed to send its result. The `action=list` response includes process details per session: `child_pid`, `foreground_pgid`, `foreground_process`, `shell_state`, `agent_state`, `background_work`, and `is_caller`. `is_caller=true` identifies the managed PTY that owns the current MCP connection so an orchestrator does not close itself. Optional values such as alias, display name, cwd, worktree data, process identity, and agent state are omitted when absent rather than serialized as `null`; `status` follows the same omission rule.
 
 `Global overview: session action=list` — one call; no per-session `status` fan-out.
 
@@ -319,7 +330,7 @@ Non-Claude Code MCP clients do not receive this field.
 
 ### MCP Tool: `repo` — Worktree Remove
 
-MCP `repo action=worktree_remove` returns `{ "ok": true, "branch_delete_warning": null }` on full success. When `delete_branch=true` and safe branch deletion fails after the worktree is removed, the action still succeeds with `branch_delete_warning` populated so clients can report that the worktree was removed but the branch was kept.
+MCP `repo action=worktree_remove` returns `{ "ok": true }` on full success. When `delete_branch=true` and safe branch deletion fails after the worktree is removed, the action still succeeds with `branch_delete_warning` populated so clients can report that the worktree was removed but the branch was kept.
 
 ## Upstream MCP Proxy
 
@@ -489,14 +500,23 @@ five-minute wait cap, avoiding false transport failures while preserving bounded
 3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
    `accepted=true` and `buffered_in_inbox=true` acknowledge success;
    `delivered_via_channel` describes only the optional SSE path, while
-   `delivery_path` distinguishes SSE from terminal-or-queued delivery.
+   `delivery_path` distinguishes SSE, terminal-or-queued, waiter, and inbox-only delivery. When the recipient is a
+   real managed PTY, `recipient_state` contains only its current `shell_state` and `agent_state`;
+   external generated peers omit `recipient_state`.
 4. **Receive** — three layers, most-immediate first:
    - **Channel push**: real-time `notifications/claude/channel` when the recipient holds an SSE stream (CC + channels flag).
    - **PTY injection**: for any idle agent without a live channel, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it acts on its next turn without polling. A busy recipient's message is queued and flushed on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead.
    - **Inbox poll**: `agent action=inbox since=<ms>` — always the authoritative store.
 5. **Wait** *(prefer over polling)*: `agent action=wait since=<ms>` blocks until new mail;
    `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. The default
-   is 60 seconds and the server cap is 300000 ms. Returns `{met, timed_out}`.
+   is 60 seconds and the server cap is 300000 ms. Agent-wait success preserves
+   `{met,timed_out,new_messages}` and directly includes every retained fresh message (up to the
+   100-message inbox capacity) plus `next_since`, in chronological order. Per-recipient logical
+   unix-millisecond cursors make equal-clock-millisecond bursts safe. Wait never consumes the
+   authoritative inbox; actual FIFO eviction is still reported by `missed_count` on inbox reads.
+
+Low-risk response compaction also omits an absent peer `project` from `list_peers` and an absent
+`parent_session_id` from standalone spawn responses. Proxied upstream tool payloads are unchanged.
 
 Blocking waits and terminal wake-up use a per-recipient delivery lease. Each
 message is atomically assigned to exactly one wake-up owner: an active waiter,

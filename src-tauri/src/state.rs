@@ -895,7 +895,7 @@ pub struct PeerAgent {
 }
 
 /// A message in the inter-agent mailbox.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AgentMessage {
     /// Unique message ID
     pub id: String,
@@ -905,7 +905,7 @@ pub struct AgentMessage {
     pub from_name: String,
     /// Message body (max 64 KB)
     pub content: String,
-    /// Unix millis timestamp
+    /// Per-recipient logical unix-millis cursor
     pub timestamp: u64,
     /// Whether this message was pushed via SSE channel notification
     pub delivered_via_channel: bool,
@@ -919,6 +919,13 @@ pub(crate) enum AgentDeliveryOwner {
     TerminalDispatched,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentDeliveryAssignment {
+    Waiter,
+    Terminal,
+    InboxOnly,
+}
+
 #[derive(Debug, Default)]
 pub(crate) struct AgentDeliveryGate {
     next_lease: u64,
@@ -929,6 +936,7 @@ pub(crate) struct AgentDeliveryGate {
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct AgentWaitFinish {
     pub fresh_count: usize,
+    pub messages: Vec<AgentMessage>,
     pub terminal_handoff: Vec<String>,
 }
 
@@ -1324,9 +1332,17 @@ impl AppState {
     /// is entirely lifecycle notifications (orchestrator badly stuck). Every
     /// genuine eviction bumps `agent_inbox_evictions`, surfaced as
     /// `missed_count` on the next `inbox` read — nothing is dropped silently.
-    pub(crate) fn push_agent_inbox(&self, recipient: &str, msg: AgentMessage) {
+    pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) {
         let evicted_id = {
             let mut inbox = self.agent_inbox.entry(recipient.to_string()).or_default();
+            if let Some(last_timestamp) = inbox.back().map(|message| message.timestamp)
+                && msg.timestamp <= last_timestamp
+            {
+                // Millisecond wall-clock timestamps can collide. Treat the serialized
+                // timestamp as a per-recipient logical cursor while avoiding wrap at
+                // the theoretical u64 ceiling.
+                msg.timestamp = last_timestamp.saturating_add(1);
+            }
             let evicted = if inbox.len() >= AGENT_INBOX_CAPACITY {
                 let evict_idx = inbox
                     .iter()
@@ -1375,30 +1391,40 @@ impl AppState {
         let mut gate = gate.lock();
         gate.active_waiters.remove(&lease);
         let last_waiter = gate.active_waiters.is_empty();
-        let fresh_ids: std::collections::HashSet<String> = self
+        let fresh_messages: Vec<AgentMessage> = self
             .agent_inbox
             .get(tuic_session)
             .map(|inbox| {
                 inbox
                     .iter()
                     .filter(|message| message.timestamp > since)
-                    .map(|message| message.id.clone())
+                    .cloned()
                     .collect()
             })
             .unwrap_or_default();
+        let fresh_ids: std::collections::HashSet<&str> = fresh_messages
+            .iter()
+            .map(|message| message.id.as_str())
+            .collect();
         let mut finish = AgentWaitFinish::default();
+        let mut observed_ids = std::collections::HashSet::new();
         for (message_id, owner) in &mut gate.owners {
-            if !fresh_ids.contains(message_id) || *owner != AgentDeliveryOwner::Waiter {
+            if !fresh_ids.contains(message_id.as_str()) || *owner != AgentDeliveryOwner::Waiter {
                 continue;
             }
             if observed {
                 *owner = AgentDeliveryOwner::WaiterObserved;
-                finish.fresh_count += 1;
+                observed_ids.insert(message_id.clone());
             } else if last_waiter {
                 *owner = AgentDeliveryOwner::TerminalPending;
                 finish.terminal_handoff.push(message_id.clone());
             }
         }
+        finish.messages = fresh_messages
+            .into_iter()
+            .filter(|message| observed_ids.contains(&message.id))
+            .collect();
+        finish.fresh_count = finish.messages.len();
         finish
     }
 
@@ -1409,22 +1435,82 @@ impl AppState {
             .is_some_and(|gate| !gate.lock().active_waiters.is_empty())
     }
 
-    pub(crate) fn assign_agent_delivery(&self, tuic_session: &str, message_id: &str) -> bool {
+    pub(crate) fn assign_agent_delivery(
+        &self,
+        tuic_session: &str,
+        message_id: &str,
+        terminal_delivery_available: bool,
+    ) -> AgentDeliveryAssignment {
         let gate = self
             .active_agent_waiters
             .entry(tuic_session.to_string())
             .or_default();
         let mut gate = gate.lock();
-        let terminal_owned = gate.active_waiters.is_empty();
-        gate.owners.insert(
-            message_id.to_string(),
-            if terminal_owned {
-                AgentDeliveryOwner::TerminalPending
-            } else {
-                AgentDeliveryOwner::Waiter
-            },
-        );
-        terminal_owned
+        if let Some(owner) = gate.owners.get(message_id) {
+            return match owner {
+                AgentDeliveryOwner::Waiter | AgentDeliveryOwner::WaiterObserved => {
+                    AgentDeliveryAssignment::Waiter
+                }
+                AgentDeliveryOwner::TerminalPending | AgentDeliveryOwner::TerminalDispatched => {
+                    AgentDeliveryAssignment::Terminal
+                }
+            };
+        }
+        if !gate.active_waiters.is_empty() {
+            gate.owners
+                .insert(message_id.to_string(), AgentDeliveryOwner::Waiter);
+            AgentDeliveryAssignment::Waiter
+        } else if terminal_delivery_available {
+            gate.owners
+                .insert(message_id.to_string(), AgentDeliveryOwner::TerminalPending);
+            AgentDeliveryAssignment::Terminal
+        } else {
+            AgentDeliveryAssignment::InboxOnly
+        }
+    }
+
+    pub(crate) fn assign_agent_delivery_with_terminal_attempt<F>(
+        &self,
+        tuic_session: &str,
+        message_id: &str,
+        terminal_fallback_available: bool,
+        attempt_terminal_delivery: F,
+    ) -> (AgentDeliveryAssignment, bool)
+    where
+        F: FnOnce() -> bool,
+    {
+        let gate = self
+            .active_agent_waiters
+            .entry(tuic_session.to_string())
+            .or_default();
+        let mut gate = gate.lock();
+        if let Some(owner) = gate.owners.get(message_id) {
+            return match owner {
+                AgentDeliveryOwner::Waiter | AgentDeliveryOwner::WaiterObserved => {
+                    (AgentDeliveryAssignment::Waiter, false)
+                }
+                AgentDeliveryOwner::TerminalPending => (AgentDeliveryAssignment::Terminal, false),
+                AgentDeliveryOwner::TerminalDispatched => (AgentDeliveryAssignment::Terminal, true),
+            };
+        }
+        if !gate.active_waiters.is_empty() {
+            gate.owners
+                .insert(message_id.to_string(), AgentDeliveryOwner::Waiter);
+            return (AgentDeliveryAssignment::Waiter, false);
+        }
+        if attempt_terminal_delivery() {
+            gate.owners.insert(
+                message_id.to_string(),
+                AgentDeliveryOwner::TerminalDispatched,
+            );
+            return (AgentDeliveryAssignment::Terminal, true);
+        }
+        if terminal_fallback_available {
+            gate.owners
+                .insert(message_id.to_string(), AgentDeliveryOwner::TerminalPending);
+            return (AgentDeliveryAssignment::Terminal, false);
+        }
+        (AgentDeliveryAssignment::InboxOnly, false)
     }
 
     pub(crate) fn waiter_fresh_message_count(&self, tuic_session: &str, since: u64) -> usize {
@@ -1451,7 +1537,8 @@ impl AppState {
                 Some(
                     AgentDeliveryOwner::TerminalPending | AgentDeliveryOwner::TerminalDispatched,
                 ) => false,
-                Some(AgentDeliveryOwner::Waiter | AgentDeliveryOwner::WaiterObserved) => true,
+                Some(AgentDeliveryOwner::Waiter) => true,
+                Some(AgentDeliveryOwner::WaiterObserved) => false,
                 None if waiter_active => {
                     gate.owners
                         .insert(message_id.clone(), AgentDeliveryOwner::Waiter);
@@ -1470,6 +1557,15 @@ impl AppState {
                     message_id.to_string(),
                     AgentDeliveryOwner::TerminalDispatched,
                 );
+            }
+        }
+    }
+
+    pub(crate) fn release_terminal_delivery(&self, tuic_session: &str, message_id: &str) {
+        if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
+            let mut gate = gate.lock();
+            if gate.owners.get(message_id) == Some(&AgentDeliveryOwner::TerminalPending) {
+                gate.owners.remove(message_id);
             }
         }
     }
@@ -3091,6 +3187,37 @@ mod tests {
     }
 
     #[test]
+    fn push_agent_inbox_assigns_monotonic_logical_timestamps() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        for id in ["first", "second", "third"] {
+            state.push_agent_inbox(recipient, make_msg(id));
+        }
+
+        let inbox = state.agent_inbox.get(recipient).unwrap();
+        let timestamps: Vec<_> = inbox.iter().map(|message| message.timestamp).collect();
+        assert_eq!(timestamps, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn push_agent_inbox_timestamp_saturation_never_wraps() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        state.push_agent_inbox(
+            recipient,
+            AgentMessage {
+                timestamp: u64::MAX,
+                ..make_msg("ceiling")
+            },
+        );
+        state.push_agent_inbox(recipient, make_msg("after-ceiling"));
+
+        let inbox = state.agent_inbox.get(recipient).unwrap();
+        assert_eq!(inbox[0].timestamp, u64::MAX);
+        assert_eq!(inbox[1].timestamp, u64::MAX);
+    }
+
+    #[test]
     fn active_agent_waiters_are_reference_counted() {
         let state = tests_support::make_test_app_state();
         let first = state.begin_agent_wait("peer");
@@ -3109,10 +3236,14 @@ mod tests {
 
         let lease = state.begin_agent_wait(recipient);
         state.push_agent_inbox(recipient, make_msg("during-wait"));
-        assert!(!state.assign_agent_delivery(recipient, "during-wait"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "during-wait", true),
+            AgentDeliveryAssignment::Waiter
+        );
         assert_eq!(state.waiter_fresh_message_count(recipient, 0), 1);
         let finish = state.finish_agent_wait(recipient, lease, 0, true);
         assert_eq!(finish.fresh_count, 1);
+        assert_eq!(finish.messages, vec![make_msg("during-wait")]);
         assert!(finish.terminal_handoff.is_empty());
         assert_eq!(
             state.agent_delivery_owner(recipient, "during-wait"),
@@ -3133,10 +3264,146 @@ mod tests {
                 ..make_msg("after-timeout")
             },
         );
-        assert!(state.assign_agent_delivery(recipient, "after-timeout"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "after-timeout", true),
+            AgentDeliveryAssignment::Terminal
+        );
         assert_eq!(
             state.agent_delivery_owner(recipient, "after-timeout"),
             Some(AgentDeliveryOwner::TerminalPending)
+        );
+    }
+
+    #[test]
+    fn delayed_delivery_assignment_preserves_waiter_observation() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+        let lease = state.begin_agent_wait(recipient);
+        state.push_agent_inbox(recipient, make_msg("claimed-before-assignment"));
+
+        assert_eq!(state.waiter_fresh_message_count(recipient, 0), 1);
+        let finish = state.finish_agent_wait(recipient, lease, 0, true);
+        assert_eq!(finish.messages, vec![make_msg("claimed-before-assignment")]);
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "claimed-before-assignment", true),
+            AgentDeliveryAssignment::Waiter
+        );
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "claimed-before-assignment"),
+            Some(AgentDeliveryOwner::WaiterObserved)
+        );
+    }
+
+    #[test]
+    fn terminal_attempt_assigns_exact_owner_for_success_failure_and_waiter() {
+        let state = tests_support::make_test_app_state();
+        state.push_agent_inbox("failed-peer", make_msg("failed-sse"));
+        assert_eq!(
+            state.assign_agent_delivery_with_terminal_attempt(
+                "failed-peer",
+                "failed-sse",
+                false,
+                || false,
+            ),
+            (AgentDeliveryAssignment::InboxOnly, false)
+        );
+        assert_eq!(
+            state.agent_delivery_owner("failed-peer", "failed-sse"),
+            None
+        );
+
+        let lease = state.begin_agent_wait("failed-peer");
+        assert_eq!(state.waiter_fresh_message_count("failed-peer", 0), 1);
+        let finish = state.finish_agent_wait("failed-peer", lease, 0, true);
+        assert_eq!(finish.messages, vec![make_msg("failed-sse")]);
+
+        state.push_agent_inbox("live-peer", make_msg("live-sse"));
+        assert_eq!(
+            state.assign_agent_delivery_with_terminal_attempt(
+                "live-peer",
+                "live-sse",
+                false,
+                || true,
+            ),
+            (AgentDeliveryAssignment::Terminal, true)
+        );
+        assert_eq!(
+            state.agent_delivery_owner("live-peer", "live-sse"),
+            Some(AgentDeliveryOwner::TerminalDispatched)
+        );
+
+        let waiter = state.begin_agent_wait("waiting-peer");
+        state.push_agent_inbox("waiting-peer", make_msg("waiter-owned"));
+        let terminal_attempted = std::cell::Cell::new(false);
+        assert_eq!(
+            state.assign_agent_delivery_with_terminal_attempt(
+                "waiting-peer",
+                "waiter-owned",
+                true,
+                || {
+                    terminal_attempted.set(true);
+                    true
+                },
+            ),
+            (AgentDeliveryAssignment::Waiter, false)
+        );
+        assert!(!terminal_attempted.get());
+        assert_eq!(
+            state
+                .finish_agent_wait("waiting-peer", waiter, 0, true)
+                .messages,
+            vec![make_msg("waiter-owned")]
+        );
+
+        state.push_agent_inbox("vanished-peer", make_msg("pty-race"));
+        assert_eq!(
+            state.assign_agent_delivery("vanished-peer", "pty-race", true),
+            AgentDeliveryAssignment::Terminal
+        );
+        state.release_terminal_delivery("vanished-peer", "pty-race");
+        assert_eq!(
+            state.agent_delivery_owner("vanished-peer", "pty-race"),
+            None
+        );
+        let waiter = state.begin_agent_wait("vanished-peer");
+        assert_eq!(state.waiter_fresh_message_count("vanished-peer", 0), 1);
+        assert_eq!(
+            state
+                .finish_agent_wait("vanished-peer", waiter, 0, true)
+                .messages,
+            vec![make_msg("pty-race")]
+        );
+    }
+
+    #[test]
+    fn concurrent_waiter_does_not_report_message_observed_by_another_lease() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+        let first = state.begin_agent_wait(recipient);
+        let second = state.begin_agent_wait(recipient);
+        state.push_agent_inbox(recipient, make_msg("one-owner"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "one-owner", true),
+            AgentDeliveryAssignment::Waiter
+        );
+
+        assert_eq!(state.waiter_fresh_message_count(recipient, 0), 1);
+        let observed = state.finish_agent_wait(recipient, first, 0, true);
+        assert_eq!(observed.messages, vec![make_msg("one-owner")]);
+
+        assert_eq!(
+            state.waiter_fresh_message_count(recipient, 0),
+            0,
+            "a second lease must not report readiness for an already observed message"
+        );
+        assert_eq!(
+            state.finish_agent_wait(recipient, second, 0, true),
+            AgentWaitFinish::default()
+        );
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "one-owner"),
+            Some(AgentDeliveryOwner::WaiterObserved),
+            "exactly-once wake ownership must remain with the first waiter"
         );
     }
 
@@ -3146,7 +3413,10 @@ mod tests {
         let recipient = "peer";
         let lease = state.begin_agent_wait(recipient);
         state.push_agent_inbox(recipient, make_msg("cancel-race"));
-        assert!(!state.assign_agent_delivery(recipient, "cancel-race"));
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "cancel-race", true),
+            AgentDeliveryAssignment::Waiter
+        );
 
         assert_eq!(
             state
