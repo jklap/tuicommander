@@ -20,6 +20,38 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 static TUIC_SESSION_ENV: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("TUIC_SESSION").ok().filter(|s| !s.is_empty()));
 
+const MCP_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// Longer than the MCP server's five-minute wait cap so a valid blocking wait
+/// completes as a tool result rather than a bridge transport timeout.
+const MCP_WAIT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(305);
+
+fn response_timeout(body: &str) -> std::time::Duration {
+    let Ok(request) = serde_json::from_str::<Value>(body) else {
+        return MCP_RESPONSE_TIMEOUT;
+    };
+    let name = request.pointer("/params/name").and_then(Value::as_str);
+    let arguments = request.pointer("/params/arguments");
+    let direct_wait = matches!(name, Some("agent" | "session"))
+        && arguments
+            .and_then(|args| args.get("action"))
+            .and_then(Value::as_str)
+            == Some("wait");
+    let collapsed_wait = name == Some("call_tool")
+        && arguments
+            .and_then(|args| args.get("tool_name"))
+            .and_then(Value::as_str)
+            .is_some_and(|tool| matches!(tool, "agent" | "session"))
+        && arguments
+            .and_then(|args| args.pointer("/arguments/action"))
+            .and_then(Value::as_str)
+            == Some("wait");
+    if direct_wait || collapsed_wait {
+        MCP_WAIT_RESPONSE_TIMEOUT
+    } else {
+        MCP_RESPONSE_TIMEOUT
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Platform-specific IPC connection
 // ---------------------------------------------------------------------------
@@ -247,14 +279,13 @@ async fn post_mcp(
 
     // Do not wait for EOF: hyper may keep an accepted IPC connection alive even
     // when the request says `Connection: close`. Read exactly Content-Length and
-    // drop our stream immediately, otherwise every MCP call stalls for the 10s
-    // timeout and leaves an accepted mcp.sock FD behind in TUIC.
-    let (header_section, response_body) = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        read_http_response(&mut stream),
-    )
-    .await
-    .map_err(|_| "read: timed out after 10s".to_string())??;
+    // drop our stream immediately, otherwise a keep-alive connection leaves an
+    // accepted mcp.sock FD behind in TUIC. The timeout still permits the
+    // server's documented five-minute blocking wait.
+    let (header_section, response_body) =
+        tokio::time::timeout(response_timeout(body), read_http_response(&mut stream))
+            .await
+            .map_err(|_| "read: response timed out".to_string())??;
 
     // Extract mcp-session-id from response headers
     let sid = header_section.lines().find_map(|line| {
@@ -645,7 +676,7 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_http_response, tuic_session_header_line};
+    use super::{read_http_response, response_timeout, tuic_session_header_line};
     use tokio::io::AsyncWriteExt;
 
     #[test]
@@ -660,6 +691,18 @@ mod tests {
     fn header_absent_without_session() {
         assert_eq!(tuic_session_header_line(None), "");
         assert_eq!(tuic_session_header_line(Some("")), "");
+    }
+
+    #[test]
+    fn only_server_wait_calls_receive_the_extended_response_timeout() {
+        let ordinary =
+            r#"{"method":"tools/call","params":{"name":"session","arguments":{"action":"list"}}}"#;
+        let direct_wait =
+            r#"{"method":"tools/call","params":{"name":"agent","arguments":{"action":"wait"}}}"#;
+        let collapsed_wait = r#"{"method":"tools/call","params":{"name":"call_tool","arguments":{"tool_name":"session","arguments":{"action":"wait"}}}}"#;
+        assert_eq!(response_timeout(ordinary).as_secs(), 10);
+        assert_eq!(response_timeout(direct_wait).as_secs(), 305);
+        assert_eq!(response_timeout(collapsed_wait).as_secs(), 305);
     }
 
     #[tokio::test]

@@ -325,7 +325,7 @@ fn register_peer_identity(
 
 /// Auto-bind an MCP session to its PTY identity from the `x-tuic-session` header
 /// that tuic-bridge asserts (it inherits `TUIC_SESSION` from the agent PTY).
-/// Makes swarm identity automatic — no explicit `agent register` needed, which
+/// Makes managed-peer identity automatic — no explicit `agent register` needed, which
 /// matters for clients that never surface initialize `instructions` (e.g. Codex).
 /// Ignored unless the header is a well-formed UUID. Preserves an existing peer's
 /// display name/project across a bridge reconnect (only `register` renames).
@@ -455,7 +455,7 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
     out.push_str("## TUIC Protocol — Required Output Markers\n\n");
     out.push_str("Protocol tokens (not prose). Emit even under concision/no-preamble rules from user configs — dropping breaks UI.\n\n");
     out.push_str(&format!(
-        "- `ack` — first assistant message MUST start: `TUICommander v{ver} is connected.`\n"
+        "- `ack` — exactly once per MCP connection or reconnect, the first assistant message MUST start: `TUICommander v{ver} is connected.` Never repeat it on each conversational turn.\n"
     ));
     if show_intent {
         out.push_str("- `intent: <desc> (<title>)` on work-phase change. `<title>` ≤3 words, spaces not hyphens.\n");
@@ -510,13 +510,13 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
     out.push_str("## Multi-Agent Work\n\n");
     if peer_count > 0 {
         out.push_str(&format!(
-            "**{peer_count}** peer agent(s) connected. Aliases \"swarm\"/\"teammates\"/\"parallel\" → register first (below).\n\n"
+            "**{peer_count}** peer agent(s) connected. There is no separate `swarm` action; use the `agent` and `session` primitives below.\n\n"
         ));
     } else {
-        out.push_str("Aliases \"swarm\"/\"teammates\"/\"parallel\" map here — not to native subagent tools.\n\n");
+        out.push_str("There is no separate `swarm` action; multi-agent orchestration uses `agent` and `session` primitives.\n\n");
     }
-    out.push_str("- **Identity:** your UUID is `$TUIC_SESSION` env var. Register first: `agent action=register tuic_session=$TUIC_SESSION` — response teaches spawn/monitor/cleanup.\n");
-    out.push_str("- **Same repo:** `agent action=spawn` peers; poll `agent action=inbox since=<last_ms>` — never `session output` on peers (token burn).\n");
+    out.push_str("- **Identity:** managed PTYs auto-bind from `$TUIC_SESSION`. Headerless external callers use `agent action=register` without a UUID to receive an MCP-scoped identity; pass `tuic_session` only to reclaim an explicit stable UUID.\n");
+    out.push_str("- **Same repo:** `agent action=spawn` peers; wait with `agent action=wait since=<last_ms>`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`. Use `session output` only as an anomaly fallback when a child failed to send its result.\n");
     out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
     if is_claude_code {
         out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
@@ -605,12 +605,12 @@ fn native_tool_definitions() -> serde_json::Value {
     let mut defs = serde_json::json!([
         {
             "name": "session",
-            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker).\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta poll: since_cursor=<previous cursor> returns only new lines — very cheap, use for monitoring. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state: {shell_state, agent_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state, exit_code}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
+            "description": "PTY multiplexer (replaces tmux). Create terminals, send input (send-keys), read output (capture-pane), manage lifecycle.\n\nActions:\n- list: All active sessions and states in one call. Use for every global overview; never fan out per-session status calls. Returns display_name (assigned name), alias (independent repo-derived short address), is_caller, shell_state (PTY activity), and agent_state (starting|working|awaiting_input|idle|completed; completed requires suggest marker).\n- create: New PTY. Returns {session_id}. Optional: cwd, shell, rows, cols.\n- input: Send text and/or special_key to a session.\n- output: Read terminal output. Returns {data, cursor, scrollback_lines, oldest_offset, exited, exit_code}. Use as an anomaly fallback for a child that failed to send its result, not as the normal orchestration channel. scrollback_lines = total lines in buffer (up to 10000); oldest_offset = first available line number. Patterns: (1) Snapshot: omit since_cursor, default limit=50 gives last 50 lines. (2) Delta read: since_cursor=<previous cursor> returns only new lines. (3) Navigate backwards: from_line=oldest_offset reads from the beginning of the buffer. (4) Arbitrary window: from_line=N, limit=50 reads any 50-line slice.\n- status: Session state: {shell_state, agent_state, idle_since_ms, busy_duration_ms, exit_code, agent_type}.\n- wait: Block (server-side) until session_id is idle or exited (until=idle|exited), or timeout_ms elapses. One cheap call instead of a status polling loop. Returns {met, timed_out, shell_state, exit_code}.\n- resize: Change PTY dimensions.\n- close: Graceful shutdown (Ctrl+C, waits).\n- kill: Force SIGKILL (use when close fails).\n- pause: Pause output buffering. resume: Resume.\n- process_stats: CPU% and RSS memory for TUIC and all child process trees. Returns {processes: [{session_id, name, pid, rss_kb, cpu_pct}]}. Use to diagnose high CPU/memory.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats" },
                 "session_id": { "type": "string", "description": "Session ID (required for input, output, resize, close, pause, resume, wait)" },
                 "until": { "type": "string", "description": "Wait target: 'idle' or 'exited' (action=wait, default idle)" },
-                "timeout_ms": { "type": "integer", "description": "Max wait in ms (action=wait; default 5000, capped 8000). On timeout returns {timed_out:true} — call again to keep waiting." },
+                "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000, capped 300000). On timeout returns {timed_out:true}." },
                 "input": { "type": "string", "description": "Raw text to write (action=input)" },
                 "special_key": { "type": "string", "description": "Special key: enter, tab, ctrl+c, ctrl+d, ctrl+z, ctrl+l, ctrl+a, ctrl+e, ctrl+k, ctrl+u, ctrl+w, ctrl+r, up, down, left, right, home, end, backspace, delete, escape (action=input)" },
                 "rows": { "type": "integer", "description": "Terminal rows (action=create or resize)" },
@@ -625,10 +625,10 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. Spawn agents (Claude Code, Codex, Aider, Goose) in managed PTYs, detect installed agents, and peer-to-peer messaging.\n\nOrchestration in 5 lines:\n1. Managed PTY identity is automatic when tuic-bridge inherits $TUIC_SESSION. External/headerless callers must set TUIC_SESSION before the bridge starts or call register with a stable UUID.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle: spawned peers auto-notify you (idle/exited) — you get woken, no polling.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>) or a session reaches a state. Returns {met, timed_out}.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. Pass a stable UUID as tuic_session.\n- list_peers: List peers. Optional: project filter.\n- send: Message a peer (requires to, message).\n- inbox: Read messages. Optional: limit, since (unix millis).",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>). Returns {met, timed_out}.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection.\n- list_peers: List peers. Optional: project filter.\n- send: Message a peer (requires to, message).\n- inbox: Read messages. Optional: limit, since (unix millis).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
-                "timeout_ms": { "type": "integer", "description": "Max wait in ms (action=wait; default 5000, capped 8000). On timeout returns {timed_out:true} — call again to keep waiting." },
+                "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000, capped 300000). On timeout returns {timed_out:true}." },
                 "prompt": { "type": "string", "description": "Task prompt for the agent (action=spawn)" },
                 "cwd": { "type": "string", "description": "Working directory (action=spawn)" },
                 "model": { "type": "string", "description": "Structured model flag; preserved when args is also set (action=spawn)" },
@@ -639,7 +639,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "args": { "type": "array", "items": { "type": "string" }, "description": "Additional CLI args; composed with structured flags and agent defaults (action=spawn)" },
                 "rows": { "type": "integer", "description": "Terminal rows (action=spawn)" },
                 "cols": { "type": "integer", "description": "Terminal cols (action=spawn)" },
-                "tuic_session": { "type": "string", "description": "Your $TUIC_SESSION env var value (action=register, required)" },
+                "tuic_session": { "type": "string", "description": "Optional explicit stable UUID (action=register). Managed PTYs normally auto-bind; a headerless caller may omit this to receive an MCP-scoped UUID." },
                 "name": { "type": "string", "description": "Non-empty peer/session display name (action=spawn optional; action=register optional; default: 'agent')" },
                 "project": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
                 "to": { "type": "string", "description": "Recipient tuic_session UUID (action=send, required)" },
@@ -1208,11 +1208,9 @@ async fn handle_mcp_tool_call_with_context(
 /// large enough to stay cheap.
 const WAIT_POLL_MS: u64 = 100;
 /// Default `wait` timeout when the caller omits `timeout_ms`.
-const WAIT_DEFAULT_MS: u64 = 5_000;
-/// Hard cap on `wait`. MUST stay under the tuic-bridge 10s read timeout, or a
-/// long wait would surface to the agent as a bridge proxy error instead of a
-/// clean `timed_out:true` it can re-issue.
-const WAIT_MAX_MS: u64 = 8_000;
+const WAIT_DEFAULT_MS: u64 = 60_000;
+/// Hard cap on a single server-side wait.
+const WAIT_MAX_MS: u64 = 300_000;
 
 /// Resolve the effective wait timeout: default when absent/zero, capped at the
 /// bridge-safe maximum.
@@ -1401,6 +1399,9 @@ fn handle_session(
     };
     match action {
         "list" => {
+            let caller_tuic = mcp_session_id
+                .and_then(|sid| state.mcp_to_session.get(sid))
+                .map(|entry| entry.value().clone());
             let sessions: Vec<serde_json::Value> = state.sessions.iter().map(|entry| {
                 let id = entry.key().clone();
                 let s = entry.value().lock();
@@ -1441,6 +1442,7 @@ fn handle_session(
                     "agent_state": agent_state,
                     "background_work": background_work,
                     "standby": standby,
+                    "is_caller": caller_tuic.as_deref() == Some(id.as_str()),
                 })
             }).collect();
             serde_json::json!(sessions)
@@ -2112,9 +2114,9 @@ async fn handle_worktree(
 }
 
 /// Build the full prompt for a spawned agent.
-/// Prepends a swarm preamble when the caller is a registered peer so the child
+/// Prepends multi-agent context when the caller is a registered peer so the child
 /// knows its identity and how to communicate back. Returns the original prompt
-/// unchanged when called outside a swarm context (`parent_tuic` is `None`).
+/// unchanged when called outside a multi-agent context (`parent_tuic` is `None`).
 fn build_spawn_prompt(
     prompt: &str,
     parent_tuic: Option<&str>,
@@ -2125,8 +2127,8 @@ fn build_spawn_prompt(
         return prompt.to_string();
     };
     format!(
-        "## TUICommander Swarm Context\n\
-         You are operating as part of a multi-agent swarm.\n\
+        "## TUICommander Multi-Agent Context\n\
+         You are operating as a managed peer. There is no separate swarm action; use the agent and session primitives.\n\
          - You are pre-registered as peer `{peer_name}`.\n\
          - Your session ID (`$TUIC_SESSION`): `{session_id}`\n\
          - Your parent agent session: `{parent}`\n\n\
@@ -2291,11 +2293,11 @@ fn handle_agent_with_parent_cwd(
             };
 
             // Resolve caller's tuic_session from their MCP session via the O(1) reverse map.
-            // Only set when caller is a registered peer — drives swarm preamble + TUIC_PARENT.
+            // Only set when caller is a registered peer — drives multi-agent context + TUIC_PARENT.
             let caller_tuic: Option<String> = mcp_session_id
                 .and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()));
 
-            // Effective prompt: preamble prepended for swarm spawns, unchanged otherwise.
+            // Effective prompt: context prepended for managed-peer spawns, unchanged otherwise.
             let effective_prompt =
                 build_spawn_prompt(&prompt, caller_tuic.as_deref(), &session_id, &peer_name);
 
@@ -2317,7 +2319,7 @@ fn handle_agent_with_parent_cwd(
             let mut cmd = CommandBuilder::new(&binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
 
-            // Inject swarm env vars so spawned agents know their identity and parent.
+            // Inject peer env vars so spawned agents know their identity and parent.
             cmd.env("TUIC_SESSION", &session_id);
             if let Some(ref parent) = caller_tuic {
                 cmd.env("TUIC_PARENT", parent);
@@ -2615,13 +2617,13 @@ fn handle_agent_with_parent_cwd(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            // ARCH-1: keep `monitor_with` canonical (always session(output)) so
-            // every spawn primitive returns the same mechanism. The peer-only
+            // Keep the legacy `monitor_with` field for compatibility, but mark
+            // raw session output as an anomaly fallback. The peer-only
             // `peer_monitor_with` is an additive hint included only when the
             // caller is a registered orchestrator — children auto-register as
             // peers and post {type:state_change} to the parent's inbox; the
-            // strategic guidance ("NEVER session output on peers — use inbox")
-            // lives in agent(register).workflow, not in this response.
+            // result-via-send guidance lives in agent(register).workflow and the
+            // compatibility output hint is explicitly marked anomaly-only.
             let mut response = serde_json::json!({
                 "session_id": session_id,
                 "name": peer_name,
@@ -2630,7 +2632,7 @@ fn handle_agent_with_parent_cwd(
                 "send_to": session_id,
                 "parent_session_id": caller_tuic.clone(),
                 "server_ts": spawn_ts,
-                "monitor_with": format!("session(action=output, session_id={session_id})"),
+                "monitor_with": format!("session(action=output, session_id={session_id}) — anomaly fallback only if the child fails to send its result"),
                 "status_with": format!("session(action=status, session_id={session_id})"),
                 "wait_with": format!("session(action=wait, session_id={session_id}, until=idle) — blocks instead of polling"),
             });
@@ -2649,13 +2651,13 @@ fn handle_agent_with_parent_cwd(
                 obj.insert(
                     "peer_wait_with".to_string(),
                     serde_json::json!(format!(
-                        "agent(action=wait, since={spawn_ts}) — blocks until this peer messages you; it auto-notifies on idle/exit"
+                        "agent(action=wait, since={spawn_ts}) — blocks until mail; lifecycle mail contains state only, and the child must send its task result"
                     )),
                 );
             } else if let Some(obj) = response.as_object_mut() {
                 obj.insert(
                     "communication_warning".to_string(),
-                    serde_json::json!("Caller has no bound TUIC peer identity; child can receive messages, but child-to-parent messaging is unavailable until the parent registers."),
+                    serde_json::json!("Caller has no bound TUIC peer identity; child can receive messages, but child-to-parent messaging is unavailable until the parent calls agent action=register. A headerless caller may omit tuic_session."),
                 );
             }
             response
@@ -2674,6 +2676,37 @@ fn handle_agent_with_parent_cwd(
     }
 }
 
+fn resolve_registration_identity(
+    state: &AppState,
+    args: &serde_json::Value,
+    mcp_sid: &str,
+) -> Result<(String, bool), serde_json::Value> {
+    let current = state
+        .mcp_to_session
+        .get(mcp_sid)
+        .map(|entry| entry.value().clone());
+    if let Some(explicit) = args["tuic_session"]
+        .as_str()
+        .filter(|value| !value.is_empty())
+    {
+        if !is_valid_uuid(explicit) {
+            return Err(serde_json::json!({
+                "error": "tuic_session must be a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"
+            }));
+        }
+        if current.as_deref().is_some_and(|bound| bound != explicit) {
+            return Err(serde_json::json!({
+                "error": "This MCP session is already bound to a different peer identity"
+            }));
+        }
+        return Ok((explicit.to_string(), false));
+    }
+    if let Some(current) = current {
+        return Ok((current, false));
+    }
+    Ok((Uuid::new_v4().to_string(), true))
+}
+
 fn handle_messaging(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -2685,25 +2718,30 @@ fn handle_messaging(
     };
     match action {
         "register" => {
-            let tuic_session = match args["tuic_session"].as_str() {
-                Some(s) if !s.is_empty() => s,
-                _ => {
-                    return serde_json::json!({"error": "Action 'register' requires 'tuic_session' (your $TUIC_SESSION env var)"});
-                }
-            };
-            // Validate UUID format to prevent prompt-injection via preamble interpolation (SEC-1).
-            // $TUIC_SESSION is always a UUID v4; reject anything that isn't.
-            if !is_valid_uuid(tuic_session) {
-                return serde_json::json!({"error": "tuic_session must be a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"});
-            }
             let mcp_sid = match mcp_session_id {
                 Some(sid) => sid.to_string(),
                 None => {
                     return serde_json::json!({"error": "No MCP session — send an initialize request first"});
                 }
             };
-            let name = args["name"].as_str().unwrap_or("agent").to_string();
-            let project = args["project"].as_str().map(|s| s.to_string());
+            let (tuic_session, generated_identity) =
+                match resolve_registration_identity(state, args, &mcp_sid) {
+                    Ok(identity) => identity,
+                    Err(error) => return error,
+                };
+            let existing = state
+                .peer_agents
+                .get(&tuic_session)
+                .map(|peer| (peer.name.clone(), peer.project.clone()));
+            let name = args["name"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| existing.as_ref().map(|(name, _)| name.clone()))
+                .unwrap_or_else(|| "agent".to_string());
+            let project = args["project"]
+                .as_str()
+                .map(str::to_string)
+                .or_else(|| existing.and_then(|(_, project)| project));
             let now_ms = now_unix_ms();
 
             // Presence in mcp_sessions is not proof of liveness: protocol sessions
@@ -2713,7 +2751,7 @@ fn handle_messaging(
             let prior_mcp = match register_peer_identity(
                 state,
                 &mcp_sid,
-                tuic_session,
+                &tuic_session,
                 name.clone(),
                 project,
                 now_ms,
@@ -2731,7 +2769,7 @@ fn handle_messaging(
                     "Reclaimed stale MCP peer binding after reconnect"
                 );
             }
-            let linked_children = link_pending_children_to_parent(state, &mcp_sid, tuic_session);
+            let linked_children = link_pending_children_to_parent(state, &mcp_sid, &tuic_session);
             // Identity bindings are security-relevant; record them (no message content).
             tracing::info!(
                 source = "agent_msg",
@@ -2756,16 +2794,21 @@ fn handle_messaging(
                 "tuic_session": tuic_session,
                 "name": name,
                 "linked_children": linked_children,
-                "identity": "This MCP session is now bound to the supplied stable UUID. Managed PTY bridges normally auto-bind from $TUIC_SESSION; external/headerless callers use register to establish the binding.",
+                "identity_generated": generated_identity,
+                "identity": if generated_identity {
+                    "This headerless caller now has an MCP-scoped UUID. It is stable for this MCP connection and requires no PTY. Supply an explicit UUID on a future connection when cross-reconnect identity stability is required."
+                } else {
+                    "This MCP session is bound to its managed or explicitly supplied stable UUID."
+                },
                 "workflow": {
                     "spawn_same_repo": "agent action=spawn prompt=<task> cwd=<repo_path> — returns {session_id, monitor_with, peer_monitor_with?, wait_with}. As orchestrator, prefer wait/inbox over raw session output to avoid token burn.",
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
-                    "monitor": "PREFER blocking waits over polling: agent action=wait since=<last_ms> (wakes on new mail) or session action=wait session_id=<id> until=idle|exited. Each returns {met, timed_out}; on timed_out just call again. NEVER session output on peers (token burn).",
-                    "auto_state_change": "Spawned peers auto-post {type:state_change, state:idle|completed|exited, session_id, exit_code?} to your inbox AND wake your terminal — completed requires the explicit suggest marker.",
+                    "monitor": "Use blocking waits instead of polling: agent action=wait since=<last_ms> (wakes on new mail) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
+                    "auto_state_change": "Spawned peers auto-post state only: {type:state_change, state:idle|completed|exited, session_id, exit_code?}. This is not task output. Every child must report its result or blocker with agent action=send; use session output only when a child anomalously failed to send.",
                     "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is always buffered in the inbox and is TYPED into an idle peer's terminal so it acts immediately; a busy peer gets it on its next idle transition. Response `accepted=true` confirms delivery acceptance; `delivered_via_channel` only reports the optional SSE path.",
                     "list_peers": "agent action=list_peers project=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
-                    "cleanup": "Automatic on MCP session close (tombstone_transient_cleanup). Peer state + inbox drained; PTY reaped."
+                    "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
                 }
             })
         }
@@ -3654,7 +3697,7 @@ pub(super) async fn mcp_post(
                 );
             }
 
-            // Auto-bind swarm identity from the `x-tuic-session` header the bridge
+            // Auto-bind managed-peer identity from the `x-tuic-session` header the bridge
             // asserts (it inherits `TUIC_SESSION` from the agent PTY). This makes
             // `agent register` optional — the caller already has a working peer
             // identity for spawn/send, which is what clients that ignore initialize
@@ -3995,6 +4038,21 @@ pub(super) async fn mcp_delete(
         for tuic in &removed_tuic {
             state.peer_agents.remove(tuic);
             state.agent_inbox.remove(tuic);
+            state.agent_inbox_evictions.remove(tuic);
+            state.active_agent_waiters.remove(tuic);
+            state.pending_injections.remove(tuic);
+            state
+                .mcp_to_session
+                .remove_if(sid, |_, mapped| mapped == tuic);
+            let remove_reverse = if let Some(mut reverse) = state.session_to_mcp.get_mut(tuic) {
+                reverse.retain(|mapped_sid| mapped_sid != sid);
+                reverse.is_empty()
+            } else {
+                false
+            };
+            if remove_reverse {
+                state.session_to_mcp.remove(tuic);
+            }
             let _ = state
                 .event_bus
                 .send(crate::state::AppEvent::PeerUnregistered {
@@ -4876,7 +4934,7 @@ mod tests {
         );
         assert!(
             state.peer_agents.contains_key(TEST_UUID_A),
-            "peer must be auto-registered so spawn gets the swarm preamble"
+            "peer must be auto-registered so spawn gets multi-agent context"
         );
         assert!(
             state
@@ -5150,6 +5208,67 @@ mod tests {
     }
 
     #[test]
+    fn headerless_register_generates_stable_mcp_scoped_identity_without_pty() {
+        let state = test_state();
+        let first = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "name": "external"}),
+            Some("mcp-external"),
+        );
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["identity_generated"], true);
+        let generated = first["tuic_session"].as_str().unwrap();
+        assert!(is_valid_uuid(generated));
+        assert!(
+            state.sessions.is_empty(),
+            "registration must not create a PTY"
+        );
+        assert_eq!(
+            state
+                .mcp_to_session
+                .get("mcp-external")
+                .map(|entry| entry.value().clone()),
+            Some(generated.to_string())
+        );
+
+        let second = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "project": "/repo"}),
+            Some("mcp-external"),
+        );
+        assert_eq!(second["tuic_session"], generated);
+        assert_eq!(second["identity_generated"], false);
+        assert_eq!(
+            second["name"], "external",
+            "omission must preserve the name"
+        );
+        assert_eq!(
+            state.peer_agents.get(generated).unwrap().project.as_deref(),
+            Some("/repo")
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_headerless_mcp_scope_removes_generated_identity_routes() {
+        let state = test_state();
+        let registered = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register"}),
+            Some("mcp-external-delete"),
+        );
+        let generated = registered["tuic_session"].as_str().unwrap().to_string();
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, "mcp-external-delete".parse().unwrap());
+
+        let _ = mcp_delete(State(Arc::clone(&state)), headers).await;
+
+        assert!(!state.peer_agents.contains_key(&generated));
+        assert!(!state.agent_inbox.contains_key(&generated));
+        assert!(!state.mcp_to_session.contains_key("mcp-external-delete"));
+        assert!(!state.session_to_mcp.contains_key(&generated));
+    }
+
+    #[test]
     fn register_renames_auto_bound_caller_without_hijack_rejection() {
         // After the initialize auto-bind, the SAME mcp session may still call
         // register to set a friendly name/project. The live-hijack guard must
@@ -5208,14 +5327,12 @@ mod tests {
         );
         assert_eq!(clamp_wait_timeout(Some(1_000)), 1_000, "in-range preserved");
         assert_eq!(
-            clamp_wait_timeout(Some(60_000)),
+            clamp_wait_timeout(Some(300_001)),
             WAIT_MAX_MS,
-            "over-cap clamped under the bridge 10s read timeout"
+            "over-cap clamped at five minutes"
         );
-        assert!(
-            WAIT_MAX_MS < 10_000,
-            "cap must stay under bridge read timeout"
-        );
+        assert_eq!(WAIT_DEFAULT_MS, 60_000);
+        assert_eq!(WAIT_MAX_MS, 300_000);
     }
 
     #[test]
@@ -5315,11 +5432,20 @@ mod tests {
     // ── messaging tool tests ────────────────────────────────────────
 
     #[test]
-    fn messaging_register_requires_tuic_session() {
+    fn messaging_register_without_tuic_session_generates_identity() {
         let state = test_state();
         let args = serde_json::json!({"action": "register"});
         let result = handle_messaging(&state, &args, Some("mcp-1"));
-        assert!(result["error"].as_str().unwrap().contains("tuic_session"));
+        assert_eq!(result["ok"], true);
+        let generated = result["tuic_session"].as_str().unwrap();
+        assert!(is_valid_uuid(generated));
+        assert_eq!(
+            state
+                .mcp_to_session
+                .get("mcp-1")
+                .map(|entry| entry.value().clone()),
+            Some(generated.to_owned())
+        );
     }
 
     #[test]
@@ -6145,11 +6271,11 @@ mod tests {
             .unwrap();
         let desc = agent["description"].as_str().unwrap();
         assert!(
-            desc.contains("Managed PTY identity is automatic"),
+            desc.contains("Managed PTYs auto-bind"),
             "must state the condition for auto-identity"
         );
         assert!(
-            desc.contains("External/headerless callers"),
+            desc.contains("headerless external caller"),
             "must explain how external callers establish identity"
         );
         assert!(desc.contains("wait"), "must mention the wait primitive");
@@ -6161,6 +6287,8 @@ mod tests {
             desc.contains("do NOT poll"),
             "must discourage polling loops"
         );
+        assert!(desc.contains("state only"));
+        assert!(desc.contains("must report task output"));
     }
 
     #[test]
@@ -6769,6 +6897,18 @@ mod tests {
     }
 
     #[test]
+    fn instructions_scope_ack_to_connection_and_use_agent_session_primitives() {
+        let state = test_state();
+        let out = build_mcp_instructions(&state, None);
+        assert!(out.contains("exactly once per MCP connection or reconnect"));
+        assert!(out.contains("Never repeat it on each conversational turn"));
+        assert!(out.contains("There is no separate `swarm` action"));
+        assert!(!out.contains("Aliases \"swarm\""));
+        assert!(out.contains("Lifecycle notifications carry state only"));
+        assert!(out.contains("workers must report results with `agent action=send`"));
+    }
+
+    #[test]
     fn instructions_collapse_on_describes_search_schema_call_flow() {
         let state = test_state();
         state.config.write().collapse_tools = true;
@@ -6857,12 +6997,12 @@ mod tests {
     }
 
     #[test]
-    fn instructions_include_session_status_for_polling() {
+    fn instructions_include_session_status_for_monitoring() {
         let state = test_state();
         let out = build_mcp_instructions(&state, None);
         assert!(
             out.contains("status"),
-            "instructions must mention session status for swarm polling"
+            "instructions must mention session status for multi-agent monitoring"
         );
     }
 
@@ -7975,6 +8115,7 @@ mod tests {
             })
             .expect("named spawned session must appear in session action=list");
         assert_eq!(listed_session["display_name"], "linux-primary");
+        assert_eq!(listed_session["is_caller"], false);
         assert!(
             listed_session["alias"].as_str().is_some(),
             "independent short alias must remain available"
@@ -7986,6 +8127,21 @@ mod tests {
             state.peer_agents.get(session_id).unwrap().name,
             "linux-primary",
             "child auto-bind must preserve the parent-assigned name"
+        );
+        let caller_list = handle_session(
+            &state,
+            &serde_json::json!({"action": "list"}),
+            Some("child-mcp"),
+        );
+        let caller = caller_list
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["session_id"] == session_id)
+            .unwrap();
+        assert_eq!(
+            caller["is_caller"], true,
+            "the caller's managed PTY must be explicit so it is never self-closed"
         );
     }
 
@@ -8054,7 +8210,7 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn spawn_no_preamble_for_non_swarm_caller_succeeds() {
+    async fn spawn_without_multi_agent_preamble_for_unregistered_caller_succeeds() {
         let state = test_state();
         let addr = "127.0.0.1:0".parse().unwrap();
         let result = handle_agent(
@@ -8079,7 +8235,7 @@ mod tests {
         }
         assert!(
             result.get("error").is_none(),
-            "non-swarm spawn must succeed: {result}"
+            "unregistered caller spawn must succeed: {result}"
         );
         assert!(result["session_id"].as_str().is_some());
     }
@@ -8304,14 +8460,14 @@ mod tests {
             result["status_with"].as_str().is_some(),
             "status_with missing: {result}"
         );
-        // ARCH-1: monitor_with must be canonical session(output), not branched
-        // on caller identity. Standalone spawn (no registered caller) must
-        // not include peer_monitor_with.
+        // The compatibility monitor_with field remains session(output), but is
+        // explicitly anomaly-only. A standalone spawn has no peer inbox hint.
         let monitor = result["monitor_with"].as_str().unwrap();
         assert!(
             monitor.starts_with("session(action=output"),
-            "standalone spawn monitor_with must be canonical session(output): {monitor}"
+            "standalone compatibility monitor must remain session(output): {monitor}"
         );
+        assert!(monitor.contains("anomaly fallback"));
         assert!(
             result.get("peer_monitor_with").is_none(),
             "standalone spawn must not include peer_monitor_with: {result}"
@@ -8337,7 +8493,6 @@ mod tests {
         let state = test_state();
         let addr = "127.0.0.1:0".parse().unwrap();
         let parent_mcp = "mcp-late-parent";
-        let parent_tuic = "550e8400-e29b-41d4-a716-446655440bb1";
 
         let spawned = handle_agent(
             &state,
@@ -8382,13 +8537,15 @@ mod tests {
             &state,
             &serde_json::json!({
                 "action": "register",
-                "tuic_session": parent_tuic,
                 "name": "orchestrator",
             }),
             Some(parent_mcp),
         );
 
         assert_eq!(registered["ok"], true, "registration failed: {registered}");
+        assert_eq!(registered["identity_generated"], true);
+        let parent_tuic = registered["tuic_session"].as_str().unwrap();
+        assert!(is_valid_uuid(parent_tuic));
         assert_eq!(registered["linked_children"], 1);
         assert_eq!(
             state
@@ -8406,14 +8563,33 @@ mod tests {
             Some(1),
             "lifecycle mail emitted before parent registration must be preserved"
         );
+
+        let ready_child = handle_agent(
+            &state,
+            addr,
+            &serde_json::json!({
+                "action": "spawn",
+                "prompt": "report with agent send",
+                "binary_path": "/usr/bin/true",
+                "cwd": "/tmp",
+            }),
+            Some(parent_mcp),
+        );
+        assert!(
+            ready_child.get("error").is_none(),
+            "registered external parent spawn failed: {ready_child}"
+        );
+        assert_eq!(ready_child["communication_ready"], true);
+        assert_eq!(ready_child["parent_session_id"], parent_tuic);
+        let ready_child_id = ready_child["session_id"].as_str().unwrap();
+        assert!(state.agent_inbox.contains_key(ready_child_id));
     }
 
     #[cfg(unix)]
     #[tokio::test]
     async fn spawn_response_adds_peer_monitor_hint_when_caller_registered() {
-        // ARCH-1: when the caller is a registered orchestrator, monitor_with
-        // stays canonical (session(output)) and the peer-only hint is added
-        // additively as peer_monitor_with — keeps the spawn response policy-free.
+        // The compatibility monitor_with field remains session(output), while
+        // peer_monitor_with is the normal inbox path for a registered caller.
         let state = test_state();
         let addr = "127.0.0.1:0".parse().unwrap();
         let tuic = "550e8400-e29b-41d4-a716-446655440aa2";
@@ -8440,8 +8616,9 @@ mod tests {
             .expect("monitor_with required");
         assert!(
             monitor.starts_with("session(action=output"),
-            "monitor_with must be canonical session(output) regardless of caller: {monitor}"
+            "compatibility monitor_with must remain session(output): {monitor}"
         );
+        assert!(monitor.contains("anomaly fallback"));
         let peer_hint = result["peer_monitor_with"]
             .as_str()
             .expect("peer_monitor_with must be present for registered caller");

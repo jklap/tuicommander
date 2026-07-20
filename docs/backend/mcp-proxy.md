@@ -30,9 +30,7 @@ The entry point for all MCP traffic is `POST /mcp` (Streamable HTTP transport, s
 
 ## Tool Namespace
 
-All proxied tools are exposed with the prefix `{upstream_name}__{tool_name}`. The double underscore (`__`) is the routing discriminator — native TUIC tools never contain it. The separator splits only on the first occurrence, so tool names with internal underscores work correctly (e.g. `upstream__tool__with__underscores` routes to upstream `upstream`, tool `tool__with__underscores`).
-
-The tool description is also annotated with `[via {upstream_name}]` so the downstream AI client knows the origin.
+All proxied tools are exposed with the prefix `{upstream_name}__{tool_name}`. The double underscore (`__`) is the routing discriminator — native TUIC tools never contain it. The separator splits only on the first occurrence, so tool names with internal underscores work correctly (e.g. `upstream__tool__with__underscores` routes to upstream `upstream`, tool `tool__with__underscores`). The namespace identifies the origin; the upstream description is preserved byte-for-byte so TUIC instructions are not duplicated across every discovered tool.
 
 ## UpstreamRegistry
 
@@ -293,4 +291,4 @@ if tool_name.contains("__") {
 
 The `tools/list` response merges native tools with upstream tools via `merged_tool_definitions()`.
 
-The `build_mcp_instructions()` function that generates the system prompt for connecting agents also documents the proxied upstream tools and their statuses, giving the AI client situational awareness about which upstream servers are available.
+The `build_mcp_instructions()` function supplies TUIC protocol and orchestration context once in the initialize response. Proxied upstream descriptions remain upstream-owned and do not repeat that preamble.

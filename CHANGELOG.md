@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 - Fixed local MCP socket stalls under multi-agent load caused by re-entering an `input_buffers` DashMap shard while its entry guard was still held; bridge health checks now use constant-size MCP `ping`, report endpoint availability accurately, safely reclaim stale peer bindings after reconnect, reject initialize auto-bind takeover while the prior bridge remains live, and reuse the bridge's existing session for its proxied initialize so its own SSE stream cannot block identity binding.
+- **Lean MCP orchestration contract** — TUIC connection acknowledgment is now explicitly once per MCP connection/reconnect, upstream tool descriptions no longer duplicate TUIC context, and multi-agent guidance uses the real `agent`/`session` primitives. Blocking waits default to 60 seconds and support up to 300000 ms through the bridge. Headerless callers can register without a PTY or supplied UUID, session lists mark the caller's managed PTY, and lifecycle notifications are documented as state-only while task results travel through `agent action=send`.
 
 ### Fixed
 - **Dev/release repository persistence collision** — Debug builds now use a one-time production-seeded `~/.tuicommander-dev/repositories.json`, preventing a concurrently running development frontend from overwriting the installed app's repository list without changing unrelated config paths.

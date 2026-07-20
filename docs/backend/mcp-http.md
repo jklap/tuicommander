@@ -176,6 +176,7 @@ Rationale: a cold tool list of 100+ tools costs ~35k tokens in every agent turn;
 The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<ToolSearchIndex>`, backed by `src-tauri/src/tool_search.rs`). A background task subscribes to the `mcp_tools_changed` broadcast and rebuilds the index whenever the tool set changes (upstream connect/disconnect, `disabled_native_tools` edit, `collapse_tools` toggle).
 
 The MCP instructions string returned by `initialize` (`build_mcp_instructions`) swaps to a "lazy discovery" guide when `collapse_tools: true` so agents know to call `search_tools` first rather than looking for a flat tool table.
+The TUIC connection acknowledgment in those instructions is emitted exactly once per MCP connection or reconnect, never once per conversational turn. TUIC protocol context remains in initialize instructions and native core-tool descriptions only; upstream tool descriptions are preserved instead of receiving a repeated TUIC preamble.
 
 ### MCP Native Tools
 
@@ -262,7 +263,7 @@ registerDebugSnapshot("storeName", () => ({ /* fields to expose */ }));
 
 ### MCP Tool: `session` Output
 
-The `session` tool's `action=output` strips ANSI escape codes by default, returning clean text suitable for AI consumption. Pass `format="raw"` to preserve escape sequences (e.g. for terminal rendering). The `action=list` response includes process details per session: `child_pid`, `foreground_pgid`, `foreground_process`, `shell_state`, `agent_state`, and `background_work`.
+The `session` tool's `action=output` strips ANSI escape codes by default, returning clean text suitable for AI consumption. Pass `format="raw"` to preserve escape sequences (e.g. for terminal rendering). For managed peers, task results travel through `agent action=send`; raw session output is only the anomaly fallback when a child failed to send its result. The `action=list` response includes process details per session: `child_pid`, `foreground_pgid`, `foreground_process`, `shell_state`, `agent_state`, `background_work`, and `is_caller`. `is_caller=true` identifies the managed PTY that owns the current MCP connection so an orchestrator does not close itself.
 
 `Global overview: session action=list` — one call; no per-session `status` fan-out.
 
@@ -414,6 +415,7 @@ OAuth callbacks arrive exclusively through the OS-level `tuic://` deep link — 
 ## Inter-Agent Messaging
 
 The `agent` tool's messaging actions (`register`, `list_peers`, `send`, `inbox`) enable coordination between multiple AI agents connected to TUICommander.
+There is no separate `swarm` action; orchestration composes the `agent` and `session` primitives.
 
 For `agent action=spawn`, `prompt` is always delivered. Caller-supplied `args`
 that contain `{prompt}` remain authoritative and receive direct substitution.
@@ -464,8 +466,8 @@ events ordered and prevents lifecycle reports from overwriting an active compose
 The stdio bridge reads each IPC HTTP response through its declared
 `Content-Length` rather than waiting for connection EOF. A single transport error
 does not discard the current MCP identity; subsequent authenticated calls refresh
-the session-to-terminal binding. This avoids ten-second stalls and false
-unregistered states when the IPC server keeps sockets alive.
+the session-to-terminal binding. The bridge timeout exceeds the server's
+five-minute wait cap, avoiding false transport failures while preserving bounded reads.
 
 ### Protocol
 
@@ -478,10 +480,11 @@ unregistered states when the IPC server keeps sockets alive.
    peer's display name is preserved. The bridge's eager initialize and the downstream client's
    proxied initialize reuse the same existing `mcp-session-id`; this prevents the bridge's own live
    SSE stream from being mistaken for a competing identity owner. External bridges without
-   `$TUIC_SESSION` are not auto-bound and must set it before startup or explicitly register a stable
-   UUID.
-1. **Register**: optional rename/project update for an auto-bound peer; required to bind a
-   headerless external caller to a stable UUID.
+   `$TUIC_SESSION` are not auto-bound at initialize.
+1. **Register**: optional rename/project update for an auto-bound peer. A headerless external
+   caller may omit `tuic_session`; the server generates an MCP-scoped UUID that remains stable for
+   that connection and does not create a PTY. Supplying an explicit UUID preserves identity across
+   reconnects and retains the live-owner takeover guard.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by project).
 3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
    `accepted=true` and `buffered_in_inbox=true` acknowledge success;
@@ -492,9 +495,8 @@ unregistered states when the IPC server keeps sockets alive.
    - **PTY injection**: for any idle agent without a live channel, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it acts on its next turn without polling. A busy recipient's message is queued and flushed on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead.
    - **Inbox poll**: `agent action=inbox since=<ms>` — always the authoritative store.
 5. **Wait** *(prefer over polling)*: `agent action=wait since=<ms>` blocks until new mail;
-   `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. Server-side
-   100 ms poll, default 5 s / cap 8 s (kept under the bridge's 10 s read timeout). Returns
-   `{met, timed_out}`; re-call on `timed_out`.
+   `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. The default
+   is 60 seconds and the server cap is 300000 ms. Returns `{met, timed_out}`.
 
 Blocking waits and terminal wake-up use a per-recipient delivery lease. Each
 message is atomically assigned to exactly one wake-up owner: an active waiter,
@@ -504,8 +506,10 @@ back to terminal delivery. This removes both duplicate inbox+terminal turns and
 the missed-wake race at the wait timeout boundary; inbox visibility itself is
 unchanged and remains backward compatible.
 
-Spawned peers additionally auto-post a `state_change` (`idle` / `exited`) to the parent's inbox
-**and** wake the parent's terminal, so an orchestrator never polls for child lifecycle.
+Spawned peers additionally auto-post a `state_change` (`idle` / `completed` / `exited`) to the
+parent's inbox and wake the parent's terminal. These notifications carry state only, never task
+output. Each child must send its result or blocker with `agent action=send`; `session action=output`
+is reserved for diagnosing the anomaly where that result message never arrived.
 
 ### Channel Push Delivery
 

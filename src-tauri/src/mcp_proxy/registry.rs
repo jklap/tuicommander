@@ -489,13 +489,6 @@ impl UpstreamRegistry {
                 let mut def = tool.definition.clone();
                 if let Some(obj) = def.as_object_mut() {
                     obj.insert("name".to_string(), Value::String(prefixed_name));
-                    // Annotate description with upstream origin
-                    let desc = obj
-                        .get("description")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    let annotated = format!("[via {}] {}", entry.config.name, desc);
-                    obj.insert("description".to_string(), Value::String(annotated));
                 }
                 result.push(def);
             }
@@ -1509,16 +1502,21 @@ mod tests {
     }
 
     #[test]
-    fn aggregated_tools_annotates_description() {
+    fn aggregated_tools_preserve_upstream_description_without_tuic_preamble() {
         let registry = UpstreamRegistry::new();
-        let (name, entry) = ready_entry("myserver", vec![make_tool_def("do_thing")]);
+        let mut tool = make_tool_def("do_thing");
+        tool.definition["description"] =
+            Value::String("Search the upstream index once.".to_string());
+        let (name, entry) = ready_entry("myserver", vec![tool]);
         registry.entries.insert(name, entry);
 
         let tools = registry.aggregated_tools();
         assert_eq!(tools.len(), 1);
         let desc = tools[0]["description"].as_str().unwrap();
-        assert!(desc.starts_with("[via myserver]"), "got: {desc}");
-        assert!(desc.contains("test tool"), "got: {desc}");
+        assert_eq!(desc, "Search the upstream index once.");
+        assert!(!desc.contains("TUICommander"));
+        assert!(!desc.contains("TUIC Protocol"));
+        assert!(!desc.contains("Required Output Markers"));
     }
 
     #[test]
