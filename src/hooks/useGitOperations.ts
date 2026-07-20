@@ -43,10 +43,12 @@ export interface GitOperationsDeps {
 			merged_branches: string[];
 			diff_stats: Record<string, { additions: number; deletions: number }>;
 			last_commit_ts: Record<string, number | null>;
+			in_progress_worktrees: string[];
 		}>;
 		getRepoStructure: (repoPath: string) => Promise<{
 			worktree_paths: Record<string, string>;
 			merged_branches: string[];
+			in_progress_worktrees: string[];
 		}>;
 		getRepoDiffStats: (repoPath: string) => Promise<{
 			diff_stats: Record<string, { additions: number; deletions: number }>;
@@ -362,6 +364,11 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 				const worktreePaths = structure.worktree_paths;
 				const mergedSet = new Set(structure.merged_branches);
+				// Worktree dirs with a rebase/merge/cherry-pick/revert/bisect in progress.
+				// A worktree mid-rebase has a transiently detached HEAD, so it can be
+				// absent from `worktreePaths` (keyed by branch) without being abandoned —
+				// this set is how the removal logic below tells the two apart.
+				const inProgressSet = new Set<string>(structure.in_progress_worktrees ?? []);
 
 				const currentRepo = repositoriesStore.get(repoPath);
 				if (!currentRepo) return;
@@ -389,6 +396,9 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				const storeIds = new Set(terminalsStore.getIds());
 				const toRemove: string[] = [];
 				const terminalsToClose: string[] = [];
+				// Branches to newly flag as "operation in progress" — applied in the
+				// same batch as toRemove below, to avoid a separate render pass.
+				const toMarkRebasing: string[] = [];
 
 				// If activeBranch is no longer a worktree, find its replacement:
 				// the worktree branch that occupies the same path (HEAD moved).
@@ -408,6 +418,24 @@ export function useGitOperations(deps: GitOperationsDeps) {
 
 				for (const branchName of Object.keys(currentRepo.branches)) {
 					if (!(branchName in worktreePaths)) {
+						// Worktree has a git operation in progress (rebase/merge/cherry-pick/
+						// revert/bisect) — its HEAD is transiently detached, which is why it
+						// dropped out of `worktreePaths`, but this is NOT abandonment. Keep
+						// the branch and its terminals untouched; mark it so the sidebar can
+						// show an indicator instead of letting the row vanish.
+						const branchStateForRebaseCheck = currentRepo.branches[branchName];
+						const wtPathForRebaseCheck = branchStateForRebaseCheck?.worktreePath;
+						if (wtPathForRebaseCheck && inProgressSet.has(wtPathForRebaseCheck)) {
+							if (!branchStateForRebaseCheck.isRebasing) {
+								appLogger.info(
+									"git",
+									`refreshAllBranchStats: "${branchName}" has an operation in progress — keeping`,
+									{ worktreePath: wtPathForRebaseCheck },
+								);
+								toMarkRebasing.push(branchName);
+							}
+							continue;
+						}
 						// Skip branches that a concurrent/recent refresh already handled.
 						// The store removal may not have settled yet (batch scheduled), so
 						// we'd otherwise re-enqueue the same close+remove.
@@ -505,6 +533,12 @@ export function useGitOperations(deps: GitOperationsDeps) {
 							const update: Partial<import("../stores/repositories").BranchState> = {
 								worktreePath: wtPath,
 								isMerged: mergedSet.has(branchName),
+								// Branch is attached again (or still is) — reflect whether its
+								// worktree currently has an operation in progress. Covers both
+								// "rebase just finished" (clear) and "merge conflict without a
+								// detached HEAD" (set, even though the branch stayed in
+								// worktreePaths the whole time).
+								isRebasing: inProgressSet.has(wtPath),
 							};
 							// Branch finished background preparation — clear placeholder state
 							// and queue the deferred setupNewWorktree (setup script, initial
@@ -527,6 +561,9 @@ export function useGitOperations(deps: GitOperationsDeps) {
 						}
 						for (const branchName of toRemove) {
 							repositoriesStore.removeBranch(repoPath, branchName);
+						}
+						for (const branchName of toMarkRebasing) {
+							repositoriesStore.setBranch(repoPath, branchName, { isRebasing: true });
 						}
 						markBodyEnd();
 					}),

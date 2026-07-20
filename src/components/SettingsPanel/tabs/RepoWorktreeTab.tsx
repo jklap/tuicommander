@@ -250,6 +250,12 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 					<option value="on">{t("repoWorktree.orphanCleanup.on", "Auto-remove")}</option>
 					<option value="off">{t("repoWorktree.orphanCleanup.off", "Keep (mark as detached)")}</option>
 				</select>
+				<p class={s.hint}>
+					{t(
+						"repoWorktree.hint.orphanCleanup",
+						"An 'orphan' worktree is one whose branch was deleted out from under it — not one that's mid-rebase or mid-merge. Worktrees with a rebase, merge, cherry-pick, revert, or bisect in progress are never closed, archived, or removed by this setting.",
+					)}
+				</p>
 			</div>
 
 			<div class={s.group}>

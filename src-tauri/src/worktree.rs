@@ -1176,6 +1176,12 @@ fn parse_orphan_worktrees(porcelain: &str) -> Vec<String> {
 
 /// Detect orphan worktrees: linked worktrees present on the filesystem but in detached HEAD
 /// state (i.e. their branch has been deleted). Returns a list of worktree directory paths.
+///
+/// Excludes worktrees with a git operation in progress (rebase/merge/cherry-pick/
+/// revert/bisect): those are also detached-HEAD-with-no-branch by nature, but the
+/// detachment is transient, not abandonment. Cleaning them up would destroy an
+/// agent's in-progress conflict resolution (see the same rationale at the
+/// idempotent-create check above).
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<String>, String> {
     let base_repo = PathBuf::from(&repo_path);
@@ -1185,7 +1191,12 @@ pub(crate) fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<String>, 
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
 
-    Ok(parse_orphan_worktrees(&out.stdout))
+    let orphans = parse_orphan_worktrees(&out.stdout)
+        .into_iter()
+        .filter(|path| !crate::git::worktree_operation_in_progress(Path::new(path)))
+        .collect();
+
+    Ok(orphans)
 }
 
 /// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
@@ -1630,6 +1641,29 @@ pub(crate) struct MergeArchiveResult {
     pub(crate) archive_path: Option<String>,
 }
 
+/// Refuse an automatic archive/delete when the branch's worktree has a git
+/// operation in progress (merge conflict, cherry-pick, revert, bisect —
+/// checked out with an attached HEAD, so it isn't already caught by a
+/// detached-HEAD branch-lookup miss in `archive_worktree`/
+/// `remove_worktree_by_branch`). Used only by the *automatic* consequences of
+/// a merge (auto-archive-merged, finalize-after-merge) — not the plain manual
+/// "remove this worktree" command, which stays a deliberate user override.
+fn err_if_branch_worktree_busy(base_repo: &Path, branch_name: &str) -> Result<(), String> {
+    let out = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|e| format!("git worktree list failed: {e}"))?;
+    if let Some(path) = find_worktree_path_for_branch(&out.stdout, branch_name)
+        && crate::git::worktree_operation_in_progress(&path)
+    {
+        return Err(format!(
+            "Cannot finalize worktree for branch '{branch_name}': a git operation \
+             (rebase/merge/cherry-pick) is in progress"
+        ));
+    }
+    Ok(())
+}
+
 /// Complete a pending merge by archiving or deleting the worktree.
 ///
 /// Called after `merge_and_archive_worktree` returns `action: "pending"` (ask mode).
@@ -1644,6 +1678,7 @@ pub(crate) fn finalize_merged_worktree(
 ) -> Result<MergeArchiveResult, String> {
     let script = resolve_archive_script(&repo_path);
     let base_repo = std::path::PathBuf::from(&repo_path);
+    err_if_branch_worktree_busy(&base_repo, &branch_name)?;
     match action.as_str() {
         "archive" => {
             let archive_path = archive_worktree(&base_repo, &branch_name, script.as_deref())?;
@@ -1709,6 +1744,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
     // 3. Handle the worktree based on after_merge setting
     match after_merge.as_str() {
         "archive" => {
+            err_if_branch_worktree_busy(&base_repo, &branch_name)?;
             let archive_path = archive_worktree(&base_repo, &branch_name, script.as_deref())?;
             state.invalidate_repo_caches(&repo_path);
             Ok(MergeArchiveResult {
@@ -1718,6 +1754,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
             })
         }
         "delete" => {
+            err_if_branch_worktree_busy(&base_repo, &branch_name)?;
             remove_worktree_by_branch(&repo_path, &branch_name, true, script.as_deref(), false)?;
             state.invalidate_repo_caches(&repo_path);
             Ok(MergeArchiveResult {
@@ -2812,6 +2849,105 @@ branch refs/heads/feat
 ";
         let orphans = super::parse_orphan_worktrees(porcelain);
         assert!(orphans.is_empty());
+    }
+
+    #[test]
+    fn worktree_operation_in_progress_detects_rebase_and_clears_after() {
+        let repo = setup_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let worktrees_dir = repo.path().join("worktrees");
+
+        let config = WorktreeConfig {
+            task_name: "feat-rebasing".to_string(),
+            base_repo: repo_path.clone(),
+            branch: Some("feat-rebasing".to_string()),
+            create_branch: true,
+        };
+        let wt = create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("Failed to create worktree");
+
+        assert!(
+            !crate::git::worktree_operation_in_progress(&wt.path),
+            "freshly created worktree has no operation in progress"
+        );
+
+        // Simulate the mid-rebase state: git creates .git/worktrees/<name>/rebase-merge
+        // in the worktree's OWN gitdir (not the common dir shared with other worktrees).
+        let git_dir = crate::git::resolve_git_dir(&wt.path).expect("resolve git dir");
+        fs::create_dir_all(git_dir.join("rebase-merge")).expect("create rebase-merge marker");
+
+        assert!(
+            crate::git::worktree_operation_in_progress(&wt.path),
+            "rebase-merge marker should be detected"
+        );
+
+        // Rebase finishes — marker removed.
+        fs::remove_dir_all(git_dir.join("rebase-merge")).expect("remove rebase-merge marker");
+        assert!(
+            !crate::git::worktree_operation_in_progress(&wt.path),
+            "operation should no longer be in progress once the marker is gone"
+        );
+    }
+
+    #[test]
+    fn detect_orphan_worktrees_excludes_in_progress_but_keeps_genuine_orphans() {
+        let repo = setup_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let worktrees_dir = repo.path().join("worktrees");
+
+        // Worktree A: will be detached with NO operation in progress — a genuine orphan.
+        let config_a = WorktreeConfig {
+            task_name: "feat-abandoned".to_string(),
+            base_repo: repo_path.clone(),
+            branch: Some("feat-abandoned".to_string()),
+            create_branch: true,
+        };
+        let wt_a = create_worktree_internal(&worktrees_dir, &config_a, None)
+            .expect("Failed to create worktree A");
+        git_cmd(&wt_a.path)
+            .args(["checkout", "--detach"])
+            .run()
+            .expect("detach HEAD in worktree A");
+
+        // Worktree B: detached AND mid-rebase — must NOT be treated as an orphan.
+        let config_b = WorktreeConfig {
+            task_name: "feat-rebasing-b".to_string(),
+            base_repo: repo_path.clone(),
+            branch: Some("feat-rebasing-b".to_string()),
+            create_branch: true,
+        };
+        let wt_b = create_worktree_internal(&worktrees_dir, &config_b, None)
+            .expect("Failed to create worktree B");
+        git_cmd(&wt_b.path)
+            .args(["checkout", "--detach"])
+            .run()
+            .expect("detach HEAD in worktree B");
+        let git_dir_b = crate::git::resolve_git_dir(&wt_b.path).expect("resolve git dir B");
+        fs::create_dir_all(git_dir_b.join("rebase-merge")).expect("create rebase-merge marker on B");
+
+        let orphans = detect_orphan_worktrees(repo_path).expect("detect_orphan_worktrees");
+        // `git worktree list --porcelain` reports canonicalized (symlink-resolved)
+        // paths — e.g. macOS /var -> /private/var — so compare against the same form.
+        let orphan_a_path = wt_a
+            .path
+            .canonicalize()
+            .unwrap_or_else(|_| wt_a.path.clone())
+            .to_string_lossy()
+            .to_string();
+        let orphan_b_path = wt_b
+            .path
+            .canonicalize()
+            .unwrap_or_else(|_| wt_b.path.clone())
+            .to_string_lossy()
+            .to_string();
+        assert!(
+            orphans.contains(&orphan_a_path),
+            "genuinely abandoned worktree A should still be reported as an orphan: {orphans:?}"
+        );
+        assert!(
+            !orphans.contains(&orphan_b_path),
+            "mid-rebase worktree B must be excluded from orphan detection: {orphans:?}"
+        );
     }
 
     #[test]

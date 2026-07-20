@@ -681,6 +681,25 @@
   opacity: 0.7;
 }
 
+/* Shown while a worktree has a rebase/merge/cherry-pick/revert/bisect in
+ * progress — deliberately NOT dimmed like mergedBadge: this is an
+ * attention-needed state, not a passive one, and must stay visible even
+ * when the branch has live terminals (unlike the merged badge). */
+.rebasingBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin-left: 4px;
+  font-size: var(--font-2xs);
+  font-weight: 600;
+  font-family: var(--font-ui);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  flex-shrink: 0;
+  background: var(--attention);
+  color: var(--bg-primary);
+}
+
 /* PR state badge */
 .prBadge {
   display: inline-flex;

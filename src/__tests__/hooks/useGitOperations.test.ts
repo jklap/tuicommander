@@ -70,10 +70,16 @@ describe("useGitOperations", () => {
 		getInfo: vi.fn(),
 		getDiffStats: vi.fn().mockResolvedValue({ additions: 0, deletions: 0 }),
 		getWorktreePaths: vi.fn().mockResolvedValue({}),
-		getRepoSummary: vi
+		getRepoSummary: vi.fn().mockResolvedValue({
+			worktree_paths: {},
+			merged_branches: [],
+			diff_stats: {},
+			last_commit_ts: {},
+			in_progress_worktrees: [],
+		}),
+		getRepoStructure: vi
 			.fn()
-			.mockResolvedValue({ worktree_paths: {}, merged_branches: [], diff_stats: {}, last_commit_ts: {} }),
-		getRepoStructure: vi.fn().mockResolvedValue({ worktree_paths: {}, merged_branches: [] }),
+			.mockResolvedValue({ worktree_paths: {}, merged_branches: [], in_progress_worktrees: [] }),
 		getRepoDiffStats: vi.fn().mockResolvedValue({ diff_stats: {}, last_commit_ts: {} }),
 		removeWorktree: vi.fn().mockResolvedValue(undefined),
 		createWorktree: vi.fn(),
@@ -1151,10 +1157,13 @@ describe("useGitOperations", () => {
 			merged_branches: string[];
 			diff_stats: Record<string, { additions: number; deletions: number }>;
 			last_commit_ts: Record<string, number | null>;
+			/** Worktree dirs with a rebase/merge/cherry-pick in progress. Defaults to none. */
+			in_progress_worktrees?: string[];
 		}) {
 			mockRepo.getRepoStructure.mockResolvedValue({
 				worktree_paths: summary.worktree_paths,
 				merged_branches: summary.merged_branches,
+				in_progress_worktrees: summary.in_progress_worktrees ?? [],
 			});
 			mockRepo.getRepoDiffStats.mockResolvedValue({
 				diff_stats: summary.diff_stats,
@@ -1330,6 +1339,60 @@ describe("useGitOperations", () => {
 			await gitOps.refreshAllBranchStats();
 
 			expect(repositoriesStore.get("/repo")?.branches["main"]).toBeDefined();
+		});
+
+		// #454-5759-adjacent: a worktree mid-rebase has a transiently detached HEAD,
+		// so it drops out of worktree_paths (keyed by branch) exactly like a genuinely
+		// abandoned worktree would. Without in_progress_worktrees, refreshAllBranchStats
+		// can't tell the two apart and would close terminals + remove the branch out
+		// from under an agent that's mid-conflict-resolution.
+		it("keeps a branch and its terminals when its worktree has an operation in progress", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setBranch("/repo", "feature", { worktreePath: "/repo/wt-feature" });
+			const tid = terminalsStore.add(makeTerminal({ name: "T1", cwd: "/repo/wt-feature" }));
+			repositoriesStore.addTerminalToBranch("/repo", "feature", tid);
+
+			// "feature" is absent from worktree_paths (detached HEAD mid-rebase) but its
+			// worktree dir is reported as in-progress.
+			mockSummary({
+				worktree_paths: { main: "/repo" },
+				merged_branches: [],
+				diff_stats: { "/repo": { additions: 0, deletions: 0 } },
+				last_commit_ts: {},
+				in_progress_worktrees: ["/repo/wt-feature"],
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			const branch = repositoriesStore.get("/repo")?.branches["feature"];
+			expect(branch).toBeDefined();
+			expect(branch?.isRebasing).toBe(true);
+			expect(branch?.terminals).toContain(tid);
+			expect(mockCloseTerminal).not.toHaveBeenCalled();
+		});
+
+		it("clears isRebasing once the worktree reappears in worktree_paths", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setBranch("/repo", "feature", {
+				worktreePath: "/repo/wt-feature",
+				isRebasing: true,
+			});
+
+			// Rebase finished — HEAD reattached, branch is back in worktree_paths, and
+			// the worktree no longer has an operation in progress.
+			mockSummary({
+				worktree_paths: { main: "/repo", feature: "/repo/wt-feature" },
+				merged_branches: [],
+				diff_stats: { "/repo": { additions: 0, deletions: 0 }, "/repo/wt-feature": { additions: 0, deletions: 0 } },
+				last_commit_ts: {},
+				in_progress_worktrees: [],
+			});
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(repositoriesStore.get("/repo")?.branches["feature"]?.isRebasing).toBe(false);
 		});
 
 		it("stores lastCommitTs converted from seconds to milliseconds", async () => {

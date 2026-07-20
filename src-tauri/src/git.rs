@@ -72,6 +72,57 @@ pub(crate) fn resolve_git_dir(repo_path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Sentinel files/dirs under a git dir that indicate an in-progress operation
+/// which puts (or can put) HEAD in a transient detached state: rebase, merge,
+/// cherry-pick, revert, bisect. Checked relative to a worktree's own resolved
+/// git dir, which for a linked worktree is its `.git/worktrees/<name>/` state
+/// dir — exactly where these markers live during that worktree's operation.
+const IN_PROGRESS_OPERATION_MARKERS: &[&str] = &[
+    "rebase-merge",
+    "rebase-apply",
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "BISECT_LOG",
+];
+
+/// True when the worktree at `worktree_path` has a git operation in progress
+/// (rebase/merge/cherry-pick/revert/bisect) whose transient detached HEAD must
+/// NOT be mistaken for an abandoned worktree. Pure file I/O, no subprocess.
+pub(crate) fn worktree_operation_in_progress(worktree_path: &Path) -> bool {
+    let Some(git_dir) = resolve_git_dir(worktree_path) else {
+        return false;
+    };
+    IN_PROGRESS_OPERATION_MARKERS
+        .iter()
+        .any(|marker| git_dir.join(marker).exists())
+}
+
+/// Parse `git worktree list --porcelain` output into a flat list of worktree
+/// directory paths (main + all linked), regardless of branch/detached state.
+fn parse_all_worktree_paths(porcelain: &str) -> Vec<String> {
+    porcelain
+        .lines()
+        .filter_map(|line| line.strip_prefix("worktree "))
+        .map(|p| p.to_string())
+        .collect()
+}
+
+/// List worktree directories of `repo_path` that currently have a git operation
+/// in progress (rebase/merge/cherry-pick/revert/bisect). Used to keep the
+/// frontend from treating a transiently-detached worktree as removed/orphaned.
+pub(crate) fn list_in_progress_worktrees(repo_path: &Path) -> Result<Vec<String>, String> {
+    let out = git_cmd(repo_path)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .map_err(|e| format!("git worktree list failed: {e}"))?;
+
+    Ok(parse_all_worktree_paths(&out.stdout)
+        .into_iter()
+        .filter(|p| worktree_operation_in_progress(Path::new(p)))
+        .collect())
+}
+
 /// Resolve a repo path to its canonical main-worktree root.
 ///
 /// Linked worktrees share the binding of their main repo: a linked worktree's
@@ -1448,6 +1499,10 @@ pub(crate) async fn get_merged_branches(
 pub(crate) struct RepoStructure {
     worktree_paths: HashMap<String, String>,
     merged_branches: Vec<String>,
+    /// Worktree directory paths with a rebase/merge/cherry-pick/revert/bisect
+    /// in progress. These may be absent from `worktree_paths` (detached HEAD
+    /// during the operation) — the frontend must not treat that as removal.
+    in_progress_worktrees: Vec<String>,
 }
 
 /// Per-worktree diff stats + last-commit timestamps.
@@ -1469,6 +1524,8 @@ pub(crate) struct RepoSummary {
     diff_stats: HashMap<String, DiffStats>,
     /// Unix timestamp of the last commit on each branch, keyed by branch name.
     last_commit_ts: HashMap<String, Option<i64>>,
+    /// See `RepoStructure::in_progress_worktrees`.
+    in_progress_worktrees: Vec<String>,
 }
 
 /// Get the unix timestamp of the last commit on each branch using a single
@@ -1518,6 +1575,9 @@ pub(crate) async fn get_repo_summary_impl(
     let wt_path = repo_path.clone();
     let worktree_handle =
         tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)));
+    let ip_path = repo_path.clone();
+    let in_progress_handle =
+        tokio::task::spawn_blocking(move || list_in_progress_worktrees(Path::new(&ip_path)));
 
     let mb_path = repo_path.clone();
     let merged_branches = cached_try(
@@ -1531,6 +1591,14 @@ pub(crate) async fn get_repo_summary_impl(
         .await
         .map_err(|e| format!("spawn_blocking error: {e}"))?
         .map_err(|e| format!("get_worktree_paths failed: {e}"))?;
+
+    // Best-effort: a worktree with an in-progress rebase/merge that also fails
+    // to list (e.g. transient git lock) should not fail the whole summary —
+    // fall back to "none in progress" rather than surfacing an error here.
+    let in_progress_worktrees = in_progress_handle
+        .await
+        .unwrap_or_else(|_| Ok(Vec::new()))
+        .unwrap_or_default();
 
     // Run diff stats and last-commit timestamps concurrently. The whole
     // function holds a monitoring_git_sem permit (acquired above), so this
@@ -1569,6 +1637,7 @@ pub(crate) async fn get_repo_summary_impl(
         merged_branches,
         diff_stats,
         last_commit_ts,
+        in_progress_worktrees,
     })
 }
 
@@ -1593,6 +1662,9 @@ pub(crate) async fn get_repo_structure_impl(
     let wt_path = repo_path.clone();
     let worktree_handle =
         tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)));
+    let ip_path = repo_path.clone();
+    let in_progress_handle =
+        tokio::task::spawn_blocking(move || list_in_progress_worktrees(Path::new(&ip_path)));
 
     let mb_path = repo_path.clone();
     let merged_branches = cached_try(
@@ -1607,9 +1679,17 @@ pub(crate) async fn get_repo_structure_impl(
         .map_err(|e| format!("spawn_blocking error: {e}"))?
         .map_err(|e| format!("get_worktree_paths failed: {e}"))?;
 
+    // Best-effort: a listing failure here shouldn't fail the whole structure
+    // snapshot — fall back to "none in progress" rather than surfacing an error.
+    let in_progress_worktrees = in_progress_handle
+        .await
+        .unwrap_or_else(|_| Ok(Vec::new()))
+        .unwrap_or_default();
+
     Ok(RepoStructure {
         worktree_paths,
         merged_branches,
+        in_progress_worktrees,
     })
 }
 
@@ -2136,6 +2216,11 @@ pub(crate) fn get_git_panel_context_impl(path: &Path) -> GitPanelContext {
             gd.join("rebase-merge").exists() || gd.join("rebase-apply").exists(),
             gd.join("CHERRY_PICK_HEAD").exists(),
         ),
+        // `git_dir` is already resolved above (line 2068) and reused across this
+        // function; `worktree_operation_in_progress` re-resolves it internally,
+        // so the split above stays as the fine-grained (rebase vs cherry-pick)
+        // panel display, while worktree_operation_in_progress is the coarse
+        // "don't touch this worktree" signal used by cleanup/orphan paths.
         None => (false, false),
     };
 
@@ -3632,6 +3717,66 @@ mod tests {
         assert!(
             git_dir.unwrap().join("HEAD").exists(),
             ".git dir should contain HEAD"
+        );
+    }
+
+    #[test]
+    fn list_in_progress_worktrees_finds_only_the_busy_one() {
+        let (_dir, repo_path) = setup_test_repo_with_commit();
+        let worktrees_dir = repo_path.join("worktrees");
+        std::fs::create_dir_all(&worktrees_dir).expect("create worktrees dir");
+
+        // A plain linked worktree — no operation in progress.
+        let idle_path = worktrees_dir.join("idle");
+        std::process::Command::new("git")
+            .current_dir(&repo_path)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "idle-branch",
+                &idle_path.to_string_lossy(),
+            ])
+            .output()
+            .expect("worktree add idle");
+
+        // A linked worktree with a rebase in progress (simulated via the marker,
+        // same as a real `git rebase` stopped on conflicts would leave behind).
+        let busy_path = worktrees_dir.join("busy");
+        std::process::Command::new("git")
+            .current_dir(&repo_path)
+            .args([
+                "worktree",
+                "add",
+                "-b",
+                "busy-branch",
+                &busy_path.to_string_lossy(),
+            ])
+            .output()
+            .expect("worktree add busy");
+        let busy_git_dir = resolve_git_dir(&busy_path).expect("resolve busy git dir");
+        std::fs::create_dir_all(busy_git_dir.join("rebase-merge")).expect("create rebase-merge");
+
+        let in_progress = list_in_progress_worktrees(&repo_path).expect("list_in_progress_worktrees");
+
+        let busy_real = busy_path
+            .canonicalize()
+            .unwrap_or(busy_path)
+            .to_string_lossy()
+            .to_string();
+        let idle_real = idle_path
+            .canonicalize()
+            .unwrap_or(idle_path)
+            .to_string_lossy()
+            .to_string();
+
+        assert!(
+            in_progress.contains(&busy_real),
+            "busy worktree should be reported in progress: {in_progress:?}"
+        );
+        assert!(
+            !in_progress.contains(&idle_real),
+            "idle worktree must not be reported in progress: {in_progress:?}"
         );
     }
 

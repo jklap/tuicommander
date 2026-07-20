@@ -727,7 +727,7 @@ export const GitHubTab: Component = () => {
 						{ value: "on", label: "Auto-remove" },
 						{ value: "off", label: "Keep (mark as detached)" },
 					]}
-					hint="Handle worktrees whose branch was deleted"
+					hint="An 'orphan' worktree is one whose branch was deleted out from under it — not one that's mid-rebase or mid-merge. Worktrees with a rebase, merge, cherry-pick, revert, or bisect in progress are never closed, archived, or removed by this setting, regardless of its value."
 				/>
 
 				<SettingSelect
