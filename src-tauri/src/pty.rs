@@ -744,9 +744,9 @@ pub(crate) struct SilenceState {
     /// explicit idle marker or a confirmed ready screen. Silence alone must not
     /// override this state: hooks are stronger evidence than output timing.
     explicit_busy: bool,
-    /// BUSY came from an observed agent hook. Only an explicit hook idle (or
-    /// process exit) may end it; the ready prompt is also visible during startup
-    /// and must not override the hook before Working is painted.
+    /// BUSY came from an observed agent hook. A stable ready screen may recover
+    /// from a missed idle hook, but the old prompt cannot do so before submitted
+    /// turn activity is observed.
     hook_busy: bool,
     /// An explicit idle marker outranks a stale Working row left in the same
     /// render chunk. Cleared by the next explicit busy or later real activity.
@@ -922,7 +922,7 @@ impl SilenceState {
 
     fn note_ready_screen(&mut self) -> bool {
         if self.injection_delivery_uncertain
-            || self.hook_busy
+            || (self.hook_busy && !self.turn_activity_seen)
             || (self.turn_started_by_input && !self.turn_activity_seen)
             || self.is_api_retry_active()
         {
@@ -935,6 +935,7 @@ impl SilenceState {
             return false;
         }
         self.explicit_busy = false;
+        self.hook_busy = false;
         self.explicit_idle = false;
         self.idle_confirmed = true;
         self.last_status_line_at = None;
@@ -2364,6 +2365,13 @@ fn apply_working_evidence(
 ) {
     {
         let mut sl = silence.lock();
+        let turn_completed = state
+            .session_states
+            .get(session_id)
+            .is_some_and(|session| sl.completion_declared_for_epoch(session.turn_epoch));
+        if turn_completed {
+            return;
+        }
         if sl.explicit_idle {
             return;
         }
@@ -2855,6 +2863,27 @@ fn try_timer_idle_transition(
     }
 }
 
+fn completion_adjusted_screen_activity(
+    state: &AppState,
+    silence: &Arc<Mutex<SilenceState>>,
+    session_id: &str,
+    screen_activity: AgentScreenActivity,
+) -> AgentScreenActivity {
+    if screen_activity != AgentScreenActivity::Working {
+        return screen_activity;
+    }
+    let silence = silence.lock();
+    if state
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| silence.completion_declared_for_epoch(session.turn_epoch))
+    {
+        AgentScreenActivity::Ready
+    } else {
+        screen_activity
+    }
+}
+
 /// Spawn the silence-detection timer thread. Shared by desktop and headless readers.
 ///
 /// Two strategies run in priority order:
@@ -2931,6 +2960,8 @@ fn spawn_silence_timer(
                     detect_agent_screen_activity(agent_type.as_deref(), &vt.lock().screen_rows())
                 })
                 .unwrap_or(AgentScreenActivity::Unknown);
+            let screen_activity =
+                completion_adjusted_screen_activity(&state, &silence, &session_id, screen_activity);
             let tracked_background_work = state
                 .session_states
                 .get(&session_id)
@@ -6418,6 +6449,7 @@ pub(crate) async fn write_pty(
         // the user types under CPU saturation (keeps the WebView thread free for
         // keystroke dispatch + echo).
         stamp_input_ms(&state, &session_id);
+        crate::state::resolve_choice_prompt_input(&state, &session_id, &data);
 
         // Feed input through the line buffer to reconstruct user-typed lines
         // Release both the inner mutex and DashMap entry guard before callbacks
@@ -10103,14 +10135,128 @@ mod tests {
     }
 
     #[test]
-    fn test_hook_busy_cannot_be_overridden_by_ready_prompt() {
+    fn test_stable_ready_prompt_recovers_missed_hook_idle_after_activity() {
         let mut silence = SilenceState::new();
+        silence.note_user_submission(true);
+        silence.note_explicit_state(SHELL_BUSY, true);
+        silence.note_real_activity();
+        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(silence.note_ready_screen());
+        assert!(!silence.explicit_busy);
+        assert!(!silence.hook_busy);
+        assert!(silence.idle_confirmed);
+    }
+
+    #[test]
+    fn test_hook_busy_cannot_be_overridden_before_turn_activity() {
+        let mut silence = SilenceState::new();
+        silence.note_user_submission(true);
         silence.note_explicit_state(SHELL_BUSY, true);
         silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
         assert!(!silence.note_ready_screen());
         assert!(silence.explicit_busy);
-        silence.note_explicit_state(SHELL_IDLE, true);
-        assert!(silence.idle_confirmed);
+        assert!(silence.hook_busy);
+        assert!(!silence.idle_confirmed);
+    }
+
+    #[test]
+    fn test_fresh_hook_busy_blocks_ready_after_prior_recovery() {
+        let mut silence = SilenceState::new();
+        silence.note_user_submission(true);
+        silence.note_explicit_state(SHELL_BUSY, true);
+        silence.note_real_activity();
+        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(silence.note_ready_screen());
+
+        silence.note_explicit_state(SHELL_BUSY, true);
+        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(!silence.note_ready_screen());
+        assert!(silence.explicit_busy);
+        assert!(silence.hook_busy);
+        assert!(!silence.idle_confirmed);
+    }
+
+    #[test]
+    fn test_working_row_cannot_relatch_a_declared_completed_turn() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "completed-working-row";
+        state.session_states.insert(
+            session_id.into(),
+            crate::state::SessionState {
+                agent_type: Some("codex".into()),
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            session_id.into(),
+            std::sync::atomic::AtomicU8::new(SHELL_IDLE),
+        );
+        let mut lifecycle = SilenceState::new();
+        lifecycle.confirm_idle();
+        lifecycle.mark_suggest_candidate(vec!["Review diff".into()], 0);
+        let lifecycle = Arc::new(Mutex::new(lifecycle));
+
+        apply_working_evidence(
+            &state,
+            &lifecycle,
+            session_id,
+            now_epoch_ms(),
+            "working-screen",
+        );
+
+        assert_eq!(
+            state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(std::sync::atomic::Ordering::Acquire),
+            SHELL_IDLE
+        );
+        assert!(lifecycle.lock().idle_confirmed);
+    }
+
+    #[test]
+    fn test_declared_completion_turns_stale_working_screen_into_ready_evidence() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "completed-working-timer";
+        agent_session(&state, session_id, SHELL_BUSY);
+        {
+            let mut session = state.session_states.get_mut(session_id).unwrap();
+            session.agent_type = Some("codex".into());
+            session.background_probe_satisfied_turn_epoch = Some(session.turn_epoch);
+        }
+        let lifecycle = state.silence_states.get(session_id).unwrap().clone();
+        {
+            let mut lifecycle = lifecycle.lock();
+            lifecycle.mark_suggest_candidate(vec!["Review diff".into()], 0);
+            lifecycle.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        }
+
+        let screen_activity = completion_adjusted_screen_activity(
+            &state,
+            &lifecycle,
+            session_id,
+            AgentScreenActivity::Working,
+        );
+        let transition = try_timer_idle_transition(
+            &state,
+            &lifecycle,
+            session_id,
+            screen_activity,
+            Some("codex"),
+            Some(0),
+        );
+
+        assert!(transition.screen_confirms_idle);
+        assert!(transition.transitioned);
+        assert_eq!(
+            state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(std::sync::atomic::Ordering::Acquire),
+            SHELL_IDLE
+        );
     }
 
     #[test]

@@ -298,6 +298,27 @@ impl SessionState {
     }
 }
 
+pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, data: &str) -> bool {
+    let Some(mut session) = state.session_states.get_mut(session_id) else {
+        return false;
+    };
+    let Some(prompt) = session.choice_prompt.as_ref() else {
+        return false;
+    };
+    let resolves = prompt.options.iter().any(|option| option.key == data)
+        || matches!(data, "\r" | "\n")
+        || (data == "\x1b" && prompt.dismiss_key.is_some())
+        || (data == "\t" && prompt.amend_key.is_some());
+    if !resolves {
+        return false;
+    }
+    session.choice_prompt = None;
+    session.awaiting_input = false;
+    session.question_text = None;
+    session.question_confident = false;
+    true
+}
+
 /// PartialEq excludes last_activity_ms (telemetry, not logical state).
 /// Used by WS dedup to avoid sending identical state frames.
 impl PartialEq for SessionState {
@@ -2176,23 +2197,30 @@ impl AppState {
         state.shell_state = self.shell_states.get(session_id).map(|atom| {
             crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed)).to_string()
         });
-        state.agent_state = if state.agent_type.is_none() {
-            None
-        } else if state.awaiting_input || state.choice_prompt.is_some() {
-            Some("awaiting_input".to_string())
-        } else if state.has_pending_background_probe()
-            || state.background_work
-            || state.shell_state.as_deref() == Some("busy")
-        {
-            Some("working".to_string())
-        } else if state.suggested_actions.is_some()
+        let completion_declared = state.suggested_actions.is_some()
             || self.silence_states.get(session_id).is_some_and(|silence| {
                 silence
                     .lock()
                     .completion_declared_for_epoch(state.turn_epoch)
-            })
-        {
+            });
+        let background_work = state.has_pending_background_probe() || state.background_work;
+        // A current-turn completion marker is stronger than a stale BUSY atom
+        // (for example a completed Codex screen that still contains its last
+        // Working row). Keep real background work authoritative, but normalize
+        // the terminal state once the agent has explicitly ended the turn.
+        if completion_declared && !background_work {
+            state.shell_state = Some("idle".to_string());
+        }
+        state.agent_state = if state.agent_type.is_none() {
+            None
+        } else if state.awaiting_input || state.choice_prompt.is_some() {
+            Some("awaiting_input".to_string())
+        } else if background_work {
+            Some("working".to_string())
+        } else if completion_declared {
             Some("completed".to_string())
+        } else if state.shell_state.as_deref() == Some("busy") {
+            Some("working".to_string())
         } else if state.shell_state.as_deref() == Some("idle") {
             Some("idle".to_string())
         } else {
@@ -2367,7 +2395,6 @@ impl AppState {
                                 s.rate_limit_set_ms = 0;
                                 s.last_error = None;
                                 s.suggested_actions = None;
-                                s.choice_prompt = None;
                                 // Only update current_task + activity timestamp when task changes.
                                 // Spinner rotations (same task name) are suppressed to avoid
                                 // churning the state and flooding WS clients.
@@ -5028,6 +5055,70 @@ mod tests {
     }
 
     #[test]
+    fn test_session_state_status_line_keeps_choice_prompt() {
+        let state = fresh_state();
+        let choice = make_parsed(
+            "choice-prompt",
+            serde_json::json!({
+                "title": "Which approach should I use?",
+                "options": [{
+                    "key": "1",
+                    "label": "Proceed",
+                    "highlighted": true,
+                    "destructive": false
+                }],
+                "dismiss_key": "cancel",
+                "amend_key": "amend"
+            }),
+        );
+        apply(&state, &choice);
+
+        let status = make_parsed("status-line", serde_json::json!({ "task_name": "Waiting" }));
+        let session = apply(&state, &status);
+        assert!(
+            session.choice_prompt.is_some(),
+            "an animated status row must not erase a visible choice prompt"
+        );
+        state.session_states.get_mut("s1").unwrap().agent_type = Some("claude".into());
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.agent_state.as_deref(), Some("awaiting_input"));
+    }
+
+    #[test]
+    fn test_non_hook_choice_prompt_clears_on_single_key_reply() {
+        let state = fresh_state();
+        let choice = make_parsed(
+            "choice-prompt",
+            serde_json::json!({
+                "title": "Which approach should I use?",
+                "options": [{
+                    "key": "1",
+                    "label": "Proceed",
+                    "highlighted": true,
+                    "destructive": false
+                }],
+                "dismiss_key": "cancel",
+                "amend_key": "amend"
+            }),
+        );
+        apply(&state, &choice);
+        assert!(!resolve_choice_prompt_input(&state, "s1", "\x1b[B"));
+        assert!(
+            state
+                .session_states
+                .get("s1")
+                .unwrap()
+                .choice_prompt
+                .is_some()
+        );
+
+        assert!(resolve_choice_prompt_input(&state, "s1", "1"));
+        let session = state.session_states.get("s1").unwrap();
+        assert!(session.choice_prompt.is_none());
+        assert!(!session.awaiting_input);
+    }
+
+    #[test]
     fn test_session_state_low_confidence_question_does_not_downgrade_confident() {
         let state = fresh_state();
         // Confident approval prompt active (grok's "Action Required" title).
@@ -5091,6 +5182,48 @@ mod tests {
             ss.shell_state.is_none(),
             "no shell_states entry should produce None, not derive from timing"
         );
+    }
+
+    #[test]
+    fn test_current_turn_completion_normalizes_stale_busy_shell() {
+        let state = fresh_state();
+        {
+            let mut session = state.session_states.get_mut("s1").unwrap();
+            session.agent_type = Some("codex".into());
+            session.suggested_actions = Some(vec!["Review diff".into()]);
+        }
+        state.shell_states.insert(
+            "s1".into(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+
+        let snapshot = state.session_state_with_shell("s1").unwrap();
+        assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+        assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
+    }
+
+    #[test]
+    fn test_completion_does_not_override_confirmed_or_pending_background_work() {
+        for pending_probe in [false, true] {
+            let state = fresh_state();
+            {
+                let mut session = state.session_states.get_mut("s1").unwrap();
+                session.agent_type = Some("claude".into());
+                session.suggested_actions = Some(vec!["Review result".into()]);
+                session.background_work = !pending_probe;
+                if pending_probe {
+                    session.background_probe_turn_epoch = Some(session.turn_epoch);
+                }
+            }
+            state.shell_states.insert(
+                "s1".into(),
+                std::sync::atomic::AtomicU8::new(crate::pty::SHELL_BUSY),
+            );
+
+            let snapshot = state.session_state_with_shell("s1").unwrap();
+            assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
+            assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+        }
     }
 
     #[test]
