@@ -95,5 +95,18 @@
       "Restarting the remote HTTP server keeps stdio MCP clients like Claude connected with their tools instead of dropping to zero."
     ],
     "date": "2026-07-15"
+  },
+  "1.6.2": {
+    "highlights": [
+      "Multi-agent MCP orchestration is now far more reliable, with socket stalls, stale bindings, and blocking-wait races fixed.",
+      "Agent-to-agent messages now use bounded inboxes and never overwrite your typed input or leave ghost \"busy\" sessions behind.",
+      "Background work (Cargo builds, tests) keeps agents marked working instead of falsely reporting completion at a ready prompt.",
+      "Agent completion is now distinct from idle, with a separate task-level state so finished turns are reported accurately.",
+      "MCP-spawned agents accept an optional name that stays stable in terminal tabs across reconnects.",
+      "Codex and OpenCode spawning and message submission are now reliable, with correct model args and prompt placement.",
+      "Dev builds use a separate repository list, so running a dev instance no longer overwrites your installed app's repos.",
+      "Build Cleaner no longer rescans every repository after each reload, sharing one scan and reusing recent results."
+    ],
+    "date": "2026-07-20"
   }
 }
