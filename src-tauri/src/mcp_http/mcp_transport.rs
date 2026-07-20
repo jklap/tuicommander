@@ -422,6 +422,21 @@ fn refresh_mcp_session(
     apply_initialize_identity(state, mcp_sid, tuic_session_header);
 }
 
+/// Reuse the bridge's live protocol session when it proxies the downstream
+/// client's initialize request. The bridge eagerly initializes once so it can
+/// expose tools while the client is starting, then forwards the client's own
+/// initialize with that session ID. Minting a second ID here would make the
+/// live-owner guard correctly reject the same bridge as an identity takeover.
+fn initialize_session_id(state: &AppState, headers: &HeaderMap) -> String {
+    headers
+        .get(MCP_SESSION_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .filter(|session_id| is_valid_uuid(session_id))
+        .filter(|session_id| state.mcp_sessions.contains_key(*session_id))
+        .map(str::to_string)
+        .unwrap_or_else(|| Uuid::new_v4().to_string())
+}
+
 /// Build server instructions for the MCP initialize response.
 /// Tells the connecting agent what tools are available, which repos are managed,
 /// and what sessions are currently active so it can orient itself.
@@ -610,7 +625,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. Spawn agents (Claude Code, Codex, Aider, Goose) in managed PTYs, detect installed agents, and peer-to-peer messaging.\n\nOrchestration in 5 lines:\n1. Identity is automatic — you are already registered as $TUIC_SESSION (no register call needed).\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle: spawned peers auto-notify you (idle/exited) — you get woken, no polling.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>) or a session reaches a state. Returns {met, timed_out}.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Optional rename/project-set (identity already auto-bound). Pass your $TUIC_SESSION.\n- list_peers: List peers. Optional: project filter.\n- send: Message a peer (requires to, message).\n- inbox: Read messages. Optional: limit, since (unix millis).",
+            "description": "AI agent orchestration. Spawn agents (Claude Code, Codex, Aider, Goose) in managed PTYs, detect installed agents, and peer-to-peer messaging.\n\nOrchestration in 5 lines:\n1. Managed PTY identity is automatic when tuic-bridge inherits $TUIC_SESSION. External/headerless callers must set TUIC_SESSION before the bridge starts or call register with a stable UUID.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle: spawned peers auto-notify you (idle/exited) — you get woken, no polling.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>) or a session reaches a state. Returns {met, timed_out}.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. Pass a stable UUID as tuic_session.\n- list_peers: List peers. Optional: project filter.\n- send: Message a peer (requires to, message).\n- inbox: Read messages. Optional: limit, since (unix millis).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "description": "Max wait in ms (action=wait; default 5000, capped 8000). On timeout returns {timed_out:true} — call again to keep waiting." },
@@ -2741,7 +2756,7 @@ fn handle_messaging(
                 "tuic_session": tuic_session,
                 "name": name,
                 "linked_children": linked_children,
-                "identity": "Automatic — you were bound to $TUIC_SESSION at connect. register is only needed to set a friendly name/project; spawn/send/inbox/wait work without it.",
+                "identity": "This MCP session is now bound to the supplied stable UUID. Managed PTY bridges normally auto-bind from $TUIC_SESSION; external/headerless callers use register to establish the binding.",
                 "workflow": {
                     "spawn_same_repo": "agent action=spawn prompt=<task> cwd=<repo_path> — returns {session_id, monitor_with, peer_monitor_with?, wait_with}. As orchestrator, prefer wait/inbox over raw session output to avoid token burn.",
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
@@ -3601,7 +3616,7 @@ pub(super) async fn mcp_post(
 
     match method {
         "initialize" => {
-            let session_id = Uuid::new_v4().to_string();
+            let session_id = initialize_session_id(&state, &headers);
             let client_name = body["params"]["clientInfo"]["name"].as_str();
             let is_claude_code = detect_claude_code_client(client_name);
 
@@ -3621,15 +3636,23 @@ pub(super) async fn mcp_post(
                 });
 
             let now = std::time::Instant::now();
-            state.mcp_sessions.insert(
-                session_id.clone(),
-                crate::state::McpSessionMeta {
-                    last_activity: now,
-                    is_claude_code,
-                    has_sse_stream: false,
-                    repo_path,
-                },
-            );
+            if let Some(mut meta) = state.mcp_sessions.get_mut(&session_id) {
+                meta.last_activity = now;
+                meta.is_claude_code = is_claude_code;
+                if repo_path.is_some() {
+                    meta.repo_path = repo_path;
+                }
+            } else {
+                state.mcp_sessions.insert(
+                    session_id.clone(),
+                    crate::state::McpSessionMeta {
+                        last_activity: now,
+                        is_claude_code,
+                        has_sse_stream: false,
+                        repo_path,
+                    },
+                );
+            }
 
             // Auto-bind swarm identity from the `x-tuic-session` header the bridge
             // asserts (it inherits `TUIC_SESSION` from the agent PTY). This makes
@@ -4973,6 +4996,92 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn proxied_initialize_reuses_eager_live_session_and_keeps_spawn_ready() {
+        let state = test_state();
+        let eager_mcp_session = TEST_UUID_B;
+        state.mcp_sessions.insert(
+            eager_mcp_session.to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                has_sse_stream: true,
+                repo_path: None,
+            },
+        );
+        assert!(apply_initialize_identity(
+            &state,
+            eager_mcp_session,
+            Some(TEST_UUID_A)
+        ));
+        let (sender, _live_sse) = tokio::sync::broadcast::channel(4);
+        state
+            .messaging_channels
+            .insert(eager_mcp_session.to_string(), sender);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, eager_mcp_session.parse().unwrap());
+        headers.insert(TUIC_SESSION_HEADER, TEST_UUID_A.parse().unwrap());
+        let response = mcp_post(
+            State(Arc::clone(&state)),
+            ConnectInfo("127.0.0.1:1".parse().unwrap()),
+            headers,
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-03-26",
+                    "capabilities": {},
+                    "clientInfo": { "name": "tuic-bridge", "version": "test" }
+                }
+            })),
+        )
+        .await
+        .into_response();
+
+        assert_eq!(
+            response
+                .headers()
+                .get(MCP_SESSION_HEADER)
+                .and_then(|value| value.to_str().ok()),
+            Some(eager_mcp_session),
+            "the downstream initialize must reuse the bridge's eager session"
+        );
+        assert_eq!(
+            state
+                .mcp_to_session
+                .get(eager_mcp_session)
+                .map(|entry| entry.value().clone()),
+            Some(TEST_UUID_A.to_string()),
+            "the live SSE owner must retain its peer binding"
+        );
+
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({
+                "action": "spawn",
+                "prompt": "verify inherited parent binding",
+                "binary_path": "/usr/bin/true",
+                "cwd": "/tmp",
+            }),
+            Some(eager_mcp_session),
+        );
+        if spawned
+            .get("error")
+            .and_then(|error| error.as_str())
+            .is_some_and(|error| error.contains("Failed to open PTY"))
+        {
+            eprintln!("Skipping spawn readiness assertion: PTY unavailable");
+            return;
+        }
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+        assert_eq!(spawned["communication_ready"], true);
+        assert_eq!(spawned["parent_session_id"], TEST_UUID_A);
+    }
+
     #[test]
     fn initialize_identity_preserves_registered_name_across_reconnect() {
         let state = test_state();
@@ -6036,8 +6145,12 @@ mod tests {
             .unwrap();
         let desc = agent["description"].as_str().unwrap();
         assert!(
-            desc.contains("Identity is automatic"),
-            "must state auto-identity"
+            desc.contains("Managed PTY identity is automatic"),
+            "must state the condition for auto-identity"
+        );
+        assert!(
+            desc.contains("External/headerless callers"),
+            "must explain how external callers establish identity"
         );
         assert!(desc.contains("wait"), "must mention the wait primitive");
         assert!(

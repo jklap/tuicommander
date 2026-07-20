@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Fixed local MCP socket stalls under multi-agent load caused by re-entering an `input_buffers` DashMap shard while its entry guard was still held; bridge health checks now use constant-size MCP `ping`, report endpoint availability accurately, safely reclaim stale peer bindings after reconnect, and reject initialize auto-bind takeover while the prior bridge remains live.
+- Fixed local MCP socket stalls under multi-agent load caused by re-entering an `input_buffers` DashMap shard while its entry guard was still held; bridge health checks now use constant-size MCP `ping`, report endpoint availability accurately, safely reclaim stale peer bindings after reconnect, reject initialize auto-bind takeover while the prior bridge remains live, and reuse the bridge's existing session for its proxied initialize so its own SSE stream cannot block identity binding.
 
 ### Fixed
 - **Dev/release repository persistence collision** — Debug builds now use a one-time production-seeded `~/.tuicommander-dev/repositories.json`, preventing a concurrently running development frontend from overwriting the installed app's repository list without changing unrelated config paths.

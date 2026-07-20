@@ -112,7 +112,9 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
 > **Identity is automatic.** The bridge asserts your `$TUIC_SESSION` at connect
 > (`x-tuic-session` header → server auto-bind), so an agent spawned inside TUICommander
 > is already a registered peer. `agent action=register` is only needed to set a friendly
-> name/project, or from a standalone session where the env-var route is unavailable.
+> name/project, or from a standalone/external session where the env-var route is unavailable.
+> External MCP clients are not implicitly bound to a separate plain-shell tab: set
+> `TUIC_SESSION` before their bridge starts or register that tab's stable UUID explicitly.
 
 > **Prefer blocking waits over polling.** `agent action=wait since=<ms>` returns as soon
 > as new mail arrives; `session action=wait session_id=<id> until=idle|exited` blocks on a

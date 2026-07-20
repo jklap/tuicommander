@@ -475,8 +475,13 @@ unregistered states when the IPC server keeps sockets alive.
    → the shared locked live-owner policy), auto-registering the peer. `agent action=register`
    becomes an optional rename. The same MCP session may refresh its binding, and a fresh session
    may reclaim a stale owner; a subscribed or recently active owner rejects takeover. An existing
-   peer's display name is preserved.
-1. **Register** *(optional)*: sets a friendly name/project on the already-bound identity.
+   peer's display name is preserved. The bridge's eager initialize and the downstream client's
+   proxied initialize reuse the same existing `mcp-session-id`; this prevents the bridge's own live
+   SSE stream from being mistaken for a competing identity owner. External bridges without
+   `$TUIC_SESSION` are not auto-bound and must set it before startup or explicitly register a stable
+   UUID.
+1. **Register**: optional rename/project update for an auto-bound peer; required to bind a
+   headerless external caller to a stable UUID.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by project).
 3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
    `accepted=true` and `buffered_in_inbox=true` acknowledge success;
