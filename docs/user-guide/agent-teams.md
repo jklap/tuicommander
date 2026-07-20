@@ -96,7 +96,7 @@ There is no separate `swarm` action: callers compose the `agent` and `session` p
 
 Every PTY session gets a stable `TUIC_SESSION` UUID injected as an environment variable. Agents use this as their identity to register, discover peers, and exchange messages through TUICommander's MCP `messaging` tool.
 
-When both sender and recipient are connected via SSE (the default for Claude Code agents), messages are **pushed in real-time** as MCP channel notifications (`notifications/claude/channel`). They also land in a buffered inbox as a fallback.
+When the recipient is a channel-enabled Claude Code client connected via SSE, messages are **pushed in real-time** as MCP channel notifications (`notifications/claude/channel`). Managed non-Claude agents use terminal submission instead, even when their MCP bridge has an SSE stream. Every message also lands in a buffered inbox as a fallback.
 
 ### What Gets Injected Automatically
 
@@ -121,7 +121,8 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
 > **Prefer blocking waits over polling.** `agent action=wait since=<ms>` returns as soon
 > as new mail arrives; `session action=wait session_id=<id> until=idle|exited` blocks on a
 > peer's lifecycle. Both default to 60 seconds, cap at 300000 ms, and return
-> `{met, timed_out}`. A successful agent wait also returns every retained fresh message (up to the
+> `{met, timed_out}`. They are event-driven end to end; the bridge deadline follows the
+> requested wait instead of its ordinary ten-second timeout. A successful agent wait also returns every retained fresh message (up to the
 > 100-message inbox capacity) and a per-recipient logical `next_since` cursor, so the normal path
 > needs no separate inbox call. Incoming messages are also **typed into an idle peer's terminal**, so a waiting
 > orchestrator is woken by its children without any poll loop.

@@ -21,35 +21,50 @@ static TUIC_SESSION_ENV: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("TUIC_SESSION").ok().filter(|s| !s.is_empty()));
 
 const MCP_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-/// Longer than the MCP server's five-minute wait cap so a valid blocking wait
-/// completes as a tool result rather than a bridge transport timeout.
-const MCP_WAIT_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(305);
+const MCP_WAIT_DEFAULT_MS: u64 = 60_000;
+const MCP_WAIT_MAX_MS: u64 = 300_000;
+/// Bounded transport overhead beyond the server-side wait. This covers HTTP
+/// framing and scheduler latency without turning unrelated calls into long
+/// hangs; the requested wait itself remains authoritative.
+const MCP_WAIT_RESPONSE_MARGIN_MS: u64 = 5_000;
+
+fn wait_timeout_ms(request: &Value) -> Option<u64> {
+    let name = request.pointer("/params/name").and_then(Value::as_str)?;
+    let outer_arguments = request.pointer("/params/arguments")?;
+    let arguments = if name == "call_tool" {
+        let tool = outer_arguments.get("tool_name").and_then(Value::as_str)?;
+        if !matches!(tool, "agent" | "session") {
+            return None;
+        }
+        outer_arguments.get("arguments")?
+    } else {
+        if !matches!(name, "agent" | "session") {
+            return None;
+        }
+        outer_arguments
+    };
+    if arguments.get("action").and_then(Value::as_str) != Some("wait") {
+        return None;
+    }
+    Some(
+        arguments
+            .get("timeout_ms")
+            .and_then(Value::as_u64)
+            .filter(|timeout| *timeout > 0)
+            .unwrap_or(MCP_WAIT_DEFAULT_MS)
+            .min(MCP_WAIT_MAX_MS),
+    )
+}
 
 fn response_timeout(body: &str) -> std::time::Duration {
     let Ok(request) = serde_json::from_str::<Value>(body) else {
         return MCP_RESPONSE_TIMEOUT;
     };
-    let name = request.pointer("/params/name").and_then(Value::as_str);
-    let arguments = request.pointer("/params/arguments");
-    let direct_wait = matches!(name, Some("agent" | "session"))
-        && arguments
-            .and_then(|args| args.get("action"))
-            .and_then(Value::as_str)
-            == Some("wait");
-    let collapsed_wait = name == Some("call_tool")
-        && arguments
-            .and_then(|args| args.get("tool_name"))
-            .and_then(Value::as_str)
-            .is_some_and(|tool| matches!(tool, "agent" | "session"))
-        && arguments
-            .and_then(|args| args.pointer("/arguments/action"))
-            .and_then(Value::as_str)
-            == Some("wait");
-    if direct_wait || collapsed_wait {
-        MCP_WAIT_RESPONSE_TIMEOUT
-    } else {
-        MCP_RESPONSE_TIMEOUT
-    }
+    wait_timeout_ms(&request)
+        .map(|timeout| {
+            std::time::Duration::from_millis(timeout.saturating_add(MCP_WAIT_RESPONSE_MARGIN_MS))
+        })
+        .unwrap_or(MCP_RESPONSE_TIMEOUT)
 }
 
 // ---------------------------------------------------------------------------
@@ -280,8 +295,8 @@ async fn post_mcp(
     // Do not wait for EOF: hyper may keep an accepted IPC connection alive even
     // when the request says `Connection: close`. Read exactly Content-Length and
     // drop our stream immediately, otherwise a keep-alive connection leaves an
-    // accepted mcp.sock FD behind in TUIC. The timeout still permits the
-    // server's documented five-minute blocking wait.
+    // accepted mcp.sock FD behind in TUIC. Wait calls derive this transport
+    // deadline from their requested server timeout plus a bounded margin.
     let (header_section, response_body) =
         tokio::time::timeout(response_timeout(body), read_http_response(&mut stream))
             .await
@@ -694,15 +709,19 @@ mod tests {
     }
 
     #[test]
-    fn only_server_wait_calls_receive_the_extended_response_timeout() {
+    fn mcp_delivery_regression_wait_response_timeout_tracks_requested_server_deadline() {
         let ordinary =
             r#"{"method":"tools/call","params":{"name":"session","arguments":{"action":"list"}}}"#;
         let direct_wait =
             r#"{"method":"tools/call","params":{"name":"agent","arguments":{"action":"wait"}}}"#;
-        let collapsed_wait = r#"{"method":"tools/call","params":{"name":"call_tool","arguments":{"tool_name":"session","arguments":{"action":"wait"}}}}"#;
+        let collapsed_wait = r#"{"method":"tools/call","params":{"name":"call_tool","arguments":{"tool_name":"session","arguments":{"action":"wait","timeout_ms":120000}}}}"#;
+        let capped_wait = r#"{"method":"tools/call","params":{"name":"agent","arguments":{"action":"wait","timeout_ms":999999}}}"#;
+        let short_wait = r#"{"method":"tools/call","params":{"name":"session","arguments":{"action":"wait","timeout_ms":1}}}"#;
         assert_eq!(response_timeout(ordinary).as_secs(), 10);
-        assert_eq!(response_timeout(direct_wait).as_secs(), 305);
-        assert_eq!(response_timeout(collapsed_wait).as_secs(), 305);
+        assert_eq!(response_timeout(direct_wait).as_secs(), 65);
+        assert_eq!(response_timeout(collapsed_wait).as_secs(), 125);
+        assert_eq!(response_timeout(capped_wait).as_secs(), 305);
+        assert_eq!(response_timeout(short_wait).as_millis(), 5_001);
     }
 
     #[tokio::test]

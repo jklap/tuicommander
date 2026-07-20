@@ -926,11 +926,26 @@ pub(crate) enum AgentDeliveryAssignment {
     InboxOnly,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct AgentDeliveryGate {
     next_lease: u64,
     active_waiters: std::collections::HashSet<u64>,
     owners: HashMap<String, AgentDeliveryOwner>,
+    inbox_revision: u64,
+    inbox_events: tokio::sync::watch::Sender<u64>,
+}
+
+impl Default for AgentDeliveryGate {
+    fn default() -> Self {
+        let (inbox_events, _) = tokio::sync::watch::channel(0);
+        Self {
+            next_lease: 0,
+            active_waiters: std::collections::HashSet::new(),
+            owners: HashMap::new(),
+            inbox_revision: 0,
+            inbox_events,
+        }
+    }
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -1321,6 +1336,21 @@ impl AppState {
         let _ = self.event_bus.send(event);
     }
 
+    /// Subscribe to lifecycle events for one PTY session. Subscription happens
+    /// before callers inspect current state, closing the check-then-sleep race:
+    /// a transition after subscription is retained by the receiver, while a
+    /// transition before it is visible in the initial state check.
+    pub(crate) fn subscribe_pty_events(
+        &self,
+        session_id: &str,
+    ) -> tokio::sync::broadcast::Receiver<AppEvent> {
+        const CHANNEL_CAPACITY: usize = 256;
+        self.pty_event_channels
+            .entry(session_id.to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(CHANNEL_CAPACITY).0)
+            .subscribe()
+    }
+
     /// Buffer a message into `recipient`'s inbox with bounded, lifecycle-aware
     /// FIFO eviction. Single source of truth for BOTH push sites (peer `send`
     /// and auto lifecycle notifications) so the two can't drift in how they
@@ -1364,9 +1394,22 @@ impl AppState {
                 gate.lock().owners.remove(&evicted_id);
             }
         }
+        if let Some(gate) = self.active_agent_waiters.get(recipient) {
+            let mut gate = gate.lock();
+            gate.inbox_revision = gate.inbox_revision.wrapping_add(1);
+            let revision = gate.inbox_revision;
+            gate.inbox_events.send_replace(revision);
+        }
     }
 
     pub(crate) fn begin_agent_wait(&self, tuic_session: &str) -> u64 {
+        self.begin_agent_wait_with_events(tuic_session).0
+    }
+
+    pub(crate) fn begin_agent_wait_with_events(
+        &self,
+        tuic_session: &str,
+    ) -> (u64, tokio::sync::watch::Receiver<u64>) {
         let gate = self
             .active_agent_waiters
             .entry(tuic_session.to_string())
@@ -1375,7 +1418,7 @@ impl AppState {
         gate.next_lease = gate.next_lease.wrapping_add(1).max(1);
         let lease = gate.next_lease;
         gate.active_waiters.insert(lease);
-        lease
+        (lease, gate.inbox_events.subscribe())
     }
 
     pub(crate) fn finish_agent_wait(

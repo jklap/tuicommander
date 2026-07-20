@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP peer sends no longer create ghost Codex turns** — `notifications/claude/channel` is now used only for channel-capable Claude Code recipients. Managed Codex sessions always receive the PTY split-write payload plus Enter, and channel/inbox delivery alone no longer clears completion or reports the recipient as working before a submitted turn exists.
+- **Blocking MCP waits now honor their advertised deadline** — Agent inbox and session lifecycle waits sleep on events instead of polling. Both default to 60 seconds, cap at 300 seconds, and the stdio/socket bridge derives its read deadline from the requested wait plus a five-second transport margin for direct and collapsed calls, eliminating the unrelated ten-second IPC cutoff.
+
 ## [1.6.2] - 2026-07-20
 
 - Fixed local MCP socket stalls under multi-agent load caused by re-entering an `input_buffers` DashMap shard while its entry guard was still held; bridge health checks now use constant-size MCP `ping`, report endpoint availability accurately, safely reclaim stale peer bindings after reconnect, reject initialize auto-bind takeover while the prior bridge remains live, and reuse the bridge's existing session for its proxied initialize so its own SSE stream cannot block identity binding.

@@ -98,6 +98,33 @@ fn detect_claude_code_from_headers(headers: &HeaderMap) -> bool {
         .is_some_and(|ua| ua.contains("claude") || ua.contains("tuic-bridge"))
 }
 
+/// Whether the recipient can consume `notifications/claude/channel` as a
+/// submitted turn. Every MCP client may own an SSE stream, but the channel
+/// notification is a Claude Code extension; a live Codex bridge will accept
+/// the SSE frame at the transport layer and then ignore it. Managed sessions
+/// therefore require both a Claude-capable MCP owner and a canonical Claude
+/// agent type. External peers have no PTY type to cross-check and retain the
+/// owner capability as their authority.
+fn recipient_supports_claude_channel(
+    state: &AppState,
+    recipient: &str,
+    mcp_session_id: &str,
+    managed_recipient: bool,
+) -> bool {
+    let owner_supports_channel = state
+        .mcp_sessions
+        .get(mcp_session_id)
+        .is_some_and(|session| session.is_claude_code && session.has_sse_stream);
+    if !owner_supports_channel {
+        return false;
+    }
+    !managed_recipient
+        || state
+            .session_states
+            .get(recipient)
+            .is_some_and(|session| session.agent_type.as_deref() == Some("claude"))
+}
+
 /// Map MCP client name to TUICommander agent type key.
 /// Returns None when the client cannot be identified.
 fn resolve_agent_type(client_name: Option<&str>) -> Option<&'static str> {
@@ -1267,9 +1294,6 @@ async fn handle_mcp_tool_call_with_context(
     }
 }
 
-/// Server-side poll cadence for blocking `wait`. Small enough to feel immediate,
-/// large enough to stay cheap.
-const WAIT_POLL_MS: u64 = 100;
 /// Default `wait` timeout when the caller omits `timeout_ms`.
 const WAIT_DEFAULT_MS: u64 = 60_000;
 /// Hard cap on a single server-side wait.
@@ -1302,6 +1326,47 @@ fn session_wait_met(state: &AppState, session_id: &str, until: &str) -> bool {
     }
 }
 
+fn session_wait_response(
+    state: &AppState,
+    session_id: &str,
+    until: &str,
+    met: bool,
+) -> serde_json::Value {
+    if !met {
+        return serde_json::json!({
+            "met": false,
+            "timed_out": true,
+            "until": until,
+        });
+    }
+    let shell_state = state
+        .shell_states
+        .get(session_id)
+        .map(|value| crate::pty::shell_state_str(value.load(std::sync::atomic::Ordering::Relaxed)));
+    let mut response = serde_json::json!({
+        "met": true,
+        "timed_out": false,
+        "until": until,
+    });
+    let object = response
+        .as_object_mut()
+        .expect("session wait response is an object");
+    insert_optional_value(
+        object,
+        "shell_state",
+        shell_state.map(|value| serde_json::Value::String(value.to_string())),
+    );
+    insert_optional_value(
+        object,
+        "exit_code",
+        state
+            .exit_codes
+            .get(session_id)
+            .map(|entry| serde_json::Value::from(*entry.value())),
+    );
+    response
+}
+
 /// `session action=wait` — block (server-side) until the session is idle or has
 /// exited, or the timeout elapses. Replaces an LLM polling loop (each poll is a
 /// full model turn) with one cheap blocking call.
@@ -1315,45 +1380,31 @@ async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) ->
         return serde_json::json!({"error": "wait 'until' must be 'idle' or 'exited'"});
     }
     let timeout_ms = clamp_wait_timeout(args["timeout_ms"].as_u64());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-    loop {
-        if session_wait_met(state, &session_id, until) {
-            let shell_state = state
-                .shell_states
-                .get(&session_id)
-                .map(|a| crate::pty::shell_state_str(a.load(std::sync::atomic::Ordering::Relaxed)));
-            let mut response = serde_json::json!({
-                "met": true,
-                "timed_out": false,
-                "until": until,
-            });
-            let object = response
-                .as_object_mut()
-                .expect("session wait response is an object");
-            insert_optional_value(
-                object,
-                "shell_state",
-                shell_state.map(|state| serde_json::Value::String(state.to_string())),
-            );
-            insert_optional_value(
-                object,
-                "exit_code",
-                state
-                    .exit_codes
-                    .get(&session_id)
-                    .map(|entry| serde_json::Value::from(*entry.value())),
-            );
-            return response;
-        }
-        if std::time::Instant::now() >= deadline {
-            return serde_json::json!({
-                "met": false,
-                "timed_out": true,
-                "until": until,
-            });
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(WAIT_POLL_MS)).await;
+    // Subscribe before checking current state. This closes the lost-wake window
+    // without polling: an earlier transition is visible in state, while a later
+    // one is retained by the per-session event receiver.
+    let mut events = state.subscribe_pty_events(&session_id);
+    if session_wait_met(state, &session_id, until) {
+        return session_wait_response(state, &session_id, until, true);
     }
+    let woke = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
+        loop {
+            match events.recv().await {
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    if session_wait_met(state, &session_id, until) {
+                        return true;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return false,
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    // Re-check at the timeout boundary so a simultaneous transition wins over
+    // a spurious timed_out response.
+    let met = woke || session_wait_met(state, &session_id, until);
+    session_wait_response(state, &session_id, until, met)
 }
 
 /// `agent action=wait` — block until the caller's inbox has a message newer than
@@ -1368,15 +1419,22 @@ struct ActiveAgentWaitGuard {
 }
 
 impl ActiveAgentWaitGuard {
-    fn new(state: &Arc<AppState>, tuic_session: &str, since: u64) -> Self {
-        let lease = state.begin_agent_wait(tuic_session);
-        Self {
-            state: Arc::clone(state),
-            tuic_session: tuic_session.to_string(),
-            lease,
-            since,
-            finished: false,
-        }
+    fn new(
+        state: &Arc<AppState>,
+        tuic_session: &str,
+        since: u64,
+    ) -> (Self, tokio::sync::watch::Receiver<u64>) {
+        let (lease, events) = state.begin_agent_wait_with_events(tuic_session);
+        (
+            Self {
+                state: Arc::clone(state),
+                tuic_session: tuic_session.to_string(),
+                lease,
+                since,
+                finished: false,
+            },
+            events,
+        )
     }
 
     fn finish(&mut self, observe_fresh: bool) -> crate::state::AgentWaitFinish {
@@ -1467,24 +1525,28 @@ async fn handle_agent_wait(
         }
     };
     let since = args["since"].as_u64().unwrap_or(0);
-    let mut active_wait = ActiveAgentWaitGuard::new(state, &caller_tuic, since);
+    let (mut active_wait, mut inbox_events) = ActiveAgentWaitGuard::new(state, &caller_tuic, since);
     let timeout_ms = clamp_wait_timeout(args["timeout_ms"].as_u64());
-    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-    loop {
-        let fresh = state.waiter_fresh_message_count(&caller_tuic, since);
-        if fresh > 0 {
-            let finish = active_wait.finish(true);
-            return agent_wait_success_response(finish);
-        }
-        if std::time::Instant::now() >= deadline {
-            let finish = active_wait.finish(true);
-            if finish.fresh_count > 0 {
-                return agent_wait_success_response(finish);
-            }
-            return serde_json::json!({"met": false, "timed_out": true, "new_messages": 0});
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(WAIT_POLL_MS)).await;
+    if state.waiter_fresh_message_count(&caller_tuic, since) > 0 {
+        return agent_wait_success_response(active_wait.finish(true));
     }
+    let woke = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
+        loop {
+            if inbox_events.changed().await.is_err() {
+                return false;
+            }
+            if state.waiter_fresh_message_count(&caller_tuic, since) > 0 {
+                return true;
+            }
+        }
+    })
+    .await
+    .unwrap_or(false);
+    let finish = active_wait.finish(true);
+    if woke || finish.fresh_count > 0 {
+        return agent_wait_success_response(finish);
+    }
+    serde_json::json!({"met": false, "timed_out": true, "new_messages": 0})
 }
 
 fn handle_session(
@@ -3146,19 +3208,13 @@ fn handle_messaging(
                     let Some(mcp_sid) = recipient_mcp_sid.as_ref() else {
                         return false;
                     };
-                    let has_sse = state
-                        .mcp_sessions
-                        .get(mcp_sid)
-                        .is_some_and(|session| session.has_sse_stream);
-                    if !has_sse {
+                    if !recipient_supports_claude_channel(state, to, mcp_sid, managed_recipient) {
                         return false;
                     }
                     let Some(channel) = state.messaging_channels.get(mcp_sid) else {
                         return false;
                     };
-                    crate::pty::deliver_with_reserved_submitted_turn(state, to, || {
-                        channel.send(notification).is_ok()
-                    })
+                    channel.send(notification).is_ok()
                 },
             );
             let waiter_owned = matches!(
@@ -3186,8 +3242,9 @@ fn handle_messaging(
             }
             // Event-driven wake: type the message into an idle recipient's terminal
             // so it acts without polling. Skip when already pushed over the SSE
-            // channel (CC agents receive it as a synthetic turn — injecting too
-            // would double-deliver). The inbox always holds the authoritative copy.
+            // channel (Claude Code consumes that notification itself, so PTY
+            // injection would double-deliver). The inbox always holds the
+            // authoritative copy.
             let pty_dispatched = terminal_owned && !pushed && {
                 let framed = frame_peer_message(&sender_name, message);
                 crate::pty::deliver_message_to_managed_pty(state, to, &framed)
@@ -5892,7 +5949,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn session_wait_times_out_with_flag() {
+    async fn mcp_delivery_regression_session_wait_times_out_with_flag() {
         use std::sync::atomic::AtomicU8;
         let state = test_state();
         state
@@ -5905,6 +5962,44 @@ mod tests {
         .await;
         assert_eq!(r["met"], false);
         assert_eq!(r["timed_out"], true);
+    }
+
+    #[tokio::test]
+    async fn mcp_delivery_regression_session_wait_wakes_from_pty_event_without_polling() {
+        use std::sync::atomic::{AtomicU8, Ordering};
+
+        let state = test_state();
+        state.shell_states.insert(
+            "event-session".to_string(),
+            AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
+        let waiting_state = Arc::clone(&state);
+        let waiter = tokio::spawn(async move {
+            handle_session_wait(
+                &waiting_state,
+                &serde_json::json!({
+                    "action": "wait",
+                    "session_id": "event-session",
+                    "until": "idle",
+                    "timeout_ms": 1_000,
+                }),
+            )
+            .await
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        state
+            .shell_states
+            .get("event-session")
+            .unwrap()
+            .store(crate::pty::SHELL_IDLE, Ordering::Release);
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: "event-session".to_string(),
+            parsed: serde_json::json!({"type": "shell-state", "state": "idle"}),
+        });
+
+        let response = waiter.await.unwrap();
+        assert_eq!(response["met"], true);
+        assert_eq!(response["timed_out"], false);
     }
 
     #[tokio::test]
@@ -5947,7 +6042,60 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_wait_replayed_cursor_times_out_after_message_was_observed() {
+    async fn mcp_delivery_regression_agent_wait_remains_pending_beyond_ten_seconds_then_wakes() {
+        let state = test_state();
+        let sender_mcp = "mcp-long-wait-sender";
+        let recipient_mcp = "mcp-long-wait-recipient";
+        register_peer(&state, TEST_UUID_A, "sender", sender_mcp);
+        register_peer(&state, TEST_UUID_B, "recipient", recipient_mcp);
+
+        let waiting_state = Arc::clone(&state);
+        let waiter = tokio::spawn(async move {
+            post_test_tool_call(
+                waiting_state,
+                recipient_mcp,
+                "agent",
+                serde_json::json!({
+                    "action": "wait",
+                    "since": 0,
+                    "timeout_ms": 15_000,
+                }),
+            )
+            .await
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(10_200)).await;
+        assert!(
+            !waiter.is_finished(),
+            "the full MCP request must remain pending beyond the ordinary 10-second transport deadline"
+        );
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": TEST_UUID_B,
+                "message": "wake the wait",
+            }),
+            Some(sender_mcp),
+        );
+        assert_eq!(sent["delivery_path"], "waiter_and_inbox");
+
+        let rpc = tokio::time::timeout(std::time::Duration::from_secs(2), waiter)
+            .await
+            .expect("event-driven wait must wake immediately after inbox delivery")
+            .unwrap();
+        let compact = rpc["result"]["content"][0]["text"]
+            .as_str()
+            .expect("native MCP result text");
+        let response: serde_json::Value = serde_json::from_str(compact).unwrap();
+        assert_eq!(response["met"], true);
+        assert_eq!(response["timed_out"], false);
+        assert_eq!(response["new_messages"], 1);
+        assert_eq!(response["messages"][0]["content"], "wake the wait");
+    }
+
+    #[tokio::test]
+    async fn mcp_delivery_regression_agent_wait_replayed_cursor_times_out_after_observation() {
         let state = test_state();
         apply_initialize_identity(&state, "mcp-w-replay", Some(TEST_UUID_A));
         state.push_agent_inbox(
@@ -6346,6 +6494,75 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    fn install_completed_agent_submission_probe(
+        state: &Arc<AppState>,
+        session_id: &str,
+        agent_type: &str,
+    ) -> std::sync::mpsc::Receiver<String> {
+        use std::io::Read;
+
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 120,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("open probe PTY");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args([
+            "-c",
+            "printf 'READY\\n'; IFS= read -r line; printf 'SUBMITTED:%s\\n' \"$line\"",
+        ]);
+        let child = pair
+            .slave
+            .spawn_command(command)
+            .expect("spawn probe shell");
+        let mut reader = pair.master.try_clone_reader().expect("clone probe reader");
+        let writer = pair.master.take_writer().expect("take probe writer");
+        state.sessions.insert(
+            session_id.to_string(),
+            Mutex::new(PtySession {
+                writer,
+                master: pair.master,
+                _child: child,
+                paused: Arc::new(AtomicBool::new(false)),
+                worktree: None,
+                cwd: None,
+                display_name: Some("submission-probe".to_string()),
+                shell: "/bin/sh".to_string(),
+            }),
+        );
+        state.session_states.insert(
+            session_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some(agent_type.to_string()),
+                suggested_actions: Some(vec!["old completion".to_string()]),
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            session_id.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        let mut silence = crate::pty::SilenceState::new();
+        silence.confirm_idle();
+        silence.mark_suggest_candidate(vec!["old completion".to_string()], 0);
+        state.silence_states.insert(
+            session_id.to_string(),
+            std::sync::Arc::new(parking_lot::Mutex::new(silence)),
+        );
+
+        let (output_tx, output_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut output = String::new();
+            let _ = reader.read_to_string(&mut output);
+            let _ = output_tx.send(output);
+        });
+        output_rx
+    }
+
     #[test]
     fn register_populates_reverse_index_for_o1_cleanup() {
         // PERF-1: agent(register) must populate session_to_mcp so tombstone
@@ -6462,7 +6679,7 @@ mod tests {
     }
 
     #[test]
-    fn messaging_sse_delivery_starts_new_turn_for_completed_recipient() {
+    fn mcp_delivery_regression_sse_does_not_claim_a_submitted_turn() {
         let state = test_state();
         register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
         register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
@@ -6482,7 +6699,7 @@ mod tests {
         state.session_states.insert(
             TEST_UUID_B.to_string(),
             crate::state::SessionState {
-                agent_type: Some("codex".to_string()),
+                agent_type: Some("claude".to_string()),
                 suggested_actions: Some(vec!["old completion".to_string()]),
                 ..Default::default()
             },
@@ -6535,18 +6752,127 @@ mod tests {
             "successful SSE delivery must not also queue PTY injection"
         );
         let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
-        assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
-        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
-        assert!(snapshot.suggested_actions.is_none());
-        assert_eq!(snapshot.turn_epoch, 1);
+        assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
+        assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
+        assert_eq!(
+            snapshot.suggested_actions,
+            Some(vec!["old completion".to_string()])
+        );
+        assert_eq!(snapshot.turn_epoch, 0);
         assert!(
-            !state
+            state
                 .silence_states
                 .get(TEST_UUID_B)
                 .unwrap()
                 .lock()
                 .completion_declared()
         );
+    }
+
+    #[test]
+    fn mcp_delivery_regression_inbox_only_preserves_completed_lifecycle() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.session_states.insert(
+            TEST_UUID_B.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                suggested_actions: Some(vec!["old completion".to_string()]),
+                ..Default::default()
+            },
+        );
+        state.shell_states.insert(
+            TEST_UUID_B.to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        let mut silence = crate::pty::SilenceState::new();
+        silence.confirm_idle();
+        silence.mark_suggest_candidate(vec!["old completion".to_string()], 0);
+        state.silence_states.insert(
+            TEST_UUID_B.to_string(),
+            std::sync::Arc::new(parking_lot::Mutex::new(silence)),
+        );
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": TEST_UUID_B,
+                "message": "buffer only",
+            }),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(result["accepted"], true);
+        assert_eq!(result["delivery_path"], "inbox_only");
+        assert_eq!(result["delivered_via_channel"], false);
+        let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
+        assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
+        assert_eq!(snapshot.turn_epoch, 0);
+        assert_eq!(
+            snapshot.suggested_actions,
+            Some(vec!["old completion".to_string()])
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn mcp_delivery_regression_codex_live_sse_submits_through_pty_before_working() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.mcp_sessions.insert(
+            "mcp-recipient".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                // A bridge-owned SSE stream can look Claude-capable even when
+                // its managed terminal is actually Codex. The PTY type is the
+                // authoritative cross-check for channel-turn support.
+                is_claude_code: true,
+                has_sse_stream: true,
+                repo_path: None,
+            },
+        );
+        let (channel, mut channel_receiver) = tokio::sync::broadcast::channel(4);
+        state
+            .messaging_channels
+            .insert("mcp-recipient".to_string(), channel);
+        let submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "codex");
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": TEST_UUID_B,
+                "message": "start the next task",
+            }),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(result["accepted"], true);
+        assert_eq!(result["delivered_via_channel"], false);
+        assert_eq!(result["delivery_path"], "terminal_or_queued_and_inbox");
+        assert!(
+            matches!(
+                channel_receiver.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ),
+            "Codex must not receive the Claude-only channel notification"
+        );
+        let output = submitted_output
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("probe exits only after the separately written Enter submits the line");
+        assert!(
+            output.contains("SUBMITTED:[TUIC message from sender] start the next task"),
+            "the managed Codex PTY must observe a complete submitted line: {output:?}"
+        );
+        let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
+        assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+        assert!(snapshot.suggested_actions.is_none());
+        assert_eq!(snapshot.turn_epoch, 1);
     }
 
     #[test]

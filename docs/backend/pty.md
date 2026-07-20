@@ -366,10 +366,10 @@ and stops scanning stable idle sessions. Enumeration or parse failures preserve
 the prior `background_work` value. On Windows, where Toolhelp does not provide
 command lines, generic `node.exe` processes are kept as meaningful work rather
 than guessed to be `node_repl` helpers.
-Submitting new user or peer input starts a new task epoch immediately, clearing
-the prior completion marker and its stale suggested actions before new output arrives.
-SSE peer delivery reserves that epoch before channel visibility and rolls it back
-only when the broadcast proves that no receiver accepted the notification. Idle
+Submitting new user or PTY-injected peer input starts a new task epoch immediately,
+clearing the prior completion marker and its stale suggested actions before new output arrives.
+Claude channel and inbox delivery do not claim a submitted turn; lifecycle changes
+only after the client consumes the notification and produces normal activity evidence. Idle
 CAS and parent lifecycle notification share the same per-session lifecycle lock;
 submitted epoch mutation and its IDLE-to-BUSY transition hold that lock as one
 critical section, so a new turn cannot inherit a stale idle notification. The

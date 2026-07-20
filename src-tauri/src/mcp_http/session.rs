@@ -962,27 +962,6 @@ pub(super) async fn ws_stream(
 /// `{"type":"log","lines":[...],"offset":N}`
 ///
 /// Client → server messages are written to the PTY as input.
-/// Capacity of a per-session PTY event channel. Matches the global `event_bus`
-/// cap (256) so a handler that kept up with the shared 256-slot bus keeps up
-/// with its own 256-slot channel (which now carries only this session's events).
-const PTY_EVENT_CHANNEL_CAP: usize = 256;
-
-/// Subscribe to a session's per-session PTY event channel, creating it on demand.
-/// The channel carries only this session's `PtyParsed`/`PtyExit`/`SessionClosed`
-/// events (emitted via `AppState::emit_pty_event`), so handlers no longer subscribe
-/// to the global `event_bus` and filter by id — every event received here belongs
-/// to `session_id`. Creating on the subscribe side (not the emit side) means a
-/// session no client ever attaches to never allocates a channel.
-fn subscribe_pty_events(
-    state: &AppState,
-    session_id: &str,
-) -> tokio::sync::broadcast::Receiver<crate::state::AppEvent> {
-    state
-        .pty_event_channels
-        .entry(session_id.to_string())
-        .or_insert_with(|| tokio::sync::broadcast::channel(PTY_EVENT_CHANNEL_CAP).0)
-        .subscribe()
-}
 
 async fn handle_ws_session(
     socket: WebSocket,
@@ -1007,7 +986,7 @@ async fn handle_ws_session(
     }
 
     // Subscribe to this session's per-session PTY event channel (no global-bus fan-out).
-    let mut event_rx = subscribe_pty_events(&state, &session_id);
+    let mut event_rx = state.subscribe_pty_events(&session_id);
 
     // Snapshot the ring buffer and register the live mpsc subscription
     // atomically while holding ring.lock(). The PTY writer takes the same
@@ -1195,7 +1174,7 @@ async fn handle_ws_log_session(
     let state_poll = state.clone();
     let send_task = tokio::spawn(async move {
         let mut offset = initial_offset;
-        let mut event_rx = subscribe_pty_events(&state_poll, &sid_poll);
+        let mut event_rx = state_poll.subscribe_pty_events(&sid_poll);
         let mut prev_screen_hash: u64 = 0;
         // Dedup: only send state frames when SessionState actually changed
         let mut prev_state: Option<crate::state::SessionState> = None;
@@ -1405,7 +1384,7 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
     }
 
     // Subscribe to this session's per-session PTY event channel (exit, closed, parsed).
-    let mut event_rx = subscribe_pty_events(&state, &session_id);
+    let mut event_rx = state.subscribe_pty_events(&session_id);
     let sid_for_events = session_id.clone();
 
     let send_task = tokio::spawn(async move {

@@ -477,8 +477,9 @@ events ordered and prevents lifecycle reports from overwriting an active compose
 The stdio bridge reads each IPC HTTP response through its declared
 `Content-Length` rather than waiting for connection EOF. A single transport error
 does not discard the current MCP identity; subsequent authenticated calls refresh
-the session-to-terminal binding. The bridge timeout exceeds the server's
-five-minute wait cap, avoiding false transport failures while preserving bounded reads.
+the session-to-terminal binding. Ordinary calls keep a ten-second read deadline;
+direct and collapsed wait calls derive it from the clamped requested timeout plus
+a five-second transport margin.
 
 ### Protocol
 
@@ -504,7 +505,7 @@ five-minute wait cap, avoiding false transport failures while preserving bounded
    real managed PTY, `recipient_state` contains only its current `shell_state` and `agent_state`;
    external generated peers omit `recipient_state`.
 4. **Receive** — three layers, most-immediate first:
-   - **Channel push**: real-time `notifications/claude/channel` when the recipient holds an SSE stream (CC + channels flag).
+   - **Channel push**: real-time `notifications/claude/channel` only when the recipient is Claude Code and holds an SSE stream (CC + channels flag). A managed non-Claude agent uses PTY delivery even if its MCP bridge has an SSE stream.
    - **PTY injection**: for any idle agent without a live channel, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it acts on its next turn without polling. A busy recipient's message is queued and flushed on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead.
    - **Inbox poll**: `agent action=inbox since=<ms>` — always the authoritative store.
 5. **Wait** *(prefer over polling)*: `agent action=wait since=<ms>` blocks until new mail;
@@ -514,6 +515,8 @@ five-minute wait cap, avoiding false transport failures while preserving bounded
    100-message inbox capacity) plus `next_since`, in chronological order. Per-recipient logical
    unix-millisecond cursors make equal-clock-millisecond bursts safe. Wait never consumes the
    authoritative inbox; actual FIFO eviction is still reported by `missed_count` on inbox reads.
+   Both wait actions subscribe before their initial state check and then sleep on inbox or
+   per-session lifecycle events; they do not run an internal polling loop.
 
 Low-risk response compaction also omits an absent peer `project` from `list_peers` and an absent
 `parent_session_id` from standalone spawn responses. Proxied upstream tool payloads are unchanged.
@@ -535,7 +538,7 @@ is reserved for diagnosing the anomaly where that result message never arrived.
 
 When a recipient has an active SSE stream (`GET /mcp`), messages are pushed as `notifications/claude/channel` JSON-RPC notifications:
 
-A channel delivery reserves the recipient's new task epoch before the notification becomes visible to the SSE consumer, matching successful PTY delivery. A broadcast send with no receiver proves zero delivery; the reserved epoch token restores the prior lifecycle exactly and leaves the existing PTY-or-queue fallback claimable.
+A channel notification is transport delivery, not proof that the recipient submitted a new turn. It does not mutate the recipient's task epoch or lifecycle; normal agent output or hook evidence starts the turn after Claude Code consumes it. Managed Codex and other non-Claude agents never receive this extension and instead use the PTY split-write payload plus Enter path.
 
 ```json
 {
