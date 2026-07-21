@@ -5,7 +5,7 @@ import { registerModal } from "../../stores/modalStack";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
-import { projectName, reconcileActivityOrder, terminalStatusLabel } from "../../utils/activitySnapshot";
+import { effectiveActivityState, projectName, reconcileActivityOrder, terminalStatusLabel } from "../../utils/activitySnapshot";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { getRepoColor } from "../../utils/repoColor";
 import { formatRelativeTime } from "../../utils/time";
@@ -117,7 +117,21 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 		const term = terminalsStore.get(id);
 		if (!term) return null;
 		const isRL = !!(term.sessionId && rateLimitStore.isRateLimited(term.sessionId));
-		const status = terminalStatusLabel(term.shellState, term.awaitingInput, isRL, statusClasses);
+		const effectiveState = effectiveActivityState(
+			term.shellState,
+			term.awaitingInput,
+			isRL,
+			term.agentState,
+			term.backgroundWork,
+		);
+		const status = terminalStatusLabel(
+			term.shellState,
+			term.awaitingInput,
+			isRL,
+			statusClasses,
+			term.agentState,
+			term.backgroundWork,
+		);
 		const repoPath = repositoriesStore.getRepoPathForTerminal(id);
 		return {
 			id,
@@ -126,7 +140,11 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 			projectColor: repoPath ? getRepoColor(repoPath) : undefined,
 			agent: term.agentType || "shell",
 			status,
-			isWorking: isRL || !!term.awaitingInput || terminalsStore.isBusy(id),
+			isWorking:
+				terminalsStore.isBusy(id) ||
+				effectiveState === "working" ||
+				effectiveState === "awaiting_input" ||
+				effectiveState === "rate_limited",
 			lastDataAt: terminalsStore.getLastDataAt(id),
 			idleSince: term.idleSince,
 			lastPrompt: term.lastPrompt,
@@ -148,7 +166,13 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 		const isWorking = (id: string): boolean => {
 			const term = terminalsStore.get(id);
 			const isRL = !!(term?.sessionId && rateLimitStore.isRateLimited(term.sessionId));
-			return isRL || !!term?.awaitingInput || terminalsStore.isBusy(id);
+			return (
+				!!term &&
+				(terminalsStore.isBusy(id) ||
+					["working", "awaiting_input", "rate_limited"].includes(
+						effectiveActivityState(term.shellState, term.awaitingInput, isRL, term.agentState, term.backgroundWork),
+					))
+			);
 		};
 		return reconcileActivityOrder(spine, terminalsStore.getAttachedIds(), isWorking);
 	});

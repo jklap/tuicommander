@@ -3,10 +3,47 @@ import { AGENT_TYPES, AGENTS, type AgentType } from "../agents";
 import { invoke } from "../invoke";
 import { pluginRegistry } from "../plugins/pluginRegistry";
 import { appLogger } from "../stores/appLogger";
-import { terminalsStore } from "../stores/terminals";
+import { type AgentLifecycleState, terminalsStore } from "../stores/terminals";
+import { rpc } from "../transport";
 
 /** Fallback polling interval — only catches cold starts and edge cases (ms) */
 const POLL_INTERVAL_MS = 30_000;
+/** Lifecycle is sampled separately from foreground-process detection. The
+ * backend refreshes meaningful descendant state at most once per second. */
+const LIFECYCLE_POLL_INTERVAL_MS = 1_000;
+
+type SessionLifecycleResponse = {
+	session_id: string;
+	state?: { agent_state?: string; background_work?: boolean } | null;
+};
+
+function toAgentLifecycleState(value: unknown): AgentLifecycleState {
+	return value === "starting" || value === "working" || value === "awaiting_input" || value === "idle" || value === "completed"
+		? value
+		: null;
+}
+
+/** Apply the backend's task lifecycle snapshot to its local terminal. The
+ * snapshot is intentionally separate from foreground-process detection: a
+ * ready composer can be shell-idle while a meaningful descendant still works. */
+export async function syncAgentLifecycleStates(): Promise<void> {
+	let sessions: SessionLifecycleResponse[];
+	try {
+		sessions = await rpc<SessionLifecycleResponse[]>("list_active_sessions");
+	} catch (err) {
+		appLogger.debug("app", "[AgentLifecycle] session list failed", err);
+		return;
+	}
+	if (!Array.isArray(sessions)) return;
+	for (const session of sessions) {
+		const termId = terminalsStore.getTerminalForSession(session.session_id);
+		if (!termId) continue;
+		terminalsStore.update(termId, {
+			agentState: toAgentLifecycleState(session.state?.agent_state),
+			backgroundWork: session.state?.background_work === true,
+		});
+	}
+}
 
 /**
  * Detection trigger source — determines whether the call can clear an existing agentType.
@@ -173,7 +210,17 @@ export function useAgentPolling(): void {
 		const timer = setInterval(() => {
 			pollAll().catch((err) => appLogger.debug("app", "[AgentPoll] poll failed", err));
 		}, POLL_INTERVAL_MS);
+		// Lifecycle must converge quickly enough for the Activity Dashboard to
+		// avoid presenting an idle composer as a completed task. It is not used
+		// to discover agents, so the slower foreground-process poll remains intact.
+		void syncAgentLifecycleStates();
+		const lifecycleTimer = setInterval(() => {
+			void syncAgentLifecycleStates();
+		}, LIFECYCLE_POLL_INTERVAL_MS);
 
-		onCleanup(() => clearInterval(timer));
+		onCleanup(() => {
+			clearInterval(timer);
+			clearInterval(lifecycleTimer);
+		});
 	});
 }

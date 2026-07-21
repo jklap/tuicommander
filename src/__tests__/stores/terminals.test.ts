@@ -413,9 +413,12 @@ describe("terminalsStore", () => {
 		it("update({ sessionId: null }) removes reverse map entry", () => {
 			testInScope(() => {
 				const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-bye" }));
+				store.update(id, { agentState: "working", backgroundWork: true });
 				expect(store.getTerminalForSession("sess-bye")).toBe(id);
 				store.update(id, { sessionId: null });
 				expect(store.getTerminalForSession("sess-bye")).toBeNull();
+				expect(store.get(id)?.agentState).toBeNull();
+				expect(store.get(id)?.backgroundWork).toBe(false);
 			});
 		});
 

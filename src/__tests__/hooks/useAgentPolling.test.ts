@@ -24,6 +24,25 @@ describe("useAgentPolling", () => {
 		vi.useRealTimers();
 	});
 
+	it("applies authoritative lifecycle transitions without retaining stale working state", async () => {
+		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+		mockInvoke.mockResolvedValueOnce([
+			{ session_id: "sess-1", state: { agent_state: "working", background_work: true } },
+		]);
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.agentState).toBe("working");
+		expect(store.get(id)?.backgroundWork).toBe(true);
+
+		mockInvoke.mockResolvedValueOnce([
+			{ session_id: "sess-1", state: { agent_state: "idle", background_work: false } },
+		]);
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.agentState).toBe("idle");
+		expect(store.get(id)?.backgroundWork).toBe(false);
+	});
+
 	it("polls the active terminal's foreground process", async () => {
 		mockInvoke.mockResolvedValue("claude");
 

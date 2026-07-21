@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+	effectiveActivityState as EffectiveStateFn,
 	terminalStatusLabel as LabelFn,
 	reconcileActivityOrder as ReconcileFn,
 } from "../../utils/activitySnapshot";
@@ -99,10 +100,12 @@ describe("activitySnapshot", () => {
 
 describe("terminalStatusLabel", () => {
 	let terminalStatusLabel: typeof LabelFn;
+	let effectiveActivityState: typeof EffectiveStateFn;
 	beforeEach(async () => {
 		vi.resetModules();
 		vi.doMock("@tauri-apps/api/core", () => ({ invoke: mockInvoke }));
 		terminalStatusLabel = (await import("../../utils/activitySnapshot")).terminalStatusLabel;
+		effectiveActivityState = (await import("../../utils/activitySnapshot")).effectiveActivityState;
 	});
 
 	const cls = { rateLimited: "RL", error: "ERR", waiting: "WAIT", working: "WORK", idle: "IDLE" };
@@ -127,6 +130,29 @@ describe("terminalStatusLabel", () => {
 		expect(terminalStatusLabel("busy", null, false, cls)).toEqual({ label: "Working", className: "WORK" });
 		expect(terminalStatusLabel("idle", null, false, cls)).toEqual({ label: "Idle", className: "IDLE" });
 		expect(terminalStatusLabel(null, null, false, cls)).toEqual({ label: "—", className: "IDLE" });
+	});
+
+	it("keeps lifecycle working authoritative over a shell-idle composer", () => {
+		expect(effectiveActivityState("idle", null, false, "working", true)).toBe("working");
+		expect(terminalStatusLabel("idle", null, false, cls, "working", true)).toEqual({ label: "Working", className: "WORK" });
+	});
+
+	it("preserves completed instead of reviving stale shell activity", () => {
+		expect(effectiveActivityState("busy", null, false, "completed", false)).toBe("completed");
+		expect(terminalStatusLabel("busy", null, false, cls, "completed", false)).toEqual({ label: "Completed", className: "IDLE" });
+	});
+
+	it("uses lifecycle awaiting-input when the parsed frontend event is stale or absent", () => {
+		expect(effectiveActivityState("idle", null, false, "awaiting_input", false)).toBe("awaiting_input");
+		expect(terminalStatusLabel("idle", null, false, cls, "awaiting_input", false)).toEqual({
+			label: "Waiting for input",
+			className: "WAIT",
+		});
+	});
+
+	it("lets a fresh idle lifecycle clear a prior working lifecycle", () => {
+		expect(effectiveActivityState("idle", null, false, "working", true)).toBe("working");
+		expect(effectiveActivityState("idle", null, false, "idle", false)).toBe("idle");
 	});
 });
 

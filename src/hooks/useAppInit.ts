@@ -33,7 +33,17 @@ const AGENT_TAB_AUTOCLOSE_MS = 10_000;
 /** Dependencies injected into initApp */
 export interface AppInitDeps {
 	pty: {
-		listActiveSessions: () => Promise<Array<{ session_id: string; cwd: string | null; display_name?: string | null }>>;
+		listActiveSessions: () => Promise<
+			Array<{
+				session_id: string;
+				cwd: string | null;
+				display_name?: string | null;
+				state?: {
+					agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
+					background_work?: boolean;
+				} | null;
+			}>
+		>;
 		close: (sessionId: string) => Promise<void>;
 	};
 	setQuitDialogVisible: (visible: boolean) => void;
@@ -586,6 +596,10 @@ export async function initApp(deps: AppInitDeps) {
 				nameIsCustom: Boolean(session.display_name),
 				cwd: session.cwd,
 				awaitingInput: null,
+			});
+			terminalsStore.update(id, {
+				agentState: session.state?.agent_state ?? null,
+				backgroundWork: session.state?.background_work ?? false,
 			});
 
 			assignSessionToRepoBranch(session.session_id, id, session.cwd);

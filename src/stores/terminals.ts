@@ -29,6 +29,8 @@ export interface CommandBlock {
 
 /** Shell activity state: null=never had output, busy=producing output, idle=waiting for input, exited=process terminated */
 export type ShellState = "busy" | "idle" | "exited" | null;
+/** Authoritative task lifecycle from the backend; distinct from PTY activity. */
+export type AgentLifecycleState = "starting" | "working" | "awaiting_input" | "idle" | "completed" | null;
 
 const VALID_SHELL_STATES = new Set<string>(["busy", "idle", "exited"]);
 
@@ -51,6 +53,8 @@ export interface TerminalData {
 	unseen: boolean; // Terminal completed work while user wasn't viewing it
 	progress: number | null; // OSC 9;4 progress (0-100), null when inactive
 	shellState: ShellState;
+	agentState: AgentLifecycleState;
+	backgroundWork: boolean;
 	agentType: AgentType | null; // Detected foreground agent process (e.g. "claude")
 	agentLaunchCommand: string | null; // Run-config command used to launch (e.g. "c"), for accurate resume
 	pendingResumeCommand: string | null; // Set at restore time, consumed on first shell idle
@@ -84,6 +88,8 @@ type TerminalCreateData = Omit<
 	| "unseen"
 	| "progress"
 	| "shellState"
+	| "agentState"
+	| "backgroundWork"
 	| "nameIsCustom"
 	| "agentType"
 	| "agentLaunchCommand"
@@ -382,6 +388,8 @@ function createTerminalsStore() {
 				unseen: false,
 				progress: null,
 				shellState: null,
+				agentState: null,
+				backgroundWork: false,
 				nameIsCustom: false,
 				agentType: null,
 				agentLaunchCommand: null,
@@ -421,6 +429,8 @@ function createTerminalsStore() {
 				unseen: false,
 				progress: null,
 				shellState: null,
+				agentState: null,
+				backgroundWork: false,
 				nameIsCustom: false,
 				agentType: null,
 				agentLaunchCommand: null,
@@ -550,6 +560,13 @@ function createTerminalsStore() {
 					if (prev) sessionToTerminal.delete(prev);
 					const next = data.sessionId ?? null;
 					if (next) sessionToTerminal.set(next, id);
+					if (!next) {
+						// Lifecycle is scoped to a live backend session. Clearing it here
+						// prevents an exited agent tab from retaining a stale Working badge
+						// after it can no longer appear in the next session-list snapshot.
+						setState("terminals", id, "agentState", null);
+						setState("terminals", id, "backgroundWork", false);
+					}
 				}
 				setState("terminals", id, data);
 			});
