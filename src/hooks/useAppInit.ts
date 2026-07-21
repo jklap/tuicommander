@@ -568,6 +568,14 @@ export async function initApp(deps: AppInitDeps) {
 	}).catch((err) => appLogger.error("app", "Failed to register screenshot-request listener", err));
 
 	// Check for surviving PTY sessions (persists across Vite HMR reloads)
+	const survivingSessionBaseline = new Map<string, { terminalId: string; shellStateRevision: number }>();
+	for (const terminalId of terminalsStore.getIds()) {
+		const terminal = terminalsStore.get(terminalId);
+		const shellStateRevision = terminalsStore.getShellStateRevision(terminalId);
+		if (terminal?.sessionId && shellStateRevision !== null) {
+			survivingSessionBaseline.set(terminal.sessionId, { terminalId, shellStateRevision });
+		}
+	}
 	let survivingSessions: Awaited<ReturnType<typeof deps.pty.listActiveSessions>> = [];
 	try {
 		survivingSessions = await deps.pty.listActiveSessions();
@@ -586,20 +594,28 @@ export async function initApp(deps: AppInitDeps) {
 		appLogger.info("app", `PTY reconnect: found ${survivingSessions.length} surviving session(s)`);
 		for (const session of survivingSessions) {
 			const existingId = terminalsStore.getTerminalForSession(session.session_id);
-			if (existingId) {
-				assignSessionToRepoBranch(session.session_id, existingId, session.cwd);
-				continue;
-			}
-			const id = terminalsStore.add({
-				sessionId: session.session_id,
-				fontSize: deps.getDefaultFontSize(),
-				name: session.display_name || terminalsStore.nextDefaultName(),
-				nameIsCustom: Boolean(session.display_name),
-				cwd: session.cwd,
-				awaitingInput: null,
-			});
+			const id =
+				existingId ??
+				terminalsStore.add({
+					sessionId: session.session_id,
+					fontSize: deps.getDefaultFontSize(),
+					name: session.display_name || terminalsStore.nextDefaultName(),
+					nameIsCustom: Boolean(session.display_name),
+					cwd: session.cwd,
+					awaitingInput: null,
+				});
+			// A session-created event can insert this terminal while the surviving-session
+			// request is pending. Reconcile its independent lifecycle fields too, but do
+			// not let the older shell snapshot overwrite a newer shell-state event.
+			const baseline = survivingSessionBaseline.get(session.session_id);
+			const currentRevision = terminalsStore.getShellStateRevision(id);
+			const canApplySnapshotShell =
+				!existingId ||
+				(baseline
+					? baseline.terminalId === existingId && baseline.shellStateRevision === currentRevision
+					: currentRevision === 0);
 			terminalsStore.update(id, {
-				...(session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
+				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
 				agentState: session.state?.agent_state ?? null,
 				backgroundWork: session.state?.background_work ?? false,
 			});

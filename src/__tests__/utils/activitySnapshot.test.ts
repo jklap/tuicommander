@@ -190,9 +190,12 @@ describe("terminalStatusLabel", () => {
 		expect(terminalStatusLabel("busy", null, false, cls, "completed", false)).toEqual({ label: "Completed", className: "IDLE" });
 	});
 
-	it("lets fresh idle lifecycle override stale frontend shell busy", () => {
-		expect(effectiveActivityState("busy", null, false, "idle", false)).toBe("idle");
-		expect(terminalStatusLabel("busy", null, false, cls, "idle", false)).toEqual({ label: "Idle", className: "IDLE" });
+	it("lets live shell activity override a lagging idle lifecycle snapshot", () => {
+		expect(effectiveActivityState("busy", null, false, "idle", false)).toBe("working");
+		expect(terminalStatusLabel("busy", null, false, cls, "idle", false)).toEqual({
+			label: "Working",
+			className: "WORK",
+		});
 	});
 
 	it("uses lifecycle awaiting-input when the parsed frontend event is stale or absent", () => {

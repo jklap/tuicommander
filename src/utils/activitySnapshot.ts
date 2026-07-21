@@ -22,8 +22,8 @@ export function effectiveActivityState(
 	if (awaitingInput || agentState === "awaiting_input") return "awaiting_input";
 	if (agentState === "starting" || agentState === "working" || backgroundWork) return "working";
 	if (agentState === "completed") return "completed";
-	if (agentState === "idle") return "idle";
 	if (shellState === "busy") return "working";
+	if (agentState === "idle") return "idle";
 	if (shellState === "idle") return "idle";
 	return "unknown";
 }

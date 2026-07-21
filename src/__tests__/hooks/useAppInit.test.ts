@@ -54,6 +54,7 @@ function createMockDeps(overrides: Partial<AppInitDeps> = {}): AppInitDeps {
 describe("initApp", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		vi.mocked(listen).mockReset().mockResolvedValue(vi.fn());
 		resetStores();
 	});
 
@@ -200,9 +201,9 @@ describe("initApp", () => {
 		repositoriesStore.setActiveBranch("/repo", "main");
 		repositoriesStore.setActive("/repo");
 
-		let sessionCreated: ((event: {
-			payload: { session_id: string; cwd: string | null; agent_type?: string | null };
-		}) => void) | null = null;
+		let sessionCreated:
+			| ((event: { payload: { session_id: string; cwd: string | null; agent_type?: string | null } }) => void)
+			| null = null;
 		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
 			if (event === "session-created") {
 				sessionCreated = handler as typeof sessionCreated;
@@ -214,8 +215,13 @@ describe("initApp", () => {
 		const listStarted = new Promise<void>((resolve) => {
 			markListStarted = resolve;
 		});
-		let resolveSessions!: (sessions: Array<{ session_id: string; cwd: string | null }>) => void;
-		const sessions = new Promise<Array<{ session_id: string; cwd: string | null }>>((resolve) => {
+		type SurvivingSession = {
+			session_id: string;
+			cwd: string | null;
+			state?: { shell_state?: "busy" | "idle"; agent_state?: "working" | "idle"; background_work?: boolean };
+		};
+		let resolveSessions!: (sessions: SurvivingSession[]) => void;
+		const sessions = new Promise<SurvivingSession[]>((resolve) => {
 			resolveSessions = resolve;
 		});
 		const deps = createMockDeps({
@@ -231,14 +237,124 @@ describe("initApp", () => {
 		const initializing = initApp(deps);
 		await listStarted;
 		sessionCreated!({ payload: { session_id: "sess-race", cwd: "/repo", agent_type: "codex" } });
-		resolveSessions([{ session_id: "sess-race", cwd: "/repo" }]);
+		resolveSessions([
+			{
+				session_id: "sess-race",
+				cwd: "/repo",
+				state: { shell_state: "idle", agent_state: "working", background_work: true },
+			},
+		]);
 		await initializing;
 
 		const branch = repositoriesStore.get("/repo")?.branches["main"];
 		expect(terminalsStore.getCount()).toBe(1);
 		expect(branch?.terminals).toHaveLength(1);
 		expect(new Set(branch?.terminals).size).toBe(1);
-		expect(terminalsStore.get(branch!.terminals[0])?.sessionId).toBe("sess-race");
+		const terminal = terminalsStore.get(branch!.terminals[0]);
+		expect(terminal?.sessionId).toBe("sess-race");
+		expect(terminal?.shellState).toBe("idle");
+		expect(terminal?.agentState).toBe("working");
+		expect(terminal?.backgroundWork).toBe(true);
+	});
+
+	it("does not overwrite a newer shell event while reconciling a deduplicated surviving session", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActive("/repo");
+
+		let sessionCreated:
+			| ((event: { payload: { session_id: string; cwd: string | null; agent_type?: string | null } }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") sessionCreated = handler as typeof sessionCreated;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+
+		let markListStarted!: () => void;
+		const listStarted = new Promise<void>((resolve) => {
+			markListStarted = resolve;
+		});
+		let resolveSessions!: (
+			sessions: Array<{
+				session_id: string;
+				cwd: string | null;
+				state: { shell_state: "busy"; agent_state: "working"; background_work: true };
+			}>,
+		) => void;
+		const sessions = new Promise<
+			Array<{
+				session_id: string;
+				cwd: string | null;
+				state: { shell_state: "busy"; agent_state: "working"; background_work: true };
+			}>
+		>((resolve) => {
+			resolveSessions = resolve;
+		});
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn(() => {
+					markListStarted();
+					return sessions;
+				}),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		const initializing = initApp(deps);
+		await listStarted;
+		sessionCreated!({ payload: { session_id: "sess-race-newer", cwd: "/repo", agent_type: "codex" } });
+		const terminalId = terminalsStore.getTerminalForSession("sess-race-newer")!;
+		terminalsStore.update(terminalId, { shellState: "idle" });
+		resolveSessions([
+			{
+				session_id: "sess-race-newer",
+				cwd: "/repo",
+				state: { shell_state: "busy", agent_state: "working", background_work: true },
+			},
+		]);
+		await initializing;
+
+		const terminal = terminalsStore.get(terminalId);
+		expect(terminal?.shellState).toBe("idle");
+		expect(terminal?.agentState).toBe("working");
+		expect(terminal?.backgroundWork).toBe(true);
+	});
+
+	it("applies a surviving shell snapshot newer than a pre-request shell event", async () => {
+		repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+		repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+		repositoriesStore.setActiveBranch("/repo", "main");
+		repositoriesStore.setActive("/repo");
+
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "session-created") {
+				handler({ payload: { session_id: "sess-before-request", cwd: "/repo", agent_type: "codex" } });
+				const terminalId = terminalsStore.getTerminalForSession("sess-before-request")!;
+				terminalsStore.update(terminalId, { shellState: "idle" });
+			}
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{
+						session_id: "sess-before-request",
+						cwd: "/repo",
+						state: { shell_state: "busy", agent_state: "idle", background_work: false },
+					},
+				]),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const terminalId = terminalsStore.getTerminalForSession("sess-before-request")!;
+		const terminal = terminalsStore.get(terminalId);
+		expect(terminal?.shellState).toBe("busy");
+		expect(terminal?.agentState).toBe("idle");
 	});
 
 	it("restores active repo/branch and eagerly calls handleBranchSelect", async () => {

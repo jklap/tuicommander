@@ -36,15 +36,17 @@ Rust-side per-session state:
 
 The Activity Dashboard uses an effective state rather than raw `shellState`: rate
 limit/error/input take precedence, followed by lifecycle `starting`/`working`
-(including `backgroundWork`), then `completed`/`idle`, with shell activity as the
-fallback. The periodic session snapshot updates both lifecycle and shell state,
+(including `backgroundWork`), `completed`, live shell activity, and finally
+lifecycle or shell `idle`. Live shell `busy` intentionally overrides a lagging
+lifecycle `idle` snapshot. The periodic session snapshot updates both lifecycle and shell state,
 is serialized with a bounded native-IPC timeout, and records both the session
 identity and shell-event revision at request start so a PTY event or session
 replacement received while it is in flight wins.
 A successful snapshot that omits a session marks its terminal exited and clears
 its session and lifecycle fields; a transport failure leaves the existing state
 untouched. The raw busy debounce is not a dashboard working signal, so a fresh
-`completed` or `idle` snapshot cannot remain working-styled or working-ordered.
+`completed` snapshot cannot remain working-styled or working-ordered; lifecycle
+`idle` does so only when there is no newer live shell activity.
 
 ## 1. Tab Indicator — Visual Priority
 
