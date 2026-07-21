@@ -730,6 +730,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/repo/remove-orphan",
             post(worktree_routes::remove_orphan_worktree_http),
         )
+        .route(
+            "/repo/delete-orphan",
+            post(worktree_routes::delete_orphan_worktree_http),
+        )
         .route("/repo/branch/rename", post(git_routes::rename_branch_http))
         .route("/repo/initials", get(git_routes::get_initials_http))
         .route(

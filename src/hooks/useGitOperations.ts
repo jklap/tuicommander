@@ -86,7 +86,8 @@ export interface GitOperationsDeps {
 		getMergedBranches: (repoPath: string) => Promise<string[]>;
 		checkoutRemoteBranch: (repoPath: string, branchName: string) => Promise<void>;
 		detectOrphanWorktrees: (repoPath: string) => Promise<string[]>;
-		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
+		removeOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<string>;
+		deleteOrphanWorktree: (repoPath: string, worktreePath: string) => Promise<void>;
 		mergePrViaGithub: (repoPath: string, prNumber: number, mergeMethod: string) => Promise<string>;
 		switchBranch: (
 			repoPath: string,
@@ -632,7 +633,14 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		);
 	};
 
-	/** Detect orphaned linked worktrees and act based on the orphanCleanup setting. */
+	/**
+	 * Detect orphaned linked worktrees and act based on the orphanCleanup setting.
+	 * "on" and "ask" archive (move aside) rather than deleting — orphan detection is a
+	 * heuristic (detached HEAD + no branch) that can't distinguish a genuinely deleted
+	 * branch from a worktree left on a detached commit for some other reason, so a false
+	 * positive must stay recoverable. "delete" is a deliberate opt-in to skip that safety
+	 * net entirely.
+	 */
 	let orphanDialogOpen = false;
 	// Orphans the user chose to "Keep" this session — don't nag about them again
 	// on every subsequent refresh/poll. Session-scoped (re-detected on next launch). (#65)
@@ -649,19 +657,21 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		}
 		if (orphanPaths.length === 0) return;
 
-		if (orphanCleanup === "on") {
-			// Auto-remove silently
+		if (orphanCleanup === "on" || orphanCleanup === "delete") {
+			// Auto-cleanup silently — "on" archives, "delete" hard-deletes.
+			const cleanup = orphanCleanup === "delete" ? deps.repo.deleteOrphanWorktree : deps.repo.removeOrphanWorktree;
 			await Promise.allSettled(
 				orphanPaths.map(async (wtPath) => {
 					try {
 						await closeTerminalsInWorktree(wtPath);
-						await deps.repo.removeOrphanWorktree(repoPath, wtPath);
+						await cleanup(repoPath, wtPath);
 					} catch (err) {
-						appLogger.warn("git", `Failed to auto-remove orphan worktree ${wtPath}`, err);
+						appLogger.warn("git", `Failed to auto-clean orphan worktree ${wtPath}`, err);
 					}
 				}),
 			);
-			deps.setStatusInfo(`Removed ${orphanPaths.length} orphaned worktree(s)`);
+			const verb = orphanCleanup === "delete" ? "Deleted" : "Archived";
+			deps.setStatusInfo(`${verb} ${orphanPaths.length} orphaned worktree(s)`);
 			return;
 		}
 
@@ -695,7 +705,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 				}
 			}),
 		);
-		deps.setStatusInfo(`Removed ${pending.length} orphaned worktree(s)`);
+		deps.setStatusInfo(`Archived ${pending.length} orphaned worktree(s)`);
 	};
 
 	/** Archive all merged linked worktrees when the autoArchiveMerged setting is enabled. */

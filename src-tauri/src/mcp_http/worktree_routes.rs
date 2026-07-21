@@ -267,6 +267,45 @@ pub(super) async fn remove_orphan_worktree_http(
     let worktree_path = body.worktree_path.clone();
     let result = tokio::task::spawn_blocking(move || {
         crate::worktree::validate_worktree_path(&repo_path, &worktree_path)?;
+        let path = std::path::PathBuf::from(&worktree_path);
+        let archive_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| worktree_path.clone());
+        let script = crate::worktree::resolve_archive_script(&repo_path);
+        crate::worktree::archive_worktree_dir(
+            std::path::Path::new(&repo_path),
+            &path,
+            &archive_name,
+            script.as_deref(),
+        )
+    })
+    .await;
+    match result {
+        Ok(Ok(archive_path)) => {
+            state.invalidate_repo_caches(&body.repo_path);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({"ok": true, "archivePath": archive_path})),
+            )
+                .into_response()
+        }
+        Ok(Err(e)) => err_500(&e),
+        Err(e) => err_500(&format!("task panic: {e}")),
+    }
+}
+
+pub(super) async fn delete_orphan_worktree_http(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<super::types::RemoveOrphanRequest>,
+) -> Response {
+    if let Err(e) = validate_repo_path(&body.repo_path) {
+        return e.into_response();
+    }
+    let repo_path = body.repo_path.clone();
+    let worktree_path = body.worktree_path.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::worktree::validate_worktree_path(&repo_path, &worktree_path)?;
         let worktree = crate::state::WorktreeInfo {
             name: std::path::Path::new(&worktree_path)
                 .file_name()

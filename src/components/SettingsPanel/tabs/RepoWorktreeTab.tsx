@@ -246,14 +246,15 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 							default: props.defaults.orphanCleanup,
 						})}
 					</option>
-					<option value="ask">{t("repoWorktree.orphanCleanup.ask", "Ask before removing")}</option>
-					<option value="on">{t("repoWorktree.orphanCleanup.on", "Auto-remove")}</option>
+					<option value="ask">{t("repoWorktree.orphanCleanup.ask", "Ask before archiving")}</option>
+					<option value="on">{t("repoWorktree.orphanCleanup.on", "Auto-archive")}</option>
+					<option value="delete">{t("repoWorktree.orphanCleanup.delete", "Auto-remove (delete, no archive)")}</option>
 					<option value="off">{t("repoWorktree.orphanCleanup.off", "Keep (mark as detached)")}</option>
 				</select>
 				<p class={s.hint}>
 					{t(
 						"repoWorktree.hint.orphanCleanup",
-						"An 'orphan' worktree is one whose branch was deleted out from under it — not one that's mid-rebase or mid-merge. Worktrees with a rebase, merge, cherry-pick, revert, or bisect in progress are never closed, archived, or removed by this setting.",
+						"An 'orphan' worktree is one whose branch was deleted out from under it — not one that's mid-rebase or mid-merge. Worktrees with a rebase, merge, cherry-pick, revert, or bisect in progress are never closed, archived, or removed by this setting. 'Auto-archive' and 'Ask' move the directory aside (recoverable) since orphan detection is a heuristic that can misfire; 'Auto-remove' deletes it outright with no recovery.",
 					)}
 				</p>
 			</div>

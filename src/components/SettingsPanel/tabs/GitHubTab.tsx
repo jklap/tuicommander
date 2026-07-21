@@ -723,11 +723,12 @@ export const GitHubTab: Component = () => {
 					value={repoDefaultsStore.state.orphanCleanup}
 					onChange={(v) => repoDefaultsStore.setOrphanCleanup(v as OrphanCleanup)}
 					options={[
-						{ value: "ask", label: "Ask before removing" },
-						{ value: "on", label: "Auto-remove" },
+						{ value: "ask", label: "Ask before archiving" },
+						{ value: "on", label: "Auto-archive" },
+						{ value: "delete", label: "Auto-remove (delete, no archive)" },
 						{ value: "off", label: "Keep (mark as detached)" },
 					]}
-					hint="An 'orphan' worktree is one whose branch was deleted out from under it — not one that's mid-rebase or mid-merge. Worktrees with a rebase, merge, cherry-pick, revert, or bisect in progress are never closed, archived, or removed by this setting, regardless of its value."
+					hint="An 'orphan' worktree is one whose branch was deleted out from under it — not one that's mid-rebase or mid-merge. Worktrees with a rebase, merge, cherry-pick, revert, or bisect in progress are never closed, archived, or removed by this setting, regardless of its value. 'Auto-archive' and 'Ask' move the directory aside (recoverable) since orphan detection is a heuristic that can misfire; 'Auto-remove' deletes it outright with no recovery."
 				/>
 
 				<SettingSelect

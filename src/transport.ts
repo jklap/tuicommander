@@ -1330,6 +1330,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { repoPath: args.repoPath, worktreePath: args.worktreePath },
 		}),
 	},
+	delete_orphan_worktree: {
+		map: (args) => ({
+			method: "POST",
+			path: "/repo/delete-orphan",
+			body: { repoPath: args.repoPath, worktreePath: args.worktreePath },
+		}),
+	},
 	run_setup_script: {
 		map: (args) => ({
 			method: "POST",

@@ -354,9 +354,21 @@ export function useRepository() {
 		}
 	}
 
-	/** Remove a detached-HEAD worktree by path (no branch to look up). */
-	async function removeOrphanWorktree(repoPath: string, worktreePath: string): Promise<void> {
-		await invoke("remove_orphan_worktree", { repoPath, worktreePath });
+	/**
+	 * Archive a detached-HEAD worktree by path (no branch to look up). Archives rather than
+	 * hard-deletes: orphan detection is a heuristic (detached HEAD + no branch), so a false
+	 * positive must stay recoverable. Returns the archive destination path.
+	 */
+	async function removeOrphanWorktree(repoPath: string, worktreePath: string): Promise<string> {
+		return await invoke<string>("remove_orphan_worktree", { repoPath, worktreePath });
+	}
+
+	/**
+	 * Hard-delete a detached-HEAD worktree by path — no archive, unrecoverable. Only used for
+	 * the explicit "Delete" orphanCleanup mode; the default modes archive instead.
+	 */
+	async function deleteOrphanWorktree(repoPath: string, worktreePath: string): Promise<void> {
+		await invoke("delete_orphan_worktree", { repoPath, worktreePath });
 	}
 
 	/** Merge a PR via GitHub REST API. merge_method: "merge" | "squash" | "rebase" */
@@ -419,6 +431,7 @@ export function useRepository() {
 		checkoutRemoteBranch,
 		detectOrphanWorktrees,
 		removeOrphanWorktree,
+		deleteOrphanWorktree,
 		mergePrViaGithub,
 		listLocalBranches,
 		switchBranch,

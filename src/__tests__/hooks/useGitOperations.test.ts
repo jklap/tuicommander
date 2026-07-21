@@ -94,7 +94,8 @@ describe("useGitOperations", () => {
 		getMergedBranches: vi.fn().mockResolvedValue(["main"]),
 		checkoutRemoteBranch: vi.fn().mockResolvedValue(undefined),
 		detectOrphanWorktrees: vi.fn().mockResolvedValue([]),
-		removeOrphanWorktree: vi.fn().mockResolvedValue(undefined),
+		removeOrphanWorktree: vi.fn().mockResolvedValue("/wt/__archived/detached-1"),
+		deleteOrphanWorktree: vi.fn().mockResolvedValue(undefined),
 		mergePrViaGithub: vi.fn().mockResolvedValue("abc123sha"),
 		switchBranch: vi
 			.fn()
@@ -2599,7 +2600,7 @@ describe("useGitOperations", () => {
 			await gitOps.refreshAllBranchStats();
 
 			expect(mockRepo.removeOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/detached-1");
-			expect(mockSetStatusInfo).toHaveBeenCalledWith("Removed 1 orphaned worktree(s)");
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Archived 1 orphaned worktree(s)");
 		});
 
 		it("closes terminals in orphan worktree before auto-removing (orphanCleanup=on)", async () => {
@@ -2618,6 +2619,35 @@ describe("useGitOperations", () => {
 			const closeOrder = mockCloseTerminal.mock.invocationCallOrder[0];
 			const removeOrder = mockRepo.removeOrphanWorktree.mock.invocationCallOrder[0];
 			expect(closeOrder).toBeLessThan(removeOrder);
+		});
+
+		it("auto-deletes orphans (no archive) silently when orphanCleanup=delete", async () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { orphanCleanup: "delete" });
+			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockRepo.deleteOrphanWorktree).toHaveBeenCalledWith("/repo", "/wt/detached-1");
+			expect(mockRepo.removeOrphanWorktree).not.toHaveBeenCalled();
+			expect(mockSetStatusInfo).toHaveBeenCalledWith("Deleted 1 orphaned worktree(s)");
+		});
+
+		it("closes terminals in orphan worktree before auto-deleting (orphanCleanup=delete)", async () => {
+			repoSettingsStore.getOrCreate("/repo", "Repo");
+			repoSettingsStore.update("/repo", { orphanCleanup: "delete" });
+			mockRepo.detectOrphanWorktrees.mockResolvedValue(["/wt/detached-1"]);
+
+			const termInOrphan = terminalsStore.add(makeTerminal({ name: "In orphan", cwd: "/wt/detached-1/subdir" }));
+			const termElsewhere = terminalsStore.add(makeTerminal({ name: "Elsewhere", cwd: "/repo" }));
+
+			await gitOps.refreshAllBranchStats();
+
+			expect(mockCloseTerminal).toHaveBeenCalledWith(termInOrphan, true);
+			expect(mockCloseTerminal).not.toHaveBeenCalledWith(termElsewhere, true);
+			const closeOrder = mockCloseTerminal.mock.invocationCallOrder[0];
+			const deleteOrder = mockRepo.deleteOrphanWorktree.mock.invocationCallOrder[0];
+			expect(closeOrder).toBeLessThan(deleteOrder);
 		});
 
 		it("asks user before removing when orphanCleanup=ask and user confirms", async () => {

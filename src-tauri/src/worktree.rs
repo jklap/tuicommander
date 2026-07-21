@@ -1199,13 +1199,50 @@ pub(crate) fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<String>, 
     Ok(orphans)
 }
 
-/// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
+/// Archive an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
+///
+/// "Orphan" detection (detached HEAD + no branch) is a heuristic — it can't distinguish a
+/// branch genuinely deleted out from under the worktree from a worktree deliberately left on
+/// a detached commit for some other reason. Because a false positive here is plausible and the
+/// consequence of misclassifying is otherwise unrecoverable, this archives (moves aside, same
+/// as the merged-branch cleanup path) rather than deleting outright.
 ///
 /// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
 /// arbitrary directory deletion via a crafted path.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn remove_orphan_worktree(
+    state: State<'_, Arc<AppState>>,
+    repo_path: String,
+    worktree_path: String,
+) -> Result<String, String> {
+    validate_worktree_path(&repo_path, &worktree_path)?;
+
+    let base_repo = PathBuf::from(&repo_path);
+    let path = PathBuf::from(&worktree_path);
+    let archive_name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| worktree_path.clone());
+    let script = resolve_archive_script(&repo_path);
+
+    let archive_path = archive_worktree_dir(&base_repo, &path, &archive_name, script.as_deref())?;
+    state.invalidate_repo_caches(&repo_path);
+    Ok(archive_path)
+}
+
+/// Hard-delete an orphan worktree by its filesystem path — no archive step, unrecoverable.
+///
+/// Unlike `remove_orphan_worktree`, this is only ever reached via the `OrphanCleanup::Delete`
+/// setting — a deliberate, explicit opt-in to skip archiving. `On` (the default auto-cleanup
+/// mode) and `Ask` both archive instead, because orphan detection is a heuristic that can
+/// misclassify a worktree that was never actually abandoned.
+///
+/// Safety: `worktree_path` is validated against the repo's actual worktree list to prevent
+/// arbitrary directory deletion via a crafted path.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn delete_orphan_worktree(
     state: State<'_, Arc<AppState>>,
     repo_path: String,
     worktree_path: String,
@@ -1834,43 +1871,69 @@ pub(crate) fn archive_worktree(
     let wt_path = find_worktree_path_for_branch(&wt_list_out.stdout, branch_name)
         .ok_or_else(|| format!("No worktree found for branch '{branch_name}'"))?;
 
+    archive_worktree_dir(base_repo, &wt_path, branch_name, archive_script)
+}
+
+/// Archive a worktree directory by path rather than by branch lookup. Used for
+/// detached/orphan worktrees, which by definition have no branch to look up via
+/// `find_worktree_path_for_branch`.
+///
+/// `archive_name` seeds the destination directory name under `__archived/` (run
+/// through `sanitize_name`); callers typically pass the branch name or, for
+/// orphans, the worktree directory's own basename.
+pub(crate) fn archive_worktree_dir(
+    base_repo: &Path,
+    wt_path: &Path,
+    archive_name: &str,
+    archive_script: Option<&str>,
+) -> Result<String, String> {
     // Run archive script before archiving (if configured)
     if let Some(script) = archive_script
         && !script.is_empty()
     {
-        run_script_in_dir(script, &wt_path).map_err(|e| format!("Archive script failed: {e}"))?;
+        run_script_in_dir(script, wt_path).map_err(|e| format!("Archive script failed: {e}"))?;
     }
     let parent_dir = wt_path.parent().ok_or("Worktree has no parent directory")?;
     let archive_dir = parent_dir.join("__archived");
-    let sanitized = sanitize_name(branch_name);
-    let mut archive_dest = archive_dir.join(&sanitized);
+    let sanitized = sanitize_name(archive_name);
 
     // Create archive directory
     std::fs::create_dir_all(&archive_dir)
         .map_err(|e| format!("Failed to create archive directory: {e}"))?;
 
-    // Remove git worktree link first (so git doesn't track it)
+    // Move the directory FIRST, before touching git's worktree registration.
+    // `git worktree remove` deletes the working tree as part of unregistering
+    // it — running it before the move would make "archive" indistinguishable
+    // from a hard delete for any clean worktree (the common case). Archive is
+    // meant to be the non-destructive alternative to delete, so content must
+    // land on disk under __archived/ before git gets a chance to remove it.
+    // Never clobber a prior archive for the same name — land on the next free
+    // suffix.
+    let archive_dest = free_archive_dest(&archive_dir, &sanitized);
+    std::fs::rename(wt_path, &archive_dest)
+        .map_err(|e| format!("Failed to move worktree to archive: {e}"))?;
+
+    // Now unregister the worktree. Its path no longer exists (we just moved
+    // it away), so git reports "not a working tree" / "No such file" — that's
+    // the expected outcome here, not a failure.
     let wt_path_str = wt_path.to_string_lossy().to_string();
-    if let Err(e) = git_cmd(base_repo)
+    match git_cmd(base_repo)
         .args(["worktree", "remove", "--force", &wt_path_str])
         .run()
     {
-        tracing::warn!(
-            source = "worktree",
-            "Archive: failed to remove worktree link: {e}"
-        );
+        Ok(_) => {}
+        Err(crate::git_cli::GitError::NonZeroExit { ref stderr, .. })
+            if stderr.contains("not a working tree") || stderr.contains("No such file") => {}
+        Err(e) => {
+            tracing::warn!(
+                source = "worktree",
+                "Archive: failed to remove worktree link: {e}"
+            );
+        }
     }
 
-    // Move the directory if it still exists (worktree remove may have deleted it)
-    if wt_path.exists() {
-        // Archive is the non-destructive alternative to delete — never clobber a
-        // prior archive for the same branch name; land on the next free suffix.
-        archive_dest = free_archive_dest(&archive_dir, &sanitized);
-        std::fs::rename(&wt_path, &archive_dest)
-            .map_err(|e| format!("Failed to move worktree to archive: {e}"))?;
-    }
-
-    // Prune stale worktree entries
+    // Prune stale worktree entries — fallback cleanup if the remove above
+    // didn't fully deregister it.
     let _ = git_cmd(base_repo).args(["worktree", "prune"]).run();
 
     Ok(archive_dest.to_string_lossy().to_string())
@@ -2947,6 +3010,81 @@ branch refs/heads/feat
         assert!(
             !orphans.contains(&orphan_b_path),
             "mid-rebase worktree B must be excluded from orphan detection: {orphans:?}"
+        );
+    }
+
+    #[test]
+    fn orphan_worktree_cleanup_archives_instead_of_deleting() {
+        // Regression: an orphan worktree's cleanup must be recoverable, not a hard
+        // delete — orphan detection (detached HEAD + no branch) is a heuristic that
+        // can misclassify a worktree that was never actually abandoned.
+        let repo = setup_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let worktrees_dir = repo.path().join("worktrees");
+
+        let config = WorktreeConfig {
+            task_name: "feat-orphan-archive".to_string(),
+            base_repo: repo_path.clone(),
+            branch: Some("feat-orphan-archive".to_string()),
+            create_branch: true,
+        };
+        let wt = create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("Failed to create worktree");
+        git_cmd(&wt.path)
+            .args(["checkout", "--detach"])
+            .run()
+            .expect("detach HEAD");
+
+        let archive_name = wt.path.file_name().unwrap().to_string_lossy().to_string();
+        let result = archive_worktree_dir(repo.path(), &wt.path, &archive_name, None);
+        assert!(result.is_ok(), "Archive should succeed: {:?}", result);
+
+        let archive_path = PathBuf::from(result.unwrap());
+        assert!(!wt.path.exists(), "Original worktree path should be gone");
+        assert!(
+            archive_path.exists(),
+            "Worktree contents should have moved to the archive destination, not been deleted"
+        );
+        assert!(
+            archive_path.starts_with(worktrees_dir.join("__archived")),
+            "Archive destination should live under __archived/: {archive_path:?}"
+        );
+    }
+
+    #[test]
+    fn orphan_worktree_delete_mode_is_a_true_hard_delete() {
+        // The `OrphanCleanup::Delete` mode is a deliberate opt-in to skip archiving —
+        // unlike the `On`/`Ask` modes, it must NOT leave a recoverable copy anywhere.
+        let repo = setup_test_repo();
+        let repo_path = repo.path().to_string_lossy().to_string();
+        let worktrees_dir = repo.path().join("worktrees");
+
+        let config = WorktreeConfig {
+            task_name: "feat-orphan-delete".to_string(),
+            base_repo: repo_path.clone(),
+            branch: Some("feat-orphan-delete".to_string()),
+            create_branch: true,
+        };
+        let wt = create_worktree_internal(&worktrees_dir, &config, None)
+            .expect("Failed to create worktree");
+        git_cmd(&wt.path)
+            .args(["checkout", "--detach"])
+            .run()
+            .expect("detach HEAD");
+
+        let worktree = WorktreeInfo {
+            name: "feat-orphan-delete".to_string(),
+            path: wt.path.clone(),
+            branch: None,
+            base_repo: repo.path().to_path_buf(),
+        };
+        remove_worktree_internal(&worktree, false).expect("delete should succeed");
+
+        assert!(!wt.path.exists(), "Worktree path should be gone");
+        let archive_dir = worktrees_dir.join("__archived");
+        assert!(
+            !archive_dir.exists() || fs::read_dir(&archive_dir).unwrap().next().is_none(),
+            "Delete mode must not leave anything behind in __archived/"
         );
     }
 
