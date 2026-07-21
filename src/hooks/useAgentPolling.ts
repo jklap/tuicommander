@@ -4,13 +4,14 @@ import { invoke } from "../invoke";
 import { pluginRegistry } from "../plugins/pluginRegistry";
 import { appLogger } from "../stores/appLogger";
 import { type AgentLifecycleState, type ShellState, terminalsStore } from "../stores/terminals";
-import { rpc } from "../transport";
+import { isTauri, rpc } from "../transport";
 
 /** Fallback polling interval — only catches cold starts and edge cases (ms) */
 const POLL_INTERVAL_MS = 30_000;
 /** Lifecycle is sampled separately from foreground-process detection. The
  * backend refreshes meaningful descendant state at most once per second. */
 const LIFECYCLE_POLL_INTERVAL_MS = 1_000;
+const NATIVE_LIFECYCLE_TIMEOUT_MS = 5_000;
 
 type SessionLifecycleResponse = {
 	session_id: string;
@@ -31,6 +32,22 @@ function toShellState(value: unknown): ShellState | undefined {
 	return value === "busy" || value === "idle" ? value : undefined;
 }
 
+function listNativeSessionsWithTimeout(): Promise<SessionLifecycleResponse[]> {
+	return new Promise((resolve, reject) => {
+		const timeout = setTimeout(() => reject(new Error("Lifecycle session snapshot timed out")), NATIVE_LIFECYCLE_TIMEOUT_MS);
+		Promise.resolve(invoke<SessionLifecycleResponse[]>("list_active_sessions")).then(
+			(sessions) => {
+				clearTimeout(timeout);
+				resolve(sessions);
+			},
+			(error) => {
+				clearTimeout(timeout);
+				reject(error);
+			},
+		);
+	});
+}
+
 /** Apply the backend's task lifecycle snapshot to its local terminal. The
  * snapshot is intentionally separate from foreground-process detection: a
  * ready composer can be shell-idle while a meaningful descendant still works. */
@@ -44,9 +61,19 @@ export function syncAgentLifecycleStates(): Promise<void> {
 
 async function syncAgentLifecycleStatesOnce(): Promise<void> {
 	const request = ++nextLifecycleRequest;
+	const requestedShellRevisions = new Map<string, number>();
+	for (const termId of terminalsStore.getIds()) {
+		const sessionId = terminalsStore.get(termId)?.sessionId;
+		const revision = terminalsStore.getShellStateRevision(termId);
+		if (sessionId && revision !== null) requestedShellRevisions.set(sessionId, revision);
+	}
 	let sessions: SessionLifecycleResponse[];
 	try {
-		sessions = await rpc<SessionLifecycleResponse[]>("list_active_sessions");
+		if (isTauri()) {
+			sessions = await listNativeSessionsWithTimeout();
+		} else {
+			sessions = await rpc<SessionLifecycleResponse[]>("list_active_sessions");
+		}
 	} catch (err) {
 		appLogger.debug("app", "[AgentLifecycle] session list failed", err);
 		return;
@@ -60,13 +87,15 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 	for (const termId of terminalsStore.getIds()) {
 		const sessionId = terminalsStore.get(termId)?.sessionId;
 		if (sessionId && !seenSessionIds.has(sessionId)) {
-			terminalsStore.update(termId, { agentState: null, backgroundWork: false });
+			terminalsStore.update(termId, { shellState: "exited", sessionId: null, agentState: null, backgroundWork: false });
 		}
 	}
 	for (const session of sessions) {
 		const termId = terminalsStore.getTerminalForSession(session.session_id);
 		if (!termId) continue;
 		const shellState = toShellState(session.state?.shell_state);
+		const snapshotIsFresh = requestedShellRevisions.get(session.session_id) === terminalsStore.getShellStateRevision(termId);
+		if (!snapshotIsFresh) continue;
 		terminalsStore.update(termId, {
 			agentState: toAgentLifecycleState(session.state?.agent_state),
 			backgroundWork: session.state?.background_work === true,

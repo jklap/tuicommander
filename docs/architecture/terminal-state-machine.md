@@ -38,10 +38,12 @@ The Activity Dashboard uses an effective state rather than raw `shellState`: rat
 limit/error/input take precedence, followed by lifecycle `starting`/`working`
 (including `backgroundWork`), then `completed`/`idle`, with shell activity as the
 fallback. The periodic session snapshot updates both lifecycle and shell state,
-is serialized so an older response cannot overwrite a newer one, and clears
-lifecycle fields for sessions that disappeared. The raw busy debounce is not a
-dashboard working signal, so a fresh `completed` or `idle` snapshot cannot remain
-working-styled or working-ordered.
+is serialized with a bounded native-IPC timeout, and records the shell-event
+revision at request start so a PTY event received while it is in flight wins.
+A successful snapshot that omits a session marks its terminal exited and clears
+its session and lifecycle fields; a transport failure leaves the existing state
+untouched. The raw busy debounce is not a dashboard working signal, so a fresh
+`completed` or `idle` snapshot cannot remain working-styled or working-ordered.
 
 ## 1. Tab Indicator — Visual Priority
 

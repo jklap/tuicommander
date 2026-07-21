@@ -53,6 +53,8 @@ export interface TerminalData {
 	unseen: boolean; // Terminal completed work while user wasn't viewing it
 	progress: number | null; // OSC 9;4 progress (0-100), null when inactive
 	shellState: ShellState;
+	/** Monotonic local event revision; prevents a stale session snapshot from overwriting PTY state. */
+	shellStateRevision: number;
 	agentState: AgentLifecycleState;
 	backgroundWork: boolean;
 	agentType: AgentType | null; // Detected foreground agent process (e.g. "claude")
@@ -88,6 +90,7 @@ type TerminalCreateData = Omit<
 	| "unseen"
 	| "progress"
 	| "shellState"
+	| "shellStateRevision"
 	| "agentState"
 	| "backgroundWork"
 	| "nameIsCustom"
@@ -388,6 +391,7 @@ function createTerminalsStore() {
 				unseen: false,
 				progress: null,
 				shellState: null,
+				shellStateRevision: 0,
 				agentState: null,
 				backgroundWork: false,
 				nameIsCustom: false,
@@ -429,6 +433,7 @@ function createTerminalsStore() {
 				unseen: false,
 				progress: null,
 				shellState: null,
+				shellStateRevision: 0,
 				agentState: null,
 				backgroundWork: false,
 				nameIsCustom: false,
@@ -536,6 +541,7 @@ function createTerminalsStore() {
 					const prev = state.terminals[id]?.shellState ?? null;
 					const next = data.shellState ?? null;
 					if (prev !== next) handleShellStateChange(id, prev, next);
+					setState("terminals", id, "shellStateRevision", (revision) => revision + 1);
 				}
 				// Agent exited back to a plain shell (agentType set→null). Any pending
 				// question/error was the agent's — a shell can't be "awaiting input" on
@@ -921,6 +927,11 @@ function createTerminalsStore() {
 		/** Read last PTY output timestamp (non-reactive, for ActivityDashboard) */
 		getLastDataAt(id: string): number | null {
 			return lastDataAtMap.get(id) ?? state.terminals[id]?.lastDataAt ?? null;
+		},
+
+		/** Revision of the last shell-state event for snapshot freshness checks. */
+		getShellStateRevision(id: string): number | null {
+			return state.terminals[id]?.shellStateRevision ?? null;
 		},
 
 		/** Flush all pending lastDataAt values to the reactive store */

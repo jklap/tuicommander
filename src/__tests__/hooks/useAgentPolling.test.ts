@@ -51,8 +51,56 @@ describe("useAgentPolling", () => {
 		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
 
 		await syncAgentLifecycleStates();
+		expect(store.get(id)?.shellState).toBe("exited");
+		expect(store.get(id)?.sessionId).toBeNull();
 		expect(store.get(id)?.agentState).toBeNull();
 		expect(store.get(id)?.backgroundWork).toBe(false);
+	});
+
+	it("does not let a snapshot overwrite a PTY state event that arrived after the request", async () => {
+		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+		store.update(id, { shellState: "idle", agentState: "working", backgroundWork: true });
+		let resolveSnapshot!: (value: unknown) => void;
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveSnapshot = resolve;
+				}),
+		);
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+		const pending = syncAgentLifecycleStates();
+		store.update(id, { shellState: "busy" });
+		resolveSnapshot([{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "idle", background_work: false } }]);
+		await pending;
+
+		expect(store.get(id)?.shellState).toBe("busy");
+		expect(store.get(id)?.agentState).toBe("working");
+		expect(store.get(id)?.backgroundWork).toBe(true);
+	});
+
+	it("recovers polling after a native session-list timeout", async () => {
+		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+		let resolveHung!: (value: unknown) => void;
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveHung = resolve;
+				}),
+		);
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+		const timedOut = syncAgentLifecycleStates();
+		await vi.advanceTimersByTimeAsync(5_001);
+		await timedOut;
+
+		mockInvoke.mockResolvedValueOnce([
+			{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "completed", background_work: false } },
+		]);
+		await syncAgentLifecycleStates();
+		resolveHung([]);
+
+		expect(store.get(id)?.agentState).toBe("completed");
 	});
 
 	it("serializes lifecycle polls so an older response cannot overwrite a newer snapshot", async () => {

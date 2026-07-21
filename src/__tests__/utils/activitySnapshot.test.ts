@@ -114,6 +114,36 @@ describe("activitySnapshot", () => {
 		expect(row.status.label).toBe("Completed");
 		expect(row.isWorking).toBe(false);
 	});
+
+	it("renders an omitted busy session as exited rather than working", () => {
+		const row = snapshotToRows({
+			terminals: [
+				{
+					id: "omitted-session",
+					name: "Terminal 5",
+					shellState: "exited",
+					awaitingInput: null,
+					sessionId: null,
+					agentType: "claude",
+					agentIntent: null,
+					currentTask: null,
+					lastPrompt: null,
+					activeSubTasks: 0,
+					cwd: null,
+					lastDataAt: null,
+					idleSince: null,
+					isActive: false,
+					isRateLimited: false,
+					agentState: null,
+					backgroundWork: false,
+					isBusy: true,
+					isPromoted: false,
+				},
+			],
+		})[0];
+		expect(row.status.label).toBe("—");
+		expect(row.isWorking).toBe(false);
+	});
 });
 
 describe("terminalStatusLabel", () => {
