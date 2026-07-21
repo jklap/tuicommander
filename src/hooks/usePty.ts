@@ -49,6 +49,7 @@ export interface ActiveSessionInfo {
 	worktree_branch: string | null;
 	display_name?: string | null;
 	state?: {
+		shell_state?: "busy" | "idle";
 		agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
 		background_work?: boolean;
 	} | null;

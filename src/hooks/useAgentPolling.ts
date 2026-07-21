@@ -3,7 +3,7 @@ import { AGENT_TYPES, AGENTS, type AgentType } from "../agents";
 import { invoke } from "../invoke";
 import { pluginRegistry } from "../plugins/pluginRegistry";
 import { appLogger } from "../stores/appLogger";
-import { type AgentLifecycleState, terminalsStore } from "../stores/terminals";
+import { type AgentLifecycleState, type ShellState, terminalsStore } from "../stores/terminals";
 import { rpc } from "../transport";
 
 /** Fallback polling interval — only catches cold starts and edge cases (ms) */
@@ -14,8 +14,12 @@ const LIFECYCLE_POLL_INTERVAL_MS = 1_000;
 
 type SessionLifecycleResponse = {
 	session_id: string;
-	state?: { agent_state?: string; background_work?: boolean } | null;
+	state?: { shell_state?: string; agent_state?: string; background_work?: boolean } | null;
 };
+
+let nextLifecycleRequest = 0;
+let lastAppliedLifecycleRequest = 0;
+let lifecycleSyncInFlight: Promise<void> | null = null;
 
 function toAgentLifecycleState(value: unknown): AgentLifecycleState {
 	return value === "starting" || value === "working" || value === "awaiting_input" || value === "idle" || value === "completed"
@@ -23,10 +27,23 @@ function toAgentLifecycleState(value: unknown): AgentLifecycleState {
 		: null;
 }
 
+function toShellState(value: unknown): ShellState | undefined {
+	return value === "busy" || value === "idle" ? value : undefined;
+}
+
 /** Apply the backend's task lifecycle snapshot to its local terminal. The
  * snapshot is intentionally separate from foreground-process detection: a
  * ready composer can be shell-idle while a meaningful descendant still works. */
-export async function syncAgentLifecycleStates(): Promise<void> {
+export function syncAgentLifecycleStates(): Promise<void> {
+	if (lifecycleSyncInFlight) return lifecycleSyncInFlight;
+	lifecycleSyncInFlight = syncAgentLifecycleStatesOnce().finally(() => {
+		lifecycleSyncInFlight = null;
+	});
+	return lifecycleSyncInFlight;
+}
+
+async function syncAgentLifecycleStatesOnce(): Promise<void> {
+	const request = ++nextLifecycleRequest;
 	let sessions: SessionLifecycleResponse[];
 	try {
 		sessions = await rpc<SessionLifecycleResponse[]>("list_active_sessions");
@@ -35,12 +52,25 @@ export async function syncAgentLifecycleStates(): Promise<void> {
 		return;
 	}
 	if (!Array.isArray(sessions)) return;
+	// A slow earlier poll must never overwrite a newer lifecycle conclusion.
+	if (request < lastAppliedLifecycleRequest) return;
+	lastAppliedLifecycleRequest = request;
+
+	const seenSessionIds = new Set(sessions.map((session) => session.session_id));
+	for (const termId of terminalsStore.getIds()) {
+		const sessionId = terminalsStore.get(termId)?.sessionId;
+		if (sessionId && !seenSessionIds.has(sessionId)) {
+			terminalsStore.update(termId, { agentState: null, backgroundWork: false });
+		}
+	}
 	for (const session of sessions) {
 		const termId = terminalsStore.getTerminalForSession(session.session_id);
 		if (!termId) continue;
+		const shellState = toShellState(session.state?.shell_state);
 		terminalsStore.update(termId, {
 			agentState: toAgentLifecycleState(session.state?.agent_state),
 			backgroundWork: session.state?.background_work === true,
+			...(shellState !== undefined ? { shellState } : {}),
 		});
 	}
 }

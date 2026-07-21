@@ -914,10 +914,14 @@ describe("initApp", () => {
 				awaitingInput: null,
 				isRemote: true,
 			});
+			terminalsStore.update(termId, { agentState: "working", backgroundWork: true });
 
 			getCallback()!({ payload: { session_id: "remote-sess", reason: "process_exit", agent_type: "claude" } });
 
 			expect(terminalsStore.get(termId)?.shellState).toBe("exited");
+			expect(terminalsStore.get(termId)?.sessionId).toBeNull();
+			expect(terminalsStore.get(termId)?.agentState).toBeNull();
+			expect(terminalsStore.get(termId)?.backgroundWork).toBe(false);
 		});
 
 		it("does not set shellState when session_id has no matching terminal", async () => {

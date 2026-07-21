@@ -8,13 +8,15 @@ import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import {
 	type ActivitySnapshot,
 	buildActivitySnapshot,
+	effectiveActivityState,
+	isActivityWorking,
 	projectName,
 	terminalStatusLabel,
 } from "../utils/activitySnapshot";
 import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { createPanelSyncReceiver } from "../utils/panelSync";
 
-function snapshotToRows(snap: ActivitySnapshot): TerminalRow[] {
+export function snapshotToRows(snap: ActivitySnapshot): TerminalRow[] {
 	return snap.terminals.map((t) => ({
 		id: t.id,
 		name: t.name,
@@ -22,14 +24,14 @@ function snapshotToRows(snap: ActivitySnapshot): TerminalRow[] {
 		projectColor: undefined,
 		agent: t.agentType || "shell",
 		status: terminalStatusLabel(
-			t.isBusy ? "busy" : t.shellState,
+			t.shellState,
 			t.awaitingInput,
 			t.isRateLimited,
 			statusClasses,
 			t.agentState,
 			t.backgroundWork,
 		),
-		isWorking: t.isRateLimited || !!t.awaitingInput || t.isBusy || t.agentState === "starting" || t.agentState === "working" || t.backgroundWork,
+		isWorking: isActivityWorking(effectiveActivityState(t.shellState, t.awaitingInput, t.isRateLimited, t.agentState, t.backgroundWork)),
 		lastDataAt: t.lastDataAt,
 		idleSince: t.idleSince,
 		lastPrompt: t.lastPrompt,

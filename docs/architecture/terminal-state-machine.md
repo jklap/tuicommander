@@ -36,10 +36,12 @@ Rust-side per-session state:
 
 The Activity Dashboard uses an effective state rather than raw `shellState`: rate
 limit/error/input take precedence, followed by lifecycle `starting`/`working`
-(including `backgroundWork`), then `completed`, with shell activity as the
-fallback. This keeps an input-ready composer from displaying `Idle` while its
-agent-owned work is still running, while a fresh idle/completed snapshot clears
-the prior working state.
+(including `backgroundWork`), then `completed`/`idle`, with shell activity as the
+fallback. The periodic session snapshot updates both lifecycle and shell state,
+is serialized so an older response cannot overwrite a newer one, and clears
+lifecycle fields for sessions that disappeared. The raw busy debounce is not a
+dashboard working signal, so a fresh `completed` or `idle` snapshot cannot remain
+working-styled or working-ordered.
 
 ## 1. Tab Indicator — Visual Priority
 

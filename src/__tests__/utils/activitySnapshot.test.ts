@@ -13,6 +13,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 
 describe("activitySnapshot", () => {
 	let buildActivitySnapshot: typeof import("../../utils/activitySnapshot").buildActivitySnapshot;
+	let snapshotToRows: typeof import("../../panelAdapters/activity").snapshotToRows;
 	let terminalsStore: typeof import("../../stores/terminals").terminalsStore;
 	let globalWorkspaceStore: typeof import("../../stores/globalWorkspace").globalWorkspaceStore;
 
@@ -27,6 +28,7 @@ describe("activitySnapshot", () => {
 		globalWorkspaceStore = gwMod.globalWorkspaceStore;
 		const snapMod = await import("../../utils/activitySnapshot");
 		buildActivitySnapshot = snapMod.buildActivitySnapshot;
+		snapshotToRows = (await import("../../panelAdapters/activity")).snapshotToRows;
 	});
 
 	it("returns empty terminals array when none exist", () => {
@@ -96,6 +98,22 @@ describe("activitySnapshot", () => {
 		const snap = buildActivitySnapshot();
 		expect(snap.terminals[0].isPromoted).toBe(true);
 	});
+
+	it("keeps completed snapshot rows idle-styled despite a stale busy debounce", () => {
+		const id = terminalsStore.add({
+			name: "Terminal 4",
+			sessionId: "sess4",
+			cwd: null,
+			fontSize: 14,
+			awaitingInput: null,
+			agentType: "codex",
+		});
+		terminalsStore.update(id, { shellState: "busy", agentState: "completed", backgroundWork: false });
+
+		const row = snapshotToRows(buildActivitySnapshot())[0];
+		expect(row.status.label).toBe("Completed");
+		expect(row.isWorking).toBe(false);
+	});
 });
 
 describe("terminalStatusLabel", () => {
@@ -140,6 +158,11 @@ describe("terminalStatusLabel", () => {
 	it("preserves completed instead of reviving stale shell activity", () => {
 		expect(effectiveActivityState("busy", null, false, "completed", false)).toBe("completed");
 		expect(terminalStatusLabel("busy", null, false, cls, "completed", false)).toEqual({ label: "Completed", className: "IDLE" });
+	});
+
+	it("lets fresh idle lifecycle override stale frontend shell busy", () => {
+		expect(effectiveActivityState("busy", null, false, "idle", false)).toBe("idle");
+		expect(terminalStatusLabel("busy", null, false, cls, "idle", false)).toEqual({ label: "Idle", className: "IDLE" });
 	});
 
 	it("uses lifecycle awaiting-input when the parsed frontend event is stale or absent", () => {

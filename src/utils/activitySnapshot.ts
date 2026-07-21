@@ -22,9 +22,15 @@ export function effectiveActivityState(
 	if (awaitingInput || agentState === "awaiting_input") return "awaiting_input";
 	if (agentState === "starting" || agentState === "working" || backgroundWork) return "working";
 	if (agentState === "completed") return "completed";
+	if (agentState === "idle") return "idle";
 	if (shellState === "busy") return "working";
-	if (agentState === "idle" || shellState === "idle") return "idle";
+	if (shellState === "idle") return "idle";
 	return "unknown";
+}
+
+/** True only for states that should receive working row styling and ordering. */
+export function isActivityWorking(state: EffectiveActivityState): boolean {
+	return state === "rate_limited" || state === "awaiting_input" || state === "working";
 }
 
 /** Extract project name (last path segment) from cwd */
@@ -137,13 +143,7 @@ export function buildActivitySnapshot(): ActivitySnapshot {
 	}
 	const isWorking = (id: string): boolean => {
 		const r = rowById.get(id);
-		return (
-			!!r &&
-			(r.isBusy ||
-				["working", "awaiting_input", "rate_limited"].includes(
-					effectiveActivityState(r.shellState, r.awaitingInput, r.isRateLimited, r.agentState, r.backgroundWork),
-				))
-		);
+		return !!r && isActivityWorking(effectiveActivityState(r.shellState, r.awaitingInput, r.isRateLimited, r.agentState, r.backgroundWork));
 	};
 	const order = reconcileActivityOrder(snapshotSpine, ids, isWorking);
 	return { terminals: order.map((id) => rowById.get(id)).filter((r): r is ActivityTerminalRow => !!r) };

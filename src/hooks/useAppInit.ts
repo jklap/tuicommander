@@ -39,6 +39,7 @@ export interface AppInitDeps {
 				cwd: string | null;
 				display_name?: string | null;
 				state?: {
+					shell_state?: "busy" | "idle";
 					agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
 					background_work?: boolean;
 				} | null;
@@ -506,7 +507,7 @@ export async function initApp(deps: AppInitDeps) {
 		const t0 = terminalsStore.get(termId);
 		if (!t0?.isRemote) return;
 
-		terminalsStore.update(termId, { shellState: "exited" });
+		terminalsStore.update(termId, { shellState: "exited", sessionId: null });
 
 		// Agent-spawned sessions get a shorter grace period — they finish their task
 		// and can be cleaned up faster than manually-opened remote sessions.
@@ -598,6 +599,7 @@ export async function initApp(deps: AppInitDeps) {
 				awaitingInput: null,
 			});
 			terminalsStore.update(id, {
+				...(session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
 				agentState: session.state?.agent_state ?? null,
 				backgroundWork: session.state?.background_work ?? false,
 			});
