@@ -505,8 +505,8 @@ a five-second transport margin.
    real managed PTY, `recipient_state` contains only its current `shell_state` and `agent_state`;
    external generated peers omit `recipient_state`.
 4. **Receive** — three layers, most-immediate first:
-   - **Channel push**: real-time `notifications/claude/channel` only when the recipient is Claude Code and holds an SSE stream (CC + channels flag). A managed non-Claude agent uses PTY delivery even if its MCP bridge has an SSE stream.
-   - **PTY injection**: for any idle agent without a live channel, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it acts on its next turn without polling. A busy recipient's message is queued and flushed on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead.
+   - **Channel push**: real-time `notifications/claude/channel` only when a managed Claude Code recipient already has a working turn and holds an SSE stream (CC + channels flag). A managed non-Claude agent, or an idle/completed Claude composer, uses PTY delivery even if its MCP bridge has an SSE stream.
+   - **PTY injection**: for any idle or completed managed agent, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it submits a real next turn without polling. A busy recipient without active Claude channel support gets the message on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead.
    - **Inbox poll**: `agent action=inbox since=<ms>` — always the authoritative store.
 5. **Wait** *(prefer over polling)*: `agent action=wait since=<ms>` blocks until new mail;
    `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. The default
@@ -536,9 +536,9 @@ is reserved for diagnosing the anomaly where that result message never arrived.
 
 ### Channel Push Delivery
 
-When a recipient has an active SSE stream (`GET /mcp`), messages are pushed as `notifications/claude/channel` JSON-RPC notifications:
+When an already working Claude Code recipient has an active SSE stream (`GET /mcp`), messages are pushed into that turn as `notifications/claude/channel` JSON-RPC notifications. Idle or completed managed recipients use PTY submission instead:
 
-A channel notification is transport delivery, not proof that the recipient submitted a new turn. It does not mutate the recipient's task epoch or lifecycle; normal agent output or hook evidence starts the turn after Claude Code consumes it. Managed Codex and other non-Claude agents never receive this extension and instead use the PTY split-write payload plus Enter path.
+A channel notification is transport delivery into an existing turn, not proof that the recipient submitted a new one. It does not mutate the recipient's task epoch or lifecycle. Managed Codex and other non-Claude agents never receive this extension; an idle or completed Claude composer also takes the PTY split-write payload plus Enter path so delivery owns a real submitted turn.
 
 ```json
 {

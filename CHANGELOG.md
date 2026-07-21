@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **Agent lifecycle no longer sticks or flickers at terminal UI boundaries** — A current-turn `suggest:` completion marker now prevents a stale Codex Working row from relatching BUSY, while confirmed background descendants still keep the task working. Claude can recover from a missed idle hook after real turn activity once its empty composer remains stable, and animated status rows no longer erase a visible choice prompt or its `awaiting_input` state.
-- **MCP peer sends no longer create ghost Codex turns** — `notifications/claude/channel` is now used only for channel-capable Claude Code recipients. Managed Codex sessions always receive the PTY split-write payload plus Enter, and channel/inbox delivery alone no longer clears completion or reports the recipient as working before a submitted turn exists.
+- **MCP peer sends no longer create ghost or missing turns** — `notifications/claude/channel` is used only to add messages to an already working Claude Code turn. Idle or completed managed agents, including Claude and Codex, receive the PTY split-write payload plus Enter so a successful SSE broadcast cannot consume wake-up ownership without submitting a new turn. Channel/inbox delivery alone no longer clears completion or reports the recipient as working.
 - **Blocking MCP waits now honor their advertised deadline** — Agent inbox and session lifecycle waits sleep on events instead of polling. Both default to 60 seconds, cap at 300 seconds, and the stdio/socket bridge derives its read deadline from the requested wait plus a five-second transport margin for direct and collapsed calls, eliminating the unrelated ten-second IPC cutoff.
 
 ## [1.6.2] - 2026-07-20
