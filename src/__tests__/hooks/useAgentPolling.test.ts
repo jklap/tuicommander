@@ -57,6 +57,45 @@ describe("useAgentPolling", () => {
 		expect(store.get(id)?.backgroundWork).toBe(false);
 	});
 
+	it("does not close an omitted terminal after a newer PTY event", async () => {
+		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+		let resolveSnapshot!: (value: unknown) => void;
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveSnapshot = resolve;
+				}),
+		);
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+		const pending = syncAgentLifecycleStates();
+		store.update(id, { shellState: "busy" });
+		resolveSnapshot([]);
+		await pending;
+
+		expect(store.get(id)?.sessionId).toBe("sess-1");
+		expect(store.get(id)?.shellState).toBe("busy");
+	});
+
+	it("does not close an omitted terminal after its session is replaced", async () => {
+		const id = store.add(makeTerminal({ name: "T1", sessionId: "old-session" }));
+		let resolveSnapshot!: (value: unknown) => void;
+		mockInvoke.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					resolveSnapshot = resolve;
+				}),
+		);
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+		const pending = syncAgentLifecycleStates();
+		store.update(id, { sessionId: "replacement-session" });
+		resolveSnapshot([]);
+		await pending;
+
+		expect(store.get(id)?.sessionId).toBe("replacement-session");
+	});
+
 	it("does not let a snapshot overwrite a PTY state event that arrived after the request", async () => {
 		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
 		store.update(id, { shellState: "idle", agentState: "working", backgroundWork: true });

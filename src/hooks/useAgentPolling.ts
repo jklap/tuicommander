@@ -61,11 +61,11 @@ export function syncAgentLifecycleStates(): Promise<void> {
 
 async function syncAgentLifecycleStatesOnce(): Promise<void> {
 	const request = ++nextLifecycleRequest;
-	const requestedShellRevisions = new Map<string, number>();
+	const requestedSessions = new Map<string, { sessionId: string; shellStateRevision: number }>();
 	for (const termId of terminalsStore.getIds()) {
 		const sessionId = terminalsStore.get(termId)?.sessionId;
 		const revision = terminalsStore.getShellStateRevision(termId);
-		if (sessionId && revision !== null) requestedShellRevisions.set(sessionId, revision);
+		if (sessionId && revision !== null) requestedSessions.set(termId, { sessionId, shellStateRevision: revision });
 	}
 	let sessions: SessionLifecycleResponse[];
 	try {
@@ -84,9 +84,13 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 	lastAppliedLifecycleRequest = request;
 
 	const seenSessionIds = new Set(sessions.map((session) => session.session_id));
-	for (const termId of terminalsStore.getIds()) {
-		const sessionId = terminalsStore.get(termId)?.sessionId;
-		if (sessionId && !seenSessionIds.has(sessionId)) {
+	for (const [termId, requested] of requestedSessions) {
+		const current = terminalsStore.get(termId);
+		if (
+			!seenSessionIds.has(requested.sessionId) &&
+			current?.sessionId === requested.sessionId &&
+			terminalsStore.getShellStateRevision(termId) === requested.shellStateRevision
+		) {
 			terminalsStore.update(termId, { shellState: "exited", sessionId: null, agentState: null, backgroundWork: false });
 		}
 	}
@@ -94,7 +98,8 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 		const termId = terminalsStore.getTerminalForSession(session.session_id);
 		if (!termId) continue;
 		const shellState = toShellState(session.state?.shell_state);
-		const snapshotIsFresh = requestedShellRevisions.get(session.session_id) === terminalsStore.getShellStateRevision(termId);
+		const requested = requestedSessions.get(termId);
+		const snapshotIsFresh = requested?.sessionId === session.session_id && requested.shellStateRevision === terminalsStore.getShellStateRevision(termId);
 		if (!snapshotIsFresh) continue;
 		terminalsStore.update(termId, {
 			agentState: toAgentLifecycleState(session.state?.agent_state),
