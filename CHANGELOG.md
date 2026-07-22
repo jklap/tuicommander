@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **MCP native file tabs no longer open without a visible tab** — Focused `ui action=tab` requests using an absolute `tuic://open` or `tuic://edit` path now switch to the owning registered repository before activating the repo-scoped file tab, preventing ghost content under an unrelated active repository.
 - **Reliable Nightly publishing across Linux and signed-tag setups** — The quick-xml security update now patches the published Wayland scanner source instead of mixing its unreleased generator ABI with stable Wayland crates, and the `tip` tag no longer opens an editor when Git is configured to sign tags.
 - **Activity Dashboard now agrees with ready agent tabs** — A ready input composer is shown as idle even when Codex retains a long-lived background terminal such as a development server; backend lifecycle tracking remains unchanged.
 - **Agent lifecycle no longer sticks or flickers at terminal UI boundaries** — A current-turn `suggest:` completion marker now prevents a stale Codex Working row from relatching BUSY, while confirmed background descendants still keep the task working. Claude can recover from a missed idle hook after real turn activity once its empty composer remains stable, and animated status rows no longer erase a visible choice prompt or its `awaiting_input` state.

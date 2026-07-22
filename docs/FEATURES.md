@@ -1509,6 +1509,7 @@ All data persisted to platform config directory via Rust:
 - `tuic://open-repo?path=/path` — Switch to repo (must be in sidebar)
 - `tuic://settings?tab=plugins` — Open Settings to specific tab
 - `tuic://open/<path>` — Open markdown file in tab (iframe SDK only, path validated against repos)
+- Focused absolute `tuic://open`/`tuic://edit` targets switch to their owning registered repository so the native file tab remains visible; background opens preserve the current repository
 - `tuic://terminal?repo=<path>` — Open terminal in repo (iframe SDK only)
 - **`tuic://cmd/{tool}/{action}?{params}`** — MCP gateway for external automation (scripts, Shortcuts, browser pages). Routes to the same tool/action handlers as the MCP server. Gating is default-deny:
   - **Read-only / notify actions** (e.g. `session/list`, `session/status`, `repo/list`, `agent/inbox`, `ui/toast`) run silently without a dialog
