@@ -171,7 +171,7 @@ nightly:
 	if [ "$$BRANCH" != "main" ]; then echo "ERROR: must be on main (currently on $$BRANCH)" && exit 1; fi; \
 	if [ -n "$$(git status --porcelain)" ]; then echo "ERROR: working tree is dirty — commit or stash first" && exit 1; fi; \
 	echo "==> Pushing main and updating tip tag..."; \
-	git tag -f tip; \
+	git tag -f -m "Nightly tip for $$(git rev-parse --short HEAD)" tip; \
 	git push origin main; \
 	git push origin tip --force; \
 	echo "==> Nightly triggered. Monitor: gh run list -w Nightly --limit 1"
