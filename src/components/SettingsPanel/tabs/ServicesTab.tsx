@@ -1,5 +1,6 @@
 import QRCode from "qrcode";
 import { type Component, createEffect, createResource, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { useConfirmDialog } from "../../../hooks/useConfirmDialog";
 import { t } from "../../../i18n";
 import { appLogger } from "../../../stores/appLogger";
 import {
@@ -13,6 +14,7 @@ import { cx } from "../../../utils";
 import { writeClipboard } from "../../../utils/clipboard";
 import { handleOpenUrl } from "../../../utils/openUrl";
 import { updateAppConfig } from "../../../utils/updateAppConfig";
+import { ConfirmDialog } from "../../ConfirmDialog";
 import { SettingInput, SettingSelect, SettingToggle } from "../SettingFields";
 import s from "../Settings.module.css";
 
@@ -66,7 +68,10 @@ interface StartOAuthResponse {
 	state: string;
 }
 
-async function startAuthorizeFlow(name: string): Promise<void> {
+export async function startAuthorizeFlow(
+	name: string,
+	confirmAuthorization: (origin: string, name: string) => Promise<boolean>,
+): Promise<void> {
 	let resp: StartOAuthResponse;
 	try {
 		resp = await rpc<StartOAuthResponse>("start_mcp_upstream_oauth", { name });
@@ -89,15 +94,13 @@ async function startAuthorizeFlow(name: string): Promise<void> {
 	} catch {
 		// keep full URL if parsing fails
 	}
-	const { confirm } = await import("@tauri-apps/plugin-dialog");
-	const proceed = await confirm(`About to open ${asOrigin} to authorize "${name}".\n\nContinue?`, {
-		title: "Authorize MCP server",
-		kind: "info",
-	});
+	const proceed = await confirmAuthorization(asOrigin, name);
 	if (!proceed) {
-		rpc("cancel_mcp_upstream_oauth", { name }).catch((e) =>
-			appLogger.warn("network", `cancel_mcp_upstream_oauth failed: ${String(e)}`),
-		);
+		try {
+			await rpc("cancel_mcp_upstream_oauth", { name });
+		} catch (e) {
+			appLogger.warn("network", `cancel_mcp_upstream_oauth failed: ${String(e)}`);
+		}
 		return;
 	}
 	handleOpenUrl(resp.authorization_url);
@@ -983,6 +986,7 @@ function emptyForm() {
 }
 
 const UpstreamMcpPanel: Component<{ upstreamStatus: UpstreamStatusEntry[] }> = (props) => {
+	const oauthDialog = useConfirmDialog();
 	const [upstreams, setUpstreams] = createSignal<UpstreamMcpServer[]>([]);
 	const [showAdd, setShowAdd] = createSignal(false);
 	const [form, setForm] = createSignal(emptyForm());
@@ -990,6 +994,14 @@ const UpstreamMcpPanel: Component<{ upstreamStatus: UpstreamStatusEntry[] }> = (
 	const [error, setError] = createSignal("");
 	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const [editForm, setEditForm] = createSignal(emptyForm());
+	const confirmAuthorization = (origin: string, name: string) =>
+		oauthDialog.confirm({
+			title: "Authorize MCP server",
+			message: `About to open ${origin} to authorize "${name}".\n\nContinue?`,
+			okLabel: "Continue",
+			cancelLabel: "Cancel",
+			kind: "info",
+		});
 
 	// Load upstream config on mount (Tauri-only)
 	onMount(async () => {
@@ -1500,7 +1512,9 @@ const UpstreamMcpPanel: Component<{ upstreamStatus: UpstreamStatusEntry[] }> = (
 															: "Authorize via OAuth 2.1"
 												}
 												onClick={() => {
-													startAuthorizeFlow(server.name).catch((e) => appLogger.warn("network", String(e)));
+													startAuthorizeFlow(server.name, confirmAuthorization).catch((e) =>
+														appLogger.warn("network", String(e)),
+													);
 												}}
 											>
 												{st()?.status === "ready" ? "Re-authorize" : "Authorize"}
@@ -1739,6 +1753,21 @@ const UpstreamMcpPanel: Component<{ upstreamStatus: UpstreamStatusEntry[] }> = (
 					);
 				}}
 			</For>
+			<Show when={oauthDialog.dialogState()}>
+				{(dialog) => (
+					<ConfirmDialog
+						visible={true}
+						title={dialog().title}
+						message={dialog().message}
+						confirmLabel={dialog().confirmLabel}
+						cancelLabel={dialog().cancelLabel}
+						kind={dialog().kind}
+						defaultButton={dialog().defaultButton}
+						onConfirm={oauthDialog.handleConfirm}
+						onClose={oauthDialog.handleClose}
+					/>
+				)}
+			</Show>
 		</div>
 	);
 };

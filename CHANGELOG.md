@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **MCP OAuth confirmation no longer appears after cancellation** — Authorization consent now uses the in-app modal, preventing the hidden macOS sheet from surfacing only after the pending OAuth flow was cancelled and opening an already-invalid authorization URL.
+
 ## [1.6.3] - 2026-07-22
 
 ### Changed

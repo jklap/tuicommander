@@ -1724,7 +1724,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Completion via native deep link `tuic://oauth-callback?code=…&state=…` — callbacks never touch the WebView console
 - `TokenManager` shared across every `HttpMcpClient` refresh path with a per-upstream semaphore that defeats thundering-herd refresh. 60 s expiry margin; `None expires_at` treated as valid
 - `UpstreamError::NeedsOAuth { www_authenticate }` transitions the registry to `needs_auth`; Services tab shows an *Authorize* button
-- Auto-triggered OAuth is gated behind explicit user consent; the confirm dialog surfaces the Authorization Server origin to defend against AS mix-up
+- Auto-triggered OAuth is gated behind explicit user consent; a blocking in-app confirm dialog surfaces the Authorization Server origin and prevents the pending flow from being cancelled behind the prompt
 - Status values extended: `authenticating` ("Awaiting authorization…") + `needs_auth`
 - Tauri commands: `start_mcp_upstream_oauth`, `mcp_oauth_callback`, `cancel_mcp_upstream_oauth`
 
