@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Linux release builds with the secured Wayland scanner** — The quick-xml security update now patches the published Wayland scanner source instead of mixing its unreleased generator ABI with the stable Wayland client/backend crates.
 - **Activity Dashboard now agrees with ready agent tabs** — A ready input composer is shown as idle even when Codex retains a long-lived background terminal such as a development server; backend lifecycle tracking remains unchanged.
 - **Agent lifecycle no longer sticks or flickers at terminal UI boundaries** — A current-turn `suggest:` completion marker now prevents a stale Codex Working row from relatching BUSY, while confirmed background descendants still keep the task working. Claude can recover from a missed idle hook after real turn activity once its empty composer remains stable, and animated status rows no longer erase a visible choice prompt or its `awaiting_input` state.
 - **MCP peer sends no longer create ghost or missing turns** — `notifications/claude/channel` is used only to add messages to an already working Claude Code turn. Idle or completed managed agents, including Claude and Codex, receive the PTY split-write payload plus Enter so a successful SSE broadcast cannot consume wake-up ownership without submitting a new turn. Channel/inbox delivery alone no longer clears completion or reports the recipient as working.

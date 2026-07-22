@@ -6,6 +6,7 @@ members = [
     "patches/alacritty_terminal",
     "patches/vte",
 ]
+exclude = ["patches/wayland-scanner"]
 resolver = "2"
 
 [workspace.package]
@@ -253,10 +254,11 @@ windows-sys = { version = "0.61", features = ["Win32_System_Diagnostics_ToolHelp
 [patch.crates-io]
 alacritty_terminal = { path = "patches/alacritty_terminal" }
 vte = { path = "patches/vte" }
-# Upstream security-only dependency bump: quick-xml 0.39 is affected by
-# RUSTSEC-2026-0194/0195; crates.io 0.31.10 still pins it, while this upstream
-# commit moves the scanner to 0.41 without source changes.
-wayland-scanner = { git = "https://github.com/Smithay/wayland-rs.git", rev = "d07c4f91f28b42e5a485823ffd9d8d5a210b1053" }
+# crates.io 0.31.10 pins vulnerable quick-xml 0.39. Keep that release's code
+# compatible with wayland-client/backend 0.31/0.3, while applying upstream's
+# quick-xml 0.41 parser adaptation. Patching current Wayland master here would
+# generate interfaces for its unreleased backend ABI and break Linux builds.
+wayland-scanner = { path = "patches/wayland-scanner" }
 
 [dev-dependencies]
 tempfile = "3"
