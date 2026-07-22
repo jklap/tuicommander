@@ -99,6 +99,8 @@ Tools:
 
 ### Upstream MCP Servers
 
+OAuth upstreams show **Authorize** when consent is required. TUIC prepares the OAuth request, then displays a blocking in-app confirmation naming the authorization-server origin before opening the system browser. Cancelling that confirmation discards the pending request.
+
 Proxy external MCP servers through TUICommander. Their tools appear prefixed as `{name}__{tool}`:
 - Add upstream servers via HTTP (Streamable MCP) or stdio (process) transport
 - API keys for HTTP upstreams are stored in the OS keychain
