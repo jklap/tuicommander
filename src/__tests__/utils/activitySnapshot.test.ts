@@ -180,9 +180,14 @@ describe("terminalStatusLabel", () => {
 		expect(terminalStatusLabel(null, null, false, cls)).toEqual({ label: "—", className: "IDLE" });
 	});
 
-	it("keeps lifecycle working authoritative over a shell-idle composer", () => {
-		expect(effectiveActivityState("idle", null, false, "working", true)).toBe("working");
-		expect(terminalStatusLabel("idle", null, false, cls, "working", true)).toEqual({ label: "Working", className: "WORK" });
+	it("shows a ready composer as idle even when Codex retains a background terminal", () => {
+		expect(effectiveActivityState("idle", null, false, "working", true)).toBe("idle");
+		expect(terminalStatusLabel("idle", null, false, cls, "working", true)).toEqual({ label: "Idle", className: "IDLE" });
+	});
+
+	it("keeps background work authoritative until the composer is ready", () => {
+		expect(effectiveActivityState("busy", null, false, "working", true)).toBe("working");
+		expect(effectiveActivityState(null, null, false, "working", true)).toBe("working");
 	});
 
 	it("preserves completed instead of reviving stale shell activity", () => {
@@ -207,7 +212,7 @@ describe("terminalStatusLabel", () => {
 	});
 
 	it("lets a fresh idle lifecycle clear a prior working lifecycle", () => {
-		expect(effectiveActivityState("idle", null, false, "working", true)).toBe("working");
+		expect(effectiveActivityState("busy", null, false, "working", true)).toBe("working");
 		expect(effectiveActivityState("idle", null, false, "idle", false)).toBe("idle");
 	});
 });

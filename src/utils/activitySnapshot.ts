@@ -20,6 +20,11 @@ export function effectiveActivityState(
 	if (isRateLimited) return "rate_limited";
 	if (awaitingInput === "error") return "error";
 	if (awaitingInput || agentState === "awaiting_input") return "awaiting_input";
+	// A ready composer is available work from the dashboard's point of view.
+	// Codex may intentionally leave a long-lived background terminal (for
+	// example a dev server) running after the turn has completed; that process
+	// remains tracked by the backend but must not keep this row latched Working.
+	if (shellState === "idle" && backgroundWork) return "idle";
 	if (agentState === "starting" || agentState === "working" || backgroundWork) return "working";
 	if (agentState === "completed") return "completed";
 	if (shellState === "busy") return "working";

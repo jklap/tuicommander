@@ -422,6 +422,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
   - `agentIntent` (crosshair icon) — LLM-declared intent via `intent:` token
   - `lastPrompt` (speech bubble icon) — last user prompt (>= 10 words). Shown only when no `agentIntent` is present
 - Status color codes: green=working, yellow=waiting, red=rate-limited, gray=idle
+- Ready input composers remain gray/idle when an agent leaves a long-lived background terminal running
 - Rate limit indicators with countdown timers
 - Click any row to switch to that terminal and close the dashboard
 - Relative timestamps auto-refresh ("2s ago", "1m ago")

@@ -35,10 +35,11 @@ Rust-side per-session state:
 | `SessionState.background_work` | `AppState.session_states` | Meaningful live agent descendant; persistent integration-helper subtrees are excluded. Keeps task lifecycle working without changing terminal readiness. |
 
 The Activity Dashboard uses an effective state rather than raw `shellState`: rate
-limit/error/input take precedence, followed by lifecycle `starting`/`working`
-(including `backgroundWork`), `completed`, live shell activity, and finally
-lifecycle or shell `idle`. Live shell `busy` intentionally overrides a lagging
-lifecycle `idle` snapshot. The periodic session snapshot updates both lifecycle and shell state,
+limit/error/input take precedence; a ready composer is shown as `Idle` even when
+the backend still tracks a long-lived background terminal. Otherwise lifecycle
+`starting`/`working` (including `backgroundWork`) precedes `completed`, live shell
+activity, and lifecycle or shell `idle`. Live shell `busy` intentionally overrides
+a lagging lifecycle `idle` snapshot. The periodic session snapshot updates both lifecycle and shell state,
 is serialized with a bounded native-IPC timeout, and records both the session
 identity and shell-event revision at request start so a PTY event or session
 replacement received while it is in flight wins.
