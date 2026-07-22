@@ -86,7 +86,7 @@ Native tools exposed to AI agents via MCP. Each tool can be individually enabled
 
 **Manual MCP configuration** (expandable) — shows the `tuic-bridge` binary path and a ready-to-paste JSON snippet for manually configuring MCP clients that aren't auto-installed. Click "Copy" to copy the snippet to clipboard.
 
-**Collapse tools** (checkbox) — when enabled, replaces the full tool list sent to AI agents with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Cuts the baseline MCP context cost from ~35k tokens to ~500 tokens per agent turn; the agent fetches schemas on demand via BM25-ranked search. Default: off. Toggling refreshes connected clients via `notifications/tools/list_changed`.
+**Collapse tools** (checkbox) — when enabled, replaces the full tool list sent to AI agents with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Cuts the baseline MCP context cost from ~35k tokens to ~500 tokens per agent turn; the agent fetches schemas on demand via BM25-ranked search. Default: off. Toggling emits `notifications/tools/list_changed`; compatible clients refresh automatically, while clients that ignore the notification may require a reconnect.
 
 Tools:
 - **session** — PTY terminal session management

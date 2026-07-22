@@ -14,6 +14,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **MCP server changes no longer falsely demand an AI-session restart** — TUIC now reports that connected clients were notified through `tools/list_changed`, accurately distinguishing automatic refresh in compatible clients from the possible reconnect required by clients that ignore the notification.
 - **MCP native file tabs no longer open without a visible tab** — Focused `ui action=tab` requests using an absolute `tuic://open` or `tuic://edit` path now switch to the owning registered repository before activating the repo-scoped file tab, preventing ghost content under an unrelated active repository.
 - **Reliable Nightly publishing across Linux and signed-tag setups** — The quick-xml security update now patches the published Wayland scanner source instead of mixing its unreleased generator ABI with stable Wayland crates, and the `tip` tag no longer opens an editor when Git is configured to sign tags.
 - **Activity Dashboard now agrees with ready agent tabs** — A ready input composer is shown as idle even when Codex retains a long-lived background terminal such as a development server; backend lifecycle tracking remains unchanged.

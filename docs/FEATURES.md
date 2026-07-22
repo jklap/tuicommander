@@ -1674,7 +1674,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Cuts MCP context from ~35k tokens to ~500 tokens per agent turn; agent fetches schemas on demand via BM25-ranked search
 - BM25 index backed by `AppState::tool_search_index` (rebuilds automatically when the tool set changes)
 - Safety filters (`disabled_native_tools`, upstream allow/deny) enforced at both discovery and dispatch time — agents cannot bypass filters by calling `call_tool` directly
-- Toggling fires `notifications/tools/list_changed` so connected clients refresh
+- Toggling fires `notifications/tools/list_changed`; compatible connected clients refresh automatically, while clients that ignore the notification may require a reconnect
 
 ### 19.2 Tool Namespace
 - Upstream tools are prefixed: `{upstream_name}__{tool_name}`
