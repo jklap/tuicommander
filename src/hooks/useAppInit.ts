@@ -458,6 +458,18 @@ export async function initApp(deps: AppInitDeps) {
 					repoPath = activeRepoPath ?? null;
 				}
 
+				// A focused native file tab must be visible in the tab bar. File tabs
+				// are repo-scoped, so opening a file owned by another registered repo
+				// without switching context creates a ghost: its content is active but
+				// its tab is filtered out by the current repo. Keep background opens in
+				// their repo, but move focused opens to their owning repo first.
+				if (focus !== false && repoPath && repoPath !== activeRepoPath) {
+					const repo = repositoriesStore.get(repoPath);
+					repositoriesStore.setActive(repoPath);
+					deps.setCurrentRepoPath(repoPath);
+					deps.setCurrentBranch(repo?.activeBranch ?? null);
+				}
+
 				if (cmd === "open" && repoPath) {
 					mdTabsStore.add(repoPath, relPath);
 				} else if (cmd === "open" && isAbsolutePath(filePath)) {

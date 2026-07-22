@@ -73,6 +73,54 @@ describe("initApp", () => {
 		expect(deps.stores.loadFontFromConfig).toHaveBeenCalled();
 	});
 
+	it("switches to the owning repo before focusing an MCP native file tab", async () => {
+		let uiTabCallback:
+			| ((event: {
+					payload: {
+						id: string;
+						title: string;
+						html: string;
+						pinned: boolean;
+						url: string;
+						focus: boolean;
+					};
+			  }) => void)
+			| null = null;
+		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+			if (event === "ui-tab") uiTabCallback = handler as typeof uiTabCallback;
+			return Promise.resolve(vi.fn());
+		}) as unknown as typeof listen);
+
+		const sourceRepo = "/repos/investimenti";
+		const targetRepo = "/repos/aicheck";
+		for (const path of [sourceRepo, targetRepo]) {
+			repositoriesStore.add({ path, displayName: path.split("/").pop()! });
+			repositoriesStore.setBranch(path, "main", { name: "main", worktreePath: path });
+			repositoriesStore.setActiveBranch(path, "main");
+		}
+		repositoriesStore.setActive(sourceRepo);
+
+		const deps = createMockDeps();
+		await initApp(deps);
+		uiTabCallback!({
+			payload: {
+				id: "comparison",
+				title: "Comparison",
+				html: "",
+				pinned: false,
+				url: `tuic://open/${targetRepo}/reports/comparison.md`,
+				focus: true,
+			},
+		});
+
+		expect(repositoriesStore.state.activeRepoPath).toBe(targetRepo);
+		expect(deps.setCurrentRepoPath).toHaveBeenCalledWith(targetRepo);
+		expect(deps.setCurrentBranch).toHaveBeenCalledWith("main");
+		const activeTab = mdTabsStore.getActive();
+		expect(activeTab).toMatchObject({ repoPath: targetRepo, filePath: "reports/comparison.md" });
+		expect(mdTabsStore.getVisibleIds(`${targetRepo}|main`)).toContain(activeTab!.id);
+	});
+
 	it("re-adopts surviving PTY sessions", async () => {
 		const deps = createMockDeps({
 			pty: {

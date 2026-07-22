@@ -481,6 +481,12 @@ the session-to-terminal binding. Ordinary calls keep a ten-second read deadline;
 direct and collapsed wait calls derive it from the clamped requested timeout plus
 a five-second transport margin.
 
+Focused `ui action=tab` requests using `tuic://open` or `tuic://edit` switch to
+the registered repository that owns an absolute target path before activating
+the native file tab. This keeps repo-scoped tabs visible in the tab bar instead
+of rendering their content under an unrelated active repository. Background
+requests (`focus=false`) do not change repository context.
+
 ### Protocol
 
 0. **Auto-identity** *(no call needed)*: `tuic-bridge` inherits `$TUIC_SESSION` from the agent
