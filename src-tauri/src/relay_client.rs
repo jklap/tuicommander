@@ -13,8 +13,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use aes_gcm::aead::{Aead, OsRng};
-use aes_gcm::{AeadCore, Aes256Gcm, KeyInit};
+use aes_gcm::aead::{Aead, Generate};
+use aes_gcm::{Aes256Gcm, KeyInit};
 use futures_util::{SinkExt, StreamExt};
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -73,12 +73,12 @@ fn derive_cipher(relay_token: &str) -> Aes256Gcm {
     let mut okm = [0u8; 32];
     hk.expand(b"aes-256-gcm-key", &mut okm)
         .expect("HKDF-SHA256 expand for 32 bytes always succeeds");
-    Aes256Gcm::new(aes_gcm::Key::<Aes256Gcm>::from_slice(&okm))
+    Aes256Gcm::new(&okm.into())
 }
 
 /// Encrypt plaintext with AES-256-GCM. Returns nonce (12 bytes) || ciphertext.
 fn encrypt(cipher: &Aes256Gcm, plaintext: &[u8]) -> anyhow::Result<Vec<u8>> {
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let nonce = aes_gcm::Nonce::generate();
     let ciphertext = cipher
         .encrypt(&nonce, plaintext)
         .map_err(|e| anyhow::anyhow!("encryption failed: {e}"))?;
@@ -94,9 +94,10 @@ fn decrypt(cipher: &Aes256Gcm, data: &[u8]) -> anyhow::Result<Vec<u8>> {
         anyhow::bail!("ciphertext too short (missing nonce)");
     }
     let (nonce_bytes, ciphertext) = data.split_at(12);
-    let nonce = aes_gcm::Nonce::from_slice(nonce_bytes);
+    let nonce = aes_gcm::Nonce::try_from(nonce_bytes)
+        .map_err(|_| anyhow::anyhow!("invalid nonce length"))?;
     let plaintext = cipher
-        .decrypt(nonce, ciphertext)
+        .decrypt(&nonce, ciphertext)
         .map_err(|e| anyhow::anyhow!("decryption failed: {e}"))?;
     Ok(plaintext)
 }
@@ -543,7 +544,7 @@ mod tests {
         let mut expected = [0u8; 32];
         hk.expand(b"aes-256-gcm-key", &mut expected).unwrap();
 
-        let reference_cipher = Aes256Gcm::new(aes_gcm::Key::<Aes256Gcm>::from_slice(&expected));
+        let reference_cipher = Aes256Gcm::new(&expected.into());
         let cipher = derive_cipher("test_token");
 
         // If derive_cipher uses the same HKDF params, cross-decryption works

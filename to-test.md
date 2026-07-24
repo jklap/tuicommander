@@ -10,6 +10,10 @@
 
 Features to test when TUICommander is more usable.
 
+## MCP OAuth in-app authorization confirmation (2026-07-22)
+
+- [ ] With an OAuth upstream in **Authorization required**, click **Authorize**: the in-app confirmation must appear above Settings immediately after OAuth preparation; underlying **Cancel** must not be clickable. **Continue** must open a valid browser flow, while dismissing the dialog must return the upstream to **Authorization required** without opening a browser.
+
 ## Clipboard "Copy Path" fix (2026-07-02, uncommitted)
 
 - [ ] **Copy Path / copy actions in all context menus** now route through the native clipboard-manager plugin (`writeClipboard`) instead of `navigator.clipboard.writeText` (rejected by WKWebView). Verify paste works after: RepoSection branch/worktree Copy Path, TabBar (diff/markdown/editor) Copy Path, FileBrowser Copy Path, CodeEditorTab, MarkdownPanel/Tab, StatusBar cwd, App "Copy Block Output", ErrorLogPanel, GeneratorsModal, AIChatPanel, GitHubPanel/Tab, ServicesTab, KnowledgeHistory, useSmartPrompts clipboard output.

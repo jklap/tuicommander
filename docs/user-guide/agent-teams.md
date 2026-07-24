@@ -96,7 +96,7 @@ There is no separate `swarm` action: callers compose the `agent` and `session` p
 
 Every PTY session gets a stable `TUIC_SESSION` UUID injected as an environment variable. Agents use this as their identity to register, discover peers, and exchange messages through TUICommander's MCP `messaging` tool.
 
-When the recipient is a channel-enabled Claude Code client connected via SSE, messages are **pushed in real-time** as MCP channel notifications (`notifications/claude/channel`). Managed non-Claude agents use terminal submission instead, even when their MCP bridge has an SSE stream. Every message also lands in a buffered inbox as a fallback.
+When a channel-enabled Claude Code recipient is connected via SSE and already working, messages are **pushed in real-time** into that turn as MCP channel notifications (`notifications/claude/channel`). Idle or completed managed agents use terminal submission to start a real next turn; managed non-Claude agents do the same even when their MCP bridge has an SSE stream. Every message also lands in a buffered inbox as a fallback.
 
 ### What Gets Injected Automatically
 

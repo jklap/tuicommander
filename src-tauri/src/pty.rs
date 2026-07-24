@@ -7702,6 +7702,8 @@ pub(crate) struct ActiveSessionInfo {
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
     display_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    state: Option<crate::state::SessionState>,
 }
 
 /// Update the working directory of a running PTY session.
@@ -7766,6 +7768,7 @@ pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<Activ
                     .map(|w| w.path.to_string_lossy().to_string()),
                 worktree_branch: session.worktree.as_ref().and_then(|w| w.branch.clone()),
                 display_name: session.display_name.clone(),
+                state: state.session_state_with_shell(entry.key()),
             }
         })
         .collect()
