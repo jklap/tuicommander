@@ -110,7 +110,9 @@ describe("useAgentPolling", () => {
 
 		const pending = syncAgentLifecycleStates();
 		store.update(id, { shellState: "busy" });
-		resolveSnapshot([{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "idle", background_work: false } }]);
+		resolveSnapshot([
+			{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "idle", background_work: false } },
+		]);
 		await pending;
 
 		expect(store.get(id)?.shellState).toBe("busy");
@@ -148,14 +150,18 @@ describe("useAgentPolling", () => {
 		const older = new Promise((resolve) => {
 			resolveOlder = resolve;
 		});
-		mockInvoke.mockImplementationOnce(() => older).mockResolvedValueOnce([
-			{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "completed", background_work: false } },
-		]);
+		mockInvoke
+			.mockImplementationOnce(() => older)
+			.mockResolvedValueOnce([
+				{ session_id: "sess-1", state: { shell_state: "idle", agent_state: "completed", background_work: false } },
+			]);
 		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
 
 		const oldRequest = syncAgentLifecycleStates();
 		const coalescedRequest = syncAgentLifecycleStates();
-		resolveOlder([{ session_id: "sess-1", state: { shell_state: "busy", agent_state: "working", background_work: true } }]);
+		resolveOlder([
+			{ session_id: "sess-1", state: { shell_state: "busy", agent_state: "working", background_work: true } },
+		]);
 		await oldRequest;
 		await coalescedRequest;
 		await syncAgentLifecycleStates();

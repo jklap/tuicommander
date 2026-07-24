@@ -182,7 +182,10 @@ describe("terminalStatusLabel", () => {
 
 	it("shows a ready composer as idle even when Codex retains a background terminal", () => {
 		expect(effectiveActivityState("idle", null, false, "working", true)).toBe("idle");
-		expect(terminalStatusLabel("idle", null, false, cls, "working", true)).toEqual({ label: "Idle", className: "IDLE" });
+		expect(terminalStatusLabel("idle", null, false, cls, "working", true)).toEqual({
+			label: "Idle",
+			className: "IDLE",
+		});
 	});
 
 	it("keeps background work authoritative until the composer is ready", () => {
@@ -192,7 +195,10 @@ describe("terminalStatusLabel", () => {
 
 	it("preserves completed instead of reviving stale shell activity", () => {
 		expect(effectiveActivityState("busy", null, false, "completed", false)).toBe("completed");
-		expect(terminalStatusLabel("busy", null, false, cls, "completed", false)).toEqual({ label: "Completed", className: "IDLE" });
+		expect(terminalStatusLabel("busy", null, false, cls, "completed", false)).toEqual({
+			label: "Completed",
+			className: "IDLE",
+		});
 	});
 
 	it("lets live shell activity override a lagging idle lifecycle snapshot", () => {

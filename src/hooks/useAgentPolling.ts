@@ -23,7 +23,11 @@ let lastAppliedLifecycleRequest = 0;
 let lifecycleSyncInFlight: Promise<void> | null = null;
 
 function toAgentLifecycleState(value: unknown): AgentLifecycleState {
-	return value === "starting" || value === "working" || value === "awaiting_input" || value === "idle" || value === "completed"
+	return value === "starting" ||
+		value === "working" ||
+		value === "awaiting_input" ||
+		value === "idle" ||
+		value === "completed"
 		? value
 		: null;
 }
@@ -34,7 +38,10 @@ function toShellState(value: unknown): ShellState | undefined {
 
 function listNativeSessionsWithTimeout(): Promise<SessionLifecycleResponse[]> {
 	return new Promise((resolve, reject) => {
-		const timeout = setTimeout(() => reject(new Error("Lifecycle session snapshot timed out")), NATIVE_LIFECYCLE_TIMEOUT_MS);
+		const timeout = setTimeout(
+			() => reject(new Error("Lifecycle session snapshot timed out")),
+			NATIVE_LIFECYCLE_TIMEOUT_MS,
+		);
 		Promise.resolve(invoke<SessionLifecycleResponse[]>("list_active_sessions")).then(
 			(sessions) => {
 				clearTimeout(timeout);
@@ -99,7 +106,9 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 		if (!termId) continue;
 		const shellState = toShellState(session.state?.shell_state);
 		const requested = requestedSessions.get(termId);
-		const snapshotIsFresh = requested?.sessionId === session.session_id && requested.shellStateRevision === terminalsStore.getShellStateRevision(termId);
+		const snapshotIsFresh =
+			requested?.sessionId === session.session_id &&
+			requested.shellStateRevision === terminalsStore.getShellStateRevision(termId);
 		if (!snapshotIsFresh) continue;
 		terminalsStore.update(termId, {
 			agentState: toAgentLifecycleState(session.state?.agent_state),

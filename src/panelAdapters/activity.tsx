@@ -31,7 +31,9 @@ export function snapshotToRows(snap: ActivitySnapshot): TerminalRow[] {
 			t.agentState,
 			t.backgroundWork,
 		),
-		isWorking: isActivityWorking(effectiveActivityState(t.shellState, t.awaitingInput, t.isRateLimited, t.agentState, t.backgroundWork)),
+		isWorking: isActivityWorking(
+			effectiveActivityState(t.shellState, t.awaitingInput, t.isRateLimited, t.agentState, t.backgroundWork),
+		),
 		lastDataAt: t.lastDataAt,
 		idleSince: t.idleSince,
 		lastPrompt: t.lastPrompt,

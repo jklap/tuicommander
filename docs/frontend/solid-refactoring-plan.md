@@ -263,7 +263,8 @@ Validation performed for work unit 1:
 - Browser-mode verification is pending because the required
   `brainstorming/x-xcan/ab-stealth.sh` wrapper is absent from both local
   checkouts and the in-app browser runtime failed to initialize. No CSS or
-  layout files changed in this work unit.
+  layout files changed in this work unit. This checkpoint was superseded by the
+  final browser validation recorded below.
 
 ### Work unit 2: Establish App lifecycle boundaries
 
@@ -306,7 +307,8 @@ Progress on 2026-07-21:
   `tweakComments.test.ts`; targeted checks for the new work pass.
 - Browser-mode verification remains pending because the required stealth
   wrapper is absent from both checkouts and the in-app browser runtime could
-  not initialize. No CSS or layout behavior changed in this work unit.
+  not initialize. No CSS or layout behavior changed in this work unit. This
+  checkpoint was superseded by the final browser validation recorded below.
 
 ### Work unit 3: Split settings service domains
 
@@ -468,21 +470,26 @@ Runtime performance claims require measurements. File size or line count alone i
 
 ### Final validation on 2026-07-24
 
-- The complete Vitest suite passes 302 files and 4,741 tests without leaked
+- The complete Vitest suite passes 302 files and 4,762 tests without leaked
   timers. Test teardown now cancels terminal cooldown/question timers and the
   activity persistence debounce owned by isolated store modules.
-- The production build passes. The desktop initial payload is 1,500,928 bytes
-  raw and 415,747 bytes gzip; the mobile initial payload is 200,334 bytes raw
-  and 61,772 bytes gzip. All optional-asset budgets pass.
+- The production build passes. The desktop initial payload is 1,518,882 bytes
+  raw and 433,460 bytes gzip; the mobile initial payload is 202,544 bytes raw
+  and 63,836 bytes gzip. All optional-asset budgets pass.
 - `pnpm architecture:cycles` analyzes 475 production runtime files and reports
   zero cycles.
-- Repository-wide `make check` passes, including TypeScript and Biome. The three
-  pre-existing formatting failures in `useAppInit.ts`, `useAppInit.test.ts`,
-  and `tweakComments.test.ts` were normalized as part of final cleanup.
-- No Rust, CSS, or layout files changed. Visual output was not changed
-  intentionally. Browser-mode verification through the mandatory stealth
-  wrapper covered the main terminal layout and the Appearance and Services
-  settings views; screenshots showed no clipping, overlap, or missing controls.
+- `cargo nextest run --no-fail-fast` passes all 3,927 Rust tests, with 10 tests
+  skipped. The tunnel supervisor tests now wait for terminal state transitions
+  instead of sampling them at fixed timing boundaries under parallel load.
+- Repository-wide `make check` passes, including TypeScript, Biome, Rust tests,
+  and dependency audits. Formatting drift exposed by the final dependency
+  upgrade was normalized during integration.
+- No production Rust behavior, CSS, or layout files changed. Rust edits are
+  limited to compile-time lint cleanup and test timing robustness. Visual
+  output was not changed intentionally.
+  Browser-mode verification through the mandatory stealth wrapper covered the
+  main terminal layout and the Appearance and Services settings views;
+  screenshots showed no clipping, overlap, or missing controls.
 
 ## Commit and Rollback Strategy
 

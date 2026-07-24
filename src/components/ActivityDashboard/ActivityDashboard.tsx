@@ -5,7 +5,13 @@ import { registerModal } from "../../stores/modalStack";
 import { rateLimitStore } from "../../stores/ratelimit";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
-import { effectiveActivityState, isActivityWorking, projectName, reconcileActivityOrder, terminalStatusLabel } from "../../utils/activitySnapshot";
+import {
+	effectiveActivityState,
+	isActivityWorking,
+	projectName,
+	reconcileActivityOrder,
+	terminalStatusLabel,
+} from "../../utils/activitySnapshot";
 import { navigateToTerminal } from "../../utils/navigateToTerminal";
 import { getRepoColor } from "../../utils/repoColor";
 import { formatRelativeTime } from "../../utils/time";
@@ -162,7 +168,12 @@ export const ActivityDashboard: Component<ActivityDashboardProps> = (props) => {
 		const isWorking = (id: string): boolean => {
 			const term = terminalsStore.get(id);
 			const isRL = !!(term?.sessionId && rateLimitStore.isRateLimited(term.sessionId));
-			return !!term && isActivityWorking(effectiveActivityState(term.shellState, term.awaitingInput, isRL, term.agentState, term.backgroundWork));
+			return (
+				!!term &&
+				isActivityWorking(
+					effectiveActivityState(term.shellState, term.awaitingInput, isRL, term.agentState, term.backgroundWork),
+				)
+			);
 		};
 		return reconcileActivityOrder(spine, terminalsStore.getAttachedIds(), isWorking);
 	});
