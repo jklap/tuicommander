@@ -1423,6 +1423,7 @@ impl AppState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn begin_agent_wait(&self, tuic_session: &str) -> u64 {
         self.begin_agent_wait_with_events(tuic_session).0
     }
