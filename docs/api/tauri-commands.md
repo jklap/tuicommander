@@ -16,7 +16,7 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `can_spawn_session` | -- | `bool` | Check session limit |
 | `get_orchestrator_stats` | -- | `OrchestratorStats` | Active/max/available |
 | `get_session_metrics` | -- | `JSON` | Spawn/fail/byte counts |
-| `list_active_sessions` | -- | `Vec<ActiveSessionInfo>` | List all sessions |
+| `list_active_sessions` | -- | `Vec<ActiveSessionInfo>` | List all sessions with the same optional lifecycle `state` (`shell_state`, `agent_state`, `background_work`) returned by `GET /sessions` |
 | `list_worktrees` | -- | `Vec<JSON>` | List managed worktrees |
 | `update_session_cwd` | `session_id, cwd` | `()` | Update session working directory (from OSC 7) |
 | `get_session_foreground_process` | `session_id` | `JSON` | Get foreground process info |

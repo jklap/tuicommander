@@ -17,7 +17,7 @@ export {
 	remoteStatusLabel,
 	transportSummary,
 } from "./services/RemoteMachinesPanel";
-export { authFromUpstreamForm, shouldShowAuthorize } from "./services/UpstreamMcpPanel";
+export { authFromUpstreamForm, shouldShowAuthorize, startAuthorizeFlow } from "./services/UpstreamMcpPanel";
 
 interface McpStatus {
 	enabled: boolean;

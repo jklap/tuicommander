@@ -77,7 +77,10 @@ To avoid serving a stale tool list, the registry exposes a one-shot settle gate:
 - `mark_initial_connect_complete()` — set by `auto_connect_saved_upstreams` once every upstream is registered (at both exits, including the empty-config early return). Async `initialize` may still be in flight.
 - `await_initial_settle(timeout)` — the first `tools/list` calls this before `merged_tool_definitions()`. It blocks (≤ `timeout`, default 3s) until auto-connect is complete **and** no entry is still `Connecting`, then serves. A global `initial_settle_done` latch makes every later call a no-op, so steady-state `tools/list` never blocks. On timeout it logs a warning and serves a possibly-partial list rather than hanging.
 
-This works around [anthropics/claude-code#4118](https://github.com/anthropics/claude-code/issues/4118): Claude Code fetches `tools/list` during its handshake — before async upstream init finishes — and never refetches on `notifications/tools/list_changed`, so without the settle wait the proxied tools (e.g. `quill__*`) would be missing until a manual reconnect.
+This also protects clients and older client versions that fetch `tools/list` during
+their handshake but do not apply a later `notifications/tools/list_changed`.
+Compatible current clients can refresh live; clients that ignore the notification
+still receive the complete settled list at connection time.
 
 ### Tool Aggregation
 

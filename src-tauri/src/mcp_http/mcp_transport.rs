@@ -98,14 +98,14 @@ fn detect_claude_code_from_headers(headers: &HeaderMap) -> bool {
         .is_some_and(|ua| ua.contains("claude") || ua.contains("tuic-bridge"))
 }
 
-/// Whether the recipient can consume `notifications/claude/channel` as a
-/// submitted turn. Every MCP client may own an SSE stream, but the channel
-/// notification is a Claude Code extension; a live Codex bridge will accept
-/// the SSE frame at the transport layer and then ignore it. Managed sessions
-/// therefore require both a Claude-capable MCP owner and a canonical Claude
-/// agent type. External peers have no PTY type to cross-check and retain the
-/// owner capability as their authority.
-fn recipient_supports_claude_channel(
+/// Whether the recipient can consume `notifications/claude/channel` inside an
+/// already active turn. Every MCP client may own an SSE stream, but the channel
+/// notification is a Claude Code extension and transport receipt does not
+/// submit a new prompt. Managed sessions therefore use the channel only while
+/// canonical Claude lifecycle state is working; an idle or completed composer
+/// must take the PTY submission path. External peers have no PTY fallback and
+/// retain the owner capability as their authority.
+fn recipient_supports_active_claude_channel(
     state: &AppState,
     recipient: &str,
     mcp_session_id: &str,
@@ -118,11 +118,15 @@ fn recipient_supports_claude_channel(
     if !owner_supports_channel {
         return false;
     }
-    !managed_recipient
-        || state
-            .session_states
-            .get(recipient)
-            .is_some_and(|session| session.agent_type.as_deref() == Some("claude"))
+    if !managed_recipient {
+        return true;
+    }
+    state
+        .session_state_with_shell(recipient)
+        .is_some_and(|session| {
+            session.agent_type.as_deref() == Some("claude")
+                && session.agent_state.as_deref() == Some("working")
+        })
 }
 
 /// Map MCP client name to TUICommander agent type key.
@@ -3208,7 +3212,12 @@ fn handle_messaging(
                     let Some(mcp_sid) = recipient_mcp_sid.as_ref() else {
                         return false;
                     };
-                    if !recipient_supports_claude_channel(state, to, mcp_sid, managed_recipient) {
+                    if !recipient_supports_active_claude_channel(
+                        state,
+                        to,
+                        mcp_sid,
+                        managed_recipient,
+                    ) {
                         return false;
                     }
                     let Some(channel) = state.messaging_channels.get(mcp_sid) else {
@@ -6679,7 +6688,7 @@ mod tests {
     }
 
     #[test]
-    fn mcp_delivery_regression_sse_does_not_claim_a_submitted_turn() {
+    fn mcp_delivery_regression_completed_claude_sse_submits_through_pty() {
         let state = test_state();
         register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
         register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
@@ -6696,25 +6705,8 @@ mod tests {
         state
             .messaging_channels
             .insert("mcp-recipient".to_string(), channel);
-        state.session_states.insert(
-            TEST_UUID_B.to_string(),
-            crate::state::SessionState {
-                agent_type: Some("claude".to_string()),
-                suggested_actions: Some(vec!["old completion".to_string()]),
-                ..Default::default()
-            },
-        );
-        state.shell_states.insert(
-            TEST_UUID_B.to_string(),
-            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
-        );
-        let mut silence = crate::pty::SilenceState::new();
-        silence.confirm_idle();
-        silence.mark_suggest_candidate(vec!["old completion".to_string()], 0);
-        state.silence_states.insert(
-            TEST_UUID_B.to_string(),
-            std::sync::Arc::new(parking_lot::Mutex::new(silence)),
-        );
+        let submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
 
         let result = handle_messaging(
             &state,
@@ -6726,18 +6718,21 @@ mod tests {
             Some("mcp-sender"),
         );
 
-        assert_eq!(result["delivered_via_channel"], true);
-        assert_eq!(result["delivery_path"], "sse_channel_and_inbox");
-        assert!(
-            receiver.try_recv().is_ok(),
-            "SSE notification must be sent once"
-        );
+        assert_eq!(result["delivered_via_channel"], false);
+        assert_eq!(result["delivery_path"], "terminal_or_queued_and_inbox");
         assert!(
             matches!(
                 receiver.try_recv(),
                 Err(tokio::sync::broadcast::error::TryRecvError::Empty)
             ),
-            "successful SSE delivery must not duplicate the notification"
+            "a completed composer must not surrender wake-up ownership to SSE"
+        );
+        let output = submitted_output
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("probe exits only after the separately written Enter submits the line");
+        assert!(
+            output.contains("SUBMITTED:[TUIC message from sender] start the next task"),
+            "the completed Claude PTY must observe a complete submitted line: {output:?}"
         );
         let message_id = result["message_id"].as_str().unwrap();
         assert_eq!(
@@ -6749,24 +6744,67 @@ mod tests {
                 .pending_injections
                 .get(TEST_UUID_B)
                 .is_none_or(|pending| pending.is_empty()),
-            "successful SSE delivery must not also queue PTY injection"
+            "successful PTY submission must not leave a queued duplicate"
         );
         let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
-        assert_eq!(snapshot.shell_state.as_deref(), Some("idle"));
-        assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
-        assert_eq!(
-            snapshot.suggested_actions,
-            Some(vec!["old completion".to_string()])
+        assert_eq!(snapshot.shell_state.as_deref(), Some("busy"));
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
+        assert!(snapshot.suggested_actions.is_none());
+        assert_eq!(snapshot.turn_epoch, 1);
+    }
+
+    #[test]
+    fn mcp_delivery_regression_working_claude_keeps_sse_turn_delivery() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_A, "sender", "mcp-sender");
+        register_peer(&state, TEST_UUID_B, "recipient", "mcp-recipient");
+        state.mcp_sessions.insert(
+            "mcp-recipient".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: true,
+                has_sse_stream: true,
+                repo_path: None,
+            },
         );
+        let (channel, mut receiver) = tokio::sync::broadcast::channel(4);
+        state
+            .messaging_channels
+            .insert("mcp-recipient".to_string(), channel);
+        let _submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "claude");
+        {
+            let mut session = state.session_states.get_mut(TEST_UUID_B).unwrap();
+            session.suggested_actions = None;
+        }
+        state
+            .silence_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .lock()
+            .reset_suggest_memory();
+        state
+            .shell_states
+            .get(TEST_UUID_B)
+            .unwrap()
+            .store(crate::pty::SHELL_BUSY, std::sync::atomic::Ordering::Release);
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": TEST_UUID_B,
+                "message": "context for the active task",
+            }),
+            Some("mcp-sender"),
+        );
+
+        assert_eq!(result["delivered_via_channel"], true);
+        assert_eq!(result["delivery_path"], "sse_channel_and_inbox");
+        assert!(receiver.try_recv().is_ok());
+        let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
+        assert_eq!(snapshot.agent_state.as_deref(), Some("working"));
         assert_eq!(snapshot.turn_epoch, 0);
-        assert!(
-            state
-                .silence_states
-                .get(TEST_UUID_B)
-                .unwrap()
-                .lock()
-                .completion_declared()
-        );
     }
 
     #[test]

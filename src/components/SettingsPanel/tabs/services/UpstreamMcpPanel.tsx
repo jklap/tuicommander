@@ -1,7 +1,9 @@
 import { type Component, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { useConfirmDialog } from "../../../../hooks/useConfirmDialog";
 import { appLogger } from "../../../../stores/appLogger";
 import { rpc, type UpstreamMcpConfig, type UpstreamMcpServer, type UpstreamTransport } from "../../../../transport";
 import { handleOpenUrl } from "../../../../utils/openUrl";
+import { ConfirmDialog } from "../../../ConfirmDialog";
 import s from "../../Settings.module.css";
 
 /** Pure helper: should the Authorize button be shown for this server+status? */
@@ -54,7 +56,10 @@ interface StartOAuthResponse {
 	state: string;
 }
 
-async function startAuthorizeFlow(name: string): Promise<void> {
+export async function startAuthorizeFlow(
+	name: string,
+	confirmAuthorization: (origin: string, name: string) => Promise<boolean>,
+): Promise<void> {
 	let resp: StartOAuthResponse;
 	try {
 		resp = await rpc<StartOAuthResponse>("start_mcp_upstream_oauth", { name });
@@ -77,15 +82,13 @@ async function startAuthorizeFlow(name: string): Promise<void> {
 	} catch {
 		// keep full URL if parsing fails
 	}
-	const { confirm } = await import("@tauri-apps/plugin-dialog");
-	const proceed = await confirm(`About to open ${asOrigin} to authorize "${name}".\n\nContinue?`, {
-		title: "Authorize MCP server",
-		kind: "info",
-	});
+	const proceed = await confirmAuthorization(asOrigin, name);
 	if (!proceed) {
-		rpc("cancel_mcp_upstream_oauth", { name }).catch((e) =>
-			appLogger.warn("network", `cancel_mcp_upstream_oauth failed: ${String(e)}`),
-		);
+		try {
+			await rpc("cancel_mcp_upstream_oauth", { name });
+		} catch (e) {
+			appLogger.warn("network", `cancel_mcp_upstream_oauth failed: ${String(e)}`);
+		}
 		return;
 	}
 	handleOpenUrl(resp.authorization_url);
@@ -124,6 +127,7 @@ function emptyForm() {
 }
 
 export const UpstreamMcpPanel: Component = () => {
+	const oauthDialog = useConfirmDialog();
 	const [upstreams, setUpstreams] = createSignal<UpstreamMcpServer[]>([]);
 	const [upstreamStatus, setUpstreamStatus] = createSignal<UpstreamStatusEntry[]>([]);
 	const [showAdd, setShowAdd] = createSignal(false);
@@ -132,6 +136,14 @@ export const UpstreamMcpPanel: Component = () => {
 	const [error, setError] = createSignal("");
 	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const [editForm, setEditForm] = createSignal(emptyForm());
+	const confirmAuthorization = (origin: string, name: string) =>
+		oauthDialog.confirm({
+			title: "Authorize MCP server",
+			message: `About to open ${origin} to authorize "${name}".\n\nContinue?`,
+			okLabel: "Continue",
+			cancelLabel: "Cancel",
+			kind: "info",
+		});
 
 	const refreshStatus = async () => {
 		try {
@@ -653,7 +665,9 @@ export const UpstreamMcpPanel: Component = () => {
 															: "Authorize via OAuth 2.1"
 												}
 												onClick={() => {
-													startAuthorizeFlow(server.name).catch((e) => appLogger.warn("network", String(e)));
+													startAuthorizeFlow(server.name, confirmAuthorization).catch((e) =>
+														appLogger.warn("network", String(e)),
+													);
 												}}
 											>
 												{st()?.status === "ready" ? "Re-authorize" : "Authorize"}
@@ -892,6 +906,21 @@ export const UpstreamMcpPanel: Component = () => {
 					);
 				}}
 			</For>
+			<Show when={oauthDialog.dialogState()}>
+				{(dialog) => (
+					<ConfirmDialog
+						visible={true}
+						title={dialog().title}
+						message={dialog().message}
+						confirmLabel={dialog().confirmLabel}
+						cancelLabel={dialog().cancelLabel}
+						kind={dialog().kind}
+						defaultButton={dialog().defaultButton}
+						onConfirm={oauthDialog.handleConfirm}
+						onClose={oauthDialog.handleClose}
+					/>
+				)}
+			</Show>
 		</div>
 	);
 };

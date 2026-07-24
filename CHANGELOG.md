@@ -8,8 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **MCP OAuth confirmation no longer appears after cancellation** — Authorization consent now uses the in-app modal, preventing the hidden macOS sheet from surfacing only after the pending OAuth flow was cancelled and opening an already-invalid authorization URL.
+
+## [1.6.3] - 2026-07-22
+
+### Changed
+
+- **Dependency stack modernized** — Updated the frontend, Tauri application, CLI, website, icon plugin, and relay service to their latest compatible releases, including Vite 8, Vitest 4, TypeScript 7, Tauri 2.11, tower-http 0.7, tokio-tungstenite 0.30, rodio 0.22, rusqlite 0.40, and current cryptography crates. The dev overlay keeps the native TypeScript 7 CLI while using Microsoft's TypeScript 6 compatibility API for watch mode. Unused direct dependencies and duplicate build/runtime packages were removed; Web Push VAPID signing now uses P-256 directly instead of the vulnerable transitive RSA backend, and Wayland code generation consumes the upstream quick-xml 0.41 security fix.
+
+### Fixed
+
+- **MCP server changes no longer falsely demand an AI-session restart** — TUIC now reports that connected clients were notified through `tools/list_changed`, accurately distinguishing automatic refresh in compatible clients from the possible reconnect required by clients that ignore the notification.
+- **MCP native file tabs no longer open without a visible tab** — Focused `ui action=tab` requests using an absolute `tuic://open` or `tuic://edit` path now switch to the owning registered repository before activating the repo-scoped file tab, preventing ghost content under an unrelated active repository.
+- **Reliable Nightly publishing across Linux and signed-tag setups** — The quick-xml security update now patches the published Wayland scanner source instead of mixing its unreleased generator ABI with stable Wayland crates, and the `tip` tag no longer opens an editor when Git is configured to sign tags.
+- **Activity Dashboard now agrees with ready agent tabs** — A ready input composer is shown as idle even when Codex retains a long-lived background terminal such as a development server; backend lifecycle tracking remains unchanged.
 - **Agent lifecycle no longer sticks or flickers at terminal UI boundaries** — A current-turn `suggest:` completion marker now prevents a stale Codex Working row from relatching BUSY, while confirmed background descendants still keep the task working. Claude can recover from a missed idle hook after real turn activity once its empty composer remains stable, and animated status rows no longer erase a visible choice prompt or its `awaiting_input` state.
-- **MCP peer sends no longer create ghost Codex turns** — `notifications/claude/channel` is now used only for channel-capable Claude Code recipients. Managed Codex sessions always receive the PTY split-write payload plus Enter, and channel/inbox delivery alone no longer clears completion or reports the recipient as working before a submitted turn exists.
+- **MCP peer sends no longer create ghost or missing turns** — `notifications/claude/channel` is used only to add messages to an already working Claude Code turn. Idle or completed managed agents, including Claude and Codex, receive the PTY split-write payload plus Enter so a successful SSE broadcast cannot consume wake-up ownership without submitting a new turn. Channel/inbox delivery alone no longer clears completion or reports the recipient as working.
 - **Blocking MCP waits now honor their advertised deadline** — Agent inbox and session lifecycle waits sleep on events instead of polling. Both default to 60 seconds, cap at 300 seconds, and the stdio/socket bridge derives its read deadline from the requested wait plus a five-second transport margin for direct and collapsed calls, eliminating the unrelated ten-second IPC cutoff.
 
 ## [1.6.2] - 2026-07-20

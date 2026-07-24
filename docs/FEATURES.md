@@ -422,6 +422,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
   - `agentIntent` (crosshair icon) — LLM-declared intent via `intent:` token
   - `lastPrompt` (speech bubble icon) — last user prompt (>= 10 words). Shown only when no `agentIntent` is present
 - Status color codes: green=working, yellow=waiting, red=rate-limited, gray=idle
+- Ready input composers remain gray/idle when an agent leaves a long-lived background terminal running
 - Rate limit indicators with countdown timers
 - Click any row to switch to that terminal and close the dashboard
 - Relative timestamps auto-refresh ("2s ago", "1m ago")
@@ -690,7 +691,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - New `messaging` MCP tool for agent-to-agent coordination when multiple agents are spawned in parallel
 - **Identity**: Each agent uses its `$TUIC_SESSION` env var (stable tab UUID) as its messaging identity
 - **Actions**: `register` (announce presence), `list_peers` (discover other agents), `send` (message a peer by tuic_session), `inbox` (poll for messages)
-- **Dual delivery**: Real-time push via MCP `notifications/claude/channel` over SSE for channel-capable Claude Code clients; managed non-Claude agents use submitted PTY delivery even when their MCP bridge has an SSE stream; polling fallback via `inbox` is always available
+- **Dual delivery**: Real-time push via MCP `notifications/claude/channel` over SSE into already working Claude Code turns; idle/completed managed agents and managed non-Claude agents use submitted PTY delivery even when their MCP bridge has an SSE stream; polling fallback via `inbox` is always available
 - **Channel support**: TUICommander declares `experimental.claude/channel` capability; spawned Claude Code agents automatically get `--dangerously-load-development-channels server:tuicommander`
 - **Lifecycle**: Peer registrations cleaned up on MCP session delete and TTL reap; `PeerRegistered`/`PeerUnregistered` events broadcast via event bus for frontend visibility
 - **Limits**: 64 KB max message size, 100 messages per inbox (FIFO eviction), optional project filtering for `list_peers`
@@ -1508,6 +1509,7 @@ All data persisted to platform config directory via Rust:
 - `tuic://open-repo?path=/path` — Switch to repo (must be in sidebar)
 - `tuic://settings?tab=plugins` — Open Settings to specific tab
 - `tuic://open/<path>` — Open markdown file in tab (iframe SDK only, path validated against repos)
+- Focused absolute `tuic://open`/`tuic://edit` targets switch to their owning registered repository so the native file tab remains visible; background opens preserve the current repository
 - `tuic://terminal?repo=<path>` — Open terminal in repo (iframe SDK only)
 - **`tuic://cmd/{tool}/{action}?{params}`** — MCP gateway for external automation (scripts, Shortcuts, browser pages). Routes to the same tool/action handlers as the MCP server. Gating is default-deny:
   - **Read-only / notify actions** (e.g. `session/list`, `session/status`, `repo/list`, `agent/inbox`, `ui/toast`) run silently without a dialog
@@ -1672,7 +1674,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Cuts MCP context from ~35k tokens to ~500 tokens per agent turn; agent fetches schemas on demand via BM25-ranked search
 - BM25 index backed by `AppState::tool_search_index` (rebuilds automatically when the tool set changes)
 - Safety filters (`disabled_native_tools`, upstream allow/deny) enforced at both discovery and dispatch time — agents cannot bypass filters by calling `call_tool` directly
-- Toggling fires `notifications/tools/list_changed` so connected clients refresh
+- Toggling fires `notifications/tools/list_changed`; compatible connected clients refresh automatically, while clients that ignore the notification may require a reconnect
 
 ### 19.2 Tool Namespace
 - Upstream tools are prefixed: `{upstream_name}__{tool_name}`
@@ -1722,7 +1724,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - Completion via native deep link `tuic://oauth-callback?code=…&state=…` — callbacks never touch the WebView console
 - `TokenManager` shared across every `HttpMcpClient` refresh path with a per-upstream semaphore that defeats thundering-herd refresh. 60 s expiry margin; `None expires_at` treated as valid
 - `UpstreamError::NeedsOAuth { www_authenticate }` transitions the registry to `needs_auth`; Services tab shows an *Authorize* button
-- Auto-triggered OAuth is gated behind explicit user consent; the confirm dialog surfaces the Authorization Server origin to defend against AS mix-up
+- Auto-triggered OAuth is gated behind explicit user consent; a blocking in-app confirm dialog surfaces the Authorization Server origin and prevents the pending flow from being cancelled behind the prompt
 - Status values extended: `authenticating` ("Awaiting authorization…") + `needs_auth`
 - Tauri commands: `start_mcp_upstream_oauth`, `mcp_oauth_callback`, `cancel_mcp_upstream_oauth`
 
