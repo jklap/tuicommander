@@ -87,13 +87,6 @@ export default defineConfig(async ({ command }) => ({
         main: "index.html",
         mobile: "mobile.html",
       },
-      output: {
-        manualChunks(id: string) {
-          if (id.includes("@codemirror/") || id.includes("@lezer/")) return "codemirror";
-          if (id.includes("@git-diff-view/core")) return "diff-view";
-          if (id.includes("/marked/") || id.includes("/dompurify/")) return "markdown";
-        },
-      },
     },
   },
 

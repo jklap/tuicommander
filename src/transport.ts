@@ -6,8 +6,7 @@
  */
 
 import type { LogLine } from "./mobile/utils/logLine";
-import { appLogger, previewLogPayload } from "./stores/appLogger";
-import { remoteConnectionsStore } from "./stores/remoteConnections";
+import { getRemoteBaseUrl, previewLogPayload, transportLogger } from "./transportRuntime";
 
 // ---------------------------------------------------------------------------
 // MCP upstream config types (mirrors Rust structs in mcp_upstream_config.rs)
@@ -2014,7 +2013,7 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 	}
 
 	const mapping = mapCommandToHttp(command, args);
-	const baseUrl = connectionId ? remoteConnectionsStore.getBaseUrl(connectionId) : undefined;
+	const baseUrl = connectionId ? getRemoteBaseUrl(connectionId) : undefined;
 	if (connectionId && !baseUrl) {
 		throw new Error(`Remote connection ${connectionId} not connected`);
 	}
@@ -2255,7 +2254,7 @@ export async function subscribePty(
 			activeWs = ws;
 
 			ws.onopen = () => {
-				appLogger.debug("network", `WebSocket connected: ${sessionId}`);
+				transportLogger().debug("network", `WebSocket connected: ${sessionId}`);
 				// Re-wire onclose for live session
 				ws.onclose = (evt: CloseEvent) => {
 					if (disposed) return;
@@ -2264,7 +2263,7 @@ export async function subscribePty(
 						onExit();
 						return;
 					}
-					appLogger.debug("network", `WebSocket closed abnormally (code ${evt.code}), will reconnect`);
+					transportLogger().debug("network", `WebSocket closed abnormally (code ${evt.code}), will reconnect`);
 					scheduleReconnect();
 				};
 				resolve();
@@ -2290,13 +2289,13 @@ export async function subscribePty(
 	const scheduleReconnect = () => {
 		if (disposed) return;
 		if (retryCount >= MAX_RETRIES) {
-			appLogger.warn("network", `WebSocket reconnect failed after ${MAX_RETRIES} attempts: ${sessionId}`);
+			transportLogger().warn("network", `WebSocket reconnect failed after ${MAX_RETRIES} attempts: ${sessionId}`);
 			onExit();
 			return;
 		}
 		const delay = Math.min(BASE_DELAY_MS * 2 ** retryCount, MAX_DELAY_MS);
 		retryCount++;
-		appLogger.debug("network", `WebSocket reconnecting in ${delay}ms (attempt ${retryCount}/${MAX_RETRIES})`);
+		transportLogger().debug("network", `WebSocket reconnecting in ${delay}ms (attempt ${retryCount}/${MAX_RETRIES})`);
 		opts.onReconnecting?.(retryCount, MAX_RETRIES);
 		reconnectTimer = setTimeout(async () => {
 			if (disposed) return;
@@ -2355,7 +2354,7 @@ export async function subscribeEvents(
 				const payload = JSON.parse(event.data);
 				handler(payload);
 			} catch {
-				appLogger.warn("network", `Failed to parse SSE event "${eventType}"`, {
+				transportLogger().warn("network", `Failed to parse SSE event "${eventType}"`, {
 					eventData: previewLogPayload(event.data),
 				});
 			}
@@ -2363,11 +2362,11 @@ export async function subscribeEvents(
 	}
 
 	es.addEventListener("lagged", ((event: MessageEvent) => {
-		appLogger.warn("network", "SSE lagged", { eventData: previewLogPayload(event.data) });
+		transportLogger().warn("network", "SSE lagged", { eventData: previewLogPayload(event.data) });
 	}) as EventListener);
 
 	es.onerror = () => {
-		appLogger.debug("network", "SSE connection error — will auto-reconnect");
+		transportLogger().debug("network", "SSE connection error — will auto-reconnect");
 	};
 
 	return () => es.close();

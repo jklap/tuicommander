@@ -221,7 +221,11 @@ describe("tweakComments parser/serializer", () => {
 				comment: "b",
 				createdAt: "2026-07-15T10:01:00.000Z",
 			});
-			expect(parseTweakComments(src).map((c) => c.id).sort()).toEqual(["c_1", "c_2"]);
+			expect(
+				parseTweakComments(src)
+					.map((c) => c.id)
+					.sort(),
+			).toEqual(["c_1", "c_2"]);
 			// Both render as independent highlight spans.
 			const rendered = injectTweakSentinels(src);
 			expect(rendered).toContain(tweakBeginSentinel("c_1"));
@@ -239,7 +243,9 @@ describe("tweakComments parser/serializer", () => {
 			);
 			const body = out.slice(CONVENTION_HEADER.length);
 			// First two "reason" stay bare; only the 3rd is wrapped.
-			expect(body).toBe("reason A. reason B. <!--tweak:begin:c_1-->reason<!--tweak:end:c_1 @2026-07-15T10:00:00.000Z\nx--> C.");
+			expect(body).toBe(
+				"reason A. reason B. <!--tweak:begin:c_1-->reason<!--tweak:end:c_1 @2026-07-15T10:00:00.000Z\nx--> C.",
+			);
 		});
 
 		it("ignores occurrences inside the convention header and comment bodies when counting", () => {

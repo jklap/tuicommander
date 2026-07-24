@@ -17,8 +17,8 @@ import { canApprovePr, effectiveMergeMethod, mergeWithFallback } from "../../uti
 import { prContextVariables } from "../../utils/promptContext";
 import { PrDetailContent } from "../PrDetailPopover/PrDetailContent";
 import { SmartButtonStrip } from "../SmartButtonStrip/SmartButtonStrip";
-import { canMergePr } from "./RemoteOnlyPrPopover";
-import { PrStateBadge } from "./RepoSection";
+import { PrStateBadge } from "./PrStateBadge";
+import { canMergePr } from "./prMergeEligibility";
 import s from "./Sidebar.module.css";
 
 export interface PrSectionProps {

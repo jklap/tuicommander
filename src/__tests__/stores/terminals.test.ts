@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeTerminal, testInScope } from "../helpers/store";
 
 describe("terminalsStore", () => {
@@ -8,6 +8,10 @@ describe("terminalsStore", () => {
 		vi.resetModules();
 		localStorage.clear();
 		store = (await import("../../stores/terminals")).terminalsStore;
+	});
+
+	afterEach(() => {
+		store._testCancelPendingTimers();
 	});
 
 	describe("add()", () => {

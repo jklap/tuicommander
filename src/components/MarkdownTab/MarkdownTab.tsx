@@ -27,7 +27,7 @@ import { DomSearchEngine } from "../shared/DomSearchEngine";
 import { DomSearchOverview } from "../shared/DomSearchOverview";
 import e from "../shared/editor-header.module.css";
 import { SearchBar } from "../shared/SearchBar";
-import { ContentRenderer } from "../ui";
+import { ContentRenderer } from "../ui/ContentRenderer";
 import { CommentOverlay } from "./CommentOverlay";
 import s from "./MarkdownTab.module.css";
 

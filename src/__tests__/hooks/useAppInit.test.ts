@@ -200,9 +200,9 @@ describe("initApp", () => {
 		repositoriesStore.setActiveBranch("/repo", "main");
 		repositoriesStore.setActive("/repo");
 
-		let sessionCreated: ((event: {
-			payload: { session_id: string; cwd: string | null; agent_type?: string | null };
-		}) => void) | null = null;
+		let sessionCreated:
+			| ((event: { payload: { session_id: string; cwd: string | null; agent_type?: string | null } }) => void)
+			| null = null;
 		vi.mocked(listen).mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
 			if (event === "session-created") {
 				sessionCreated = handler as typeof sessionCreated;
@@ -1122,9 +1122,7 @@ describe("initApp", () => {
 				},
 			});
 
-			const terminalId = terminalsStore
-				.getIds()
-				.find((id) => terminalsStore.get(id)?.sessionId === "named-sess");
+			const terminalId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "named-sess");
 			expect(terminalsStore.get(terminalId!)?.name).toBe("windows-primary");
 			expect(terminalsStore.get(terminalId!)?.nameIsCustom).toBe(true);
 		});

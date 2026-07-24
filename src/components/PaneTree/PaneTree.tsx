@@ -1,4 +1,4 @@
-import { type Component, createMemo, createSignal, For, Match, Show, Switch } from "solid-js";
+import { type Component, createMemo, createSignal, For, lazy, Match, Show, Suspense, Switch } from "solid-js";
 import { initMouseDrag } from "../../hooks/useMouseDrag";
 import { invoke } from "../../invoke";
 import { diffTabsStore } from "../../stores/diffTabs";
@@ -19,13 +19,16 @@ import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
 import { pathBasename } from "../../utils/pathUtils";
 import { getRepoColor } from "../../utils/repoColor";
-import { CodeEditorTab } from "../CodeEditorPanel";
 import { ContextMenu, type ContextMenuItem, createContextMenu } from "../ContextMenu/ContextMenu";
-import { DiffTab } from "../DiffTab";
 import { GlobeIcon } from "../GlobeIcon";
 import { MdTabContent } from "../shared/MdTabContent";
 import { Terminal } from "../Terminal";
 import "./PaneTree.css";
+
+const CodeEditorTab = lazy(() =>
+	import("../CodeEditorPanel/CodeEditorTab").then((module) => ({ default: module.CodeEditorTab })),
+);
+const DiffTab = lazy(() => import("../DiffTab/DiffTab").then((module) => ({ default: module.DiffTab })));
 
 // ---- PaneNodeView: recursive tree renderer ----
 
@@ -474,14 +477,16 @@ const DiffPane: Component<{ tabId: string; onClose: (id: string) => void }> = (p
 	return (
 		<Show when={tab()}>
 			{(diffTab) => (
-				<DiffTab
-					tabId={props.tabId}
-					repoPath={diffTab().repoPath}
-					filePath={diffTab().filePath}
-					scope={diffTab().scope}
-					untracked={diffTab().untracked}
-					onClose={() => props.onClose(props.tabId)}
-				/>
+				<Suspense>
+					<DiffTab
+						tabId={props.tabId}
+						repoPath={diffTab().repoPath}
+						filePath={diffTab().filePath}
+						scope={diffTab().scope}
+						untracked={diffTab().untracked}
+						onClose={() => props.onClose(props.tabId)}
+					/>
+				</Suspense>
 			)}
 		</Show>
 	);
@@ -492,14 +497,16 @@ const EditorPane: Component<{ tabId: string; onClose: (id: string) => void }> = 
 	return (
 		<Show when={tab()}>
 			{(editTab) => (
-				<CodeEditorTab
-					id={props.tabId}
-					repoPath={editTab().repoPath}
-					filePath={editTab().filePath}
-					initialLine={editTab().initialLine}
-					externalEditable={editTab().externalEditable}
-					onClose={() => props.onClose(props.tabId)}
-				/>
+				<Suspense>
+					<CodeEditorTab
+						id={props.tabId}
+						repoPath={editTab().repoPath}
+						filePath={editTab().filePath}
+						initialLine={editTab().initialLine}
+						externalEditable={editTab().externalEditable}
+						onClose={() => props.onClose(props.tabId)}
+					/>
+				</Suspense>
 			)}
 		</Show>
 	);

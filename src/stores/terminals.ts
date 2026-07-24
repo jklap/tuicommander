@@ -921,6 +921,10 @@ function createTerminalsStore() {
 		state,
 		...actions,
 		_testCancelPendingTimers(): void {
+			for (const timer of cooldownTimers.values()) clearTimeout(timer);
+			cooldownTimers.clear();
+			for (const timer of staleQuestionTimers.values()) clearTimeout(timer);
+			staleQuestionTimers.clear();
 			if (lastDataAtFlushTimer) {
 				clearInterval(lastDataAtFlushTimer);
 				lastDataAtFlushTimer = null;
