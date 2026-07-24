@@ -4911,7 +4911,7 @@ mod tests {
     /// Compares owner/repo extraction, token resolution, API call, and parsed results
     /// against the gh CLI output on this repository.
     #[tokio::test]
-    #[ignore] // Requires network + GitHub token
+    #[ignore = "requires network access and a GitHub token"]
     async fn test_graphql_pr_query_matches_gh_cli() {
         // 1. Resolve token (same path our production code uses)
         let token = resolve_github_token()
@@ -5053,7 +5053,7 @@ mod tests {
 
     /// Test that GraphQL token resolution works and can authenticate.
     #[tokio::test]
-    #[ignore] // Requires network + GitHub token
+    #[ignore = "requires network access and a GitHub token"]
     async fn test_graphql_auth_and_rate_limit() {
         let token = resolve_github_token().expect("No GitHub token found");
 
@@ -5166,7 +5166,7 @@ mod tests {
     /// This catches the exact bug where GITHUB_TOKEN="" in Tauri GUI processes
     /// caused gh_token crate to return an empty string → 401 Bad credentials.
     #[tokio::test]
-    #[ignore] // Requires gh CLI authenticated
+    #[ignore = "requires an authenticated GitHub CLI"]
     async fn test_resolve_token_with_empty_env_falls_through_to_cli() {
         // Save and clear env vars to simulate GUI context
         let saved_gh = std::env::var("GH_TOKEN").ok();

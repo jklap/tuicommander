@@ -2,7 +2,14 @@ import { globalWorkspaceStore } from "../stores/globalWorkspace";
 import { rateLimitStore } from "../stores/ratelimit";
 import { terminalsStore } from "../stores/terminals";
 
-export type EffectiveActivityState = "rate_limited" | "error" | "awaiting_input" | "working" | "completed" | "idle" | "unknown";
+export type EffectiveActivityState =
+	| "rate_limited"
+	| "error"
+	| "awaiting_input"
+	| "working"
+	| "completed"
+	| "idle"
+	| "unknown";
 
 /** Resolve the dashboard state from task lifecycle and PTY activity.
  *
@@ -148,7 +155,12 @@ export function buildActivitySnapshot(): ActivitySnapshot {
 	}
 	const isWorking = (id: string): boolean => {
 		const r = rowById.get(id);
-		return !!r && isActivityWorking(effectiveActivityState(r.shellState, r.awaitingInput, r.isRateLimited, r.agentState, r.backgroundWork));
+		return (
+			!!r &&
+			isActivityWorking(
+				effectiveActivityState(r.shellState, r.awaitingInput, r.isRateLimited, r.agentState, r.backgroundWork),
+			)
+		);
 	};
 	const order = reconcileActivityOrder(snapshotSpine, ids, isWorking);
 	return { terminals: order.map((id) => rowById.get(id)).filter((r): r is ActivityTerminalRow => !!r) };

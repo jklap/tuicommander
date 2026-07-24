@@ -766,46 +766,46 @@ describe("TabBar", () => {
 	});
 
 	describe("tab-kind parity across ordering modes", () => {
-		it.each([
-			"grouped-by-type",
-			"free",
-		] satisfies TabOrderingMode[])("renders and selects every tab kind in %s mode", (mode) => {
-			repositoriesStore.add({ path: "/repo", displayName: "repo" });
-			repositoriesStore.setBranch("/repo", "main", { isMain: true, worktreePath: null });
-			repositoriesStore.setActive("/repo");
-			repositoriesStore.setActiveBranch("/repo", "main");
+		it.each(["grouped-by-type", "free"] satisfies TabOrderingMode[])(
+			"renders and selects every tab kind in %s mode",
+			(mode) => {
+				repositoriesStore.add({ path: "/repo", displayName: "repo" });
+				repositoriesStore.setBranch("/repo", "main", { isMain: true, worktreePath: null });
+				repositoriesStore.setActive("/repo");
+				repositoriesStore.setActiveBranch("/repo", "main");
 
-			const terminalId = addTerminal({ name: "Terminal parity" });
-			repositoriesStore.addTerminalToBranch("/repo", "main", terminalId);
-			const diffId = diffTabsStore.add("/repo", "/repo/change.ts", "M");
-			const markdownId = mdTabsStore.add("/repo", "/repo/readme.md");
-			const editorId = editorTabsStore.add("/repo", "/repo/edit.ts");
-			settingsStore.setTabOrderingMode(mode);
+				const terminalId = addTerminal({ name: "Terminal parity" });
+				repositoriesStore.addTerminalToBranch("/repo", "main", terminalId);
+				const diffId = diffTabsStore.add("/repo", "/repo/change.ts", "M");
+				const markdownId = mdTabsStore.add("/repo", "/repo/readme.md");
+				const editorId = editorTabsStore.add("/repo", "/repo/edit.ts");
+				settingsStore.setTabOrderingMode(mode);
 
-			const onTabSelect = vi.fn();
-			const { container } = render(() => (
-				<TabBar
-					onTabSelect={onTabSelect}
-					onTabClose={() => {}}
-					onCloseOthers={() => {}}
-					onCloseToRight={() => {}}
-					onNewTab={() => {}}
-				/>
-			));
+				const onTabSelect = vi.fn();
+				const { container } = render(() => (
+					<TabBar
+						onTabSelect={onTabSelect}
+						onTabClose={() => {}}
+						onCloseOthers={() => {}}
+						onCloseToRight={() => {}}
+						onNewTab={() => {}}
+					/>
+				));
 
-			for (const [id, label] of [
-				[terminalId, "Terminal parity"],
-				[diffId, "change.ts"],
-				[markdownId, "readme.md"],
-				[editorId, "edit.ts"],
-			] as const) {
-				const tab = container.querySelector(`[data-tab-id="${id}"]`);
-				expect(tab, `${mode}:${id}`).not.toBeNull();
-				expect(tab!.querySelector(".tabName")?.textContent).toContain(label);
-				fireEvent.click(tab!);
-				expect(onTabSelect).toHaveBeenLastCalledWith(id);
-			}
-		});
+				for (const [id, label] of [
+					[terminalId, "Terminal parity"],
+					[diffId, "change.ts"],
+					[markdownId, "readme.md"],
+					[editorId, "edit.ts"],
+				] as const) {
+					const tab = container.querySelector(`[data-tab-id="${id}"]`);
+					expect(tab, `${mode}:${id}`).not.toBeNull();
+					expect(tab!.querySelector(".tabName")?.textContent).toContain(label);
+					fireEvent.click(tab!);
+					expect(onTabSelect).toHaveBeenLastCalledWith(id);
+				}
+			},
+		);
 	});
 
 	describe("tab rename", () => {

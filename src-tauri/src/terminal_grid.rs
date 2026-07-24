@@ -1753,7 +1753,7 @@ mod tests {
     ///
     /// Run: `cargo test --lib replay_capture_from_env -- --ignored --nocapture`
     #[test]
-    #[ignore]
+    #[ignore = "requires TUIC_REPLAY_FILE pointing to a PTY capture"]
     fn replay_capture_from_env() {
         let path = match std::env::var("TUIC_REPLAY_FILE") {
             Ok(p) => p,
