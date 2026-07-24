@@ -1,4 +1,14 @@
-import { type Component, createEffect, createMemo, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js";
+import {
+	type Component,
+	createEffect,
+	createMemo,
+	createSignal,
+	Match,
+	onCleanup,
+	onMount,
+	Show,
+	Switch,
+} from "solid-js";
 import { AGENT_DISPLAY } from "../../agents";
 import { useGitHub } from "../../hooks/useGitHub";
 import { t } from "../../i18n";
@@ -18,8 +28,9 @@ import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { activePrStatus } from "../../utils/mergedPrGrace";
 import { PrDetailPopover } from "../PrDetailPopover/PrDetailPopover";
-import { CiBadge, PrBadge, ZoomIndicator } from "../ui";
 import { AgentIcon } from "../ui/AgentIcon";
+import { CiBadge, PrBadge } from "../ui/StatusBadge";
+import { ZoomIndicator } from "../ui/ZoomIndicator";
 import s from "./StatusBar.module.css";
 import { TickerArea } from "./TickerArea";
 
@@ -272,9 +283,7 @@ export const StatusBar: Component<StatusBarProps> = (props) => {
 									<AgentIcon agent={agentType()} size={12} />
 								</span>
 								<Switch fallback={<span style={{ color: display().color }}> {agentType()}</span>}>
-									<Match when={rl()}>
-										{(rl) => <span class={s.agentRateLimited}> ⚠ {rl().remaining}</span>}
-									</Match>
+									<Match when={rl()}>{(rl) => <span class={s.agentRateLimited}> ⚠ {rl().remaining}</span>}</Match>
 									<Match when={claudeTicker()}>
 										{(ticker) => (
 											<span

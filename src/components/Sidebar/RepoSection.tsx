@@ -29,6 +29,7 @@ import { ContextMenu, createContextMenu } from "../ContextMenu";
 import { remoteUrlToGitHub } from "../GitPanel/BranchesTab";
 import { PromptDialog } from "../PromptDialog";
 import b from "../shared/branch.module.css";
+import { PrStateBadge } from "./PrStateBadge";
 import s from "./Sidebar.module.css";
 import { SidebarPluginSection } from "./SidebarPluginSection";
 
@@ -40,19 +41,6 @@ const BRANCH_ICON_CLASSES: Record<string, string> = {
 	activity: s.branchIconActivity,
 	unseen: s.branchIconUnseen,
 	idle: s.branchIconIdle,
-};
-
-const PR_BADGE_CLASSES: Record<string, string> = {
-	ready: s.prReady,
-	open: s.prOpen,
-	merged: s.prMerged,
-	closed: s.prClosed,
-	draft: s.prDraft,
-	conflict: s.prConflict,
-	"ci-failed": s.prCiFailed,
-	"changes-requested": s.prChangesRequested,
-	"review-required": s.prReviewRequired,
-	"ci-pending": s.prCiPending,
 };
 
 /** Branch icon component — icon shape and color driven by terminal state.
@@ -169,41 +157,6 @@ export const StatsBadge: Component<{
 		</div>
 	</Show>
 );
-
-/** PR state badge — single badge replacing both old PR number badge and CI ring.
- *  Shows the most critical state as short text with color/animation. */
-export const PrStateBadge: Component<{
-	prNumber: number;
-	state?: string;
-	isDraft?: boolean;
-	mergeable?: string;
-	reviewDecision?: string;
-	ciPassed?: number;
-	ciFailed?: number;
-	ciPending?: number;
-}> = (props) => {
-	const badge = (): { label: string; cls: string } => {
-		// Terminal states
-		if (props.isDraft) return { label: "Draft", cls: "draft" };
-		const state = props.state?.toLowerCase();
-		if (state === "merged") return { label: "Merged", cls: "merged" };
-		if (state === "closed") return { label: "Closed", cls: "closed" };
-		// Action-required states (priority order)
-		if (props.mergeable === "CONFLICTING") return { label: "Conflicts", cls: "conflict" };
-		if ((props.ciFailed ?? 0) > 0) return { label: "CI Failed", cls: "ci-failed" };
-		if (props.reviewDecision === "CHANGES_REQUESTED") return { label: "Changes Req.", cls: "changes-requested" };
-		if (props.reviewDecision === "REVIEW_REQUIRED") return { label: "Review Req.", cls: "review-required" };
-		if ((props.ciPending ?? 0) > 0) return { label: "CI Running", cls: "ci-pending" };
-		if (props.mergeable === "MERGEABLE" && props.reviewDecision === "APPROVED") return { label: "Ready", cls: "ready" };
-		return { label: `#${props.prNumber}`, cls: "open" };
-	};
-
-	return (
-		<span class={cx(s.prBadge, PR_BADGE_CLASSES[badge().cls])} title={`PR #${props.prNumber}`}>
-			{badge().label}
-		</span>
-	);
-};
 
 export { _resetMergedActivityAccum };
 
@@ -620,7 +573,8 @@ export const BranchItem: Component<{
 	);
 };
 
-export { canMergePr } from "./RemoteOnlyPrPopover";
+export { PrStateBadge } from "./PrStateBadge";
+export { canMergePr } from "./prMergeEligibility";
 
 import { GitHubPanel } from "./GitHubPanel";
 

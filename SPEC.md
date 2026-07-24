@@ -24,7 +24,7 @@ TUICommander is a multi-agent terminal orchestrator designed to manage multiple 
 | Frontend | SolidJS | Reactive UI with fine-grained reactivity |
 | Terminal | alacritty_terminal | Native VT engine with canvas rendering |
 | Backend | Rust + Tauri | Native PTY management, file system access |
-| Build | Vite | Fast HMR development, optimized production builds (bundle splitting via manualChunks) |
+| Build | Vite | Fast HMR development, optimized production builds with automatic code splitting and deferred loading |
 
 ### Backend Execution Model
 
@@ -37,6 +37,18 @@ All Tauri commands that perform I/O (git subprocesses, network, bcrypt) are `asy
 - Compile-time optimizations
 - Smaller bundle size than React/Vue
 - Familiar JSX syntax
+
+### Frontend Refactoring Workstream
+
+The SolidJS frontend is being refactored incrementally to improve module ownership,
+test isolation, and deferred loading without changing the framework or product
+behavior. The measured architecture map, dependency constraints, sequencing, and
+validation contract are maintained in
+[`docs/frontend/solid-refactoring-plan.md`](docs/frontend/solid-refactoring-plan.md).
+
+The work preserves browser/Tauri transport parity and keeps terminal frame and
+paint scheduling imperative. Structural changes must remain independently tested
+and revertible; line-count reduction alone is not a goal.
 
 ### Component Architecture
 

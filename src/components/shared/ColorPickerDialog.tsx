@@ -2,6 +2,7 @@ import { type Component, createEffect, Show } from "solid-js";
 import { t } from "../../i18n";
 import { registerModal } from "../../stores/modalStack";
 import { ColorSwatchPicker } from "./ColorSwatchPicker";
+import { DEFAULT_COLOR_PRESETS } from "./colorPresets";
 import d from "./dialog.module.css";
 
 export interface ColorPickerDialogProps {
@@ -34,7 +35,7 @@ export const ColorPickerDialog: Component<ColorPickerDialogProps> = (props) => {
 						<h4>{props.title}</h4>
 					</div>
 					<div class={d.body}>
-						<ColorSwatchPicker color={props.currentColor} onChange={handleChange} />
+						<ColorSwatchPicker color={props.currentColor} presets={DEFAULT_COLOR_PRESETS} onChange={handleChange} />
 					</div>
 					<div class={d.actions}>
 						<button class={d.cancelBtn} onClick={props.onClose}>

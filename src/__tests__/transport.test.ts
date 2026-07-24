@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildHttpUrl, INTENTIONALLY_UNMAPPED, isTauri, mapCommandToHttp } from "../transport";
+import { setTransportLogger } from "../transportRuntime";
 
 function readRepoFile(relativePath: string): string {
 	return readFileSync(join(process.cwd(), relativePath), "utf8");
@@ -1555,7 +1556,8 @@ describe("transport", () => {
 			const origWs = globalThis.WebSocket;
 			globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
 
-			const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => {});
+			const debugSpy = vi.fn();
+			setTransportLogger({ debug: debugSpy, warn: vi.fn() });
 			const onExit = vi.fn();
 
 			const subscribePromise = subscribePty("sess-1", vi.fn(), onExit);
@@ -1564,12 +1566,12 @@ describe("transport", () => {
 
 			// Abnormal close triggers reconnect, not onExit
 			wsInstance!.onclose!({ wasClean: false, code: 1006, reason: "" });
-			expect(debugSpy).toHaveBeenCalledWith("[network]", expect.stringContaining("abnormally"), expect.anything());
+			expect(debugSpy).toHaveBeenCalledWith("network", expect.stringContaining("abnormally"));
 			// onExit is NOT called on abnormal close — the transport schedules a reconnect instead
 			expect(onExit).not.toHaveBeenCalled();
 
 			unsub();
-			debugSpy.mockRestore();
+			setTransportLogger({ debug: vi.fn(), warn: vi.fn() });
 			globalThis.WebSocket = origWs;
 		});
 

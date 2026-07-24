@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, onCleanup, onMount, Show } from "solid-js";
+import { type Component, createEffect, createSignal, lazy, onCleanup, onMount, Show, Suspense } from "solid-js";
 import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { browserCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
@@ -17,7 +17,6 @@ import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
-import { ComposePanel } from "../ComposePanel";
 import { getAwaitingInputSound } from "./awaitingInputSound";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
@@ -26,6 +25,10 @@ import { shouldApplyIntentTitle } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
 import s from "./Terminal.module.css";
 import { TerminalSearch } from "./TerminalSearch";
+
+const ComposePanel = lazy(() =>
+	import("../ComposePanel/ComposePanel").then((module) => ({ default: module.ComposePanel })),
+);
 
 /** Trim trailing whitespace from each line of a terminal selection. */
 export function trimSelection(text: string): string {
@@ -1209,32 +1212,36 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					Compose {keyFor("toggle-compose-panel")}
 				</div>
 			</Show>
-			<ComposePanel
-				isOpen={composeOpen}
-				initialText={pendingComposeText}
-				onTextChange={setPendingComposeText}
-				onClose={() => {
-					setComposeOpen(false);
-					canvasTerminalRef()?.focus();
-				}}
-				onSend={async (text) => {
-					if (sessionId) {
-						try {
-							const term = terminalsStore.get(props.id);
-							await pty.sendCommand(sessionId, text, term?.agentType);
-							setPendingComposeText("");
+			<Show when={composeOpen()}>
+				<Suspense>
+					<ComposePanel
+						isOpen={composeOpen}
+						initialText={pendingComposeText}
+						onTextChange={setPendingComposeText}
+						onClose={() => {
 							setComposeOpen(false);
 							canvasTerminalRef()?.focus();
-						} catch (err) {
-							appLogger.error("terminal", "ComposePanel send failed", { sessionId, error: err });
-						}
-					} else {
-						setPendingComposeText("");
-						setComposeOpen(false);
-						canvasTerminalRef()?.focus();
-					}
-				}}
-			/>
+						}}
+						onSend={async (text) => {
+							if (sessionId) {
+								try {
+									const term = terminalsStore.get(props.id);
+									await pty.sendCommand(sessionId, text, term?.agentType);
+									setPendingComposeText("");
+									setComposeOpen(false);
+									canvasTerminalRef()?.focus();
+								} catch (err) {
+									appLogger.error("terminal", "ComposePanel send failed", { sessionId, error: err });
+								}
+							} else {
+								setPendingComposeText("");
+								setComposeOpen(false);
+								canvasTerminalRef()?.focus();
+							}
+						}}
+					/>
+				</Suspense>
+			</Show>
 		</div>
 	);
 };
