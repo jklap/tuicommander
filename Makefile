@@ -32,12 +32,13 @@ hooks:
 	@bash scripts/hooks/install-hooks.sh
 
 # Run in development mode with frontend-only hot reload (debug tracing for our code only).
-# Pre-builds frontend so the PWA (served from dist/) is up to date.
+# Pre-builds sidecars required by Tauri and the frontend served from dist/.
 # `--no-watch` disables the Tauri CLI's Rust file watcher: editing `src-tauri/**`
 # (or its `.rs.tmp.*` scratch files) will NOT rebuild/restart the Rust backend.
 # Vite HMR still reloads the UI (it runs as a separate `beforeDevCommand` process).
 # Rust changes require a manual `make dev` restart — see AGENTS.md "Dev Hot Reload".
 dev: hooks
+	@pnpm build:sidecar
 	@pnpm exec vite build
 	RUST_LOG=tuicommander_lib=debug,info pnpm tauri dev --no-watch
 

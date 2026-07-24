@@ -963,7 +963,6 @@ pub(super) async fn ws_stream(
 /// `{"type":"log","lines":[...],"offset":N}`
 ///
 /// Client → server messages are written to the PTY as input.
-
 async fn handle_ws_session(
     socket: WebSocket,
     session_id: String,
