@@ -1313,6 +1313,11 @@ fn parse_plan_file(clean: &str) -> Option<ParsedEvent> {
 /// parsed. Char-class body only (no surrounding `[ ]`) so callers write `[{…}]`.
 const AGENT_LINE_BULLETS: &str = r"\x{25CF}\x{23FA}\x{2022}\x{25E6}";
 
+/// The same glyph set as [`AGENT_LINE_BULLETS`], for the one anchor that tests
+/// leading characters directly instead of through a regex (`dewrap_suggest_keyword`).
+/// Kept in sync by `agent_line_bullet_chars_match_the_regex_class`.
+const AGENT_LINE_BULLET_CHARS: [char; 4] = ['\u{25CF}', '\u{23FA}', '\u{2022}', '\u{25E6}'];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StructuredTokenAnchor {
     Intent,
@@ -1624,12 +1629,14 @@ fn dewrap_suggest_keyword(text: &str) -> std::borrow::Cow<'_, str> {
         let mut changed_this_pass = false;
         for (idx, _) in src.match_indices(&needle) {
             // Only dewrap when the prefix begins at column 0 — optionally
-            // after whitespace or a Claude Code `●`/`⏺` bullet marker.
+            // after whitespace or an agent bullet marker. Accept the same
+            // glyphs as the token regexes: this check knew only the Ink
+            // bullets, so a wrapped Codex `• sugg\nest:` never rejoined.
             let line_start = src[..idx].rfind('\n').map_or(0, |n| n + 1);
             let leading = &src[line_start..idx];
             let leading_ok = leading
                 .chars()
-                .all(|c| c == ' ' || c == '\t' || c == '\u{25CF}' || c == '\u{23FA}');
+                .all(|c| c == ' ' || c == '\t' || AGENT_LINE_BULLET_CHARS.contains(&c));
             if !leading_ok {
                 continue;
             }
@@ -4198,6 +4205,53 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             "must allocate when dewrap actually rewrites"
         );
         assert_eq!(result.as_ref(), "suggest: A | B");
+    }
+
+    #[test]
+    fn test_dewrap_accepts_every_agent_bullet_as_leading() {
+        // Same drift as the token regexes had: this leading check knew only the
+        // Ink bullets, so a wrapped Codex `• sugg\nest:` stayed broken and the
+        // suggest never parsed. Every glyph in AGENT_LINE_BULLET_CHARS must
+        // anchor the dewrap.
+        for bullet in super::AGENT_LINE_BULLET_CHARS {
+            let input = format!("{bullet} sugges\nt: A | B");
+            assert_eq!(
+                super::dewrap_suggest_keyword(&input).as_ref(),
+                format!("{bullet} suggest: A | B"),
+                "bullet {bullet:?} must anchor the dewrap"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dewrap_rejects_prose_before_the_split_keyword() {
+        // The column-0 constraint still holds: arbitrary text before the split
+        // means this is prose, not a protocol token.
+        let input = "I will sugges\nt: A | B";
+        assert_eq!(
+            super::dewrap_suggest_keyword(input).as_ref(),
+            input,
+            "non-bullet, non-whitespace leading text must not dewrap"
+        );
+    }
+
+    #[test]
+    fn agent_line_bullet_chars_match_the_regex_class() {
+        // The char array and the regex char-class body are two spellings of one
+        // glyph set; drift between them is exactly the bug story 458-4d7b fixed.
+        let class = regex::Regex::new(&format!(r"^[{}]$", super::AGENT_LINE_BULLETS)).unwrap();
+        for bullet in super::AGENT_LINE_BULLET_CHARS {
+            assert!(
+                class.is_match(&bullet.to_string()),
+                "{bullet:?} is in AGENT_LINE_BULLET_CHARS but not in AGENT_LINE_BULLETS"
+            );
+        }
+        for other in ['\u{25CB}', '\u{2234}', '-', '*'] {
+            assert!(
+                !class.is_match(&other.to_string()),
+                "{other:?} must not be treated as an agent line bullet"
+            );
+        }
     }
 
     #[test]
