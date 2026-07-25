@@ -543,6 +543,8 @@
   transform-origin: left;
   animation: progressShimmer 1.5s ease-in-out infinite;
   transition: transform 0.3s ease;
+  /* Above .tab.active::before (z-index:1) so the accent bar doesn't hide it */
+  z-index: 2;
 }
 
 @keyframes progressShimmer {

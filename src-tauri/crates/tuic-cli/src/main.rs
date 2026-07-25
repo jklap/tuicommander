@@ -127,7 +127,10 @@ enum AgentAction {
     Spawn {
         /// Agent type (claude, codex, etc.)
         agent_type: String,
-        /// Repository path
+        /// Initial prompt for the agent (required by the server)
+        prompt: String,
+        /// Repository path (defaults to the current directory)
+        #[arg(long)]
         repo: Option<String>,
     },
     /// List running agents
@@ -229,12 +232,11 @@ fn cmd_open(path: Option<String>, _wait: bool, goto: Option<String>) -> Result<(
     // Check if path is a directory → open as repo, file → open in editor
     let metadata = std::fs::metadata(actual_path);
     if metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false) {
-        // Open repo
-        let body = serde_json::json!({ "path": actual_path });
+        // Open repo. Server's CreateSessionRequest reads `cwd` (not `repo_path`).
         let resp = ipc::post(
             "/sessions",
             &serde_json::json!({
-                "repo_path": actual_path,
+                "cwd": actual_path,
                 "rows": 24,
                 "cols": 80,
             })
@@ -249,7 +251,6 @@ fn cmd_open(path: Option<String>, _wait: bool, goto: Option<String>) -> Result<(
             let _ = open_deep_link(&format!("tuic://open-repo?path={}", urlencod(actual_path)));
             eprintln!("Activated {actual_path}");
         }
-        let _ = body; // suppress unused warning
     } else {
         // Open file in editor via deep link
         let mut url = format!("tuic://edit/{}", urlencod(actual_path));
@@ -278,6 +279,45 @@ fn cmd_diff(file_a: &str, file_b: &str) -> Result<(), String> {
     .map_err(|e| e.to_string())
 }
 
+/// Truncate to `max` chars with a trailing ellipsis so it fits a fixed column.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
+        t.push('…');
+        t
+    } else {
+        s.to_string()
+    }
+}
+
+/// Shorten a repo path to its last two components (e.g. `personal/tuicommander`).
+fn short_repo(path: &str) -> String {
+    path.rsplit('/')
+        .take(2)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Derive a single-word status from a session's nested `state` object.
+/// The `/sessions` response carries no top-level status field — state lives
+/// under `state` as `awaiting_input` / `agent_state` / `shell_state`.
+fn session_status(s: &serde_json::Value) -> String {
+    let st = &s["state"];
+    if st["awaiting_input"].as_bool().unwrap_or(false) {
+        return "awaiting".to_string();
+    }
+    if let Some(agent_state) = st["agent_state"].as_str() {
+        return agent_state.to_string();
+    }
+    if let Some(shell_state) = st["shell_state"].as_str() {
+        return shell_state.to_string();
+    }
+    "-".to_string()
+}
+
 fn cmd_ls() -> Result<(), String> {
     let resp = ipc::get("/sessions").map_err(|e| e.to_string())?;
     if !resp.is_success() {
@@ -297,24 +337,11 @@ fn cmd_ls() -> Result<(), String> {
     println!("{}", "-".repeat(90));
 
     for s in &arr {
-        let id = s["id"].as_str().unwrap_or("-");
-        let name = s["name"].as_str().unwrap_or("-");
-        let status = if s["paused"].as_bool().unwrap_or(false) {
-            "paused"
-        } else {
-            "running"
-        };
-        let repo = s["repo_path"].as_str().unwrap_or("-");
-        // Shorten repo to last 2 components
-        let short_repo = repo
-            .rsplit('/')
-            .take(2)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("/");
-        println!("{:<38} {:<20} {:<10} {}", id, name, status, short_repo);
+        let id = s["session_id"].as_str().unwrap_or("-");
+        let name = truncate(s["display_name"].as_str().unwrap_or("-"), 20);
+        let status = session_status(s);
+        let repo = short_repo(s["cwd"].as_str().unwrap_or("-"));
+        println!("{:<38} {:<20} {:<10} {}", id, name, status, repo);
     }
 
     Ok(())
@@ -330,22 +357,27 @@ fn cmd_new(name: Option<&str>, repo: Option<&str>) -> Result<(), String> {
             .map_err(|e| format!("Cannot get cwd: {e}"))?,
     };
 
-    let mut body = serde_json::json!({
-        "repo_path": repo_path,
+    let body = serde_json::json!({
+        "cwd": repo_path,
         "rows": 24,
         "cols": 80,
     });
-
-    if let Some(n) = name {
-        body["name"] = serde_json::Value::String(n.to_string());
-    }
 
     let resp = ipc::post("/sessions", &body.to_string()).map_err(|e| e.to_string())?;
 
     if resp.is_success() {
         if let Ok(v) = resp.json() {
-            let id = v["id"].as_str().unwrap_or("?");
-            let name_display = name.unwrap_or(id);
+            let id = v["session_id"].as_str().unwrap_or("?").to_string();
+            // Naming is a separate endpoint — the create request has no name field.
+            if let Some(n) = name {
+                let name_body = serde_json::json!({ "name": n });
+                match ipc::put(&format!("/sessions/{id}/name"), &name_body.to_string()) {
+                    Ok(r) if r.is_success() => {}
+                    Ok(r) => eprintln!("tuic: warning: could not set session name: {}", r.body),
+                    Err(e) => eprintln!("tuic: warning: could not set session name: {e}"),
+                }
+            }
+            let name_display = name.unwrap_or(&id);
             println!("{name_display}: {id}");
         }
     } else {
@@ -444,24 +476,30 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
     ipc::ensure_running().map_err(|e| e.to_string())?;
 
     match action {
-        AgentAction::Spawn { agent_type, repo } => {
-            let repo_path = match repo {
+        AgentAction::Spawn {
+            agent_type,
+            prompt,
+            repo,
+        } => {
+            let cwd = match repo {
                 Some(r) => resolve_path(&r),
                 None => std::env::current_dir()
                     .map(|d| d.to_string_lossy().to_string())
                     .map_err(|e| format!("Cannot get cwd: {e}"))?,
             };
 
+            // Server's SpawnAgentRequest reads `cwd` (not `repo_path`) and requires `prompt`.
             let body = serde_json::json!({
                 "agent_type": agent_type,
-                "repo_path": repo_path,
+                "cwd": cwd,
+                "prompt": prompt,
             });
             let resp =
                 ipc::post("/sessions/agent", &body.to_string()).map_err(|e| e.to_string())?;
 
             if resp.is_success() {
                 if let Ok(v) = resp.json() {
-                    let id = v["id"].as_str().unwrap_or("?");
+                    let id = v["session_id"].as_str().unwrap_or("?");
                     println!("Spawned {agent_type} agent: {id}");
                 }
             } else {
@@ -477,7 +515,7 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
             let arr = sessions.as_array().unwrap_or(&Vec::new()).clone();
             let agents: Vec<_> = arr
                 .iter()
-                .filter(|s| s["agent_type"].as_str().is_some())
+                .filter(|s| s["state"]["agent_type"].as_str().is_some())
                 .collect();
 
             if agents.is_empty() {
@@ -489,23 +527,10 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
             println!("{}", "-".repeat(82));
 
             for s in &agents {
-                let id = s["id"].as_str().unwrap_or("-");
-                let agent_type = s["agent_type"].as_str().unwrap_or("-");
-                let status = if s["paused"].as_bool().unwrap_or(false) {
-                    "paused"
-                } else {
-                    "running"
-                };
-                let repo = s["repo_path"]
-                    .as_str()
-                    .unwrap_or("-")
-                    .rsplit('/')
-                    .take(2)
-                    .collect::<Vec<_>>()
-                    .into_iter()
-                    .rev()
-                    .collect::<Vec<_>>()
-                    .join("/");
+                let id = s["session_id"].as_str().unwrap_or("-");
+                let agent_type = s["state"]["agent_type"].as_str().unwrap_or("-");
+                let status = session_status(s);
+                let repo = short_repo(s["cwd"].as_str().unwrap_or("-"));
                 println!("{:<38} {:<12} {:<10} {}", id, agent_type, status, repo);
             }
         }
@@ -830,7 +855,7 @@ fn tmux_compat() {
                 if let Ok(v) = resp.json() {
                     if let Some(arr) = v.as_array() {
                         for s in arr {
-                            if let Some(id) = s["id"].as_str() {
+                            if let Some(id) = s["session_id"].as_str() {
                                 let _ = ipc::delete(&format!("/sessions/{id}"));
                             }
                         }
@@ -951,8 +976,8 @@ fn resolve_session_id(target: &str) -> Result<String, String> {
 
     // Try exact name match
     for s in arr {
-        if s["name"].as_str() == Some(target) {
-            return s["id"]
+        if s["display_name"].as_str() == Some(target) {
+            return s["session_id"]
                 .as_str()
                 .map(String::from)
                 .ok_or("Session has no ID".to_string());
@@ -963,7 +988,7 @@ fn resolve_session_id(target: &str) -> Result<String, String> {
     let matches: Vec<_> = arr
         .iter()
         .filter(|s| {
-            s["id"]
+            s["session_id"]
                 .as_str()
                 .map(|id| id.starts_with(target))
                 .unwrap_or(false)
@@ -972,7 +997,7 @@ fn resolve_session_id(target: &str) -> Result<String, String> {
 
     match matches.len() {
         0 => Err(format!("No session found matching '{target}'")),
-        1 => matches[0]["id"]
+        1 => matches[0]["session_id"]
             .as_str()
             .map(String::from)
             .ok_or("Session has no ID".to_string()),
@@ -1067,7 +1092,64 @@ fn remove_with_elevation(path: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::agent_send_parts;
+    use super::{agent_send_parts, session_status, short_repo, truncate};
+    use serde_json::json;
+
+    #[test]
+    fn short_repo_keeps_last_two_components() {
+        assert_eq!(short_repo("/Users/s/personal/tuicommander"), "personal/tuicommander");
+    }
+
+    #[test]
+    fn short_repo_single_component() {
+        assert_eq!(short_repo("tuicommander"), "tuicommander");
+    }
+
+    #[test]
+    fn short_repo_empty() {
+        assert_eq!(short_repo(""), "");
+    }
+
+    #[test]
+    fn truncate_leaves_short_unchanged() {
+        assert_eq!(truncate("abc", 10), "abc");
+        assert_eq!(truncate("abcde", 5), "abcde"); // count == max, not >
+    }
+
+    #[test]
+    fn truncate_cuts_and_appends_ellipsis() {
+        assert_eq!(truncate("abcdefgh", 5), "abcd…"); // 4 chars + ellipsis = 5
+    }
+
+    #[test]
+    fn truncate_counts_chars_not_bytes() {
+        // Multi-byte input must not panic and must cut on char boundaries.
+        assert_eq!(truncate("日本語abcdef", 5), "日本語a…");
+    }
+
+    #[test]
+    fn session_status_awaiting_input_wins() {
+        let s = json!({ "state": { "awaiting_input": true, "agent_state": "working" } });
+        assert_eq!(session_status(&s), "awaiting");
+    }
+
+    #[test]
+    fn session_status_prefers_agent_state_over_shell_state() {
+        let s = json!({ "state": { "agent_state": "working", "shell_state": "idle" } });
+        assert_eq!(session_status(&s), "working");
+    }
+
+    #[test]
+    fn session_status_falls_back_to_shell_state() {
+        let s = json!({ "state": { "shell_state": "busy" } });
+        assert_eq!(session_status(&s), "busy");
+    }
+
+    #[test]
+    fn session_status_defaults_to_dash_when_state_absent_or_empty() {
+        assert_eq!(session_status(&json!({})), "-");
+        assert_eq!(session_status(&json!({ "state": {} })), "-");
+    }
 
     #[test]
     fn agent_send_separates_framed_payload_from_enter() {

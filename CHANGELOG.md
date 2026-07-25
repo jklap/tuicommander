@@ -9,6 +9,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **MCP OAuth confirmation no longer appears after cancellation** — Authorization consent now uses the in-app modal, preventing the hidden macOS sheet from surfacing only after the pending OAuth flow was cancelled and opening an already-invalid authorization URL.
+- **`tuic` CLI session and agent commands now match the backend contract** — `tuic ls`, `tuic new`, `tuic kill`, `tuic agent ls`, and session name/prefix resolution read the fields the server actually returns (`session_id`, `cwd`, `display_name`, nested `state`) instead of the non-existent `id`/`name`/`repo_path`, so listings show real ids, names, repositories, and per-session status. Session creation sends `cwd`, and `tuic new -n` applies the name through the dedicated endpoint rather than silently discarding it. `tuic agent spawn` takes the initial prompt the backend requires, with the repository moved to an optional `--repo` flag.
+- **Terminal tab progress bar is no longer hidden by the active-tab accent** — The progress indicator is layered above the active tab's accent bar.
 
 ## [1.6.3] - 2026-07-22
 
