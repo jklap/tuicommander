@@ -3276,8 +3276,15 @@ fn suppress_heuristic_question(hook_instrumented: bool, event: &ParsedEvent) -> 
 /// Used by `spawn_reader_thread`.
 struct ChunkProcessor {
     parser: OutputParser,
-    /// Dedup: only emit StatusLine when task_name actually changes
-    last_status_task: Option<String>,
+    /// Dedup: only emit StatusLine when task_name actually changes *within a
+    /// turn*, stored as `(turn_epoch, task_name)`. The epoch is part of the key
+    /// because agents may name every turn identically — Codex always reports
+    /// "Working" — and a session-lifetime dedup would then swallow the status
+    /// line of every turn after the first. The suppressed event is the only
+    /// thing that clears the previous turn's `suggested_actions`, which
+    /// `session_state_with_shell` treats as a completion marker, so a working
+    /// agent would stay reported as completed/idle for the rest of the session.
+    last_status_task: Option<(u64, String)>,
     /// Dedup: don't re-emit the same question prompt_text
     last_question_text: Option<String>,
     /// Dedup: last emitted ChoicePrompt signature (title + option keys).
@@ -4112,6 +4119,14 @@ impl ChunkProcessor {
                 .any(|e| matches!(e, ParsedEvent::Question { .. }))
         };
 
+        // Read the turn epoch once so every event in this chunk is attributed to
+        // the same turn, and per-turn dedup cannot straddle a boundary mid-chunk.
+        let turn_epoch = state
+            .session_states
+            .get(session_id)
+            .map(|session| session.turn_epoch)
+            .unwrap_or(0);
+
         // Emit events with dedup, grace filtering, and PlanFile resolution.
         for event in &events {
             // During startup/resize grace, suppress low-confidence notifications to
@@ -4147,21 +4162,17 @@ impl ChunkProcessor {
             // removes the race and simplifies the Terminal event handler.
             if let ParsedEvent::Suggest { items } = event {
                 let mut silence_state = silence.lock();
-                let turn_epoch = state
-                    .session_states
-                    .get(session_id)
-                    .map(|session| session.turn_epoch)
-                    .unwrap_or(0);
                 silence_state.mark_suggest_candidate(items.clone(), turn_epoch);
                 continue;
             }
 
-            // Dedup status-line: skip if task_name hasn't changed
+            // Dedup status-line: skip only a repeat within the same turn.
             if let ParsedEvent::StatusLine { task_name, .. } = event {
-                if self.last_status_task.as_deref() == Some(task_name.as_str()) {
+                let seen = (turn_epoch, task_name.clone());
+                if self.last_status_task.as_ref() == Some(&seen) {
                     continue;
                 }
-                self.last_status_task = Some(task_name.clone());
+                self.last_status_task = Some(seen);
             }
 
             // Dedup question: skip if same prompt_text already emitted.
@@ -13069,7 +13080,7 @@ mod tests {
         let mut status_count = 0;
         while let Ok(evt) = rx.try_recv() {
             if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt
-                && parsed.get("type").and_then(|t| t.as_str()) == Some("StatusLine")
+                && parsed.get("type").and_then(|t| t.as_str()) == Some("status-line")
             {
                 status_count += 1;
             }
@@ -13081,6 +13092,105 @@ mod tests {
 
         // Verify the result contains data
         assert!(result1.is_some(), "first chunk should return data");
+    }
+
+    /// A new turn must re-emit its status line even when the task name is
+    /// identical to the previous turn's. Codex names every turn "Working", so a
+    /// session-lifetime dedup swallows the status line of every turn after the
+    /// first. Nothing then clears the prior turn's `suggested_actions`, which
+    /// `session_state_with_shell` reads as a completion marker — a busy agent is
+    /// reported completed/idle for the rest of the session.
+    #[test]
+    fn test_chunk_processor_status_dedup_is_scoped_to_turn() {
+        use crate::state::VtLogBuffer;
+        use std::sync::atomic::AtomicU64;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "test-cp-dedup-turn";
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        state
+            .silence_states
+            .insert(sid.to_string(), silence.clone());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_NULL),
+        );
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .output_buffers
+            .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(0));
+        state.session_states.insert(
+            sid.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                turn_epoch: 1,
+                ..Default::default()
+            },
+        );
+
+        let mut cp = ChunkProcessor::new(None, None);
+        let mut utf8_buf = Utf8ReadBuffer::new();
+        let mut esc_buf = EscapeAwareBuffer::new();
+
+        let mut feed = |cp: &mut ChunkProcessor,
+                        utf8_buf: &mut Utf8ReadBuffer,
+                        esc_buf: &mut EscapeAwareBuffer,
+                        raw: &[u8]|
+         -> usize {
+            let mut rx = state.event_bus.subscribe();
+            let utf8_data = utf8_buf.push(raw);
+            let esc_data = esc_buf.push(&utf8_data);
+            cp.process_chunk(&esc_data, &silence, sid, &state);
+            let mut count = 0;
+            while let Ok(evt) = rx.try_recv() {
+                if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt
+                    && parsed.get("type").and_then(|t| t.as_str()) == Some("status-line")
+                {
+                    count += 1;
+                }
+            }
+            count
+        };
+
+        let turn1 = feed(
+            &mut cp,
+            &mut utf8_buf,
+            &mut esc_buf,
+            "• Working (1s • esc to interrupt)".as_bytes(),
+        );
+        assert_eq!(turn1, 1, "first turn must emit its status line");
+
+        // Spinner rotation inside the SAME turn stays deduped.
+        let same_turn = feed(
+            &mut cp,
+            &mut utf8_buf,
+            &mut esc_buf,
+            "\r\n• Working (2s • esc to interrupt)".as_bytes(),
+        );
+        assert_eq!(same_turn, 0, "spinner rotation within a turn must dedup");
+
+        // The user submits again: a new turn begins.
+        state
+            .session_states
+            .get_mut(sid)
+            .expect("session state")
+            .turn_epoch = 2;
+
+        let turn2 = feed(
+            &mut cp,
+            &mut utf8_buf,
+            &mut esc_buf,
+            "\r\n• Working (1s • esc to interrupt)".as_bytes(),
+        );
+        assert_eq!(
+            turn2, 1,
+            "a new turn must re-emit the status line even with an identical task name"
+        );
     }
 
     #[test]
