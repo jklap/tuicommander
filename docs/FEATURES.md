@@ -1835,7 +1835,7 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 - tmux key name translation (Enter, C-c, Space, etc.)
 
 ### 21.4 Agent Orchestration
-- `tuic agent spawn <type> [repo]` — spawn AI agent
+- `tuic agent spawn <type> <prompt> [--repo <path>]` — spawn AI agent on an initial prompt
 - `tuic agent ls` — list running agents
 - `tuic agent send <id> <message>` — message an agent
 

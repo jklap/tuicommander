@@ -174,6 +174,11 @@ pub fn post(path: &str, body: &str) -> io::Result<Response> {
     request("POST", path, Some(body))
 }
 
+/// Convenience: PUT request with JSON body
+pub fn put(path: &str, body: &str) -> io::Result<Response> {
+    request("PUT", path, Some(body))
+}
+
 /// Convenience: DELETE request
 pub fn delete(path: &str) -> io::Result<Response> {
     request("DELETE", path, None)

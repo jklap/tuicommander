@@ -82,9 +82,9 @@ Session targets accept full UUIDs, ID prefixes, or session names.
 ## Agent Orchestration
 
 ```bash
-# Spawn an AI agent
-tuic agent spawn claude
-tuic agent spawn codex /path/to/repo
+# Spawn an AI agent (the prompt is required — the agent starts on it)
+tuic agent spawn claude "review the failing tests"
+tuic agent spawn codex "add a changelog entry" --repo /path/to/repo
 
 # List running agents
 tuic agent ls
