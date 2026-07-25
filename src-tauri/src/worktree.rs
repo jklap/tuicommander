@@ -3260,6 +3260,41 @@ branch refs/heads/feat
         );
     }
 
+    /// End-to-end companion to `test_fetch_local_branch_with_slash_is_noop`:
+    /// the user-facing "Create Branch from <slashed local branch>" flow reaches
+    /// `fetch_if_remote` through `create_worktree_internal`'s start-point, so the
+    /// no-op must hold at the caller too — not just in the helper.
+    #[test]
+    fn test_create_worktree_from_slashed_local_start_point_succeeds() {
+        let repo = setup_test_repo();
+        let worktrees_dir = repo.path().join("worktrees");
+
+        git_cmd(repo.path())
+            .args(["branch", "POC-0001/merge-radar"])
+            .run()
+            .expect("Failed to create slashed local branch");
+
+        let config = WorktreeConfig {
+            task_name: "from-slashed-base".to_string(),
+            base_repo: repo.path().to_string_lossy().to_string(),
+            branch: Some("POC-0002/derived".to_string()),
+            create_branch: true,
+        };
+
+        let result =
+            create_worktree_internal(&worktrees_dir, &config, Some("POC-0001/merge-radar"));
+        assert!(
+            result.is_ok(),
+            "slashed local start-point must not be fetched as a remote: {:?}",
+            result
+        );
+        assert_eq!(
+            result.unwrap().branch,
+            Some("POC-0002/derived".to_string()),
+            "new branch should be created from the slashed local base"
+        );
+    }
+
     /// Get the current branch name in a test repo (could be main or master)
     fn current_branch(repo: &TempDir) -> String {
         let out = git_cmd(repo.path())
