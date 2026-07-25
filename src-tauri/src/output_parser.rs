@@ -4343,6 +4343,28 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     }
 
     #[test]
+    fn test_parse_clean_lines_codex_working_with_background_terminal_suffix() {
+        // Captured live from a running Codex turn. The trailing hint suffix
+        // (added when Codex holds a background terminal) carries `/ps` and
+        // `/stop`, which must not disqualify the status line — losing it
+        // leaves a prior turn's `suggest:` sticky, which the snapshot reads
+        // as completion and reports the working agent as idle.
+        let mut parser = OutputParser::new();
+        let rows = vec![row(
+            34,
+            "• Working (1m 39s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close",
+        )];
+        let events = parser.parse_clean_lines(&rows, true);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, ParsedEvent::StatusLine { task_name, .. } if task_name == "Working")),
+            "expected StatusLine(Working), got: {:?}",
+            events
+        );
+    }
+
+    #[test]
     fn test_parse_clean_lines_intent_with_title() {
         let mut parser = OutputParser::new();
         let rows = vec![row(0, "intent: Implementing feature (My title)")];

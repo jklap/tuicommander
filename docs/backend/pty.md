@@ -384,6 +384,8 @@ Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 
 **Status line ticks:** Animated spinner repaint evidence refreshes both shell activity and `SilenceState`, preventing low-confidence question/tool-error events from contradicting a busy tab. Static mode/footer rows remain chrome only and do not prove activity.
 
+**Status line dedup is per turn:** `ChunkProcessor.last_status_task` keys its dedup on `(turn_epoch, task_name)`, so a spinner rotation inside one turn stays suppressed while the first status line of a *new* turn always re-emits. The epoch must stay in the key because an agent may name every turn identically — Codex always reports `Working`. A session-lifetime dedup swallowed every turn after the first, and since the `status-line` event is the only thing that clears the previous turn's `suggested_actions` (which `session_state_with_shell` reads as a completion marker), the session reported a busy agent as `completed`/`idle` permanently.
+
 **Agent detection:** `detectAgentForTerminal()` fires on shell-state transitions (immediate on idle, 500ms debounce on busy). A 30s fallback poll catches cold starts. This replaces the previous 3s polling interval, reducing syscalls ~30x.
 
 ## Amber Tab Styling
