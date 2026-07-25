@@ -333,7 +333,7 @@ fn cmd_ls() -> Result<(), String> {
     }
 
     // Header
-    println!("{:<38} {:<20} {:<10} {}", "ID", "NAME", "STATUS", "REPO");
+    println!("{:<38} {:<20} {:<10} REPO", "ID", "NAME", "STATUS");
     println!("{}", "-".repeat(90));
 
     for s in &arr {
@@ -523,7 +523,7 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
                 return Ok(());
             }
 
-            println!("{:<38} {:<12} {:<10} {}", "ID", "TYPE", "STATUS", "REPO");
+            println!("{:<38} {:<12} {:<10} REPO", "ID", "TYPE", "STATUS");
             println!("{}", "-".repeat(82));
 
             for s in &agents {
@@ -611,11 +611,11 @@ fn cmd_install_cli(target: Option<&str>) -> Result<(), String> {
         std::env::current_exe().map_err(|e| format!("Cannot find own executable: {e}"))?;
 
     // Check if target already exists and points to us
-    if let Ok(existing) = std::fs::read_link(target_path) {
-        if existing == self_exe {
-            println!("Already installed at {target_path}");
-            return Ok(());
-        }
+    if let Ok(existing) = std::fs::read_link(target_path)
+        && existing == self_exe
+    {
+        println!("Already installed at {target_path}");
+        return Ok(());
     }
 
     // Try direct copy/symlink first, fall back to sudo on Unix
@@ -733,11 +733,11 @@ fn cmd_alias(remove: bool) -> Result<(), String> {
     if has_real_tmux {
         // Check if it's already our symlink
         #[cfg(unix)]
-        if let Ok(target) = std::fs::read_link(&tmux_path) {
-            if target == self_exe {
-                println!("tmux alias already installed at {tmux_path}");
-                return Ok(());
-            }
+        if let Ok(target) = std::fs::read_link(&tmux_path)
+            && target == self_exe
+        {
+            println!("tmux alias already installed at {tmux_path}");
+            return Ok(());
         }
 
         eprintln!("Warning: real tmux is installed. The alias will shadow it.");
@@ -851,14 +851,13 @@ fn tmux_compat() {
         }
         "kill-server" => {
             // Kill all sessions
-            if let Ok(resp) = ipc::get("/sessions") {
-                if let Ok(v) = resp.json() {
-                    if let Some(arr) = v.as_array() {
-                        for s in arr {
-                            if let Some(id) = s["session_id"].as_str() {
-                                let _ = ipc::delete(&format!("/sessions/{id}"));
-                            }
-                        }
+            if let Ok(resp) = ipc::get("/sessions")
+                && let Ok(v) = resp.json()
+                && let Some(arr) = v.as_array()
+            {
+                for s in arr {
+                    if let Some(id) = s["session_id"].as_str() {
+                        let _ = ipc::delete(&format!("/sessions/{id}"));
                     }
                 }
             }
