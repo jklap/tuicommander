@@ -189,15 +189,15 @@ async fn connect_ipc() -> Result<IpcStream, String> {
                 let Some(name_str) = name.to_str() else {
                     continue;
                 };
-                if name_str.starts_with("mcp-") && name_str.ends_with(".sock") {
-                    if let Ok(Ok(stream)) = tokio::time::timeout(
+                if name_str.starts_with("mcp-")
+                    && name_str.ends_with(".sock")
+                    && let Ok(Ok(stream)) = tokio::time::timeout(
                         std::time::Duration::from_secs(3),
                         tokio::net::UnixStream::connect(&entry.path()),
                     )
                     .await
-                    {
-                        return Ok(IpcStream::Unix(stream));
-                    }
+                {
+                    return Ok(IpcStream::Unix(stream));
                 }
             }
         }
@@ -543,15 +543,13 @@ async fn main() {
                 } else {
                     consecutive_failures = 0;
                 }
-            } else {
-                if let Ok((sid, _)) = server_initialize().await {
-                    eprintln!("tuic-bridge: reconnected to TUIC");
-                    *bg_state.session_id.lock().unwrap() = Some(sid);
-                    bg_state.connected.store(true, Ordering::Release);
-                    start_sse_listener(&bg_state);
-                    emit_tools_changed();
-                    consecutive_failures = 0;
-                }
+            } else if let Ok((sid, _)) = server_initialize().await {
+                eprintln!("tuic-bridge: reconnected to TUIC");
+                *bg_state.session_id.lock().unwrap() = Some(sid);
+                bg_state.connected.store(true, Ordering::Release);
+                start_sse_listener(&bg_state);
+                emit_tools_changed();
+                consecutive_failures = 0;
             }
         }
     });

@@ -13137,7 +13137,7 @@ mod tests {
         let mut utf8_buf = Utf8ReadBuffer::new();
         let mut esc_buf = EscapeAwareBuffer::new();
 
-        let mut feed = |cp: &mut ChunkProcessor,
+        let feed = |cp: &mut ChunkProcessor,
                         utf8_buf: &mut Utf8ReadBuffer,
                         esc_buf: &mut EscapeAwareBuffer,
                         raw: &[u8]|
