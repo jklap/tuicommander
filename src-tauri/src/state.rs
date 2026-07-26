@@ -1101,6 +1101,11 @@ pub struct AppState {
     /// Dirty flag: set by PTY reader when new data is processed, cleared by frame ticker.
     /// Decouples read() from frame serialization to coalesce rapid writes (spinners).
     pub(crate) grid_frame_dirty: DashMap<String, Arc<AtomicBool>>,
+    /// Hint: true while a DEC 2026 synchronized update is open on this session.
+    /// Written by the PTY reader after each `process()`, read by the frame ticker
+    /// so an idle tick only takes the vt lock for sessions that can actually have
+    /// a stalled update to flush.
+    pub(crate) sync_update_active: DashMap<String, Arc<AtomicBool>>,
     /// Pending coalesced scroll target (absolute display offset, -1 = none).
     /// Set by `terminal_scroll_to_offset` without taking the vt lock; applied by the
     /// frame ticker under the lock it already holds, so scroll never blocks on the
@@ -1714,6 +1719,7 @@ impl AppState {
             grid_watch: DashMap::new(),
             grid_frame_in_flight: DashMap::new(),
             grid_frame_dirty: DashMap::new(),
+            sync_update_active: DashMap::new(),
             pending_scroll: DashMap::new(),
             kitty_states: DashMap::new(),
             input_buffers: DashMap::new(),
@@ -2990,6 +2996,22 @@ impl VtLogBuffer {
         self.grid.serialize_dirty_rows()
     }
 
+    /// Whether a DEC 2026 synchronized update is currently open.
+    pub(crate) fn is_sync_update_active(&self) -> bool {
+        self.grid.is_sync_update_active()
+    }
+
+    /// Flush a synchronized update whose deadline has passed; `true` when it
+    /// produced new damage to serialize.
+    pub(crate) fn flush_sync_timeout_if_needed(&mut self) -> bool {
+        self.grid.flush_sync_timeout_if_needed()
+    }
+
+    /// Drain a still-buffered synchronized update regardless of its deadline.
+    pub(crate) fn force_stop_sync_if_buffered(&mut self) -> bool {
+        self.grid.force_stop_sync_if_buffered()
+    }
+
     pub(crate) fn is_alternate_screen(&self) -> bool {
         self.grid.is_alternate_screen()
     }
@@ -4254,6 +4276,7 @@ mod tests {
             grid_watch: dashmap::DashMap::new(),
             grid_frame_in_flight: dashmap::DashMap::new(),
             grid_frame_dirty: dashmap::DashMap::new(),
+            sync_update_active: dashmap::DashMap::new(),
             pending_scroll: dashmap::DashMap::new(),
             kitty_states: dashmap::DashMap::new(),
             input_buffers: dashmap::DashMap::new(),
@@ -5290,6 +5313,48 @@ mod tests {
             texts[0].starts_with("line "),
             "line content preserved: {:?}",
             texts[0]
+        );
+    }
+
+    /// The reader publishes sync state and the frame ticker flushes a stalled
+    /// update through `VtLogBuffer` — both go through these delegations, so a
+    /// missing one silently reinstates the wedged-terminal bug.
+    #[test]
+    fn test_vt_log_sync_update_flush_delegation() {
+        let mut buf = make_vt_log();
+        buf.process(b"\x1b[?2026h");
+        assert!(buf.is_sync_update_active(), "reader observes the open update");
+        buf.process(b"STALLED\r\n");
+        assert!(
+            !buf.flush_sync_timeout_if_needed(),
+            "ticker does not flush before the deadline"
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(170));
+
+        assert!(
+            buf.flush_sync_timeout_if_needed(),
+            "ticker flushes the expired update with no further PTY bytes"
+        );
+        assert!(!buf.is_sync_update_active(), "hint clears after the flush");
+        assert!(
+            buf.screen_rows_ref()
+                .is_some_and(|rows| rows.iter().any(|r| r.contains("STALLED"))),
+            "flushed content reaches the cached screen rows"
+        );
+    }
+
+    /// Teardown must drain a buffered update rather than drop it.
+    #[test]
+    fn test_vt_log_force_stop_sync_on_shutdown() {
+        let mut buf = make_vt_log();
+        buf.process(b"\x1b[?2026h");
+        buf.process(b"ATEXIT\r\n");
+        assert!(buf.force_stop_sync_if_buffered(), "shutdown drains the buffer");
+        assert!(
+            buf.screen_rows_ref()
+                .is_some_and(|rows| rows.iter().any(|r| r.contains("ATEXIT"))),
+            "content survives teardown"
         );
     }
 

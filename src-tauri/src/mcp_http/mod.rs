@@ -2050,6 +2050,7 @@ mod tests {
             trigger_classifier: crate::ai_agent::triggers::TriggerClassifier::new(),
             ai_suggestions_enabled: dashmap::DashMap::new(),
             grid_frame_dirty: dashmap::DashMap::new(),
+            sync_update_active: dashmap::DashMap::new(),
             tunnel_manager: {
                 let audit = std::sync::Arc::new(parking_lot::Mutex::new(
                     crate::tunnels::audit::AuditLog::open(

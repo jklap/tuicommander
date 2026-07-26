@@ -102,6 +102,16 @@ Frame emission is decoupled from PTY reading via a per-session **frame ticker** 
 
 This coalesces rapid writes (e.g. spinner CR+erase+rewrite within 16ms) into a single frame, eliminating flicker from intermediate erase states. The ticker exits when the reader's `running` flag clears, with a final flush to avoid losing the last frame.
 
+**Synchronized output (DEC mode 2026).** TUIC advertises `Sy` in the spoofed `TERM_FEATURES`, so agents — Codex in particular — wrap each repaint in `ESC[?2026h` … `ESC[?2026l`. The vendored VTE buffers those bytes and applies them atomically on ESU, but its 150ms `SYNC_UPDATE_TIMEOUT` is **passive**: it records a deadline and never fires. The embedder must enforce it, and the ticker is the only wakeup that can — by definition no further PTY bytes are coming.
+
+The ticker therefore checks the deadline **before** the non-dirty early return, via `flush_sync_timeout_if_needed()` on `VtLogBuffer`. Three details are load-bearing:
+
+- A per-session `sync_update_active` AtomicBool, published by the reader after each `process()`, keeps idle sessions from taking the vt lock every 16ms. It mirrors real parser state, so a nested BSU (which re-arms the deadline rather than closing the update) keeps it set.
+- A timeout flush **bypasses** `grid_send_min_interval_ms()`. A protocol deadline is not animation; throttling it back a tick defeats the purpose.
+- Teardown calls `force_stop_sync_if_buffered()` before the final serialize — session exit is the other "no more bytes arrive" case, and without it buffered output dies with the session.
+
+Without this enforcement a single BSU whose ESU is delayed or lost freezes the tab **indefinitely**: content buffers invisibly and only a later ESU releases it. That was the cause of Codex streaming appearing to eat text and then dump it all at once, and it made any binary containing the BSU bytes a permanent tab wedge.
+
 ### Headless Reader Thread
 
 `spawn_headless_reader_thread()` — used for HTTP-created sessions (no Tauri app handle). Same pipeline but skips Tauri event emission; only writes to ring buffer and WebSocket. Includes `extract_question_line()` for silence-based question detection, session lifecycle events (`session-created`, `session-closed`), and full output parser integration.
