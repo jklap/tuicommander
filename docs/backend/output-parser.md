@@ -155,6 +155,8 @@ ParsedEvent::Suggest {
 
 Detected as a plain-prefix token at column 0: `suggest: [ A | B | C ]`.
 
+**Keyword rejoin (narrow panes):** in a narrow pane the wrap can fall inside the keyword itself, so `dewrap_suggest_keyword` rejoins every split position (`s\nuggest:` … `suggest\n:`) before the regex runs. The tail is accepted behind the agent's own hanging wrap indent — Codex soft-wraps its output with two leading spaces and emits `• suggest` / `  : [ … ]`, verified live at 9 columns — while the head must still start at column 0, optionally after whitespace or an agent bullet, so prose ending in a partial word is never rewritten. The rejoin buffer is allocated only when a match qualifies: the scan keys on `prefix + newline`, which any line ending in `s` hits, and ordinary chunks must stay on the `Cow::Borrowed` path.
+
 One bounded logical line may soft-wrap across terminal rows and may begin with any parser-supported agent bullet (`●`, `⏺`, `•`, or `◦`), but the bracketed content may not contain a nested `[`/`]`. The closing bracket must be at or before the cursor; cells to the right of the cursor are ignored so stale content left by a carriage-return overwrite cannot complete a partial token. Reconstruction follows at most four soft-wrap transitions and 512 bytes. If those bounds or cursor metadata prevent reconstruction, the cursor-row structural candidate is rejected rather than parsed from rendered cells. Items are pipe-delimited (2–4 per the protocol). Parsing is agent-gated; the raw token is stripped from the log delivered to PWA/REST consumers by `strip_structural_tokens`, and concealed on the desktop canvas by the frontend overlay.
 
 ### UsageLimit
