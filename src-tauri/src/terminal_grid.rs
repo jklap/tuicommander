@@ -1748,9 +1748,15 @@ mod tests {
     #[test]
     fn sync_update_active_tracks_bsu_and_esu() {
         let mut grid = TerminalGrid::new(10, 40, 100);
-        assert!(!grid.is_sync_update_active(), "idle grid is not in sync mode");
+        assert!(
+            !grid.is_sync_update_active(),
+            "idle grid is not in sync mode"
+        );
         grid.process(BSU);
-        assert!(grid.is_sync_update_active(), "BSU opens a synchronized update");
+        assert!(
+            grid.is_sync_update_active(),
+            "BSU opens a synchronized update"
+        );
         grid.process(ESU);
         assert!(!grid.is_sync_update_active(), "ESU closes it");
     }
@@ -1777,8 +1783,14 @@ mod tests {
             grid.flush_sync_timeout_if_needed(),
             "an expired sync update must flush without any further PTY bytes"
         );
-        assert!(screen_contains(&grid, "BUFFERED"), "flushed content is visible");
-        assert!(!grid.is_sync_update_active(), "the update is closed after flushing");
+        assert!(
+            screen_contains(&grid, "BUFFERED"),
+            "flushed content is visible"
+        );
+        assert!(
+            !grid.is_sync_update_active(),
+            "the update is closed after flushing"
+        );
         assert!(
             !grid.flush_sync_timeout_if_needed(),
             "a closed update does not flush twice"
@@ -1809,15 +1821,24 @@ mod tests {
         grid.process(BSU); // re-arm before the first deadline expires
         grid.process(b"SECOND\r\n");
 
-        assert!(grid.is_sync_update_active(), "a nested BSU keeps the update open");
+        assert!(
+            grid.is_sync_update_active(),
+            "a nested BSU keeps the update open"
+        );
         assert!(
             !grid.flush_sync_timeout_if_needed(),
             "the nested BSU restarted the deadline, so 100ms in there is nothing to flush"
         );
 
         std::thread::sleep(PAST_DEADLINE);
-        assert!(grid.flush_sync_timeout_if_needed(), "the extended deadline still expires");
-        assert!(screen_contains(&grid, "SECOND"), "content after the nested BSU surfaces");
+        assert!(
+            grid.flush_sync_timeout_if_needed(),
+            "the extended deadline still expires"
+        );
+        assert!(
+            screen_contains(&grid, "SECOND"),
+            "content after the nested BSU surfaces"
+        );
     }
 
     #[test]
@@ -1830,7 +1851,10 @@ mod tests {
             grid.force_stop_sync_if_buffered(),
             "teardown must not wait out the deadline"
         );
-        assert!(screen_contains(&grid, "ONSHUTDOWN"), "buffered output is not dropped");
+        assert!(
+            screen_contains(&grid, "ONSHUTDOWN"),
+            "buffered output is not dropped"
+        );
         assert!(
             !grid.force_stop_sync_if_buffered(),
             "nothing left to force once the buffer drained"

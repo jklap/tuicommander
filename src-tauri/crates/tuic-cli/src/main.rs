@@ -1096,7 +1096,10 @@ mod tests {
 
     #[test]
     fn short_repo_keeps_last_two_components() {
-        assert_eq!(short_repo("/Users/s/personal/tuicommander"), "personal/tuicommander");
+        assert_eq!(
+            short_repo("/Users/s/personal/tuicommander"),
+            "personal/tuicommander"
+        );
     }
 
     #[test]

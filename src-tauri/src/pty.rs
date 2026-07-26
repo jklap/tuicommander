@@ -13185,9 +13185,9 @@ mod tests {
         let mut esc_buf = EscapeAwareBuffer::new();
 
         let feed = |cp: &mut ChunkProcessor,
-                        utf8_buf: &mut Utf8ReadBuffer,
-                        esc_buf: &mut EscapeAwareBuffer,
-                        raw: &[u8]|
+                    utf8_buf: &mut Utf8ReadBuffer,
+                    esc_buf: &mut EscapeAwareBuffer,
+                    raw: &[u8]|
          -> usize {
             let mut rx = state.event_bus.subscribe();
             let utf8_data = utf8_buf.push(raw);

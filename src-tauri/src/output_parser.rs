@@ -1596,7 +1596,9 @@ fn dewrap_suggest_brackets(text: &str) -> std::borrow::Cow<'_, str> {
 
 /// Rejoin a `suggest:` keyword that got split across a newline by terminal
 /// auto-wrap (e.g. zoomed / narrow window). Handles every split position of
-/// the literal word: `s\nuggest:`, `su\nggest:`, ..., `suggest\n:`.
+/// the literal word: `s\nuggest:`, `su\nggest:`, ..., `suggest\n:`, including
+/// when the continuation row carries the agent's own hanging wrap indent
+/// (`suggest\n  :`), which is what Codex emits in a narrow pane.
 ///
 /// Returns `Cow::Borrowed` when no wrap is detected so the caller pays no
 /// allocation cost in the common (wide terminal) case.
@@ -1607,8 +1609,8 @@ fn dewrap_suggest_keyword(text: &str) -> std::borrow::Cow<'_, str> {
     const SUGGEST: &str = "suggest:";
 
     // Every way "suggest:" can split across a newline at column 0:
-    //   prefix (non-empty proper prefix of "suggest:") + "\n" + suffix
-    //   where prefix + suffix == "suggest:".
+    //   prefix (non-empty proper prefix of "suggest:") + "\n" + wrap indent
+    //   + suffix, where prefix + suffix == "suggest:".
     // Iterate 1..=7 split points: s|uggest:, su|ggest:, …, suggest|:.
     //
     // Stay Borrowed until we actually rewrite. PTY chunks land here on every
@@ -1618,16 +1620,23 @@ fn dewrap_suggest_keyword(text: &str) -> std::borrow::Cow<'_, str> {
 
     for split in 1..SUGGEST.len() {
         let (prefix, suffix) = SUGGEST.split_at(split);
-        let needle = format!("{prefix}\n{suffix}");
-        if !current.contains(&needle) {
+        // Match on the prefix + newline alone: the suffix may sit behind the
+        // agent's own wrap indent, so it cannot be part of a fixed needle.
+        let wrap_at = format!("{prefix}\n");
+        if !current.contains(&wrap_at) {
             continue;
         }
 
         let src: &str = current.as_ref();
-        let mut buf = String::with_capacity(src.len());
+        // Allocate only once a match actually qualifies — a bare `s\n` ends
+        // plenty of ordinary prose lines and must stay on the borrowed path.
+        let mut buf: Option<String> = None;
         let mut last = 0;
-        let mut changed_this_pass = false;
-        for (idx, _) in src.match_indices(&needle) {
+        for (idx, _) in src.match_indices(&wrap_at) {
+            // A previous rewrite already consumed this region.
+            if idx < last {
+                continue;
+            }
             // Only dewrap when the prefix begins at column 0 — optionally
             // after whitespace or an agent bullet marker. Accept the same
             // glyphs as the token regexes: this check knew only the Ink
@@ -1640,15 +1649,24 @@ fn dewrap_suggest_keyword(text: &str) -> std::borrow::Cow<'_, str> {
             if !leading_ok {
                 continue;
             }
-            buf.push_str(&src[last..idx]);
-            buf.push_str(prefix);
-            buf.push_str(suffix);
-            last = idx + needle.len();
-            changed_this_pass = true;
+            // Skip the continuation row's hanging indent: Codex soft-wraps its
+            // own output with two leading spaces, so the tail of the keyword
+            // does not start at column 0 (captured live in a 9-column pane).
+            let after_newline = idx + wrap_at.len();
+            let rest = &src[after_newline..];
+            let indent = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+            if !rest[indent..].starts_with(suffix) {
+                continue;
+            }
+            let out = buf.get_or_insert_with(|| String::with_capacity(src.len()));
+            out.push_str(&src[last..idx]);
+            out.push_str(prefix);
+            out.push_str(suffix);
+            last = after_newline + indent + suffix.len();
         }
-        if changed_this_pass {
-            buf.push_str(&src[last..]);
-            current = std::borrow::Cow::Owned(buf);
+        if let Some(mut out) = buf {
+            out.push_str(&src[last..]);
+            current = std::borrow::Cow::Owned(out);
         }
     }
 
@@ -4224,6 +4242,33 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     }
 
     #[test]
+    fn test_dewrap_rejoins_across_the_wrap_indent() {
+        // Captured live from Codex in a 9-column pane: it soft-wraps its own
+        // output with a two-space hanging indent, so the tail of the split
+        // keyword does NOT start at column 0. Requiring the suffix immediately
+        // after the newline dropped every narrow-terminal suggest.
+        assert_eq!(
+            super::dewrap_suggest_keyword("\u{2022} suggest\n  : [ X | Y | Z ]").as_ref(),
+            "\u{2022} suggest: [ X | Y | Z ]"
+        );
+        assert_eq!(
+            super::dewrap_suggest_keyword("\u{2022} sugges\n  t: [ X | Y ]").as_ref(),
+            "\u{2022} suggest: [ X | Y ]"
+        );
+    }
+
+    #[test]
+    fn test_suggest_parses_when_the_keyword_wraps_with_indent() {
+        // End-to-end shape of the live 9-column capture: the keyword split plus
+        // the bracket body wrapped across three rows must still yield the items.
+        let items = match parse_suggest("\u{2022} suggest\n  : [ X |\n  Y | Z ]", true) {
+            Some(ParsedEvent::Suggest { items }) => items,
+            _ => panic!("indented narrow-terminal wrap must parse"),
+        };
+        assert_eq!(items, vec!["X", "Y", "Z"]);
+    }
+
+    #[test]
     fn test_dewrap_rejects_prose_before_the_split_keyword() {
         // The column-0 constraint still holds: arbitrary text before the split
         // means this is prose, not a protocol token.
@@ -4410,9 +4455,9 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         )];
         let events = parser.parse_clean_lines(&rows, true);
         assert!(
-            events
-                .iter()
-                .any(|e| matches!(e, ParsedEvent::StatusLine { task_name, .. } if task_name == "Working")),
+            events.iter().any(
+                |e| matches!(e, ParsedEvent::StatusLine { task_name, .. } if task_name == "Working")
+            ),
             "expected StatusLine(Working), got: {:?}",
             events
         );
