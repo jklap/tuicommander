@@ -500,6 +500,66 @@ impl TerminalGrid {
         changed
     }
 
+    /// Whether a DEC 2026 synchronized update is currently open.
+    ///
+    /// Mirrors the real parser state rather than "a BSU was seen once": the
+    /// vendored VTE re-arms the deadline on a nested BSU and only clears it when
+    /// the update actually ends, so this stays true across BSU extension.
+    pub fn is_sync_update_active(&self) -> bool {
+        self.processor.sync_timeout().sync_timeout().is_some()
+    }
+
+    /// End a synchronized update whose 150ms deadline has passed, returning
+    /// whether anything was flushed.
+    ///
+    /// The vendored VTE timeout is passive — it records a deadline but never
+    /// fires on its own, so without this the buffered bytes wait for an ESU
+    /// that may never arrive and the terminal is wedged. Callers must treat a
+    /// `true` return as new damage to serialize.
+    ///
+    pub fn flush_sync_timeout_if_needed(&mut self) -> bool {
+        let Some(deadline) = self.processor.sync_timeout().sync_timeout() else {
+            return false;
+        };
+        if std::time::Instant::now() < deadline {
+            return false;
+        }
+        self.processor.stop_sync(&mut self.term);
+        self.refresh_rows_after_sync_flush();
+        true
+    }
+
+    /// End a synchronized update unconditionally when it still holds bytes.
+    ///
+    /// Used on teardown: session exit is the other "no more PTY bytes arrive"
+    /// case, where waiting for the deadline would simply drop the buffer.
+    pub fn force_stop_sync_if_buffered(&mut self) -> bool {
+        if self.processor.sync_bytes_count() == 0 {
+            return false;
+        }
+        self.processor.stop_sync(&mut self.term);
+        self.refresh_rows_after_sync_flush();
+        true
+    }
+
+    /// Re-sync the cached screen rows after a flush that bypassed `process()`.
+    ///
+    /// `screen_text_rows()` serves `prev_rows`, so without this every screen
+    /// reader (HTTP snapshots, agent screen classifiers) would keep answering
+    /// with pre-flush content until the next PTY chunk arrived — the same
+    /// staleness the flush exists to end.
+    ///
+    /// DEFERRED (2026-07-26) — refreshing the cache means the next `process()`
+    /// diff no longer reports these rows, so the output parser sees flushed
+    /// content only if the agent repaints it (Codex and Ink both do, every
+    /// frame). Feeding them to the parser needs the ticker to reach the
+    /// reader-owned `ChunkProcessor`; revisit if a parser miss is ever observed.
+    fn refresh_rows_after_sync_flush(&mut self) {
+        if !self.prev_rows.is_empty() {
+            self.prev_rows = self.read_screen_text();
+        }
+    }
+
     /// Reference (pre-optimization) implementation of `process`: always rebuilds
     /// and diffs the ENTIRE visible screen. Kept test-only as the correctness
     /// oracle for the parse-damage fast path — `process_damage_matches_full_diff`
@@ -1673,6 +1733,109 @@ impl TerminalGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- DEC 2026 synchronized update (see `flush_sync_timeout_if_needed`) ---
+
+    const BSU: &[u8] = b"\x1b[?2026h";
+    const ESU: &[u8] = b"\x1b[?2026l";
+    /// Slightly past the vendored VTE `SYNC_UPDATE_TIMEOUT` (150ms).
+    const PAST_DEADLINE: std::time::Duration = std::time::Duration::from_millis(170);
+
+    fn screen_contains(grid: &TerminalGrid, needle: &str) -> bool {
+        grid.screen_text_rows().iter().any(|r| r.contains(needle))
+    }
+
+    #[test]
+    fn sync_update_active_tracks_bsu_and_esu() {
+        let mut grid = TerminalGrid::new(10, 40, 100);
+        assert!(!grid.is_sync_update_active(), "idle grid is not in sync mode");
+        grid.process(BSU);
+        assert!(grid.is_sync_update_active(), "BSU opens a synchronized update");
+        grid.process(ESU);
+        assert!(!grid.is_sync_update_active(), "ESU closes it");
+    }
+
+    #[test]
+    fn stalled_sync_update_flushes_once_the_deadline_passes() {
+        let mut grid = TerminalGrid::new(10, 40, 100);
+        grid.process(b"BEFORE\r\n");
+        grid.process(BSU);
+        grid.process(b"BUFFERED\r\n");
+
+        assert!(
+            !screen_contains(&grid, "BUFFERED"),
+            "content inside an open sync update stays buffered"
+        );
+        assert!(
+            !grid.flush_sync_timeout_if_needed(),
+            "no flush before the deadline"
+        );
+
+        std::thread::sleep(PAST_DEADLINE);
+
+        assert!(
+            grid.flush_sync_timeout_if_needed(),
+            "an expired sync update must flush without any further PTY bytes"
+        );
+        assert!(screen_contains(&grid, "BUFFERED"), "flushed content is visible");
+        assert!(!grid.is_sync_update_active(), "the update is closed after flushing");
+        assert!(
+            !grid.flush_sync_timeout_if_needed(),
+            "a closed update does not flush twice"
+        );
+    }
+
+    #[test]
+    fn esu_before_the_deadline_leaves_nothing_to_flush() {
+        let mut grid = TerminalGrid::new(10, 40, 100);
+        grid.process(BSU);
+        grid.process(b"QUICK\r\n");
+        grid.process(ESU);
+        assert!(screen_contains(&grid, "QUICK"), "ESU applies the update");
+
+        std::thread::sleep(PAST_DEADLINE);
+        assert!(
+            !grid.flush_sync_timeout_if_needed(),
+            "an already-closed update must not be flushed again by the ticker"
+        );
+    }
+
+    #[test]
+    fn nested_bsu_extends_the_deadline_instead_of_closing() {
+        let mut grid = TerminalGrid::new(10, 40, 100);
+        grid.process(BSU);
+        grid.process(b"FIRST\r\n");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        grid.process(BSU); // re-arm before the first deadline expires
+        grid.process(b"SECOND\r\n");
+
+        assert!(grid.is_sync_update_active(), "a nested BSU keeps the update open");
+        assert!(
+            !grid.flush_sync_timeout_if_needed(),
+            "the nested BSU restarted the deadline, so 100ms in there is nothing to flush"
+        );
+
+        std::thread::sleep(PAST_DEADLINE);
+        assert!(grid.flush_sync_timeout_if_needed(), "the extended deadline still expires");
+        assert!(screen_contains(&grid, "SECOND"), "content after the nested BSU surfaces");
+    }
+
+    #[test]
+    fn force_stop_surfaces_buffered_content_without_waiting() {
+        let mut grid = TerminalGrid::new(10, 40, 100);
+        grid.process(BSU);
+        grid.process(b"ONSHUTDOWN\r\n");
+
+        assert!(
+            grid.force_stop_sync_if_buffered(),
+            "teardown must not wait out the deadline"
+        );
+        assert!(screen_contains(&grid, "ONSHUTDOWN"), "buffered output is not dropped");
+        assert!(
+            !grid.force_stop_sync_if_buffered(),
+            "nothing left to force once the buffer drained"
+        );
+    }
 
     /// Differential oracle (story 138): the parse-damage fast path in `process()`
     /// must produce byte-identical `ChangedRow`s to the old full-screen

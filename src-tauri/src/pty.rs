@@ -3675,6 +3675,12 @@ impl ChunkProcessor {
         ): VtProcessResult = if let Some(vt_log) = state.vt_log_buffers.get(session_id) {
             let mut vt = vt_log.lock();
             let changed = vt.process(data.as_bytes());
+            // Publish the real sync state (a nested BSU keeps it open) so the
+            // frame ticker knows whether this session can have a stalled
+            // synchronized update worth taking the lock for.
+            if let Some(flag) = state.sync_update_active.get(session_id) {
+                flag.store(vt.is_sync_update_active(), Ordering::Relaxed);
+            }
             let total = vt.total_lines();
             let oldest = vt.oldest_offset();
             let hist = vt.grid_history_size();
@@ -5586,8 +5592,13 @@ pub(crate) fn spawn_reader_thread(
     state
         .grid_frame_dirty
         .insert(session_id.clone(), frame_dirty.clone());
+    let sync_active = Arc::new(AtomicBool::new(false));
+    state
+        .sync_update_active
+        .insert(session_id.clone(), sync_active.clone());
     let ticker_running = running.clone();
     let ticker_dirty = frame_dirty.clone();
+    let ticker_sync_active = Some(sync_active);
     let ticker_state = state.clone();
     let ticker_sid = session_id.clone();
     std::thread::spawn(move || {
@@ -5621,7 +5632,31 @@ pub(crate) fn spawn_reader_thread(
         let mut system_saturated = false;
         while ticker_running.load(Ordering::Relaxed) {
             std::thread::sleep(TICK);
-            if !ticker_dirty.swap(false, Ordering::Relaxed) {
+            let mut effective_dirty = ticker_dirty.swap(false, Ordering::Relaxed);
+            // DEC 2026: the vendored VTE records a 150ms deadline but never fires
+            // it, so a synchronized update left open (delayed/lost ESU, or a stream
+            // that simply stops mid-update) would buffer forever and wedge the
+            // terminal. This is the only wakeup that can end it — no PTY bytes are
+            // coming — so it must run BEFORE the non-dirty early return. The
+            // atomic hint keeps idle sessions from touching the vt lock at all.
+            let mut sync_timeout_flush = false;
+            if ticker_sync_active
+                .as_ref()
+                .is_some_and(|f| f.load(Ordering::Relaxed))
+                && let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid)
+            {
+                let mut g = vt.lock();
+                if g.flush_sync_timeout_if_needed() {
+                    sync_timeout_flush = true;
+                    effective_dirty = true;
+                }
+                let still_active = g.is_sync_update_active();
+                drop(g);
+                if let Some(f) = ticker_sync_active.as_ref() {
+                    f.store(still_active, Ordering::Relaxed);
+                }
+            }
+            if !effective_dirty {
                 // Idle tick: leave sustained-animation mode so the next burst
                 // (keystroke, fresh output) gets full 60 fps low-latency response.
                 dirty_run = 0;
@@ -5702,7 +5737,13 @@ pub(crate) fn spawn_reader_thread(
             };
             // Pick the send-rate floor: typing-under-load (~20 fps) wins, else the
             // sustained-animation floor (~30 fps), else full 60 fps for short bursts.
-            let min_interval = grid_send_min_interval_ms(input_recent, dirty_run);
+            // A sync-timeout flush is a protocol deadline, not animation — the
+            // frame-rate floor must not defer it into the next tick.
+            let min_interval = if sync_timeout_flush {
+                0
+            } else {
+                grid_send_min_interval_ms(input_recent, dirty_run)
+            };
             if min_interval > 0
                 && let Some(last) = last_sent
                 && (now.duration_since(last).as_millis() as u64) < min_interval
@@ -5724,12 +5765,18 @@ pub(crate) fn spawn_reader_thread(
                 last_sent = Some(now);
             }
         }
-        // Final flush after reader exits
+        // Final flush after reader exits. Session teardown is the other "no more
+        // PTY bytes arrive" case: drain any still-buffered synchronized update
+        // BEFORE serializing, or its content is dropped with the session.
         if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
-            let frame = vt.lock().serialize_dirty_rows();
+            let mut g = vt.lock();
+            g.force_stop_sync_if_buffered();
+            let frame = g.serialize_dirty_rows();
+            drop(g);
             send_grid_frame(&ticker_state, &ticker_sid, frame);
         }
         ticker_state.grid_frame_dirty.remove(&ticker_sid);
+        ticker_state.sync_update_active.remove(&ticker_sid);
     });
 
     std::thread::spawn(move || {
