@@ -5323,7 +5323,10 @@ mod tests {
     fn test_vt_log_sync_update_flush_delegation() {
         let mut buf = make_vt_log();
         buf.process(b"\x1b[?2026h");
-        assert!(buf.is_sync_update_active(), "reader observes the open update");
+        assert!(
+            buf.is_sync_update_active(),
+            "reader observes the open update"
+        );
         buf.process(b"STALLED\r\n");
         assert!(
             !buf.flush_sync_timeout_if_needed(),
@@ -5350,7 +5353,10 @@ mod tests {
         let mut buf = make_vt_log();
         buf.process(b"\x1b[?2026h");
         buf.process(b"ATEXIT\r\n");
-        assert!(buf.force_stop_sync_if_buffered(), "shutdown drains the buffer");
+        assert!(
+            buf.force_stop_sync_if_buffered(),
+            "shutdown drains the buffer"
+        );
         assert!(
             buf.screen_rows_ref()
                 .is_some_and(|rows| rows.iter().any(|r| r.contains("ATEXIT"))),
