@@ -163,17 +163,15 @@ fn is_codex_chrome_bullet(text: &str) -> bool {
 /// PRESENCE-driven signal: while this line sits in the content zone the agent
 /// is alive, regardless of whether it changed this tick.
 ///
-/// Keyed on the "esc to interrupt" hint (shown only while working) so it never
-/// matches plain `• …` output bullets or the `• Boot` startup line.
+/// The verb is NOT part of the signature: Codex renders
+/// `<Verb…> (<elapsed> • esc to interrupt)` and swaps the verb per phase
+/// (`Working`, `Waiting for background terminal`, …). Keying on the verb made
+/// every background-terminal phase read as idle. The invariant is the
+/// interrupt hint — Codex only offers `esc` while a turn is running — anchored
+/// on its closing paren so prose that merely mentions pressing esc (or a plain
+/// `• …` output bullet / the `• Boot` startup line) never matches.
 pub fn is_working_status_row(text: &str) -> bool {
-    let t = text.trim_start();
-    // Optional Codex blink bullet (• / ◦) then the working status text.
-    let t = t
-        .strip_prefix('\u{2022}')
-        .or_else(|| t.strip_prefix('\u{25E6}'))
-        .unwrap_or(t)
-        .trim_start();
-    t.starts_with("Working") && t.contains("esc to interrupt")
+    text.contains("esc to interrupt)")
 }
 
 /// junie (JetBrains) renders a persistent idle status bar whose "effort"
@@ -291,6 +289,31 @@ mod tests {
     fn codex_working_indented_is_working_status() {
         assert!(is_working_status_row(
             "   • Working (1m 3s • esc to interrupt)"
+        ));
+    }
+
+    #[test]
+    fn codex_background_terminal_wait_is_working_status() {
+        // Codex swaps the verb while a background terminal runs; the turn is
+        // still interruptible, so the session must stay busy. Keying on
+        // "Working" made every `rtk cargo …` background phase read as idle.
+        assert!(is_working_status_row(
+            "• Waiting for background terminal (41s • esc to interrupt) · 1 background terminal running · /ps to view · …"
+        ));
+    }
+
+    #[test]
+    fn codex_working_line_with_background_suffix_is_working_status() {
+        assert!(is_working_status_row(
+            "• Working (1m 39s • esc to interrupt) · 1 background terminal running · /ps to view · /stop to close"
+        ));
+    }
+
+    #[test]
+    fn codex_completed_background_wait_is_not_working_status() {
+        // Past tense, no interrupt hint — the wait is over, this is transcript.
+        assert!(!is_working_status_row(
+            "• Waited for background terminal · rtk cargo fmt --all"
         ));
     }
 
