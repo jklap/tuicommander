@@ -31,4 +31,8 @@ export interface ContentSearchBatch {
 	files_searched: number;
 	files_skipped: number;
 	truncated: boolean;
+	/** Cross-repo search: registered repos still building their index (0 for single-repo). */
+	repos_pending: number;
+	/** Cross-repo search: registered repos actually searched (0 for single-repo). */
+	repos_searched: number;
 }

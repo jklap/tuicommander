@@ -27,6 +27,11 @@ interface CommandPaletteState {
 	contentError: string | null;
 	/** When true, content search (? prefix) spans all indexed repos, not just the active one */
 	contentAllRepos: boolean;
+	/** Cross-repo search: repos whose index was still building, so they were not searched.
+	 *  Non-zero means an empty result is "not searched yet", NOT a confirmed miss. */
+	contentReposPending: number;
+	/** Cross-repo search: repos actually searched. */
+	contentReposSearched: number;
 	/** Filename search results (! prefix) */
 	filenameResults: DirEntry[];
 	filenameSearching: boolean;
@@ -55,6 +60,8 @@ function createCommandPaletteStore() {
 		contentSearching: false,
 		contentError: null,
 		contentAllRepos: false,
+		contentReposPending: 0,
+		contentReposSearched: 0,
 		filenameResults: [],
 		filenameSearching: false,
 		terminalResults: [],
@@ -119,7 +126,13 @@ function createCommandPaletteStore() {
 		if (!allRepos && !repoPath) return;
 
 		cancelled = false;
-		setState({ contentResults: [], contentSearching: true, contentError: null });
+		setState({
+			contentResults: [],
+			contentSearching: true,
+			contentError: null,
+			contentReposPending: 0,
+			contentReposSearched: 0,
+		});
 
 		// Subscribe to streaming results BEFORE invoking search
 		try {
@@ -130,6 +143,10 @@ function createCommandPaletteStore() {
 					if (prev.length >= MAX_CONTENT_RESULTS) return prev;
 					const combined = [...prev, ...batch.matches];
 					return combined.slice(0, MAX_CONTENT_RESULTS);
+				});
+				setState({
+					contentReposPending: batch.repos_pending ?? 0,
+					contentReposSearched: batch.repos_searched ?? 0,
 				});
 				if (batch.is_final) {
 					setState("contentSearching", false);

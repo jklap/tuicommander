@@ -329,7 +329,16 @@ export const CommandPalette: Component<CommandPaletteProps> = (props) => {
 									!commandPaletteStore.state.contentError
 								}
 							>
-								<div class={s.empty}>No results</div>
+								{/* A cross-repo search can only cover repos whose index is built.
+								    Saying "No results" while N repos are still indexing is a lie —
+								    report the coverage instead. */}
+								<div class={s.empty}>
+									{commandPaletteStore.state.contentReposPending > 0
+										? `No results in ${commandPaletteStore.state.contentReposSearched} repo${
+												commandPaletteStore.state.contentReposSearched === 1 ? "" : "s"
+											} — ${commandPaletteStore.state.contentReposPending} still indexing, retry shortly`
+										: "No results"}
+								</div>
 							</Show>
 							<Show when={commandPaletteStore.state.contentError}>
 								<div class={s.empty}>Error: {commandPaletteStore.state.contentError}</div>

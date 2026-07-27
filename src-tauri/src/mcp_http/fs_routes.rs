@@ -86,8 +86,9 @@ pub(super) async fn search_content_http(
     json_result(result)
 }
 
-/// BM25 semantic search across **all** indexed repos. Each match includes `repoPath`.
-/// Only searches repos whose index is already ready — repos still building are skipped.
+/// BM25 semantic search across **all registered** repos. Each match includes `repoPath`.
+/// Repos whose index is not ready yet cannot answer now: a build is kicked off and they
+/// are counted in `repos_pending`, so an empty result is never reported as a clean miss.
 pub(super) async fn search_content_all_http(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::state::AppState>>,
     Query(q): Query<FsSearchContentAllQuery>,
@@ -96,12 +97,7 @@ pub(super) async fn search_content_all_http(
     let global_limit = q.limit.unwrap_or(100);
 
     let _guard = state.indexer_throttle.begin_search();
-    let result = crate::fs::search_content_all_impl(
-        &state.content_indices,
-        &q.query,
-        case_sensitive,
-        global_limit,
-    );
+    let result = crate::fs::search_content_all_impl(&state, &q.query, case_sensitive, global_limit);
 
     json_result(Ok::<crate::fs::ContentSearchResult, String>(result))
 }
