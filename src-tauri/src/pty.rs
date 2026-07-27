@@ -9942,6 +9942,29 @@ mod tests {
         );
     }
 
+    /// Regression (live capture, session "Native Closure"): while a background
+    /// terminal runs Codex swaps the status verb to `Waiting for background
+    /// terminal`. The turn is still interruptible, but the verb-keyed presence
+    /// check read Ready and the session showed a green idle dot for minutes.
+    #[test]
+    fn test_codex_background_terminal_wait_holds_busy() {
+        let screen: Vec<String> = vec![
+            "• Il secondo pre-push ha già superato nuovamente check, Clippy e audit root/plugin.".into(),
+            "".into(),
+            "• Waiting for background terminal (41s • esc to interrupt) · 1 background terminal running · /ps to view · …".into(),
+            "  └ rtk git fetch origin POC-00002-BLADES-REFINEMENT && rtk git rev-parse origin/POC-00002…".into(),
+            "".into(),
+            "".into(),
+            "› Use /skills to list available skills".into(),
+            "  gpt-5.6-sol medium · ~/Gits/CC_Playground/itview · master · Context 67% left".into(),
+        ];
+        assert_eq!(
+            detect_codex_screen_activity(&screen),
+            AgentScreenActivity::Working,
+            "a running background terminal must keep the Codex session busy"
+        );
+    }
+
     #[test]
     fn test_codex_historical_working_far_from_prompt_does_not_latch_busy() {
         let mut screen = vec!["• Working (1m • esc to interrupt)".to_string()];
