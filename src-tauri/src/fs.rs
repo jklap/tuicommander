@@ -39,7 +39,7 @@ pub struct ContentMatch {
 }
 
 /// Aggregated result of a full-text content search.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ContentSearchResult {
     pub matches: Vec<ContentMatch>,
     pub files_searched: u32,
@@ -47,6 +47,15 @@ pub struct ContentSearchResult {
     pub files_skipped: u32,
     /// `true` when the global match limit was reached.
     pub truncated: bool,
+    /// Cross-repo search only: registered repos whose content index was not
+    /// ready yet, so they contributed nothing to this result. A build is kicked
+    /// off for each, so a later search covers them. Zero for single-repo search.
+    /// Non-zero means "not found HERE yet" — never report a clean miss.
+    #[serde(default)]
+    pub repos_pending: u32,
+    /// Cross-repo search only: registered repos actually searched.
+    #[serde(default)]
+    pub repos_searched: u32,
 }
 
 /// Streamed batch payload emitted via the `content-search-batch` event.
@@ -57,6 +66,10 @@ pub struct ContentSearchBatch {
     pub files_searched: u32,
     pub files_skipped: u32,
     pub truncated: bool,
+    /// Mirrors `ContentSearchResult` — lets the UI distinguish "no match" from
+    /// "not searched yet" on a cross-repo search.
+    pub repos_pending: u32,
+    pub repos_searched: u32,
 }
 
 /// Managed state for cancelling in-flight content searches.
@@ -489,6 +502,8 @@ fn emit_content_batches(
                 files_searched: result.files_searched,
                 files_skipped: result.files_skipped,
                 truncated: result.truncated,
+                repos_pending: result.repos_pending,
+                repos_searched: result.repos_searched,
             },
         );
     }
@@ -503,42 +518,71 @@ fn emit_content_batches(
                 files_searched: result.files_searched,
                 files_skipped: result.files_skipped,
                 truncated: result.truncated,
+                repos_pending: result.repos_pending,
+                repos_searched: result.repos_searched,
             },
         );
     }
 }
 
-/// Search every ready content index (all registered repos) and merge the results,
-/// tagging each match with its `repo_path`. The global limit is split evenly across
-/// repos (min 5 each). Repos whose index isn't built yet are skipped. Shared by the
-/// `search_content_all` Tauri command and the `/fs/search-content-all` HTTP route.
+/// Every registered repo, from `repositories.json` — NOT just the ones that
+/// happen to have an index entry. The index map only holds repos someone
+/// already touched this session, so iterating it silently narrows "all repos"
+/// to "repos I visited".
+fn registered_repo_paths() -> Vec<String> {
+    crate::config::load_repositories()
+        .get("repos")
+        .and_then(|r| r.as_object())
+        .map(|repos| repos.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
+/// Search every registered repo and merge the results, tagging each match with
+/// its `repo_path`. The global limit is split evenly across repos (min 5 each).
+/// Shared by the `search_content_all` Tauri command and the
+/// `/fs/search-content-all` HTTP route.
+///
+/// A repo whose index is not built yet cannot be searched now — but it is NOT
+/// silently dropped: the build is kicked off (`ensure_index`, serialised by the
+/// global indexer semaphore) and the repo is counted in `repos_pending` so the
+/// caller can say "not found in the 2 repos searched, 32 still indexing"
+/// instead of a flat "No results". With the default `active_and_switch`
+/// strategy only the active repo is pre-warmed at boot, so without this a
+/// cross-repo search covered almost nothing and reported a confident miss.
 pub(crate) fn search_content_all_impl(
-    content_indices: &dashmap::DashMap<
-        String,
-        Arc<parking_lot::RwLock<crate::content_index::ContentIndex>>,
-    >,
+    state: &Arc<crate::state::AppState>,
     query: &str,
     case_sensitive: bool,
     global_limit: usize,
 ) -> ContentSearchResult {
-    let repos: Vec<(
-        String,
-        Arc<parking_lot::RwLock<crate::content_index::ContentIndex>>,
-    )> = content_indices
-        .iter()
-        .map(|e| (e.key().clone(), Arc::clone(e.value())))
-        .collect();
+    // Union of registered repos and already-indexed ones: a repo can hold an
+    // index (e.g. an agent searched it) without being registered, and must
+    // still be searchable.
+    let mut repo_paths = registered_repo_paths();
+    for entry in state.content_indices.iter() {
+        if !repo_paths.iter().any(|p| p == entry.key()) {
+            repo_paths.push(entry.key().clone());
+        }
+    }
 
-    let per_repo_limit = (global_limit / repos.len().max(1)).max(5);
+    let per_repo_limit = (global_limit / repo_paths.len().max(1)).max(5);
 
     let mut all_matches = Vec::new();
     let mut files_searched: u32 = 0;
+    let mut repos_searched: u32 = 0;
+    let mut repos_pending: u32 = 0;
 
-    for (repo_path, index_arc) in &repos {
+    for repo_path in &repo_paths {
+        // ensure_index returns the existing index untouched when present, and
+        // otherwise inserts a placeholder + spawns the build. Calling it here is
+        // what makes a cross-repo search self-healing across invocations.
+        let index_arc = crate::content_index::ensure_index(state, repo_path);
         let index = index_arc.read();
         if !index.is_ready() {
+            repos_pending += 1;
             continue;
         }
+        repos_searched += 1;
         if let Ok(result) = search_via_index(&index, query, case_sensitive, Some(per_repo_limit)) {
             files_searched += result.files_searched;
             for mut m in result.matches {
@@ -560,6 +604,8 @@ pub(crate) fn search_content_all_impl(
         files_searched,
         files_skipped: 0,
         truncated,
+        repos_pending,
+        repos_searched,
     }
 }
 
@@ -593,12 +639,7 @@ pub async fn search_content_all(
 
     tokio::task::spawn_blocking(move || {
         let _throttle_guard = throttle_guard;
-        let result = search_content_all_impl(
-            &app_state.content_indices,
-            &query,
-            case_sensitive,
-            global_limit,
-        );
+        let result = search_content_all_impl(&app_state, &query, case_sensitive, global_limit);
         if cancel_token.load(Ordering::Relaxed) {
             return;
         }
@@ -718,12 +759,7 @@ pub(crate) fn search_via_index(
     let ranked_files = index.search(query, 50);
 
     if ranked_files.is_empty() {
-        return Ok(ContentSearchResult {
-            matches: Vec::new(),
-            files_searched: 0,
-            files_skipped: 0,
-            truncated: false,
-        });
+        return Ok(ContentSearchResult::default());
     }
 
     // Grep phase: search only the ranked files for exact line matches
@@ -792,6 +828,7 @@ pub(crate) fn search_via_index(
         files_searched,
         files_skipped: 0,
         truncated,
+        ..Default::default()
     })
 }
 
@@ -899,12 +936,7 @@ pub(crate) fn search_content_impl(
     use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
 
     if query.is_empty() {
-        return Ok(ContentSearchResult {
-            matches: Vec::new(),
-            files_searched: 0,
-            files_skipped: 0,
-            truncated: false,
-        });
+        return Ok(ContentSearchResult::default());
     }
 
     let repo = PathBuf::from(&repo_path);
@@ -1069,6 +1101,7 @@ pub(crate) fn search_content_impl(
         files_searched,
         files_skipped,
         truncated,
+        ..Default::default()
     })
 }
 
@@ -2898,8 +2931,35 @@ mod tests {
         ))
     }
 
+    /// Cross-repo search now takes the whole `AppState` (it must be able to
+    /// kick off a missing index), so the fixtures build one and pre-populate
+    /// `content_indices` exactly as the old DashMap fixtures did.
+    fn state_with_indices(
+        entries: Vec<(
+            String,
+            Arc<parking_lot::RwLock<crate::content_index::ContentIndex>>,
+        )>,
+    ) -> Arc<crate::state::AppState> {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        for (path, index) in entries {
+            state.content_indices.insert(path, index);
+        }
+        state
+    }
+
+    /// Cross-repo search reads the repo registry from the config dir, so a test
+    /// that does not isolate it would search the developer's REAL repos and get
+    /// machine-dependent counts. Returns the guard — keep it alive.
+    fn empty_repo_registry(cfg: &TempDir) -> impl Drop {
+        let guard = crate::config::set_config_dir_override(cfg.path().to_path_buf());
+        crate::config::save_repositories(serde_json::json!({ "repos": {} })).unwrap();
+        guard
+    }
+
     #[test]
     fn search_content_all_merges_and_tags_each_repo() {
+        let cfg = TempDir::new().unwrap();
+        let _registry_guard = empty_repo_registry(&cfg);
         let repo_a = TempDir::new().unwrap();
         fs::write(
             repo_a.path().join("a.txt"),
@@ -2915,11 +2975,12 @@ mod tests {
 
         let path_a = repo_a.path().to_string_lossy().to_string();
         let path_b = repo_b.path().to_string_lossy().to_string();
-        let indices = dashmap::DashMap::new();
-        indices.insert(path_a.clone(), ready_index(repo_a.path()));
-        indices.insert(path_b.clone(), ready_index(repo_b.path()));
+        let state = state_with_indices(vec![
+            (path_a.clone(), ready_index(repo_a.path())),
+            (path_b.clone(), ready_index(repo_b.path())),
+        ]);
 
-        let result = search_content_all_impl(&indices, "zebrafish", false, 100);
+        let result = search_content_all_impl(&state, "zebrafish", false, 100);
 
         assert_eq!(result.matches.len(), 2, "one match per repo");
         let repos: std::collections::HashSet<_> = result
@@ -2933,6 +2994,8 @@ mod tests {
 
     #[test]
     fn search_content_all_skips_unready_indices() {
+        let cfg = TempDir::new().unwrap();
+        let _registry_guard = empty_repo_registry(&cfg);
         let repo_a = TempDir::new().unwrap();
         fs::write(repo_a.path().join("a.txt"), "the zebrafish swims here\n").unwrap();
         let repo_b = TempDir::new().unwrap();
@@ -2940,36 +3003,99 @@ mod tests {
 
         let path_a = repo_a.path().to_string_lossy().to_string();
         let path_b = repo_b.path().to_string_lossy().to_string();
-        let indices = dashmap::DashMap::new();
-        indices.insert(path_a.clone(), ready_index(repo_a.path()));
-        // repo_b's index never built → not ready → must be skipped
-        indices.insert(
-            path_b.clone(),
-            Arc::new(parking_lot::RwLock::new(
-                crate::content_index::ContentIndex::empty(repo_b.path().to_path_buf()),
-            )),
-        );
+        let state = state_with_indices(vec![
+            (path_a.clone(), ready_index(repo_a.path())),
+            // repo_b's index never built → not ready → cannot contribute now
+            (
+                path_b.clone(),
+                Arc::new(parking_lot::RwLock::new(
+                    crate::content_index::ContentIndex::empty(repo_b.path().to_path_buf()),
+                )),
+            ),
+        ]);
 
-        let result = search_content_all_impl(&indices, "zebrafish", false, 100);
+        let result = search_content_all_impl(&state, "zebrafish", false, 100);
 
         assert_eq!(result.matches.len(), 1, "only the ready repo contributes");
         assert_eq!(
             result.matches[0].repo_path.as_deref(),
             Some(path_a.as_str())
         );
+        // Regression: the unready repo used to vanish silently, so a query that
+        // only exists there rendered as a confident "No results". It must be
+        // reported as still-indexing instead.
+        assert_eq!(result.repos_pending, 1, "unready repo must be reported");
+        assert_eq!(result.repos_searched, 1);
+    }
+
+    /// A cross-repo search must cover EVERY registered repo, not just the ones
+    /// that already hold an index entry. With the default `active_and_switch`
+    /// index strategy only the active repo is pre-warmed at boot, so iterating
+    /// `content_indices` narrowed "all repos" down to "repos visited this
+    /// session" — the query silently missed everything else.
+    #[test]
+    fn search_content_all_counts_registered_repos_without_an_index() {
+        let cfg = TempDir::new().unwrap();
+        let _config_guard = crate::config::set_config_dir_override(cfg.path().to_path_buf());
+
+        let indexed = TempDir::new().unwrap();
+        fs::write(indexed.path().join("a.txt"), "the zebrafish swims here\n").unwrap();
+        let never_visited = TempDir::new().unwrap();
+        fs::write(never_visited.path().join("b.txt"), "zebrafish here too\n").unwrap();
+
+        let indexed_path = indexed.path().to_string_lossy().to_string();
+        let unvisited_path = never_visited.path().to_string_lossy().to_string();
+        crate::config::save_repositories(serde_json::json!({
+            "repos": { indexed_path.clone(): {}, unvisited_path.clone(): {} }
+        }))
+        .unwrap();
+
+        // Only the "active" repo has an index — exactly the boot-time shape.
+        let state = state_with_indices(vec![(indexed_path.clone(), ready_index(indexed.path()))]);
+
+        let result = search_content_all_impl(&state, "zebrafish", false, 100);
+
+        assert_eq!(result.repos_searched, 1, "only the indexed repo is ready");
+        assert_eq!(
+            result.repos_pending, 1,
+            "the registered-but-unindexed repo must be surfaced, not dropped"
+        );
+        assert!(
+            state.content_indices.contains_key(&unvisited_path),
+            "a build must be kicked off so the next search covers it"
+        );
+    }
+
+    /// A repo holding an index without being registered (an agent searched it)
+    /// must still be searched — the union, not just the registry.
+    #[test]
+    fn search_content_all_includes_indexed_but_unregistered_repo() {
+        let cfg = TempDir::new().unwrap();
+        let _registry_guard = empty_repo_registry(&cfg);
+
+        let repo = TempDir::new().unwrap();
+        fs::write(repo.path().join("a.txt"), "the zebrafish swims here\n").unwrap();
+        let path = repo.path().to_string_lossy().to_string();
+        let state = state_with_indices(vec![(path.clone(), ready_index(repo.path()))]);
+
+        let result = search_content_all_impl(&state, "zebrafish", false, 100);
+
+        assert_eq!(result.matches.len(), 1);
+        assert_eq!(result.matches[0].repo_path.as_deref(), Some(path.as_str()));
     }
 
     #[test]
     fn search_content_all_no_matches_returns_empty() {
+        let cfg = TempDir::new().unwrap();
+        let _registry_guard = empty_repo_registry(&cfg);
         let repo = TempDir::new().unwrap();
         fs::write(repo.path().join("a.txt"), "nothing relevant here\n").unwrap();
-        let indices = dashmap::DashMap::new();
-        indices.insert(
+        let state = state_with_indices(vec![(
             repo.path().to_string_lossy().to_string(),
             ready_index(repo.path()),
-        );
+        )]);
 
-        let result = search_content_all_impl(&indices, "zebrafish", false, 100);
+        let result = search_content_all_impl(&state, "zebrafish", false, 100);
 
         assert!(result.matches.is_empty());
         assert!(!result.truncated);
