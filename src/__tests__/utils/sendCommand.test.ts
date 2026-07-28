@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { containsShellMetacharacters, sendCommand, shouldAutoSubmitSuggestion } from "../../utils/sendCommand";
+import {
+	AGENT_ENTER_GAP_MS,
+	containsShellMetacharacters,
+	sendCommand,
+	shouldAutoSubmitSuggestion,
+} from "../../utils/sendCommand";
 
 /**
  * Fake writer that records every call in order. Returns a resolved promise
@@ -115,6 +120,43 @@ describe("sendCommand", () => {
 		const { writeFn, calls } = makeRecorder();
 		await sendCommand(writeFn, "ls", null, "posix");
 		expect(calls).toEqual(["\x15ls", "\r"]);
+	});
+
+	/**
+	 * Regression: two writes are not two reads. Without an elapsed-time gap the
+	 * PTY coalesces payload + CR into one read() and an Ink/raw-mode agent
+	 * (Codex, Claude Code) renders the CR as a newline in its composer instead
+	 * of submitting — the suggestion is typed but never sent.
+	 */
+	it("separates the Enter from the payload in TIME when an agent is attached", async () => {
+		setPlatform("MacIntel");
+		const stamps: number[] = [];
+		const writeFn = async (): Promise<void> => {
+			stamps.push(performance.now());
+		};
+		await sendCommand(writeFn, "run the tests", "codex", "posix");
+		expect(stamps.length).toBe(2);
+		// setTimeout never fires early; allow a small scheduler tolerance.
+		expect(stamps[1] - stamps[0]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
+	});
+
+	it("does not delay the Enter on a plain shell (line-buffered, no coalescing risk)", async () => {
+		setPlatform("MacIntel");
+		const stamps: number[] = [];
+		const writeFn = async (): Promise<void> => {
+			stamps.push(performance.now());
+		};
+		await sendCommand(writeFn, "ls", null, "posix");
+		expect(stamps[1] - stamps[0]).toBeLessThan(AGENT_ENTER_GAP_MS);
+	});
+
+	it("does not delay when the Enter is withheld", async () => {
+		setPlatform("MacIntel");
+		const started = performance.now();
+		const { writeFn, calls } = makeRecorder();
+		await sendCommand(writeFn, "run the tests", "codex", "posix", false);
+		expect(calls).toEqual(["\x15run the tests"]);
+		expect(performance.now() - started).toBeLessThan(AGENT_ENTER_GAP_MS);
 	});
 });
 

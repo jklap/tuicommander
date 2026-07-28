@@ -4917,11 +4917,17 @@ fn injection_payload(text: &str) -> String {
 /// microsecond-apart back-to-back write — even with a flush in between — is
 /// coalesced into one read and the CR is swallowed as part of the typed buffer,
 /// so the message just sits at the prompt unsubmitted (verified live against
-/// Codex: back-to-back hangs, CR after a gap submits). The frontend
-/// `sendCommand.ts` recipe gets this gap for free — its two `writeFn` calls are
-/// separate IPC round-trips — so this native path must reproduce it explicitly.
+/// Codex: back-to-back hangs, CR after a gap submits).
 /// 50ms comfortably clears the child's read-scheduling latency while staying
 /// imperceptible for a wake message.
+///
+/// This comment used to claim the frontend `sendCommand.ts` recipe "gets this
+/// gap for free — its two `writeFn` calls are separate IPC round-trips". It does
+/// NOT: a Tauri IPC round-trip completes well inside the child's read latency,
+/// so both writes land in one `read()` and a clicked suggestion renders as a
+/// newline instead of submitting. `sendCommand.ts` now waits the same 50ms
+/// (`AGENT_ENTER_GAP_MS`) whenever an agent is attached. Keep the two constants
+/// in step — separate flushes never guaranteed separate reads, only time does.
 const INJECT_ENTER_GAP: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// Type a framed line into a session's PTY as if the user submitted it, waking an
