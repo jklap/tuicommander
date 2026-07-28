@@ -1497,8 +1497,12 @@ fn dewrap_suggest_content(text: &str) -> std::borrow::Cow<'_, str> {
         // Matches a `suggest:` prefix line (with optional whitespace/bullet)
         // that ends with only whitespace before the newline — no item content.
         // Capture group 1: everything up to (but not including) trailing space+\n.
+        // The trailing run is `*`, not `+`: after the keyword rejoin of a
+        // colon-alone row (`\u{2022} suggest` / `  :` at 9 cols) there is no
+        // space left after the colon at all, and requiring one dropped the
+        // narrowest real Codex shape.
         static ref SUGGEST_TRAILING_RE: regex::Regex = regex::Regex::new(&format!(
-            r"(?m)^([\t ]*(?:[{b}][\t ]+)?suggest:[\t ]+)[ \t]*\n",
+            r"(?m)^([\t ]*(?:[{b}][\t ]+)?suggest:[\t ]*)[ \t]*\n",
             b = AGENT_LINE_BULLETS
         ))
         .unwrap();
@@ -4266,6 +4270,55 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             _ => panic!("indented narrow-terminal wrap must parse"),
         };
         assert_eq!(items, vec!["X", "Y", "Z"]);
+    }
+
+    #[test]
+    fn test_suggest_parses_when_the_colon_row_holds_nothing_else() {
+        // Captured live from Codex at 9 columns (2026-07-28): the bullet plus
+        // `suggest` fills the row, so the colon lands alone on the continuation
+        // row and the bracket body starts on the row after that. The keyword
+        // rejoin then yields `suggest:` with NOTHING after it, which the
+        // trailing-space pull refused to join.
+        let items = match parse_suggest(
+            "\u{2022} suggest\n  :\n  [ Alpha\n  | Beta\n  |\n  Gamma ]",
+            true,
+        ) {
+            Some(ParsedEvent::Suggest { items }) => items,
+            _ => panic!("colon-alone narrow-terminal wrap must parse"),
+        };
+        assert_eq!(items, vec!["Alpha", "Beta", "Gamma"]);
+    }
+
+    #[test]
+    fn test_colon_alone_row_still_needs_a_bracket_body() {
+        // Relaxing the trailing-space run to `*` lets any column-0 `suggest:`
+        // pull the next row up. The bracket + item-count guards must still
+        // reject ordinary prose that happens to follow.
+        assert!(
+            parse_suggest("\u{2022} suggest\n  :\n  and then I will refactor", true).is_none(),
+            "a colon-alone row followed by prose must not parse"
+        );
+    }
+
+    #[test]
+    fn test_colon_alone_row_parses_for_an_earlier_keyword_split() {
+        // The colon need not be the split point: at other widths the break
+        // lands mid-word and the colon still ends its row alone.
+        let items = match parse_suggest("\u{2022} sugges\n  t:\n  [ A | B ]", true) {
+            Some(ParsedEvent::Suggest { items }) => items,
+            _ => panic!("mid-word split with a colon-alone row must parse"),
+        };
+        assert_eq!(items, vec!["A", "B"]);
+    }
+
+    #[test]
+    fn test_colon_alone_row_rejects_prose_prefix() {
+        // The column-0 anchor is what keeps prose out; the `*` relaxation must
+        // not weaken it.
+        assert!(
+            parse_suggest("I will suggest:\n  [ A | B ]", true).is_none(),
+            "leading prose must not anchor a wrapped suggest"
+        );
     }
 
     #[test]
