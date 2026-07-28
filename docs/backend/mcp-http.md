@@ -168,6 +168,16 @@ The bridge uses the standard MCP `ping` request for its three-second liveness ch
 
 On reconnect, a peer may reclaim its stable TUIC identity after the prior MCP protocol session has no live SSE subscriber and has missed the bridge activity grace period. The takeover retires the old forward and reverse routing entries atomically. A currently subscribed or recently active owner cannot be replaced.
 
+**Blocking tool handlers run off the runtime worker.** The `session`, `agent`, and
+`config` tool handlers are synchronous and reach genuinely blocking work — `session
+close`/`kill` wait on the child with `std::thread::sleep` (up to 200 ms), agent
+injection sleeps `INJECT_ENTER_GAP` between the payload and the Enter, spawn and
+config paths issue blocking syscalls and disk I/O. `handle_mcp_tool_call_with_context`
+dispatches each of them through `run_blocking_handler` (`tokio::task::spawn_blocking`)
+so they cannot park a tokio worker and stall every other in-flight MCP request; a
+panicking handler comes back as a tool error rather than killing the request task.
+The `POST /mcp` call site does **not** wrap anything itself.
+
 ### Lazy Tool Discovery (`collapse_tools`)
 
 When `collapse_tools: true` in `config.json` (or via Settings > Services > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with exactly three meta-tools (the Speakeasy pattern):

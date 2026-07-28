@@ -1204,6 +1204,25 @@ pub(crate) async fn handle_mcp_tool_call(
     )
 }
 
+/// Run a synchronous tool handler on the blocking pool.
+///
+/// The sync handlers reach genuinely blocking work: `session close`/`kill` wait on the
+/// child with `std::thread::sleep` (up to 200ms in `close_pty_core`/`kill_pty_core`),
+/// agent injection sleeps `INJECT_ENTER_GAP` between the payload and the Enter, and
+/// spawn/config paths issue blocking syscalls and disk I/O. Called inline from an async
+/// handler these park a tokio worker for the whole duration.
+async fn run_blocking_handler<F>(f: F) -> serde_json::Value
+where
+    F: FnOnce() -> serde_json::Value + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f).await {
+        Ok(value) => value,
+        Err(e) => serde_json::json!({
+            "error": format!("tool handler failed to complete: {e}")
+        }),
+    }
+}
+
 async fn handle_mcp_tool_call_with_context(
     state: &Arc<AppState>,
     addr: SocketAddr,
@@ -1254,20 +1273,30 @@ async fn handle_mcp_tool_call_with_context(
                     "error": "This session action is restricted to localhost connections"
                 })
             } else {
-                handle_session(state, args, mcp_session_id)
+                let state = state.clone();
+                let args = args.clone();
+                let sid = mcp_session_id.map(str::to_owned);
+                run_blocking_handler(move || handle_session(&state, &args, sid.as_deref())).await
             }
         }
         "agent" => {
             if args["action"].as_str() == Some("wait") {
                 handle_agent_wait(state, args, mcp_session_id).await
             } else {
-                handle_agent_unified_with_parent_cwd(
-                    state,
-                    addr,
-                    args,
-                    mcp_session_id,
-                    managed_parent_cwd,
-                )
+                let state = state.clone();
+                let args = args.clone();
+                let sid = mcp_session_id.map(str::to_owned);
+                let parent_cwd = managed_parent_cwd.map(str::to_owned);
+                run_blocking_handler(move || {
+                    handle_agent_unified_with_parent_cwd(
+                        &state,
+                        addr,
+                        &args,
+                        sid.as_deref(),
+                        parent_cwd.as_deref(),
+                    )
+                })
+                .await
             }
         }
         "repo" => handle_repo(state, args, is_claude_code).await,
@@ -1275,7 +1304,11 @@ async fn handle_mcp_tool_call_with_context(
         "plugin_dev_guide" => {
             serde_json::json!({"content": super::plugin_docs::PLUGIN_DOCS})
         }
-        "config" => handle_config(state, addr, args),
+        "config" => {
+            let state = state.clone();
+            let args = args.clone();
+            run_blocking_handler(move || handle_config(&state, addr, &args)).await
+        }
         "debug" => handle_debug_unified(state, addr, args),
         "search_tools" => handle_search_tools(state, args),
         "get_tool_schema" => handle_get_tool_schema(state, args),
@@ -4174,7 +4207,9 @@ pub(super) async fn mcp_post(
             );
 
             // Route upstream-prefixed tools ({upstream}__{tool}) via the proxy registry.
-            // Native tools (no "__") go through the sync handler via spawn_blocking.
+            // Native tools (no "__") dispatch through handle_mcp_tool_call_with_context,
+            // which puts each blocking sync handler on the blocking pool itself
+            // (see run_blocking_handler) — this call site does not wrap anything.
             let allowed = resolve_allowed_upstreams(&state, session_id_str.as_deref());
             let (result, is_error) = if tool_name.contains("__") {
                 match state
@@ -5070,6 +5105,54 @@ mod tests {
             )
             .unwrap(),
             native
+        );
+    }
+
+    /// `#[tokio::test]` gives a current-thread runtime: exactly one worker. A sync tool
+    /// handler invoked inline owns that worker for its whole duration, so no other task
+    /// can run — which is what made `session close`/`kill` (200ms of `std::thread::sleep`)
+    /// and agent injection (`INJECT_ENTER_GAP`) stall the whole MCP server.
+    ///
+    /// Here the blocking closure waits for a flag that only a spawned async task can set.
+    /// Routed through `spawn_blocking` the task gets its turn and the flag flips; called
+    /// inline the closure spins to its deadline and reports no progress.
+    #[tokio::test]
+    async fn run_blocking_handler_lets_other_tasks_progress() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let signal = Arc::new(AtomicBool::new(false));
+
+        let setter = signal.clone();
+        tokio::spawn(async move {
+            setter.store(true, Ordering::SeqCst);
+        });
+
+        let observed = signal.clone();
+        let result = run_blocking_handler(move || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            while !observed.load(Ordering::SeqCst) && std::time::Instant::now() < deadline {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            serde_json::json!({"saw_progress": observed.load(Ordering::SeqCst)})
+        })
+        .await;
+
+        assert_eq!(
+            result["saw_progress"], true,
+            "sync tool handlers must run on the blocking pool — running them inline parks the runtime worker"
+        );
+    }
+
+    /// A panicking sync handler must surface as a tool error, not abort the request task.
+    #[tokio::test]
+    async fn run_blocking_handler_reports_a_panicking_handler_as_an_error() {
+        let result = run_blocking_handler(|| panic!("handler exploded")).await;
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("failed to complete"),
+            "expected an error envelope, got {result}"
         );
     }
 
