@@ -91,7 +91,7 @@ pub(crate) mod sleep_prevention;
 pub(crate) mod smart_prompt;
 pub(crate) mod state;
 #[cfg(feature = "desktop")]
-mod tab_shortcut;
+mod native_keys;
 pub(crate) mod tailscale;
 pub(crate) mod terminal_grid;
 pub(crate) mod text_rank;
@@ -1377,8 +1377,9 @@ pub fn run() {
                 // Install Fn/Globe key monitor for push-to-talk dictation
                 dictation::fn_key_monitor::install(app.handle().clone());
 
-                // Install Ctrl+Tab monitor (macOS swallows it before JS/WKWebView)
-                tab_shortcut::install(app.handle().clone());
+                // Install the native key monitor (macOS swallows Ctrl+Tab and F13-F20
+                // before JS/WKWebView ever sees them)
+                native_keys::install(app.handle().clone());
 
                 // Disable macOS press-and-hold accent popup so held keys repeat
                 // in the terminal's hidden input (vim j/l/i — issue #79)
