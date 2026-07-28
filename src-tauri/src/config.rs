@@ -1428,6 +1428,55 @@ pub(crate) fn preserve_redacted_app_config_secrets(config: &mut AppConfig, curre
     }
 }
 
+/// Deep-merge a possibly-partial config payload onto the current config.
+///
+/// `PUT /config` and the MCP `config` tool advertise "config fields to save",
+/// but both used to deserialize the body straight into an `AppConfig`. Every
+/// omitted field then fell back to its serde default — and `ServerConfig`
+/// defaults `enabled` to `false`, so a partial save silently switched remote
+/// access off on disk while the already-bound listener kept serving. The
+/// divergence only surfaced at the next boot, as "it was listening when I quit
+/// and dead when it came back". Merging onto the current snapshot keeps every
+/// unmentioned field intact.
+///
+/// Objects merge key by key; arrays and scalars replace wholesale, so a caller
+/// can still clear a list by sending an empty one or blank a string by sending
+/// `""`.
+pub(crate) fn merge_partial_app_config(
+    current: &AppConfig,
+    incoming: serde_json::Value,
+) -> Result<AppConfig, String> {
+    let mut merged =
+        serde_json::to_value(current).map_err(|e| format!("Could not snapshot config: {e}"))?;
+    merge_json_value(&mut merged, incoming);
+    serde_json::from_value(merged).map_err(|e| format!("Invalid config: {e}"))
+}
+
+fn merge_json_value(base: &mut serde_json::Value, incoming: serde_json::Value) {
+    match (base, incoming) {
+        (serde_json::Value::Object(base_map), serde_json::Value::Object(incoming_map)) => {
+            for (key, value) in incoming_map {
+                merge_json_value(
+                    base_map.entry(key).or_insert(serde_json::Value::Null),
+                    value,
+                );
+            }
+        }
+        (base, incoming) => *base = incoming,
+    }
+}
+
+/// The remote-access settings whose change requires an HTTP server restart.
+/// Shared by every config writer (IPC `save_config`, `PUT /config`, MCP
+/// `config` save) so the transports cannot drift on when to rebind.
+pub(crate) fn server_settings_changed(old: &AppConfig, new: &AppConfig) -> bool {
+    old.services.server.enabled != new.services.server.enabled
+        || old.services.server.port != new.services.server.port
+        || old.services.server.ipv6_enabled != new.services.server.ipv6_enabled
+        || old.services.auth.username != new.services.auth.username
+        || old.services.auth.password_hash != new.services.auth.password_hash
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_app_config() -> AppConfig {
     let path = config_dir().join(APP_CONFIG_FILE);
@@ -2434,6 +2483,101 @@ mod tests {
         assert_eq!(cfg.services.push.vapid_subject, "mailto:test@example.com");
         // Flat fields should be removed after migration
         assert_eq!(cfg.font_family, "JetBrains Mono");
+    }
+
+    #[test]
+    fn merge_partial_keeps_remote_access_enabled() {
+        // The bug: `PUT /config` and the MCP `config` save deserialized a partial
+        // body straight into an AppConfig, so `services.server.enabled` fell back
+        // to its `false` default and remote access silently died on disk while the
+        // bound listener kept serving.
+        let mut current = AppConfig::default();
+        current.services.server.enabled = true;
+        current.services.server.port = 9876;
+
+        let merged = merge_partial_app_config(&current, serde_json::json!({ "font_size": 18 }))
+            .expect("partial payload must merge");
+
+        assert!(
+            merged.services.server.enabled,
+            "a payload that never mentions remote access must not switch it off"
+        );
+        assert_eq!(merged.services.server.port, 9876);
+        assert_eq!(merged.font_size, 18);
+    }
+
+    #[test]
+    fn merge_partial_honors_an_explicit_disable() {
+        // Preserving omitted fields must not make the setting unwritable: a caller
+        // that does mention it still wins.
+        let mut current = AppConfig::default();
+        current.services.server.enabled = true;
+
+        let merged = merge_partial_app_config(
+            &current,
+            serde_json::json!({ "services": { "server": { "enabled": false } } }),
+        )
+        .expect("explicit disable must merge");
+
+        assert!(!merged.services.server.enabled);
+    }
+
+    #[test]
+    fn merge_partial_merges_siblings_and_replaces_lists() {
+        // Objects merge key by key, so touching one field under `services.server`
+        // leaves its siblings alone; arrays replace wholesale so a caller can
+        // still clear a list by sending an empty one.
+        let mut current = AppConfig::default();
+        current.services.server.enabled = true;
+        current.services.server.ipv6_enabled = true;
+        current.disabled_plugin_ids = vec!["one".to_string(), "two".to_string()];
+
+        let merged = merge_partial_app_config(
+            &current,
+            serde_json::json!({
+                "services": { "server": { "port": 9999 } },
+                "disabled_plugin_ids": []
+            }),
+        )
+        .expect("sibling merge must succeed");
+
+        assert_eq!(merged.services.server.port, 9999);
+        assert!(merged.services.server.enabled, "sibling must survive");
+        assert!(merged.services.server.ipv6_enabled, "sibling must survive");
+        assert!(
+            merged.disabled_plugin_ids.is_empty(),
+            "list must be cleared"
+        );
+    }
+
+    #[test]
+    fn merge_partial_rejects_a_type_mismatch() {
+        let current = AppConfig::default();
+        assert!(
+            merge_partial_app_config(&current, serde_json::json!({ "font_size": "big" })).is_err(),
+            "a wrongly-typed field must fail loudly, not silently default"
+        );
+    }
+
+    #[test]
+    fn server_settings_changed_covers_every_rebind_trigger() {
+        let base = AppConfig::default();
+        assert!(!server_settings_changed(&base, &base.clone()));
+
+        for mutate in [
+            (|c: &mut AppConfig| c.services.server.enabled = true) as fn(&mut AppConfig),
+            |c: &mut AppConfig| c.services.server.port = 1234,
+            |c: &mut AppConfig| c.services.server.ipv6_enabled = true,
+            |c: &mut AppConfig| c.services.auth.username = "admin".to_string(),
+            |c: &mut AppConfig| c.services.auth.password_hash = "hash".to_string(),
+        ] {
+            let mut changed = base.clone();
+            mutate(&mut changed);
+            assert!(
+                server_settings_changed(&base, &changed),
+                "every listener-affecting field must trigger a rebind"
+            );
+        }
     }
 
     #[test]

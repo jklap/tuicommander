@@ -768,6 +768,15 @@ PUT /config
 
 Load/save `AppConfig`.
 
+`PUT /config` **merges** its body onto the live config rather than replacing it, so
+a caller may send only the fields it wants changed. Objects merge key by key;
+arrays and scalars replace wholesale (an empty array still clears a list, `""`
+still blanks a string). A wrongly-typed field is a `400`, never a silent default.
+When the body moves `services.server.{enabled,port,ipv6_enabled}` or
+`services.auth.{username,password_hash}`, the HTTP listener is rebound just as the
+IPC `save_config` does, so the running process cannot keep serving a configuration
+the disk no longer agrees with.
+
 `GET /config` redacts remote-access secrets (`services.auth.password_hash`,
 `services.auth.session_token`, `services.relay.token`, and
 `services.push.vapid_private_key`). Secret presence is exposed only through
