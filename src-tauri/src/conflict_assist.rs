@@ -65,6 +65,73 @@ fn emit_conflict_assist_status(
 ) {
 }
 
+/// Fetch the PR base branch and decide what `git rebase` should target.
+///
+/// Rebasing onto the bare branch name resolves against the local `refs/heads/<base>`,
+/// which may be days stale — the rebase then comes back `clean` against an old base and
+/// the user pushes a PR that actually conflicts. Mirrors `local_pr_diff` in `github.rs`:
+/// fetch `+refs/heads/<base>:refs/remotes/origin/<base>` and rebase the remote-tracking
+/// ref, so "clean" means clean against what origin has right now.
+///
+/// Falls back to the bare name when no remote-tracking ref exists afterwards — a
+/// local-only base branch or an unreachable origin should still get a (clearly
+/// local) answer rather than a hard failure.
+fn resolve_rebase_target(repo: &Path, base_ref: &str) -> String {
+    let remote_ref = format!("refs/remotes/origin/{base_ref}");
+    let refspec = format!("+refs/heads/{base_ref}:{remote_ref}");
+    let _ = crate::git_cli::git_cmd(repo)
+        .args(["fetch", "--no-tags", "origin", &refspec])
+        .run_silent();
+
+    let exists = crate::git_cli::git_cmd(repo)
+        .args([
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("{remote_ref}^{{commit}}"),
+        ])
+        .run()
+        .is_ok();
+
+    if exists {
+        remote_ref
+    } else {
+        base_ref.to_string()
+    }
+}
+
+/// Rebase `worktree` onto `rebase_target` and report what happened.
+///
+/// Split out from the command so the three outcomes — clean, conflicted, and failed for
+/// some other reason — are reachable from tests against a fixture repo without any
+/// network or PR plumbing.
+fn rebase_and_collect_conflicts(
+    worktree: &Path,
+    rebase_target: &str,
+) -> (bool, Vec<String>, String) {
+    // `run_raw` so a conflicting rebase (non-zero exit) is inspected rather than
+    // treated as a hard error.
+    let rebase = crate::git_cli::git_cmd(worktree)
+        .args(["rebase", "--", rebase_target])
+        .run_raw();
+    let (rebase_ok, rebase_stderr) = match rebase {
+        Ok(out) => (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stderr).to_string(),
+        ),
+        Err(e) => (false, format!("git rebase failed to start: {e}")),
+    };
+
+    let status_out = crate::git_cli::git_cmd(worktree)
+        .args(["status", "--porcelain"])
+        .run()
+        .map(|o| o.stdout)
+        .unwrap_or_default();
+    let conflicted = crate::git_cli::parse_conflicted_files_porcelain(&status_out);
+
+    (rebase_ok, conflicted, rebase_stderr)
+}
+
 pub(crate) async fn start_conflict_assist_impl(
     repo_path: String,
     pr_number: i64,
@@ -109,21 +176,11 @@ pub(crate) async fn start_conflict_assist_impl(
             )?;
             let wt_path = wt.path.clone();
 
-            // Rebase onto the base. `run_raw` so a conflicting rebase (non-zero
-            // exit) is inspected rather than treated as a hard error.
-            let rebase = crate::git_cli::git_cmd(&wt_path)
-                .args(["rebase", "--", &base_ref_for_git])
-                .run_raw()
-                .map_err(|e| format!("git rebase failed to start: {e}"))?;
-            let rebase_ok = rebase.status.success();
-            let rebase_stderr = String::from_utf8_lossy(&rebase.stderr).to_string();
-
-            let status_out = crate::git_cli::git_cmd(&wt_path)
-                .args(["status", "--porcelain"])
-                .run()
-                .map(|o| o.stdout)
-                .unwrap_or_default();
-            let conflicted = crate::git_cli::parse_conflicted_files_porcelain(&status_out);
+            // Rebase onto what origin has now, not a possibly-stale local branch.
+            let rebase_target =
+                resolve_rebase_target(Path::new(&repo_path_for_git), &base_ref_for_git);
+            let (rebase_ok, conflicted, rebase_stderr) =
+                rebase_and_collect_conflicts(&wt_path, &rebase_target);
 
             Ok((
                 wt_path.to_string_lossy().to_string(),
@@ -139,10 +196,15 @@ pub(crate) async fn start_conflict_assist_impl(
     // another reason (missing base ref, dirty tree, …). Surface it instead of
     // reporting a phantom "conflicts" state with an empty file list.
     if !rebase_ok && conflicted.is_empty() {
-        return Err(format!(
-            "Rebase onto {} failed (not a conflict): {}",
-            base_ref,
-            rebase_stderr.trim()
+        // Abort before returning: git may have stopped mid-rebase (detached HEAD,
+        // rebase-merge state on disk), and leaving it that way strands the worktree
+        // so every later run fails with "a rebase is already in progress". Same
+        // recovery the merge/rebase paths in git.rs and worktree.rs use.
+        return Err(crate::git_cli::finish_failed_git_operation_after_abort(
+            Path::new(&worktree_path),
+            "rebase",
+            &format!("Rebase onto {base_ref} failed (not a conflict)"),
+            rebase_stderr.trim(),
         ));
     }
 
@@ -176,4 +238,190 @@ pub(crate) async fn start_conflict_assist(
 ) -> Result<ConflictAssistResult, String> {
     let state = state.inner().clone();
     start_conflict_assist_impl(repo_path, pr_number, &state).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    fn git(repo: &Path, args: &[&str]) -> std::process::Output {
+        Command::new("git")
+            .current_dir(repo)
+            .args(args)
+            .output()
+            .expect("git")
+    }
+
+    fn write(repo: &Path, name: &str, body: &str) {
+        std::fs::write(repo.join(name), body).expect("write");
+    }
+
+    /// A repo on `main` with one commit, plus a `feature` branch forked from it.
+    /// Both branches are left ready for the caller to add divergent commits.
+    fn fixture() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().to_path_buf();
+        git(&path, &["init", "--initial-branch=main"]);
+        git(&path, &["config", "user.email", "test@test.com"]);
+        git(&path, &["config", "user.name", "Test"]);
+        write(&path, "shared.txt", "base\n");
+        git(&path, &["add", "."]);
+        git(&path, &["commit", "-m", "base"]);
+        git(&path, &["branch", "feature"]);
+        (dir, path)
+    }
+
+    /// Advance `branch` with a commit touching `file`.
+    fn commit_on(repo: &Path, branch: &str, file: &str, body: &str, msg: &str) {
+        git(repo, &["checkout", branch]);
+        write(repo, file, body);
+        git(repo, &["add", "."]);
+        git(repo, &["commit", "-m", msg]);
+    }
+
+    #[test]
+    fn clean_rebase_reports_no_conflicts() {
+        let (_d, repo) = fixture();
+        // main and feature touch different files — nothing to collide.
+        commit_on(&repo, "main", "on_main.txt", "main\n", "main work");
+        commit_on(
+            &repo,
+            "feature",
+            "on_feature.txt",
+            "feature\n",
+            "feature work",
+        );
+
+        let (ok, conflicted, stderr) = rebase_and_collect_conflicts(&repo, "main");
+        assert!(ok, "clean rebase must succeed: {stderr}");
+        assert!(
+            conflicted.is_empty(),
+            "unexpected conflicts: {conflicted:?}"
+        );
+    }
+
+    #[test]
+    fn conflicting_rebase_reports_the_conflicted_file() {
+        let (_d, repo) = fixture();
+        // Both sides edit the same line of the same file.
+        commit_on(&repo, "main", "shared.txt", "from main\n", "main edit");
+        commit_on(
+            &repo,
+            "feature",
+            "shared.txt",
+            "from feature\n",
+            "feature edit",
+        );
+
+        let (ok, conflicted, _) = rebase_and_collect_conflicts(&repo, "main");
+        assert!(!ok, "a conflicting rebase must not report success");
+        assert_eq!(conflicted, vec!["shared.txt"]);
+    }
+
+    /// The case the abort exists for: the rebase fails without producing any
+    /// unmerged file, so the caller cannot tell it apart from a conflict by the
+    /// file list alone and must not leave the repo mid-rebase.
+    #[test]
+    fn rebase_failure_without_conflicts_yields_empty_file_list() {
+        let (_d, repo) = fixture();
+        commit_on(
+            &repo,
+            "feature",
+            "on_feature.txt",
+            "feature\n",
+            "feature work",
+        );
+
+        let (ok, conflicted, stderr) =
+            rebase_and_collect_conflicts(&repo, "refs/remotes/origin/nope");
+        assert!(!ok, "rebase onto a missing ref must fail");
+        assert!(
+            conflicted.is_empty(),
+            "a missing base is not a conflict, got {conflicted:?}"
+        );
+        assert!(!stderr.trim().is_empty(), "the failure must carry a reason");
+    }
+
+    /// After a failed rebase the abort must leave the worktree usable — otherwise
+    /// every later conflict-assist run dies with "a rebase is already in progress".
+    #[test]
+    fn abort_after_a_failed_rebase_leaves_the_worktree_clean() {
+        let (_d, repo) = fixture();
+        commit_on(&repo, "main", "shared.txt", "from main\n", "main edit");
+        commit_on(
+            &repo,
+            "feature",
+            "shared.txt",
+            "from feature\n",
+            "feature edit",
+        );
+
+        let (ok, conflicted, _) = rebase_and_collect_conflicts(&repo, "main");
+        assert!(
+            !ok && !conflicted.is_empty(),
+            "precondition: conflicted rebase"
+        );
+
+        let msg = crate::git_cli::finish_failed_git_operation_after_abort(
+            &repo,
+            "rebase",
+            "Rebase failed",
+            "boom",
+        );
+        assert!(msg.contains("aborted"), "abort must be reported: {msg}");
+
+        let status = git(&repo, &["status", "--porcelain"]);
+        assert!(
+            String::from_utf8_lossy(&status.stdout).trim().is_empty(),
+            "worktree must be clean after abort"
+        );
+        // And a fresh rebase must be startable again.
+        let (_, _, stderr) = rebase_and_collect_conflicts(&repo, "main");
+        assert!(
+            !stderr.contains("already in progress"),
+            "repo left mid-rebase: {stderr}"
+        );
+    }
+
+    /// No origin configured: the fetch fails, no remote-tracking ref appears, and the
+    /// bare branch name must still be usable rather than a ref that does not exist.
+    #[test]
+    fn rebase_target_falls_back_to_the_local_branch_without_a_remote() {
+        let (_d, repo) = fixture();
+        assert_eq!(resolve_rebase_target(&repo, "main"), "main");
+    }
+
+    /// With a reachable origin the remote-tracking ref wins — that is the whole point:
+    /// "clean" must mean clean against what origin has now, not a stale local branch.
+    #[test]
+    fn rebase_target_prefers_the_remote_tracking_ref() {
+        let (_origin_dir, origin) = fixture();
+        let clone_dir = tempfile::tempdir().expect("tempdir");
+        let clone = clone_dir.path().join("clone");
+        let out = Command::new("git")
+            .args(["clone", origin.to_str().unwrap(), clone.to_str().unwrap()])
+            .output()
+            .expect("git clone");
+        assert!(out.status.success(), "clone failed");
+        git(&clone, &["config", "user.email", "test@test.com"]);
+        git(&clone, &["config", "user.name", "Test"]);
+
+        // origin moves ahead after the clone — the local refs/heads/main is now stale.
+        commit_on(&origin, "main", "on_main.txt", "main\n", "main work");
+
+        assert_eq!(
+            resolve_rebase_target(&clone, "main"),
+            "refs/remotes/origin/main"
+        );
+        // And the fetch actually advanced it, so a rebase would see the new commit.
+        let rev = git(&clone, &["rev-parse", "refs/remotes/origin/main"]);
+        let local = git(&clone, &["rev-parse", "refs/heads/main"]);
+        assert_ne!(
+            String::from_utf8_lossy(&rev.stdout),
+            String::from_utf8_lossy(&local.stdout),
+            "remote-tracking ref must be ahead of the stale local branch"
+        );
+    }
 }
