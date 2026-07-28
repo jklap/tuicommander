@@ -17,6 +17,7 @@ import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
+import { safeUnlisten } from "../../utils/safeUnlisten";
 import { getAwaitingInputSound } from "./awaitingInputSound";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
@@ -160,11 +161,15 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	let sessionInitialized = false;
 	let disposed = false;
 	let unsubscribePty: Unsubscribe | undefined;
-	let unlistenParsed: (() => void) | undefined;
-	let unlistenKitty: (() => void) | undefined;
-	let unlistenOsc133: (() => void) | undefined;
-	let unlistenTitle: (() => void) | undefined;
-	let unlistenClipboardStore: (() => void) | undefined;
+	// Tauri's `listen()` resolves to `async () => _unlisten(...)`: calling these
+	// returns a PROMISE that rejects when the listener is already gone. Typed as
+	// such so every teardown goes through `safeUnlisten` instead of a
+	// synchronous try/catch that cannot see the rejection.
+	let unlistenParsed: (() => unknown) | undefined;
+	let unlistenKitty: (() => unknown) | undefined;
+	let unlistenOsc133: (() => unknown) | undefined;
+	let unlistenTitle: (() => unknown) | undefined;
+	let unlistenClipboardStore: (() => unknown) | undefined;
 
 	let kittyFlags = 0;
 
@@ -609,7 +614,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				handleParsedEvent(event.payload);
 			});
 			if (disposed) {
-				unlistenParsed();
+				safeUnlisten(unlistenParsed);
 				unlistenParsed = undefined;
 				return;
 			}
@@ -619,7 +624,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				kittyFlags = event.payload;
 			});
 			if (disposed) {
-				unlistenKitty();
+				safeUnlisten(unlistenKitty);
 				unlistenKitty = undefined;
 				return;
 			}
@@ -634,7 +639,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				},
 			);
 			if (disposed) {
-				unlistenOsc133();
+				safeUnlisten(unlistenOsc133);
 				unlistenOsc133 = undefined;
 				return;
 			}
@@ -657,6 +662,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					}
 				}
 			});
+			// Unmounting during the await above leaves this listener attached:
+			// onCleanup already ran and saw `unlistenTitle` still undefined. Every
+			// sibling listener has this guard; this one was missing it.
+			if (disposed) {
+				safeUnlisten(unlistenTitle);
+				unlistenTitle = undefined;
+				return;
+			}
 
 			// Listen for OSC 52 clipboard store from Rust (native renderer).
 			// OSC 52 is honored from anywhere in the byte stream, so a displayed file/log
@@ -670,7 +683,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				toastsStore.add("Clipboard updated", `by ${name}`, "info");
 			});
 			if (disposed) {
-				unlistenClipboardStore();
+				safeUnlisten(unlistenClipboardStore);
 				unlistenClipboardStore = undefined;
 				return;
 			}
@@ -748,41 +761,17 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					);
 					sessionId = null;
 					setCurrentSessionId(null);
-					try {
-						unsubscribePty?.();
-					} catch {
-						/* listener already gone */
-					}
+					safeUnlisten(unsubscribePty);
 					unsubscribePty = undefined;
-					try {
-						unlistenParsed?.();
-					} catch {
-						/* */
-					}
+					safeUnlisten(unlistenParsed);
 					unlistenParsed = undefined;
-					try {
-						unlistenKitty?.();
-					} catch {
-						/* */
-					}
+					safeUnlisten(unlistenKitty);
 					unlistenKitty = undefined;
-					try {
-						unlistenOsc133?.();
-					} catch {
-						/* */
-					}
+					safeUnlisten(unlistenOsc133);
 					unlistenOsc133 = undefined;
-					try {
-						unlistenTitle?.();
-					} catch {
-						/* */
-					}
+					safeUnlisten(unlistenTitle);
 					unlistenTitle = undefined;
-					try {
-						unlistenClipboardStore?.();
-					} catch {
-						/* */
-					}
+					safeUnlisten(unlistenClipboardStore);
 					unlistenClipboardStore = undefined;
 				}
 			}
@@ -907,13 +896,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		clearTimeout(retryTimer);
 		clearTimeout(agentDetectTimer);
 		clearTimeout(questionDebounceTimer);
-		const safeUnlisten = (fn: (() => void) | undefined) => {
-			try {
-				fn?.();
-			} catch {
-				/* listener already gone */
-			}
-		};
 		safeUnlisten(unsubscribePty);
 		unsubscribePty = undefined;
 		safeUnlisten(unlistenParsed);
