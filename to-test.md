@@ -1484,3 +1484,14 @@ worktree build's HTTP API on :9877 or the desktop app._
 
 - [ ] [VISUAL] Commenting a word that repeats many times in the doc (e.g. "reason" ×18) highlights the ACTUAL selected occurrence, not the first one. _(root cause: `findSourceMatch` used first-occurrence `indexOf`; fixed with DOM occurrence-ordinal → Nth source occurrence. Logic verified in `tweakComments.test.ts` incl. real-file offsets; visual anchor position needs an eye.)_
 - [ ] [VISUAL] Selecting text overlapping an existing highlight hides the "Add comment" button; keyboard-selecting over one and saving shows "That text already has a comment" instead of silently nesting/vanishing. _(logic verified: overlap-rejection + OverlappingCommentError; DOM pre-filter `rangeIntersectsHighlight` needs a visual check.)_
+
+## Native key monitor: F13-F20 + Ctrl+Tab (#495-ec28, 2026-07-28, Rust — needs `make dev` restart)
+
+- [ ] Help > Keyboard Shortcuts > pencil on any action, press **F13** (or F16-F20): the combo is recorded and persists. Repeat with a modifier (Cmd+F13) — the recorded string must match what a normal key produces. Same for the Global Hotkey field at the top of the tab.
+- [ ] **Ctrl+Tab / Ctrl+Shift+Tab still cycle tabs** — the Ctrl+Tab monitor moved from `tab_shortcut.rs` into the same `native_keys.rs` monitor, so this is the regression to watch.
+- [ ] F13-F20 keep their normal behaviour when NO recorder is open (the listener is only attached while capturing).
+- [ ] If **F14/F15** record nothing: check `curl 'http://localhost:9876/logs?source=native-keys'`. A "extended function key observed" line means AppKit delivered it and the gap is downstream; no line means macOS consumed the key system-wide for keyboard illumination — remap it in System Settings, not a bug here.
+
+## Config partial saves (2026-07-28, Rust — needs `make dev` restart)
+
+- [ ] With remote access ON, `curl -X PUT localhost:9876/config -H 'Content-Type: application/json' -d '{"font_size":18}'`, then `curl localhost:9876/config` and check `services.server.enabled` is still `true` — and that it survives an app restart.
