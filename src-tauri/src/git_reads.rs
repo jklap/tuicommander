@@ -1639,13 +1639,54 @@ mod tests {
             .unwrap(),
         );
 
-        // blame on a committed, tracked file
+        // blame on a committed, tracked file.
+        //
+        // a.txt has a staged line, which git attributes to the all-zero hash with
+        // `author_time` = wall-clock *now*. The two implementations are separate `git blame`
+        // invocations, so comparing that field byte-for-byte tests whether the clock ticked
+        // between them, not whether the implementations agree — it fails whenever the two
+        // calls straddle a second boundary (rare, and widened by a loaded parallel test run).
+        //
+        // Lift those timestamps out, compare everything else strictly, then assert the two
+        // are both live and close. That is a stronger claim than the original: it also
+        // pins that an uncommitted row exists at all and that neither side reports a
+        // zero/stale time.
+        fn take_uncommitted_times(value: &mut serde_json::Value) -> Vec<i64> {
+            const UNCOMMITTED: &str = "0000000000000000000000000000000000000000";
+            let mut times = Vec::new();
+            for row in value.as_array_mut().into_iter().flatten() {
+                if row["hash"].as_str() == Some(UNCOMMITTED) {
+                    times.push(row["author_time"].as_i64().unwrap_or_default());
+                    row["author_time"] = serde_json::json!("<wall-clock>");
+                }
+            }
+            times
+        }
+
         let bl_a = cli.blame(&repo, "a.txt").unwrap();
         let bl_b = crate::git::blame_cli(&repo, "a.txt").unwrap();
+        let mut blame_a = serde_json::to_value(&bl_a).unwrap();
+        let mut blame_b = serde_json::to_value(&bl_b).unwrap();
+        let times_a = take_uncommitted_times(&mut blame_a);
+        let times_b = take_uncommitted_times(&mut blame_b);
+
+        assert_eq!(blame_a, blame_b);
         assert_eq!(
-            serde_json::to_value(&bl_a).unwrap(),
-            serde_json::to_value(&bl_b).unwrap(),
+            times_a.len(),
+            times_b.len(),
+            "both implementations must report the same uncommitted rows"
         );
+        assert!(
+            !times_a.is_empty(),
+            "a.txt has a staged line, so blame must report an uncommitted row"
+        );
+        for (a, b) in times_a.iter().zip(&times_b) {
+            assert!(*a > 0 && *b > 0, "uncommitted row needs a live time: {a}, {b}");
+            assert!(
+                (a - b).abs() <= 2,
+                "uncommitted author_time should track the wall clock on both sides: {a} vs {b}"
+            );
+        }
         assert!(!bl_a.is_empty());
     }
 }
