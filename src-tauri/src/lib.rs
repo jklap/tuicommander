@@ -247,11 +247,7 @@ fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Re
     let old = state.config.read().clone();
     let mut config = config;
     config::preserve_redacted_app_config_secrets(&mut config, &old);
-    let server_changed = old.services.server.enabled != config.services.server.enabled
-        || old.services.server.port != config.services.server.port
-        || old.services.auth.username != config.services.auth.username
-        || old.services.auth.password_hash != config.services.auth.password_hash
-        || old.services.server.ipv6_enabled != config.services.server.ipv6_enabled;
+    let server_changed = config::server_settings_changed(&old, &config);
 
     let tools_changed = old.disabled_native_tools != config.disabled_native_tools
         || old.collapse_tools != config.collapse_tools;

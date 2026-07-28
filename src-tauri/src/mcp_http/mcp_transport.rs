@@ -3386,27 +3386,31 @@ fn handle_config(
                     return serde_json::json!({"error": "Action 'save' requires 'config' object"});
                 }
             };
-            let mut config: crate::config::AppConfig =
-                match serde_json::from_value(config_val.clone()) {
-                    Ok(c) => c,
-                    Err(e) => return serde_json::json!({"error": format!("Invalid config: {}", e)}),
-                };
-            // Preserve server-managed secrets
+            // The schema advertises "config fields to save", so callers legitimately
+            // send a subset. Merge it onto the live config — deserializing the
+            // payload on its own would default every omitted field away.
+            let old = state.config.read().clone();
+            let mut config = match crate::config::merge_partial_app_config(&old, config_val.clone())
             {
-                let current = state.config.read();
-                crate::config::preserve_redacted_app_config_secrets(&mut config, &current);
-            }
+                Ok(c) => c,
+                Err(e) => return serde_json::json!({"error": e}),
+            };
+            // Preserve server-managed secrets
+            crate::config::preserve_redacted_app_config_secrets(&mut config, &old);
+            let server_changed = crate::config::server_settings_changed(&old, &config);
             match crate::config::save_app_config(config.clone()) {
                 Ok(()) => {
-                    let (old_disabled, old_collapse) = {
-                        let c = state.config.read();
-                        (c.disabled_native_tools.clone(), c.collapse_tools)
-                    };
                     *state.config.write() = config.clone();
-                    if old_disabled != config.disabled_native_tools
-                        || old_collapse != config.collapse_tools
+                    if old.disabled_native_tools != config.disabled_native_tools
+                        || old.collapse_tools != config.collapse_tools
                     {
                         let _ = state.mcp_tools_changed.send(());
+                    }
+                    if server_changed {
+                        super::restart_after_server_settings_change(
+                            state,
+                            "remote-access configuration changed over MCP",
+                        );
                     }
                     serde_json::json!({"ok": true})
                 }

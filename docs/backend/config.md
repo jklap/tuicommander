@@ -33,6 +33,21 @@ Frontend surfaces that update this full-document configuration use the shared
 → save sequence so simultaneous General, Services, and plugin changes cannot
 overwrite one another with stale snapshots.
 
+**Partial saves merge, they do not replace.** The IPC `save_config`, `PUT /config`
+and the MCP `config` tool (`action: "save"`) all accept a body that mentions only
+the fields being changed; `merge_partial_app_config` deep-merges it onto the live
+config before persisting. Objects merge key by key, arrays and scalars replace
+wholesale (so an empty array still clears a list, and `""` still blanks a string).
+This is not cosmetic: every field carries `#[serde(default)]`, so deserializing a
+partial body on its own reset the omitted ones — `services.server.enabled` defaults
+to `false`, which is how a partial save used to switch remote access off on disk
+while the already-bound listener kept serving, surfacing only at the next boot.
+
+All three writers also share `server_settings_changed` and rebind the listener
+through `restart_after_server_settings_change` when `services.server.{enabled,port,
+ipv6_enabled}` or `services.auth.{username,password_hash}` move, so the running
+process can never serve a configuration the disk disagrees with.
+
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `shell` | `Option<String>` | `None` | Shell override (platform default if None) |

@@ -55,27 +55,41 @@ pub(super) async fn put_config(
     State(state): State<Arc<AppState>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     auth: Option<Extension<Authenticated>>,
-    Json(config): Json<crate::config::AppConfig>,
+    Json(incoming): Json<serde_json::Value>,
 ) -> impl IntoResponse {
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
+    // Merge onto the live config: the body may mention only the fields the
+    // caller wants changed, and a full-replace would default the rest away.
+    let old = state.config.read().clone();
+    let mut config = match crate::config::merge_partial_app_config(&old, incoming) {
+        Ok(c) => c,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": e})),
+            );
+        }
+    };
     // Preserve server-managed secrets — clients must not overwrite these via save
-    let mut config = config;
-    {
-        let current = state.config.read();
-        crate::config::preserve_redacted_app_config_secrets(&mut config, &current);
-    }
+    crate::config::preserve_redacted_app_config_secrets(&mut config, &old);
+    let server_changed = crate::config::server_settings_changed(&old, &config);
     match crate::config::save_app_config(config.clone()) {
         Ok(()) => {
-            let (old_disabled, old_collapse) = {
-                let c = state.config.read();
-                (c.disabled_native_tools.clone(), c.collapse_tools)
-            };
             *state.config.write() = config.clone();
-            if old_disabled != config.disabled_native_tools || old_collapse != config.collapse_tools
+            if old.disabled_native_tools != config.disabled_native_tools
+                || old.collapse_tools != config.collapse_tools
             {
                 let _ = state.mcp_tools_changed.send(());
+            }
+            // Parity with the IPC `save_config`: rebind the listener so the
+            // running process cannot keep serving a config the disk disagrees with.
+            if server_changed {
+                super::restart_after_server_settings_change(
+                    &state,
+                    "remote-access configuration changed over HTTP",
+                );
             }
             (StatusCode::OK, Json(serde_json::json!({"ok": true})))
         }

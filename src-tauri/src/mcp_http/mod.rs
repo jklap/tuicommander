@@ -1495,6 +1495,20 @@ pub fn build_remote_router(state: Arc<AppState>) -> Router {
     public_routes.merge(authed)
 }
 
+/// Rebind the TCP listener after a config write changed remote-access settings.
+///
+/// The IPC `save_config` has always done this; the HTTP and MCP config writers
+/// did not, so a save over those transports left the running process serving a
+/// state the disk no longer agreed with. Routed through one helper so the
+/// transports cannot drift again. No-op in the headless binary, which has no
+/// desktop restart plumbing.
+pub(crate) fn restart_after_server_settings_change(state: &Arc<AppState>, reason: &'static str) {
+    #[cfg(feature = "desktop")]
+    crate::restart_server(state, reason);
+    #[cfg(not(feature = "desktop"))]
+    let _ = (state, reason);
+}
+
 /// Start the HTTP API server.
 ///
 /// **Unix socket** (macOS/Linux): always starts at `<config_dir>/mcp.sock`.

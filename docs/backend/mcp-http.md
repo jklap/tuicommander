@@ -101,6 +101,15 @@ The socket at `<config_dir>/mcp.sock` is managed with two safety layers to survi
 `services.relay.token`, and `services.push.vapid_private_key`. The config shape
 exposes only the corresponding `*_exists` booleans for secret presence.
 
+`PUT /config` and MCP `config action=save` both advertise "config fields to save"
+and both accept a partial body: it is deep-merged onto the live config by
+`merge_partial_app_config`, so an omitted field keeps its current value instead of
+falling back to its serde default. Both also share `server_settings_changed` with
+the IPC `save_config` and rebind the listener through
+`restart_after_server_settings_change`, so no transport can leave the process
+serving a configuration the disk disagrees with. See
+[`config.md`](config.md#application-config-configjson) for the merge semantics.
+
 ### Agents
 
 | Method | Path | Description |
