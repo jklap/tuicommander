@@ -1448,6 +1448,17 @@ All data persisted to platform config directory via Rust:
 | Click | Status bar panel buttons | Toggle panels |
 | Hold | Mic button (status bar) | Record dictation |
 
+### Recording a Custom Combo
+Every shortcut above is rebindable from Help > Keyboard Shortcuts (see
+[`docs/user-guide/keyboard-shortcuts.md`](user-guide/keyboard-shortcuts.md)).
+On macOS, `Ctrl+Tab` and `F13`–`F20` never reach the WebView — AppKit consumes the
+first for native tab cycling and simply does not forward the rest — so a
+`keydown` listener sees nothing. `src-tauri/src/native_keys.rs` installs a single
+`NSEvent` monitor that catches both and re-emits them (`ctrl-tab`,
+`native-key-down`), which is what makes `F13`–`F20` recordable for both per-action
+shortcuts and the Global Hotkey. Keys macOS itself claims before the process
+(`F14`/`F15` keyboard illumination) still need remapping in System Settings.
+
 ---
 
 ## 16. Build & Release

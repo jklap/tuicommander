@@ -140,6 +140,33 @@ Returns cleanup function to remove listener on unmount.
 
 ---
 
+## useNativeKeyCombo
+
+**File:** `src/hooks/useNativeKeyCombo.ts`
+
+Feeds natively-captured keys into a shortcut recorder. macOS never delivers `F13`–`F20`
+to WKWebView, so a `keydown` listener sees nothing at all and those keys look unbindable
+even though `keyEventToCombo`, `validateGlobalHotkeyCombo` and the `global-hotkey` crate
+all accept them. `src-tauri/src/native_keys.rs` catches them with an `NSEvent` monitor and
+re-emits `native-key-down`; this hook turns that back into the same combo string the DOM
+path produces.
+
+```typescript
+useNativeKeyCombo(active: () => boolean, onCombo: (combo: string) => void): void
+export function nativeKeyToCombo(payload: NativeKeyDown): string
+```
+
+- The listener is attached **only while `active()` is true**, so these keys keep their
+  normal behaviour everywhere else in the app.
+- `nativeKeyToCombo` mirrors `keyEventToCombo`'s modifier order (Cmd, Ctrl, Alt, Shift) —
+  the two are compared against each other for conflicts and persisted to the same store,
+  so a mismatch would make one physical chord compare as two different combos.
+- No-op outside Tauri (`isTauri()`); the event does not exist in browser mode.
+- Consumers: `KeyComboCapture` (Global Hotkey) and `KeyboardShortcutsTab` (per-action
+  recording), both routing the result through the same conflict check as the DOM path.
+
+---
+
 ## useGitHub
 
 **File:** `src/hooks/useGitHub.ts`

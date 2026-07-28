@@ -53,8 +53,11 @@ When adding or changing shortcuts:
 |------|----------------|
 | `src/keybindingDefaults.ts` | ACTION_NAMES + default key combo |
 | `src/actions/actionRegistry.ts` | ACTION_META (label, category) — auto-populates Settings and Command Palette |
+| `src-tauri/src/native_keys.rs` | macOS `NSEvent` monitor for keys WKWebView never forwards (Ctrl+Tab, F13–F20). **Keep it as ONE `KeyDown` monitor** — a second one doubles per-keystroke work on every key typed |
+| `src/hooks/useNativeKeyCombo.ts` | Turns `native-key-down` back into a combo string identical to `keyEventToCombo`'s; used by every recorder |
 | `docs/FEATURES.md` | Section 15 (Keyboard Shortcut Reference) |
 | `docs/user-guide/keyboard-shortcuts.md` | User-facing shortcut table |
+| `docs/frontend/hooks.md` | `useNativeKeyCombo` entry |
 
 ### Tauri Commands & IPC
 When adding or changing Tauri commands:
@@ -78,6 +81,8 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | `review-progress` | `{ repo_path: string, payload: { pr_number, summary, files, phase, done, llm_used, llm_model } }` | `diff_triage.rs` `ProgressSink::PrReview` during `run_pr_review`; also sent on `event_bus` for `/events` SSE | `githubOpsStore` listener updates per-PR review progress |
 | `conflict-assist-status` | `{ repo_path: string, payload: { pr_number, status, conflicted_files } }` | `conflict_assist.rs` `emit_conflict_assist_status()` lifecycle; also sent on `event_bus` for `/events` SSE | `githubOpsStore` listener updates conflict-assist state |
 | `proposals-ready` | `{ repo_path: string, payload: ImprovementScanResult }` | `improvement_scan.rs` after `run_improvement_scan` completes; also sent on `event_bus` for `/events` SSE | `githubOpsStore` listener accumulates proposals for the GitHub Ops dashboard |
+| `ctrl-tab` | `"next"` \| `"prev"` | `native_keys.rs` — macOS only; the `NSEvent` is swallowed so AppKit cannot also cycle tabs | `useNativeMenuBridge.ts` → tab switch |
+| `native-key-down` | `{ key: "F13".."F20", cmd, ctrl, alt, shift }` | `native_keys.rs` — macOS only, scoped to the `main` window; the event is passed through (nothing native to suppress) | `useNativeKeyCombo.ts`, attached only while a shortcut recorder is open |
 
 ### HTTP & MCP Server
 When adding routes or changing server behavior:
