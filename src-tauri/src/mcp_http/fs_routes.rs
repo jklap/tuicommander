@@ -4,7 +4,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 
 use super::types::*;
-use super::{err_500, json_result, validate_repo_path};
+use super::{err_500, json_result, validate_path_string, validate_repo_path};
 
 // `list_directory_http` intentionally omits `State` + `indexer_throttle`: the
 // underlying `fs::list_directory_impl` is a single `read_dir` + sort, which
@@ -123,8 +123,40 @@ pub(super) async fn read_editor_file_http(Query(q): Query<FsFileQuery>) -> Respo
 
 /// Check if a path falls within any of the given repository roots.
 /// Uses Path::starts_with for component-level matching (not string prefix).
+///
+/// This is a purely LEXICAL check — it compares the path as written. On its own it does
+/// not confine anything: `/repo/../../etc/passwd` starts with `/repo` by components, yet
+/// the OS resolves it far outside. Callers on the HTTP boundary must go through
+/// `deny_unless_in_roots`, which rejects traversal syntax before consulting this.
 fn is_within_repo_roots(path: &std::path::Path, roots: &[String]) -> bool {
     roots.iter().any(|root| path.starts_with(root))
+}
+
+/// Gate an absolute, client-supplied path on the HTTP boundary. Returns a 403 response
+/// when the path must not be served, `None` when it may proceed.
+///
+/// Two layers:
+/// 1. `validate_path_string` — rejects `..`, NUL and non-absolute paths. This is the layer
+///    that actually confines: with `..` gone, the lexical component check below cannot be
+///    walked out of.
+/// 2. `is_within_repo_roots` — component-level containment in a registered repo.
+///
+/// Deliberately NOT canonicalizing: symlinks inside a registered repo that resolve outside
+/// it are an accepted design decision in this project (the user put them there), and
+/// canonicalizing would break them. The remote caller these routes are exposed to cannot
+/// create symlinks through any gated route, so resolution buys nothing here.
+///
+/// These routes live in `shared_routes()` and are therefore merged into the remote router
+/// as well as the loopback one. The caller there is a narrower trust level than the desktop
+/// user, which is why this boundary exists at all — see `read_external_file_http`.
+fn deny_unless_in_roots(path: &str, roots: &[String]) -> Option<Response> {
+    if validate_path_string(path).is_err() {
+        return Some(access_denied());
+    }
+    if !is_within_repo_roots(std::path::Path::new(path), roots) {
+        return Some(access_denied());
+    }
+    None
 }
 
 /// Extract registered repository root paths from the opaque repos JSON.
@@ -138,15 +170,8 @@ fn registered_repo_roots() -> Vec<String> {
 
 pub(super) async fn read_external_file_http(Query(q): Query<FsExternalFileQuery>) -> Response {
     // Restrict to files within registered repos — prevents arbitrary file reads via HTTP
-    let roots = registered_repo_roots();
-    if !is_within_repo_roots(std::path::Path::new(&q.path), &roots) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "Access denied: path must be within a registered repository"
-            })),
-        )
-            .into_response();
+    if let Some(resp) = deny_unless_in_roots(&q.path, &registered_repo_roots()) {
+        return resp;
     }
     json_result(crate::read_external_file(q.path))
 }
@@ -156,15 +181,8 @@ pub(super) async fn read_external_file_http(Query(q): Query<FsExternalFileQuery>
 pub(super) async fn read_editor_file_external_http(
     Query(q): Query<FsExternalFileQuery>,
 ) -> Response {
-    let roots = registered_repo_roots();
-    if !is_within_repo_roots(std::path::Path::new(&q.path), &roots) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "Access denied: path must be within a registered repository"
-            })),
-        )
-            .into_response();
+    if let Some(resp) = deny_unless_in_roots(&q.path, &registered_repo_roots()) {
+        return resp;
     }
     json_result(crate::read_external_file_with_limit(
         &q.path,
@@ -269,9 +287,8 @@ pub(super) async fn warm_content_index_http(
 /// `read_external_file_http` — the editor can only *open* repo-root files over
 /// HTTP, so saves target the same set. `write_external_file` also confines to $HOME.
 pub(super) async fn write_external_file_http(Json(body): Json<FsExternalWriteRequest>) -> Response {
-    let roots = registered_repo_roots();
-    if !is_within_repo_roots(std::path::Path::new(&body.path), &roots) {
-        return access_denied();
+    if let Some(resp) = deny_unless_in_roots(&body.path, &registered_repo_roots()) {
+        return resp;
     }
     match crate::write_external_file(body.path, body.content) {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
@@ -307,9 +324,8 @@ pub(super) async fn move_path_abs_http(Json(body): Json<FsAbsTransferRequest>) -
 /// is gated to repo roots: sources are frequently external (a file dragged from
 /// the desktop), which is the whole point of drag-import.
 pub(super) async fn fs_transfer_paths_http(Json(body): Json<FsTransferPathsRequest>) -> Response {
-    let roots = registered_repo_roots();
-    if !is_within_repo_roots(std::path::Path::new(&body.dest_dir), &roots) {
-        return access_denied();
+    if let Some(resp) = deny_unless_in_roots(&body.dest_dir, &registered_repo_roots()) {
+        return resp;
     }
     json_result(crate::fs::fs_transfer_paths(
         body.dest_dir,
@@ -333,9 +349,7 @@ fn access_denied() -> Response {
 /// Deny unless BOTH absolute paths fall within a registered repo root.
 fn deny_unless_both_in_roots(from: &str, to: &str) -> Option<Response> {
     let roots = registered_repo_roots();
-    let ok = is_within_repo_roots(std::path::Path::new(from), &roots)
-        && is_within_repo_roots(std::path::Path::new(to), &roots);
-    (!ok).then(access_denied)
+    deny_unless_in_roots(from, &roots).or_else(|| deny_unless_in_roots(to, &roots))
 }
 
 #[cfg(test)]
@@ -383,5 +397,64 @@ mod tests {
     #[test]
     fn within_repo_roots_empty() {
         assert!(!is_within_repo_roots(Path::new("/any/path"), &[]));
+    }
+
+    /// The bug this gate exists for: `Path::starts_with` is lexical, so a traversal path
+    /// is "inside" the root by components while the OS resolves it outside. All six
+    /// external-path routes share `deny_unless_in_roots`, so covering it covers them.
+    #[test]
+    fn gate_rejects_traversal_the_lexical_check_accepts() {
+        let roots = vec!["/Users/dev/project-a".to_string()];
+        let escape = "/Users/dev/project-a/../../../etc/passwd";
+
+        // Component-level containment says yes — this is exactly why it is not enough.
+        assert!(
+            is_within_repo_roots(Path::new(escape), &roots),
+            "precondition: the lexical check accepts the escape"
+        );
+        assert!(
+            deny_unless_in_roots(escape, &roots).is_some(),
+            "the gate must reject a traversal path before the lexical check is consulted"
+        );
+    }
+
+    #[test]
+    fn gate_rejects_relative_and_nul_paths() {
+        let roots = vec!["/Users/dev/project-a".to_string()];
+        assert!(deny_unless_in_roots("project-a/src/main.rs", &roots).is_some());
+        assert!(deny_unless_in_roots("/Users/dev/project-a/sr\0c", &roots).is_some());
+    }
+
+    #[test]
+    fn gate_rejects_a_path_outside_every_root() {
+        let roots = vec!["/Users/dev/project-a".to_string()];
+        assert!(deny_unless_in_roots("/etc/passwd", &roots).is_some());
+        assert!(deny_unless_in_roots("/Users/dev/project-abc/f.txt", &roots).is_some());
+        assert!(deny_unless_in_roots("/Users/dev/project-a/f.txt", &[]).is_some());
+    }
+
+    #[test]
+    fn gate_allows_a_plain_path_inside_a_root() {
+        let roots = vec!["/Users/dev/project-a".to_string()];
+        assert!(deny_unless_in_roots("/Users/dev/project-a/src/main.rs", &roots).is_none());
+    }
+
+    /// copy/move gate both endpoints, so a traversal on either side must deny.
+    #[test]
+    fn both_sides_are_gated_for_transfers() {
+        let roots = vec!["/Users/dev/project-a".to_string()];
+        let good = "/Users/dev/project-a/src/main.rs";
+        let bad = "/Users/dev/project-a/../../../etc/passwd";
+
+        assert!(
+            deny_unless_in_roots(good, &roots)
+                .or_else(|| deny_unless_in_roots(bad, &roots))
+                .is_some()
+        );
+        assert!(
+            deny_unless_in_roots(bad, &roots)
+                .or_else(|| deny_unless_in_roots(good, &roots))
+                .is_some()
+        );
     }
 }
