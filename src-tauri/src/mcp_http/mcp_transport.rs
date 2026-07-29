@@ -3422,24 +3422,16 @@ fn handle_config(
             // The schema advertises "config fields to save", so callers legitimately
             // send a subset. Merge it onto the live config — deserializing the
             // payload on its own would default every omitted field away.
-            let old = state.config.read().clone();
-            let mut config = match crate::config::merge_partial_app_config(&old, config_val.clone())
-            {
-                Ok(c) => c,
-                Err(e) => return serde_json::json!({"error": e}),
-            };
-            // Preserve server-managed secrets
-            crate::config::preserve_redacted_app_config_secrets(&mut config, &old);
-            let server_changed = crate::config::server_settings_changed(&old, &config);
-            match crate::config::save_app_config(config.clone()) {
-                Ok(()) => {
-                    *state.config.write() = config.clone();
-                    if old.disabled_native_tools != config.disabled_native_tools
-                        || old.collapse_tools != config.collapse_tools
-                    {
+            // The merge runs inside the config write lock so it applies to the config as
+            // it is at write time — this handler already runs on the blocking pool.
+            match crate::config::commit_config_change(state, |current| {
+                crate::config::merge_partial_app_config(current, config_val.clone())
+            }) {
+                Ok(effects) => {
+                    if effects.tools_changed {
                         let _ = state.mcp_tools_changed.send(());
                     }
-                    if server_changed {
+                    if effects.server_changed {
                         super::restart_after_server_settings_change(
                             state,
                             "remote-access configuration changed over MCP",

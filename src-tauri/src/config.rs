@@ -1298,65 +1298,121 @@ fn migrate_flat_services(val: &mut serde_json::Value) {
     );
 }
 
-fn read_secret(cred: crate::credentials::Credential<'_>) -> Option<String> {
-    match crate::credentials::get(cred) {
-        Ok(value) => value,
+/// Read one secret from the credential vault.
+///
+/// `Ok(None)` means the vault answered and the secret genuinely is not there.
+/// `Err` means the vault could not be consulted at all. Callers MUST keep those apart:
+/// collapsing a failure into "absent" is how a valid secret gets deleted — see
+/// [`hydrate_one_secret`].
+fn read_secret(cred: crate::credentials::Credential<'_>) -> Result<Option<String>, String> {
+    crate::credentials::get(cred)
+}
+
+/// What happened while hydrating one secret.
+struct SecretHydration {
+    /// The `*_exists` flag to record in the config.
+    exists: bool,
+    /// A plaintext secret was found in config.json and pushed into the vault, so the
+    /// config must be rewritten to strip it from disk.
+    migrated: bool,
+}
+
+/// Load one secret into `plaintext`, or migrate it into the vault if it is still
+/// sitting in config.json.
+///
+/// `previous_exists` is what config.json last claimed. On a vault **read failure** it is
+/// kept rather than reset to `false`, and that is the whole point of this function:
+///
+/// A transient keychain error used to be indistinguishable from "no secret". The flag
+/// went to `false`, which made `preserve_redacted_app_config_secrets` skip the field
+/// (it only preserves what it believes exists), so the next save reached
+/// `persist_secret` with an empty value and `exists == false` — the one branch that
+/// calls `credentials::delete`. A locked keychain for one second therefore destroyed a
+/// working session token permanently. Keeping the flag makes that branch unreachable:
+/// `persist_secret` returns early on `exists == true` without touching the vault.
+fn hydrate_one_secret(
+    cred: crate::credentials::Credential<'_>,
+    plaintext: &mut String,
+    previous_exists: bool,
+    label: &str,
+) -> SecretHydration {
+    if !plaintext.is_empty() {
+        // Plaintext left over from before the vault existed: move it in and tell the
+        // caller to rewrite config.json, otherwise the cleartext copy lingers forever.
+        match crate::credentials::set(cred, plaintext) {
+            Ok(()) => {
+                return SecretHydration {
+                    exists: true,
+                    migrated: true,
+                };
+            }
+            Err(e) => {
+                tracing::warn!(source = "config", "Failed to migrate {label} to vault: {e}");
+                // Migration failed — the plaintext is all we have, so keep serving it and
+                // do NOT rewrite the file, or the only copy would be erased.
+                return SecretHydration {
+                    exists: true,
+                    migrated: false,
+                };
+            }
+        }
+    }
+
+    match read_secret(cred) {
+        Ok(Some(value)) => {
+            *plaintext = value;
+            SecretHydration {
+                exists: true,
+                migrated: false,
+            }
+        }
+        Ok(None) => SecretHydration {
+            exists: false,
+            migrated: false,
+        },
         Err(e) => {
             tracing::warn!(
                 source = "config",
-                "Failed to read secret from credential vault: {e}"
+                "Could not read {label} from the credential vault: {e}. \
+                 Keeping the recorded presence flag so the secret is not deleted."
             );
-            None
+            SecretHydration {
+                exists: previous_exists,
+                migrated: false,
+            }
         }
     }
 }
 
-fn hydrate_app_config_secrets(config: &mut AppConfig) {
-    if config.services.auth.session_token.is_empty() {
-        if let Some(token) = read_secret(crate::credentials::Credential::RemoteSessionToken) {
-            config.services.auth.session_token = token;
-        }
-    } else if let Err(e) = crate::credentials::set(
+/// Hydrate every vault-backed secret. Returns `true` when plaintext was migrated out of
+/// config.json and the file must be rewritten.
+#[must_use]
+fn hydrate_app_config_secrets(config: &mut AppConfig) -> bool {
+    let session = hydrate_one_secret(
         crate::credentials::Credential::RemoteSessionToken,
-        &config.services.auth.session_token,
-    ) {
-        tracing::warn!(
-            source = "config",
-            "Failed to migrate session token to vault: {e}"
-        );
-    }
-    config.services.auth.session_token_exists = !config.services.auth.session_token.is_empty();
+        &mut config.services.auth.session_token,
+        config.services.auth.session_token_exists,
+        "session token",
+    );
+    config.services.auth.session_token_exists = session.exists;
 
-    if config.services.relay.token.is_empty() {
-        if let Some(token) = read_secret(crate::credentials::Credential::RelayToken) {
-            config.services.relay.token = token;
-        }
-    } else if let Err(e) = crate::credentials::set(
+    let relay = hydrate_one_secret(
         crate::credentials::Credential::RelayToken,
-        &config.services.relay.token,
-    ) {
-        tracing::warn!(
-            source = "config",
-            "Failed to migrate relay token to vault: {e}"
-        );
-    }
-    config.services.relay.token_exists = Some(!config.services.relay.token.is_empty());
+        &mut config.services.relay.token,
+        config.services.relay.token_exists.unwrap_or(false),
+        "relay token",
+    );
+    config.services.relay.token_exists = Some(relay.exists);
 
-    if config.services.push.vapid_private_key.is_empty() {
-        if let Some(key) = read_secret(crate::credentials::Credential::PushVapidPrivateKey) {
-            config.services.push.vapid_private_key = key;
-        }
-    } else if let Err(e) = crate::credentials::set(
+    let push = hydrate_one_secret(
         crate::credentials::Credential::PushVapidPrivateKey,
-        &config.services.push.vapid_private_key,
-    ) {
-        tracing::warn!(
-            source = "config",
-            "Failed to migrate VAPID private key to vault: {e}"
-        );
-    }
-    config.services.push.vapid_private_key_exists =
-        !config.services.push.vapid_private_key.is_empty();
+        &mut config.services.push.vapid_private_key,
+        config.services.push.vapid_private_key_exists,
+        "VAPID private key",
+    );
+    config.services.push.vapid_private_key_exists = push.exists;
+
+    session.migrated || relay.migrated || push.migrated
 }
 
 fn persist_secret(
@@ -1477,6 +1533,83 @@ pub(crate) fn server_settings_changed(old: &AppConfig, new: &AppConfig) -> bool 
         || old.services.auth.password_hash != new.services.auth.password_hash
 }
 
+/// Serializes every read-modify-write-persist of the app config.
+///
+/// The three writers (IPC `save_config`, `PUT /config`, MCP `config action=save`) plus
+/// token rotation all did: read `state.config`, merge, write the file, store back. With
+/// no lock, two overlapping saves both read the same snapshot and the second overwrote
+/// the first — a classic lost update, and one of the two was often a security-relevant
+/// field. `parking_lot` rather than `std`: a panic while holding this must not poison the
+/// mutex and wedge every later config write.
+static CONFIG_WRITE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+
+/// Side effects the caller must action after a successful config write.
+#[derive(Debug)]
+pub(crate) struct ConfigSaveEffects {
+    /// `disabled_native_tools` or `collapse_tools` moved — notify MCP clients.
+    pub tools_changed: bool,
+    /// A listener-affecting field moved — rebind the HTTP server.
+    pub server_changed: bool,
+}
+
+/// Atomically apply a change to the app config.
+///
+/// `mutate` is handed the CURRENT config *while the lock is held* and returns the desired
+/// one, so a merge of a partial payload can never be computed against a snapshot that
+/// another writer has already superseded. Redacted secrets are preserved, the file is
+/// written, and `state.config` is updated — all inside the same critical section.
+///
+/// Synchronous on purpose: the body does blocking disk I/O, so async callers must reach
+/// it through `spawn_blocking` rather than holding an async task across the write.
+pub(crate) fn commit_config_change<F>(
+    state: &crate::AppState,
+    mutate: F,
+) -> Result<ConfigSaveEffects, String>
+where
+    F: FnOnce(&AppConfig) -> Result<AppConfig, String>,
+{
+    let _guard = CONFIG_WRITE_LOCK.lock();
+
+    let old = state.config.read().clone();
+    let mut next = mutate(&old)?;
+    preserve_redacted_app_config_secrets(&mut next, &old);
+
+    let effects = ConfigSaveEffects {
+        tools_changed: old.disabled_native_tools != next.disabled_native_tools
+            || old.collapse_tools != next.collapse_tools,
+        server_changed: server_settings_changed(&old, &next),
+    };
+
+    save_app_config(next.clone())?;
+    *state.config.write() = next;
+    Ok(effects)
+}
+
+/// Issue a fresh remote-access session token and persist it.
+///
+/// Shared by the desktop IPC command and `POST /auth/rotate-session-token`, which each
+/// had their own copy. Both copies updated `state.session_token` and the file but never
+/// `state.config`, so the in-memory config kept the OLD token — and the next unrelated
+/// save wrote that stale token straight back to the vault, silently resurrecting a
+/// credential the user had just rotated away. Going through `commit_config_change` keeps
+/// the three views (vault, disk, memory) in agreement by construction.
+///
+/// `state.session_token` is updated only after the write succeeds: a token that could not
+/// be persisted must not start authenticating requests it would lose at restart.
+pub(crate) fn rotate_session_token(state: &crate::AppState) -> Result<String, String> {
+    let new_token = uuid::Uuid::new_v4().to_string();
+
+    commit_config_change(state, |current| {
+        let mut next = current.clone();
+        next.services.auth.session_token = new_token.clone();
+        next.services.auth.session_token_exists = true;
+        Ok(next)
+    })?;
+
+    *state.session_token.write() = new_token.clone();
+    Ok(new_token)
+}
+
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn load_app_config() -> AppConfig {
     let path = config_dir().join(APP_CONFIG_FILE);
@@ -1500,7 +1633,17 @@ pub(crate) fn load_app_config() -> AppConfig {
     migrate_flat_services(&mut val);
     match serde_json::from_value(val) {
         Ok(mut cfg) => {
-            hydrate_app_config_secrets(&mut cfg);
+            if hydrate_app_config_secrets(&mut cfg) {
+                // A plaintext secret was just moved into the vault. Rewrite immediately —
+                // config_for_disk strips the cleartext — otherwise it stays readable in
+                // config.json until some unrelated setting happens to be saved.
+                if let Err(e) = save_app_config(cfg.clone()) {
+                    tracing::warn!(
+                        source = "config",
+                        "Migrated a secret to the vault but could not rewrite config.json: {e}"
+                    );
+                }
+            }
             cfg
         }
         Err(e) => {
@@ -3885,5 +4028,234 @@ mod tests {
         cfg.experimental_features_enabled = true;
         assert!(cfg.is_experimental_enabled(true));
         assert!(!cfg.is_experimental_enabled(false));
+    }
+
+    // --- Vault-backed secrets: failure must never look like absence (#488-5576) ---
+
+    /// Restore the read-fault flag even if the test panics, so one failure cannot
+    /// cascade into every later test in the binary.
+    struct ReadFaultGuard;
+    impl Drop for ReadFaultGuard {
+        fn drop(&mut self) {
+            crate::credentials::MOCK_FAIL_READS.store(false, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    fn fail_vault_reads() -> ReadFaultGuard {
+        crate::credentials::MOCK_FAIL_READS.store(true, std::sync::atomic::Ordering::SeqCst);
+        ReadFaultGuard
+    }
+
+    /// The core of the bug: a keychain that cannot be read used to be indistinguishable
+    /// from a keychain holding nothing. `*_exists` went false, which made
+    /// `preserve_redacted_app_config_secrets` skip the field, and the next save reached
+    /// the one `persist_secret` branch that calls `credentials::delete`.
+    #[test]
+    fn a_vault_read_failure_keeps_the_exists_flag() {
+        let _fault = fail_vault_reads();
+        let mut plaintext = String::new();
+
+        let out = hydrate_one_secret(
+            crate::credentials::Credential::RemoteSessionToken,
+            &mut plaintext,
+            true, // config.json said a secret is there
+            "session token",
+        );
+
+        assert!(
+            out.exists,
+            "an unreadable vault must not be reported as an absent secret"
+        );
+        assert!(!out.migrated);
+    }
+
+    /// And the flag it keeps is what makes deletion unreachable: `persist_secret` with
+    /// an empty value returns early on `exists == true` instead of deleting.
+    #[test]
+    fn keeping_the_flag_stops_the_next_save_from_deleting_the_secret() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        crate::credentials::set(
+            crate::credentials::Credential::RemoteSessionToken,
+            "live-token",
+        )
+        .expect("seed vault");
+
+        // exists=true is what a read failure now preserves.
+        let kept = persist_secret(crate::credentials::Credential::RemoteSessionToken, "", true)
+            .expect("persist");
+        assert!(kept);
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteSessionToken)
+                .expect("vault readable"),
+            Some("live-token".to_string()),
+            "the secret must survive a save that could not read it"
+        );
+
+        // The contrast: a genuinely absent secret (exists=false) still gets cleaned up.
+        let kept = persist_secret(
+            crate::credentials::Credential::RemoteSessionToken,
+            "",
+            false,
+        )
+        .expect("persist");
+        assert!(!kept);
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteSessionToken)
+                .expect("vault readable"),
+            None
+        );
+    }
+
+    /// A genuine absence is still reported as absence — the fix must not make every
+    /// missing secret look present forever.
+    #[test]
+    fn a_genuinely_absent_secret_clears_the_flag() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let _ = crate::credentials::delete(crate::credentials::Credential::RelayToken);
+
+        let mut plaintext = String::new();
+        let out = hydrate_one_secret(
+            crate::credentials::Credential::RelayToken,
+            &mut plaintext,
+            true,
+            "relay token",
+        );
+        assert!(!out.exists, "vault answered 'not there' — believe it");
+    }
+
+    /// Plaintext still in config.json must move into the vault AND flag the file for
+    /// rewriting, otherwise the cleartext copy survives on disk indefinitely.
+    #[test]
+    fn plaintext_migration_reports_that_the_file_must_be_rewritten() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let mut cfg = AppConfig::default();
+        cfg.services.auth.session_token = "legacy-plaintext".to_string();
+
+        assert!(
+            hydrate_app_config_secrets(&mut cfg),
+            "a migration must ask for a rewrite"
+        );
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteSessionToken)
+                .expect("vault readable"),
+            Some("legacy-plaintext".to_string())
+        );
+        assert!(cfg.services.auth.session_token_exists);
+    }
+
+    /// Nothing to migrate → no rewrite. Loading the config must not write to disk on
+    /// every start.
+    #[test]
+    fn a_plain_load_does_not_ask_for_a_rewrite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let _ = crate::credentials::delete(crate::credentials::Credential::RemoteSessionToken);
+        let _ = crate::credentials::delete(crate::credentials::Credential::RelayToken);
+        let _ = crate::credentials::delete(crate::credentials::Credential::PushVapidPrivateKey);
+
+        let mut cfg = AppConfig::default();
+        assert!(!hydrate_app_config_secrets(&mut cfg));
+    }
+
+    // --- Serialized writes (#488-5576) ---
+
+    /// Rotation used to update `state.session_token` and the file but never
+    /// `state.config`. A later unrelated save then wrote the stale in-memory token back
+    /// to the vault, resurrecting the credential the user had just rotated away.
+    #[test]
+    fn rotation_survives_a_later_unrelated_save() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+
+        let rotated = rotate_session_token(&state).expect("rotate");
+        assert_eq!(*state.session_token.read(), rotated);
+        assert_eq!(
+            state.config.read().services.auth.session_token,
+            rotated,
+            "the in-memory config must carry the new token, not the old one"
+        );
+
+        // An unrelated save that says nothing about tokens.
+        commit_config_change(&state, |current| {
+            let mut next = current.clone();
+            next.font_size = 18;
+            Ok(next)
+        })
+        .expect("unrelated save");
+
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteSessionToken)
+                .expect("vault readable"),
+            Some(rotated.clone()),
+            "the unrelated save must not resurrect the pre-rotation token"
+        );
+        assert_eq!(state.config.read().font_size, 18);
+    }
+
+    /// Lost update: two writers used to read the same snapshot and the second one's
+    /// write erased the first one's field. Serializing read-merge-persist keeps both.
+    #[test]
+    fn concurrent_saves_do_not_lose_each_other() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = std::sync::Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let a = {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                for _ in 0..20 {
+                    commit_config_change(&state, |c| {
+                        let mut n = c.clone();
+                        n.font_size = 18;
+                        Ok(n)
+                    })
+                    .expect("save a");
+                }
+            })
+        };
+        let b = {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                for _ in 0..20 {
+                    commit_config_change(&state, |c| {
+                        let mut n = c.clone();
+                        n.services.server.enabled = true;
+                        Ok(n)
+                    })
+                    .expect("save b");
+                }
+            })
+        };
+        a.join().expect("thread a");
+        b.join().expect("thread b");
+
+        let final_cfg = state.config.read().clone();
+        assert_eq!(final_cfg.font_size, 18, "writer A's field was lost");
+        assert!(
+            final_cfg.services.server.enabled,
+            "writer B's field was lost"
+        );
+
+        // And disk agrees with memory — the last write in the lock is the one persisted.
+        let on_disk = load_app_config();
+        assert_eq!(on_disk.font_size, 18);
+        assert!(on_disk.services.server.enabled);
+    }
+
+    /// A failing mutation must leave both memory and disk untouched.
+    #[test]
+    fn a_rejected_mutation_changes_nothing() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        let before = state.config.read().font_size;
+
+        let err = commit_config_change(&state, |_| Err("nope".to_string())).unwrap_err();
+        assert_eq!(err, "nope");
+        assert_eq!(state.config.read().font_size, before);
     }
 }

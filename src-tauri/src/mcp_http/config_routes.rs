@@ -60,44 +60,50 @@ pub(super) async fn put_config(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    // Merge onto the live config: the body may mention only the fields the
-    // caller wants changed, and a full-replace would default the rest away.
-    let old = state.config.read().clone();
-    let mut config = match crate::config::merge_partial_app_config(&old, incoming) {
-        Ok(c) => c,
+    // The merge runs INSIDE the config write lock (commit_config_change) so a partial
+    // body is applied to the config as it is at write time, not to a snapshot another
+    // writer has already replaced. Blocking pool: the critical section does disk I/O.
+    let saved = {
+        let state = state.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::config::commit_config_change(&state, |current| {
+                crate::config::merge_partial_app_config(current, incoming)
+            })
+        })
+        .await
+    };
+
+    let effects = match saved {
+        Ok(Ok(effects)) => effects,
+        Ok(Err(e)) => {
+            // A merge/validation failure is the caller's fault; a write failure is ours.
+            let code = if e.starts_with("Invalid config") {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return (code, Json(serde_json::json!({"error": e})));
+        }
         Err(e) => {
             return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": e})),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("config save task failed: {e}")})),
             );
         }
     };
-    // Preserve server-managed secrets — clients must not overwrite these via save
-    crate::config::preserve_redacted_app_config_secrets(&mut config, &old);
-    let server_changed = crate::config::server_settings_changed(&old, &config);
-    match crate::config::save_app_config(config.clone()) {
-        Ok(()) => {
-            *state.config.write() = config.clone();
-            if old.disabled_native_tools != config.disabled_native_tools
-                || old.collapse_tools != config.collapse_tools
-            {
-                let _ = state.mcp_tools_changed.send(());
-            }
-            // Parity with the IPC `save_config`: rebind the listener so the
-            // running process cannot keep serving a config the disk disagrees with.
-            if server_changed {
-                super::restart_after_server_settings_change(
-                    &state,
-                    "remote-access configuration changed over HTTP",
-                );
-            }
-            (StatusCode::OK, Json(serde_json::json!({"ok": true})))
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e})),
-        ),
+
+    if effects.tools_changed {
+        let _ = state.mcp_tools_changed.send(());
     }
+    // Parity with the IPC `save_config`: rebind the listener so the running process
+    // cannot keep serving a config the disk disagrees with.
+    if effects.server_changed {
+        super::restart_after_server_settings_change(
+            &state,
+            "remote-access configuration changed over HTTP",
+        );
+    }
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
 pub(super) async fn hash_password_http(
@@ -132,12 +138,12 @@ pub(super) async fn rotate_session_token(
     if let Err(resp) = require_local_or_auth(&addr, auth.is_some()) {
         return resp;
     }
-    let new_token = uuid::Uuid::new_v4().to_string();
-    *state.session_token.write() = new_token.clone();
-    let mut cfg = state.config.read().clone();
-    cfg.services.auth.session_token = new_token;
-    cfg.services.auth.session_token_exists = true;
-    if let Err(e) = crate::config::save_app_config(cfg) {
+    // Blocking pool: the rotation takes the config write lock and touches disk.
+    let rotated = tokio::task::spawn_blocking(move || crate::config::rotate_session_token(&state))
+        .await
+        .map_err(|e| format!("token rotation task failed: {e}"))
+        .and_then(|r| r);
+    if let Err(e) = rotated {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": format!("Failed to persist token: {e}")})),

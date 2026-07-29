@@ -67,6 +67,13 @@ Remote-access secrets under `services` are not persisted in plaintext
 JSON file keeps only the non-secret settings plus `session_token_exists`,
 `token_exists`, and `vapid_private_key_exists` booleans for UI state.
 
+A vault **read failure** is never treated as "the secret is absent": on error
+`hydrate_one_secret` keeps the `*_exists` flag that `config.json` recorded, so a
+momentarily locked keychain cannot flip the flag to `false` and make the next
+save delete a live credential. Plaintext still found in `config.json` is moved
+into the vault at load time and the file is rewritten immediately, so the
+cleartext copy does not survive on disk.
+
 | `confirm_before_quit` | `bool` | `true` | Show quit confirmation |
 | `confirm_before_closing_tab` | `bool` | `true` | Show tab close confirmation |
 | `copy_on_select` | `bool` | `true` | Auto-copy terminal selection to clipboard |
@@ -91,6 +98,17 @@ JSON file keeps only the non-secret settings plus `session_token_exists`,
 | `inline_blame_enabled` | `bool` | `true` | Show GitLens-style inline git blame on the code editor's active line |
 
 **Commands:** `load_app_config()`, `save_app_config(config)`
+
+Every writer of `config.json` — IPC `save_config`, `PUT /config`, MCP
+`config action=save`, and session-token rotation — goes through
+`config::commit_config_change`, which holds one process-wide mutex across the
+whole read → merge → preserve-secrets → write → update-`state.config`
+sequence. Without it two overlapping saves both merged onto the same snapshot
+and the second silently erased the first one's fields. Rotation
+(`config::rotate_session_token`, shared by the desktop command and
+`POST /auth/rotate-session-token`) goes through the same path so the vault, the
+file and `state.config` cannot disagree — previously the in-memory config kept
+the pre-rotation token and the next unrelated save wrote it back.
 
 ### Notification Config (`notifications.json`)
 

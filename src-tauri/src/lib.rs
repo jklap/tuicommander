@@ -63,6 +63,8 @@ mod menu;
 #[cfg(feature = "desktop")]
 mod native_drag;
 #[cfg(feature = "desktop")]
+mod native_keys;
+#[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
 mod output_parser;
 #[cfg(feature = "desktop")]
@@ -90,8 +92,6 @@ mod shell_integration;
 pub(crate) mod sleep_prevention;
 pub(crate) mod smart_prompt;
 pub(crate) mod state;
-#[cfg(feature = "desktop")]
-mod native_keys;
 pub(crate) mod tailscale;
 pub(crate) mod terminal_grid;
 pub(crate) mod text_rank;
@@ -244,22 +244,15 @@ fn load_config(state: State<'_, Arc<AppState>>) -> config::AppConfig {
 /// if MCP / Remote Access settings changed (no app restart required).
 #[tauri::command]
 fn save_config(state: State<'_, Arc<AppState>>, config: config::AppConfig) -> Result<(), String> {
-    let old = state.config.read().clone();
-    let mut config = config;
-    config::preserve_redacted_app_config_secrets(&mut config, &old);
-    let server_changed = config::server_settings_changed(&old, &config);
+    // Serialized read-merge-persist: see config::commit_config_change. Two overlapping
+    // saves used to read the same snapshot and the loser's fields were silently dropped.
+    let effects = config::commit_config_change(state.inner(), move |_current| Ok(config))?;
 
-    let tools_changed = old.disabled_native_tools != config.disabled_native_tools
-        || old.collapse_tools != config.collapse_tools;
-
-    config::save_app_config(config.clone())?; // clone goes to disk
-    *state.config.write() = config; // move original into state
-
-    if tools_changed {
+    if effects.tools_changed {
         let _ = state.mcp_tools_changed.send(());
     }
 
-    if server_changed {
+    if effects.server_changed {
         restart_server(state.inner(), "remote-access configuration changed");
     }
 
@@ -829,13 +822,7 @@ async fn deep_link_mcp_call(
 #[cfg(feature = "desktop")]
 #[tauri::command]
 fn regenerate_session_token(state: State<'_, Arc<AppState>>) {
-    let new_token = uuid::Uuid::new_v4().to_string();
-    *state.session_token.write() = new_token.clone();
-    // Persist so the new token survives restarts
-    let mut cfg = state.config.read().clone();
-    cfg.services.auth.session_token = new_token;
-    cfg.services.auth.session_token_exists = true;
-    if let Err(e) = config::save_app_config(cfg) {
+    if let Err(e) = config::rotate_session_token(state.inner()) {
         tracing::error!(
             source = "auth",
             "Failed to persist regenerated session token: {e}"

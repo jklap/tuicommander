@@ -404,6 +404,14 @@ mod dev_store {
 #[cfg(test)]
 static MOCK_FAIL_WRITES: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Test-only fault injection for READS: the mock rejects `get_password` with a real
+/// error rather than `NoEntry`. That distinction is the whole point — a vault that
+/// cannot be consulted must never be mistaken for a vault holding nothing, or the
+/// config layer deletes a perfectly good secret (#488-5576).
+#[cfg(test)]
+pub(crate) static MOCK_FAIL_READS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 #[cfg(test)]
 fn ensure_mock_keyring() {
     use keyring::{
@@ -442,6 +450,11 @@ fn ensure_mock_keyring() {
             self.set_password(s)
         }
         fn get_password(&self) -> keyring::Result<String> {
+            if MOCK_FAIL_READS.load(std::sync::atomic::Ordering::SeqCst) {
+                // NOT NoEntry: this is "the vault is unreachable", which callers must
+                // treat differently from "the secret is not there".
+                return Err(Error::Invalid("mock".into(), "forced read failure".into()));
+            }
             store()
                 .lock()
                 .unwrap()
