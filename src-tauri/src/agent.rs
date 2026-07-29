@@ -1,5 +1,5 @@
 use parking_lot::Mutex;
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, PtySize};
 use serde::Serialize;
 use std::process::Command;
 use std::sync::Arc;
@@ -889,61 +889,57 @@ pub(crate) async fn spawn_agent(
     };
 
     let session_id = Uuid::new_v4().to_string();
-    let pty_system = native_pty_system();
 
-    let pair = pty_system
-        .openpty(PtySize {
+    let (pair, child) = crate::pty::spawn_pty_pair_with_retry(
+        PtySize {
             rows: pty_config.rows,
             cols: pty_config.cols,
             pixel_width: 0,
             pixel_height: 0,
-        })
-        .map_err(|e| format!("Failed to open PTY: {e}"))?;
+        },
+        || {
+            // Build agent command
+            let mut cmd = CommandBuilder::new(&binary_path);
+            crate::pty::sanitize_pty_parent_env(&mut cmd);
 
-    // Build agent command
-    let mut cmd = CommandBuilder::new(&binary_path);
-    crate::pty::sanitize_pty_parent_env(&mut cmd);
+            // If custom args are provided, use them directly
+            if let Some(ref args) = agent_config.args {
+                for arg in args {
+                    cmd.arg(arg);
+                }
+            } else {
+                // Default Claude-style args for backward compatibility
+                if agent_config.print_mode {
+                    cmd.arg("--print");
+                }
 
-    // If custom args are provided, use them directly
-    if let Some(ref args) = agent_config.args {
-        for arg in args {
-            cmd.arg(arg);
-        }
-    } else {
-        // Default Claude-style args for backward compatibility
-        if agent_config.print_mode {
-            cmd.arg("--print");
-        }
+                if let Some(ref format) = agent_config.output_format {
+                    cmd.arg("--output-format");
+                    cmd.arg(format);
+                }
 
-        if let Some(ref format) = agent_config.output_format {
-            cmd.arg("--output-format");
-            cmd.arg(format);
-        }
+                if let Some(ref model) = agent_config.model {
+                    cmd.arg("--model");
+                    cmd.arg(model);
+                }
 
-        if let Some(ref model) = agent_config.model {
-            cmd.arg("--model");
-            cmd.arg(model);
-        }
+                // Add prompt
+                cmd.arg(&agent_config.prompt);
+            }
 
-        // Add prompt
-        cmd.arg(&agent_config.prompt);
-    }
+            if let Some(ref cwd) = agent_config.cwd {
+                cmd.cwd(crate::cli::expand_tilde(cwd));
+            } else if let Some(ref cwd) = pty_config.cwd {
+                cmd.cwd(crate::cli::expand_tilde(cwd));
+            }
 
-    if let Some(ref cwd) = agent_config.cwd {
-        cmd.cwd(crate::cli::expand_tilde(cwd));
-    } else if let Some(ref cwd) = pty_config.cwd {
-        cmd.cwd(crate::cli::expand_tilde(cwd));
-    }
-
-    // Inject env flags (feature flags configured in Settings → Agents)
-    for (key, value) in &pty_config.env {
-        cmd.env(key, value);
-    }
-
-    let child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| format!("Failed to spawn agent: {e}"))?;
+            // Inject env flags (feature flags configured in Settings → Agents)
+            for (key, value) in &pty_config.env {
+                cmd.env(key, value);
+            }
+            cmd
+        },
+    )?;
 
     let writer = pair
         .master

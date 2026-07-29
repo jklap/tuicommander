@@ -36,6 +36,18 @@ close_pty(cleanup_worktree)
 | `create_pty(config: PtyConfig)` | Spawn a new PTY session. Returns session ID. |
 | `create_pty_with_worktree(pty_config, worktree_config)` | Create worktree + spawn PTY in it. Returns `WorktreeResult`. |
 
+**All seven production spawn sites go through `pty::spawn_pty_pair_with_retry`**
+— `create_pty`, `create_pty_with_worktree`, `spawn_session_for_agent`,
+`agent.rs`, `mcp_http/session.rs::spawn_pty_session`,
+`mcp_http/agent_routes.rs` and the MCP `agent spawn` handler. It encapsulates
+only the retry policy (3 attempts, 100/200 ms backoff): each site keeps its own
+command assembly, env policy and dimension handling, because they diverge for
+real reasons (dimension clamping, shell-integration injection, env sanitising,
+cwd inheritance). Retry used to live in `create_pty` alone, so whether a burst
+of tab creation survived a momentarily exhausted PTY table depended on which
+code path opened the terminal. A unit test scans these sources and fails on a
+new production `openpty` call outside the helper.
+
 ### Session Control
 
 | Command | Description |
@@ -339,11 +351,11 @@ single source of truth — the frontend does not derive activity from raw PTY da
 - **→ idle:** The 1s silence timer is the sole heuristic idle path. Plain shells use 500ms; agents use 2.5s and must have no active sub-tasks. Agents with ready-screen adapters require the ready prompt to remain stable for 1.5s.
 - **Interrupts:** Ctrl-C and bare Escape record `interrupt pending` but never force idle. Idle follows only after an interrupted/ready screen, explicit Stop, or process exit.
 
-**Movement is the busy signal (#446-596f):** "if the text above the input area moves, the agent is active." Post-cutoff `changed_rows` are text-equality diffed (`TerminalGrid::process`), so a byte-identical repaint produces no ChangedRow: any *static* glyph — a completed-turn summary `✻ Sautéed for 1m 25s`, a `· run /mcp` hint, HUD `░░` bars, banner art — is inert by construction and can neither latch nor hold BUSY. Spinner rows among the changed rows (glyph must LEAD the trimmed line, `is_spinner_row()` in `chrome.rs`) additionally refresh `last_output_ms` while the agent animates; when movement stops, the idle timer expires naturally after AGENT_IDLE_MS (2.5s).
+**Movement is the default busy signal (#446-596f):** "if the text above the input area moves, the agent is active." Post-cutoff `changed_rows` are text-equality diffed (`TerminalGrid::process`), so a byte-identical repaint produces no ChangedRow. Static completed summaries, hints, HUD bars, and banner art are inert. Spinner rows among the changed rows additionally refresh `last_output_ms` while they animate. Claude and Codex have narrowly scoped semantic presence exceptions described below because current versions can freeze a valid active status while a child or blocking hook runs.
 
-**Prompt-based screen adapters:** Claude, Gemini, and Aider screen classifiers are prompt-based only — `Ready` when the input prompt is visible, `Unknown` otherwise, never `Working` from glyph presence (three stuck-BUSY regressions came from static glyphs read as live spinners). Codex is the deliberate exception: it distinguishes `Working`/`Ready`/`Interrupted` by the *presence* of its `• Working (… esc to interrupt)` status line, because its TUI legitimately freezes for minutes while a child process runs — accepted policy: prefer false-BUSY over false-IDLE for Codex. Codex inspection uses the full screen snapshot before chrome filtering (its separator divides tool output from the summary rather than framing the prompt, so `find_chrome_cutoff()` would discard the Working row) and searches a bounded neighborhood immediately above the lowest `›` prompt; historical Working text elsewhere in scrollback cannot latch busy. A frozen agent screen with no visible prompt stays BUSY by design (irreducible ambiguity — the user can see the screen).
+**Agent screen adapters:** Gemini and Aider remain prompt-based (`Ready` or `Unknown`). Codex detects `Working`/`Ready`/`Interrupted` from its semantic status near the lowest current composer; both `›` and the newer `»` composer glyph are accepted so a historical submitted prompt cannot anchor the scan. Claude treats only a spinner-prefixed phase containing an ellipsis and parenthesized progress as `Working`; this outranks the empty `❯` composer that current Claude versions leave visible during long tools. Completed summaries such as `✻ Sautéed for 1m 25s` remain `Ready`. If Claude emits a premature Stop/suggest before a blocking Stop hook, a live phase marker reopens that turn and clears the stale completion suggestions.
 
-**Signal precedence and confirmation:** Explicit hook busy > Codex Working marker > movement (real output / animated spinner) > silence. A ready prompt visible from the previous turn cannot cancel a newly submitted prompt until real activity has been observed; after activity, a stable ready composer can repair a missed hook idle. A current-turn completion marker prevents a stale Working row from relatching BUSY, but a pending process probe or confirmed meaningful descendant still owns the task lifecycle. Hook-based question suppression activates only after an OSC 7770 state marker is actually received, rather than trusting a possibly stale configuration flag.
+**Signal precedence and confirmation:** Explicit hook busy > current Claude/Codex semantic Working marker > movement (real output / animated spinner) > silence. A ready prompt visible from the previous turn cannot cancel a newly submitted prompt until real activity has been observed; after activity, a stable ready composer can repair a missed hook idle. A current-turn completion marker prevents a stale Codex Working row from relatching BUSY; Claude's current live phase marker can supersede a premature completion from a blocking Stop hook. A pending process probe or confirmed meaningful descendant still owns the task lifecycle. Hook-based question suppression activates only after an OSC 7770 state marker is actually received.
 
 **Safety consumers:** For agents with a verified screen adapter, peer-message injection and Unix auto-standby require confirmed idle (explicit Stop/OSC or stable ready screen). A silence-only idle can update the cosmetic state but cannot type into or `SIGSTOP` a potentially working agent. Agents without an adapter retain the legacy heuristic behavior until their UI is characterized.
 

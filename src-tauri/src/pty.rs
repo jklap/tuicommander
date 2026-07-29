@@ -112,6 +112,63 @@ fn inject_unix_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS", "1");
 }
 
+/// Attempts made before a PTY spawn is reported as failed.
+pub(crate) const PTY_SPAWN_ATTEMPTS: usize = 3;
+
+/// Open a PTY pair and spawn a command into it, retrying transient failures.
+///
+/// Story 059 added this retry to `create_pty` after a spawn regression, but the
+/// other six production spawn sites kept a single `openpty`/`spawn_command` and
+/// failed hard — so whether a burst of tab creation survived a momentarily
+/// exhausted PTY table depended on *which* code path opened the terminal. This
+/// helper is deliberately the retry policy and nothing else: the sites diverge
+/// for real reasons (dimension clamping, shell-integration injection, env
+/// sanitising, cwd inheritance) and unifying past this point would force a false
+/// abstraction.
+///
+/// `build_command` runs once per attempt because `spawn_command` consumes the
+/// `CommandBuilder`; a retry therefore gets a freshly assembled command rather
+/// than a half-consumed one.
+///
+/// Synchronous, with a blocking sleep between attempts: one of the call sites is
+/// inside a non-async closure, and a second policy for async callers would
+/// reintroduce exactly the divergence this removes. The worst case is a 300ms
+/// block, only on the path where the OS has already refused twice, and every
+/// call site was doing blocking `openpty`/`spawn_command` syscalls inline
+/// anyway.
+pub(crate) fn spawn_pty_pair_with_retry<F>(
+    size: PtySize,
+    mut build_command: F,
+) -> Result<
+    (
+        portable_pty::PtyPair,
+        Box<dyn portable_pty::Child + Send + Sync>,
+    ),
+    String,
+>
+where
+    F: FnMut() -> CommandBuilder,
+{
+    let pty_system = native_pty_system();
+    let mut last_err = String::new();
+
+    for attempt in 0..PTY_SPAWN_ATTEMPTS {
+        let outcome = match pty_system.openpty(size) {
+            Ok(pair) => match pair.slave.spawn_command(build_command()) {
+                Ok(child) => return Ok((pair, child)),
+                Err(e) => format!("Failed to spawn shell (attempt {}): {e}", attempt + 1),
+            },
+            Err(e) => format!("Failed to open PTY (attempt {}): {e}", attempt + 1),
+        };
+        last_err = outcome;
+        if attempt < PTY_SPAWN_ATTEMPTS - 1 {
+            std::thread::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)));
+        }
+    }
+
+    Err(last_err)
+}
+
 /// Build a CommandBuilder for the given shell with platform-appropriate flags.
 ///
 /// The `shell` string may contain arguments (e.g. `wsl.exe -d Ubuntu`).
@@ -6027,7 +6084,6 @@ pub(crate) async fn create_pty(
     config: PtyConfig,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
-    let pty_system = native_pty_system();
 
     let shell = resolve_shell(config.shell);
 
@@ -6035,78 +6091,46 @@ pub(crate) async fn create_pty(
     let rows = config.rows.max(24);
     let cols = config.cols.max(80);
 
-    // Retry PTY spawn up to 3 times with increasing delay (Story 059)
-    let max_retries = 3;
-    let mut last_err = String::new();
-    let mut pair_and_child = None;
-
-    for attempt in 0..max_retries {
-        let pair = match pty_system.openpty(PtySize {
+    let (pair, child) = spawn_pty_pair_with_retry(
+        PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
-        }) {
-            Ok(p) => p,
-            Err(e) => {
-                last_err = format!("Failed to open PTY (attempt {}): {}", attempt + 1, e);
-                if attempt < max_retries - 1 {
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        100 * (attempt as u64 + 1),
-                    ))
-                    .await;
-                }
-                continue;
+        },
+        || {
+            let mut cmd = build_shell_command(&shell);
+
+            if let Some(ref cwd) = config.cwd {
+                let cwd = crate::cli::expand_tilde(cwd);
+                // Don't convert drive paths for WSL — cmd.cwd() sets the Windows
+                // process CWD via CreateProcessW, which can't resolve Linux paths.
+                // Windows translates drive paths to /mnt/... automatically when
+                // spawning wsl.exe. (GitHub #27)
+                cmd.cwd(cwd);
             }
-        };
 
-        let mut cmd = build_shell_command(&shell);
+            // Inject OSC 133 shell integration (command block markers)
+            crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
 
-        if let Some(ref cwd) = config.cwd {
-            let cwd = crate::cli::expand_tilde(cwd);
-            // Don't convert drive paths for WSL — cmd.cwd() sets the Windows
-            // process CWD via CreateProcessW, which can't resolve Linux paths.
-            // Windows translates drive paths to /mnt/... automatically when
-            // spawning wsl.exe. (GitHub #27)
-            cmd.cwd(cwd);
-        }
-
-        // Inject OSC 133 shell integration (command block markers)
-        crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
-
-        // Inject stable session UUID so agents can use it for session binding
-        // (e.g. `claude --session-id $TUIC_SESSION`, then `claude --resume $TUIC_SESSION`)
-        if let Some(ref tuic_session) = config.tuic_session {
-            cmd.env("TUIC_SESSION", tuic_session);
-            cmd.env(
-                "TUIC_CONFIG_DIR",
-                crate::config::config_dir().to_string_lossy().as_ref(),
-            );
-        }
-
-        // Inject env flags (feature flags configured in Settings → Agents)
-        for (key, value) in &config.env {
-            cmd.env(key, value);
-        }
-
-        match pair.slave.spawn_command(cmd) {
-            Ok(child) => {
-                pair_and_child = Some((pair, child));
-                break;
+            // Inject stable session UUID so agents can use it for session binding
+            // (e.g. `claude --session-id $TUIC_SESSION`, then `claude --resume $TUIC_SESSION`)
+            if let Some(ref tuic_session) = config.tuic_session {
+                cmd.env("TUIC_SESSION", tuic_session);
+                cmd.env(
+                    "TUIC_CONFIG_DIR",
+                    crate::config::config_dir().to_string_lossy().as_ref(),
+                );
             }
-            Err(e) => {
-                last_err = format!("Failed to spawn shell (attempt {}): {}", attempt + 1, e);
-                if attempt < max_retries - 1 {
-                    tokio::time::sleep(std::time::Duration::from_millis(
-                        100 * (attempt as u64 + 1),
-                    ))
-                    .await;
-                }
-            }
-        }
-    }
 
-    let (pair, child) = pair_and_child.ok_or(last_err)?;
+            // Inject env flags (feature flags configured in Settings → Agents)
+            for (key, value) in &config.env {
+                cmd.env(key, value);
+            }
+
+            cmd
+        },
+    )?;
     lower_pty_child_priority(child.process_id());
 
     let tuic_session = config.tuic_session.clone();
@@ -6192,33 +6216,30 @@ pub(crate) async fn spawn_session_for_agent(
     display_name: Option<String>,
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
-    let pty_system = native_pty_system();
     let rows: u16 = 24;
     let cols: u16 = 80;
 
-    let pair = pty_system
-        .openpty(PtySize {
+    let shell = resolve_shell(None);
+
+    let (pair, child) = spawn_pty_pair_with_retry(
+        PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
-        })
-        .map_err(|e| format!("Failed to open PTY: {e}"))?;
+        },
+        || {
+            let mut cmd = build_shell_command(&shell);
 
-    let shell = resolve_shell(None);
-    let mut cmd = build_shell_command(&shell);
+            if let Some(ref dir) = cwd {
+                let expanded = crate::cli::expand_tilde(dir);
+                cmd.cwd(expanded);
+            }
 
-    if let Some(ref dir) = cwd {
-        let expanded = crate::cli::expand_tilde(dir);
-        cmd.cwd(expanded);
-    }
-
-    crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
-
-    let child = pair
-        .slave
-        .spawn_command(cmd)
-        .map_err(|e| format!("Failed to spawn shell: {e}"))?;
+            crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
+            cmd
+        },
+    )?;
     lower_pty_child_priority(child.process_id());
 
     let writer = pair
@@ -6335,38 +6356,34 @@ pub(crate) async fn create_pty_with_worktree(
     // Wrap PTY creation so we can clean up the worktree on failure
     let pty_result = (|| -> Result<_, String> {
         let session_id = Uuid::new_v4().to_string();
-        let pty_system = native_pty_system();
 
         // Guard against invalid dimensions from zero-sized windows
         let rows = pty_config.rows.max(24);
         let cols = pty_config.cols.max(80);
 
-        let pair = pty_system
-            .openpty(PtySize {
+        let shell = resolve_shell(pty_config.shell);
+
+        let (pair, child) = spawn_pty_pair_with_retry(
+            PtySize {
                 rows,
                 cols,
                 pixel_width: 0,
                 pixel_height: 0,
-            })
-            .map_err(|e| format!("Failed to open PTY: {e}"))?;
+            },
+            || {
+                let mut cmd = build_shell_command(&shell);
+                cmd.cwd(&worktree_path);
 
-        let shell = resolve_shell(pty_config.shell);
+                // Inject OSC 133 shell integration (command block markers)
+                crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
 
-        let mut cmd = build_shell_command(&shell);
-        cmd.cwd(&worktree_path);
-
-        // Inject OSC 133 shell integration (command block markers)
-        crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
-
-        // Inject env flags (feature flags configured in Settings → Agents)
-        for (key, value) in &pty_config.env {
-            cmd.env(key, value);
-        }
-
-        let child = pair
-            .slave
-            .spawn_command(cmd)
-            .map_err(|e| format!("Failed to spawn shell: {e}"))?;
+                // Inject env flags (feature flags configured in Settings → Agents)
+                for (key, value) in &pty_config.env {
+                    cmd.env(key, value);
+                }
+                cmd
+            },
+        )?;
         lower_pty_child_priority(child.process_id());
 
         let writer = pair
@@ -14036,6 +14053,156 @@ mod tests {
         assert!(!super::is_wsl_shell("/bin/zsh"));
         assert!(!super::is_wsl_shell("cmd.exe"));
         assert!(!super::is_wsl_shell("wslconfig.exe"));
+    }
+
+    // --- PTY spawn retry parity (#493-fce6) ---
+
+    /// A binary that cannot exist, so `spawn_command` fails on every attempt
+    /// without depending on the host's PATH.
+    fn unspawnable_command() -> CommandBuilder {
+        CommandBuilder::new("/nonexistent/tuic-spawn-retry-probe")
+    }
+
+    /// Kill and reap a probe child without blocking the test: `wait()` on a live
+    /// PTY child does not return while the pair is still open in this process.
+    fn reap(mut child: Box<dyn portable_pty::Child + Send + Sync>) {
+        let _ = child.kill();
+        for _ in 0..100 {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    fn probe_size() -> PtySize {
+        PtySize {
+            rows: 24,
+            cols: 80,
+            pixel_width: 0,
+            pixel_height: 0,
+        }
+    }
+
+    /// The whole point of the helper: a failing spawn is retried, not reported
+    /// on the first refusal. The command is rebuilt per attempt because
+    /// `spawn_command` consumes the builder — a retry that reused a moved-from
+    /// builder could not compile, and one that reused a shared builder would
+    /// carry the previous attempt's state.
+    #[test]
+    fn a_failing_spawn_is_retried_for_every_attempt() {
+        let attempts = std::cell::Cell::new(0);
+        // `PtyPair` is not Debug, so unwrap the error by hand.
+        let Err(err) = spawn_pty_pair_with_retry(probe_size(), || {
+            attempts.set(attempts.get() + 1);
+            unspawnable_command()
+        }) else {
+            panic!("a nonexistent binary must not spawn");
+        };
+
+        assert_eq!(attempts.get(), PTY_SPAWN_ATTEMPTS);
+        assert!(
+            err.contains(&format!("attempt {PTY_SPAWN_ATTEMPTS}")),
+            "the surfaced error must be the LAST attempt's, not the first: {err}"
+        );
+    }
+
+    /// A spawn that recovers must stop retrying and hand back a live child —
+    /// the retry must not cost extra processes on the success path.
+    #[test]
+    fn a_recovering_spawn_stops_at_the_first_success() {
+        let attempts = std::cell::Cell::new(0);
+        let (_pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() < 2 {
+                unspawnable_command()
+            } else {
+                CommandBuilder::new("/bin/echo")
+            }
+        })
+        .expect("the second attempt must succeed");
+
+        assert_eq!(attempts.get(), 2, "it must not keep retrying after success");
+        reap(child);
+    }
+
+    /// A spawn that works first time must be built exactly once.
+    #[test]
+    fn a_working_spawn_is_built_once() {
+        let attempts = std::cell::Cell::new(0);
+        let (_pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
+            attempts.set(attempts.get() + 1);
+            CommandBuilder::new("/bin/echo")
+        })
+        .expect("echo must spawn");
+
+        assert_eq!(attempts.get(), 1);
+        reap(child);
+    }
+
+    /// Parity guard. Only `create_pty` used to retry, so whether a burst of tab
+    /// creation survived an exhausted PTY table depended on which code path
+    /// opened the terminal. Asserting on the sources keeps that true for spawn
+    /// sites added later: a new production `openpty` call is a test failure,
+    /// pointing the author at the helper.
+    #[test]
+    fn no_production_spawn_site_calls_openpty_directly() {
+        let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+        let files = [
+            "pty.rs",
+            "agent.rs",
+            "mcp_http/session.rs",
+            "mcp_http/agent_routes.rs",
+            "mcp_http/mcp_transport.rs",
+        ];
+
+        let mut offenders = Vec::new();
+        let mut excused = 0usize;
+        for file in files {
+            let text = std::fs::read_to_string(src.join(file)).expect("read source");
+            // Everything from `mod tests` on is test scaffolding, which may open
+            // its own PTYs directly — the retry policy is about production spawns.
+            let production = text.split("\nmod tests {").next().unwrap_or(&text);
+            assert!(
+                production.len() > text.len() / 10,
+                "{file}: the production slice collapsed, so this test proves nothing"
+            );
+            // The helper's own body holds the one legitimate call. Bound it by the
+            // next item so the window cannot silently swallow later code.
+            let helper = production
+                .find("pub(crate) fn spawn_pty_pair_with_retry")
+                .map(|start| {
+                    let end = production[start..]
+                        .find("\npub(crate) fn build_shell_command")
+                        .map_or(production.len(), |offset| start + offset);
+                    start..end
+                });
+
+            let mut cursor = 0usize;
+            for (idx, line) in production.lines().enumerate() {
+                let line_start = cursor;
+                cursor += line.len() + 1;
+                if !line.contains("openpty(") {
+                    continue;
+                }
+                if helper.as_ref().is_some_and(|r| r.contains(&line_start)) {
+                    excused += 1;
+                    continue;
+                }
+                offenders.push(format!("{file}:{}", idx + 1));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these spawn sites bypass spawn_pty_pair_with_retry: {offenders:?}"
+        );
+        // Without this the test would also pass if the scan stopped matching
+        // `openpty(` at all — an empty offender list would then mean nothing.
+        assert_eq!(
+            excused, 1,
+            "expected exactly one production openpty, inside the helper"
+        );
     }
 
     // --- build_shell_command arg splitting tests ---

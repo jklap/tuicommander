@@ -6,7 +6,7 @@ use axum::extract::{ConnectInfo, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use parking_lot::Mutex;
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, PtySize};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -2587,16 +2587,6 @@ fn handle_agent_with_parent_cwd(
                 .unwrap_or_else(|| "agent".to_string());
 
             let session_id = Uuid::new_v4().to_string();
-            let pty_system = native_pty_system();
-            let pair = match pty_system.openpty(PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            }) {
-                Ok(p) => p,
-                Err(e) => return serde_json::json!({"error": format!("Failed to open PTY: {}", e)}),
-            };
 
             // Resolve caller's tuic_session from their MCP session via the O(1) reverse map.
             // Only set when caller is a registered peer — drives multi-agent context + TUIC_PARENT.
@@ -2770,11 +2760,20 @@ fn handle_agent_with_parent_cwd(
                 cmd.cwd(crate::cli::expand_tilde(cwd));
             }
 
-            let child = match pair.slave.spawn_command(cmd) {
-                Ok(c) => c,
-                Err(e) => {
-                    return serde_json::json!({"error": format!("Failed to spawn agent: {}", e)});
-                }
+            // The argv assembly above can bail out with an error response, so it
+            // cannot live inside the retry closure; the built command is cloned
+            // per attempt instead (`spawn_command` consumes it).
+            let (pair, child) = match crate::pty::spawn_pty_pair_with_retry(
+                PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                },
+                || cmd.clone(),
+            ) {
+                Ok(pair_and_child) => pair_and_child,
+                Err(e) => return serde_json::json!({"error": e}),
             };
             let writer = match pair.master.take_writer() {
                 Ok(w) => w,
@@ -6589,6 +6588,7 @@ mod tests {
         session_id: &str,
         agent_type: &str,
     ) -> std::sync::mpsc::Receiver<String> {
+        use portable_pty::native_pty_system;
         use std::io::Read;
 
         let pair = native_pty_system()
