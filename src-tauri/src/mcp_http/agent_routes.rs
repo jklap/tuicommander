@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use parking_lot::Mutex;
-use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use portable_pty::{CommandBuilder, PtySize};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -317,56 +317,48 @@ pub(super) async fn spawn_agent_session(
             .into_response();
     }
     let session_id = Uuid::new_v4().to_string();
-    let pty_system = native_pty_system();
 
-    let pair = match pty_system.openpty(PtySize {
-        rows,
-        cols,
-        pixel_width: 0,
-        pixel_height: 0,
-    }) {
-        Ok(p) => p,
+    let (pair, child) = match crate::pty::spawn_pty_pair_with_retry(
+        PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        },
+        || {
+            let mut cmd = CommandBuilder::new(&binary_path);
+            crate::pty::sanitize_pty_parent_env(&mut cmd);
+
+            if let Some(ref args) = body.args {
+                for arg in args {
+                    cmd.arg(arg);
+                }
+            } else {
+                if body.print_mode.unwrap_or(false) {
+                    cmd.arg("--print");
+                }
+                if let Some(ref format) = body.output_format {
+                    cmd.arg("--output-format");
+                    cmd.arg(format);
+                }
+                if let Some(ref model) = body.model {
+                    cmd.arg("--model");
+                    cmd.arg(model);
+                }
+                cmd.arg(&body.prompt);
+            }
+
+            if let Some(ref cwd) = body.cwd {
+                cmd.cwd(crate::cli::expand_tilde(cwd));
+            }
+            cmd
+        },
+    ) {
+        Ok(pair_and_child) => pair_and_child,
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to open PTY: {}", e)})),
-            )
-                .into_response();
-        }
-    };
-
-    let mut cmd = CommandBuilder::new(&binary_path);
-    crate::pty::sanitize_pty_parent_env(&mut cmd);
-
-    if let Some(ref args) = body.args {
-        for arg in args {
-            cmd.arg(arg);
-        }
-    } else {
-        if body.print_mode.unwrap_or(false) {
-            cmd.arg("--print");
-        }
-        if let Some(ref format) = body.output_format {
-            cmd.arg("--output-format");
-            cmd.arg(format);
-        }
-        if let Some(ref model) = body.model {
-            cmd.arg("--model");
-            cmd.arg(model);
-        }
-        cmd.arg(&body.prompt);
-    }
-
-    if let Some(ref cwd) = body.cwd {
-        cmd.cwd(crate::cli::expand_tilde(cwd));
-    }
-
-    let child = match pair.slave.spawn_command(cmd) {
-        Ok(c) => c,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to spawn agent: {}", e)})),
+                Json(serde_json::json!({"error": e})),
             )
                 .into_response();
         }

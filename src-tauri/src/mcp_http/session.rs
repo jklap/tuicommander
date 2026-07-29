@@ -8,7 +8,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use futures_util::stream::StreamExt;
 use parking_lot::Mutex;
-use portable_pty::{PtySize, native_pty_system};
+use portable_pty::PtySize;
 use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -347,26 +347,25 @@ pub(super) async fn get_output(
         return (StatusCode::OK, Json(resp));
     }
 
-    // format=text: serve clean rows from VtLogBuffer (no strip_ansi needed)
+    // format=text: serve one canonical terminal snapshot. Do not concatenate
+    // VtLogBuffer's finalized-log cursor with its current screen: after a row
+    // resize grows the viewport, rows can move from history back onto the
+    // screen while still being retained in the cursor log, producing duplicate
+    // text even though the canonical terminal grid is correct.
     if format == "text" {
         let vt_log = match state.vt_log_buffers.get(&session_id) {
             Some(b) => b,
             None => return session_not_found(),
         };
         let buf = vt_log.lock();
+        let total = buf.grid_total_lines();
         let limit = query.limit.unwrap_or(usize::MAX);
-        let total = buf.total_lines();
-        let offset = total.saturating_sub(limit);
-        let (log_lines, _) = buf.lines_since_owned(offset, limit);
-        // Append current visible screen rows (non-empty) after the log
-        let screen: Vec<String> = buf
-            .screen_rows()
-            .into_iter()
-            .filter(|r| !r.is_empty())
-            .collect();
-        let mut all_lines: Vec<String> = log_lines.iter().map(|ll| ll.text()).collect();
-        all_lines.extend(screen);
-        let data = all_lines.join("\n");
+        let start = query
+            .offset
+            .unwrap_or_else(|| total.saturating_sub(limit))
+            .min(total);
+        let end = start.saturating_add(limit).min(total);
+        let data = buf.grid_get_lines(start, end).join("\n");
         return (
             StatusCode::OK,
             Json(serde_json::json!({
@@ -454,32 +453,26 @@ pub(super) fn spawn_pty_session(
         Some(id) if !id.is_empty() && !state.sessions.contains_key(&id) => id,
         _ => Uuid::new_v4().to_string(),
     };
-    let pty_system = native_pty_system();
-
-    let pair = pty_system
-        .openpty(PtySize {
+    let (pair, child) = crate::pty::spawn_pty_pair_with_retry(
+        PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
-        })
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": format!("Failed to open PTY: {}", e)})),
-            )
-        })?;
-
-    let mut cmd = build_shell_command(&shell);
-    if let Some(ref dir) = cwd {
-        let dir = crate::cli::expand_tilde(dir);
-        cmd.cwd(dir);
-    }
-
-    let child = pair.slave.spawn_command(cmd).map_err(|e| {
+        },
+        || {
+            let mut cmd = build_shell_command(&shell);
+            if let Some(ref dir) = cwd {
+                let dir = crate::cli::expand_tilde(dir);
+                cmd.cwd(dir);
+            }
+            cmd
+        },
+    )
+    .map_err(|e| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to spawn shell: {}", e)})),
+            Json(serde_json::json!({"error": e})),
         )
     })?;
 
