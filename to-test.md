@@ -1492,6 +1492,16 @@ worktree build's HTTP API on :9877 or the desktop app._
 - [ ] F13-F20 keep their normal behaviour when NO recorder is open (the listener is only attached while capturing).
 - [ ] If **F14/F15** record nothing: check `curl 'http://localhost:9876/logs?source=native-keys'`. A "extended function key observed" line means AppKit delivered it and the gap is downstream; no line means macOS consumed the key system-wide for keyboard illumination — remap it in System Settings, not a bug here.
 
+## Claude/Codex stay busy with a LIVE agent (#497-4e67, 2026-07-29, Rust — needs `make dev` restart)
+
+Data integrity and the slash-menu log flood are already verified automatically —
+`tests/terminal-stress/run.py` passes all four scenarios at 2000 records against a
+HEAD build, with zero `slash_menu` log records. What is left needs REAL agents:
+
+- [ ] Give Claude a long tool call (something taking minutes) while its empty `❯` composer stays visible: the tab must stay busy for the whole call, not flip idle. Then let it finish — the completed `✻ …ed for 1m 25s` summary must go idle normally.
+- [ ] Claude with a **blocking Stop hook**: the tab must NOT settle to completed while the hook is still doing visible work, and the follow-up suggestions from the premature Stop must be discarded rather than left on screen.
+- [ ] Codex v0.145+ with a background terminal: the `»` composer row (not the historical `›`) must anchor the Working marker, and the tab stays busy.
+
 ## Cross-repo content search covers every registered repo (#483-7b93, 2026-07-29, Rust — needs `make dev` restart)
 
 - [ ] Command palette, `?OPENROUTER` with **Search all repos** on: matches appear from repos you have NOT opened this session. Before the fix only repos with a warm index were searched (with the default `active_and_switch` strategy that is the active repo alone), so 33 of 34 registered repos were skipped.

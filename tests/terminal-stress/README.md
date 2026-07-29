@@ -18,6 +18,25 @@ orchestrator already owns `9876`. Then run:
 python3 tests/terminal-stress/run.py --base-url http://127.0.0.1:9877
 ```
 
+### Against a headless instance (no window, fully isolated)
+
+`make dev` opens a window and shares the config dir with the orchestrator. To
+verify a HEAD build without either, run the headless binary under its own `HOME`
+so it gets a private config dir, credential store and session set:
+
+```bash
+cargo build --no-default-features --bin tuic-remote
+export STRESS_HOME=/tmp/tuic-stress-home && mkdir -p "$STRESS_HOME"
+printf 'stress\nstresspass\n' | HOME=$STRESS_HOME ./target/debug/tuic-remote --set-password
+HOME=$STRESS_HOME TUIC_PORT=9879 ./target/debug/tuic-remote &
+python3 tests/terminal-stress/run.py --base-url http://127.0.0.1:9879 \
+  --auth stress:stresspass --scenario all --count 2000
+```
+
+`--auth` is required here and only here: the headless binary has no desktop
+loopback bypass, so it demands Basic Auth even on 127.0.0.1. Setting the password
+without the `HOME` override would write credentials into the REAL config.
+
 To deliberately test a primary instance:
 
 ```bash
