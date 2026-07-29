@@ -4246,6 +4246,69 @@ mod tests {
         assert!(on_disk.services.server.enabled);
     }
 
+    /// Criteria 2 and 3 of #484-1a07 say "on disk", and that is the assertion that
+    /// matters: the unit tests above prove `merge_partial_app_config` returns the
+    /// right value, but the defect was what got PERSISTED. This drives the exact
+    /// composition both `PUT /config` and the MCP `config action=save` use —
+    /// `commit_config_change(state, |current| merge_partial_app_config(current, body))`
+    /// — and then reads config.json back off the filesystem.
+    #[test]
+    fn a_partial_save_leaves_remote_access_enabled_on_disk() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        {
+            let mut cfg = state.config.write();
+            cfg.services.server.enabled = true;
+            cfg.services.server.port = 9876;
+        }
+
+        // A body that says nothing whatsoever about remote access.
+        let effects = commit_config_change(&state, |current| {
+            merge_partial_app_config(current, serde_json::json!({ "font_size": 18 }))
+        })
+        .expect("partial save");
+
+        let on_disk = load_app_config();
+        assert!(
+            on_disk.services.server.enabled,
+            "a partial save must not switch remote access off ON DISK"
+        );
+        assert_eq!(on_disk.services.server.port, 9876);
+        assert_eq!(on_disk.font_size, 18);
+        assert!(
+            !effects.server_changed,
+            "an untouched listener must not trigger a needless rebind"
+        );
+    }
+
+    /// The other half of criterion 4: a save that DOES change remote access must
+    /// report it, because that flag is what makes the three writers rebind the
+    /// listener instead of leaving the process serving a config the disk
+    /// disagrees with until the next boot.
+    #[test]
+    fn a_save_that_changes_remote_access_asks_for_a_rebind() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        state.config.write().services.server.enabled = true;
+
+        let effects = commit_config_change(&state, |current| {
+            merge_partial_app_config(
+                current,
+                serde_json::json!({ "services": { "server": { "port": 9999 } } }),
+            )
+        })
+        .expect("port change");
+
+        assert!(effects.server_changed, "a port change must rebind");
+        assert_eq!(load_app_config().services.server.port, 9999);
+        assert!(
+            load_app_config().services.server.enabled,
+            "and the sibling must still survive the merge"
+        );
+    }
+
     /// A failing mutation must leave both memory and disk untouched.
     #[test]
     fn a_rejected_mutation_changes_nothing() {

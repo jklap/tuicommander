@@ -1492,6 +1492,18 @@ worktree build's HTTP API on :9877 or the desktop app._
 - [ ] F13-F20 keep their normal behaviour when NO recorder is open (the listener is only attached while capturing).
 - [ ] If **F14/F15** record nothing: check `curl 'http://localhost:9876/logs?source=native-keys'`. A "extended function key observed" line means AppKit delivered it and the gap is downstream; no line means macOS consumed the key system-wide for keyboard illumination — remap it in System Settings, not a bug here.
 
+## Cross-repo content search covers every registered repo (#483-7b93, 2026-07-29, Rust — needs `make dev` restart)
+
+- [ ] Command palette, `?OPENROUTER` with **Search all repos** on: matches appear from repos you have NOT opened this session. Before the fix only repos with a warm index were searched (with the default `active_and_switch` strategy that is the active repo alone), so 33 of 34 registered repos were skipped.
+- [ ] Immediately after a cold start the same search must report `N still indexing, retry shortly` rather than a bare **No results** — the empty result reading as a confident miss is the actual bug being fixed.
+- [ ] Repeat the search a few seconds later: the pending count drops and matches appear, proving `ensure_index` was kicked off by the first search rather than the repo staying invisible forever.
+
+## Codex busy while a background terminal runs (#482-33ec, 2026-07-29, Rust — needs `make dev` restart)
+
+- [ ] Start a background terminal from Codex (something long, e.g. `sleep 120 &` via its own runner) so its status row reads `• Waiting for background terminal (Ns • esc to interrupt)`. The tab dot must stay **busy (non-green)** for the whole wait. Before the fix the verb swap flipped it idle within seconds and nothing could re-enter busy until the next user submission.
+- [ ] While it is waiting, confirm the session is NOT put into standby (auto-standby SIGSTOPs an idle session — a false idle here would suspend Codex mid-work).
+- [ ] After it finishes, the transcript line `• Waited for background terminal · <cmd>` (past tense, no `esc to interrupt`) must NOT hold the tab busy — it should go idle normally.
+
 ## Config partial saves (2026-07-28, Rust — needs `make dev` restart)
 
 - [ ] With remote access ON, `curl -X PUT localhost:9876/config -H 'Content-Type: application/json' -d '{"font_size":18}'`, then `curl localhost:9876/config` and check `services.server.enabled` is still `true` — and that it survives an app restart.
