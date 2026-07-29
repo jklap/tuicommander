@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import time
 import urllib.error
@@ -14,8 +15,15 @@ from pathlib import Path
 
 
 class Client:
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, auth: str | None = None) -> None:
         self.base_url = base_url.rstrip("/")
+        # The headless `tuic-remote` binary has no desktop loopback bypass, so it
+        # demands Basic Auth even on 127.0.0.1. A desktop `make dev` instance does
+        # not, which is why this is optional.
+        self.headers = {"Content-Type": "application/json"}
+        if auth:
+            token = base64.b64encode(auth.encode()).decode()
+            self.headers["Authorization"] = f"Basic {token}"
 
     def request(self, method: str, path: str, body: dict | None = None) -> dict:
         data = None if body is None else json.dumps(body).encode()
@@ -23,7 +31,7 @@ class Client:
             self.base_url + path,
             data=data,
             method=method,
-            headers={"Content-Type": "application/json"},
+            headers=self.headers,
         )
         with urllib.request.urlopen(request, timeout=10) as response:
             return json.load(response)
@@ -172,6 +180,11 @@ def main() -> None:
     parser.add_argument("--count", type=int, default=2000)
     parser.add_argument("--timeout", type=float, default=30.0)
     parser.add_argument(
+        "--auth",
+        metavar="USER:PASS",
+        help="Basic Auth credentials, required against a headless tuic-remote instance",
+    )
+    parser.add_argument(
         "--scenario",
         choices=("atomic", "progressive", "timeout", "slash-pressure", "all"),
         default="all",
@@ -185,7 +198,7 @@ def main() -> None:
         parser.error("--count must be between 1 and 9999")
 
     repo_root = Path(__file__).resolve().parents[2]
-    client = Client(args.base_url)
+    client = Client(args.base_url, args.auth)
     scenarios = (
         ("atomic", "progressive", "timeout", "slash-pressure")
         if args.scenario == "all"
