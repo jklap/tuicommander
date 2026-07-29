@@ -914,19 +914,7 @@ pub fn uninstall_plugin(
     app_handle: AppHandle,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
 ) -> Result<(), String> {
-    if id.is_empty() || is_path_escape(&id) {
-        return Err("Invalid plugin ID".into());
-    }
-
-    let dir = plugins_dir().join(&id);
-    if !dir.exists() {
-        dispose_plugin_runtime_state(&state, &id); // Sweep any lingering runtime state
-        return Ok(()); // Already gone
-    }
-
-    std::fs::remove_dir_all(&dir).map_err(|e| format!("Failed to remove plugin directory: {e}"))?;
-
-    dispose_plugin_runtime_state(&state, &id);
+    uninstall_plugin_inner(&state, &id)?;
 
     let _ = app_handle.emit("plugin-changed", vec![id.clone()]);
     crate::app_logger::log_via_handle(
@@ -936,6 +924,29 @@ pub fn uninstall_plugin(
         &format!("Uninstalled plugin \"{id}\""),
     );
     Ok(())
+}
+
+/// Core uninstall, separated from the Tauri command wrapper for testability.
+///
+/// Runtime disposal happens FIRST and unconditionally. It used to run after the
+/// `?` on `remove_dir_all`, so a delete that failed (a file held open, a
+/// permissions problem) left the plugin's watchers and capability grant alive for
+/// a plugin the user had been told was gone — and every retry hit the same early
+/// return, so it never recovered. Disposal is idempotent and independent of the
+/// directory, so nothing is lost by doing it before the step that can fail.
+fn uninstall_plugin_inner(state: &crate::AppState, id: &str) -> Result<(), String> {
+    if id.is_empty() || is_path_escape(id) {
+        return Err("Invalid plugin ID".into());
+    }
+
+    dispose_plugin_runtime_state(state, id);
+
+    let dir = plugins_dir().join(id);
+    if !dir.exists() {
+        return Ok(()); // Already gone
+    }
+
+    std::fs::remove_dir_all(&dir).map_err(|e| format!("Failed to remove plugin directory: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -1116,6 +1127,64 @@ pub fn start_plugin_watcher(app_handle: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- Uninstall disposal (#485-1bd0) --
+
+    /// A failed directory removal used to skip `dispose_plugin_runtime_state`
+    /// entirely, leaving watchers and the capability grant alive for a plugin the
+    /// user was told was gone — and every retry hit the same early return.
+    #[cfg(unix)]
+    #[test]
+    fn a_failed_uninstall_still_disposes_the_runtime_state() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(home.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        state
+            .loaded_plugins
+            .insert("doomed".to_string(), vec!["fs:read".to_string()]);
+
+        let dir = plugins_dir().join("doomed");
+        std::fs::create_dir_all(dir.join("nested")).expect("create plugin dir");
+        // A read-only parent makes remove_dir_all fail without any exotic setup.
+        let parent = plugins_dir();
+        let original = std::fs::metadata(&parent).expect("stat").permissions();
+        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o555))
+            .expect("make parent read-only");
+
+        let result = uninstall_plugin_inner(&state, "doomed");
+
+        // Restore before asserting so a failure cannot leave the tempdir undeletable.
+        std::fs::set_permissions(&parent, original).expect("restore permissions");
+
+        assert!(result.is_err(), "the removal was supposed to fail");
+        assert!(
+            !state.loaded_plugins.contains_key("doomed"),
+            "the capability grant must be revoked even when the delete fails"
+        );
+    }
+
+    #[test]
+    fn uninstalling_an_absent_plugin_still_sweeps_its_runtime_state() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(home.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        state
+            .loaded_plugins
+            .insert("ghost".to_string(), vec!["fs:read".to_string()]);
+
+        uninstall_plugin_inner(&state, "ghost").expect("absent plugin is not an error");
+
+        assert!(!state.loaded_plugins.contains_key("ghost"));
+    }
+
+    #[test]
+    fn uninstall_rejects_a_path_escaping_id_before_touching_anything() {
+        let state = crate::state::tests_support::make_test_app_state();
+        assert!(uninstall_plugin_inner(&state, "../etc").is_err());
+        assert!(uninstall_plugin_inner(&state, "").is_err());
+    }
 
     // -- Path safety --
 

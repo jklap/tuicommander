@@ -181,15 +181,19 @@ pub struct UnifiedDiffFile {
     pub deletions: u32,
 }
 
+/// A PR review is a [`TriageResult`] plus the PR it came from.
+///
+/// The triage fields are EMBEDDED and `#[serde(flatten)]`ed rather than
+/// redeclared: the wire shape is identical to the four-field copy it replaces, so
+/// no client changes, but the two can no longer drift and a new triage field
+/// cannot be forgotten at one of the construction sites.
 #[derive(Debug, Clone, Serialize)]
 pub struct PrReviewResult {
     pub repo_path: String,
     pub pr_number: i64,
     pub head_sha: String,
-    pub summary: Option<String>,
-    pub files: Vec<FileClassification>,
-    pub llm_used: bool,
-    pub llm_model: Option<String>,
+    #[serde(flatten)]
+    pub triage: TriageResult,
 }
 
 // ---------------------------------------------------------------------------
@@ -1772,13 +1776,15 @@ pub(crate) async fn run_pr_review_impl(
             repo_path,
             pr_number,
             head_sha,
-            summary: Some(format!(
-                "Reviewed {n} file{}",
-                if n == 1 { "" } else { "s" }
-            )),
-            files: heuristic,
-            llm_used: false,
-            llm_model: None,
+            triage: TriageResult {
+                summary: Some(format!(
+                    "Reviewed {n} file{}",
+                    if n == 1 { "" } else { "s" }
+                )),
+                files: heuristic,
+                llm_used: false,
+                llm_model: None,
+            },
         });
     }
 
@@ -1907,10 +1913,12 @@ pub(crate) async fn run_pr_review_impl(
         repo_path,
         pr_number,
         head_sha,
-        summary,
-        files,
-        llm_used: true,
-        llm_model: Some(model_name),
+        triage: TriageResult {
+            summary,
+            files,
+            llm_used: true,
+            llm_model: Some(model_name),
+        },
     })
 }
 
