@@ -100,7 +100,9 @@ cleartext copy does not survive on disk.
 **Commands:** `load_app_config()`, `save_app_config(config)`
 
 Every writer of `config.json` — IPC `save_config`, `PUT /config`, MCP
-`config action=save`, and session-token rotation — goes through
+`config action=save`, session-token rotation, `set_global_hotkey`, the
+`disabled_mcp_agents` toggle and the push auto-enable on first subscription —
+goes through
 `config::commit_config_change`, which holds one process-wide mutex across the
 whole read → merge → preserve-secrets → write → update-`state.config`
 sequence. Without it two overlapping saves both merged onto the same snapshot
@@ -109,6 +111,12 @@ and the second silently erased the first one's fields. Rotation
 `POST /auth/rotate-session-token`) goes through the same path so the vault, the
 file and `state.config` cannot disagree — previously the in-memory config kept
 the pre-rotation token and the next unrelated save wrote it back.
+
+Routing every writer through it also guarantees the file is produced by
+`config_for_disk`. A writer that serialized the config itself (the
+`disabled_mcp_agents` toggle called `save_json_config("config.json", ..)`)
+skipped the stripping step and wrote the session token, relay token and VAPID
+private key to disk in cleartext.
 
 ### Notification Config (`notifications.json`)
 

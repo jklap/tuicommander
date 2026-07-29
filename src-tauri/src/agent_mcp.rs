@@ -573,17 +573,22 @@ pub(crate) fn remove_agent_mcp(
 /// and on-disk `config.json`. Updating only disk would leave a stale snapshot in
 /// memory, and a subsequent `put_config` from the FE (carrying that stale list)
 /// would silently revert the toggle.
+///
+/// Goes through `commit_config_change` rather than serializing a snapshot itself:
+/// a direct `save_json_config("config.json", ..)` skips `config_for_disk`, so the
+/// session token, relay token and VAPID private key were written to config.json in
+/// cleartext — the exact thing the credential vault exists to prevent. It also puts
+/// this writer under the same lock as every other one.
 fn update_disabled_mcp_agents(
     state: &std::sync::Arc<crate::state::AppState>,
     mutator: impl FnOnce(&mut Vec<String>),
 ) {
-    use crate::config::save_json_config;
-    let snapshot = {
-        let mut cfg = state.config.write();
-        mutator(&mut cfg.disabled_mcp_agents);
-        cfg.clone()
-    };
-    if let Err(e) = save_json_config("config.json", &snapshot) {
+    let result = crate::config::commit_config_change(state, |current| {
+        let mut next = current.clone();
+        mutator(&mut next.disabled_mcp_agents);
+        Ok(next)
+    });
+    if let Err(e) = result {
         tracing::error!(source = "mcp", "Failed to save disabled_mcp_agents: {e}");
     }
 }
