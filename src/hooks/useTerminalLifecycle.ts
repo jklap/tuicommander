@@ -472,23 +472,15 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 	};
 
 	const handleTerminalSelect = (id: string) => {
+		// Each setActive deactivates the other panes itself (activatePaneExclusively).
 		if (id.startsWith("diff-")) {
 			diffTabsStore.setActive(id);
-			mdTabsStore.setActive(null);
-			editorTabsStore.setActive(null);
-			terminalsStore.setActive(null);
 			activateInPaneGroup(id, "diff");
 		} else if (id.startsWith("md-")) {
 			mdTabsStore.setActive(id);
-			diffTabsStore.setActive(null);
-			editorTabsStore.setActive(null);
-			terminalsStore.setActive(null);
 			activateInPaneGroup(id, "markdown");
 		} else if (id.startsWith("edit-")) {
 			editorTabsStore.setActive(id);
-			diffTabsStore.setActive(null);
-			mdTabsStore.setActive(null);
-			terminalsStore.setActive(null);
 			activateInPaneGroup(id, "editor");
 		} else {
 			navigateToTerminal(id);
