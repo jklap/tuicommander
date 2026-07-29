@@ -52,6 +52,7 @@ Each frame: 26-byte header + variable row data. The header ends with a `historyB
 - **RAF coalescing:** All paint triggers (frame arrival, keydown selection clear, mousedown) go through `scheduleRepaint()` which schedules a single `requestAnimationFrame`. No synchronous paint calls — prevents double-paint in a single event loop turn.
 - **`send_grid_frame` clone guard:** Frame is only cloned for the `grid_watch` channel when `receiver_count() > 0` (i.e. WS clients connected). Desktop-only path (Tauri Channel) is zero-copy.
 - **`screen_text_rows_ref()`:** `TerminalGrid` exposes a borrowed `&[String]` view of cached screen rows. Used in `process_chunk` for chrome cutoff detection to avoid cloning 50 Strings per PTY chunk. Downstream parsers (slash-menu, choice-prompt) share a single owned snapshot computed once per chunk.
+- **No per-chunk parser logs:** Slash-menu detection can remain active during a large output burst, so its hot path emits events only when a menu is found and never writes a debug record for every parse.
 - **Trim in-place:** `read_screen_text()` and `row_to_text()` use `String::truncate()` instead of `.trim_end().to_string()`, eliminating one allocation per row.
 
 ## Feature Table

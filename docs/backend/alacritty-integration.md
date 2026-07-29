@@ -64,6 +64,11 @@ In-band signalling via the PTY stream. Never written to the grid (consumed by VT
 | `RegexSearch::new(query)` + `term.regex_search_right()` | Native DFA regex search across grid + scrollback |
 | `EventListener` trait | Capture bell, title, clipboard, PTY write-back events |
 
+Canonical HTTP text snapshots read a single absolute range from this grid.
+They must not rebuild a snapshot by appending a separately retained log to the
+screen: increasing terminal rows can move history back into the viewport and
+make the two representations overlap.
+
 ## Notable forks and patches (external)
 
 ### Zed Editor (zed-industries/alacritty)

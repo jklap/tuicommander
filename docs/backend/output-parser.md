@@ -322,3 +322,13 @@ publishing parent idle/completed lifecycle mail, so background descendants remai
 working even while the shell is ready. Other parsed events continue unchanged.
 See `suppress_heuristic_question()` and the
 explicit-state fields in `SilenceState` (`src-tauri/src/pty.rs`).
+
+Claude Stop hooks can block after Claude has already emitted a Stop/suggest
+marker. If the current screen still contains a semantic active phase (spinner
+prefix, active verb ending in an ellipsis, and parenthesized progress), the PTY
+lifecycle reopens the same turn and discards the premature suggestions. A plain
+empty composer or completed-duration summary does not provide this evidence.
+
+Slash-menu parsing is gated by the input FSM's slash mode and intentionally
+does not emit a per-chunk debug record. Sustained output with a stale slash flag
+previously produced thousands of identical application-log writes in seconds.
