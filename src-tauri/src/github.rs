@@ -1048,6 +1048,21 @@ fn stamp_merge_policy(nodes: &mut [BranchPrStatus], repo_json: &serde_json::Valu
     }
 }
 
+/// Forget the cached github.com viewer login so the next query re-resolves it.
+///
+/// `github_viewer_login` is the identity behind `author:@me` in the viewer-PR
+/// search and behind `issues_filter_clause`'s assignee/creator/mentioned filters.
+/// It was written on the first successful viewer query and cleared nowhere, so
+/// after logging out and back in as somebody else the user kept seeing the
+/// PREVIOUS account's PRs and issues for the rest of the session. Every path that
+/// changes who "we" are on github.com must call this.
+///
+/// Named accounts cache their own login in `ghe_state` and are unaffected — that
+/// is the point of the per-account cache.
+pub(crate) fn invalidate_viewer_login(state: &AppState) {
+    *state.github_viewer_login.write() = None;
+}
+
 /// Fetch the authenticated user's GitHub login via `query { viewer { login } }`.
 /// Cached after first successful call for the session lifetime.
 pub(crate) async fn get_viewer_login(state: &AppState) -> Result<String, String> {
@@ -1740,16 +1755,18 @@ pub(crate) async fn close_issue_impl(
     crate::github_debug::log_api("PATCH", &url, "close_issue_impl");
     let body = serde_json::json!({ "state": "closed" });
 
-    let response = state
-        .http_client
-        .patch(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("User-Agent", "tuicommander")
-        .header("Accept", "application/vnd.github+json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("GitHub API request failed: {e}"))?;
+    let response = send_rest_with_breaker(
+        state,
+        &account,
+        state
+            .http_client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body),
+    )
+    .await?;
 
     let status = response.status().as_u16();
     if (200..300).contains(&status) {
@@ -1788,16 +1805,18 @@ pub(crate) async fn reopen_issue_impl(
     crate::github_debug::log_api("PATCH", &url, "reopen_issue_impl");
     let body = serde_json::json!({ "state": "open" });
 
-    let response = state
-        .http_client
-        .patch(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("User-Agent", "tuicommander")
-        .header("Accept", "application/vnd.github+json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("GitHub API request failed: {e}"))?;
+    let response = send_rest_with_breaker(
+        state,
+        &account,
+        state
+            .http_client
+            .patch(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body),
+    )
+    .await?;
 
     let status = response.status().as_u16();
     if (200..300).contains(&status) {
@@ -1821,24 +1840,80 @@ pub(crate) async fn reopen_issue(
     reopen_issue_impl(&repo_path, issue_number, &state).await
 }
 
+/// Send a direct REST request through the account's circuit breaker.
+///
+/// `graphql_with_retry` and `run_gh_write` were breaker-aware; the direct-REST
+/// sites were not, so once an account was rate-limited every one of them kept
+/// hammering GitHub while the GraphQL path politely backed off. This is the same
+/// check-send-record cycle, adapted to REST.
+///
+/// The response is handed back on any non-rate-limit status so each caller keeps
+/// its own status handling and error wording (merge conflicts, self-approval,
+/// diff-too-large fallback all read the body themselves). Only rate limits are
+/// intercepted, because they are the one outcome that must not reach the caller
+/// as an ordinary failure.
+///
+/// A 403 is classified from headers alone — `x-ratelimit-remaining: 0` for the
+/// primary limit, a `retry-after` for a secondary/abuse limit. That keeps the
+/// body intact for the plain permission-denied 403, which callers still format.
+async fn send_rest_with_breaker(
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, String> {
+    with_account_breaker(state, account, |b| b.check())?;
+
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(e) => {
+            with_account_breaker(state, account, |b| b.record_failure());
+            return Err(format!("GitHub API request failed: {e}"));
+        }
+    };
+
+    let status = response.status().as_u16();
+    let reset_at = header_as_u64(response.headers(), "x-ratelimit-reset");
+    let retry_after = header_as_u64(response.headers(), "retry-after");
+    let remaining = header_as_u64(response.headers(), "x-ratelimit-remaining");
+
+    let rate_limited =
+        status == 429 || (status == 403 && (remaining == Some(0) || retry_after.is_some()));
+    if rate_limited {
+        let wait = rate_limit_wait_secs(reset_at, retry_after);
+        with_account_breaker(state, account, |b| b.record_rate_limit(wait));
+        return Err(format!("rate-limit: GitHub returned HTTP {status}"));
+    }
+
+    if (200..300).contains(&status) {
+        with_account_breaker(state, account, |b| b.record_success());
+    } else {
+        with_account_breaker(state, account, |b| b.record_failure());
+    }
+    Ok(response)
+}
+
 /// GET a GitHub REST endpoint and parse the JSON body, returning a descriptive
 /// error on any non-2xx status (e.g. 404/401/403) instead of parsing an error
 /// body as a valid-but-empty resource. Mirrors the status idiom used by
 /// `close_issue_impl`/`reopen_issue_impl`.
 async fn fetch_github_json(
-    client: &reqwest::Client,
+    state: &AppState,
+    account: &crate::github_account::GitHubAccount,
     url: &str,
     token: &str,
     context: &str,
 ) -> Result<serde_json::Value, String> {
-    let response = client
-        .get(url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("User-Agent", "tuicommander")
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|e| format!("GitHub API request failed: {e}"))?;
+    let response = send_rest_with_breaker(
+        state,
+        account,
+        state
+            .http_client
+            .get(url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github+json"),
+    )
+    .await?;
 
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
@@ -1864,8 +1939,7 @@ pub(crate) async fn get_issue_detail_impl(
         &format!("/repos/{owner}/{repo}/issues/{issue_number}"),
     );
     crate::github_debug::log_api("GET", &issue_url, "get_issue_detail_impl");
-    let issue_json =
-        fetch_github_json(&state.http_client, &issue_url, &token, "GitHub issue").await?;
+    let issue_json = fetch_github_json(state, &account, &issue_url, &token, "GitHub issue").await?;
 
     let comments_url = crate::github_account::github_rest_url(
         &account.host,
@@ -1873,7 +1947,8 @@ pub(crate) async fn get_issue_detail_impl(
     );
     crate::github_debug::log_api("GET", &comments_url, "get_issue_detail_impl comments");
     let comments_json = fetch_github_json(
-        &state.http_client,
+        state,
+        &account,
         &comments_url,
         &token,
         "GitHub issue comments",
@@ -2541,16 +2616,18 @@ pub(crate) async fn merge_pr_github_impl(
     crate::github_debug::log_api("PUT", &url, "merge_pr_github_impl");
     let body = serde_json::json!({ "merge_method": merge_method });
 
-    let response = state
-        .http_client
-        .put(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("User-Agent", "tuicommander")
-        .header("Accept", "application/vnd.github+json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("GitHub API request failed: {e}"))?;
+    let response = send_rest_with_breaker(
+        state,
+        &account,
+        state
+            .http_client
+            .put(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body),
+    )
+    .await?;
 
     let status = response.status().as_u16();
     let json: serde_json::Value = response
@@ -2963,16 +3040,18 @@ pub(crate) async fn approve_pr_impl(
     crate::github_debug::log_api("POST", &url, "approve_pr_impl");
     let body = serde_json::json!({ "event": "APPROVE" });
 
-    let response = state
-        .http_client
-        .post(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("User-Agent", "tuicommander")
-        .header("Accept", "application/vnd.github+json")
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("GitHub API request failed: {e}"))?;
+    let response = send_rest_with_breaker(
+        state,
+        &account,
+        state
+            .http_client
+            .post(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github+json")
+            .json(&body),
+    )
+    .await?;
 
     let status = response.status();
     if status.is_success() {
@@ -3047,15 +3126,17 @@ pub(crate) async fn get_pr_diff_impl(
     );
     crate::github_debug::log_api("GET", &url, "get_pr_diff_impl");
 
-    let response = state
-        .http_client
-        .get(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("User-Agent", "tuicommander")
-        .header("Accept", "application/vnd.github.diff")
-        .send()
-        .await
-        .map_err(|e| format!("GitHub API request failed: {e}"))?;
+    let response = send_rest_with_breaker(
+        state,
+        &account,
+        state
+            .http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github.diff"),
+    )
+    .await?;
 
     let status = response.status();
     if status.is_success() {
@@ -3211,18 +3292,20 @@ pub(crate) async fn get_pr_refs_impl(
         &format!("/repos/{owner}/{repo}/pulls/{pr_number}"),
     );
     crate::github_debug::log_api("GET", &url, "get_pr_refs_impl");
-    let json: serde_json::Value = state
-        .http_client
-        .get(&url)
-        .header("Authorization", format!("Bearer {token}"))
-        .header("User-Agent", "tuicommander")
-        .header("Accept", "application/vnd.github+json")
-        .send()
-        .await
-        .map_err(|e| format!("GitHub API request failed: {e}"))?
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse GitHub PR response: {e}"))?;
+    let json: serde_json::Value = send_rest_with_breaker(
+        state,
+        &account,
+        state
+            .http_client
+            .get(&url)
+            .header("Authorization", format!("Bearer {token}"))
+            .header("User-Agent", "tuicommander")
+            .header("Accept", "application/vnd.github+json"),
+    )
+    .await?
+    .json()
+    .await
+    .map_err(|e| format!("Failed to parse GitHub PR response: {e}"))?;
     parse_pr_refs(&json).ok_or_else(|| "PR response missing head/base refs".to_string())
 }
 
@@ -6060,6 +6143,188 @@ mod tests {
         );
     }
 
+    // --- direct-REST circuit breaker (#491-6bb2) ---
+
+    /// The defect: only graphql_with_retry and run_gh_write consulted the breaker,
+    /// so a rate-limited account kept hammering GitHub through every direct-REST
+    /// call while the GraphQL path politely backed off. A tripped breaker must now
+    /// stop the request before it is sent — asserted by the mock NEVER being hit.
+    #[tokio::test]
+    async fn a_tripped_breaker_stops_a_rest_call_before_it_is_sent() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/repos/o/r/issues/1")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
+        state.github_circuit_breaker.record_rate_limit(60);
+
+        let url = format!("{}/repos/o/r/issues/1", server.url());
+        let err = send_rest_with_breaker(&state, &account, state.http_client.get(&url))
+            .await
+            .expect_err("an open breaker must refuse the call");
+
+        assert!(err.contains("rate-limit"), "unexpected error: {err}");
+        mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn a_rest_429_trips_the_breaker_for_the_next_call() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("PATCH", "/repos/o/r/issues/1")
+            .with_status(429)
+            .with_header("retry-after", "42")
+            .create_async()
+            .await;
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
+        let url = format!("{}/repos/o/r/issues/1", server.url());
+
+        let err = send_rest_with_breaker(&state, &account, state.http_client.patch(&url))
+            .await
+            .expect_err("429 must not be handed back as an ordinary response");
+        assert!(err.contains("rate-limit"), "unexpected error: {err}");
+        mock.assert_async().await;
+
+        let follow_up = state.github_circuit_breaker.check().unwrap_err();
+        assert!(
+            follow_up.contains("rate-limit"),
+            "the 429 must leave the breaker backing off: {follow_up}"
+        );
+    }
+
+    /// GitHub's 403 is ambiguous. An exhausted primary limit (remaining: 0) must
+    /// back off; a plain permission denial must not, or one protected branch would
+    /// silence every GitHub call for the account.
+    #[tokio::test]
+    async fn a_403_is_a_rate_limit_only_when_the_headers_say_so() {
+        let mut server = mockito::Server::new_async().await;
+        let exhausted = server
+            .mock("GET", "/exhausted")
+            .with_status(403)
+            .with_header("x-ratelimit-remaining", "0")
+            .with_header("x-ratelimit-reset", "99999999999")
+            .create_async()
+            .await;
+        let forbidden = server
+            .mock("GET", "/forbidden")
+            .with_status(403)
+            .with_body(r#"{"message":"Resource not accessible"}"#)
+            .create_async()
+            .await;
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
+
+        let err = send_rest_with_breaker(
+            &state,
+            &account,
+            state.http_client.get(format!("{}/exhausted", server.url())),
+        )
+        .await
+        .expect_err("an exhausted primary limit is a rate limit");
+        assert!(err.contains("rate-limit"), "unexpected error: {err}");
+        exhausted.assert_async().await;
+        state.github_circuit_breaker.reset();
+
+        // The permission 403 comes back as a Response so the caller can read the
+        // body and produce its own wording (friendly_approve_error, merge errors…).
+        let response = send_rest_with_breaker(
+            &state,
+            &account,
+            state.http_client.get(format!("{}/forbidden", server.url())),
+        )
+        .await
+        .expect("a permission 403 must reach the caller with its body intact");
+        assert_eq!(response.status().as_u16(), 403);
+        assert!(response.text().await.unwrap().contains("not accessible"));
+        forbidden.assert_async().await;
+        assert!(
+            state.github_circuit_breaker.check().is_ok(),
+            "a single permission denial must not open the breaker"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_successful_rest_call_clears_earlier_failures() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/ok")
+            .with_status(200)
+            .with_body("{}")
+            .create_async()
+            .await;
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
+        state.github_circuit_breaker.record_failure();
+
+        let response = send_rest_with_breaker(
+            &state,
+            &account,
+            state.http_client.get(format!("{}/ok", server.url())),
+        )
+        .await
+        .expect("2xx");
+        assert_eq!(response.status().as_u16(), 200);
+        mock.assert_async().await;
+        assert!(state.github_circuit_breaker.check().is_ok());
+    }
+
+    // --- viewer login invalidation (#491-6bb2) ---
+
+    /// github_viewer_login was written once and cleared nowhere, so after switching
+    /// accounts the `author:@me` PR search and the issue assignee/creator filters
+    /// kept resolving to the PREVIOUS user.
+    #[test]
+    fn invalidating_the_viewer_login_forgets_the_previous_account() {
+        let state = crate::state::tests_support::make_test_app_state();
+        *state.github_viewer_login.write() = Some("old-user".to_string());
+
+        invalidate_viewer_login(&state);
+
+        assert_eq!(*state.github_viewer_login.read(), None);
+        assert_eq!(
+            github_com_account(&state).login,
+            None,
+            "the derived account identity must forget it too"
+        );
+    }
+
+    /// Named accounts cache their own login in ghe_state — that isolation is the
+    /// point, so clearing the ambient one must not touch them.
+    #[test]
+    fn invalidating_the_viewer_login_leaves_named_accounts_alone() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let named = named_cloud_account();
+        *state.github_viewer_login.write() = Some("ambient-user".to_string());
+        *state
+            .ghe_state
+            .entry(named.id.clone())
+            .or_insert_with(GheAccountState::new)
+            .viewer_login
+            .write() = Some("named-user".to_string());
+
+        invalidate_viewer_login(&state);
+
+        assert_eq!(*state.github_viewer_login.read(), None);
+        assert_eq!(
+            state
+                .ghe_state
+                .get(&named.id)
+                .unwrap()
+                .viewer_login
+                .read()
+                .clone(),
+            Some("named-user".to_string())
+        );
+    }
+
     // --- fetch_github_json status-check tests ---
 
     #[tokio::test]
@@ -6073,9 +6338,10 @@ mod tests {
             .create_async()
             .await;
 
-        let client = reqwest::Client::new();
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
         let url = format!("{}/repos/o/r/issues/999", server.url());
-        let result = fetch_github_json(&client, &url, "tok", "GitHub issue").await;
+        let result = fetch_github_json(&state, &account, &url, "tok", "GitHub issue").await;
 
         mock.assert_async().await;
         // A 404 must surface as an Err, NOT parse into a silent empty issue.
@@ -6098,9 +6364,10 @@ mod tests {
             .create_async()
             .await;
 
-        let client = reqwest::Client::new();
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
         let url = format!("{}/repos/o/r/issues/1", server.url());
-        let result = fetch_github_json(&client, &url, "tok", "GitHub issue").await;
+        let result = fetch_github_json(&state, &account, &url, "tok", "GitHub issue").await;
 
         mock.assert_async().await;
         let err = result.expect_err("401 must return Err");
@@ -6122,9 +6389,10 @@ mod tests {
             .create_async()
             .await;
 
-        let client = reqwest::Client::new();
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
         let url = format!("{}/repos/o/r/issues/42", server.url());
-        let value = fetch_github_json(&client, &url, "tok", "GitHub issue")
+        let value = fetch_github_json(&state, &account, &url, "tok", "GitHub issue")
             .await
             .expect("2xx should parse into JSON");
 
