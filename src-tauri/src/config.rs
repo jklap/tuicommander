@@ -4258,4 +4258,52 @@ mod tests {
         assert_eq!(err, "nope");
         assert_eq!(state.config.read().font_size, before);
     }
+
+    /// Every writer must route through `config_for_disk`. `agent_mcp` used to call
+    /// `save_json_config("config.json", &snapshot)` directly, which skips the stripping
+    /// step and wrote the session token, relay token and VAPID private key to disk in
+    /// cleartext — defeating the vault entirely. Going through `commit_config_change`
+    /// makes that impossible for any caller.
+    #[test]
+    fn a_commit_never_leaves_a_secret_in_the_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = crate::state::tests_support::make_test_app_state();
+        {
+            let mut cfg = state.config.write();
+            cfg.services.auth.session_token = "session-secret".to_string();
+            cfg.services.auth.session_token_exists = true;
+            cfg.services.relay.token = "relay-secret".to_string();
+            cfg.services.relay.token_exists = Some(true);
+            cfg.services.push.vapid_private_key = "vapid-secret".to_string();
+            cfg.services.push.vapid_private_key_exists = true;
+        }
+
+        // A mutation that says nothing about secrets — the shape every incidental
+        // writer (disabled_mcp_agents, global_hotkey, push auto-enable) has.
+        commit_config_change(&state, |current| {
+            let mut next = current.clone();
+            next.disabled_mcp_agents = vec!["claude".to_string()];
+            Ok(next)
+        })
+        .expect("commit");
+
+        let raw = std::fs::read_to_string(dir.path().join(APP_CONFIG_FILE)).expect("read file");
+        for secret in ["session-secret", "relay-secret", "vapid-secret"] {
+            assert!(
+                !raw.contains(secret),
+                "{secret} was written to config.json in cleartext"
+            );
+        }
+        // And the secrets are still reachable, i.e. they were moved, not dropped.
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteSessionToken)
+                .expect("vault readable"),
+            Some("session-secret".to_string())
+        );
+        assert_eq!(
+            load_app_config().disabled_mcp_agents,
+            vec!["claude".to_string()]
+        );
+    }
 }

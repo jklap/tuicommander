@@ -419,20 +419,27 @@ async fn push_subscribe(
         return (StatusCode::BAD_REQUEST, e).into_response();
     }
     state.push_store.upsert(sub);
-    // Auto-enable push on first subscription — mutate + drop lock before disk I/O
-    let needs_save = {
-        let mut config = state.config.write();
-        if !config.services.push.enabled {
-            config.services.push.enabled = true;
-            true
-        } else {
-            false
-        }
-    };
-    if needs_save {
-        let snapshot = state.config.read().clone();
-        if let Err(e) = crate::config::save_app_config(snapshot) {
-            tracing::error!(source = "push", "Failed to persist push_enabled=true: {e}");
+    // Auto-enable push on first subscription. Through the shared config lock: the old
+    // mutate-then-snapshot-then-save left a window where another writer's save carried
+    // this flag, or this save carried the other writer's half-applied change. Blocking
+    // pool because the critical section writes to disk.
+    let already_enabled = state.config.read().services.push.enabled;
+    if !already_enabled {
+        let state = state.clone();
+        let saved = tokio::task::spawn_blocking(move || {
+            crate::config::commit_config_change(&state, |current| {
+                let mut next = current.clone();
+                next.services.push.enabled = true;
+                Ok(next)
+            })
+        })
+        .await;
+        match saved {
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => {
+                tracing::error!(source = "push", "Failed to persist push_enabled=true: {e}")
+            }
+            Err(e) => tracing::error!(source = "push", "push_enabled save task failed: {e}"),
         }
     }
     StatusCode::CREATED.into_response()
@@ -4963,6 +4970,49 @@ mod tests {
         let lines = json["lines"].as_array().expect("lines should be an array");
         assert_eq!(lines.len(), 3, "limit=3 should return 3 lines");
         assert_eq!(json["total_lines"].as_u64().unwrap(), total as u64);
+    }
+
+    #[tokio::test]
+    async fn test_get_output_format_text_does_not_duplicate_rows_after_growing_viewport() {
+        use crate::state::{VT_LOG_BUFFER_CAPACITY, VtLogBuffer};
+
+        let state = test_state();
+        let sid = "test-text-resize-growth";
+        let mut vt_log = VtLogBuffer::new(12, 80, VT_LOG_BUFFER_CAPACITY);
+        for i in 0..50 {
+            vt_log.process(format!("resize-line-{i:02}\r\n").as_bytes());
+        }
+        vt_log.resize(33, 80);
+        let canonical_total = vt_log.grid_total_lines();
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), parking_lot::Mutex::new(vt_log));
+
+        let app = build_router(state, false, true);
+        let resp = app
+            .oneshot(
+                Request::get(format!("/sessions/{sid}/output?format=text&limit=1000"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        let text = json["data"].as_str().expect("data should be text");
+
+        for i in 0..50 {
+            let marker = format!("resize-line-{i:02}");
+            assert_eq!(
+                text.lines().filter(|line| *line == marker).count(),
+                1,
+                "canonical text snapshot must contain {marker} exactly once"
+            );
+        }
+        assert_eq!(json["total_written"], canonical_total);
     }
 
     #[tokio::test]

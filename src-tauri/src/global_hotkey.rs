@@ -115,13 +115,13 @@ pub async fn set_global_hotkey(
         register(&app, new_combo).map_err(|e| e.to_string())?;
     }
 
-    // Persist to config
-    {
-        let mut config = state.config.read().clone();
-        config.global_hotkey = combo;
-        *state.config.write() = config.clone();
-        crate::config::save_app_config(config).map_err(|e| e.to_string())?;
-    }
+    // Persist to config. Under the shared config lock: read-clone-mutate-save-store
+    // on its own raced every other writer, and the loser's fields were dropped.
+    crate::config::commit_config_change(state.inner(), |current| {
+        let mut next = current.clone();
+        next.global_hotkey = combo;
+        Ok(next)
+    })?;
 
     Ok(())
 }
