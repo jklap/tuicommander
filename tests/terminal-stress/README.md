@@ -55,6 +55,13 @@ python3 tests/terminal-stress/run.py \
   race with the producer.
 - `timeout`: the same workload with periodic pauses longer than the synchronized
   update timeout before the erase-and-complete phase.
+- `reflow`: commits a PARTIAL row to history with its own newline, then prints
+  the complete extension as a separate row, while the runner resizes the
+  viewport underneath. Models the shape reported in story #498-7e3d. Its
+  verifier is deliberately different: it does NOT require the partial row to
+  disappear (the producer really printed both, and discarding one would be the
+  grid silently dropping history) — it requires that the grid does not
+  MANUFACTURE a copy of the complete row under reflow.
 - `slash-pressure`: enters TUIC's slash-command mode through a no-echo producer
   handshake, then emits the atomic workload. This reproduces the per-chunk
   slash-menu parser pressure that once generated thousands of application-log
@@ -65,6 +72,19 @@ python3 tests/terminal-stress/run.py \
 For every scenario the verifier requires every expected `REC-NNNN` record to
 exist exactly once and byte-complete in the canonical backend grid. Missing,
 truncated, or duplicate records fail with the relevant record IDs.
+
+## Capturing a live anomaly
+
+`capture.py` snapshots the three things a grid anomaly can only be diagnosed
+from together — the raw ring, the dimensions, and the canonical rows — in one
+shot, because two of them are volatile and the ring rotates:
+
+```bash
+python3 tests/terminal-stress/capture.py --session <id> -o capture-dir
+```
+
+It also flags adjacent rows where the next row EXTENDS the previous one, which
+is the reported #498-7e3d shape.
 
 The suite does not erase legitimate terminal history. If an application scrolls
 a partial row into history and only later prints an extended version, both rows

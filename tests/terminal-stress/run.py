@@ -74,6 +74,37 @@ def verify(lines: list[str], count: int, scenario: str) -> None:
         )
 
 
+def verify_reflow(lines: list[str], count: int) -> None:
+    """The reflow scenario prints a partial row AND its complete extension.
+
+    Both are legitimate output — the producer really emitted both, so requiring
+    the partial to vanish would be asserting the grid should silently discard
+    terminal history. What must hold is that the grid does not MANUFACTURE a
+    copy: every complete record appears exactly once even though the viewport
+    was resized underneath it while the rows were being written.
+    """
+    expected = {expected_record(index) for index in range(count)}
+    observed = Counter(line for line in lines if line in expected)
+    missing = sorted(expected - observed.keys())
+    duplicates = sorted(line for line, seen in observed.items() if seen != 1)
+    truncated = sorted(
+        line
+        for line in lines
+        if line.startswith("REC-")
+        and line not in expected
+        and len(line) > len(expected_record(0))
+    )
+    problems = []
+    if missing:
+        problems.append(f"missing={missing[:5]} ({len(missing)} total)")
+    if duplicates:
+        problems.append(f"duplicated={duplicates[:5]} ({len(duplicates)} total)")
+    if truncated:
+        problems.append(f"overlong={truncated[:5]} ({len(truncated)} total)")
+    if problems:
+        raise AssertionError("reflow: " + "; ".join(problems))
+
+
 def run_scenario(
     client: Client,
     repo_root: Path,
@@ -164,8 +195,13 @@ def run_scenario(
             {"offset": 0},
         )
         time.sleep(0.25)
-        verify(read_all_lines(client, session_id), count, scenario)
-        print(f"PASS {scenario}: {count} complete unique records")
+        lines = read_all_lines(client, session_id)
+        if scenario == "reflow":
+            verify_reflow(lines, count)
+            print(f"PASS reflow: {count} complete records, none manufactured by reflow")
+        else:
+            verify(lines, count, scenario)
+            print(f"PASS {scenario}: {count} complete unique records")
     finally:
         try:
             client.request("DELETE", f"/sessions/{session_id}")
@@ -186,7 +222,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--scenario",
-        choices=("atomic", "progressive", "timeout", "slash-pressure", "all"),
+        choices=("atomic", "progressive", "timeout", "slash-pressure", "reflow", "all"),
         default="all",
     )
     args = parser.parse_args()
@@ -200,7 +236,7 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     client = Client(args.base_url, args.auth)
     scenarios = (
-        ("atomic", "progressive", "timeout", "slash-pressure")
+        ("atomic", "progressive", "timeout", "slash-pressure", "reflow")
         if args.scenario == "all"
         else (args.scenario,)
     )
