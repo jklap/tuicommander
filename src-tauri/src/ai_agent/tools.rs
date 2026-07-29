@@ -3641,7 +3641,13 @@ mod tests {
         assert!(!r.output.contains("truncated"));
     }
 
+    // These three mutate the process-wide TUIC_WARN_SECRET_READS. Serialized like
+    // every other env-mutating test in this codebase: nextest's process-per-test
+    // makes it moot today, but `cargo test` (and the doctest runner) share one
+    // process, and an unserialized env write is a race waiting for the day
+    // somebody runs the suite that way.
     #[test]
+    #[serial_test::serial]
     fn warn_secret_reads_off_by_default() {
         // Default (env unset) must be off — reads stay unrestricted with no warn.
         unsafe { std::env::remove_var("TUIC_WARN_SECRET_READS") };
@@ -3649,6 +3655,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial]
     fn warn_secret_reads_honors_env() {
         unsafe { std::env::set_var("TUIC_WARN_SECRET_READS", "1") };
         assert!(warn_secret_reads_enabled());
@@ -3681,6 +3688,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn read_secret_file_with_warn_on_still_unrestricted() {
         // AC2: with the opt-in warn enabled, the read still succeeds unrestricted
         // (warn is a log side-effect only, never a gate).
