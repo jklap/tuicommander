@@ -1,0 +1,64 @@
+# Terminal Stress Regression Suite
+
+This directory contains repeatable end-to-end regressions for terminal data
+integrity and agent lifecycle detection. It complements the in-process Rust
+tests in `src-tauri/src/terminal_grid.rs` and `src-tauri/src/pty.rs` by driving a
+real PTY through TUICommander's HTTP transport.
+
+## Safety
+
+The runner creates a throwaway shell session, verifies only that session, and
+deletes it in a `finally` block. It refuses port `9876` by default because that
+is normally the orchestrator instance containing live user sessions.
+
+Start a worktree build with `make dev`; it normally binds to `9877` when the
+orchestrator already owns `9876`. Then run:
+
+```bash
+python3 tests/terminal-stress/run.py --base-url http://127.0.0.1:9877
+```
+
+To deliberately test a primary instance:
+
+```bash
+python3 tests/terminal-stress/run.py \
+  --base-url http://127.0.0.1:9876 \
+  --allow-primary
+```
+
+## Scenarios
+
+- `atomic`: 2,000 DEC 2026 synchronized updates. Each record is first written
+  partially, erased, then written completely. Escape sequences and payloads
+  are split at deterministic irregular byte boundaries.
+- `progressive`: writes the partial and replacement row in separate synchronized
+  frames, modeling visible token-by-token growth while scroll and resize requests
+  race with the producer.
+- `timeout`: the same workload with periodic pauses longer than the synchronized
+  update timeout before the erase-and-complete phase.
+- `slash-pressure`: enters TUIC's slash-command mode through a no-echo producer
+  handshake, then emits the atomic workload. This reproduces the per-chunk
+  slash-menu parser pressure that once generated thousands of application-log
+  records during sustained agent output.
+- During both scenarios the controller repeatedly scrolls and resizes the
+  terminal while output is still arriving.
+
+For every scenario the verifier requires every expected `REC-NNNN` record to
+exist exactly once and byte-complete in the canonical backend grid. Missing,
+truncated, or duplicate records fail with the relevant record IDs.
+
+The suite does not erase legitimate terminal history. If an application scrolls
+a partial row into history and only later prints an extended version, both rows
+are valid terminal output and cannot be deduplicated safely without an
+application-specific semantic signal. Preserve a raw-ring capture when such an
+episode occurs so a new deterministic producer sequence can be added here.
+
+The screen snapshots in `fixtures/` are sanitized captures of real false-idle
+layouts. Rust lifecycle tests load these fixtures so changes to agent chrome can
+be reviewed independently from the assertions.
+
+## Extending the suite
+
+Add producer behavior as a named scenario in `producer.py`, keep all schedules
+deterministic, and document the exact invariant here. A regression fixture must
+contain no repository secrets, credentials, or full user prompts.
