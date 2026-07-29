@@ -64,6 +64,34 @@ def emit(scenario: str, count: int, marker: str | None = None) -> None:
     os.write(1, f"\r\nTUIC_STRESS_DONE:{marker}:{count}\r\n".encode())
 
 
+def emit_reflow(count: int) -> None:
+    """Scroll a PARTIAL row into history, then print its complete extension.
+
+    This is the exact shape story #498-7e3d reported seeing in a live Claude
+    session: a partial sentence in canonical history immediately followed by its
+    own complete extension. Emitting it deliberately, with the viewport resized
+    underneath it by the runner, separates the three candidate causes named in
+    that story — application output, resize reflow, and TUIC grid handling.
+
+    Note what is NOT asserted afterwards: that the partial row disappears. Two
+    rows where the second extends the first are BOTH legitimate terminal output
+    when the application printed them that way, and the suite says so. What the
+    runner checks is that the grid does not MANUFACTURE a copy under reflow.
+    """
+    for index in range(count):
+        complete = record(index)
+        # Partial row committed to history with its own newline: nothing can
+        # rewrite it afterwards, which is what distinguishes this from the
+        # atomic/progressive scenarios where the partial is erased in place.
+        os.write(1, complete[: 8 + index % 17] + b"\r\n")
+        time.sleep(0.001)
+        os.write(1, complete + b"\r\n")
+        if index % 11 == 0:
+            time.sleep(0.001)
+
+    os.write(1, f"\r\nTUIC_STRESS_DONE:reflow:{count}\r\n".encode())
+
+
 def emit_slash_pressure(count: int) -> None:
     original = termios.tcgetattr(0)
     try:
@@ -83,7 +111,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--scenario",
-        choices=("atomic", "progressive", "timeout", "slash-pressure"),
+        choices=("atomic", "progressive", "timeout", "slash-pressure", "reflow"),
         required=True,
     )
     parser.add_argument("--count", type=int, default=2000)
@@ -92,6 +120,8 @@ def main() -> None:
         parser.error("--count must be between 1 and 9999")
     if args.scenario == "slash-pressure":
         emit_slash_pressure(args.count)
+    elif args.scenario == "reflow":
+        emit_reflow(args.count)
     else:
         emit(args.scenario, args.count)
 
