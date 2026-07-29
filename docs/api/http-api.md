@@ -95,16 +95,21 @@ Returns recent output. Format controls what is returned:
 | `format` | Response shape | Description |
 |----------|----------------|-------------|
 | (omit) | `{ "data": "<string>", "data_length": N, "total_written": N }` | Raw PTY output as a lossy-UTF-8 string (not base64), read from the ring buffer |
-| `text` | `{ "data": "<string>", "data_length": N, "total_written": N }` | Clean VT100 lines from `VtLogBuffer` plus visible screen rows, joined by `\n` (not from the ring buffer) |
+| `text` | `{ "data": "<string>", "data_length": N, "total_written": N }` | One canonical terminal-grid snapshot, joined by `\n` (not from the ring buffer) |
 | `log` | `{ "lines": [...], "total_lines": N, "screen": [...], "input_line"? }` | VT100-extracted clean lines (no ANSI, no TUI garbage) plus current screen rows and optional input line |
 
 | Param | Default | Description |
 |-------|---------|-------------|
-| `limit` | raw: 8192 bytes; text/log: all | `raw`/`text`: max bytes; `log`: max lines to return |
-| `offset` | (tail) | `log` only: absolute start offset. When omitted, returns the newest `limit` lines (tail). When provided, returns lines starting from that offset |
+| `limit` | raw: 8192 bytes; text/log: all | `raw`: max bytes; `text`/`log`: max lines to return |
+| `offset` | (tail) | `text`/`log`: absolute start row/line offset. When omitted, returns the newest `limit` rows/lines. When provided, returns data starting from that offset |
 | `format` | (raw) | See table above |
 
 `format=log` reads from `VtLogBuffer` — a VT100-aware buffer that extracts only scrolled-off lines, suppressing alternate-screen TUI apps (vim, htop, claude). Ideal for mobile clients.
+
+`format=text` is a point-in-time canonical grid view. It does not concatenate
+the finalized log cursor with the visible screen, because growing a viewport can
+move history rows back onto the screen and make that concatenation overlap.
+`total_written` is the snapshot's total grid-row count for this format.
 
 `total_lines` in the response is a monotonically increasing counter — it never decreases when old lines are evicted from the buffer. Use it as a stable cursor for paginated reads. The `offset` parameter operates in the same coordinate space.
 
