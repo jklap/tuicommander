@@ -92,7 +92,10 @@ python3 tests/terminal-stress/capture.py --session <id> -o capture-dir
 ```
 
 It also flags adjacent rows where the next row EXTENDS the previous one, which
-is the reported #498-7e3d shape.
+is the reported #498-7e3d shape. A worked example lives in
+`fixtures/capture-498-7e3d/` — raw ring, dimensions and canonical rows of a real
+captured occurrence, with a README explaining why that shape is correct output
+rather than a defect.
 
 The suite does not erase legitimate terminal history. If an application scrolls
 a partial row into history and only later prints an extended version, both rows
