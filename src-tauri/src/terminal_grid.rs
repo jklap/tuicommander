@@ -1861,6 +1861,137 @@ mod tests {
         );
     }
 
+    fn canonical_rows(grid: &TerminalGrid) -> Vec<String> {
+        let total = grid.total_lines();
+        if total == 0 {
+            Vec::new()
+        } else {
+            grid.read_rows_in_range(0, total - 1)
+        }
+    }
+
+    fn synchronized_stress_stream(frames: usize) -> Vec<u8> {
+        let mut stream = Vec::new();
+        for line in 0..24 {
+            stream.extend_from_slice(format!("seed-{line:03}\r\n").as_bytes());
+        }
+        for frame in 0..frames {
+            stream.extend_from_slice(BSU);
+            stream.extend_from_slice(format!("section-{frame:03}\r\n").as_bytes());
+            stream.extend_from_slice(
+                format!("payload-{frame:03}-abcdefghijklmnopqrstuvwxyz\r\n").as_bytes(),
+            );
+            stream.extend_from_slice(ESU);
+        }
+        stream
+    }
+
+    #[test]
+    fn synchronized_updates_are_invariant_across_every_chunk_boundary() {
+        let stream = synchronized_stress_stream(64);
+
+        let mut whole = TerminalGrid::new(12, 80, 10_000);
+        whole.process(&stream);
+        let expected = canonical_rows(&whole);
+
+        // One byte per process call exercises every possible split inside BSU,
+        // ESU, UTF-8-free payload text, CRLF, cursor movement, and scroll.
+        let mut bytewise = TerminalGrid::new(12, 80, 10_000);
+        for byte in &stream {
+            bytewise.process(std::slice::from_ref(byte));
+        }
+        assert_eq!(canonical_rows(&bytewise), expected, "bytewise stream");
+
+        // A deterministic irregular schedule models reader chunks under load.
+        for schedule in [
+            &[1, 2, 3, 5, 8, 13, 21][..],
+            &[127, 4, 31, 2, 255, 7][..],
+            &[9, 1, 1, 1, 64, 3, 17, 5][..],
+        ] {
+            let mut chunked = TerminalGrid::new(12, 80, 10_000);
+            let mut offset = 0;
+            let mut step = 0;
+            while offset < stream.len() {
+                let end = (offset + schedule[step % schedule.len()]).min(stream.len());
+                chunked.process(&stream[offset..end]);
+                offset = end;
+                step += 1;
+            }
+            assert_eq!(
+                canonical_rows(&chunked),
+                expected,
+                "irregular chunk schedule {schedule:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn synchronized_redraws_while_scrolled_preserve_history_and_final_screen() {
+        let mut grid = TerminalGrid::new(8, 72, 10_000);
+        for line in 0..40 {
+            grid.process(format!("history-{line:03}\r\n").as_bytes());
+        }
+        let history_before = grid.read_rows_in_range(0, grid.scrollback_count() - 1);
+        grid.scroll(17);
+        assert!(grid.display_offset() > 0, "fixture must be scrolled up");
+
+        for frame in 0..512 {
+            let redraw = format!(
+                "\x1b[?2026h\x1b[H\x1b[2Ksection: canonical\r\n\x1b[2Kframe: {frame:03}\r\n\x1b[2Kdata: never truncate this payload\x1b[?2026l"
+            );
+            // Split each redraw differently but reproducibly, including inside
+            // escape sequences and printable lines.
+            let pivot = 1 + (frame * 17 % (redraw.len() - 1));
+            grid.process(&redraw.as_bytes()[..pivot]);
+            grid.process(&redraw.as_bytes()[pivot..]);
+        }
+
+        let history_after = grid.read_rows_in_range(0, grid.scrollback_count() - 1);
+        assert_eq!(
+            history_after, history_before,
+            "redraws must not rewrite history"
+        );
+        let screen = grid.read_screen_text();
+        assert_eq!(
+            screen
+                .iter()
+                .filter(|row| row.contains("section: canonical"))
+                .count(),
+            1,
+            "section duplicated on the final screen: {screen:?}"
+        );
+        assert!(screen.iter().any(|row| row == "frame: 511"));
+        assert!(
+            screen
+                .iter()
+                .any(|row| row == "data: never truncate this payload")
+        );
+    }
+
+    #[test]
+    fn expired_update_then_late_esu_preserves_each_logical_record_once() {
+        let mut grid = TerminalGrid::new(4, 80, 100);
+        grid.process(b"seed-0\r\nseed-1\r\nseed-2\r\nseed-3\r\n");
+        grid.process(BSU);
+        grid.process(b"timeout-record\r\n");
+        std::thread::sleep(PAST_DEADLINE);
+        assert!(grid.flush_sync_timeout_if_needed());
+
+        // The producer eventually resumes and sends the remainder plus the ESU
+        // that would normally have closed the already-expired update.
+        grid.process(b"late-record\r\n");
+        grid.process(ESU);
+
+        let rows = canonical_rows(&grid);
+        for record in ["timeout-record", "late-record"] {
+            assert_eq!(
+                rows.iter().filter(|row| row.as_str() == record).count(),
+                1,
+                "{record} duplicated or lost after timeout: {rows:?}"
+            );
+        }
+    }
+
     /// Differential oracle (story 138): the parse-damage fast path in `process()`
     /// must produce byte-identical `ChangedRow`s to the old full-screen
     /// rebuild+diff (`process_full`) for every chunk. Two independent

@@ -2248,7 +2248,8 @@ fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
 
     let Some(prompt_idx) = rows.iter().rposition(|row| {
         let t = row.trim_start();
-        t.starts_with('\u{203A}') && !t.starts_with("\u{203A}\u{203A}")
+        matches!(t.chars().next(), Some('\u{203A}' | '\u{00BB}'))
+            && !t.starts_with("\u{203A}\u{203A}")
     }) else {
         return AgentScreenActivity::Unknown;
     };
@@ -2270,28 +2271,34 @@ fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
     AgentScreenActivity::Ready
 }
 
-/// Claude/Gemini/Aider screen classification is PROMPT-based only (#446-596f):
-/// Working is never inferred from glyph presence. A spinner is defined by
-/// ANIMATION, and animation is only observable as text above the input area
-/// CHANGING — the PTY reader owns that evidence (a spinner row among the
-/// post-cutoff `changed_rows` latches and keeps BUSY; a byte-identical repaint
-/// produces no ChangedRow, so a frozen glyph physically cannot). Any static
-/// glyph — a completed-turn summary (`✻ Sautéed for 1m 25s`), a `· run /mcp`
-/// hint, HUD bars, banner art — is therefore inert by construction: it cannot
-/// classify Working, cannot latch or hold BUSY, and cannot mask the Ready
-/// prompt below it. Codex is the deliberate exception (presence-based, see
-/// `detect_codex_screen_activity`): its TUI legitimately freezes while a child
-/// process runs.
+/// Claude's active status is presence-based because current Claude versions can
+/// keep the empty composer visible while a long tool call is still running.
+/// The live marker is deliberately semantic rather than glyph-only: an animated
+/// spinner prefix plus an ellipsis in the phase name (`✽ Nucleating… (3m 50s)`)
+/// means active, while completed summaries (`✻ Sautéed for 1m 25s`), HUD bars,
+/// hints, and banner art remain inert. This also holds BUSY when DEC 2026 frame
+/// coalescing makes consecutive spinner paints text-identical.
 fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActivity {
     let content_end = rows
         .iter()
         .rposition(|row| !row.trim().is_empty())
         .map_or(0, |idx| idx + 1);
     let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
-    let prompt_present = rows[chrome_start..content_end]
+    let prompt_idx = rows[chrome_start..content_end]
         .iter()
-        .any(|row| row.trim() == "\u{276F}");
-    if prompt_present {
+        .rposition(|row| row.trim() == "\u{276F}")
+        .map(|idx| chrome_start + idx);
+    let activity_end = prompt_idx.unwrap_or(content_end);
+    let activity_start = activity_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
+    if rows[activity_start..activity_end].iter().any(|row| {
+        crate::chrome::is_spinner_row(row)
+            && row.contains('\u{2026}')
+            && row.contains('(')
+            && row.contains(')')
+    }) {
+        return AgentScreenActivity::Working;
+    }
+    if prompt_idx.is_some() {
         AgentScreenActivity::Ready
     } else {
         AgentScreenActivity::Unknown
@@ -2363,20 +2370,37 @@ fn apply_working_evidence(
     now_ms: u64,
     source: &'static str,
 ) {
-    {
+    let claude_active_marker = state
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.agent_type.as_deref() == Some("claude"));
+    let reopened_completion = {
         let mut sl = silence.lock();
         let turn_completed = state
             .session_states
             .get(session_id)
             .is_some_and(|session| sl.completion_declared_for_epoch(session.turn_epoch));
-        if turn_completed {
+        if turn_completed && !claude_active_marker {
             return;
         }
-        if sl.explicit_idle {
+        if sl.explicit_idle && !claude_active_marker {
             return;
+        }
+        let reopen = claude_active_marker && (turn_completed || sl.explicit_idle);
+        if reopen {
+            // Claude can emit Stop/suggest before a blocking Stop hook finishes.
+            // A semantic active-phase marker in the same turn is stronger,
+            // current evidence: discard the premature completion so lifecycle
+            // state and follow-up suggestions cannot remain `completed` while
+            // the hook continues doing visible work.
+            sl.reset_suggest_memory();
         }
         sl.note_working_screen();
         invalidate_background_probe_boundary_locked(state, session_id);
+        reopen
+    };
+    if reopened_completion && let Some(mut session) = state.session_states.get_mut(session_id) {
+        session.suggested_actions = None;
     }
     stamp_last_output_now(state, session_id, now_ms);
     let prev = state
@@ -2871,6 +2895,17 @@ fn completion_adjusted_screen_activity(
 ) -> AgentScreenActivity {
     if screen_activity != AgentScreenActivity::Working {
         return screen_activity;
+    }
+    // Claude may declare completion before running a blocking Stop hook, while
+    // keeping an active phase marker on screen for minutes. That live marker
+    // reopens the same turn in `apply_working_evidence`; only adapters whose
+    // completed screen can retain a stale Working row need this downgrade.
+    if state
+        .session_states
+        .get(session_id)
+        .is_some_and(|session| session.agent_type.as_deref() == Some("claude"))
+    {
+        return AgentScreenActivity::Working;
     }
     let silence = silence.lock();
     if state
@@ -4093,13 +4128,11 @@ impl ChunkProcessor {
             .get(session_id)
             .is_some_and(|v| v.load(std::sync::atomic::Ordering::Relaxed));
         if slash_on && let Some(screen) = &screen_cache {
-            let menu = crate::output_parser::parse_slash_menu(screen);
-            tracing::debug!(
-                "slash_menu parse: sid={session_id} found={} rows={}",
-                menu.is_some(),
-                screen.len()
-            );
-            if let Some(evt) = menu {
+            // This runs in the per-PTY-chunk hot path. Do not log each parse:
+            // a stale slash-mode flag during sustained output previously sent
+            // thousands of identical records through the application logger,
+            // adding avoidable lock/contention pressure to terminal delivery.
+            if let Some(evt) = crate::output_parser::parse_slash_menu(screen) {
                 events.push(evt);
             }
         }
@@ -8481,6 +8514,14 @@ pub(crate) async fn set_session_visible(
 mod tests {
     use super::*;
 
+    fn fixture_rows(fixture: &str) -> Vec<String> {
+        fixture
+            .trim_end_matches('\n')
+            .lines()
+            .map(str::to_string)
+            .collect()
+    }
+
     /// The interactive-path threads raise their QoS to USER_INTERACTIVE. Verify
     /// the syscall actually takes effect by reading the class back on the same
     /// thread (default QoS for a fresh test thread is *not* USER_INTERACTIVE).
@@ -9971,6 +10012,23 @@ mod tests {
         );
     }
 
+    /// Live 2026-07-28 regression: while a background command is running Codex
+    /// v0.145 renders the current composer with `»`, while submitted transcript
+    /// prompts still use `›`. Looking only for `›` selected the historical row,
+    /// missed the later Working marker, and flipped the session idle every few
+    /// seconds until the next user submission.
+    #[test]
+    fn test_codex_guillemet_composer_finds_later_working_status() {
+        let screen = fixture_rows(include_str!(
+            "../../tests/terminal-stress/fixtures/codex-background-working.txt"
+        ));
+        assert_eq!(
+            detect_codex_screen_activity(&screen),
+            AgentScreenActivity::Working,
+            "the lowest current composer must anchor the working neighborhood"
+        );
+    }
+
     #[test]
     fn test_codex_historical_working_far_from_prompt_does_not_latch_busy() {
         let mut screen = vec!["• Working (1m • esc to interrupt)".to_string()];
@@ -10020,15 +10078,13 @@ mod tests {
         ]
     }
 
-    /// The classifier no longer distinguishes summary from live spinner — it
-    /// does not look at glyphs at all. A visible empty composer is Ready
-    /// regardless of what static decoration sits above it; the idle path is
-    /// always reachable.
+    /// Completed summaries and inert decoration above an empty composer remain
+    /// Ready. Active phase names are covered separately because current Claude
+    /// versions can leave the composer visible during long tool calls.
     #[test]
-    fn claude_classifier_is_prompt_based_never_working() {
+    fn claude_completed_decorations_remain_ready() {
         for mid in [
-            "✻ Sautéed for 1m 25s",                 // completed-turn summary
-            "✻ Sautéing… (12s · esc to interrupt)", // spinner frame (frozen render)
+            "✻ Sautéed for 1m 25s", // completed-turn summary
             "✳ Ideated for 2m 9s · 1 local agent still running",
             "· Proofed for 1m 14s (↓ 1.6k tokens)",
             "✽ Sautéed for 12s",
@@ -10042,11 +10098,25 @@ mod tests {
         }
     }
 
-    /// During real work Claude hides its prompt box: without a ❯ the screen is
-    /// Unknown (never a heuristic idle source); BUSY is held by spinner/output
-    /// movement in the reader, not by classification.
+    /// Live capture from session "DB corruption": Claude kept the empty `❯`
+    /// composer on screen throughout a long tool call. The active phase marker
+    /// must outrank that composer even if load/coalescing freezes its text.
     #[test]
-    fn claude_working_screen_without_prompt_is_unknown() {
+    fn claude_active_phase_with_visible_composer_holds_busy() {
+        let screen = fixture_rows(include_str!(
+            "../../tests/terminal-stress/fixtures/claude-blocking-stop-hook.txt"
+        ));
+        assert_eq!(
+            detect_claude_screen_activity(&screen),
+            AgentScreenActivity::Working
+        );
+    }
+
+    /// A semantic active phase is Working with or without a visible composer.
+    /// This presence fallback is required when repaint movement freezes while a
+    /// long child or blocking hook still owns the turn.
+    #[test]
+    fn claude_active_phase_without_prompt_holds_busy() {
         let screen: Vec<String> = vec![
             "⏺ Editing src/main.rs…".into(),
             "".into(),
@@ -10055,7 +10125,7 @@ mod tests {
         ];
         assert_eq!(
             detect_claude_screen_activity(&screen),
-            AgentScreenActivity::Unknown
+            AgentScreenActivity::Working
         );
     }
 
@@ -10306,6 +10376,76 @@ mod tests {
     }
 
     #[test]
+    fn test_claude_active_marker_reopens_premature_stop_hook_completion() {
+        use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "claude-blocking-stop-hook";
+        state.session_states.insert(
+            session_id.into(),
+            crate::state::SessionState {
+                agent_type: Some("claude".into()),
+                suggested_actions: Some(vec!["Premature follow-up".into()]),
+                ..Default::default()
+            },
+        );
+        state
+            .shell_states
+            .insert(session_id.into(), AtomicU8::new(SHELL_IDLE));
+        state
+            .last_output_ms
+            .insert(session_id.into(), AtomicU64::new(1));
+        let mut lifecycle = SilenceState::new();
+        lifecycle.mark_suggest_candidate(vec!["Premature follow-up".into()], 0);
+        lifecycle.note_explicit_state(SHELL_IDLE, true);
+        let lifecycle = Arc::new(Mutex::new(lifecycle));
+        state
+            .silence_states
+            .insert(session_id.into(), lifecycle.clone());
+
+        let screen = vec![
+            "✽ Nucleating… (8m 47s · ↓ 29.0k tokens)".to_string(),
+            "❯".to_string(),
+        ];
+        let activity = detect_agent_screen_activity(Some("claude"), &screen);
+        assert_eq!(activity, AgentScreenActivity::Working);
+        assert_eq!(
+            completion_adjusted_screen_activity(&state, &lifecycle, session_id, activity,),
+            AgentScreenActivity::Working,
+            "premature completion must not downgrade current Claude work"
+        );
+
+        apply_working_evidence(
+            &state,
+            &lifecycle,
+            session_id,
+            now_epoch_ms(),
+            "working-screen",
+        );
+
+        assert_eq!(
+            state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_BUSY
+        );
+        assert!(
+            state
+                .session_states
+                .get(session_id)
+                .unwrap()
+                .suggested_actions
+                .is_none()
+        );
+        let lifecycle = lifecycle.lock();
+        assert!(!lifecycle.completion_declared_for_epoch(0));
+        assert!(!lifecycle.explicit_idle);
+        assert!(!lifecycle.idle_confirmed);
+    }
+
+    #[test]
     fn test_declared_completion_turns_stale_working_screen_into_ready_evidence() {
         let state = crate::state::tests_support::make_test_app_state();
         let session_id = "completed-working-timer";
@@ -10424,13 +10564,10 @@ mod tests {
     }
 
     #[test]
-    fn test_other_agent_screen_adapters_are_prompt_based() {
-        // Classification is prompt-based only (#446-596f): no prompt → Unknown
-        // (BUSY is movement-driven in the reader), prompt → Ready. Gemini keeps
-        // its prompt on screen even mid-work, so a working Gemini classifies
-        // Ready — harmless, because its braille spinner repaints every second
-        // and each movement resets `ready_since`, so the 1.5s ready confirm
-        // never completes while it is genuinely working.
+    fn test_agent_screen_adapter_baselines() {
+        // Claude and Codex have presence-based active markers because both can
+        // freeze or leave a composer visible during long tools. Gemini/Aider
+        // remain prompt-based and use movement to hold BUSY.
         let claude_working = vec!["✻ Cogitating… (12s)".into()];
         let claude_ready = vec!["Answer complete".into(), "❯".into()];
         let gemini_working_prompt_visible = vec![
@@ -10443,7 +10580,7 @@ mod tests {
         let aider_ready = vec!["Tokens: 10k sent".into(), ">".into()];
 
         for (agent, rows, expected) in [
-            ("claude", claude_working, AgentScreenActivity::Unknown),
+            ("claude", claude_working, AgentScreenActivity::Working),
             ("claude", claude_ready, AgentScreenActivity::Ready),
             (
                 "gemini",
@@ -10455,6 +10592,145 @@ mod tests {
             ("aider", aider_ready, AgentScreenActivity::Ready),
         ] {
             assert_eq!(detect_agent_screen_activity(Some(agent), &rows), expected);
+        }
+    }
+
+    #[test]
+    fn active_screen_matrix_is_stable_and_repairs_false_idle_repeatedly() {
+        use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let cases = [
+            (
+                "codex-chevron",
+                "codex",
+                vec![
+                    "• Working (7s • esc to interrupt)".to_string(),
+                    "› Use /skills to list available skills".to_string(),
+                ],
+            ),
+            (
+                "codex-guillemet-background",
+                "codex",
+                vec![
+                    "› historical submitted prompt".to_string(),
+                    "• Waiting for background terminal (41s • esc to interrupt) · 1 background terminal running".to_string(),
+                    "".to_string(),
+                    "» Use /skills to list available skills".to_string(),
+                ],
+            ),
+            (
+                "claude-visible-composer",
+                "claude",
+                vec![
+                    "✽ Nucleating… (3m 50s · ↓ 7.8k tokens)".to_string(),
+                    "".to_string(),
+                    "────────────────────────────────────────".to_string(),
+                    "❯".to_string(),
+                    "────────────────────────────────────────".to_string(),
+                ],
+            ),
+            (
+                "claude-frozen-tool",
+                "claude",
+                vec![
+                    "✻ Sautéing… (12s · esc to interrupt)".to_string(),
+                    "".to_string(),
+                    "❯".to_string(),
+                ],
+            ),
+        ];
+
+        for (sid, agent, rows) in cases {
+            state.session_states.insert(
+                sid.into(),
+                crate::state::SessionState {
+                    agent_type: Some(agent.into()),
+                    ..Default::default()
+                },
+            );
+            state
+                .shell_states
+                .insert(sid.into(), AtomicU8::new(SHELL_IDLE));
+            state.last_output_ms.insert(sid.into(), AtomicU64::new(1));
+            let lifecycle = Arc::new(Mutex::new(SilenceState::new()));
+            state.silence_states.insert(sid.into(), lifecycle.clone());
+
+            for iteration in 0..256 {
+                state
+                    .shell_states
+                    .get(sid)
+                    .unwrap()
+                    .store(SHELL_IDLE, Ordering::Release);
+                lifecycle.lock().confirm_idle();
+
+                let activity = detect_agent_screen_activity(Some(agent), &rows);
+                assert_eq!(
+                    activity,
+                    AgentScreenActivity::Working,
+                    "{sid} iteration {iteration}"
+                );
+                apply_working_evidence(&state, &lifecycle, sid, now_epoch_ms(), "working-screen");
+                assert_eq!(
+                    state.shell_states.get(sid).unwrap().load(Ordering::Acquire),
+                    SHELL_BUSY,
+                    "{sid} failed to repair false idle at iteration {iteration}"
+                );
+                assert!(!lifecycle.lock().idle_confirmed);
+            }
+        }
+    }
+
+    #[test]
+    fn completed_and_lookalike_screen_matrix_never_latches_working() {
+        let claude_completed = fixture_rows(include_str!(
+            "../../tests/terminal-stress/fixtures/claude-completed.txt"
+        ));
+        let cases = [
+            (
+                "codex completed output",
+                "codex",
+                vec![
+                    "• Waited for background terminal · cargo test".to_string(),
+                    "» Use /skills to list available skills".to_string(),
+                ],
+                AgentScreenActivity::Ready,
+            ),
+            (
+                "claude completed summary",
+                "claude",
+                claude_completed,
+                AgentScreenActivity::Ready,
+            ),
+            (
+                "claude hud progress",
+                "claude",
+                vec![
+                    "  [Opus | Team] ██░░░░░░░░ 17%".to_string(),
+                    "❯".to_string(),
+                ],
+                AgentScreenActivity::Ready,
+            ),
+            (
+                "claude source lookalike below composer",
+                "claude",
+                vec![
+                    "Completed normally".to_string(),
+                    "❯".to_string(),
+                    "✻ source_example… (not live)".to_string(),
+                ],
+                AgentScreenActivity::Ready,
+            ),
+        ];
+
+        for iteration in 0..256 {
+            for (name, agent, rows, expected) in &cases {
+                assert_eq!(
+                    detect_agent_screen_activity(Some(agent), rows),
+                    *expected,
+                    "{name} iteration {iteration}"
+                );
+            }
         }
     }
 

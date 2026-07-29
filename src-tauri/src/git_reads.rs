@@ -1681,7 +1681,10 @@ mod tests {
             "a.txt has a staged line, so blame must report an uncommitted row"
         );
         for (a, b) in times_a.iter().zip(&times_b) {
-            assert!(*a > 0 && *b > 0, "uncommitted row needs a live time: {a}, {b}");
+            assert!(
+                *a > 0 && *b > 0,
+                "uncommitted row needs a live time: {a}, {b}"
+            );
             assert!(
                 (a - b).abs() <= 2,
                 "uncommitted author_time should track the wall clock on both sides: {a} vs {b}"
