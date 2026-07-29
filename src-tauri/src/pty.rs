@@ -3751,6 +3751,14 @@ impl ChunkProcessor {
         // Check pending plan files: emit if file appeared, drop if deadline expired.
         self.check_pending_planfiles(session_id, state);
 
+        // Read once, before the vt_log lock: the screen classifier needs it inside
+        // that lock, and taking a session_states shard while holding the vt_log
+        // mutex would introduce a lock order this file does not otherwise have.
+        let agent_type = state
+            .session_states
+            .get(session_id)
+            .and_then(|s| s.agent_type.clone());
+
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
         // Also capture the post-process `total_lines` and `oldest_offset` so
         // we can emit a throttled growth/rotation event for the scrollback overlay.
@@ -3760,6 +3768,7 @@ impl ChunkProcessor {
             vt_log_oldest,
             term_events,
             screen_cache,
+            screen_activity,
             cursor_row,
             logical_prefix,
             physical_prefix,
@@ -3777,6 +3786,10 @@ impl ChunkProcessor {
             let oldest = vt.oldest_offset();
             let hist = vt.grid_history_size();
             let tevts = vt.grid_drain_events();
+            // Did ANYTHING on screen move? Taken before the chrome filter below,
+            // because that filter drops rows under the input-area border and a
+            // choice dialog can render there.
+            let any_row_changed = !changed.is_empty();
 
             // Filter out changed rows below the input area border (horizontal rule).
             // Claude Code (and similar agents) render a quota/budget status bar below
@@ -3804,8 +3817,24 @@ impl ChunkProcessor {
                 changed
             };
 
-            // Single owned snapshot for downstream parsers (slash-menu, choice-prompt).
-            let screen = vt.screen_rows();
+            // Screen classification runs on EVERY chunk, borrowed, never cloned: a
+            // repaint that is byte-identical produces no changed rows, and holding
+            // BUSY through exactly that case (a frozen spinner, DEC 2026 frame
+            // coalescing) is the point of `detect_agent_screen_activity`.
+            let screen_activity = vt
+                .screen_rows_ref()
+                .map(|rows| detect_agent_screen_activity(agent_type.as_deref(), rows))
+                .unwrap_or(AgentScreenActivity::Unknown);
+
+            // The two screen PARSERS are different: a slash menu or a choice
+            // dialog cannot have appeared on a screen where nothing moved, so
+            // skip them — and skip the full-screen clone they need — on a chunk
+            // that changed no row. This is the per-chunk hot path.
+            let screen = if any_row_changed {
+                Some(vt.screen_rows())
+            } else {
+                None
+            };
             let cursor_row = vt.cursor_point().0;
             let logical_prefix = vt.logical_prefix_at_cursor();
             let physical_prefix = vt.physical_prefix_at_cursor();
@@ -3815,7 +3844,8 @@ impl ChunkProcessor {
                 Some(total),
                 Some(oldest),
                 tevts,
-                Some(screen),
+                screen,
+                screen_activity,
                 Some(cursor_row),
                 logical_prefix,
                 physical_prefix,
@@ -3828,6 +3858,7 @@ impl ChunkProcessor {
                 None,
                 Vec::new(),
                 None,
+                AgentScreenActivity::Unknown,
                 None,
                 None,
                 None,
@@ -3884,14 +3915,23 @@ impl ChunkProcessor {
                                 "PtyWrite contains DEC private mode sequences! response={:?}",
                                 response.as_bytes().iter().take(200).collect::<Vec<_>>());
                         }
-                        if let Some(sess) = state.sessions.get(session_id)
-                            && let Some(mut s) = sess.try_lock()
-                        {
-                            if let Err(e) = s.writer.write_all(response.as_bytes()) {
-                                tracing::warn!(source = "terminal", session_id = %session_id, "PtyWrite response failed: {e}");
-                            }
-                            if let Err(e) = s.writer.flush() {
-                                tracing::warn!(source = "terminal", session_id = %session_id, "PtyWrite flush failed: {e}");
+                        // try_lock, never lock: blocking the reader here while
+                        // write_pty holds the session deadlocks (reader blocked →
+                        // kernel buffer fills → write_pty blocks on write). The
+                        // cost is that a contended lock silently swallows a
+                        // terminal query response, which the app is still waiting
+                        // for — so say so, exactly like the kitty query sibling.
+                        if let Some(sess) = state.sessions.get(session_id) {
+                            if let Some(mut s) = sess.try_lock() {
+                                if let Err(e) = s.writer.write_all(response.as_bytes()) {
+                                    tracing::warn!(source = "terminal", session_id = %session_id, "PtyWrite response failed: {e}");
+                                }
+                                if let Err(e) = s.writer.flush() {
+                                    tracing::warn!(source = "terminal", session_id = %session_id, "PtyWrite flush failed: {e}");
+                                }
+                            } else {
+                                tracing::warn!(source = "terminal", session_id = %session_id,
+                                    "PtyWrite response dropped — session lock contended; the app awaiting this terminal query may hang or fall back");
                             }
                         }
                     }
@@ -4440,14 +4480,8 @@ impl ChunkProcessor {
         // generic chrome cutoff is a presentation/logging boundary and must not
         // erase agent-specific liveness evidence (Codex tool separators are the
         // canonical counterexample).
-        let agent_type = state
-            .session_states
-            .get(session_id)
-            .and_then(|s| s.agent_type.clone());
-        let screen_activity = screen_cache
-            .as_ref()
-            .map(|rows| detect_agent_screen_activity(agent_type.as_deref(), rows))
-            .unwrap_or(AgentScreenActivity::Unknown);
+        // `screen_activity` was classified inside the vt_log lock above, from a
+        // borrowed screen — see the note there.
         if screen_activity == AgentScreenActivity::Working && !explicit_idle_in_chunk {
             apply_working_evidence(state, silence, session_id, now_epoch_ms(), "working-screen");
         }
@@ -4728,6 +4762,7 @@ type VtProcessResult = (
     Option<usize>,
     Vec<crate::terminal_grid::TermEvent>,
     Option<Vec<String>>,
+    AgentScreenActivity,
     Option<usize>,
     Option<crate::terminal_grid::LogicalPrefix>,
     Option<crate::terminal_grid::LogicalPrefix>,

@@ -542,6 +542,10 @@ requests (`focus=false`) do not change repository context.
    authoritative inbox; actual FIFO eviction is still reported by `missed_count` on inbox reads.
    Both wait actions subscribe before their initial state check and then sleep on inbox or
    per-session lifecycle events; they do not run an internal polling loop.
+   `session action=wait` validates `session_id` against the live session registry first and
+   returns `{"error": "Unknown session …"}` immediately for an id that is not a real session —
+   subscribing creates the per-session broadcast channel for whatever id it is given, and
+   teardown only reaps ids that were real sessions.
 
 Low-risk response compaction also omits an absent peer `project` from `list_peers` and an absent
 `parent_session_id` from standalone spawn responses. Proxied upstream tool payloads are unchanged.

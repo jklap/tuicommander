@@ -1417,6 +1417,17 @@ async fn handle_session_wait(state: &Arc<AppState>, args: &serde_json::Value) ->
         return serde_json::json!({"error": "wait 'until' must be 'idle' or 'exited'"});
     }
     let timeout_ms = clamp_wait_timeout(args["timeout_ms"].as_u64());
+    // Reject an unknown session BEFORE subscribing. `subscribe_pty_events` uses
+    // the DashMap entry API, so it CREATES a 256-slot broadcast channel for
+    // whatever id it is handed. Session teardown reaps that entry — but only for
+    // ids that were ever real sessions, so a caller passing made-up ids grew
+    // `pty_event_channels` with entries nothing will ever remove. It also spared
+    // the caller a pointless full-timeout block on a session that cannot exist.
+    if !state.sessions.contains_key(&session_id) {
+        return serde_json::json!({
+            "error": format!("Unknown session \"{session_id}\"")
+        });
+    }
     // Subscribe before checking current state. This closes the lost-wake window
     // without polling: an earlier transition is visible in state, while a later
     // one is retained by the per-session event receiver.
@@ -6020,10 +6031,14 @@ mod tests {
         );
     }
 
+    /// `wait` now requires a real session (see below), so these tests register one.
+    /// `#[cfg(unix)]` follows `insert_managed_test_session`, which opens a real PTY.
+    #[cfg(unix)]
     #[tokio::test]
     async fn session_wait_returns_immediately_when_already_idle() {
         use std::sync::atomic::AtomicU8;
         let state = test_state();
+        insert_managed_test_session(&state, "s", "/tmp");
         state
             .shell_states
             .insert("s".to_string(), AtomicU8::new(crate::pty::SHELL_IDLE));
@@ -6036,10 +6051,12 @@ mod tests {
         assert_eq!(r["timed_out"], false);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn mcp_delivery_regression_session_wait_times_out_with_flag() {
         use std::sync::atomic::AtomicU8;
         let state = test_state();
+        insert_managed_test_session(&state, "s", "/tmp");
         state
             .shell_states
             .insert("s".to_string(), AtomicU8::new(crate::pty::SHELL_BUSY));
@@ -6052,11 +6069,46 @@ mod tests {
         assert_eq!(r["timed_out"], true);
     }
 
+    /// `subscribe_pty_events` CREATES the channel for whatever id it is handed,
+    /// and teardown only reaps ids that were real sessions — so an unvalidated
+    /// `wait` let a caller grow `pty_event_channels` with entries nothing would
+    /// ever remove, one 256-slot broadcast channel per made-up id. It also blocked
+    /// the caller for the full timeout on a session that cannot exist.
+    #[tokio::test]
+    async fn session_wait_rejects_an_unknown_session_without_subscribing() {
+        let state = test_state();
+        let started = std::time::Instant::now();
+
+        let r = handle_session_wait(
+            &state,
+            &serde_json::json!({"action":"wait","session_id":"never-existed","until":"idle","timeout_ms":5_000}),
+        )
+        .await;
+
+        assert!(
+            r["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("Unknown session"),
+            "unexpected response: {r}"
+        );
+        assert!(
+            state.pty_event_channels.is_empty(),
+            "an unknown id must not leave a broadcast channel behind"
+        );
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "it must fail fast, not block for the full timeout"
+        );
+    }
+
+    #[cfg(unix)]
     #[tokio::test]
     async fn mcp_delivery_regression_session_wait_wakes_from_pty_event_without_polling() {
         use std::sync::atomic::{AtomicU8, Ordering};
 
         let state = test_state();
+        insert_managed_test_session(&state, "event-session", "/tmp");
         state.shell_states.insert(
             "event-session".to_string(),
             AtomicU8::new(crate::pty::SHELL_BUSY),
@@ -8764,14 +8816,25 @@ mod tests {
         );
     }
 
+    /// A timeout response must not carry a redundant `hint`. This used to force
+    /// the timeout with a nonexistent session id — that path now returns an error
+    /// instead of blocking, so the timeout is forced with a real busy session,
+    /// which is what a timeout actually means.
+    #[cfg(unix)]
     #[tokio::test]
     async fn session_wait_timeout_has_no_redundant_hint() {
+        use std::sync::atomic::AtomicU8;
         let state = test_state();
+        insert_managed_test_session(&state, "busy-session", "/tmp");
+        state.shell_states.insert(
+            "busy-session".to_string(),
+            AtomicU8::new(crate::pty::SHELL_BUSY),
+        );
         let response = handle_session_wait(
             &state,
             &serde_json::json!({
                 "action": "wait",
-                "session_id": "missing-session",
+                "session_id": "busy-session",
                 "timeout_ms": 1,
             }),
         )

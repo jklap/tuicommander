@@ -546,6 +546,11 @@ pub(crate) async fn plugin_write_file_impl(
 }
 
 /// Core write logic, separated from the Tauri command wrapper for testability.
+///
+/// The whole body runs on the blocking pool like every other fs entry point here:
+/// the existence probes, `canonicalize`, `create_dir_all` and the write itself are
+/// all synchronous syscalls, and a plugin writing to a slow or network-mounted
+/// path would otherwise stall an async worker thread.
 async fn plugin_write_file_inner(path: String, content: String) -> Result<(), String> {
     if content.len() > MAX_WRITE_SIZE {
         return Err(format!(
@@ -555,40 +560,43 @@ async fn plugin_write_file_inner(path: String, content: String) -> Result<(), St
         ));
     }
 
-    let file_path = PathBuf::from(&path);
-    if !file_path.is_absolute() {
-        return Err("Path must be absolute".into());
-    }
+    spawn_blocking_fs(move || {
+        let file_path = PathBuf::from(&path);
+        if !file_path.is_absolute() {
+            return Err("Path must be absolute".into());
+        }
 
-    let home = effective_home_dir()?;
+        let home = effective_home_dir()?;
 
-    if file_path.exists() {
-        let canonical = file_path
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve path: {e}"))?;
-        if !canonical.starts_with(&home) {
-            return Err("Path must be within the user's home directory".into());
+        if file_path.exists() {
+            let canonical = file_path
+                .canonicalize()
+                .map_err(|e| format!("Failed to resolve path: {e}"))?;
+            if !canonical.starts_with(&home) {
+                return Err("Path must be within the user's home directory".into());
+            }
+            if canonical.is_dir() {
+                return Err("Cannot overwrite a directory".into());
+            }
+        } else {
+            let parent = file_path
+                .parent()
+                .ok_or("Cannot determine parent directory")?;
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create parent directories: {e}"))?;
+            }
+            let canonical_parent = parent
+                .canonicalize()
+                .map_err(|e| format!("Failed to resolve parent path: {e}"))?;
+            if !canonical_parent.starts_with(&home) {
+                return Err("Path must be within the user's home directory".into());
+            }
         }
-        if canonical.is_dir() {
-            return Err("Cannot overwrite a directory".into());
-        }
-    } else {
-        let parent = file_path
-            .parent()
-            .ok_or("Cannot determine parent directory")?;
-        if !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create parent directories: {e}"))?;
-        }
-        let canonical_parent = parent
-            .canonicalize()
-            .map_err(|e| format!("Failed to resolve parent path: {e}"))?;
-        if !canonical_parent.starts_with(&home) {
-            return Err("Path must be within the user's home directory".into());
-        }
-    }
 
-    std::fs::write(&file_path, &content).map_err(|e| format!("Failed to write file: {e}"))
+        std::fs::write(&file_path, &content).map_err(|e| format!("Failed to write file: {e}"))
+    })
+    .await
 }
 
 /// Rename/move a file within $HOME.
@@ -614,31 +622,36 @@ pub(crate) async fn plugin_rename_path_impl(
     plugin_rename_path_inner(from, to).await
 }
 
+/// Same blocking-pool rule as [`plugin_write_file_inner`]: `validate_within_home`
+/// canonicalizes, and `create_dir_all`/`rename` are synchronous syscalls.
 async fn plugin_rename_path_inner(from: String, to: String) -> Result<(), String> {
-    let from_path = validate_within_home(&from)?;
+    spawn_blocking_fs(move || {
+        let from_path = validate_within_home(&from)?;
 
-    let to_path = PathBuf::from(&to);
-    if !to_path.is_absolute() {
-        return Err("Destination path must be absolute".into());
-    }
+        let to_path = PathBuf::from(&to);
+        if !to_path.is_absolute() {
+            return Err("Destination path must be absolute".into());
+        }
 
-    let home = effective_home_dir()?;
+        let home = effective_home_dir()?;
 
-    let to_parent = to_path
-        .parent()
-        .ok_or("Cannot determine destination parent directory")?;
-    if !to_parent.exists() {
-        std::fs::create_dir_all(to_parent)
-            .map_err(|e| format!("Failed to create destination parent directories: {e}"))?;
-    }
-    let canonical_parent = to_parent
-        .canonicalize()
-        .map_err(|e| format!("Failed to resolve destination parent: {e}"))?;
-    if !canonical_parent.starts_with(&home) {
-        return Err("Destination must be within the user's home directory".into());
-    }
+        let to_parent = to_path
+            .parent()
+            .ok_or("Cannot determine destination parent directory")?;
+        if !to_parent.exists() {
+            std::fs::create_dir_all(to_parent)
+                .map_err(|e| format!("Failed to create destination parent directories: {e}"))?;
+        }
+        let canonical_parent = to_parent
+            .canonicalize()
+            .map_err(|e| format!("Failed to resolve destination parent: {e}"))?;
+        if !canonical_parent.starts_with(&home) {
+            return Err("Destination must be within the user's home directory".into());
+        }
 
-    std::fs::rename(&from_path, &to_path).map_err(|e| format!("Failed to rename: {e}"))
+        std::fs::rename(&from_path, &to_path).map_err(|e| format!("Failed to rename: {e}"))
+    })
+    .await
 }
 
 // ---------------------------------------------------------------------------

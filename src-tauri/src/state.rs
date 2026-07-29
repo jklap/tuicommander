@@ -1366,6 +1366,11 @@ impl AppState {
     /// before callers inspect current state, closing the check-then-sleep race:
     /// a transition after subscription is retained by the receiver, while a
     /// transition before it is visible in the initial state check.
+    ///
+    /// CALLER CONTRACT: validate `session_id` first. This CREATES the channel for
+    /// whatever id it is given (entry API), and session teardown only reaps ids
+    /// that were real sessions — so subscribing to an id that never existed
+    /// leaves an entry nothing will remove.
     pub(crate) fn subscribe_pty_events(
         &self,
         session_id: &str,

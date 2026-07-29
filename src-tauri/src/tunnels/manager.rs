@@ -15,7 +15,11 @@ pub struct TunnelHandle {
 }
 
 pub struct TunnelManager {
-    tunnels: DashMap<String, Arc<Mutex<TunnelHandle>>>,
+    /// `None` is a RESERVATION: a `start()` that has claimed the id but has not
+    /// finished spawning its supervisor yet. Keeping reservations in the same map
+    /// as running tunnels is what makes the claim atomic — a second map would
+    /// reintroduce the very window this closes.
+    tunnels: DashMap<String, Option<Arc<Mutex<TunnelHandle>>>>,
     /// Wrapped in Mutex so Arc<Mutex<AuditLog>> is Send+Sync and can be
     /// captured in the `Send + 'static` status callback required by TunnelSupervisor.
     audit: Arc<Mutex<AuditLog>>,
@@ -34,12 +38,20 @@ impl TunnelManager {
     pub async fn start(&self, profile: TunnelProfile) -> Result<String, String> {
         let id = profile.id.clone();
 
-        // Reject a start for an already-running id before spawning anything. Without
-        // this, DashMap::insert would overwrite the live handle and orphan its
-        // supervisor loop + ssh child forever (no Drop). Mirrors
-        // UpstreamRegistry::connect_upstream's contains_key guard.
-        if self.tunnels.contains_key(&id) {
-            return Err(format!("tunnel '{id}' already running"));
+        // Claim the id ATOMICALLY, before spawning anything. A `contains_key`
+        // check followed by an `.await` and a later `insert` is a TOCTOU: two
+        // concurrent starts both saw the id free, both spawned a supervisor, and
+        // the second insert overwrote the first — orphaning its supervisor loop
+        // and ssh child forever (TunnelHandle has no Drop). The DashMap entry API
+        // holds the shard lock across check-and-insert, so exactly one caller can
+        // win, and it wins before any await point.
+        match self.tunnels.entry(id.clone()) {
+            dashmap::mapref::entry::Entry::Occupied(_) => {
+                return Err(format!("tunnel '{id}' already running"));
+            }
+            dashmap::mapref::entry::Entry::Vacant(slot) => {
+                slot.insert(None);
+            }
         }
 
         let audit = Arc::clone(&self.audit);
@@ -78,7 +90,19 @@ impl TunnelManager {
             started_at: Utc::now(),
         }));
 
-        self.tunnels.insert(id.clone(), handle);
+        // Publish into OUR reservation. If it is gone, a stop() landed while we
+        // were spawning: honour it rather than resurrecting a tunnel the user
+        // asked to stop, and shut down the supervisor we just created so it does
+        // not outlive this call.
+        match self.tunnels.get_mut(&id) {
+            Some(mut slot) if slot.is_none() => {
+                *slot = Some(handle);
+            }
+            _ => {
+                handle.lock().supervisor.stop();
+                return Err(format!("tunnel '{id}' was stopped while starting"));
+            }
+        }
         Ok(id)
     }
 
@@ -90,7 +114,12 @@ impl TunnelManager {
             .map(|(_, v)| v)
             .ok_or_else(|| format!("tunnel '{id}' not found"))?;
 
-        handle.lock().supervisor.stop();
+        // `None` = a reservation whose start() is still spawning. Removing it is
+        // the whole stop: that start() will find its slot gone and shut its own
+        // supervisor down.
+        if let Some(handle) = handle {
+            handle.lock().supervisor.stop();
+        }
         let _ = self.audit.lock().insert(
             id,
             EventKind::Stopped,
@@ -102,7 +131,9 @@ impl TunnelManager {
     /// Stop the tunnel if it exists, ignoring "not found".
     pub fn stop_if_running(&self, id: &str) {
         if let Some((_, handle)) = self.tunnels.remove(id) {
-            handle.lock().supervisor.stop();
+            if let Some(handle) = handle {
+                handle.lock().supervisor.stop();
+            }
             let _ = self.audit.lock().insert(
                 id,
                 EventKind::Stopped,
@@ -117,7 +148,11 @@ impl TunnelManager {
             .iter()
             .map(|entry| {
                 let id = entry.key().clone();
-                let status = entry.value().lock().supervisor.status();
+                // A reservation has no supervisor to ask — it IS starting.
+                let status = entry
+                    .value()
+                    .as_ref()
+                    .map_or(TunnelStatus::Starting, |h| h.lock().supervisor.status());
                 (id, status)
             })
             .collect()
@@ -125,15 +160,20 @@ impl TunnelManager {
 
     /// Return the current status of a single tunnel, or `None` if not found.
     pub fn get_status(&self, id: &str) -> Option<TunnelStatus> {
-        self.tunnels
-            .get(id)
-            .map(|entry| entry.value().lock().supervisor.status())
+        self.tunnels.get(id).map(|entry| {
+            entry
+                .value()
+                .as_ref()
+                .map_or(TunnelStatus::Starting, |h| h.lock().supervisor.status())
+        })
     }
 
     /// Stop all running tunnels and clear the map. Used on app exit.
     pub fn shutdown_all(&self) {
         for entry in self.tunnels.iter() {
-            entry.value().lock().supervisor.stop();
+            if let Some(handle) = entry.value() {
+                handle.lock().supervisor.stop();
+            }
         }
         self.tunnels.clear();
     }
@@ -222,7 +262,7 @@ mod tests {
             started_at: Utc::now(),
         }));
 
-        manager.tunnels.insert(id.clone(), handle);
+        manager.tunnels.insert(id.clone(), Some(handle));
         Ok(id)
     }
 
@@ -324,7 +364,7 @@ mod tests {
         // Identity of the original handle — must survive a duplicate start.
         let original_ptr = {
             let entry = manager.tunnels.get(&id).unwrap();
-            Arc::as_ptr(entry.value())
+            Arc::as_ptr(entry.value().as_ref().expect("started tunnel has a handle"))
         };
 
         // Second start with the same id must be rejected by the collision guard
@@ -341,7 +381,7 @@ mod tests {
 
         let still_ptr = {
             let entry = manager.tunnels.get(&id).unwrap();
-            Arc::as_ptr(entry.value())
+            Arc::as_ptr(entry.value().as_ref().expect("started tunnel has a handle"))
         };
         assert_eq!(
             original_ptr, still_ptr,
@@ -349,6 +389,70 @@ mod tests {
         );
 
         manager.stop(&id).unwrap();
+    }
+
+    /// The TOCTOU: `start` used to check `contains_key`, then `.await` the
+    /// supervisor spawn, then `insert`. During that await the map held NOTHING
+    /// for the id, so a second concurrent start saw it free, spawned its own
+    /// supervisor, and its insert overwrote the first — orphaning a supervisor
+    /// loop and an ssh child with no Drop to clean them up.
+    ///
+    /// The id is now claimed before the first await. A reservation is exactly
+    /// what the map looks like during that window, so a second start hitting it
+    /// must be rejected — and it is rejected before spawning anything, which is
+    /// why this test can run without a real ssh binary.
+    #[tokio::test]
+    async fn a_start_is_rejected_while_another_start_holds_the_id() {
+        let (audit, _dir) = temp_audit();
+        let manager = TunnelManager::new(audit);
+        let profile = test_profile("in-flight");
+        let id = profile.id.clone();
+
+        // Exactly the state an in-flight start() leaves behind at its await point.
+        manager.tunnels.insert(id.clone(), None);
+
+        // Rejected BEFORE the supervisor spawn, which is what lets this test run
+        // without a real ssh binary — and is the point: nothing gets orphaned.
+        let err = manager.start(profile).await.unwrap_err();
+        assert!(err.contains("already running"), "unexpected error: {err}");
+        assert_eq!(manager.tunnels.len(), 1, "no second entry may be created");
+        assert!(
+            manager.tunnels.get(&id).unwrap().is_none(),
+            "the in-flight reservation must be left alone"
+        );
+    }
+
+    /// A reserved slot has no supervisor to ask, and reporting it as absent would
+    /// make a starting tunnel invisible in the UI.
+    #[test]
+    fn a_reserved_tunnel_reports_starting() {
+        let (audit, _dir) = temp_audit();
+        let manager = TunnelManager::new(audit);
+        manager.tunnels.insert("in-flight".to_string(), None);
+
+        assert!(matches!(
+            manager.get_status("in-flight"),
+            Some(TunnelStatus::Starting)
+        ));
+        let list = manager.list();
+        assert_eq!(list.len(), 1);
+        assert!(matches!(list[0].1, TunnelStatus::Starting));
+    }
+
+    /// Stopping a tunnel that is still starting must not panic on the missing
+    /// supervisor, and must free the id so the user can start it again.
+    #[test]
+    fn stopping_a_reserved_tunnel_frees_the_id() {
+        let (audit, _dir) = temp_audit();
+        let manager = TunnelManager::new(audit);
+        manager.tunnels.insert("in-flight".to_string(), None);
+
+        manager.stop("in-flight").expect("stop a reserved tunnel");
+        assert!(manager.tunnels.is_empty());
+
+        manager.tunnels.insert("in-flight".to_string(), None);
+        manager.stop_if_running("in-flight");
+        assert!(manager.tunnels.is_empty());
     }
 
     #[tokio::test]
