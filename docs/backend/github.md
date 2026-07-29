@@ -66,6 +66,26 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 | `create_issue_from_proposal` | `(repo_path: String, proposal: ImprovementProposal) -> CreatedIssue` | Explicit issue creation from a proposal; scan never creates issues automatically |
 | `check_github_circuit` | `(path: String) -> CircuitState` | Check GitHub API circuit breaker state |
 
+### Circuit breaker coverage
+
+**Every** call out to GitHub goes through the account's circuit breaker:
+GraphQL via `graphql_with_retry`, `gh api` writes via `run_gh_write`, and direct
+REST via `send_rest_with_breaker` (close/reopen issue, merge PR, approve PR,
+`fetch_github_json`, PR diff, PR refs). The REST helper only intercepts rate
+limits — every other response is handed back so each caller keeps its own status
+handling and error wording. A `403` counts as a rate limit only when the headers
+say so (`x-ratelimit-remaining: 0` for the primary limit, a `retry-after` for a
+secondary/abuse limit); a plain permission denial must not open the breaker.
+
+### Cached viewer login
+
+`state.github_viewer_login` backs `author:@me` in the viewer-PR search and the
+assignee/creator/mentioned issue filters. It is dropped by
+`github::invalidate_viewer_login` on logout, disconnect and a successful device-flow
+login — without that, switching accounts kept showing the previous account's PRs
+and issues for the rest of the session. Named accounts cache their own login in
+`ghe_state` and are deliberately untouched by that invalidation.
+
 ## Data Types
 
 ### GitHubStatus
