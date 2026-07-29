@@ -20,9 +20,44 @@ use tauri::{AppHandle, Emitter};
 // ---------------------------------------------------------------------------
 // Capability enforcement
 // ---------------------------------------------------------------------------
+//
+// WHAT THIS BOUNDARY IS, AND WHAT IT IS NOT.
+//
+// Capabilities gate what a plugin DECLARES — a plugin that never asked for
+// `exec:cli` cannot reach the exec commands under its own id, and a manifest is
+// validated against KNOWN_CAPABILITIES before anything is granted. That is the
+// whole of the guarantee.
+//
+// Capabilities do NOT gate what a plugin can IMPERSONATE. `plugin_id` arrives
+// from the caller and is the only key every check below consults, and plugins
+// are loaded by a bare dynamic `import()` into the SAME JavaScript realm as the
+// host (`src/plugins/pluginLoader.ts`). Any plugin can therefore import `invoke`
+// itself and pass a different plugin's id to inherit that plugin's exec,
+// credential and allowed-URL grants. Plugins are isolated from the HOST's
+// declared surface, not from EACH OTHER.
+//
+// This is stated plainly rather than papered over: a host-generated per-plugin
+// token would not fix it. Same-realm JavaScript can read the token out of the
+// module that holds it, proxy the function that uses it, or monkey-patch the
+// transport — so the token would add ceremony and a false sense of a boundary
+// without moving the actual trust line. TUICommander's threat model is that the
+// user vets what they install (see AGENTS.md "Security Scope"); treat every
+// installed plugin as trusted with the union of all installed capabilities.
+//
+// DEFERRED (2026-07-28) — real per-plugin isolation. It requires running each
+// plugin off-realm (a Worker or a sandboxed iframe) and giving it a host-created
+// MessagePort as its ONLY channel to the backend, so the plugin's identity is
+// the port it was handed rather than a string it supplies. That is a rewrite of
+// the plugin loading and IPC surface, not an incremental patch, which is why a
+// token alone was rejected (Boss decision, 2026-07-28). Re-evaluate if plugins
+// ever become installable from an untrusted registry, which is the point where
+// mutually-untrusted plugins stop being hypothetical.
 
 /// Check that a plugin has a required capability, using the provided map.
 /// This is the testable core — does not depend on AppState.
+///
+/// Answers "did this plugin declare this capability", NOT "is this caller really
+/// this plugin" — see the module-level note above.
 /// Built-in plugins and their allowed capabilities.
 /// Hardcoded in Rust to maintain the security model — the frontend cannot
 /// self-register arbitrary capabilities for built-in plugins.

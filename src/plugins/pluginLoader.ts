@@ -217,6 +217,22 @@ async function loadPlugin(manifest: PluginManifest): Promise<void> {
 		loaded: false,
 	});
 
+	// A bare dynamic import: the plugin runs in the SAME JavaScript realm as the
+	// host, with the host's module graph in reach. Capabilities gate what a plugin
+	// DECLARES, not what it can IMPERSONATE — a plugin can import `invoke` itself
+	// and pass another plugin's id to inherit that plugin's grants, because
+	// `plugin_id` is caller-supplied and is the only key the Rust checks consult
+	// (see the capability-enforcement note in `src-tauri/src/plugins.rs`). Treat
+	// every installed plugin as trusted with the union of all installed
+	// capabilities; they are isolated from the host's declared surface, not from
+	// each other.
+	//
+	// DEFERRED (2026-07-28) — real isolation means loading each plugin off-realm
+	// (Worker or sandboxed iframe) with a host-created MessagePort as its only
+	// channel, so identity is the port it was handed rather than a string it
+	// supplies. A per-plugin token was considered and rejected: same-realm JS can
+	// read, proxy or monkey-patch it, so it would be a boundary in name only.
+	//
 	// `?t=` cache-busts for hot reload.
 	const url = `${pluginModuleBaseUrl(manifest.id, manifest.main, isWindows())}?t=${Date.now()}`;
 	let mod: unknown;

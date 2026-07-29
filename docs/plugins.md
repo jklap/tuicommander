@@ -1116,6 +1116,28 @@ const cache = JSON.parse(raw);
 
 ## Capabilities
 
+> **What capabilities are, and what they are not.** Capabilities gate what a
+> plugin **declares** — a plugin that never asked for `exec:cli` cannot reach the
+> exec commands under its own id. They do **not** gate what a plugin can
+> **impersonate**. Plugins load with a bare dynamic `import()` into the *same
+> JavaScript realm* as the host, and `plugin_id` is caller-supplied — it is the
+> only key the Rust capability checks consult. Any plugin can therefore import
+> `invoke` itself and pass another plugin's id to inherit that plugin's exec,
+> credential and allowed-URL grants.
+>
+> **Plugins are isolated from the host's declared surface, not from each other.**
+> Treat every installed plugin as trusted with the union of all installed
+> capabilities, and vet what you install. This matches TUICommander's threat
+> model — a local tool where the human user is the trust boundary.
+>
+> A per-plugin token was considered and deliberately rejected: same-realm
+> JavaScript can read it out of the module that holds it, proxy the function that
+> uses it, or monkey-patch the transport, so it would be a boundary in name only.
+> Real isolation requires running each plugin off-realm (a Worker or sandboxed
+> iframe) with a host-created `MessagePort` as its only channel to the backend,
+> so a plugin's identity is the port it was handed rather than a string it
+> supplies. That is tracked as future work, not a gap being quietly ignored.
+
 Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest.json`:
 
 ```json
