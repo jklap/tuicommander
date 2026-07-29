@@ -62,6 +62,14 @@ python3 tests/terminal-stress/run.py \
   disappear (the producer really printed both, and discarding one would be the
   grid silently dropping history) — it requires that the grid does not
   MANUFACTURE a copy of the complete row under reflow.
+- `scrollout`: the mechanism `reflow` does NOT model, and the one that
+  reproduces story #498-7e3d. A partial row is left LIVE (no newline, still the
+  cursor's row, so the application could still `\r` over it), then enough output
+  arrives to push it into scrollback, and only then is the rewrite attempted. The
+  rewrite lands on a new row and history keeps the partial — which is what a real
+  terminal does, because carriage return cannot reach a row that already scrolled
+  off. Its verifier hard-asserts only that no complete record is duplicated, and
+  REPORTS the orphaned partials rather than failing on them.
 - `slash-pressure`: enters TUIC's slash-command mode through a no-echo producer
   handshake, then emits the atomic workload. This reproduces the per-chunk
   slash-menu parser pressure that once generated thousands of application-log
@@ -89,8 +97,10 @@ is the reported #498-7e3d shape.
 The suite does not erase legitimate terminal history. If an application scrolls
 a partial row into history and only later prints an extended version, both rows
 are valid terminal output and cannot be deduplicated safely without an
-application-specific semantic signal. Preserve a raw-ring capture when such an
-episode occurs so a new deterministic producer sequence can be added here.
+application-specific semantic signal. `scrollout` demonstrates this concretely:
+it produces the partial-then-extension shape on purpose, and the grid keeping
+both rows is the correct outcome, not a defect. If you see the shape live and
+suspect something else is going on, `capture.py` preserves the evidence.
 
 The screen snapshots in `fixtures/` are sanitized captures of real false-idle
 layouts. Rust lifecycle tests load these fixtures so changes to agent chrome can

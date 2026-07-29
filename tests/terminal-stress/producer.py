@@ -92,6 +92,36 @@ def emit_reflow(count: int) -> None:
     os.write(1, f"\r\nTUIC_STRESS_DONE:reflow:{count}\r\n".encode())
 
 
+def emit_scrollout(count: int) -> None:
+    """Scroll a LIVE partial row (no newline) out of the viewport, then extend it.
+
+    This is the mechanism `reflow` does NOT model. There the partial row was
+    committed with its own newline, so nothing could ever have rewritten it. Here
+    the partial row is still the cursor's line — the application could still `\r`
+    over it — but enough output arrives to push it into scrollback first. The
+    later rewrite therefore lands on a NEW row, and history keeps the partial.
+
+    That is what a real terminal does: carriage return only reaches the current
+    line, never one that has already scrolled off. So if TUIC reproduces both
+    rows here it is being CORRECT, and the #498-7e3d sighting is the application
+    printing both — not the grid duplicating anything.
+    """
+    for index in range(count):
+        complete = record(index)
+        # Live partial: no newline, so it is still the cursor's row.
+        os.write(1, complete[: 8 + index % 17])
+        time.sleep(0.001)
+        # Push it out of the 12-row viewport while it is still "rewritable".
+        for filler in range(16):
+            os.write(1, f"\r\nFILL-{index:04d}-{filler:02d}".encode())
+        # Now try to rewrite it. A real terminal cannot reach the scrolled row.
+        os.write(1, b"\r\x1b[2K" + complete + b"\r\n")
+        if index % 11 == 0:
+            time.sleep(0.001)
+
+    os.write(1, f"\r\nTUIC_STRESS_DONE:scrollout:{count}\r\n".encode())
+
+
 def emit_slash_pressure(count: int) -> None:
     original = termios.tcgetattr(0)
     try:
@@ -111,7 +141,14 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--scenario",
-        choices=("atomic", "progressive", "timeout", "slash-pressure", "reflow"),
+        choices=(
+            "atomic",
+            "progressive",
+            "timeout",
+            "slash-pressure",
+            "reflow",
+            "scrollout",
+        ),
         required=True,
     )
     parser.add_argument("--count", type=int, default=2000)
@@ -122,6 +159,8 @@ def main() -> None:
         emit_slash_pressure(args.count)
     elif args.scenario == "reflow":
         emit_reflow(args.count)
+    elif args.scenario == "scrollout":
+        emit_scrollout(args.count)
     else:
         emit(args.scenario, args.count)
 

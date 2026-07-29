@@ -105,6 +105,44 @@ def verify_reflow(lines: list[str], count: int) -> None:
         raise AssertionError("reflow: " + "; ".join(problems))
 
 
+def verify_scrollout(lines: list[str], count: int) -> None:
+    """Report what the grid did with a live partial row that scrolled away.
+
+    Deliberately diagnostic rather than pass/fail on the partial: the point is to
+    establish WHICH behaviour TUIC has, so #498-7e3d's cause can be named. The
+    hard assertion is only that every complete record exists exactly once — the
+    grid must not manufacture copies. Whether the orphaned partial ALSO survives
+    is printed, because that is the reported shape and a real terminal keeps it.
+    """
+    expected = {expected_record(index) for index in range(count)}
+    observed = Counter(line for line in lines if line in expected)
+    missing = sorted(expected - observed.keys())
+    duplicates = sorted(line for line, seen in observed.items() if seen != 1)
+    if missing or duplicates:
+        raise AssertionError(
+            f"scrollout: missing={missing[:5]} duplicated={duplicates[:5]}"
+        )
+
+    # An orphaned partial is a REC- row that is a strict prefix of its complete
+    # form — exactly the #498-7e3d shape.
+    orphans = [
+        line
+        for line in lines
+        if line.startswith("REC-")
+        and line not in expected
+        and any(full.startswith(line) for full in expected)
+    ]
+    print(
+        f"PASS scrollout: {count} complete records, none manufactured; "
+        f"{len(orphans)} orphaned partial row(s) retained in history"
+    )
+    if orphans:
+        print(
+            "  -> retaining them is correct: carriage return cannot reach a row "
+            "that already scrolled off, so both rows are real output"
+        )
+
+
 def run_scenario(
     client: Client,
     repo_root: Path,
@@ -199,6 +237,8 @@ def run_scenario(
         if scenario == "reflow":
             verify_reflow(lines, count)
             print(f"PASS reflow: {count} complete records, none manufactured by reflow")
+        elif scenario == "scrollout":
+            verify_scrollout(lines, count)
         else:
             verify(lines, count, scenario)
             print(f"PASS {scenario}: {count} complete unique records")
@@ -222,7 +262,15 @@ def main() -> None:
     )
     parser.add_argument(
         "--scenario",
-        choices=("atomic", "progressive", "timeout", "slash-pressure", "reflow", "all"),
+        choices=(
+            "atomic",
+            "progressive",
+            "timeout",
+            "slash-pressure",
+            "reflow",
+            "scrollout",
+            "all",
+        ),
         default="all",
     )
     args = parser.parse_args()
@@ -236,7 +284,7 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     client = Client(args.base_url, args.auth)
     scenarios = (
-        ("atomic", "progressive", "timeout", "slash-pressure", "reflow")
+        ("atomic", "progressive", "timeout", "slash-pressure", "reflow", "scrollout")
         if args.scenario == "all"
         else (args.scenario,)
     )
