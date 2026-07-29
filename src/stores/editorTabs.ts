@@ -53,6 +53,7 @@ function createEditorTabsStore() {
 		},
 
 		/** Add a new editor tab (or activate existing if same file already open).
+		 *  Deactivates the terminal/diff/markdown panes so the editor is the only one showing.
 		 *  Pass `fsRoot` via opts when the file lives in a worktree that differs from the canonical repo path. */
 		add(
 			repoPath: string,

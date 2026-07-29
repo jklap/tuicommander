@@ -430,6 +430,24 @@ Default settings applied to newly added repositories.
 ### tabManager (`tabManager.ts`)
 Tab ordering, branch-key mapping, and tab persistence logic.
 
+**Exclusive pane activation.** TerminalArea renders terminals, diffs, markdown and
+editors as four independent `For` lists, each marking its pane `active` from its
+OWN store's `activeId` — so "only one pane shows" is a cross-store invariant.
+`createTabManager` registers a deactivator per store (`registerPaneDeactivator`);
+`terminals.ts` registers its own since it doesn't use the factory. Activating a
+tab — `setActive(id)` with a non-null id, or `_addTab` — calls
+`activatePaneExclusively(storeName)`, which clears every other store's `activeId`.
+`setActive(null)` and the `_addTabBackground` variants are local: a background
+open must not yank the user out of the pane they're in.
+
+Call sites therefore must NOT hand-roll `setActive(null)` on the other stores.
+This replaced the `useTabActivationSync` hook, which enforced the same rule from
+deferred `on(activeId)` effects: an effect keyed on a *change* cannot enforce an
+invariant that has to hold on every activation *request*, so re-activating an
+already-active tab (Edit on a file whose editor tab was already the active one)
+wrote the same value, fired nothing, and left the other pane rendered underneath.
+Pinned by `src/__tests__/stores/paneExclusivity.test.ts`.
+
 ### appLogger (`appLogger.ts`)
 Centralized logging — replaces direct `console.*` calls. Writes to ring buffer, forwards to console, and surfaces in ErrorLogPanel.
 

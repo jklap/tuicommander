@@ -1,9 +1,6 @@
 import { pathBasename } from "../utils/pathUtils";
-import { editorTabsStore } from "./editorTabs";
-import { mdTabsStore } from "./mdTabs";
 import { currentBranchKey } from "./repositories";
 import { type BaseTab, createTabManager } from "./tabManager";
-import { terminalsStore } from "./terminals";
 
 export type DiffStatus = "M" | "A" | "D" | "R" | "?";
 
@@ -49,9 +46,6 @@ function createDiffTabsStore() {
 			);
 			if (existing) {
 				base.setActive(existing.id);
-				terminalsStore.setActive(null);
-				mdTabsStore.setActive(null);
-				editorTabsStore.setActive(null);
 				return existing.id;
 			}
 
@@ -67,9 +61,6 @@ function createDiffTabsStore() {
 				untracked,
 				branchKey: currentBranchKey(),
 			});
-			terminalsStore.setActive(null);
-			mdTabsStore.setActive(null);
-			editorTabsStore.setActive(null);
 			return tabId;
 		},
 

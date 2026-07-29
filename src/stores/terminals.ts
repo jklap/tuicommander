@@ -5,6 +5,7 @@ import { rpc } from "../transport";
 import type { TerminalMatch } from "../types";
 import { isPerfDebug } from "../utils/perfDebug";
 import { appLogger } from "./appLogger";
+import { activatePaneExclusively, registerPaneDeactivator } from "./tabManager";
 
 /** Type of input being awaited */
 export type AwaitingInputType = "question" | "error" | null;
@@ -511,6 +512,10 @@ function createTerminalsStore() {
 			const prevId = state.activeId;
 			batch(() => {
 				if (id) {
+					// The terminal pane is now the only one showing — see
+					// activatePaneExclusively. Without this, opening a terminal on top of
+					// an active editor/diff/markdown tab left both panes rendered.
+					activatePaneExclusively("terminals");
 					setState("terminals", id, "activity", false);
 					setState("terminals", id, "unseen", false);
 					setState("lastActiveId", id);
@@ -962,3 +967,9 @@ function createTerminalsStore() {
 }
 
 export const terminalsStore = createTerminalsStore();
+
+// Terminals own a pane but don't go through createTabManager, so register the
+// deactivator by hand — otherwise opening a diff/markdown/editor tab would leave
+// the terminal pane active underneath it. Uses setActive(null), not a raw state
+// write, so the visibility RPC for the terminal we're leaving still fires.
+registerPaneDeactivator("terminals", () => terminalsStore.setActive(null));

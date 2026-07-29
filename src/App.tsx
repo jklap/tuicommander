@@ -64,7 +64,6 @@ import { useShortcutRegistration } from "./hooks/useShortcutRegistration";
 import { useSmartPrompts } from "./hooks/useSmartPrompts";
 import { useSplitPanes } from "./hooks/useSplitPanes";
 import { useSystemLifecycle } from "./hooks/useSystemLifecycle";
-import { useTabActivationSync } from "./hooks/useTabActivationSync";
 import { useTerminalCompletionNotifications } from "./hooks/useTerminalCompletionNotifications";
 import { useTerminalContextMenus } from "./hooks/useTerminalContextMenus";
 import { useTerminalLifecycle } from "./hooks/useTerminalLifecycle";
@@ -441,7 +440,6 @@ const App: Component = () => {
 
 	useAppearanceSync();
 
-	useTabActivationSync();
 	useActiveTerminalSync();
 
 	useTerminalShellExit(terminalLifecycle.closeTerminal);
