@@ -162,6 +162,23 @@ Client ──GET───> /mcp   (SSE stream for server notifications, requires
 Client ──DELETE─> /mcp  (end session, pass Mcp-Session-Id header)
 ```
 
+**`tools/call` does not require `Mcp-Session-Id`.** Identity is resolved per call
+rather than demanded up front. A caller that sends the header gets its protocol
+session refreshed — a stale id (app restart, or a long-lived client like Claude Code
+that lost its session) auto-recovers instead of erroring. A caller that sends none is
+served anyway: most tools need no caller identity at all, so a plain `curl` against
+`POST /mcp` now works.
+
+The identity-scoped actions (`agent action=register|send|inbox|wait`) still refuse
+without a protocol session — but each refuses on its own, with the concrete next step
+(`initialize`, or `agent action=register`) that the previous blanket `-32600` never
+gave the caller. Making identity itself independent of the protocol session is a
+separate step (Phase E of the dual-era plan); an `x-tuic-session` header binds a TUIC
+identity **to** an existing `mcp-session-id`, it does not substitute for one.
+
+`GET /mcp` and `DELETE /mcp` still require the header — both are bound to a specific
+protocol session, and `GET` answers `401` without it.
+
 The `GET /mcp` SSE stream emits `notifications/tools/list_changed` whenever the available tool set changes (e.g., native tools are enabled/disabled via config, or upstream MCP servers connect/disconnect). The bridge sidecar subscribes to this stream and forwards the notification to the AI agent.
 
 The bridge uses the standard MCP `ping` request for its three-second liveness check. This keeps health traffic constant-size as terminal count grows; it does not rebuild or serialize the complete tool catalog. If IPC is reachable but `/mcp` is unavailable, the bridge reports that the MCP endpoint is unavailable instead of incorrectly claiming the desktop process is not running.

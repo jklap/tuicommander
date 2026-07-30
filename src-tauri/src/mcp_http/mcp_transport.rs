@@ -3212,7 +3212,12 @@ fn handle_messaging(
             let mcp_sid = match mcp_session_id {
                 Some(sid) => sid.to_string(),
                 None => {
-                    return serde_json::json!({"error": "No MCP session — send an initialize request first"});
+                    // Reached by a stateless caller now that tools/call no longer
+                    // gates on the header (#0f44). Registration keys the identity on
+                    // the protocol session, so it cannot mint one from nothing —
+                    // say what to do instead of just stating the problem. Making
+                    // identity itself stateless is Phase E, not this step.
+                    return serde_json::json!({"error": "Registration needs an MCP protocol session, and this request carried no `mcp-session-id`. Run `initialize` first — managed PTYs auto-bind from $TUIC_SESSION. Tools that need no caller identity work without it."});
                 }
             };
             let (tuic_session, generated_identity) =
@@ -3359,7 +3364,7 @@ fn handle_messaging(
                 }) {
                 Some(s) => s,
                 None => {
-                    return serde_json::json!({"error": "You are not registered. Register first with messaging action=register"});
+                    return serde_json::json!({"error": "You are not registered. Register first with agent action=register"});
                 }
             };
             // Check recipient exists
@@ -3506,7 +3511,7 @@ fn handle_messaging(
             {
                 Some(ts) => ts,
                 None => {
-                    return serde_json::json!({"error": "You are not registered. Register first with messaging action=register"});
+                    return serde_json::json!({"error": "You are not registered. Register first with agent action=register"});
                 }
             };
             let limit = args["limit"].as_u64().unwrap_or(50) as usize;
@@ -4311,33 +4316,26 @@ pub(super) async fn mcp_post(
         }
 
         "tools/call" => {
-            // Validate MCP session. If the session ID is stale (e.g. app restarted, or
-            // long-lived client like Claude Code lost its session), auto-recover by
-            // re-registering the session instead of returning an error.
+            // Identity is resolved per call, not demanded up front. A caller that
+            // sends the header gets its session refreshed — stale ids (app restart,
+            // or a long-lived client like Claude Code that lost its session)
+            // auto-recover rather than erroring. A caller that sends none is served
+            // anyway: most tools need no identity, and the ones that do already
+            // refuse with guidance the caller can act on, which a blanket -32600
+            // never gave them.
             let is_cc_ua = detect_claude_code_from_headers(&headers);
-            let session_valid = headers
+            if let Some(sid) = headers
                 .get(MCP_SESSION_HEADER)
                 .and_then(|v| v.to_str().ok())
-                .map(|sid| {
-                    refresh_mcp_session(
-                        &state,
-                        sid,
-                        is_cc_ua,
-                        headers
-                            .get(TUIC_SESSION_HEADER)
-                            .and_then(|v| v.to_str().ok()),
-                    );
-                    true
-                })
-                .unwrap_or(false);
-            if !session_valid {
-                // No session header at all — reject
-                let response = serde_json::json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "error": { "code": -32600, "message": "mcp-session-id header required. Call initialize first." }
-                });
-                return Json(response).into_response();
+            {
+                refresh_mcp_session(
+                    &state,
+                    sid,
+                    is_cc_ua,
+                    headers
+                        .get(TUIC_SESSION_HEADER)
+                        .and_then(|v| v.to_str().ok()),
+                );
             }
 
             let params = body
@@ -5186,6 +5184,119 @@ mod tests {
             .await
             .unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    // --- stateless tools/call (#0f44) ---
+
+    async fn post_tool_call_with_headers(
+        state: Arc<AppState>,
+        headers: HeaderMap,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> (HeaderMap, serde_json::Value) {
+        let response = mcp_post(
+            State(state),
+            ConnectInfo(loopback_addr()),
+            headers,
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 7,
+                "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}
+            })),
+        )
+        .await
+        .into_response();
+        let resp_headers = response.headers().clone();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        (resp_headers, serde_json::from_slice(&bytes).unwrap())
+    }
+
+    /// The blanket `mcp-session-id` rejection was the single blocker to stateless
+    /// operation — it refused calls that need no identity at all, including our own
+    /// curl probes against :9877.
+    #[tokio::test]
+    async fn a_tool_that_needs_no_identity_works_without_a_session_header() {
+        let state = test_state();
+        let (_, body) = post_tool_call_with_headers(
+            state,
+            HeaderMap::new(),
+            "plugin_dev_guide",
+            serde_json::json!({}),
+        )
+        .await;
+
+        assert!(
+            body.get("error").is_none(),
+            "a session-independent tool must not be gated on identity: {body}"
+        );
+        assert!(
+            body["result"]["content"][0]["text"].is_string(),
+            "the tool must actually have run: {body}"
+        );
+    }
+
+    /// Identity-scoped actions must still refuse — but with the guidance the caller
+    /// needs, not a bare protocol code it cannot act on.
+    #[tokio::test]
+    async fn an_identity_scoped_action_without_identity_explains_how_to_get_one() {
+        let state = test_state();
+        let (_, body) = post_tool_call_with_headers(
+            state,
+            HeaderMap::new(),
+            "agent",
+            serde_json::json!({"action": "register"}),
+        )
+        .await;
+
+        assert!(
+            body.get("error").is_none(),
+            "the refusal belongs in the tool result, not as a JSON-RPC protocol error: {body}"
+        );
+        let text = body["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        assert!(
+            text.contains("initialize") && text.contains("mcp-session-id"),
+            "the error must name what is missing AND how to get it: {text}"
+        );
+        assert!(
+            !text.contains("-32600"),
+            "a bare protocol code is not actionable: {text}"
+        );
+    }
+
+    /// Legacy clients must be untouched: the header they send is still refreshed
+    /// into `mcp_sessions` and echoed back on the response.
+    #[tokio::test]
+    async fn a_legacy_client_still_gets_its_session_refreshed_and_echoed() {
+        let state = test_state();
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, "mcp-legacy-c1".parse().unwrap());
+
+        let (resp_headers, body) = post_tool_call_with_headers(
+            Arc::clone(&state),
+            headers,
+            "plugin_dev_guide",
+            serde_json::json!({}),
+        )
+        .await;
+
+        assert!(body.get("error").is_none(), "{body}");
+        assert_eq!(
+            resp_headers
+                .get(MCP_SESSION_HEADER)
+                .and_then(|v| v.to_str().ok()),
+            Some("mcp-legacy-c1"),
+            "the session header must still be echoed"
+        );
+        assert!(
+            state.mcp_sessions.contains_key("mcp-legacy-c1"),
+            "a stale or first-seen session must still be (re-)registered on tools/call"
+        );
     }
 
     #[test]
@@ -6981,7 +7092,12 @@ mod tests {
         let state = test_state();
         let args = serde_json::json!({"action": "register", "tuic_session": "550e8400-e29b-41d4-a716-446655440a01"});
         let result = handle_messaging(&state, &args, None);
-        assert!(result["error"].as_str().unwrap().contains("MCP session"));
+        // Still refused — but since tools/call no longer gates on the header, this
+        // message is what a stateless caller actually sees, so it must name a way
+        // out rather than just state the problem (#0f44).
+        let error = result["error"].as_str().unwrap();
+        assert!(error.contains("mcp-session-id"), "{error}");
+        assert!(error.contains("initialize"), "{error}");
     }
 
     #[test]
