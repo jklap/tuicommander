@@ -254,6 +254,26 @@ fn pending_parent_id(mcp_session_id: &str) -> String {
     format!("{PENDING_PARENT_PREFIX}{mcp_session_id}")
 }
 
+/// Interval a client should poll a task handle at. Floored well above zero so a
+/// stuck orchestrator cannot hot-loop the server.
+const TASK_POLL_INTERVAL_MS: u64 = 1000;
+
+/// Owner recorded for a caller with no identity of any kind. `agent spawn` is
+/// loopback-only and per AGENTS.md the OS user is the auth boundary, so anonymous
+/// local callers share one bucket rather than being locked out of their own tasks.
+const ANONYMOUS_TASK_OWNER: &str = "loopback";
+
+/// The identity a task belongs to. A registered peer owns tasks under its TUIC
+/// session; an orchestrator that has not registered yet is pinned to its MCP
+/// protocol session — the same identity `session_parent` uses for pending
+/// children, so registering later does not orphan the handle.
+fn task_owner_identity(caller_tuic: Option<&str>, mcp_session_id: Option<&str>) -> String {
+    caller_tuic
+        .map(str::to_string)
+        .or_else(|| mcp_session_id.map(pending_parent_id))
+        .unwrap_or_else(|| ANONYMOUS_TASK_OWNER.to_string())
+}
+
 fn link_pending_children_to_parent(
     state: &AppState,
     mcp_session_id: &str,
@@ -2940,8 +2960,20 @@ fn handle_agent_with_parent_cwd(
             // peers and post {type:state_change} to the parent's inbox; the
             // result-via-send guidance lives in agent(register).workflow and the
             // compatibility output hint is explicitly marked anomaly-only.
+            // Durable handle for this spawn. Created only after the PTY is live, so
+            // every early return above (loopback guard, bad binary, spawn failure)
+            // leaves no task behind. Purely additive in the response: classic MCP
+            // clients that ignore `task_id` keep working exactly as before.
+            let task_id = state.tasks.create(
+                crate::tasks::TaskKind::AgentSpawn,
+                &task_owner_identity(caller_tuic.as_deref(), mcp_session_id),
+                Some(&session_id),
+            );
+
             let mut response = serde_json::json!({
                 "session_id": session_id,
+                "task_id": task_id,
+                "poll_interval_ms": TASK_POLL_INTERVAL_MS,
                 "name": peer_name,
                 "peer_registered": true,
                 "communication_ready": caller_tuic.is_some(),
@@ -5382,6 +5414,7 @@ mod tests {
                 )
                 .unwrap(),
             )),
+            tasks: std::sync::Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: dashmap::DashMap::new(),
             standby_sessions: dashmap::DashMap::new(),
@@ -5810,6 +5843,173 @@ mod tests {
         assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
         assert_eq!(spawned["communication_ready"], true);
         assert_eq!(spawned["parent_session_id"], TEST_UUID_A);
+    }
+
+    /// Compatibility bar for the task handle: a classic MCP client parses the
+    /// spawn response by field name, so `task_id`/`poll_interval_ms` may only be
+    /// *added* — no pre-existing field may disappear or change type.
+    // Needs a runtime: the spawn path arms the initial-prompt watchdog and the
+    // reader thread through tokio.
+    #[tokio::test]
+    async fn spawn_response_adds_the_task_handle_without_touching_existing_fields() {
+        let state = test_state();
+        let spawned = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({
+                "action": "spawn",
+                "prompt": "task handle additivity",
+                "binary_path": "/usr/bin/true",
+                "cwd": "/tmp",
+            }),
+            Some("mcp-classic"),
+        );
+        if spawned["error"]
+            .as_str()
+            .is_some_and(|e| e.contains("Failed to open PTY"))
+        {
+            eprintln!("Skipping: PTY unavailable");
+            return;
+        }
+        assert!(spawned.get("error").is_none(), "spawn failed: {spawned}");
+
+        // Every field a pre-task client already read, with its original type.
+        for key in [
+            "session_id",
+            "name",
+            "send_to",
+            "monitor_with",
+            "status_with",
+            "wait_with",
+        ] {
+            assert!(
+                spawned[key].is_string(),
+                "{key} must still be a string: {spawned}"
+            );
+        }
+        for key in ["peer_registered", "communication_ready"] {
+            assert!(
+                spawned[key].is_boolean(),
+                "{key} must still be a boolean: {spawned}"
+            );
+        }
+        assert!(spawned["server_ts"].is_u64(), "server_ts must stay numeric");
+
+        // The additions.
+        let task_id = spawned["task_id"]
+            .as_str()
+            .expect("task_id must be a string");
+        assert_eq!(spawned["poll_interval_ms"], TASK_POLL_INTERVAL_MS);
+        assert!(
+            TASK_POLL_INTERVAL_MS >= 1000,
+            "a lower floor lets a stuck orchestrator hot-loop the server"
+        );
+
+        // The handle must actually resolve, be owned by this caller, and track the
+        // session that was spawned.
+        let rec = state.tasks.get(task_id).expect("task must exist");
+        assert_eq!(rec.status, crate::tasks::TaskStatus::Working);
+        assert_eq!(rec.kind, crate::tasks::TaskKind::AgentSpawn);
+        assert_eq!(rec.owner, pending_parent_id("mcp-classic"));
+        assert_eq!(
+            rec.session_id.as_deref(),
+            spawned["session_id"].as_str(),
+            "the task must point at the spawned session"
+        );
+    }
+
+    /// The loopback guard runs before anything is allocated — a rejected caller
+    /// must not leave a task behind for someone else to poll.
+    #[test]
+    fn a_rejected_remote_spawn_creates_no_task() {
+        let state = test_state();
+        let rejected = handle_agent(
+            &state,
+            "8.8.8.8:1234".parse().unwrap(),
+            &serde_json::json!({
+                "action": "spawn",
+                "prompt": "remote caller",
+                "binary_path": "/usr/bin/true",
+            }),
+            Some("mcp-remote"),
+        );
+
+        assert!(
+            rejected["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("restricted to localhost")),
+            "a remote spawn must be refused: {rejected}"
+        );
+        assert!(rejected.get("task_id").is_none());
+        assert_eq!(state.tasks.len(), 0, "no task may outlive a refused spawn");
+    }
+
+    /// A spawn that never reaches the PTY (bad binary) must also leave no task.
+    #[test]
+    fn a_failed_spawn_creates_no_task() {
+        let state = test_state();
+        let failed = handle_agent(
+            &state,
+            "127.0.0.1:1".parse().unwrap(),
+            &serde_json::json!({
+                "action": "spawn",
+                "prompt": "bad binary",
+                "binary_path": "/nonexistent/definitely-not-a-binary",
+            }),
+            Some("mcp-classic"),
+        );
+
+        assert!(failed["error"].is_string(), "spawn must fail: {failed}");
+        assert_eq!(state.tasks.len(), 0, "no task may outlive a failed spawn");
+    }
+
+    /// The point of the handle: the outcome is recorded when the agent exits, even
+    /// though nobody was waiting. A clean exit completes; a non-zero exit fails.
+    #[test]
+    fn a_session_exit_drives_its_task_to_a_terminal_state() {
+        use crate::tasks::{TaskKind, TaskStatus};
+
+        let state = test_state();
+
+        let clean = state.tasks.create(TaskKind::AgentSpawn, "owner", Some("sess-clean"));
+        state
+            .exit_codes
+            .insert("sess-clean".to_string(), 0);
+        crate::pty::mark_session_exited("sess-clean", &state);
+        let rec = state.tasks.get(&clean).expect("task must survive");
+        assert_eq!(rec.status, TaskStatus::Completed);
+        assert_eq!(rec.result.as_ref().unwrap()["exit_code"], 0);
+
+        let broken = state.tasks.create(TaskKind::AgentSpawn, "owner", Some("sess-broken"));
+        state.exit_codes.insert("sess-broken".to_string(), 137);
+        crate::pty::mark_session_exited("sess-broken", &state);
+        let rec = state.tasks.get(&broken).expect("task must survive");
+        assert_eq!(rec.status, TaskStatus::Failed);
+        assert!(
+            rec.error.as_deref().is_some_and(|e| e.contains("137")),
+            "the exit code must reach the caller: {:?}",
+            rec.error
+        );
+    }
+
+    /// A cancel that races the agent's exit must stick — terminal immutability
+    /// means the exit path cannot rewrite it as completed.
+    #[test]
+    fn a_cancelled_task_is_not_resurrected_by_the_session_exit() {
+        use crate::tasks::{TaskKind, TaskStatus};
+
+        let state = test_state();
+        let id = state.tasks.create(TaskKind::AgentSpawn, "owner", Some("sess-cancel"));
+        state.tasks.cancel(&id).expect("cancel");
+
+        state.exit_codes.insert("sess-cancel".to_string(), 0);
+        crate::pty::mark_session_exited("sess-cancel", &state);
+
+        assert_eq!(
+            state.tasks.get(&id).unwrap().status,
+            TaskStatus::Cancelled,
+            "the exit must not overwrite an orchestrator's cancel"
+        );
     }
 
     #[test]

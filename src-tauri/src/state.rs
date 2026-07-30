@@ -1323,6 +1323,9 @@ pub struct AppState {
     pub(crate) tunnel_manager: Arc<crate::tunnels::manager::TunnelManager>,
     /// SSH tunnel audit log — persisted event history for all tunnels.
     pub(crate) tunnel_audit: Arc<parking_lot::Mutex<crate::tunnels::audit::AuditLog>>,
+    /// Task registry for long-running MCP orchestration. Survives client
+    /// reconnects, so an orchestrator is not bound by the 300s wait ceiling.
+    pub(crate) tasks: Arc<crate::tasks::TaskRegistry>,
     /// Serializes load-modify-save on `connections.json` to prevent TOCTOU races.
     pub(crate) connections_lock: tokio::sync::Mutex<()>,
     /// Pending screenshot requests: request_id → oneshot sender for base64 image data.
@@ -1792,6 +1795,7 @@ impl AppState {
             ai_suggestions_enabled: DashMap::new(),
             tunnel_manager,
             tunnel_audit,
+            tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
             #[cfg(unix)]
@@ -4367,12 +4371,38 @@ mod tests {
                 )
                 .unwrap(),
             )),
+            tasks: Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
             standby_sessions: DashMap::new(),
             process_snapshot_cache: crate::pty::ProcessSnapshotCache::default(),
             hot_repo_paths: parking_lot::RwLock::new(std::collections::HashSet::new()),
         }
+    }
+
+    /// The registry is reached through `AppState` by every MCP task handler, so a
+    /// state built without a live one would fail at request time, not at boot.
+    #[test]
+    fn test_state_carries_a_live_task_registry() {
+        use crate::tasks::{TaskKind, TaskStatus, TaskUpdate};
+
+        let state = make_test_app_state();
+        let id = state
+            .tasks
+            .create(TaskKind::AgentSpawn, "owner", Some("sess-1"));
+        assert_eq!(state.tasks.get(&id).unwrap().status, TaskStatus::Working);
+
+        state
+            .tasks
+            .set_status(&id, TaskStatus::Completed, TaskUpdate::default())
+            .expect("transition");
+        assert!(
+            state
+                .tasks
+                .set_status(&id, TaskStatus::Working, TaskUpdate::default())
+                .is_err(),
+            "terminal immutability must hold through AppState too"
+        );
     }
 
     #[test]
