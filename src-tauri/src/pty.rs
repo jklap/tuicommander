@@ -5348,6 +5348,47 @@ pub(crate) fn flush_pending_injections(state: &AppState, session_id: &str) {
 /// Keeps `output_buffers`, `vt_log_buffers`, `last_output_ms`, and `exit_codes`
 /// alive so MCP consumers can read final output + exit status post-mortem.
 /// Tombstones are reaped by `spawn_tombstone_sweeper` after `TOMBSTONE_TTL_MS`.
+/// Drive any task tracking `session_id` to its terminal state. This is what makes
+/// a task handle worth polling: the outcome is recorded even if no client was
+/// waiting when the agent finished.
+///
+/// A missing exit code is read as success — the session is gone and we have no
+/// evidence of failure, so an orchestrator should collect a result rather than
+/// see a phantom error.
+fn finish_session_tasks(state: &AppState, session_id: &str, exit_code: Option<i32>) {
+    let failed = exit_code.is_some_and(|code| code != 0);
+    for task_id in state.tasks.live_ids_for_session(session_id) {
+        let (status, update) = if failed {
+            (
+                crate::tasks::TaskStatus::Failed,
+                crate::tasks::TaskUpdate {
+                    error: Some(format!(
+                        "agent session exited with code {}",
+                        exit_code.unwrap_or_default()
+                    )),
+                    ..Default::default()
+                },
+            )
+        } else {
+            (
+                crate::tasks::TaskStatus::Completed,
+                crate::tasks::TaskUpdate {
+                    result: Some(serde_json::json!({
+                        "session_id": session_id,
+                        "exit_code": exit_code,
+                    })),
+                    ..Default::default()
+                },
+            )
+        };
+        if let Err(e) = state.tasks.set_status(&task_id, status, update) {
+            // Terminal already (a cancel that raced the exit) is expected, not an
+            // error worth a warning — `live_ids_for_session` just read it as live.
+            tracing::debug!(source = "tasks", task_id = %task_id, error = %e, "Task not finished on session exit");
+        }
+    }
+}
+
 pub(crate) fn mark_session_exited(session_id: &str, state: &AppState) {
     // Capture exit code before dropping the session entry.
     // portable_pty::ExitStatus carries both exit_code() and signal().
@@ -5373,6 +5414,7 @@ pub(crate) fn mark_session_exited(session_id: &str, state: &AppState) {
 
     // Notify orchestrator (if any) that this agent has exited.
     let exit_code = state.exit_codes.get(session_id).map(|e| *e.value());
+    finish_session_tasks(state, session_id, exit_code);
     push_state_change_to_parent(
         state,
         session_id,

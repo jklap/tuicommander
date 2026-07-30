@@ -1628,6 +1628,18 @@ pub async fn start_server(
                         "Swept expired auth rate-limit entries"
                     );
                 }
+
+                // Drop tasks past their TTL on the same pass — a task handle
+                // outlives its protocol session, so it needs its own sweep, but
+                // not its own timer.
+                let reaped_tasks = reaper_state.tasks.reap_expired();
+                if reaped_tasks > 0 {
+                    tracing::debug!(
+                        source = "tasks",
+                        reaped = reaped_tasks,
+                        "Reaped expired tasks"
+                    );
+                }
             }
         });
 
@@ -2087,6 +2099,7 @@ mod tests {
                 )
                 .unwrap(),
             )),
+            tasks: std::sync::Arc::new(crate::tasks::TaskRegistry::new()),
             connections_lock: tokio::sync::Mutex::new(()),
             screenshot_responses: DashMap::new(),
             standby_sessions: DashMap::new(),

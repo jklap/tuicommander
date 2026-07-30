@@ -93,6 +93,7 @@ pub(crate) mod sleep_prevention;
 pub(crate) mod smart_prompt;
 pub(crate) mod state;
 pub(crate) mod tailscale;
+pub(crate) mod tasks;
 pub(crate) mod terminal_grid;
 pub(crate) mod text_rank;
 pub(crate) mod themes;
