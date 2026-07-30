@@ -328,6 +328,36 @@ pub(crate) fn check_graphql_errors(
     Err(GqlError::Other(format!("GraphQL error: {msg}")))
 }
 
+/// Flatten a `reqwest` error and its source chain into a single line.
+/// `reqwest::Error`'s `Display` omits sources, so the only useful part of a
+/// transport failure ("connection closed before message completed", TLS
+/// errors, …) never reaches the log.
+fn describe_reqwest_error(e: &reqwest::Error) -> String {
+    let mut out = e.to_string();
+    let mut src = std::error::Error::source(e);
+    while let Some(s) = src {
+        out.push_str(&format!(": {s}"));
+        src = s.source();
+    }
+    out
+}
+
+/// Single-line, length-capped preview of a response body for error messages.
+/// GitHub/proxy error pages are HTML — a snippet identifies them instantly.
+fn body_snippet(body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body);
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.is_empty() {
+        return "<empty body>".to_string();
+    }
+    if flat.chars().count() > 200 {
+        let head: String = flat.chars().take(200).collect();
+        format!("{head}…")
+    } else {
+        flat
+    }
+}
+
 /// Execute a GraphQL query against the GitHub API.
 /// Returns the parsed JSON response or a typed error.
 /// Detects rate limits from HTTP status codes, headers, and GraphQL error types.
@@ -350,7 +380,12 @@ pub(crate) async fn graphql_request(
         .json(&body)
         .send()
         .await
-        .map_err(|e| GqlError::Other(format!("GraphQL request failed: {e}")))?;
+        .map_err(|e| {
+            GqlError::Other(format!(
+                "GraphQL request failed: {}",
+                describe_reqwest_error(&e)
+            ))
+        })?;
 
     let status = response.status();
 
@@ -368,13 +403,23 @@ pub(crate) async fn graphql_request(
         });
     }
 
-    let json: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| GqlError::Other(format!("Failed to parse GraphQL response: {e}")))?;
+    // Read the body as bytes and parse separately: `response.json()` collapses a
+    // transport failure (truncated body) and a non-JSON payload (GitHub 5xx /
+    // proxy HTML error page) into the same opaque "error decoding response body",
+    // discarding the HTTP status that would have explained it.
+    let body = response.bytes().await.map_err(|e| {
+        GqlError::Other(format!(
+            "GraphQL response body read failed (HTTP {status}): {}",
+            describe_reqwest_error(&e)
+        ))
+    })?;
+    let parsed: Option<serde_json::Value> = serde_json::from_slice(&body).ok();
 
     if !status.is_success() {
-        let msg = json["message"].as_str().unwrap_or("Unknown error");
+        let msg = parsed
+            .as_ref()
+            .and_then(|j| j["message"].as_str().map(str::to_string))
+            .unwrap_or_else(|| body_snippet(&body));
         let err_msg = format!("GitHub API error ({status}): {msg}");
 
         if status.as_u16() == 401 {
@@ -404,6 +449,14 @@ pub(crate) async fn graphql_request(
 
         return Err(GqlError::Other(err_msg));
     }
+
+    let json = parsed.ok_or_else(|| {
+        GqlError::Other(format!(
+            "Failed to parse GraphQL response (HTTP {status}, {} bytes): {}",
+            body.len(),
+            body_snippet(&body)
+        ))
+    })?;
 
     // 4. HTTP 200 + GraphQL errors
     check_graphql_errors(&json, ratelimit_reset, retry_after)?;
@@ -5313,6 +5366,172 @@ mod tests {
     fn test_gql_error_display_other() {
         let err = GqlError::Other("network timeout".to_string());
         assert_eq!(format!("{err}"), "network timeout");
+    }
+
+    // --- non-JSON GraphQL responses ---
+    //
+    // The defect: `response.json()` ran before the status check, so any response
+    // GitHub (or an intercepting proxy) served as HTML collapsed into the opaque
+    // "Failed to parse GraphQL response: error decoding response body" — the
+    // status code, and with it the Auth/RateLimit classification, was thrown away.
+
+    #[test]
+    fn body_snippet_collapses_whitespace_and_caps_length() {
+        assert_eq!(body_snippet(b""), "<empty body>");
+        assert_eq!(body_snippet(b"   \n\t "), "<empty body>");
+        assert_eq!(
+            body_snippet(b"<html>\n  <body>Bad gateway</body>\n</html>"),
+            "<html> <body>Bad gateway</body> </html>"
+        );
+
+        let long = "x".repeat(500);
+        let snippet = body_snippet(long.as_bytes());
+        assert_eq!(snippet.chars().count(), 201, "200 chars plus the ellipsis");
+        assert!(snippet.ends_with('…'));
+    }
+
+    #[tokio::test]
+    async fn a_502_html_page_reports_the_http_status_not_a_parse_error() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/graphql")
+            .with_status(502)
+            .with_body("<html><body>Bad gateway</body></html>")
+            .create_async()
+            .await;
+
+        let err = graphql_request(
+            &reqwest::Client::new(),
+            "token",
+            &format!("{}/graphql", server.url()),
+            "query { viewer { login } }",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("a 502 must not be reported as success");
+        mock.assert_async().await;
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("502") && msg.contains("Bad gateway"),
+            "the status and body must both survive: {msg}"
+        );
+    }
+
+    /// A 401 behind a non-JSON body used to surface as `Other`, so the
+    /// token-candidate fallback loop (which only advances on `Auth`) never tried
+    /// the next token.
+    #[tokio::test]
+    async fn a_401_with_a_non_json_body_is_still_an_auth_error() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/graphql")
+            .with_status(401)
+            .with_body("Bad credentials")
+            .create_async()
+            .await;
+
+        let err = graphql_request(
+            &reqwest::Client::new(),
+            "token",
+            &format!("{}/graphql", server.url()),
+            "query { viewer { login } }",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("a 401 must not be reported as success");
+        mock.assert_async().await;
+
+        assert!(
+            matches!(err, GqlError::Auth(_)),
+            "expected Auth, got {err:?}"
+        );
+        assert!(err.to_string().contains("Bad credentials"));
+    }
+
+    /// Same misclassification, worse consequence: an exhausted primary limit
+    /// served as HTML counted as an ordinary failure instead of backing off.
+    #[tokio::test]
+    async fn a_403_with_exhausted_headers_and_a_non_json_body_is_a_rate_limit() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/graphql")
+            .with_status(403)
+            .with_header("x-ratelimit-remaining", "0")
+            .with_header("x-ratelimit-reset", "99999999999")
+            .with_body("<html>rate limited</html>")
+            .create_async()
+            .await;
+
+        let err = graphql_request(
+            &reqwest::Client::new(),
+            "token",
+            &format!("{}/graphql", server.url()),
+            "query { viewer { login } }",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("an exhausted primary limit must not be reported as success");
+        mock.assert_async().await;
+
+        match err {
+            GqlError::RateLimit { reset_at, .. } => {
+                assert_eq!(reset_at, Some(99999999999));
+            }
+            other => panic!("expected RateLimit, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_non_json_200_body_names_the_body_it_could_not_parse() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body("<html>logged out</html>")
+            .create_async()
+            .await;
+
+        let err = graphql_request(
+            &reqwest::Client::new(),
+            "token",
+            &format!("{}/graphql", server.url()),
+            "query { viewer { login } }",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect_err("a non-JSON 200 body is not a usable GraphQL response");
+        mock.assert_async().await;
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("logged out") && msg.contains("23 bytes"),
+            "the body must be quoted so the cause is identifiable: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_valid_json_200_still_parses() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_body(r#"{"data":{"viewer":{"login":"octocat"}}}"#)
+            .create_async()
+            .await;
+
+        let json = graphql_request(
+            &reqwest::Client::new(),
+            "token",
+            &format!("{}/graphql", server.url()),
+            "query { viewer { login } }",
+            &serde_json::json!({}),
+        )
+        .await
+        .expect("a well-formed response must still come through");
+        mock.assert_async().await;
+
+        assert_eq!(json["data"]["viewer"]["login"], "octocat");
     }
 
     // --- GitHubCircuitBreaker tests ---
