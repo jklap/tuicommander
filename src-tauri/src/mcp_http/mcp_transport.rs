@@ -263,15 +263,32 @@ const TASK_POLL_INTERVAL_MS: u64 = 1000;
 /// local callers share one bucket rather than being locked out of their own tasks.
 const ANONYMOUS_TASK_OWNER: &str = "loopback";
 
-/// The identity a task belongs to. A registered peer owns tasks under its TUIC
-/// session; an orchestrator that has not registered yet is pinned to its MCP
-/// protocol session — the same identity `session_parent` uses for pending
-/// children, so registering later does not orphan the handle.
-fn task_owner_identity(caller_tuic: Option<&str>, mcp_session_id: Option<&str>) -> String {
-    caller_tuic
+/// Every identity the caller may legitimately claim, most specific first.
+///
+/// The first element stamps a new task; the whole set is what an ownership check
+/// accepts. Both matter: a caller that spawns before registering is stamped with
+/// its pending id, and once it auto-binds its specific identity changes — it must
+/// not lose the handle it was already given. `pending_parent_id` is the same alias
+/// `link_pending_children_to_parent` reconciles for child sessions.
+fn caller_task_identities(
+    caller_tuic: Option<&str>,
+    mcp_session_id: Option<&str>,
+) -> Vec<String> {
+    let mut identities: Vec<String> = caller_tuic
         .map(str::to_string)
-        .or_else(|| mcp_session_id.map(pending_parent_id))
-        .unwrap_or_else(|| ANONYMOUS_TASK_OWNER.to_string())
+        .into_iter()
+        .chain(mcp_session_id.map(pending_parent_id))
+        .collect();
+    if identities.is_empty() {
+        identities.push(ANONYMOUS_TASK_OWNER.to_string());
+    }
+    identities
+}
+
+/// The identity a new task is stamped with.
+fn task_owner_identity(caller_tuic: Option<&str>, mcp_session_id: Option<&str>) -> String {
+    caller_task_identities(caller_tuic, mcp_session_id)
+        .swap_remove(0)
 }
 
 fn link_pending_children_to_parent(
@@ -589,6 +606,7 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
         out.push_str("## Tools\n\n");
         out.push_str("- `session` (PTY panes, tmux-equivalent): list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats\n");
         out.push_str("- `agent` (AI peers + messaging): spawn, wait, detect, stats, metrics, register, list_peers, send, inbox\n");
+        out.push_str("- `task` (poll a spawn that outlives a wait): get, cancel\n");
         out.push_str("- `repo` (repos, PRs, worktrees): list, active, prs, status, worktree_list, worktree_create, worktree_remove\n");
         out.push_str("- `ui` (tabs, toasts, confirm dialogs): tab, toast, confirm\n");
         out.push_str("- `plugin_dev_guide`: plugin authoring reference\n\n");
@@ -604,7 +622,7 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
         out.push_str("## Workflow\n\n");
         out.push_str("- **Discover:** `repo action=list|prs|active` · `agent action=detect`.\n");
         out.push_str("- **Spawn:** `session action=create` (shell) · `agent action=spawn` (AI) · `repo action=worktree_create` (isolated). `agent_type` resolves run config names first (case-insensitive), then agent binary names.\n");
-        out.push_str("- **Observe:** `session action=status|output` · `agent action=inbox`.\n");
+        out.push_str("- **Observe:** `session action=status|output` · `agent action=inbox` · `task action=get` for work longer than the 300s wait cap.\n");
         out.push_str(
             "- **Coordinate:** `agent action=register/send/inbox` for peer messaging.\n\n",
         );
@@ -706,8 +724,9 @@ const LEGACY_UI_ACTIONS: &str = "tab";
 const LEGACY_NOTIFY_ACTIONS: &str = "toast, confirm";
 const LEGACY_MESSAGING_ACTIONS: &str = "register, list_peers, send, inbox";
 const LEGACY_DEBUG_ACTIONS: &str = "agent_detection, logs, sessions, invoke_js";
+const LEGACY_TASK_ACTIONS: &str = "get, cancel";
 
-/// Full MCP tool definitions — 7 base native tools + all `ai_terminal_*` tools.
+/// Full MCP tool definitions — 8 base native tools + all `ai_terminal_*` tools.
 ///
 /// This returns the unfiltered schema list. Public listing/search paths MUST
 /// route through [`filtered_native_tools`] to honour `disabled_native_tools`
@@ -737,7 +756,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order plus next_since.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection.\n- list_peers: List peers. Optional: project filter. Absent project is omitted.\n- send: Message a peer (requires to, message). Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Optional: limit, since (logical unix-millis cursor).",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order plus next_since.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection.\n- list_peers: List peers. Optional: project filter. Absent project is omitted.\n- send: Message a peer (requires to, message). Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Optional: limit, since (logical unix-millis cursor).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000, capped 300000). On timeout returns {timed_out:true}." },
@@ -758,6 +777,14 @@ fn native_tool_definitions() -> serde_json::Value {
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
                 "since": { "type": "integer", "description": "Logical unix-millis cursor — return messages after this (action=inbox), or wake on mail newer than this (action=wait)" }
             }, "required": ["action"] }
+        },
+        {
+            "name": "task",
+            "description": "Poll a long-running task handle without blocking. `agent action=spawn` returns a task_id; use it here instead of holding a wait open, which is capped at 300s and loses the outcome if the connection drops.\n\nThe outcome is recorded when the agent exits whether or not anyone was listening, so a reconnecting orchestrator can still collect it (for up to 24h).\n\nActions:\n- get: Current state. Returns {task_id, status, status_message?, result?, error_detail?, poll_interval_ms}. status is working|input_required|completed|failed|cancelled; the last three are final and never change again. A failed task reports why in error_detail, NOT in error — a top-level `error` always means the call itself failed. Poll no faster than poll_interval_ms.\n- cancel: Mark the task cancelled. Does NOT kill the agent — use session action=kill for that. A cancel is final: the agent's later exit cannot overwrite it.",
+            "inputSchema": { "type": "object", "properties": {
+                "action": { "type": "string", "description": "One of: get, cancel" },
+                "task_id": { "type": "string", "description": "Task handle returned by agent action=spawn (required)" }
+            }, "required": ["action", "task_id"] }
         },
         {
             "name": "repo",
@@ -1318,6 +1345,12 @@ async fn handle_mcp_tool_call_with_context(
                 })
                 .await
             }
+        }
+        "task" => {
+            let state = state.clone();
+            let args = args.clone();
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || handle_task(&state, addr, &args, sid.as_deref())).await
         }
         "repo" => handle_repo(state, args, is_claude_code).await,
         "ui" => handle_ui_unified(state, addr, args, mcp_session_id).await,
@@ -3025,6 +3058,94 @@ fn handle_agent_with_parent_cwd(
             "Unknown action '{}' for tool 'agent'. Available: {}", other, LEGACY_AGENT_ACTIONS
         )}),
     }
+}
+
+/// Poll or cancel a task handle. Non-blocking by design: this is what lifts the
+/// 300s ceiling on `agent wait`, so it must never wait on anything itself.
+fn handle_task(
+    state: &Arc<AppState>,
+    addr: SocketAddr,
+    args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
+) -> serde_json::Value {
+    let action = match require_action(args, "task", LEGACY_TASK_ACTIONS) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    let task_id = match require_string(args, "task_id") {
+        Ok(id) => id,
+        Err(e) => return e,
+    };
+    if !matches!(action, "get" | "cancel") {
+        return serde_json::json!({"error": format!(
+            "Unknown action '{}' for tool 'task'. Available: {}", action, LEGACY_TASK_ACTIONS
+        )});
+    }
+
+    let caller_tuic: Option<String> = mcp_session_id
+        .and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()));
+    let identities = caller_task_identities(caller_tuic.as_deref(), mcp_session_id);
+
+    // A task handle is a capability over a spawned agent, so ownership is checked
+    // before any state is returned or mutated — one agent must not be able to
+    // inspect or cancel another's children.
+    let rec = match state.tasks.get(task_id) {
+        Some(rec) if identities.contains(&rec.owner) => rec,
+        Some(_) => {
+            return serde_json::json!({"error": "task_id is not owned by the calling identity"});
+        }
+        None => return serde_json::json!({"error": "unknown or expired task_id"}),
+    };
+
+    if action == "cancel" {
+        // Same loopback restriction as `agent spawn`: cancelling mutates another
+        // agent's orchestration state, so a remote MCP client must not reach it.
+        if !addr.ip().is_loopback() {
+            return serde_json::json!({
+                "error": "Task cancellation is restricted to localhost connections"
+            });
+        }
+        return match state.tasks.cancel(&rec.task_id) {
+            Ok(()) => serde_json::json!({
+                "task_id": rec.task_id,
+                "status": crate::tasks::TaskStatus::Cancelled.as_str(),
+                "cancelled": true,
+                "note": "The agent process is untouched — use session(action=kill) to stop it.",
+            }),
+            // Already finished: report the state that stands rather than an error,
+            // so a cancel racing the agent's exit is not a failure for the caller.
+            Err(crate::tasks::TaskError::Terminal(status)) => serde_json::json!({
+                "task_id": rec.task_id,
+                "status": status.as_str(),
+                "cancelled": false,
+                "note": "Task already finished; terminal states are immutable.",
+            }),
+            Err(crate::tasks::TaskError::NotFound) => {
+                serde_json::json!({"error": "unknown or expired task_id"})
+            }
+        };
+    }
+
+    // Absent optional fields are omitted, not null — same convention as session
+    // and agent responses.
+    let mut response = serde_json::json!({
+        "task_id": rec.task_id,
+        "status": rec.status.as_str(),
+        "poll_interval_ms": TASK_POLL_INTERVAL_MS,
+    });
+    let obj = response
+        .as_object_mut()
+        .expect("literal above is an object");
+    if let Some(message) = rec.status_message {
+        obj.insert("status_message".to_string(), serde_json::json!(message));
+    }
+    if let Some(result) = rec.result {
+        obj.insert("result".to_string(), result);
+    }
+    if let Some(error) = rec.error {
+        obj.insert("error_detail".to_string(), serde_json::json!(error));
+    }
+    response
 }
 
 fn resolve_registration_identity(
@@ -5992,6 +6113,308 @@ mod tests {
         );
     }
 
+    // --- task tool ---
+
+    fn task_call(
+        state: &Arc<AppState>,
+        addr: &str,
+        args: serde_json::Value,
+        mcp_sid: Option<&str>,
+    ) -> serde_json::Value {
+        handle_task(state, addr.parse().unwrap(), &args, mcp_sid)
+    }
+
+    /// The whole point of the handle: poll the outcome without holding a wait
+    /// open. `get` must answer immediately at every stage of the task's life.
+    #[test]
+    fn task_get_reports_each_stage_without_blocking() {
+        use crate::tasks::{TaskKind, TaskStatus, TaskUpdate};
+
+        let state = test_state();
+        let id = state.tasks.create(TaskKind::AgentSpawn, "peer-a", Some("sess-1"));
+        state
+            .mcp_to_session
+            .insert("mcp-a".to_string(), "peer-a".to_string());
+
+        let working = task_call(
+            &state,
+            "127.0.0.1:1",
+            serde_json::json!({"action": "get", "task_id": id}),
+            Some("mcp-a"),
+        );
+        assert_eq!(working["status"], "working");
+        assert_eq!(working["poll_interval_ms"], TASK_POLL_INTERVAL_MS);
+        assert!(
+            working.get("result").is_none() && working.get("status_message").is_none(),
+            "absent optional fields are omitted, not null: {working}"
+        );
+
+        state
+            .tasks
+            .set_status(
+                &id,
+                TaskStatus::Completed,
+                TaskUpdate {
+                    result: Some(serde_json::json!({"exit_code": 0})),
+                    status_message: Some("done".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("transition");
+
+        let done = task_call(
+            &state,
+            "127.0.0.1:1",
+            serde_json::json!({"action": "get", "task_id": id}),
+            Some("mcp-a"),
+        );
+        assert_eq!(done["status"], "completed");
+        assert_eq!(done["result"]["exit_code"], 0);
+        assert_eq!(done["status_message"], "done");
+    }
+
+    /// A failed task must not report its reason under `error`: every handler in
+    /// this transport uses a top-level `error` to mean "the call failed", so a
+    /// client would read a successful poll as a broken call.
+    #[test]
+    fn task_get_reports_a_failure_under_error_detail_not_error() {
+        use crate::tasks::{TaskKind, TaskStatus, TaskUpdate};
+
+        let state = test_state();
+        let id = state.tasks.create(TaskKind::AgentSpawn, "peer-a", None);
+        state
+            .mcp_to_session
+            .insert("mcp-a".to_string(), "peer-a".to_string());
+        state
+            .tasks
+            .set_status(
+                &id,
+                TaskStatus::Failed,
+                TaskUpdate {
+                    error: Some("agent session exited with code 137".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("transition");
+
+        let failed = task_call(
+            &state,
+            "127.0.0.1:1",
+            serde_json::json!({"action": "get", "task_id": id}),
+            Some("mcp-a"),
+        );
+        assert_eq!(failed["status"], "failed");
+        assert!(
+            failed.get("error").is_none(),
+            "a successful poll must not carry a top-level error: {failed}"
+        );
+        assert_eq!(failed["error_detail"], "agent session exited with code 137");
+    }
+
+    /// A task handle is a capability over a spawned agent — one agent must not be
+    /// able to inspect or cancel another's children.
+    #[test]
+    fn a_task_owned_by_another_identity_is_refused() {
+        use crate::tasks::TaskKind;
+
+        let state = test_state();
+        let id = state.tasks.create(TaskKind::AgentSpawn, "peer-a", None);
+        state
+            .mcp_to_session
+            .insert("mcp-b".to_string(), "peer-b".to_string());
+
+        for action in ["get", "cancel"] {
+            let refused = task_call(
+                &state,
+                "127.0.0.1:1",
+                serde_json::json!({"action": action, "task_id": id}),
+                Some("mcp-b"),
+            );
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|e| e.contains("not owned")),
+                "{action} must be refused: {refused}"
+            );
+        }
+        assert_eq!(
+            state.tasks.get(&id).unwrap().status,
+            crate::tasks::TaskStatus::Working,
+            "a refused cancel must not have mutated the task"
+        );
+    }
+
+    /// An orchestrator that spawns before it registers is stamped with its pending
+    /// id; auto-binding afterwards changes its specific identity, and it must not
+    /// lose the handle it was already handed.
+    #[test]
+    fn a_handle_survives_the_caller_binding_a_tuic_identity_later() {
+        use crate::tasks::TaskKind;
+
+        let state = test_state();
+        // Spawned while unbound: owner is the pending alias.
+        let id = state.tasks.create(
+            TaskKind::AgentSpawn,
+            &task_owner_identity(None, Some("mcp-late")),
+            None,
+        );
+        assert_eq!(state.tasks.get(&id).unwrap().owner, pending_parent_id("mcp-late"));
+
+        // Now it binds a real TUIC identity on the same MCP session.
+        state
+            .mcp_to_session
+            .insert("mcp-late".to_string(), TEST_UUID_A.to_string());
+
+        let got = task_call(
+            &state,
+            "127.0.0.1:1",
+            serde_json::json!({"action": "get", "task_id": id}),
+            Some("mcp-late"),
+        );
+        assert_eq!(got["status"], "working", "own handle must stay reachable: {got}");
+    }
+
+    #[test]
+    fn task_cancel_is_final_and_leaves_the_agent_running() {
+        use crate::tasks::{TaskKind, TaskStatus};
+
+        let state = test_state();
+        let id = state.tasks.create(TaskKind::AgentSpawn, "peer-a", Some("sess-1"));
+        state
+            .mcp_to_session
+            .insert("mcp-a".to_string(), "peer-a".to_string());
+
+        let cancelled = task_call(
+            &state,
+            "127.0.0.1:1",
+            serde_json::json!({"action": "cancel", "task_id": id}),
+            Some("mcp-a"),
+        );
+        assert_eq!(cancelled["cancelled"], true);
+        assert_eq!(cancelled["status"], "cancelled");
+        assert!(
+            cancelled["note"]
+                .as_str()
+                .is_some_and(|n| n.contains("session(action=kill)")),
+            "the caller must be told the process is still alive: {cancelled}"
+        );
+
+        // A second cancel is not an error — it reports the state that stands, so a
+        // cancel racing the agent's exit never looks like a failure.
+        let again = task_call(
+            &state,
+            "127.0.0.1:1",
+            serde_json::json!({"action": "cancel", "task_id": id}),
+            Some("mcp-a"),
+        );
+        assert_eq!(again["cancelled"], false);
+        assert_eq!(again["status"], "cancelled");
+        assert!(again.get("error").is_none());
+        assert_eq!(
+            state.tasks.get(&id).unwrap().status,
+            TaskStatus::Cancelled
+        );
+    }
+
+    /// `agent spawn` is loopback-only, so cancelling one must be too — otherwise a
+    /// remote client could halt another agent's orchestration.
+    #[test]
+    fn a_remote_caller_cannot_cancel_but_may_still_poll() {
+        use crate::tasks::{TaskKind, TaskStatus};
+
+        let state = test_state();
+        let id = state.tasks.create(TaskKind::AgentSpawn, "peer-a", None);
+        state
+            .mcp_to_session
+            .insert("mcp-a".to_string(), "peer-a".to_string());
+
+        let refused = task_call(
+            &state,
+            "8.8.8.8:1234",
+            serde_json::json!({"action": "cancel", "task_id": id}),
+            Some("mcp-a"),
+        );
+        assert!(
+            refused["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("restricted to localhost")),
+            "{refused}"
+        );
+        assert_eq!(state.tasks.get(&id).unwrap().status, TaskStatus::Working);
+
+        // Reading is monitoring, not control — it stays open, like session status.
+        let polled = task_call(
+            &state,
+            "8.8.8.8:1234",
+            serde_json::json!({"action": "get", "task_id": id}),
+            Some("mcp-a"),
+        );
+        assert_eq!(polled["status"], "working");
+    }
+
+    #[test]
+    fn task_rejects_an_unknown_id_and_a_bad_action() {
+        let state = test_state();
+
+        let unknown = task_call(
+            &state,
+            "127.0.0.1:1",
+            serde_json::json!({"action": "get", "task_id": "no-such-task"}),
+            Some("mcp-a"),
+        );
+        assert!(
+            unknown["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("unknown or expired")),
+            "{unknown}"
+        );
+
+        let no_id = task_call(
+            &state,
+            "127.0.0.1:1",
+            serde_json::json!({"action": "get"}),
+            Some("mcp-a"),
+        );
+        assert!(no_id["error"].as_str().is_some_and(|e| e.contains("task_id")));
+
+        let bad = task_call(
+            &state,
+            "127.0.0.1:1",
+            serde_json::json!({"action": "explode", "task_id": "x"}),
+            Some("mcp-a"),
+        );
+        assert!(
+            bad["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("get, cancel")),
+            "the error must list the available actions: {bad}"
+        );
+    }
+
+    /// Per docs/sync-matrix.md a tool-surface change must land in the listing AND
+    /// the search corpus — a tool missing from the latter is invisible under
+    /// `collapse_tools` and to lazy discovery.
+    #[test]
+    fn the_task_tool_is_listed_and_searchable() {
+        let state = test_state();
+
+        let listed = merged_tool_definitions(&state, None);
+        assert!(
+            listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["name"] == "task"),
+            "task must appear in tools/list"
+        );
+        assert!(
+            searchable_tool_definitions(&state)
+                .iter()
+                .any(|t| t["name"] == "task"),
+            "task must appear in the search corpus"
+        );
+    }
+
     /// A cancel that races the agent's exit must stick — terminal immutability
     /// means the exit path cannot rewrite it as completed.
     #[test]
@@ -7512,6 +7935,7 @@ mod tests {
             vec![
                 "session",
                 "agent",
+                "task",
                 "repo",
                 "ui",
                 "plugin_dev_guide",
@@ -7531,7 +7955,7 @@ mod tests {
                 "ai_terminal_run_command",
                 "ai_terminal_drive_agent",
             ],
-            "native_tool_definitions must return 7 base tools + 13 ai_terminal_* tools in order"
+            "native_tool_definitions must return 8 base tools + 13 ai_terminal_* tools in order"
         );
     }
 

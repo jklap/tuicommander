@@ -199,12 +199,13 @@ The TUIC connection acknowledgment in those instructions is emitted exactly once
 
 ### MCP Native Tools
 
-Seven native tools, organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled.
+Eight native tools, organized by domain. Two (`config`, `debug`) are hidden by default via `disabled_native_tools` — discoverable through `search_tools`/`get_tool_schema`/`call_tool` when `collapse_tools` is enabled.
 
 | Tool | Actions | Default |
 |------|---------|---------|
 | `session` | list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats | Enabled |
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
+| `task` | get, cancel | Enabled |
 | `repo` | list, active, prs, status, worktree_list, worktree_create, worktree_remove | Enabled |
 | `ui` | tab, toast, confirm | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
@@ -223,6 +224,61 @@ with a `content` array) instead becomes the JSON-RPC result directly, preserving
 This applies both to direct `{upstream}__{tool}` calls and to the collapsed `call_tool`
 meta-path. A malformed upstream value falls back to the native compact JSON text
 envelope so the response remains protocol-valid and inspectable.
+
+#### `task` tool — long-running orchestration past the 300s ceiling
+
+`agent action=wait` and `session action=wait` are server-side blocking long-polls
+clamped to `WAIT_MAX_MS` (300 000 ms). An orchestrator supervising a peer that works
+longer than five minutes cannot hold one open, and a client that drops mid-wait loses
+the outcome entirely.
+
+`agent action=spawn` therefore also returns a **task handle**:
+
+```json
+{ "session_id": "…", "task_id": "…", "poll_interval_ms": 1000, "…": "…" }
+```
+
+The handle is polled with `task action=get` instead of holding a wait open. This is
+purely additive — every field a pre-task client already read keeps its name and type,
+and a client that ignores `task_id` behaves exactly as before.
+
+**Lifecycle.** A task is created `working` once the PTY is live (a refused or failed
+spawn leaves none). `mark_session_exited` (`pty.rs`) drives it to `completed` with
+`result = {session_id, exit_code}`, or to `failed` with `error` when the exit code is
+non-zero — so the outcome is recorded whether or not anyone was listening.
+
+| Status | Meaning |
+|--------|---------|
+| `working` | The agent is running |
+| `input_required` | Waiting on input; still live |
+| `completed` / `failed` / `cancelled` | **Terminal and immutable** — never change again |
+
+The vocabulary is the MCP `2026-07-28` Tasks vocabulary from day one, so the standard
+`tasks/*` front door stays a serialization change rather than a semantic remap.
+
+**`task action=get`** returns `{task_id, status, status_message?, result?, error_detail?,
+poll_interval_ms}`, absent optional fields omitted. A failed task reports its reason in
+`error_detail`, **not** `error` — a top-level `error` always means the call itself failed,
+so reusing it would make a successful poll look like a broken one.
+
+**`task action=cancel`** marks the task `cancelled` and does **not** kill the agent
+(`session action=kill` does that). Cancelling an already-finished task is not an error:
+it reports the state that stands with `cancelled: false`, so a cancel racing the agent's
+exit never looks like a failure. Because terminal states are immutable, a cancel that
+lands first is never overwritten by the later exit.
+
+**Ownership.** A `task_id` is a capability over a spawned agent, so ownership is checked
+before any state is returned or mutated: one agent cannot inspect or cancel another's
+children. A caller that spawned before registering is stamped with its pending id and
+still reaches the handle after it auto-binds a TUIC identity. `cancel` additionally
+re-checks the same loopback guard as `agent spawn`; `get` is read-only monitoring and
+stays open to authenticated remote clients.
+
+**Retention.** Tasks live in memory for 24 h and are reaped by the existing
+`mcp_sessions` reaper, not a separate timer. They are deliberately **not** persisted: the
+case this exists for is a *client* restart, which the TUIC process outlives. Disk would
+only cover a TUIC restart — and that tears down every PTY, so a recovered `working` task
+would describe an agent that no longer exists.
 
 #### `ui` tool — `tab` URL schemes
 
