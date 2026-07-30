@@ -3935,8 +3935,12 @@ mod tests {
         );
     }
 
+    /// Was `test_tools_call_requires_session`, which pinned the blanket -32600 on a
+    /// missing `mcp-session-id`. That rejection was the single blocker to stateless
+    /// operation and is gone (#0f44); identity is now resolved per call. The test is
+    /// inverted rather than dropped, so the route stays covered end-to-end.
     #[tokio::test]
-    async fn test_tools_call_requires_session() {
+    async fn test_tools_call_no_longer_requires_a_session_header() {
         let state = test_state();
         let body = serde_json::json!({
             "jsonrpc": "2.0",
@@ -3948,22 +3952,20 @@ mod tests {
             }
         });
         let app = build_router(state, false, true);
-        // Send without mcp-session-id header — should be rejected
+        // No mcp-session-id header — `session action=list` needs no identity.
         let resp = app.oneshot(mcp_post("/mcp", &body)).await.unwrap();
         assert_eq!(resp.status(), StatusCode::OK);
         let resp_body = axum::body::to_bytes(resp.into_body(), usize::MAX)
             .await
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&resp_body).unwrap();
-        assert_eq!(
-            json["error"]["code"], -32600,
-            "Missing session should return -32600"
+        assert!(
+            json.get("error").is_none(),
+            "a headerless call must not be refused: {json}"
         );
         assert!(
-            json["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("mcp-session-id")
+            json["result"]["content"][0]["text"].is_string(),
+            "the tool must actually have run: {json}"
         );
     }
 
