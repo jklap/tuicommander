@@ -171,6 +171,16 @@ fn persist(vault: &Vault) -> Result<(), String> {
 }
 
 fn load(guard: &mut VaultGuard<'_>) -> Result<(), String> {
+    // Read-fault injection means "the vault is unreachable", so a cache some
+    // other test happened to populate first must not answer in its place —
+    // otherwise the fault never reaches the mock and the assertion becomes
+    // order-dependent. Dropping it under the same guard leaves no window for a
+    // concurrent test to repopulate before the forced failure is observed.
+    #[cfg(test)]
+    if MOCK_FAIL_READS.load(std::sync::atomic::Ordering::SeqCst) {
+        guard.take();
+    }
+
     if guard.is_some() {
         return Ok(());
     }
