@@ -65,7 +65,7 @@ Sidebar branch icons also show purple when they contain unseen terminals.
 
 Agent activity combines native lifecycle hooks, terminal movement (text
 changing above the input area means the agent is active), and the visible
-ready prompt. Claude, Codex, Gemini, and Aider require a stable ready
+ready prompt. Claude, Codex, Gemini, Aider, and Grok require a stable ready
 screen before safety-sensitive actions such as auto-standby or queued agent
 message delivery. Pressing Ctrl-C or Escape requests interruption but does not
 turn the dot green until the agent confirms the interruption, returns to its
@@ -74,6 +74,8 @@ prompt, or exits.
 Current Claude and Codex status lines are also recognized when their interface
 keeps an empty composer visible or freezes during a long tool. Completed timing
 summaries are not treated as work, so the indicator can still return to idle.
+Grok keeps its composer visible while responding, so TUICommander waits for the
+animated status row to disappear before treating that composer as ready.
 
 A ready prompt means the terminal can accept input; it does not necessarily
 mean the agent's turn is finished. If the agent still owns a background command,

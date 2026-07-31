@@ -36,17 +36,14 @@ close_pty(cleanup_worktree)
 | `create_pty(config: PtyConfig)` | Spawn a new PTY session. Returns session ID. |
 | `create_pty_with_worktree(pty_config, worktree_config)` | Create worktree + spawn PTY in it. Returns `WorktreeResult`. |
 
-**All seven production spawn sites go through `pty::spawn_pty_pair_with_retry`**
-— `create_pty`, `create_pty_with_worktree`, `spawn_session_for_agent`,
-`agent.rs`, `mcp_http/session.rs::spawn_pty_session`,
-`mcp_http/agent_routes.rs` and the MCP `agent spawn` handler. It encapsulates
-only the retry policy (3 attempts, 100/200 ms backoff): each site keeps its own
-command assembly, env policy and dimension handling, because they diverge for
-real reasons (dimension clamping, shell-integration injection, env sanitising,
-cwd inheritance). Retry used to live in `create_pty` alone, so whether a burst
-of tab creation survived a momentarily exhausted PTY table depended on which
-code path opened the terminal. A unit test scans these sources and fails on a
-new production `openpty` call outside the helper.
+Production spawn sites share `pty::spawn_pty_pair_with_retry` and its async
+wrapper. Only explicitly classified PTY allocation failures (for example OS
+resource exhaustion or an interrupted/would-block allocation) receive the
+bounded three-attempt, 100/200 ms backoff. Once a PTY pair exists, command spawn
+runs exactly once: invalid binaries, cwd, and permission failures return
+immediately. Async Tauri and HTTP entry points run allocation and backoff on
+Tokio's blocking pool; synchronous internal callers retain the same bounded
+policy. Each site still owns its justified command/env/dimension assembly.
 
 ### Session Control
 
@@ -353,9 +350,9 @@ single source of truth — the frontend does not derive activity from raw PTY da
 
 **Movement is the default busy signal (#446-596f):** "if the text above the input area moves, the agent is active." Post-cutoff `changed_rows` are text-equality diffed (`TerminalGrid::process`), so a byte-identical repaint produces no ChangedRow. Static completed summaries, hints, HUD bars, and banner art are inert. Spinner rows among the changed rows additionally refresh `last_output_ms` while they animate. Claude and Codex have narrowly scoped semantic presence exceptions described below because current versions can freeze a valid active status while a child or blocking hook runs.
 
-**Agent screen adapters:** Gemini and Aider remain prompt-based (`Ready` or `Unknown`). Codex detects `Working`/`Ready`/`Interrupted` from its semantic status near the lowest current composer; both `›` and the newer `»` composer glyph are accepted so a historical submitted prompt cannot anchor the scan. Claude treats only a spinner-prefixed phase containing an ellipsis and parenthesized progress as `Working`; this outranks the empty `❯` composer that current Claude versions leave visible during long tools. Completed summaries such as `✻ Sautéed for 1m 25s` remain `Ready`. If Claude emits a premature Stop/suggest before a blocking Stop hook, a live phase marker reopens that turn and clears the stale completion suggestions.
+**Agent screen adapters:** Gemini and Aider remain prompt-based (`Ready` or `Unknown`). Codex detects `Working`/`Ready`/`Interrupted` from its semantic status near the lowest current composer; both `›` and the newer `»` composer glyph are accepted so a historical submitted prompt cannot anchor the scan. Claude treats only a spinner-prefixed phase containing an ellipsis and parenthesized progress as `Working`; this outranks the empty `❯` composer that current Claude versions leave visible during long tools. Completed summaries such as `✻ Sautéed for 1m 25s` remain `Ready`. If Claude emits a premature Stop/suggest before a blocking Stop hook, a live phase marker reopens that turn and clears the stale completion suggestions. Grok similarly keeps its `❯` composer visible during a turn: a leading Braille spinner in its bottom status row is `Working`, and the stable composer becomes `Ready` only after that row disappears. This repairs the shell's long-lived OSC 133 busy marker even when native Grok hooks are disabled.
 
-**Signal precedence and confirmation:** Explicit hook busy > current Claude/Codex semantic Working marker > movement (real output / animated spinner) > silence. A ready prompt visible from the previous turn cannot cancel a newly submitted prompt until real activity has been observed; after activity, a stable ready composer can repair a missed hook idle. A current-turn completion marker prevents a stale Codex Working row from relatching BUSY; Claude's current live phase marker can supersede a premature completion from a blocking Stop hook. A pending process probe or confirmed meaningful descendant still owns the task lifecycle. Hook-based question suppression activates only after an OSC 7770 state marker is actually received.
+**Signal precedence and confirmation:** Explicit hook busy > current Claude/Codex/Grok semantic Working marker > movement (real output / animated spinner) > silence. A ready prompt visible from the previous turn cannot cancel a newly submitted prompt until real activity has been observed; after activity, a stable ready composer can repair a missed hook idle. A current-turn completion marker prevents a stale static Codex Working row from relatching BUSY; movement of that exact semantic row can reopen a Codex internal continuation that starts without PTY input. Claude's current live phase marker can supersede a premature completion from a blocking Stop hook. A pending process probe or confirmed meaningful descendant still owns the task lifecycle. Hook-based question suppression activates only after an OSC 7770 state marker is actually received.
 
 **Safety consumers:** For agents with a verified screen adapter, peer-message injection and Unix auto-standby require confirmed idle (explicit Stop/OSC or stable ready screen). A silence-only idle can update the cosmetic state but cannot type into or `SIGSTOP` a potentially working agent. Agents without an adapter retain the legacy heuristic behavior until their UI is characterized.
 
@@ -417,6 +414,11 @@ Sessions created via HTTP/MCP (remote sessions) are flagged with `isRemote`. The
 ## Concurrency
 
 - Sessions stored in `DashMap<String, Mutex<PtySession>>` for lock-free concurrent access
-- Each session's writer is behind `Mutex` for exclusive write access
+- Each session's writer has its own shared `Mutex`, independent from the
+  `PtySession` metadata lock. User input, HTTP/WebSocket input, agent injection,
+  and terminal-generated protocol replies all serialize through that writer.
+  A reader may therefore wait for an in-flight write without blocking PTY
+  draining, and mandatory device/kitty query replies are never dropped merely
+  because session metadata is contended.
 - Reader thread holds `Arc<AtomicBool>` for pause signaling
 - Metrics use `AtomicUsize` for zero-overhead counting

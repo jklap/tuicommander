@@ -549,8 +549,12 @@ POST /repo/conflict-assist   { repoPath, prNumber }        -> ConflictAssistResu
 returns line-level findings. `/repo/changelog` summarizes merged PRs (Headless
 slot) into markdown + a structured JSON breakdown; `sinceTag` filters to PRs
 merged at/after that tag's date. `/repo/conflict-assist` creates a worktree on
-the PR head, rebases onto the base, and reports `status` (`clean`/`conflicts`)
-with the conflicted-file list and an agent prompt — it never pushes or merges.
+the PR head and rebases it onto the base. `status` is `clean` only when the base
+was refreshed from origin, `clean_unverified` when a conflict-free result used
+an existing tracking ref or local fallback, and `conflicts` when manual
+resolution is needed. The response includes `base_source`, an optional
+`base_warning`, the conflicted-file list, and an agent prompt; it never pushes
+or merges.
 
 ### Remote URL
 

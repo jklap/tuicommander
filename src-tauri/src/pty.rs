@@ -115,7 +115,7 @@ fn inject_unix_terminal_env(cmd: &mut CommandBuilder) {
 /// Attempts made before a PTY spawn is reported as failed.
 pub(crate) const PTY_SPAWN_ATTEMPTS: usize = 3;
 
-/// Open a PTY pair and spawn a command into it, retrying transient failures.
+/// Open a PTY pair and spawn a command into it, retrying transient allocation failures.
 ///
 /// Story 059 added this retry to `create_pty` after a spawn regression, but the
 /// other six production spawn sites kept a single `openpty`/`spawn_command` and
@@ -126,19 +126,13 @@ pub(crate) const PTY_SPAWN_ATTEMPTS: usize = 3;
 /// sanitising, cwd inheritance) and unifying past this point would force a false
 /// abstraction.
 ///
-/// `build_command` runs once per attempt because `spawn_command` consumes the
-/// `CommandBuilder`; a retry therefore gets a freshly assembled command rather
-/// than a half-consumed one.
-///
-/// Synchronous, with a blocking sleep between attempts: one of the call sites is
-/// inside a non-async closure, and a second policy for async callers would
-/// reintroduce exactly the divergence this removes. The worst case is a 300ms
-/// block, only on the path where the OS has already refused twice, and every
-/// call site was doing blocking `openpty`/`spawn_command` syscalls inline
-/// anyway.
+/// Command-spawn failures are never retried: invalid binaries, cwd, permissions,
+/// and arguments do not become valid after sleeping. Async entry points use the
+/// companion async wrapper so this bounded blocking backoff runs only on Tokio's
+/// blocking pool.
 pub(crate) fn spawn_pty_pair_with_retry<F>(
     size: PtySize,
-    mut build_command: F,
+    build_command: F,
 ) -> Result<
     (
         portable_pty::PtyPair,
@@ -147,26 +141,102 @@ pub(crate) fn spawn_pty_pair_with_retry<F>(
     String,
 >
 where
-    F: FnMut() -> CommandBuilder,
+    F: FnOnce() -> CommandBuilder,
 {
     let pty_system = native_pty_system();
-    let mut last_err = String::new();
+    let pair = retry_transient(
+        || pty_system.openpty(size),
+        is_transient_pty_open_error,
+        |attempt| {
+            std::thread::sleep(std::time::Duration::from_millis(100 * attempt as u64));
+        },
+    )
+    .map_err(|(attempt, error)| format!("Failed to open PTY (attempt {attempt}): {error}"))?;
 
-    for attempt in 0..PTY_SPAWN_ATTEMPTS {
-        let outcome = match pty_system.openpty(size) {
-            Ok(pair) => match pair.slave.spawn_command(build_command()) {
-                Ok(child) => return Ok((pair, child)),
-                Err(e) => format!("Failed to spawn shell (attempt {}): {e}", attempt + 1),
-            },
-            Err(e) => format!("Failed to open PTY (attempt {}): {e}", attempt + 1),
-        };
-        last_err = outcome;
-        if attempt < PTY_SPAWN_ATTEMPTS - 1 {
-            std::thread::sleep(std::time::Duration::from_millis(100 * (attempt as u64 + 1)));
+    let child = pair
+        .slave
+        .spawn_command(build_command())
+        .map_err(|error| format!("Failed to spawn shell: {error}"))?;
+    Ok((pair, child))
+}
+
+fn retry_transient<T, E, O, C, S>(
+    mut operation: O,
+    is_transient: C,
+    mut sleep_before_retry: S,
+) -> Result<T, (usize, E)>
+where
+    O: FnMut() -> Result<T, E>,
+    C: Fn(&E) -> bool,
+    S: FnMut(usize),
+{
+    for attempt in 1..=PTY_SPAWN_ATTEMPTS {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(error) if attempt < PTY_SPAWN_ATTEMPTS && is_transient(&error) => {
+                sleep_before_retry(attempt);
+            }
+            Err(error) => return Err((attempt, error)),
         }
     }
+    unreachable!("bounded retry loop always returns")
+}
 
-    Err(last_err)
+fn is_transient_pty_open_error(error: &anyhow::Error) -> bool {
+    let Some(io_error) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+    else {
+        return false;
+    };
+    if matches!(
+        io_error.kind(),
+        std::io::ErrorKind::Interrupted | std::io::ErrorKind::WouldBlock
+    ) {
+        return true;
+    }
+    let Some(code) = io_error.raw_os_error() else {
+        return false;
+    };
+    #[cfg(unix)]
+    if matches!(
+        code,
+        libc::EAGAIN | libc::EINTR | libc::EMFILE | libc::ENFILE | libc::ENOSPC | libc::ENXIO
+    ) {
+        return true;
+    }
+    #[cfg(windows)]
+    if matches!(code, 8 | 14 | 170 | 1450 | 1816) {
+        return true;
+    }
+    false
+}
+
+/// Run the synchronous PTY allocation policy without occupying an async worker.
+pub(crate) async fn spawn_pty_pair_with_retry_async<F>(
+    size: PtySize,
+    build_command: F,
+) -> Result<
+    (
+        portable_pty::PtyPair,
+        Box<dyn portable_pty::Child + Send + Sync>,
+    ),
+    String,
+>
+where
+    F: FnOnce() -> CommandBuilder + Send + 'static,
+{
+    run_pty_spawn_blocking(move || spawn_pty_pair_with_retry(size, build_command)).await
+}
+
+async fn run_pty_spawn_blocking<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    tokio::task::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("PTY spawn task panicked: {error}"))?
 }
 
 /// Build a CommandBuilder for the given shell with platform-appropriate flags.
@@ -2389,18 +2459,47 @@ fn detect_aider_screen_activity(rows: &[String]) -> AgentScreenActivity {
     }
 }
 
+/// Grok keeps its composer visible while a turn is running, so the prompt
+/// alone is not enough to declare the session ready. Its turn-status row is
+/// structurally stronger: it starts with the animated braille spinner already
+/// recognized by `is_spinner_row` and disappears when the turn completes.
+fn detect_grok_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    let content_end = rows
+        .iter()
+        .rposition(|row| !row.trim().is_empty())
+        .map_or(0, |idx| idx + 1);
+    let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
+    let footer = &rows[chrome_start..content_end];
+
+    if footer.iter().any(|row| crate::chrome::is_spinner_row(row)) {
+        return AgentScreenActivity::Working;
+    }
+    if footer.iter().any(|row| {
+        let mut chars = row.trim_start().chars();
+        chars.next() == Some('\u{276F}') && chars.next().is_none_or(char::is_whitespace)
+    }) {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
 fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> AgentScreenActivity {
     match agent_type {
         Some("claude") => detect_claude_screen_activity(rows),
         Some("codex") => detect_codex_screen_activity(rows),
         Some("gemini") => detect_gemini_screen_activity(rows),
         Some("aider") => detect_aider_screen_activity(rows),
+        Some("grok") => detect_grok_screen_activity(rows),
         _ => AgentScreenActivity::Unknown,
     }
 }
 
 pub(crate) fn has_ready_screen_adapter(agent_type: Option<&str>) -> bool {
-    matches!(agent_type, Some("claude" | "codex" | "gemini" | "aider"))
+    matches!(
+        agent_type,
+        Some("claude" | "codex" | "gemini" | "aider" | "grok")
+    )
 }
 
 fn stamp_last_output_now(state: &crate::state::AppState, session_id: &str, now_ms: u64) {
@@ -2414,12 +2513,14 @@ fn stamp_last_output_now(state: &crate::state::AppState, session_id: &str, now_m
 /// a keepalive that only runs while the state happens to be busy. An explicit
 /// idle marker (agent hook) outranks it until the next busy evidence.
 ///
-/// Two sources call this (#446-596f):
-/// - `"working-screen"` — Codex's presence-based `• Working (… esc to
-///   interrupt)` status line (its TUI legitimately freezes while a child runs).
-/// - `"spinner-movement"` — a spinner row among the post-cutoff `changed_rows`.
-///   Changed rows are text-equality diffed, so this fires only while the
-///   spinner actually ANIMATES; a frozen glyph cannot reach here.
+/// Two evidence strengths call this (#446-596f):
+/// - `"working-screen"` — presence-based `• Working (… esc to interrupt)`;
+///   this holds an open turn but cannot reopen a completed Codex turn because
+///   completed screens can retain a stale static Working row.
+/// - `"working-screen-movement"` — that exact semantic row occurred among the
+///   post-cutoff `changed_rows`. Text-equality diffing means this fires only
+///   while the row actually animates or its elapsed time advances, so it can
+///   safely reopen an internal Codex continuation that had no PTY submission.
 fn apply_working_evidence(
     state: &crate::state::AppState,
     silence: &Arc<Mutex<SilenceState>>,
@@ -2427,29 +2528,29 @@ fn apply_working_evidence(
     now_ms: u64,
     source: &'static str,
 ) {
-    let claude_active_marker = state
+    let agent_type = state
         .session_states
         .get(session_id)
-        .is_some_and(|session| session.agent_type.as_deref() == Some("claude"));
+        .and_then(|session| session.agent_type.clone());
+    let can_reopen_completed = agent_type.as_deref() == Some("claude")
+        || (agent_type.as_deref() == Some("codex") && source == "working-screen-movement");
     let reopened_completion = {
         let mut sl = silence.lock();
         let turn_completed = state
             .session_states
             .get(session_id)
             .is_some_and(|session| sl.completion_declared_for_epoch(session.turn_epoch));
-        if turn_completed && !claude_active_marker {
+        if turn_completed && !can_reopen_completed {
             return;
         }
-        if sl.explicit_idle && !claude_active_marker {
+        if sl.explicit_idle && !can_reopen_completed {
             return;
         }
-        let reopen = claude_active_marker && (turn_completed || sl.explicit_idle);
+        let reopen = can_reopen_completed && (turn_completed || sl.explicit_idle);
         if reopen {
-            // Claude can emit Stop/suggest before a blocking Stop hook finishes.
-            // A semantic active-phase marker in the same turn is stronger,
-            // current evidence: discard the premature completion so lifecycle
-            // state and follow-up suggestions cannot remain `completed` while
-            // the hook continues doing visible work.
+            // Claude can emit Stop/suggest before a blocking Stop hook finishes;
+            // Codex can start an internal continuation without a PTY submission.
+            // Current semantic movement is stronger than either stale boundary.
             sl.reset_suggest_memory();
         }
         sl.note_working_screen();
@@ -3915,25 +4016,7 @@ impl ChunkProcessor {
                                 "PtyWrite contains DEC private mode sequences! response={:?}",
                                 response.as_bytes().iter().take(200).collect::<Vec<_>>());
                         }
-                        // try_lock, never lock: blocking the reader here while
-                        // write_pty holds the session deadlocks (reader blocked →
-                        // kernel buffer fills → write_pty blocks on write). The
-                        // cost is that a contended lock silently swallows a
-                        // terminal query response, which the app is still waiting
-                        // for — so say so, exactly like the kitty query sibling.
-                        if let Some(sess) = state.sessions.get(session_id) {
-                            if let Some(mut s) = sess.try_lock() {
-                                if let Err(e) = s.writer.write_all(response.as_bytes()) {
-                                    tracing::warn!(source = "terminal", session_id = %session_id, "PtyWrite response failed: {e}");
-                                }
-                                if let Err(e) = s.writer.flush() {
-                                    tracing::warn!(source = "terminal", session_id = %session_id, "PtyWrite flush failed: {e}");
-                                }
-                            } else {
-                                tracing::warn!(source = "terminal", session_id = %session_id,
-                                    "PtyWrite response dropped — session lock contended; the app awaiting this terminal query may hang or fall back");
-                            }
-                        }
+                        write_terminal_reply(state, session_id, response.as_bytes(), "PtyWrite");
                     }
                     TermEvent::Title(title) => {
                         #[cfg(feature = "desktop")]
@@ -4482,8 +4565,16 @@ impl ChunkProcessor {
         // canonical counterexample).
         // `screen_activity` was classified inside the vt_log lock above, from a
         // borrowed screen — see the note there.
+        let working_status_moved = changed_rows
+            .iter()
+            .any(|row| crate::chrome::is_working_status_row(&row.text));
         if screen_activity == AgentScreenActivity::Working && !explicit_idle_in_chunk {
-            apply_working_evidence(state, silence, session_id, now_epoch_ms(), "working-screen");
+            let source = if working_status_moved {
+                "working-screen-movement"
+            } else {
+                "working-screen"
+            };
+            apply_working_evidence(state, silence, session_id, now_epoch_ms(), source);
         }
 
         // Stamp last_output_ms for real output and for active spinner repaints.
@@ -4609,22 +4700,7 @@ fn process_kitty_actions(kitty_actions: &[KittyAction], session_id: &str, state:
             KittyAction::Query => {
                 let flags = ks.current_flags();
                 let response = format!("\x1b[?{}u", flags);
-                // try_lock: MUST NOT block the reader thread — blocking here
-                // while write_pty holds the lock causes a circular deadlock
-                // (reader blocked → kernel buffer fills → write_pty blocks on write).
-                if let Some(sess) = state.sessions.get(session_id) {
-                    if let Some(mut s) = sess.try_lock() {
-                        if let Err(e) = s.writer.write_all(response.as_bytes()) {
-                            tracing::warn!(source = "terminal", session_id = %session_id, "kitty query write failed: {e}");
-                        }
-                        if let Err(e) = s.writer.flush() {
-                            tracing::warn!(source = "terminal", session_id = %session_id, "kitty query flush failed: {e}");
-                        }
-                    } else {
-                        tracing::warn!(source = "terminal", session_id = %session_id,
-                            "kitty query response dropped — session lock contended; agent input handling may degrade");
-                    }
-                }
+                write_terminal_reply(state, session_id, response.as_bytes(), "kitty query");
             }
         }
     }
@@ -4633,6 +4709,19 @@ fn process_kitty_actions(kitty_actions: &[KittyAction], session_id: &str, state:
     #[cfg(feature = "desktop")]
     if let Some(app) = state.app_handle.read().as_ref() {
         let _ = app.emit(&format!("kitty-keyboard-{session_id}"), flags);
+    }
+}
+
+/// Serialize a terminal-generated protocol reply with every other PTY write.
+///
+/// The writer has its own mutex, separate from the session metadata. Waiting
+/// here is safe: the reader remains able to drain PTY output even when another
+/// thread is blocked in a kernel write, so the old session-lock deadlock cannot
+/// occur and mandatory replies are never discarded merely due to contention.
+fn write_terminal_reply(state: &AppState, session_id: &str, response: &[u8], kind: &str) {
+    if let Err(error) = state.write_pty_parts(session_id, &[response]) {
+        tracing::warn!(source = "terminal", session_id = %session_id, %kind, %error,
+            "Terminal reply failed");
     }
 }
 
@@ -5073,20 +5162,15 @@ pub(crate) fn write_agent_command_to_pty(
     text: &str,
 ) -> Result<(), String> {
     {
-        let entry = state
-            .sessions
-            .get(session_id)
+        let writer = state
+            .pty_writer(session_id)
             .ok_or_else(|| "Session not found".to_string())?;
-        let mut session = entry.lock();
-        session
-            .writer
+        let mut writer = writer.lock();
+        writer
             .write_all(injection_payload(text).as_bytes())
             .map_err(|e| format!("Write failed: {e}"))?;
-        session
-            .writer
-            .flush()
-            .map_err(|e| format!("Flush failed: {e}"))?;
-    } // lock released before the gap
+        writer.flush().map_err(|e| format!("Flush failed: {e}"))?;
+    } // writer lock released before the gap
 
     // DEFERRED (2026-07-17) — this blocks the calling thread (sometimes a tokio
     // worker: session-state accumulator / agent-send dispatch) for INJECT_ENTER_GAP.
@@ -5096,19 +5180,14 @@ pub(crate) fn write_agent_command_to_pty(
     std::thread::sleep(INJECT_ENTER_GAP);
 
     {
-        let entry = state
-            .sessions
-            .get(session_id)
+        let writer = state
+            .pty_writer(session_id)
             .ok_or_else(|| "Session vanished before Enter injection".to_string())?;
-        let mut session = entry.lock();
-        session
-            .writer
+        let mut writer = writer.lock();
+        writer
             .write_all(b"\r")
             .map_err(|e| format!("Write failed: {e}"))?;
-        session
-            .writer
-            .flush()
-            .map_err(|e| format!("Flush failed: {e}"))?;
+        writer.flush().map_err(|e| format!("Flush failed: {e}"))?;
     }
 
     Ok(())
@@ -5150,13 +5229,13 @@ fn write_all_with_progress(
 fn write_claimed_agent_command(state: &AppState, session_id: &str, text: &str) -> InjectionOutcome {
     let payload = injection_payload(text);
     {
-        let entry = match state.sessions.get(session_id) {
-            Some(entry) => entry,
+        let writer = match state.pty_writer(session_id) {
+            Some(writer) => writer,
             None => return InjectionOutcome::NotStarted("Session not found".to_string()),
         };
-        let mut session = entry.lock();
+        let mut writer = writer.lock();
         if let Err((written, error)) =
-            write_all_with_progress(session.writer.as_mut(), payload.as_bytes(), 0)
+            write_all_with_progress(writer.as_mut(), payload.as_bytes(), 0)
         {
             return if written == 0 {
                 InjectionOutcome::NotStarted(error)
@@ -5164,7 +5243,7 @@ fn write_claimed_agent_command(state: &AppState, session_id: &str, text: &str) -
                 InjectionOutcome::Uncertain(error)
             };
         }
-        if let Err(error) = session.writer.flush() {
+        if let Err(error) = writer.flush() {
             return InjectionOutcome::Uncertain(format!("Flush failed: {error}"));
         }
     }
@@ -5172,21 +5251,19 @@ fn write_claimed_agent_command(state: &AppState, session_id: &str, text: &str) -
     std::thread::sleep(INJECT_ENTER_GAP);
 
     {
-        let entry = match state.sessions.get(session_id) {
-            Some(entry) => entry,
+        let writer = match state.pty_writer(session_id) {
+            Some(writer) => writer,
             None => {
                 return InjectionOutcome::Uncertain(
                     "Session vanished before Enter injection".to_string(),
                 );
             }
         };
-        let mut session = entry.lock();
-        if let Err((_, error)) =
-            write_all_with_progress(session.writer.as_mut(), b"\r", payload.len())
-        {
+        let mut writer = writer.lock();
+        if let Err((_, error)) = write_all_with_progress(writer.as_mut(), b"\r", payload.len()) {
             return InjectionOutcome::Uncertain(error);
         }
-        if let Err(error) = session.writer.flush() {
+        if let Err(error) = writer.flush() {
             return InjectionOutcome::Uncertain(format!("Flush failed: {error}"));
         }
     }
@@ -6162,23 +6239,26 @@ pub(crate) async fn create_pty(
 ) -> Result<String, String> {
     let session_id = Uuid::new_v4().to_string();
 
-    let shell = resolve_shell(config.shell);
+    let shell = resolve_shell(config.shell.clone());
 
     // Guard against invalid dimensions from zero-sized windows
     let rows = config.rows.max(24);
     let cols = config.cols.max(80);
 
-    let (pair, child) = spawn_pty_pair_with_retry(
+    let spawn_config = config.clone();
+    let spawn_shell = shell.clone();
+    let data_dir = state.data_dir.clone();
+    let (pair, child) = spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
         },
-        || {
-            let mut cmd = build_shell_command(&shell);
+        move || {
+            let mut cmd = build_shell_command(&spawn_shell);
 
-            if let Some(ref cwd) = config.cwd {
+            if let Some(ref cwd) = spawn_config.cwd {
                 let cwd = crate::cli::expand_tilde(cwd);
                 // Don't convert drive paths for WSL — cmd.cwd() sets the Windows
                 // process CWD via CreateProcessW, which can't resolve Linux paths.
@@ -6188,11 +6268,11 @@ pub(crate) async fn create_pty(
             }
 
             // Inject OSC 133 shell integration (command block markers)
-            crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
+            crate::shell_integration::inject(&data_dir, &spawn_shell, &mut cmd);
 
             // Inject stable session UUID so agents can use it for session binding
             // (e.g. `claude --session-id $TUIC_SESSION`, then `claude --resume $TUIC_SESSION`)
-            if let Some(ref tuic_session) = config.tuic_session {
+            if let Some(ref tuic_session) = spawn_config.tuic_session {
                 cmd.env("TUIC_SESSION", tuic_session);
                 cmd.env(
                     "TUIC_CONFIG_DIR",
@@ -6201,13 +6281,14 @@ pub(crate) async fn create_pty(
             }
 
             // Inject env flags (feature flags configured in Settings → Agents)
-            for (key, value) in &config.env {
+            for (key, value) in &spawn_config.env {
                 cmd.env(key, value);
             }
 
             cmd
         },
-    )?;
+    )
+    .await?;
     lower_pty_child_priority(child.process_id());
 
     let tuic_session = config.tuic_session.clone();
@@ -6227,7 +6308,7 @@ pub(crate) async fn create_pty(
     state.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
             paused: paused.clone(),
@@ -6298,25 +6379,29 @@ pub(crate) async fn spawn_session_for_agent(
 
     let shell = resolve_shell(None);
 
-    let (pair, child) = spawn_pty_pair_with_retry(
+    let spawn_cwd = cwd.clone();
+    let spawn_shell = shell.clone();
+    let data_dir = state.data_dir.clone();
+    let (pair, child) = spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
         },
-        || {
-            let mut cmd = build_shell_command(&shell);
+        move || {
+            let mut cmd = build_shell_command(&spawn_shell);
 
-            if let Some(ref dir) = cwd {
+            if let Some(ref dir) = spawn_cwd {
                 let expanded = crate::cli::expand_tilde(dir);
                 cmd.cwd(expanded);
             }
 
-            crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
+            crate::shell_integration::inject(&data_dir, &spawn_shell, &mut cmd);
             cmd
         },
-    )?;
+    )
+    .await?;
     lower_pty_child_priority(child.process_id());
 
     let writer = pair
@@ -6333,7 +6418,7 @@ pub(crate) async fn spawn_session_for_agent(
     state.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
             paused: paused.clone(),
@@ -6430,37 +6515,34 @@ pub(crate) async fn create_pty_with_worktree(
     };
     let worktree_path = worktree.path.clone();
 
-    // Wrap PTY creation so we can clean up the worktree on failure
-    let pty_result = (|| -> Result<_, String> {
-        let session_id = Uuid::new_v4().to_string();
-
-        // Guard against invalid dimensions from zero-sized windows
-        let rows = pty_config.rows.max(24);
-        let cols = pty_config.cols.max(80);
-
-        let shell = resolve_shell(pty_config.shell);
-
-        let (pair, child) = spawn_pty_pair_with_retry(
-            PtySize {
-                rows,
-                cols,
-                pixel_width: 0,
-                pixel_height: 0,
-            },
-            || {
-                let mut cmd = build_shell_command(&shell);
-                cmd.cwd(&worktree_path);
-
-                // Inject OSC 133 shell integration (command block markers)
-                crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
-
-                // Inject env flags (feature flags configured in Settings → Agents)
-                for (key, value) in &pty_config.env {
-                    cmd.env(key, value);
-                }
-                cmd
-            },
-        )?;
+    // Wrap PTY creation so we can clean up the worktree on failure.
+    let session_id = Uuid::new_v4().to_string();
+    let rows = pty_config.rows.max(24);
+    let cols = pty_config.cols.max(80);
+    let shell = resolve_shell(pty_config.shell.clone());
+    let spawn_shell = shell.clone();
+    let spawn_worktree_path = worktree_path.clone();
+    let spawn_env = pty_config.env.clone();
+    let data_dir = state.data_dir.clone();
+    let pty_result = spawn_pty_pair_with_retry_async(
+        PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        },
+        move || {
+            let mut cmd = build_shell_command(&spawn_shell);
+            cmd.cwd(&spawn_worktree_path);
+            crate::shell_integration::inject(&data_dir, &spawn_shell, &mut cmd);
+            for (key, value) in &spawn_env {
+                cmd.env(key, value);
+            }
+            cmd
+        },
+    )
+    .await
+    .and_then(|(pair, child)| {
         lower_pty_child_priority(child.process_id());
 
         let writer = pair
@@ -6474,7 +6556,7 @@ pub(crate) async fn create_pty_with_worktree(
             .map_err(|e| format!("Failed to get PTY reader: {e}"))?;
 
         Ok((session_id, pair.master, child, writer, reader, shell))
-    })();
+    });
 
     let (session_id, master, child, writer, reader, shell) = match pty_result {
         Ok(result) => result,
@@ -6495,7 +6577,7 @@ pub(crate) async fn create_pty_with_worktree(
     state.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
             master,
             _child: child,
             paused: paused.clone(),
@@ -6610,7 +6692,7 @@ pub(crate) async fn write_pty(
         vt.process(b"\x1b[?25h");
     }
 
-    if let Some(entry) = state.sessions.get(&session_id) {
+    if let Some(writer) = state.pty_writer(&session_id) {
         tracing::trace!(session_id = %session_id, data_len = data.len(), "write_pty");
         if data.contains("\x1b[?1049") || data.contains("\x1b[?1047") || data.contains("\x1b[?47l") || data.contains("\x1b[?25h") {
             tracing::error!(source = "terminal", session_id = %session_id,
@@ -6619,14 +6701,12 @@ pub(crate) async fn write_pty(
         }
         let t0 = std::time::Instant::now();
         {
-            let mut session = entry.lock();
+            let mut writer = writer.lock();
             let lock_ms = t0.elapsed().as_millis();
-            session
-                .writer
+            writer
                 .write_all(data.as_bytes())
                 .map_err(|e| format!("Failed to write to PTY: {e}"))?;
-            session
-                .writer
+            writer
                 .flush()
                 .map_err(|e| format!("Failed to flush PTY: {e}"))?;
             let total_ms = t0.elapsed().as_millis();
@@ -7334,8 +7414,10 @@ pub(crate) fn close_pty_core(
     let mut session = session_mutex.into_inner();
 
     // Send Ctrl-C (0x03) to give the process a chance to clean up
-    let _ = session.writer.write_all(&[0x03]);
-    let _ = session.writer.flush();
+    let mut writer = session.writer.lock();
+    let _ = writer.write_all(&[0x03]);
+    let _ = writer.flush();
+    drop(writer);
 
     // Wait up to 100ms for process to exit gracefully
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(100);
@@ -10123,6 +10205,20 @@ mod tests {
         );
     }
 
+    /// Live 2026-07-29 regression: Codex may begin an internal continuation
+    /// after the previous task emitted `suggest:`. Its persistent goal HUD still
+    /// says `Goal achieved`, but the interruptible Working row is authoritative.
+    #[test]
+    fn test_codex_goal_achieved_hud_does_not_hide_current_working_status() {
+        let screen = fixture_rows(include_str!(
+            "../../tests/terminal-stress/fixtures/codex-completed-internal-working.txt"
+        ));
+        assert_eq!(
+            detect_codex_screen_activity(&screen),
+            AgentScreenActivity::Working
+        );
+    }
+
     #[test]
     fn test_codex_historical_working_far_from_prompt_does_not_latch_busy() {
         let mut screen = vec!["• Working (1m • esc to interrupt)".to_string()];
@@ -10374,6 +10470,29 @@ mod tests {
     }
 
     #[test]
+    fn test_grok_ready_composer_recovers_long_lived_shell_busy() {
+        let rows = vec![
+            "Finished the response.".to_string(),
+            "❯ Ask anything".to_string(),
+            "⌘ Grok 4.3 OpenRouter · Medium effort".to_string(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("grok"), &rows),
+            AgentScreenActivity::Ready
+        );
+
+        let mut silence = SilenceState::new();
+        // OSC 133 marks the long-lived `grok` shell command busy. Without a
+        // Grok ready-screen adapter this bit survived for the whole process.
+        silence.note_explicit_state(SHELL_BUSY, false);
+        silence.note_real_activity();
+        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(silence.note_ready_screen());
+        assert!(!silence.explicit_busy);
+        assert!(silence.idle_confirmed);
+    }
+
+    #[test]
     fn test_old_ready_prompt_cannot_cancel_new_submission_before_activity() {
         let mut silence = SilenceState::new();
         silence.note_user_submission(true);
@@ -10467,6 +10586,60 @@ mod tests {
             SHELL_IDLE
         );
         assert!(lifecycle.lock().idle_confirmed);
+    }
+
+    #[test]
+    fn test_codex_moving_working_row_reopens_completed_internal_continuation() {
+        use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+
+        let state = crate::state::tests_support::make_test_app_state();
+        let session_id = "codex-completed-internal-continuation";
+        state.session_states.insert(
+            session_id.into(),
+            crate::state::SessionState {
+                agent_type: Some("codex".into()),
+                suggested_actions: Some(vec!["Review diff".into()]),
+                ..Default::default()
+            },
+        );
+        state
+            .shell_states
+            .insert(session_id.into(), AtomicU8::new(SHELL_IDLE));
+        state
+            .last_output_ms
+            .insert(session_id.into(), AtomicU64::new(1));
+        let mut lifecycle = SilenceState::new();
+        lifecycle.confirm_idle();
+        lifecycle.mark_suggest_candidate(vec!["Review diff".into()], 0);
+        let lifecycle = Arc::new(Mutex::new(lifecycle));
+
+        apply_working_evidence(
+            &state,
+            &lifecycle,
+            session_id,
+            now_epoch_ms(),
+            "working-screen-movement",
+        );
+
+        assert_eq!(
+            state
+                .shell_states
+                .get(session_id)
+                .unwrap()
+                .load(Ordering::Acquire),
+            SHELL_BUSY
+        );
+        assert!(
+            state
+                .session_states
+                .get(session_id)
+                .unwrap()
+                .suggested_actions
+                .is_none()
+        );
+        let lifecycle = lifecycle.lock();
+        assert!(!lifecycle.completion_declared_for_epoch(0));
+        assert!(!lifecycle.idle_confirmed);
     }
 
     #[test]
@@ -10672,6 +10845,16 @@ mod tests {
         let gemini_ready = vec!["> Type your message".into()];
         let aider_working = vec!["█░  Waiting for model".into()];
         let aider_ready = vec!["Tokens: 10k sent".into(), ">".into()];
+        let grok_working = vec![
+            "❯ Ask anything".into(),
+            "⠹ Responding… 12s [stop]".into(),
+            "⌘ Grok 4.3 OpenRouter · Medium effort".into(),
+        ];
+        let grok_ready = vec![
+            "Done.".into(),
+            "❯ Ask anything".into(),
+            "⌘ Grok 4.3 OpenRouter · Medium effort".into(),
+        ];
 
         for (agent, rows, expected) in [
             ("claude", claude_working, AgentScreenActivity::Working),
@@ -10684,6 +10867,8 @@ mod tests {
             ("gemini", gemini_ready, AgentScreenActivity::Ready),
             ("aider", aider_working, AgentScreenActivity::Unknown),
             ("aider", aider_ready, AgentScreenActivity::Ready),
+            ("grok", grok_working, AgentScreenActivity::Working),
+            ("grok", grok_ready, AgentScreenActivity::Ready),
         ] {
             assert_eq!(detect_agent_screen_activity(Some(agent), &rows), expected);
         }
@@ -10731,6 +10916,15 @@ mod tests {
                     "✻ Sautéing… (12s · esc to interrupt)".to_string(),
                     "".to_string(),
                     "❯".to_string(),
+                ],
+            ),
+            (
+                "grok-responding",
+                "grok",
+                vec![
+                    "❯ Ask anything".to_string(),
+                    "⠴ Responding… 12s [stop]".to_string(),
+                    "⌘ Grok 4.3 OpenRouter · Medium effort".to_string(),
                 ],
             ),
         ];
@@ -14161,46 +14355,82 @@ mod tests {
         }
     }
 
-    /// The whole point of the helper: a failing spawn is retried, not reported
-    /// on the first refusal. The command is rebuilt per attempt because
-    /// `spawn_command` consumes the builder — a retry that reused a moved-from
-    /// builder could not compile, and one that reused a shared builder would
-    /// carry the previous attempt's state.
     #[test]
-    fn a_failing_spawn_is_retried_for_every_attempt() {
+    fn transient_allocation_recovers_and_uses_bounded_backoff() {
+        let mut attempts = 0;
+        let mut sleeps = Vec::new();
+        let result = retry_transient(
+            || {
+                attempts += 1;
+                if attempts < 3 {
+                    Err("busy")
+                } else {
+                    Ok("pair")
+                }
+            },
+            |_| true,
+            |attempt| sleeps.push(attempt),
+        );
+
+        assert_eq!(result, Ok("pair"));
+        assert_eq!(attempts, 3);
+        assert_eq!(sleeps, vec![1, 2]);
+    }
+
+    #[test]
+    fn transient_allocation_stops_after_the_attempt_limit() {
+        let mut attempts = 0;
+        let result = retry_transient(
+            || {
+                attempts += 1;
+                Err::<(), _>("busy")
+            },
+            |_| true,
+            |_| {},
+        );
+
+        assert_eq!(result, Err((PTY_SPAWN_ATTEMPTS, "busy")));
+        assert_eq!(attempts, PTY_SPAWN_ATTEMPTS);
+    }
+
+    #[test]
+    fn permanent_allocation_failure_is_not_retried() {
+        let mut attempts = 0;
+        let result = retry_transient(
+            || {
+                attempts += 1;
+                Err::<(), _>("permission denied")
+            },
+            |_| false,
+            |_| panic!("permanent failure must not sleep"),
+        );
+
+        assert_eq!(result, Err((1, "permission denied")));
+        assert_eq!(attempts, 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pty_allocation_classifier_retries_resource_pressure_not_permissions() {
+        let exhausted = anyhow::Error::new(std::io::Error::from_raw_os_error(libc::EMFILE));
+        let denied = anyhow::Error::new(std::io::Error::from_raw_os_error(libc::EACCES));
+
+        assert!(is_transient_pty_open_error(&exhausted));
+        assert!(!is_transient_pty_open_error(&denied));
+    }
+
+    #[test]
+    fn permanent_command_spawn_failure_builds_once() {
         let attempts = std::cell::Cell::new(0);
-        // `PtyPair` is not Debug, so unwrap the error by hand.
-        let Err(err) = spawn_pty_pair_with_retry(probe_size(), || {
+        let Err(error) = spawn_pty_pair_with_retry(probe_size(), || {
             attempts.set(attempts.get() + 1);
             unspawnable_command()
         }) else {
             panic!("a nonexistent binary must not spawn");
         };
 
-        assert_eq!(attempts.get(), PTY_SPAWN_ATTEMPTS);
-        assert!(
-            err.contains(&format!("attempt {PTY_SPAWN_ATTEMPTS}")),
-            "the surfaced error must be the LAST attempt's, not the first: {err}"
-        );
-    }
-
-    /// A spawn that recovers must stop retrying and hand back a live child —
-    /// the retry must not cost extra processes on the success path.
-    #[test]
-    fn a_recovering_spawn_stops_at_the_first_success() {
-        let attempts = std::cell::Cell::new(0);
-        let (_pair, child) = spawn_pty_pair_with_retry(probe_size(), || {
-            attempts.set(attempts.get() + 1);
-            if attempts.get() < 2 {
-                unspawnable_command()
-            } else {
-                CommandBuilder::new("/bin/echo")
-            }
-        })
-        .expect("the second attempt must succeed");
-
-        assert_eq!(attempts.get(), 2, "it must not keep retrying after success");
-        reap(child);
+        assert_eq!(attempts.get(), 1);
+        assert!(error.contains("Failed to spawn shell"), "{error}");
     }
 
     /// A spawn that works first time must be built exactly once.
@@ -14217,69 +14447,20 @@ mod tests {
         reap(child);
     }
 
-    /// Parity guard. Only `create_pty` used to retry, so whether a burst of tab
-    /// creation survived an exhausted PTY table depended on which code path
-    /// opened the terminal. Asserting on the sources keeps that true for spawn
-    /// sites added later: a new production `openpty` call is a test failure,
-    /// pointing the author at the helper.
-    #[test]
-    fn no_production_spawn_site_calls_openpty_directly() {
-        let src = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
-        let files = [
-            "pty.rs",
-            "agent.rs",
-            "mcp_http/session.rs",
-            "mcp_http/agent_routes.rs",
-            "mcp_http/mcp_transport.rs",
-        ];
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_spawn_wrapper_does_not_block_the_runtime_worker() {
+        let started = std::time::Instant::now();
+        let spawn = tokio::spawn(run_pty_spawn_blocking(|| {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            Ok::<_, String>(())
+        }));
 
-        let mut offenders = Vec::new();
-        let mut excused = 0usize;
-        for file in files {
-            let text = std::fs::read_to_string(src.join(file)).expect("read source");
-            // Everything from `mod tests` on is test scaffolding, which may open
-            // its own PTYs directly — the retry policy is about production spawns.
-            let production = text.split("\nmod tests {").next().unwrap_or(&text);
-            assert!(
-                production.len() > text.len() / 10,
-                "{file}: the production slice collapsed, so this test proves nothing"
-            );
-            // The helper's own body holds the one legitimate call. Bound it by the
-            // next item so the window cannot silently swallow later code.
-            let helper = production
-                .find("pub(crate) fn spawn_pty_pair_with_retry")
-                .map(|start| {
-                    let end = production[start..]
-                        .find("\npub(crate) fn build_shell_command")
-                        .map_or(production.len(), |offset| start + offset);
-                    start..end
-                });
-
-            let mut cursor = 0usize;
-            for (idx, line) in production.lines().enumerate() {
-                let line_start = cursor;
-                cursor += line.len() + 1;
-                if !line.contains("openpty(") {
-                    continue;
-                }
-                if helper.as_ref().is_some_and(|r| r.contains(&line_start)) {
-                    excused += 1;
-                    continue;
-                }
-                offenders.push(format!("{file}:{}", idx + 1));
-            }
-        }
-
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert!(
-            offenders.is_empty(),
-            "these spawn sites bypass spawn_pty_pair_with_retry: {offenders:?}"
+            started.elapsed() < std::time::Duration::from_millis(80),
+            "blocking spawn work occupied the async runtime"
         );
-        // Without this the test would also pass if the scan stopped matching
-        // `openpty(` at all — an empty offender list would then mean nothing.
-        assert_eq!(
-            excused, 1,
-            "expected exactly one production openpty, inside the helper"
-        );
+        spawn.await.unwrap().unwrap();
     }
 
     // --- build_shell_command arg splitting tests ---
@@ -15941,6 +16122,142 @@ mod tests {
         assert!(failure.1.contains("injected failure"));
     }
 
+    #[cfg(unix)]
+    struct RecordingWriter {
+        bytes: Arc<std::sync::Mutex<Vec<u8>>>,
+    }
+
+    #[cfg(unix)]
+    impl std::io::Write for RecordingWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.bytes.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    struct FailingWriter;
+
+    #[cfg(unix)]
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _bytes: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("injected PTY failure"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    fn insert_session_with_writer(
+        state: &AppState,
+        session_id: &str,
+        writer: Box<dyn std::io::Write + Send>,
+    ) {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        let child = pair.slave.spawn_command(command).expect("spawn shell");
+        state.sessions.insert(
+            session_id.to_string(),
+            Mutex::new(PtySession {
+                writer: Arc::new(Mutex::new(writer)),
+                master: pair.master,
+                _child: child,
+                paused: Arc::new(AtomicBool::new(false)),
+                worktree: None,
+                cwd: None,
+                display_name: None,
+                shell: "/bin/sh".to_string(),
+            }),
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_user_input_and_terminal_reply_are_both_serialized() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        insert_session_with_writer(
+            &state,
+            "serialized-writes",
+            Box::new(RecordingWriter {
+                bytes: Arc::clone(&bytes),
+            }),
+        );
+
+        let writer = state.pty_writer("serialized-writes").unwrap();
+        let held = writer.lock();
+        let input_state = Arc::clone(&state);
+        let input = std::thread::spawn(move || {
+            input_state
+                .write_pty_parts("serialized-writes", &[b"input"])
+                .unwrap();
+        });
+        let reply_state = Arc::clone(&state);
+        let reply = std::thread::spawn(move || {
+            write_terminal_reply(&reply_state, "serialized-writes", b"reply", "test");
+        });
+
+        drop(held);
+        input.join().unwrap();
+        reply.join().unwrap();
+        let output = bytes.lock().unwrap().clone();
+        assert!(
+            output == b"inputreply" || output == b"replyinput",
+            "{output:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn multiple_terminal_replies_keep_reader_order() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        insert_session_with_writer(
+            &state,
+            "reply-order",
+            Box::new(RecordingWriter {
+                bytes: Arc::clone(&bytes),
+            }),
+        );
+
+        write_terminal_reply(&state, "reply-order", b"first", "test");
+        write_terminal_reply(&state, "reply-order", b"second", "test");
+        assert_eq!(*bytes.lock().unwrap(), b"firstsecond");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn shared_pty_write_reports_writer_failure_and_teardown() {
+        let state = crate::state::tests_support::make_test_app_state();
+        insert_session_with_writer(&state, "failed-writer", Box::new(FailingWriter));
+
+        let error = state
+            .write_pty_parts("failed-writer", &[b"reply"])
+            .expect_err("writer error must be observable");
+        assert!(error.contains("injected PTY failure"), "{error}");
+
+        state.sessions.remove("failed-writer");
+        let error = state
+            .write_pty_parts("failed-writer", &[b"late reply"])
+            .expect_err("removed session must reject writes");
+        assert_eq!(error, "Session not found");
+        write_terminal_reply(&state, "failed-writer", b"late reply", "test");
+    }
+
     #[test]
     fn uncertain_injection_preserves_busy_and_surfaces_status_flag() {
         let state = crate::state::tests_support::make_test_app_state();
@@ -16100,7 +16417,7 @@ mod tests {
         state.sessions.insert(
             sid.to_string(),
             Mutex::new(PtySession {
-                writer,
+                writer: Arc::new(Mutex::new(writer)),
                 master,
                 _child: child,
                 paused: Arc::new(AtomicBool::new(false)),
@@ -16995,7 +17312,7 @@ mod tests {
         state.sessions.insert(
             sid.to_string(),
             Mutex::new(PtySession {
-                writer,
+                writer: Arc::new(Mutex::new(writer)),
                 master,
                 _child: child,
                 paused: Arc::new(AtomicBool::new(false)),
@@ -17175,7 +17492,7 @@ mod tests {
         state.sessions.insert(
             sid.to_string(),
             Mutex::new(PtySession {
-                writer,
+                writer: Arc::new(Mutex::new(writer)),
                 master,
                 _child: child,
                 paused: Arc::new(AtomicBool::new(false)),

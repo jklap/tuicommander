@@ -82,7 +82,7 @@ Every git subprocess invocation goes through `git_cmd(cwd: &Path) -> GitCmd`. Th
 | `get_repo_structure` | `(repo_path: String) -> RepoStructure` | Fast: worktree paths + merged branches only |
 | `get_repo_diff_stats` | `(repo_path: String) -> RepoDiffStats` | Slow: per-worktree diff stats + last commit timestamps |
 
-The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phase 2) for progressive loading — UI rows appear immediately, stats fill in later. `get_repo_summary` remains for backward compatibility.
+The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phase 2) for progressive loading — UI rows appear immediately, stats fill in later. Refresh is single-flight per repository: concurrent requests join the active run and coalesce into one trailing rerun. This guarantees that sustained filesystem events cannot repeatedly cancel Phase 1 and leave deleted worktrees in the persisted sidebar cache. `get_repo_summary` remains for backward compatibility.
 
 ### Branch Operations
 
@@ -90,6 +90,7 @@ The frontend uses `get_repo_structure` (Phase 1) and `get_repo_diff_stats` (Phas
 |---------|-----------|-------------|
 | `rename_branch` | `(path, old_name, new_name) -> ()` | Rename a branch |
 | `update_from_base` | `(path, branch, strategy?) -> String` | Fetch base ref (if remote) and rebase or merge the branch onto it. On conflict, reports `(aborted)` only after `git rebase/merge --abort` succeeds; if abort fails, the error says the repo may still be conflicted and includes the manual abort command. |
+| `start_conflict_assist` | `(repo_path, pr_number) -> ConflictAssistResult` | Creates a PR-head worktree and rebases it. A conflict-free result is `clean` only after a successful origin refresh; stale tracking or local fallback results are `clean_unverified` with `base_source` and `base_warning`. |
 | `get_branch_base` | `(path, branch) -> Option<String>` | Read stored base ref from `git config branch.<name>.tuicommander-base` |
 | `git_apply_reverse_patch` | `(path, patch) -> ()` | Apply a reverse patch for hunk/line-level restore |
 

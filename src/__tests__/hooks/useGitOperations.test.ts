@@ -1077,10 +1077,12 @@ describe("useGitOperations", () => {
 		});
 
 		function mockConflictAssist(result: {
-			status: "clean" | "conflicts";
+			status: "clean" | "clean_unverified" | "conflicts";
 			worktree_path: string;
 			branch: string;
 			base: string;
+			base_source: "fetched_remote" | "existing_tracking" | "local_fallback";
+			base_warning: string | null;
 			conflicted_files: string[];
 			prompt: string;
 		}) {
@@ -1096,6 +1098,8 @@ describe("useGitOperations", () => {
 				worktree_path: "/repo/.worktrees/feature",
 				branch: "feature",
 				base: "main",
+				base_source: "fetched_remote",
+				base_warning: null,
 				conflicted_files: [],
 				prompt: "",
 			});
@@ -1107,6 +1111,25 @@ describe("useGitOperations", () => {
 			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
 		});
 
+		it("warns when a conflict-free rebase used a base that could not be refreshed", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			mockConflictAssist({
+				status: "clean_unverified",
+				worktree_path: "/repo/.worktrees/feature",
+				branch: "feature",
+				base: "main",
+				base_source: "existing_tracking",
+				base_warning: "Could not refresh origin/main; using the existing remote-tracking ref.",
+				conflicted_files: [],
+				prompt: "",
+			});
+
+			await gitOps.handleConflictAssist("/repo", 43);
+
+			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("Could not refresh origin/main"));
+			expect(repositoriesStore.get("/repo")?.branches["feature"]).toBeUndefined();
+		});
+
 		it("registers the existing worktree and seeds an agent with the resolution prompt on conflicts", async () => {
 			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 			mockConflictAssist({
@@ -1114,6 +1137,8 @@ describe("useGitOperations", () => {
 				worktree_path: "/repo/.worktrees/feature",
 				branch: "feature",
 				base: "main",
+				base_source: "fetched_remote",
+				base_warning: null,
 				conflicted_files: ["a.ts"],
 				prompt: "Resolve the conflicts in a.ts",
 			});
@@ -1250,6 +1275,66 @@ describe("useGitOperations", () => {
 
 			expect(repositoriesStore.get("/repo")?.branches["stale"]).toBeUndefined();
 			expect(repositoriesStore.get("/repo")?.branches["main"]).toBeDefined();
+		});
+
+		it("coalesces refresh storms without starving stale-worktree pruning", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			repositoriesStore.setBranch("/repo", "ghost-a", { worktreePath: "/repo/wt-a" });
+			repositoriesStore.setBranch("/repo", "ghost-b", { worktreePath: "/repo/wt-b" });
+
+			const structureResolvers: Array<(value: unknown) => void> = [];
+			mockRepo.getRepoStructure.mockImplementation(() => new Promise((resolve) => structureResolvers.push(resolve)));
+			mockRepo.getRepoDiffStats.mockResolvedValue({
+				diff_stats: { "/repo": { additions: 0, deletions: 0 } },
+				last_commit_ts: {},
+			});
+
+			const first = gitOps.refreshAllBranchStats("/repo");
+			await vi.waitFor(() => expect(structureResolvers).toHaveLength(1));
+			const queued = Array.from({ length: 100 }, () => gitOps.refreshAllBranchStats("/repo"));
+			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(1);
+
+			structureResolvers[0]({ worktree_paths: { main: "/repo" }, merged_branches: [] });
+			await vi.waitFor(() => expect(structureResolvers).toHaveLength(2));
+			structureResolvers[1]({ worktree_paths: { main: "/repo" }, merged_branches: [] });
+			await Promise.all([first, ...queued]);
+
+			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(2);
+			expect(Object.keys(repositoriesStore.get("/repo")?.branches ?? {})).toEqual(["main"]);
+		});
+
+		it("runs the queued refresh after the active refresh fails", async () => {
+			repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo" });
+			let rejectFirst!: (reason: Error) => void;
+			mockRepo.getRepoStructure
+				.mockReturnValueOnce(new Promise((_, reject) => (rejectFirst = reject)))
+				.mockResolvedValueOnce({ worktree_paths: { main: "/repo" }, merged_branches: [] });
+			mockRepo.getRepoDiffStats.mockResolvedValue({
+				diff_stats: { "/repo": { additions: 0, deletions: 0 } },
+				last_commit_ts: {},
+			});
+
+			const first = gitOps.refreshAllBranchStats("/repo");
+			await vi.waitFor(() => expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(1));
+			const queued = gitOps.refreshAllBranchStats("/repo");
+			rejectFirst(new Error("transient structure failure"));
+			await Promise.all([first, queued]);
+
+			expect(mockRepo.getRepoStructure).toHaveBeenCalledTimes(2);
+			expect(mockRepo.getRepoDiffStats).toHaveBeenCalledTimes(1);
+		});
+
+		it("does not refresh a parked repository even when explicitly scoped", async () => {
+			repositoriesStore.add({ path: "/parked", displayName: "Parked" });
+			repositoriesStore.setBranch("/parked", "main", { worktreePath: "/parked" });
+			repositoriesStore.setPark("/parked", true);
+
+			await gitOps.refreshAllBranchStats("/parked");
+
+			expect(mockRepo.getRepoStructure).not.toHaveBeenCalled();
+			expect(mockRepo.getRepoDiffStats).not.toHaveBeenCalled();
 		});
 
 		it("discovers externally created worktrees", async () => {

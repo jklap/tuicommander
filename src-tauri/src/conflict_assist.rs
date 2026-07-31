@@ -14,15 +14,19 @@ use serde::Serialize;
 /// Outcome of a conflict-assist run.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ConflictAssistResult {
-    /// `"clean"` (rebase applied without conflicts) or `"conflicts"`.
+    /// `"clean"`, `"clean_unverified"`, or `"conflicts"`.
     pub status: String,
     pub worktree_path: String,
     /// The PR head branch that was rebased.
     pub branch: String,
     /// The base branch it was rebased onto.
     pub base: String,
+    /// `"fetched_remote"`, `"existing_tracking"`, or `"local_fallback"`.
+    pub base_source: String,
+    /// Present when the selected base could not be refreshed from origin.
+    pub base_warning: Option<String>,
     pub conflicted_files: Vec<String>,
-    /// Agent prompt to resolve the conflicts — empty when `status == "clean"`.
+    /// Agent prompt to resolve the conflicts — empty unless `status == "conflicts"`.
     pub prompt: String,
 }
 
@@ -76,28 +80,86 @@ fn emit_conflict_assist_status(
 /// Falls back to the bare name when no remote-tracking ref exists afterwards — a
 /// local-only base branch or an unreachable origin should still get a (clearly
 /// local) answer rather than a hard failure.
-fn resolve_rebase_target(repo: &Path, base_ref: &str) -> String {
-    let remote_ref = format!("refs/remotes/origin/{base_ref}");
-    let refspec = format!("+refs/heads/{base_ref}:{remote_ref}");
-    let _ = crate::git_cli::git_cmd(repo)
-        .args(["fetch", "--no-tags", "origin", &refspec])
-        .run_silent();
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BaseSource {
+    FetchedRemote,
+    ExistingTracking,
+    LocalFallback,
+}
 
-    let exists = crate::git_cli::git_cmd(repo)
+impl BaseSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::FetchedRemote => "fetched_remote",
+            Self::ExistingTracking => "existing_tracking",
+            Self::LocalFallback => "local_fallback",
+        }
+    }
+
+    fn warning(self, base_ref: &str) -> Option<String> {
+        match self {
+            Self::FetchedRemote => None,
+            Self::ExistingTracking => Some(format!(
+                "Could not refresh origin/{base_ref}; conflict result uses the existing remote-tracking ref."
+            )),
+            Self::LocalFallback => Some(format!(
+                "Could not refresh origin/{base_ref} and no remote-tracking ref exists; conflict result uses the local {base_ref} branch."
+            )),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ResolvedBase {
+    target: String,
+    source: BaseSource,
+}
+
+fn ref_exists(repo: &Path, reference: &str) -> bool {
+    crate::git_cli::git_cmd(repo)
         .args([
             "rev-parse",
             "--verify",
             "--quiet",
-            &format!("{remote_ref}^{{commit}}"),
+            &format!("{reference}^{{commit}}"),
         ])
         .run()
-        .is_ok();
+        .is_ok()
+}
 
-    if exists {
-        remote_ref
-    } else {
-        base_ref.to_string()
+fn resolve_rebase_target(repo: &Path, base_ref: &str) -> Result<ResolvedBase, String> {
+    let remote_ref = format!("refs/remotes/origin/{base_ref}");
+    let refspec = format!("+refs/heads/{base_ref}:{remote_ref}");
+    let fetch = crate::git_cli::git_cmd(repo)
+        .args(["fetch", "--no-tags", "origin", &refspec])
+        .run();
+
+    if fetch.is_ok() && ref_exists(repo, &remote_ref) {
+        return Ok(ResolvedBase {
+            target: remote_ref,
+            source: BaseSource::FetchedRemote,
+        });
     }
+    if ref_exists(repo, &remote_ref) {
+        return Ok(ResolvedBase {
+            target: remote_ref,
+            source: BaseSource::ExistingTracking,
+        });
+    }
+    if ref_exists(repo, base_ref) {
+        return Ok(ResolvedBase {
+            target: base_ref.to_string(),
+            source: BaseSource::LocalFallback,
+        });
+    }
+
+    let fetch_error = fetch
+        .err()
+        .map(|error| format!(": {error}"))
+        .unwrap_or_default();
+    Err(format!(
+        "Could not resolve PR base {base_ref} from origin, remote tracking, or a local branch{fetch_error}"
+    ))
 }
 
 /// Rebase `worktree` onto `rebase_target` and report what happened.
@@ -155,7 +217,7 @@ pub(crate) async fn start_conflict_assist_impl(
 
     // All blocking git work (fetch, worktree add, rebase, status) runs off the
     // async executor so a slow checkout/rebase doesn't stall other commands.
-    let (worktree_path, conflicted, rebase_ok, rebase_stderr) =
+    let (worktree_path, conflicted, rebase_ok, rebase_stderr, base_source) =
         tokio::task::spawn_blocking(move || -> Result<_, String> {
             // Make the head branch available locally. Best-effort: it may already
             // be present, or origin may be unreachable for a local-only branch.
@@ -177,16 +239,17 @@ pub(crate) async fn start_conflict_assist_impl(
             let wt_path = wt.path.clone();
 
             // Rebase onto what origin has now, not a possibly-stale local branch.
-            let rebase_target =
-                resolve_rebase_target(Path::new(&repo_path_for_git), &base_ref_for_git);
+            let resolved_base =
+                resolve_rebase_target(Path::new(&repo_path_for_git), &base_ref_for_git)?;
             let (rebase_ok, conflicted, rebase_stderr) =
-                rebase_and_collect_conflicts(&wt_path, &rebase_target);
+                rebase_and_collect_conflicts(&wt_path, &resolved_base.target);
 
             Ok((
                 wt_path.to_string_lossy().to_string(),
                 conflicted,
                 rebase_ok,
                 rebase_stderr,
+                resolved_base.source,
             ))
         })
         .await
@@ -208,8 +271,17 @@ pub(crate) async fn start_conflict_assist_impl(
         ));
     }
 
+    let base_warning = base_source.warning(&base_ref);
     let (status, prompt) = if conflicted.is_empty() {
-        ("clean".to_string(), String::new())
+        (
+            if base_source == BaseSource::FetchedRemote {
+                "clean"
+            } else {
+                "clean_unverified"
+            }
+            .to_string(),
+            String::new(),
+        )
     } else {
         (
             "conflicts".to_string(),
@@ -224,6 +296,8 @@ pub(crate) async fn start_conflict_assist_impl(
         worktree_path,
         branch: refs.head_ref,
         base: refs.base_ref,
+        base_source: base_source.as_str().to_string(),
+        base_warning,
         conflicted_files: conflicted,
         prompt,
     })
@@ -390,7 +464,9 @@ mod tests {
     #[test]
     fn rebase_target_falls_back_to_the_local_branch_without_a_remote() {
         let (_d, repo) = fixture();
-        assert_eq!(resolve_rebase_target(&repo, "main"), "main");
+        let resolved = resolve_rebase_target(&repo, "main").expect("local fallback");
+        assert_eq!(resolved.target, "main");
+        assert_eq!(resolved.source, BaseSource::LocalFallback);
     }
 
     /// With a reachable origin the remote-tracking ref wins — that is the whole point:
@@ -411,10 +487,9 @@ mod tests {
         // origin moves ahead after the clone — the local refs/heads/main is now stale.
         commit_on(&origin, "main", "on_main.txt", "main\n", "main work");
 
-        assert_eq!(
-            resolve_rebase_target(&clone, "main"),
-            "refs/remotes/origin/main"
-        );
+        let resolved = resolve_rebase_target(&clone, "main").expect("fetched remote");
+        assert_eq!(resolved.target, "refs/remotes/origin/main");
+        assert_eq!(resolved.source, BaseSource::FetchedRemote);
         // And the fetch actually advanced it, so a rebase would see the new commit.
         let rev = git(&clone, &["rev-parse", "refs/remotes/origin/main"]);
         let local = git(&clone, &["rev-parse", "refs/heads/main"]);
@@ -422,6 +497,30 @@ mod tests {
             String::from_utf8_lossy(&rev.stdout),
             String::from_utf8_lossy(&local.stdout),
             "remote-tracking ref must be ahead of the stale local branch"
+        );
+    }
+
+    #[test]
+    fn rebase_target_uses_existing_tracking_ref_when_fetch_fails() {
+        let (_d, repo) = fixture();
+        git(
+            &repo,
+            &["update-ref", "refs/remotes/origin/main", "refs/heads/main"],
+        );
+
+        let resolved = resolve_rebase_target(&repo, "main").expect("existing tracking ref");
+        assert_eq!(resolved.target, "refs/remotes/origin/main");
+        assert_eq!(resolved.source, BaseSource::ExistingTracking);
+        assert!(resolved.source.warning("main").is_some());
+    }
+
+    #[test]
+    fn rebase_target_rejects_a_missing_remote_and_local_ref() {
+        let (_d, repo) = fixture();
+        let error = resolve_rebase_target(&repo, "missing").expect_err("missing base must fail");
+        assert!(
+            error.contains("Could not resolve PR base missing"),
+            "{error}"
         );
     }
 }

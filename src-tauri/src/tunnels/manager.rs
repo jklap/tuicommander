@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
@@ -14,12 +15,49 @@ pub struct TunnelHandle {
     pub started_at: DateTime<Utc>,
 }
 
+enum TunnelSlot {
+    Starting(u64),
+    Running(Arc<Mutex<TunnelHandle>>),
+}
+
+struct StartReservation<'a> {
+    manager: &'a TunnelManager,
+    id: String,
+    token: u64,
+    published: bool,
+}
+
+impl StartReservation<'_> {
+    fn publish(&mut self, handle: Arc<Mutex<TunnelHandle>>) -> bool {
+        let Some(mut slot) = self.manager.tunnels.get_mut(&self.id) else {
+            return false;
+        };
+        if !matches!(*slot, TunnelSlot::Starting(token) if token == self.token) {
+            return false;
+        }
+        *slot = TunnelSlot::Running(handle);
+        self.published = true;
+        true
+    }
+}
+
+impl Drop for StartReservation<'_> {
+    fn drop(&mut self) {
+        if self.published {
+            return;
+        }
+        if let dashmap::mapref::entry::Entry::Occupied(entry) =
+            self.manager.tunnels.entry(self.id.clone())
+            && matches!(entry.get(), TunnelSlot::Starting(token) if *token == self.token)
+        {
+            entry.remove();
+        }
+    }
+}
+
 pub struct TunnelManager {
-    /// `None` is a RESERVATION: a `start()` that has claimed the id but has not
-    /// finished spawning its supervisor yet. Keeping reservations in the same map
-    /// as running tunnels is what makes the claim atomic — a second map would
-    /// reintroduce the very window this closes.
-    tunnels: DashMap<String, Option<Arc<Mutex<TunnelHandle>>>>,
+    tunnels: DashMap<String, TunnelSlot>,
+    next_reservation: AtomicU64,
     /// Wrapped in Mutex so Arc<Mutex<AuditLog>> is Send+Sync and can be
     /// captured in the `Send + 'static` status callback required by TunnelSupervisor.
     audit: Arc<Mutex<AuditLog>>,
@@ -29,6 +67,7 @@ impl TunnelManager {
     pub fn new(audit: Arc<Mutex<AuditLog>>) -> Self {
         Self {
             tunnels: DashMap::new(),
+            next_reservation: AtomicU64::new(1),
             audit,
         }
     }
@@ -36,7 +75,19 @@ impl TunnelManager {
     /// Start a tunnel for `profile`, store its handle, and log the Started event.
     /// Returns the profile id on success.
     pub async fn start(&self, profile: TunnelProfile) -> Result<String, String> {
+        self.start_with(profile, |profile, callback| async move {
+            TunnelSupervisor::start(profile, callback).await
+        })
+        .await
+    }
+
+    async fn start_with<F, Fut>(&self, profile: TunnelProfile, spawn: F) -> Result<String, String>
+    where
+        F: FnOnce(TunnelProfile, Box<dyn Fn(TunnelStatus) + Send + 'static>) -> Fut + Send,
+        Fut: std::future::Future<Output = TunnelSupervisor> + Send,
+    {
         let id = profile.id.clone();
+        let token = self.next_reservation.fetch_add(1, Ordering::Relaxed);
 
         // Claim the id ATOMICALLY, before spawning anything. A `contains_key`
         // check followed by an `.await` and a later `insert` is a TOCTOU: two
@@ -50,9 +101,15 @@ impl TunnelManager {
                 return Err(format!("tunnel '{id}' already running"));
             }
             dashmap::mapref::entry::Entry::Vacant(slot) => {
-                slot.insert(None);
+                slot.insert(TunnelSlot::Starting(token));
             }
         }
+        let mut reservation = StartReservation {
+            manager: self,
+            id: id.clone(),
+            token,
+            published: false,
+        };
 
         let audit = Arc::clone(&self.audit);
         let audit_cb = Arc::clone(&self.audit);
@@ -77,12 +134,10 @@ impl TunnelManager {
             let _ = audit_cb.lock().insert(&cb_id, kind, detail);
         };
 
-        let supervisor = TunnelSupervisor::start(profile.clone(), status_callback).await;
-
-        // Log Started event.
-        let _ = audit
-            .lock()
-            .insert(&id, EventKind::Started, serde_json::json!({}));
+        let supervisor = spawn(profile.clone(), Box::new(status_callback)).await;
+        if let TunnelStatus::Error { message } = supervisor.status() {
+            return Err(format!("Failed to start tunnel '{id}': {message}"));
+        }
 
         let handle = Arc::new(Mutex::new(TunnelHandle {
             profile,
@@ -94,15 +149,13 @@ impl TunnelManager {
         // were spawning: honour it rather than resurrecting a tunnel the user
         // asked to stop, and shut down the supervisor we just created so it does
         // not outlive this call.
-        match self.tunnels.get_mut(&id) {
-            Some(mut slot) if slot.is_none() => {
-                *slot = Some(handle);
-            }
-            _ => {
-                handle.lock().supervisor.stop();
-                return Err(format!("tunnel '{id}' was stopped while starting"));
-            }
+        if !reservation.publish(Arc::clone(&handle)) {
+            handle.lock().supervisor.stop();
+            return Err(format!("tunnel '{id}' was stopped while starting"));
         }
+        let _ = audit
+            .lock()
+            .insert(&id, EventKind::Started, serde_json::json!({}));
         Ok(id)
     }
 
@@ -117,7 +170,7 @@ impl TunnelManager {
         // `None` = a reservation whose start() is still spawning. Removing it is
         // the whole stop: that start() will find its slot gone and shut its own
         // supervisor down.
-        if let Some(handle) = handle {
+        if let TunnelSlot::Running(handle) = handle {
             handle.lock().supervisor.stop();
         }
         let _ = self.audit.lock().insert(
@@ -131,7 +184,7 @@ impl TunnelManager {
     /// Stop the tunnel if it exists, ignoring "not found".
     pub fn stop_if_running(&self, id: &str) {
         if let Some((_, handle)) = self.tunnels.remove(id) {
-            if let Some(handle) = handle {
+            if let TunnelSlot::Running(handle) = handle {
                 handle.lock().supervisor.stop();
             }
             let _ = self.audit.lock().insert(
@@ -149,10 +202,10 @@ impl TunnelManager {
             .map(|entry| {
                 let id = entry.key().clone();
                 // A reservation has no supervisor to ask — it IS starting.
-                let status = entry
-                    .value()
-                    .as_ref()
-                    .map_or(TunnelStatus::Starting, |h| h.lock().supervisor.status());
+                let status = match entry.value() {
+                    TunnelSlot::Starting(_) => TunnelStatus::Starting,
+                    TunnelSlot::Running(handle) => handle.lock().supervisor.status(),
+                };
                 (id, status)
             })
             .collect()
@@ -160,18 +213,16 @@ impl TunnelManager {
 
     /// Return the current status of a single tunnel, or `None` if not found.
     pub fn get_status(&self, id: &str) -> Option<TunnelStatus> {
-        self.tunnels.get(id).map(|entry| {
-            entry
-                .value()
-                .as_ref()
-                .map_or(TunnelStatus::Starting, |h| h.lock().supervisor.status())
+        self.tunnels.get(id).map(|entry| match entry.value() {
+            TunnelSlot::Starting(_) => TunnelStatus::Starting,
+            TunnelSlot::Running(handle) => handle.lock().supervisor.status(),
         })
     }
 
     /// Stop all running tunnels and clear the map. Used on app exit.
     pub fn shutdown_all(&self) {
         for entry in self.tunnels.iter() {
-            if let Some(handle) = entry.value() {
+            if let TunnelSlot::Running(handle) = entry.value() {
                 handle.lock().supervisor.stop();
             }
         }
@@ -225,45 +276,11 @@ mod tests {
         profile: TunnelProfile,
         ssh_path: PathBuf,
     ) -> Result<String, String> {
-        let id = profile.id.clone();
-        let audit = Arc::clone(&manager.audit);
-        let audit_cb = Arc::clone(&manager.audit);
-        let cb_id = id.clone();
-
-        let status_callback = move |status: TunnelStatus| {
-            let kind = match &status {
-                TunnelStatus::Connected => EventKind::Connected,
-                TunnelStatus::Reconnecting { .. } => EventKind::Retry,
-                TunnelStatus::Stopped { .. } => EventKind::Stopped,
-                TunnelStatus::Error { .. } => EventKind::Error,
-                TunnelStatus::Starting => return,
-            };
-            let detail = match &status {
-                TunnelStatus::Error { message } => serde_json::json!({ "message": message }),
-                TunnelStatus::Stopped { reason } => serde_json::json!({ "reason": reason }),
-                TunnelStatus::Reconnecting { attempt, reason } => {
-                    serde_json::json!({ "attempt": attempt, "reason": reason })
-                }
-                _ => serde_json::json!({}),
-            };
-            let _ = audit_cb.lock().insert(&cb_id, kind, detail);
-        };
-
-        let supervisor =
-            TunnelSupervisor::start_with_binary(profile.clone(), ssh_path, status_callback).await;
-
-        let _ = audit
-            .lock()
-            .insert(&id, EventKind::Started, serde_json::json!({}));
-
-        let handle = Arc::new(Mutex::new(TunnelHandle {
-            profile,
-            supervisor,
-            started_at: Utc::now(),
-        }));
-
-        manager.tunnels.insert(id.clone(), Some(handle));
-        Ok(id)
+        manager
+            .start_with(profile, move |profile, callback| async move {
+                TunnelSupervisor::start_with_binary(profile, ssh_path, callback).await
+            })
+            .await
     }
 
     #[tokio::test]
@@ -280,6 +297,8 @@ mod tests {
         let list = manager.list();
         assert_eq!(list.len(), 1);
         assert_eq!(list[0].0, id);
+        let events = manager.audit.lock().query_by_tunnel(&id, 20).unwrap();
+        assert!(events.iter().any(|event| event.kind == EventKind::Started));
 
         manager.stop(&id).unwrap();
     }
@@ -364,7 +383,10 @@ mod tests {
         // Identity of the original handle — must survive a duplicate start.
         let original_ptr = {
             let entry = manager.tunnels.get(&id).unwrap();
-            Arc::as_ptr(entry.value().as_ref().expect("started tunnel has a handle"))
+            match entry.value() {
+                TunnelSlot::Running(handle) => Arc::as_ptr(handle),
+                TunnelSlot::Starting(_) => panic!("started tunnel has no handle"),
+            }
         };
 
         // Second start with the same id must be rejected by the collision guard
@@ -381,7 +403,10 @@ mod tests {
 
         let still_ptr = {
             let entry = manager.tunnels.get(&id).unwrap();
-            Arc::as_ptr(entry.value().as_ref().expect("started tunnel has a handle"))
+            match entry.value() {
+                TunnelSlot::Running(handle) => Arc::as_ptr(handle),
+                TunnelSlot::Starting(_) => panic!("started tunnel has no handle"),
+            }
         };
         assert_eq!(
             original_ptr, still_ptr,
@@ -409,7 +434,7 @@ mod tests {
         let id = profile.id.clone();
 
         // Exactly the state an in-flight start() leaves behind at its await point.
-        manager.tunnels.insert(id.clone(), None);
+        manager.tunnels.insert(id.clone(), TunnelSlot::Starting(1));
 
         // Rejected BEFORE the supervisor spawn, which is what lets this test run
         // without a real ssh binary — and is the point: nothing gets orphaned.
@@ -417,9 +442,91 @@ mod tests {
         assert!(err.contains("already running"), "unexpected error: {err}");
         assert_eq!(manager.tunnels.len(), 1, "no second entry may be created");
         assert!(
-            manager.tunnels.get(&id).unwrap().is_none(),
+            matches!(
+                manager.tunnels.get(&id).as_deref(),
+                Some(TunnelSlot::Starting(1))
+            ),
             "the in-flight reservation must be left alone"
         );
+    }
+
+    #[tokio::test]
+    async fn cancelling_start_removes_only_its_reservation() {
+        let (audit, _dir) = temp_audit();
+        let manager = Arc::new(TunnelManager::new(audit));
+        let profile = test_profile("cancelled");
+        let id = profile.id.clone();
+        let task_manager = Arc::clone(&manager);
+        let task = tokio::spawn(async move {
+            task_manager
+                .start_with(profile, |_, _| async {
+                    std::future::pending::<TunnelSupervisor>().await
+                })
+                .await
+        });
+        while !matches!(manager.get_status(&id), Some(TunnelStatus::Starting)) {
+            tokio::task::yield_now().await;
+        }
+
+        manager.stop(&id).unwrap();
+        manager
+            .tunnels
+            .insert(id.clone(), TunnelSlot::Starting(999));
+        task.abort();
+        let _ = task.await;
+        assert!(matches!(
+            manager.tunnels.get(&id).as_deref(),
+            Some(TunnelSlot::Starting(999))
+        ));
+    }
+
+    #[tokio::test]
+    async fn stop_during_spawn_prevents_publication_and_started_audit() {
+        let (audit, _dir) = temp_audit();
+        let manager = Arc::new(TunnelManager::new(audit));
+        let script = fake_ssh_script("sleep 3600");
+        let ssh_path = script.path().to_path_buf();
+        let profile = test_profile("stopped-during-spawn");
+        let id = profile.id.clone();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let task_manager = Arc::clone(&manager);
+        let task = tokio::spawn(async move {
+            task_manager
+                .start_with(profile, move |profile, callback| async move {
+                    let _ = release_rx.await;
+                    TunnelSupervisor::start_with_binary(profile, ssh_path, callback).await
+                })
+                .await
+        });
+        while !matches!(manager.get_status(&id), Some(TunnelStatus::Starting)) {
+            tokio::task::yield_now().await;
+        }
+
+        manager.stop(&id).unwrap();
+        let _ = release_tx.send(());
+        let error = task
+            .await
+            .unwrap()
+            .expect_err("stopped start must not publish");
+        assert!(error.contains("stopped while starting"), "{error}");
+        assert!(manager.get_status(&id).is_none());
+        let events = manager.audit.lock().query_by_tunnel(&id, 20).unwrap();
+        assert!(!events.iter().any(|event| event.kind == EventKind::Started));
+    }
+
+    #[tokio::test]
+    async fn failed_spawn_releases_reservation_without_started_audit() {
+        let (audit, _dir) = temp_audit();
+        let manager = TunnelManager::new(audit);
+        let mut profile = test_profile("invalid");
+        profile.host = " ".to_string();
+        let id = profile.id.clone();
+
+        let error = manager.start(profile).await.expect_err("invalid profile");
+        assert!(error.contains("host must not be empty"), "{error}");
+        assert!(manager.get_status(&id).is_none());
+        let events = manager.audit.lock().query_by_tunnel(&id, 20).unwrap();
+        assert!(!events.iter().any(|event| event.kind == EventKind::Started));
     }
 
     /// A reserved slot has no supervisor to ask, and reporting it as absent would
@@ -428,7 +535,9 @@ mod tests {
     fn a_reserved_tunnel_reports_starting() {
         let (audit, _dir) = temp_audit();
         let manager = TunnelManager::new(audit);
-        manager.tunnels.insert("in-flight".to_string(), None);
+        manager
+            .tunnels
+            .insert("in-flight".to_string(), TunnelSlot::Starting(1));
 
         assert!(matches!(
             manager.get_status("in-flight"),
@@ -445,12 +554,16 @@ mod tests {
     fn stopping_a_reserved_tunnel_frees_the_id() {
         let (audit, _dir) = temp_audit();
         let manager = TunnelManager::new(audit);
-        manager.tunnels.insert("in-flight".to_string(), None);
+        manager
+            .tunnels
+            .insert("in-flight".to_string(), TunnelSlot::Starting(1));
 
         manager.stop("in-flight").expect("stop a reserved tunnel");
         assert!(manager.tunnels.is_empty());
 
-        manager.tunnels.insert("in-flight".to_string(), None);
+        manager
+            .tunnels
+            .insert("in-flight".to_string(), TunnelSlot::Starting(2));
         manager.stop_if_running("in-flight");
         assert!(manager.tunnels.is_empty());
     }

@@ -36,6 +36,13 @@ class Client:
         with urllib.request.urlopen(request, timeout=10) as response:
             return json.load(response)
 
+    def request_bytes(self, path: str) -> bytes:
+        request = urllib.request.Request(
+            self.base_url + path, method="GET", headers=self.headers
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.read()
+
 
 def expected_record(index: int) -> str:
     return f"REC-{index:04d}:abcdefghijklmnopqrstuvwxyz0123456789"
@@ -143,6 +150,39 @@ def verify_scrollout(lines: list[str], count: int) -> None:
         )
 
 
+def verify_ink_repaint(lines: list[str], raw: bytes, count: int) -> None:
+    """Prove that every apparent duplicate was already emitted by Ink."""
+    expected_copies = 4
+    raw_banners = raw.count(b"TUIC_INK_BANNER")
+    grid_banners = sum(line == "TUIC_INK_BANNER" for line in lines)
+    if raw_banners != expected_copies or grid_banners != raw_banners:
+        raise AssertionError(
+            "ink-repaint banner provenance failed: "
+            f"expected={expected_copies} raw={raw_banners} grid={grid_banners}"
+        )
+
+    expected = {expected_record(index) for index in range(count)}
+    observed = Counter(line for line in lines if line in expected)
+    bad_raw = sorted(
+        line for line in expected if raw.count(line.encode()) != expected_copies
+    )
+    missing = sorted(line for line in expected if observed[line] == 0)
+    manufactured = sorted(
+        line for line in expected if observed[line] > raw.count(line.encode())
+    )
+    if bad_raw or missing or manufactured:
+        raise AssertionError(
+            "ink-repaint record provenance failed: "
+            f"bad_raw={bad_raw[:10]} missing={missing[:10]} "
+            f"manufactured={manufactured[:10]}"
+        )
+
+    distribution = Counter(observed.values())
+    print(
+        f"PASS ink-repaint: {count} records x {expected_copies} raw emissions; "
+        f"canonical copies={dict(sorted(distribution.items()))}, none manufactured"
+    )
+
 def run_scenario(
     client: Client,
     repo_root: Path,
@@ -233,12 +273,15 @@ def run_scenario(
             {"offset": 0},
         )
         time.sleep(0.25)
+        raw = client.request_bytes(f"/sessions/{session_id}/raw-ring")
         lines = read_all_lines(client, session_id)
         if scenario == "reflow":
             verify_reflow(lines, count)
             print(f"PASS reflow: {count} complete records, none manufactured by reflow")
         elif scenario == "scrollout":
             verify_scrollout(lines, count)
+        elif scenario == "ink-repaint":
+            verify_ink_repaint(lines, raw, count)
         else:
             verify(lines, count, scenario)
             print(f"PASS {scenario}: {count} complete unique records")
@@ -269,6 +312,7 @@ def main() -> None:
             "slash-pressure",
             "reflow",
             "scrollout",
+            "ink-repaint",
             "all",
         ),
         default="all",
@@ -284,7 +328,15 @@ def main() -> None:
     repo_root = Path(__file__).resolve().parents[2]
     client = Client(args.base_url, args.auth)
     scenarios = (
-        ("atomic", "progressive", "timeout", "slash-pressure", "reflow", "scrollout")
+        (
+            "atomic",
+            "progressive",
+            "timeout",
+            "slash-pressure",
+            "reflow",
+            "scrollout",
+            "ink-repaint",
+        )
         if args.scenario == "all"
         else (args.scenario,)
     )

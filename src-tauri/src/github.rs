@@ -1906,9 +1906,10 @@ pub(crate) async fn reopen_issue(
 /// intercepted, because they are the one outcome that must not reach the caller
 /// as an ordinary failure.
 ///
-/// A 403 is classified from headers alone — `x-ratelimit-remaining: 0` for the
-/// primary limit, a `retry-after` for a secondary/abuse limit. That keeps the
-/// body intact for the plain permission-denied 403, which callers still format.
+/// A 403 is classified from headers first — `x-ratelimit-remaining: 0` for the
+/// primary limit, a `retry-after` for a secondary/abuse limit — then from the
+/// JSON message when GitHub omits both headers. Ambiguous bodies are buffered
+/// and rebuilt so plain permission-denied responses still reach their caller.
 async fn send_rest_with_breaker(
     state: &AppState,
     account: &crate::github_account::GitHubAccount,
@@ -1929,18 +1930,48 @@ async fn send_rest_with_breaker(
     let retry_after = header_as_u64(response.headers(), "retry-after");
     let remaining = header_as_u64(response.headers(), "x-ratelimit-remaining");
 
-    let rate_limited =
+    let mut rate_limited =
         status == 429 || (status == 403 && (remaining == Some(0) || retry_after.is_some()));
+    let response = if status == 403 && !rate_limited {
+        let response_status = response.status();
+        let response_version = response.version();
+        let response_headers = response.headers().clone();
+        let body = match response.bytes().await {
+            Ok(body) => body,
+            Err(error) => {
+                with_account_breaker(state, account, |b| b.record_failure());
+                return Err(format!("Failed to read GitHub 403 response: {error}"));
+            }
+        };
+        let message = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|json| json["message"].as_str().map(str::to_lowercase))
+            .unwrap_or_default();
+        rate_limited = message.contains("secondary rate") || message.contains("abuse");
+
+        let mut rebuilt = axum::http::Response::builder()
+            .status(response_status)
+            .version(response_version)
+            .body(reqwest::Body::from(body))
+            .map_err(|e| format!("Failed to rebuild GitHub response: {e}"))?;
+        *rebuilt.headers_mut() = response_headers;
+        reqwest::Response::from(rebuilt)
+    } else {
+        response
+    };
     if rate_limited {
         let wait = rate_limit_wait_secs(reset_at, retry_after);
         with_account_breaker(state, account, |b| b.record_rate_limit(wait));
         return Err(format!("rate-limit: GitHub returned HTTP {status}"));
     }
 
-    if (200..300).contains(&status) {
-        with_account_breaker(state, account, |b| b.record_success());
-    } else {
+    if (500..600).contains(&status) {
         with_account_breaker(state, account, |b| b.record_failure());
+    } else {
+        // Any ordinary response proves the service is reachable. Authentication,
+        // validation, conflicts and missing resources are caller errors, not an
+        // availability incident for unrelated operations.
+        with_account_breaker(state, account, |b| b.record_success());
     }
     Ok(response)
 }
@@ -6466,6 +6497,97 @@ mod tests {
         assert!(
             state.github_circuit_breaker.check().is_ok(),
             "a single permission denial must not open the breaker"
+        );
+    }
+
+    #[tokio::test]
+    async fn ordinary_rest_4xx_responses_do_not_poison_account_availability() {
+        let mut server = mockito::Server::new_async().await;
+        for (path, status) in [("/missing", 404), ("/conflict", 409), ("/invalid", 422)] {
+            server
+                .mock("GET", path)
+                .with_status(status)
+                .with_body(r#"{"message":"deterministic caller error"}"#)
+                .create_async()
+                .await;
+        }
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
+
+        for path in ["missing", "conflict", "invalid"] {
+            let response = send_rest_with_breaker(
+                &state,
+                &account,
+                state.http_client.get(format!("{}/{path}", server.url())),
+            )
+            .await
+            .expect("ordinary 4xx must reach its caller");
+            assert!(response.status().is_client_error());
+        }
+
+        assert!(
+            state.github_circuit_breaker.check().is_ok(),
+            "three deterministic 4xx responses must not open the breaker"
+        );
+    }
+
+    #[tokio::test]
+    async fn three_rest_5xx_responses_open_the_availability_breaker() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/unavailable")
+            .with_status(503)
+            .expect(3)
+            .create_async()
+            .await;
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
+
+        for _ in 0..3 {
+            let response = send_rest_with_breaker(
+                &state,
+                &account,
+                state
+                    .http_client
+                    .get(format!("{}/unavailable", server.url())),
+            )
+            .await
+            .expect("5xx body remains caller-readable");
+            assert_eq!(response.status().as_u16(), 503);
+        }
+
+        mock.assert_async().await;
+        assert!(state.github_circuit_breaker.check().is_err());
+    }
+
+    #[tokio::test]
+    async fn a_secondary_limit_body_trips_rest_backoff_without_headers() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/secondary")
+            .with_status(403)
+            .with_body(r#"{"message":"You have exceeded a secondary rate limit."}"#)
+            .create_async()
+            .await;
+        let state = crate::state::tests_support::make_test_app_state();
+        let account = github_com_account(&state);
+
+        let error = send_rest_with_breaker(
+            &state,
+            &account,
+            state.http_client.get(format!("{}/secondary", server.url())),
+        )
+        .await
+        .expect_err("body-signalled secondary limit must back off");
+
+        mock.assert_async().await;
+        assert!(error.contains("rate-limit"), "{error}");
+        assert!(
+            state
+                .github_circuit_breaker
+                .check()
+                .unwrap_err()
+                .starts_with("rate-limit:")
         );
     }
 

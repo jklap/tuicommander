@@ -86,7 +86,7 @@ The socket at `<config_dir>/mcp.sock` is managed with two safety layers to survi
 | `POST` | `/repo/post-pr-review` | Post a PR review with inline comments |
 | `GET` | `/repo/merged-prs?path=&sinceTag=` | Merged PRs via GraphQL (changelog source) |
 | `GET` | `/repo/changelog?path=&sinceTag=` | AI changelog `{markdown, json}` (Headless slot) |
-| `POST` | `/repo/conflict-assist` | Worktree + rebase; reports clean/conflicts + agent prompt |
+| `POST` | `/repo/conflict-assist` | Worktree + rebase; reports verified/unverified clean or conflicts, base source, warning, and agent prompt |
 
 ### Configuration
 
@@ -183,17 +183,22 @@ The `GET /mcp` SSE stream emits `notifications/tools/list_changed` whenever the 
 
 The bridge uses the standard MCP `ping` request for its three-second liveness check. This keeps health traffic constant-size as terminal count grows; it does not rebuild or serialize the complete tool catalog. If IPC is reachable but `/mcp` is unavailable, the bridge reports that the MCP endpoint is unavailable instead of incorrectly claiming the desktop process is not running.
 
+The bridge retains the downstream client's last `initialize` request and replays
+it internally after reconnecting to a restarted TUIC process. This restores
+session-scoped metadata such as Grok compatibility mode without sending a
+second initialize response to the client.
+
 On reconnect, a peer may reclaim its stable TUIC identity after the prior MCP protocol session has no live SSE subscriber and has missed the bridge activity grace period. The takeover retires the old forward and reverse routing entries atomically. A currently subscribed or recently active owner cannot be replaced.
 
-**Blocking tool handlers run off the runtime worker.** The `session`, `agent`, and
-`config` tool handlers are synchronous and reach genuinely blocking work — `session
-close`/`kill` wait on the child with `std::thread::sleep` (up to 200 ms), agent
-injection sleeps `INJECT_ENTER_GAP` between the payload and the Enter, spawn and
-config paths issue blocking syscalls and disk I/O. `handle_mcp_tool_call_with_context`
-dispatches each of them through `run_blocking_handler` (`tokio::task::spawn_blocking`)
-so they cannot park a tokio worker and stall every other in-flight MCP request; a
-panicking handler comes back as a tool error rather than killing the request task.
-The `POST /mcp` call site does **not** wrap anything itself.
+**Blocking tool actions run off the runtime worker.** Dispatch is action-aware:
+session create/input/close/kill/process-stats, agent spawn/detect/send, and config
+writes use `run_blocking_handler` (`tokio::task::spawn_blocking`) because they may
+sleep, spawn processes, write PTYs, or touch disk. Common read-only actions such
+as session list/output/status and agent list-peers/inbox/stats/metrics execute
+inline without cloning their JSON payload or scheduling blocking-pool work.
+Async waits remain on their event-driven async handlers. A panicking blocking
+handler becomes a tool error rather than killing the request task; `POST /mcp`
+does not add another blanket wrapper.
 
 ### Lazy Tool Discovery (`collapse_tools`)
 
@@ -207,11 +212,19 @@ When `collapse_tools: true` in `config.json` (or via Settings > Services > TUIC 
 
 Rationale: a cold tool list of 100+ tools costs ~35k tokens in every agent turn; the 3 meta-tools cost ~500 fixed tokens and the agent fetches schemas on demand. Toggling `collapse_tools` fires `notifications/tools/list_changed` so connected clients refresh their tool cache.
 
+TUIC also selects this three-tool surface automatically for an individual Grok
+session when `initialize.clientInfo.name` starts with `grok-shell-`. Grok accepts
+only one `__` namespace delimiter in a qualified MCP tool name, so it otherwise
+discards proxied names such as `tuicommander__upstream__tool`. The meta-tools keep
+the upstream identifier in the `call_tool` argument instead of the qualified MCP
+tool id. This compatibility mode is session-local: it does not change
+`collapse_tools` or the tool surface returned to other connected clients.
+
 **Filter enforcement.** Both `search_tools` and `call_tool` re-apply the safety filters that the full listing would apply: `disabled_native_tools` is checked up-front in `handle_call_tool`, and upstream allow/deny filters are enforced at both enumeration time (`aggregated_tools`) and dispatch time (`proxy_tool_call`). This is critical under collapse mode: discovery no longer gates dispatch, so an agent that knows a filtered tool name cannot bypass the filter by calling `call_tool` directly. `search_tools` and `get_tool_schema` also reject meta-tool names, and `call_tool` refuses to recurse into itself.
 
 The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<ToolSearchIndex>`, backed by `src-tauri/src/tool_search.rs`). A background task subscribes to the `mcp_tools_changed` broadcast and rebuilds the index whenever the tool set changes (upstream connect/disconnect, `disabled_native_tools` edit, `collapse_tools` toggle).
 
-The MCP instructions string returned by `initialize` (`build_mcp_instructions`) swaps to a "lazy discovery" guide when `collapse_tools: true` so agents know to call `search_tools` first rather than looking for a flat tool table.
+The MCP instructions string returned by `initialize` (`build_mcp_instructions`) swaps to a "lazy discovery" guide when `collapse_tools: true` or the connecting Grok session requires compatibility mode, so agents know to call `search_tools` first rather than looking for a flat tool table.
 The TUIC connection acknowledgment in those instructions is emitted exactly once per MCP connection or reconnect, never once per conversational turn. TUIC protocol context remains in initialize instructions and native core-tool descriptions only; upstream tool descriptions are preserved instead of receiving a repeated TUIC preamble.
 
 ### MCP Native Tools

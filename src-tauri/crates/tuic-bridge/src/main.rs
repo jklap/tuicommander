@@ -367,6 +367,21 @@ async fn server_initialize() -> Result<(String, String), String> {
     Ok((sid, body))
 }
 
+/// Re-establish the upstream protocol session after TUIC restarts. Replaying
+/// the downstream initialize preserves client-specific server behavior (for
+/// example Grok's compact meta-tool surface) without exposing another response
+/// to the downstream client.
+async fn server_reinitialize(downstream_initialize: Option<String>) -> Result<String, String> {
+    let (mut sid, _) = server_initialize().await?;
+    if let Some(initialize) = downstream_initialize {
+        let (_, restored_sid) = post_mcp(&initialize, Some(&sid)).await?;
+        if let Some(restored_sid) = restored_sid {
+            sid = restored_sid;
+        }
+    }
+    Ok(sid)
+}
+
 // ---------------------------------------------------------------------------
 // SSE listener
 // ---------------------------------------------------------------------------
@@ -376,6 +391,15 @@ struct BridgeState {
     connected: AtomicBool,
     /// Handle to the SSE listener task — aborted and restarted on reconnect.
     sse_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Last initialize received from the stdio client. Replayed after an
+    /// upstream restart so TUIC restores client-specific session metadata.
+    downstream_initialize: Mutex<Option<String>>,
+}
+
+impl BridgeState {
+    fn downstream_initialize(&self) -> Option<String> {
+        self.downstream_initialize.lock().unwrap().clone()
+    }
 }
 
 /// Open a persistent GET /mcp SSE connection and forward server notifications to stdout.
@@ -490,6 +514,7 @@ async fn main() {
         session_id: Mutex::new(None),
         connected: AtomicBool::new(false),
         sse_handle: Mutex::new(None),
+        downstream_initialize: Mutex::new(None),
     });
 
     // Try initial connection
@@ -543,7 +568,7 @@ async fn main() {
                 } else {
                     consecutive_failures = 0;
                 }
-            } else if let Ok((sid, _)) = server_initialize().await {
+            } else if let Ok(sid) = server_reinitialize(bg_state.downstream_initialize()).await {
                 eprintln!("tuic-bridge: reconnected to TUIC");
                 *bg_state.session_id.lock().unwrap() = Some(sid);
                 bg_state.connected.store(true, Ordering::Release);
@@ -585,6 +610,7 @@ async fn main() {
 
         match method {
             "initialize" => {
+                *state.downstream_initialize.lock().unwrap() = Some(line.clone());
                 // Proxy to server when connected to get dynamic instructions.
                 // The server response includes intent protocol, active sessions, etc.
                 // Fall back to a minimal local response only when offline.
@@ -642,7 +668,7 @@ async fn main() {
             _ => {
                 // Lazy reconnect attempt if disconnected
                 if !state.connected.load(Ordering::Acquire)
-                    && let Ok((sid, _)) = server_initialize().await
+                    && let Ok(sid) = server_reinitialize(state.downstream_initialize()).await
                 {
                     eprintln!("tuic-bridge: reconnected to TUIC");
                     *state.session_id.lock().unwrap() = Some(sid);

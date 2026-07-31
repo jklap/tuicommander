@@ -62,14 +62,6 @@ pub(crate) enum TaskKind {
     AgentSpawn,
 }
 
-impl TaskKind {
-    pub(crate) fn as_str(self) -> &'static str {
-        match self {
-            Self::AgentSpawn => "agent_spawn",
-        }
-    }
-}
-
 /// Payload attached to a status transition. Every field is optional, and an
 /// omitted one leaves the stored value alone — a progress message must not wipe
 /// an earlier partial result.
@@ -131,12 +123,7 @@ impl TaskRegistry {
     }
 
     /// Create a `working` task and return its handle.
-    pub(crate) fn create(
-        &self,
-        kind: TaskKind,
-        owner: &str,
-        session_id: Option<&str>,
-    ) -> String {
+    pub(crate) fn create(&self, kind: TaskKind, owner: &str, session_id: Option<&str>) -> String {
         let task_id = uuid::Uuid::new_v4().to_string();
         let now = unix_now();
         self.tasks.insert(
@@ -433,7 +420,7 @@ mod tests {
     }
 
     /// Phase G serializes these strings straight onto the `tasks/*` surface, where
-    /// they are the spec — `as_str` and the derive must never diverge.
+    /// they are the spec. Keep the explicit expected spellings aligned with serde.
     #[test]
     fn status_as_str_matches_the_wire() {
         for status in [
@@ -450,10 +437,9 @@ mod tests {
             );
         }
 
-        let kind = TaskKind::AgentSpawn;
         assert_eq!(
-            serde_json::to_value(kind).expect("serialize"),
-            serde_json::Value::String(kind.as_str().to_string())
+            serde_json::to_value(TaskKind::AgentSpawn).expect("serialize"),
+            serde_json::Value::String("agent_spawn".to_string())
         );
     }
 
