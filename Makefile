@@ -21,7 +21,7 @@ export MACOSX_DEPLOYMENT_TARGET ?= 10.15
 # Distribution output
 DIST_DIR=dist-release
 
-.PHONY: all clean dev test build build-dmg check cov fmt sign verify-sign notarize release dist \
+.PHONY: all clean dev test build build-dmg check cov crap fmt sign verify-sign notarize release dist \
        nightly github-release preview bump release-notes hooks \
        gh-debug-on gh-debug-off gh-debug-status gh-debug-logs gh-rate logs
 
@@ -69,6 +69,7 @@ check:
 	@echo "Running checks..."
 	@rtk pnpm exec tsc --noEmit && echo "  tsc ✓"
 	@rtk pnpm exec biome check --max-diagnostics=100 src/ && echo "  biome ✓"
+	@rtk pnpm architecture:cycles && rtk pnpm architecture:cycles:test && echo "  architecture cycles ✓"
 	@bash -c 'caps=$$(sed -n "/const KNOWN_CAPABILITIES/,/];/p" src-tauri/src/plugins.rs | grep -oE "\"[a-z][a-z:_-]+\"" | tr -d "\""); miss=0; for c in $$caps; do for d in src-tauri/src/mcp_http/plugin_docs.rs docs/plugins.md; do grep -qF "$$c" "$$d" || { echo "  ✗ capability $$c missing from $$d"; miss=1; }; done; done; [ $$miss -eq 0 ]' && echo "  plugin-docs-sync ✓"
 	@cd src-tauri && rtk cargo fmt --check && echo "  rustfmt ✓"
 	@cd src-tauri && rtk cargo clippy --release -- -D warnings && echo "  clippy ✓"
@@ -85,7 +86,20 @@ check:
 cov:
 	@cd src-tauri && ulimit -n 10240 && rtk cargo llvm-cov nextest
 	@cd src-tauri && rtk cargo llvm-cov report --html
+	@cd src-tauri && rtk cargo llvm-cov report --lcov --output-path lcov.info
 	@echo "HTML report: src-tauri/target/llvm-cov/html/index.html"
+
+# CRAP metric (complexity² × uncovered³ + complexity) over the coverage data
+# from `make cov`. Thresholds and exclusions live in src-tauri/.cargo-crap.toml.
+#
+# Deliberately NOT `--workspace`: workspace mode walks every member root, and
+# src-tauri/ is itself a member whose tree *contains* crates/ and patches/ — so
+# each of those files is analyzed twice (417 reported "crappy" vs 312 real). One
+# root from src-tauri/ sees the same code once and lets the `patches/**` exclude
+# actually match.
+crap:
+	@cd src-tauri && test -f lcov.info || { echo "src-tauri/lcov.info missing — run 'make cov' first"; exit 1; }
+	@cd src-tauri && rtk cargo crap --lcov lcov.info --top 30
 
 # GitHub API debug logging — toggle at runtime, view logs
 gh-debug-on:
@@ -189,6 +203,8 @@ bump:
 	echo "  src-tauri/Cargo.toml [workspace.package] → $(V) (tuicommander, tuic-bridge, tuic-cli inherit)"; \
 	echo "  src-tauri/tauri.conf.json → $(V)"; \
 	echo "  package.json          → $(V)"; \
+	(cd src-tauri && (cargo metadata --offline --format-version 1 >/dev/null 2>&1 || cargo metadata --format-version 1 >/dev/null)); \
+	echo "  src-tauri/Cargo.lock  → $(V) (workspace members re-pinned)"; \
 	sed -i '' 's/^\*\*Version:\*\* .*/**Version:** $(V)/' SPEC.md; \
 	echo "  SPEC.md               → $(V)"; \
 	TODAY=$$(date +%Y-%m-%d); \
