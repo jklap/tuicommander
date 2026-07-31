@@ -4922,11 +4922,8 @@ fn enqueue_state_change_to_parent(
 /// Wake/dispatch only after the child lifecycle lock has been released. This
 /// may acquire the parent's SilenceState lock through terminal delivery.
 fn dispatch_parent_lifecycle(state: &AppState, dispatch: ParentLifecycleDispatch) {
-    if deliver_message_to_managed_pty(state, &dispatch.parent_id, &dispatch.framed) {
-        state.mark_terminal_delivery_dispatched(&dispatch.parent_id, &dispatch.message_id);
-    } else {
-        state.release_terminal_delivery(&dispatch.parent_id, &dispatch.message_id);
-    }
+    let outcome = deliver_message_to_managed_pty(state, &dispatch.parent_id, &dispatch.framed);
+    settle_terminal_delivery(state, &dispatch.parent_id, &dispatch.message_id, outcome);
 }
 
 /// Push a state_change message and wake the parent when no child lifecycle
@@ -4978,7 +4975,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
     {
         return true;
     }
-    let delivered = deliver_message_to_managed_pty(
+    let outcome = deliver_message_to_managed_pty(
         state,
         &parent_id,
         &format!(
@@ -4986,11 +4983,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
             short_session(session_id)
         ),
     );
-    if delivered {
-        state.mark_terminal_delivery_dispatched(&parent_id, &message_id);
-    } else {
-        state.release_terminal_delivery(&parent_id, &message_id);
-    }
+    settle_terminal_delivery(state, &parent_id, &message_id, outcome);
     true
 }
 
@@ -5330,11 +5323,34 @@ fn requeue_injection_front(state: &AppState, session_id: &str, text: &str) {
         .push_front(text.to_string());
 }
 
+/// What actually became of a peer message handed to the terminal path.
+///
+/// The distinction is the whole point: `Queued` is NOT delivery. The composer was
+/// busy, so the message only sits in `pending_injections` until the next BUSY→IDLE
+/// transition — and a teardown before that flush drops the queue (see the tombstone
+/// cleanup). Collapsing this into "the session still exists" is what let a caller
+/// mark a never-typed message `TerminalDispatched`, which the waiter filter then
+/// hides, stranding it in the inbox with nothing left to surface it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PtyDelivery {
+    /// Written into the composer and submitted, or written ambiguously enough that
+    /// a retry would risk duplicating it. Either way the terminal owns it.
+    Typed,
+    /// Parked in `pending_injections`; nothing reached the terminal yet.
+    Queued,
+    /// Not an agent, or the session is gone — the terminal path cannot take it.
+    Unavailable,
+}
+
 /// Deliver a framed peer message into a recipient's terminal, waking it. Injects
 /// immediately when the recipient is an idle agent; otherwise queues it to flush
 /// on the recipient's next BUSY→IDLE transition. No-op for non-agent sessions.
 /// The caller has already buffered the authoritative copy in the inbox.
-pub(crate) fn deliver_message_to_pty(state: &AppState, session_id: &str, framed: &str) {
+pub(crate) fn deliver_message_to_pty(
+    state: &AppState,
+    session_id: &str,
+    framed: &str,
+) -> PtyDelivery {
     // Never queue for a non-agent — shells and dead sessions have no wake path.
     let is_agent = state
         .session_states
@@ -5342,7 +5358,7 @@ pub(crate) fn deliver_message_to_pty(state: &AppState, session_id: &str, framed:
         .map(|s| s.agent_type.is_some())
         .unwrap_or(false);
     if !is_agent {
-        return;
+        return PtyDelivery::Unavailable;
     }
     if let Some(claim) = claim_idle_for_injection(state, session_id) {
         if matches!(
@@ -5350,7 +5366,11 @@ pub(crate) fn deliver_message_to_pty(state: &AppState, session_id: &str, framed:
             InjectionOutcome::NotStarted(_)
         ) {
             requeue_injection_front(state, session_id, framed);
+            return PtyDelivery::Queued;
         }
+        // Submitted, or Uncertain — an ambiguous write must not be retried, so the
+        // terminal keeps ownership either way.
+        PtyDelivery::Typed
     } else {
         state
             .pending_injections
@@ -5367,27 +5387,68 @@ pub(crate) fn deliver_message_to_pty(state: &AppState, session_id: &str, framed:
         // drains under a get_mut write lock, so the racing flush that loses just finds
         // an empty queue.
         flush_pending_injections(state, session_id);
+        // That flush drains the whole queue under a write lock, so an empty queue
+        // means everything — ours included — reached the composer. A non-empty
+        // queue may still hold this message, and reporting Queued in the ambiguous
+        // case is the safe direction: the worst outcome is that teardown later
+        // hands a message the waiter can still see, instead of losing it.
+        if state
+            .pending_injections
+            .get(session_id)
+            .is_some_and(|queue| !queue.is_empty())
+        {
+            PtyDelivery::Queued
+        } else {
+            PtyDelivery::Typed
+        }
+    }
+}
+
+/// Settle wake ownership from what the terminal path actually did.
+///
+/// `Queued` deliberately does nothing, and that is the fix: the message stays
+/// `TerminalPending`, which is the truthful state — the terminal owns it and will
+/// type it on the next idle transition, but nothing has been typed yet. Marking it
+/// `TerminalDispatched` here (as every call site used to, because the old boolean
+/// only meant "the session exists") claimed a delivery that had not happened.
+pub(crate) fn settle_terminal_delivery(
+    state: &AppState,
+    tuic_session: &str,
+    message_id: &str,
+    outcome: PtyDelivery,
+) {
+    match outcome {
+        PtyDelivery::Typed => state.mark_terminal_delivery_dispatched(tuic_session, message_id),
+        PtyDelivery::Queued => {}
+        PtyDelivery::Unavailable => state.release_terminal_delivery(tuic_session, message_id),
     }
 }
 
 /// Deliver only while the recipient still has a managed PTY and agent state.
-/// Returns false when teardown won the race so the caller can release wake
-/// ownership and leave the authoritative inbox copy available to `agent wait`.
+/// Reports what the terminal path actually did, so the caller can keep wake
+/// ownership only for a message that truly reached the composer. `Unavailable`
+/// means teardown won the race and the authoritative inbox copy must stay
+/// available to `agent wait`.
 pub(crate) fn deliver_message_to_managed_pty(
     state: &AppState,
     session_id: &str,
     framed: &str,
-) -> bool {
+) -> PtyDelivery {
     let available = state.sessions.contains_key(session_id)
         && state
             .session_states
             .get(session_id)
             .is_some_and(|session| session.agent_type.is_some());
     if !available {
-        return false;
+        return PtyDelivery::Unavailable;
     }
-    deliver_message_to_pty(state, session_id, framed);
-    state.sessions.contains_key(session_id)
+    let outcome = deliver_message_to_pty(state, session_id, framed);
+    // Teardown can still win between the check above and the write.
+    if state.sessions.contains_key(session_id) {
+        outcome
+    } else {
+        PtyDelivery::Unavailable
+    }
 }
 
 /// Drain and inject any messages queued for a session that can receive them now.
@@ -15951,10 +16012,97 @@ mod tests {
     fn deliver_queues_pending_for_busy_agent() {
         let state = crate::state::tests_support::make_test_app_state();
         agent_session(&state, "busy", SHELL_BUSY);
-        deliver_message_to_pty(&state, "busy", "[TUIC message from lead] go");
+        let outcome = deliver_message_to_pty(&state, "busy", "[TUIC message from lead] go");
+        assert_eq!(
+            outcome,
+            PtyDelivery::Queued,
+            "a busy composer parks the message; nothing reached the terminal"
+        );
         let q = state.pending_injections.get("busy").expect("queued");
         assert_eq!(q.len(), 1);
         assert_eq!(q.front().unwrap(), "[TUIC message from lead] go");
+    }
+
+    /// The defect this pair pins: `deliver_message_to_managed_pty` used to return
+    /// `state.sessions.contains_key(session_id)` — "the session exists", not "the
+    /// message was typed". Every call site read that as delivery and marked the
+    /// message `TerminalDispatched`, and the waiter filter hides Terminal-owned
+    /// messages, so a queued-but-never-typed message became invisible to
+    /// `agent wait` while still sitting unread in the inbox.
+    #[test]
+    fn queued_message_is_not_claimed_as_dispatched() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "busy-peer", SHELL_BUSY);
+        let msg = "m-queued";
+        assert_eq!(
+            state.assign_agent_delivery("busy-peer", msg, true),
+            crate::state::AgentDeliveryAssignment::Terminal
+        );
+
+        let outcome = deliver_message_to_pty(&state, "busy-peer", "[TUIC message from lead] go");
+        settle_terminal_delivery(&state, "busy-peer", msg, outcome);
+
+        assert_eq!(outcome, PtyDelivery::Queued);
+        assert_eq!(
+            state.agent_delivery_owner("busy-peer", msg),
+            Some(crate::state::AgentDeliveryOwner::TerminalPending),
+            "still owned by the terminal — but pending, never dispatched"
+        );
+    }
+
+    /// `settle_terminal_delivery` is the decision this fix introduced, so pin all
+    /// three branches directly. Driving `Typed` end-to-end would need a live PTY
+    /// (without one the claim path always reports `NotStarted` and requeues — see
+    /// `ready_prompt_delivery_attempts_and_requeues_when_pty_is_missing`), and a
+    /// fake PTY would only prove the fake.
+    #[test]
+    fn settle_maps_each_outcome_to_the_right_ownership() {
+        let state = crate::state::tests_support::make_test_app_state();
+        for (msg, outcome, expected) in [
+            (
+                "m-typed",
+                PtyDelivery::Typed,
+                Some(crate::state::AgentDeliveryOwner::TerminalDispatched),
+            ),
+            (
+                "m-queued",
+                PtyDelivery::Queued,
+                Some(crate::state::AgentDeliveryOwner::TerminalPending),
+            ),
+            ("m-gone", PtyDelivery::Unavailable, None),
+        ] {
+            assert_eq!(
+                state.assign_agent_delivery("peer", msg, true),
+                crate::state::AgentDeliveryAssignment::Terminal
+            );
+            settle_terminal_delivery(&state, "peer", msg, outcome);
+            assert_eq!(
+                state.agent_delivery_owner("peer", msg),
+                expected,
+                "{outcome:?} must not claim more or less than it achieved"
+            );
+        }
+    }
+
+    #[test]
+    fn dead_session_reports_unavailable_and_releases_ownership() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let msg = "m-dead";
+        assert_eq!(
+            state.assign_agent_delivery("ghost-peer", msg, true),
+            crate::state::AgentDeliveryAssignment::Terminal
+        );
+
+        // No PTY was ever registered for this id.
+        let outcome = deliver_message_to_managed_pty(&state, "ghost-peer", "[TUIC] hi");
+        settle_terminal_delivery(&state, "ghost-peer", msg, outcome);
+
+        assert_eq!(outcome, PtyDelivery::Unavailable);
+        assert_eq!(
+            state.agent_delivery_owner("ghost-peer", msg),
+            None,
+            "ownership handed back so `agent wait` can still surface the inbox copy"
+        );
     }
 
     #[test]
@@ -16043,9 +16191,10 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         agent_session(&state, "vanished", SHELL_BUSY);
 
-        assert!(!deliver_message_to_managed_pty(
-            &state, "vanished", "message"
-        ));
+        assert_eq!(
+            deliver_message_to_managed_pty(&state, "vanished", "message"),
+            PtyDelivery::Unavailable
+        );
         assert!(!state.pending_injections.contains_key("vanished"));
     }
 
