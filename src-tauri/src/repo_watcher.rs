@@ -218,13 +218,34 @@ pub(crate) fn compute_git_fingerprint(
     index_size: u64,
     head_target: &str,
     porcelain_status: &str,
+    worktree_admin_names: &[String],
 ) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     index_size.hash(&mut hasher);
     head_target.hash(&mut hasher);
     porcelain_status.hash(&mut hasher);
+    worktree_admin_names.hash(&mut hasher);
     hasher.finish()
+}
+
+/// Sorted names of the repo's linked-worktree admin dirs (`.git/worktrees/*`).
+///
+/// Part of the fingerprint because adding or removing a worktree touches nothing
+/// else it covers: HEAD, the index and the working tree are all unchanged, so a
+/// worktree-only change used to be swallowed by the "git-state unchanged" guard
+/// and the sidebar kept showing rows for worktrees that no longer existed.
+/// Sorted so directory-iteration order can't produce a spurious change.
+fn worktree_admin_names(git_dir: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(git_dir.join("worktrees")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    names.sort();
+    names
 }
 
 /// Resolve HEAD to a stable target string (cheap file reads, no subprocess):
@@ -263,7 +284,12 @@ fn repo_git_fingerprint(repo_root: &Path, git_dir: &Path) -> u64 {
         .run_silent()
         .map(|o| o.stdout)
         .unwrap_or_default();
-    compute_git_fingerprint(index_size, &head_target, &porcelain)
+    compute_git_fingerprint(
+        index_size,
+        &head_target,
+        &porcelain,
+        &worktree_admin_names(git_dir),
+    )
 }
 
 /// Decide whether a `head-changed` emit should fire for `repo_path` given the
@@ -1011,37 +1037,38 @@ mod tests {
 
     #[test]
     fn test_fingerprint_same_state_is_equal() {
-        let a = compute_git_fingerprint(1024, "refs/heads/main=abc123", " M src/main.rs\n");
-        let b = compute_git_fingerprint(1024, "refs/heads/main=abc123", " M src/main.rs\n");
+        let a = compute_git_fingerprint(1024, "refs/heads/main=abc123", " M src/main.rs\n", &[]);
+        let b = compute_git_fingerprint(1024, "refs/heads/main=abc123", " M src/main.rs\n", &[]);
         assert_eq!(a, b);
     }
 
     #[test]
     fn test_fingerprint_changed_file_differs() {
-        let clean = compute_git_fingerprint(1024, "refs/heads/main=abc123", "");
-        let dirty = compute_git_fingerprint(1024, "refs/heads/main=abc123", " M src/main.rs\n");
+        let clean = compute_git_fingerprint(1024, "refs/heads/main=abc123", "", &[]);
+        let dirty =
+            compute_git_fingerprint(1024, "refs/heads/main=abc123", " M src/main.rs\n", &[]);
         assert_ne!(clean, dirty);
     }
 
     #[test]
     fn test_fingerprint_branch_switch_differs() {
-        let on_main = compute_git_fingerprint(1024, "refs/heads/main=abc123", "");
-        let on_feat = compute_git_fingerprint(1024, "refs/heads/feature=def456", "");
+        let on_main = compute_git_fingerprint(1024, "refs/heads/main=abc123", "", &[]);
+        let on_feat = compute_git_fingerprint(1024, "refs/heads/feature=def456", "", &[]);
         assert_ne!(on_main, on_feat);
     }
 
     #[test]
     fn test_fingerprint_commit_changes_head_sha() {
         // Same branch, new commit → resolved HEAD sha changes even if porcelain matches.
-        let before = compute_git_fingerprint(1024, "refs/heads/main=abc123", "");
-        let after = compute_git_fingerprint(1024, "refs/heads/main=zzz999", "");
+        let before = compute_git_fingerprint(1024, "refs/heads/main=abc123", "", &[]);
+        let after = compute_git_fingerprint(1024, "refs/heads/main=zzz999", "", &[]);
         assert_ne!(before, after);
     }
 
     #[test]
     fn test_fingerprint_index_size_differs() {
-        let small = compute_git_fingerprint(512, "refs/heads/main=abc123", "");
-        let large = compute_git_fingerprint(2048, "refs/heads/main=abc123", "");
+        let small = compute_git_fingerprint(512, "refs/heads/main=abc123", "", &[]);
+        let large = compute_git_fingerprint(2048, "refs/heads/main=abc123", "", &[]);
         assert_ne!(small, large);
     }
 
@@ -1049,10 +1076,109 @@ mod tests {
     fn test_fingerprint_ignores_index_mtime_noop_touch() {
         // mtime is NOT an input — a bare `touch .git/index` (size/head/status all
         // unchanged) yields the identical fingerprint, so the emit is skipped.
-        let before = compute_git_fingerprint(1024, "refs/heads/main=abc123", " M a.txt\n");
+        let before = compute_git_fingerprint(1024, "refs/heads/main=abc123", " M a.txt\n", &[]);
         let after_noop_touch =
-            compute_git_fingerprint(1024, "refs/heads/main=abc123", " M a.txt\n");
+            compute_git_fingerprint(1024, "refs/heads/main=abc123", " M a.txt\n", &[]);
         assert_eq!(before, after_noop_touch);
+    }
+
+    /// The ghost-worktree regression: removing a worktree leaves HEAD, the index
+    /// and the working tree untouched, so before the worktree set joined the
+    /// fingerprint the emit was skipped and the sidebar row survived forever.
+    #[test]
+    fn test_fingerprint_worktree_removed_differs() {
+        let two = compute_git_fingerprint(
+            1024,
+            "refs/heads/main=abc123",
+            "",
+            &["feat-a".to_string(), "feat-b".to_string()],
+        );
+        let one =
+            compute_git_fingerprint(1024, "refs/heads/main=abc123", "", &["feat-a".to_string()]);
+        assert_ne!(two, one, "a removed worktree must change the fingerprint");
+    }
+
+    #[test]
+    fn test_fingerprint_worktree_added_differs() {
+        let none = compute_git_fingerprint(1024, "refs/heads/main=abc123", "", &[]);
+        let one =
+            compute_git_fingerprint(1024, "refs/heads/main=abc123", "", &["feat-a".to_string()]);
+        assert_ne!(none, one);
+    }
+
+    #[test]
+    fn test_fingerprint_worktree_set_is_order_insensitive() {
+        // `worktree_admin_names` sorts, so readdir order can never fake a change.
+        let dir = tempfile::tempdir().unwrap();
+        let git_dir = dir.path();
+        std::fs::create_dir_all(git_dir.join("worktrees/zeta")).unwrap();
+        std::fs::create_dir_all(git_dir.join("worktrees/alpha")).unwrap();
+        assert_eq!(worktree_admin_names(git_dir), vec!["alpha", "zeta"]);
+    }
+
+    /// End-to-end guard on a real repo: `git worktree add` then `git worktree
+    /// remove` must move the fingerprint both ways. HEAD, the index and the
+    /// working tree are identical before and after, so this is exactly the case
+    /// the "git-state unchanged" skip used to swallow — leaving the sidebar with
+    /// rows for worktrees that no longer exist.
+    #[test]
+    fn test_real_worktree_add_remove_moves_fingerprint() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str], cwd: &Path| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-b", "main"], &repo);
+        git(&["config", "user.email", "t@t.com"], &repo);
+        git(&["config", "user.name", "T"], &repo);
+        std::fs::write(repo.join("a.txt"), "hi\n").unwrap();
+        git(&["add", "a.txt"], &repo);
+        git(&["commit", "-m", "init"], &repo);
+
+        let git_dir = repo.join(".git");
+        let before = repo_git_fingerprint(&repo, &git_dir);
+
+        let wt = dir.path().join("wt-feat");
+        git(
+            &["worktree", "add", "-b", "feat", wt.to_str().unwrap()],
+            &repo,
+        );
+        let with_worktree = repo_git_fingerprint(&repo, &git_dir);
+        assert_ne!(
+            before, with_worktree,
+            "adding a worktree must be visible to the git-state guard"
+        );
+
+        git(&["worktree", "remove", wt.to_str().unwrap()], &repo);
+        let after_remove = repo_git_fingerprint(&repo, &git_dir);
+        assert_ne!(
+            with_worktree, after_remove,
+            "removing a worktree must be visible to the git-state guard — \
+             this is the ghost-row regression"
+        );
+        assert_eq!(
+            before, after_remove,
+            "back to the original worktree set → back to the original fingerprint"
+        );
+    }
+
+    #[test]
+    fn test_worktree_admin_names_empty_without_worktrees_dir() {
+        // A repo with no linked worktrees (no `.git/worktrees`) must not error and
+        // must hash the same as one whose worktrees were all removed.
+        let dir = tempfile::tempdir().unwrap();
+        assert!(worktree_admin_names(dir.path()).is_empty());
     }
 
     #[test]

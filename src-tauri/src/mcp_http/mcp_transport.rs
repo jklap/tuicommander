@@ -2521,7 +2521,7 @@ async fn handle_worktree(
                 false,
             ) {
                 Ok(outcome) => {
-                    state.invalidate_repo_caches(&path);
+                    state.notify_worktree_removed(&path, &branch);
                     worktree_remove_success_response(outcome.branch_delete_warning)
                 }
                 Err(e) => serde_json::json!({"error": e}),
@@ -3440,7 +3440,15 @@ fn handle_messaging(
             // a claim made by a concurrent waiter between these two operations.
             // External peers without a live SSE subscriber remain inbox-only.
             state.push_agent_inbox(to, msg);
-            let managed_recipient = state.sessions.contains_key(to);
+            // Resolve, do not compare. A self-registering agent announces its
+            // `$TUIC_SESSION`, which is not the key its PTY was filed under, so the
+            // old `sessions.contains_key(to)` answered "no terminal" for every peer
+            // that had not been spawned by the server itself.
+            let live_pty = state.live_pty_for_peer(to);
+            let managed_recipient = live_pty.is_some();
+            // The channel-eligibility probe reads agent lifecycle state, which is
+            // filed under the PTY key like everything else.
+            let channel_pty = live_pty.clone();
             let recipient_mcp_sid = state.peer_agents.get(to).map(|p| p.mcp_session_id.clone());
             let notification = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -3465,7 +3473,7 @@ fn handle_messaging(
                     };
                     if !recipient_supports_active_claude_channel(
                         state,
-                        to,
+                        channel_pty.as_deref().unwrap_or(to),
                         mcp_sid,
                         managed_recipient,
                     ) {
@@ -3497,18 +3505,24 @@ fn handle_messaging(
             }
 
             #[cfg(unix)]
-            if managed_recipient && let Err(e) = crate::pty::wake_session(state, to) {
-                tracing::debug!(session = %to, error = %e, "Wake on message delivery failed");
+            if let Some(pty_session) = live_pty.as_deref()
+                && let Err(e) = crate::pty::wake_session(state, pty_session)
+            {
+                tracing::debug!(session = %pty_session, error = %e, "Wake on message delivery failed");
             }
             // Event-driven wake: type the message into an idle recipient's terminal
             // so it acts without polling. Skip when already pushed over the SSE
             // channel (Claude Code consumes that notification itself, so PTY
             // injection would double-deliver). The inbox always holds the
             // authoritative copy.
-            let terminal_outcome = (terminal_owned && !pushed).then(|| {
-                let framed = frame_peer_message(&sender_name, message);
-                crate::pty::deliver_message_to_managed_pty(state, to, &framed)
-            });
+            let terminal_outcome =
+                live_pty
+                    .as_ref()
+                    .filter(|_| terminal_owned && !pushed)
+                    .map(|pty_session| {
+                        let framed = frame_peer_message(&sender_name, message);
+                        crate::pty::deliver_message_to_managed_pty(state, pty_session, &framed)
+                    });
             if let Some(outcome) = terminal_outcome {
                 crate::pty::settle_terminal_delivery(state, to, &msg_id, outcome);
                 // Only a session that cannot take the message at all falls back to
@@ -3551,7 +3565,9 @@ fn handle_messaging(
                     .as_object_mut()
                     .expect("send response is an object"),
                 "recipient_state",
-                managed_recipient_state(state, to),
+                live_pty
+                    .as_deref()
+                    .and_then(|pty_session| managed_recipient_state(state, pty_session)),
             );
             response
         }
@@ -5649,6 +5665,7 @@ mod tests {
     fn test_state() -> Arc<AppState> {
         let state = Arc::new(AppState {
             sessions: dashmap::DashMap::new(),
+            live_pty_by_tuic_session: dashmap::DashMap::new(),
             data_dir: std::env::temp_dir().join("test-tuic-data"),
             worktrees_dir: std::env::temp_dir().join("test-worktrees"),
             metrics: crate::SessionMetrics::new(),

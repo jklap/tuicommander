@@ -79,6 +79,35 @@ pub(crate) fn sanitize_pty_parent_env(cmd: &mut CommandBuilder) {
 
 /// Inject the Unix-style env vars that Claude Code / Ink need to detect
 /// terminal capabilities (color, kitty keyboard protocol, etc.).
+/// Give the PTY the identity its agent will announce, and record which terminal
+/// currently backs it.
+///
+/// Every session-creating path must call this. Before it existed only `create_pty`
+/// injected `TUIC_SESSION`, so a tab opened through the worktree, agent-spawn or
+/// HTTP paths ran with no identity at all: its bridge sent no `x-tuic-session`
+/// header, the server minted an MCP-scoped UUID at `register`, and that UUID
+/// matched no PTY — leaving the agent addressable by mail but unreachable through
+/// its own terminal.
+///
+/// `tuic_session` is the caller's stable identity when it has one (a desktop tab
+/// persists it across restarts for `claude --resume $TUIC_SESSION` and for goose's
+/// `--name`). Paths without one fall back to the PTY key itself, which makes
+/// identity and terminal trivially the same value for those sessions.
+pub(crate) fn bind_pty_identity(
+    state: &AppState,
+    cmd: &mut CommandBuilder,
+    session_id: &str,
+    tuic_session: Option<&str>,
+) {
+    let identity = tuic_session.unwrap_or(session_id);
+    cmd.env("TUIC_SESSION", identity);
+    cmd.env(
+        "TUIC_CONFIG_DIR",
+        crate::config::config_dir().to_string_lossy().as_ref(),
+    );
+    state.bind_live_pty(identity, session_id);
+}
+
 fn inject_unix_terminal_env(cmd: &mut CommandBuilder) {
     cmd.env("TERM", "xterm-256color");
     cmd.env("COLORTERM", "truecolor");
@@ -4820,6 +4849,22 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     state.resize_locks.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
     state.shell_state_since_ms.remove(session_id);
+    // A peer that announced its own `$TUIC_SESSION` is filed under that identity,
+    // not under the PTY key — so the `peer_agents.remove(session_id)` below has
+    // never matched it, and its registration outlived the terminal for the whole
+    // process lifetime. Retire the identities this PTY was backing as well.
+    for orphaned in state.unbind_live_pty(session_id) {
+        state.peer_agents.remove(&orphaned);
+        state.agent_inbox.remove(&orphaned);
+        state.agent_inbox_evictions.remove(&orphaned);
+        state.active_agent_waiters.remove(&orphaned);
+        state.pending_injections.remove(&orphaned);
+        let _ = state
+            .event_bus
+            .send(crate::state::AppEvent::PeerUnregistered {
+                tuic_session: orphaned,
+            });
+    }
     state.pending_injections.remove(session_id);
     state.pending_initial_prompts.remove(session_id);
     state.active_agent_waiters.remove(session_id);
@@ -6309,6 +6354,8 @@ pub(crate) async fn create_pty(
     let spawn_config = config.clone();
     let spawn_shell = shell.clone();
     let data_dir = state.data_dir.clone();
+    let state_for_env = state.inner().clone();
+    let session_id_for_env = session_id.clone();
     let (pair, child) = spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
@@ -6333,13 +6380,12 @@ pub(crate) async fn create_pty(
 
             // Inject stable session UUID so agents can use it for session binding
             // (e.g. `claude --session-id $TUIC_SESSION`, then `claude --resume $TUIC_SESSION`)
-            if let Some(ref tuic_session) = spawn_config.tuic_session {
-                cmd.env("TUIC_SESSION", tuic_session);
-                cmd.env(
-                    "TUIC_CONFIG_DIR",
-                    crate::config::config_dir().to_string_lossy().as_ref(),
-                );
-            }
+            bind_pty_identity(
+                &state_for_env,
+                &mut cmd,
+                &session_id_for_env,
+                spawn_config.tuic_session.as_deref(),
+            );
 
             // Inject env flags (feature flags configured in Settings → Agents)
             for (key, value) in &spawn_config.env {
@@ -6443,6 +6489,8 @@ pub(crate) async fn spawn_session_for_agent(
     let spawn_cwd = cwd.clone();
     let spawn_shell = shell.clone();
     let data_dir = state.data_dir.clone();
+    let state_for_env = state.clone();
+    let session_id_for_env = session_id.clone();
     let (pair, child) = spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
@@ -6459,6 +6507,9 @@ pub(crate) async fn spawn_session_for_agent(
             }
 
             crate::shell_integration::inject(&data_dir, &spawn_shell, &mut cmd);
+            // No caller-supplied identity on this path, so the PTY key is the
+            // identity — see bind_pty_identity.
+            bind_pty_identity(&state_for_env, &mut cmd, &session_id_for_env, None);
             cmd
         },
     )
@@ -6585,6 +6636,9 @@ pub(crate) async fn create_pty_with_worktree(
     let spawn_worktree_path = worktree_path.clone();
     let spawn_env = pty_config.env.clone();
     let data_dir = state.data_dir.clone();
+    let state_for_env = state.inner().clone();
+    let session_id_for_env = session_id.clone();
+    let spawn_tuic_session = pty_config.tuic_session.clone();
     let pty_result = spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
@@ -6596,6 +6650,12 @@ pub(crate) async fn create_pty_with_worktree(
             let mut cmd = build_shell_command(&spawn_shell);
             cmd.cwd(&spawn_worktree_path);
             crate::shell_integration::inject(&data_dir, &spawn_shell, &mut cmd);
+            bind_pty_identity(
+                &state_for_env,
+                &mut cmd,
+                &session_id_for_env,
+                spawn_tuic_session.as_deref(),
+            );
             for (key, value) in &spawn_env {
                 cmd.env(key, value);
             }

@@ -73,6 +73,10 @@ pub enum AppEvent {
         branch: String,
         worktree_path: String,
     },
+    /// A worktree was removed (UI, MCP, HTTP, or merge&archive) — frontend must
+    /// drop its sidebar row and close any terminal still living in it.
+    #[serde(rename = "worktree-removed")]
+    WorktreeRemoved { repo_path: String, branch: String },
     /// A peer agent registered for inter-agent messaging
     #[serde(rename = "peer-registered")]
     PeerRegistered { tuic_session: String, name: String },
@@ -1260,6 +1264,17 @@ pub struct AppState {
     /// `tombstone_transient_cleanup` remove entries in O(1) instead of scanning
     /// every entry of `mcp_to_session` on each session exit.
     pub session_to_mcp: DashMap<String, Vec<String>>,
+    /// `$TUIC_SESSION` → the PTY session key that currently backs it.
+    ///
+    /// These are two independently minted UUIDs: `create_pty` keys `sessions` by a
+    /// fresh `Uuid::new_v4()` while exporting the caller-supplied `tuic_session` to
+    /// the agent's environment, and the messaging layer historically assumed they
+    /// were the same value. They never are, so a self-registered agent's peer
+    /// identity matched no PTY and its wake-ups silently degraded to inbox-only.
+    /// Recording the pair here is what lets delivery resolve a stable peer identity
+    /// to whatever terminal currently backs it — including after a respawn, which
+    /// mints a new session key under the same `$TUIC_SESSION`.
+    pub(crate) live_pty_by_tuic_session: DashMap<String, String>,
     /// Parent session for swarm-spawned agents (child_tuic_session → parent_tuic_session).
     /// Populated at spawn time when caller_tuic is set. Used to route auto-notifications
     /// (state_change messages) to the orchestrator's inbox on exit and idle transitions.
@@ -1675,6 +1690,54 @@ impl AppState {
         }
     }
 
+    /// The PTY that currently backs a peer identity, if any.
+    ///
+    /// Resolution, not equality — that distinction is the whole point. Two kinds of
+    /// peer reach us: a spawn-registered child, whose identity the server stamped
+    /// with the real PTY key, and a self-registering agent, which announces its
+    /// `$TUIC_SESSION` and has no idea what key its PTY got. Checking
+    /// `sessions.contains_key(peer_id)` only ever answered for the first kind, and
+    /// answered "no PTY" for the second — which is how an orchestrator running in a
+    /// TUIC tab ended up unreachable through its own terminal.
+    ///
+    /// Resolved per call rather than cached on the peer, so a respawn under the same
+    /// `$TUIC_SESSION` is picked up without anyone re-registering.
+    pub(crate) fn live_pty_for_peer(&self, peer_id: &str) -> Option<String> {
+        if self.sessions.contains_key(peer_id) {
+            return Some(peer_id.to_string());
+        }
+        self.live_pty_by_tuic_session
+            .get(peer_id)
+            .map(|entry| entry.value().clone())
+            .filter(|session_id| self.sessions.contains_key(session_id))
+    }
+
+    /// Record the PTY now backing a `$TUIC_SESSION`. Called at spawn.
+    pub(crate) fn bind_live_pty(&self, tuic_session: &str, session_id: &str) {
+        self.live_pty_by_tuic_session
+            .insert(tuic_session.to_string(), session_id.to_string());
+    }
+
+    /// Drop every `$TUIC_SESSION` pointing at a PTY that is going away, returning
+    /// the identities that just lost their terminal so the caller can retire their
+    /// peer registrations too.
+    ///
+    /// Scans rather than reverse-indexing: the map holds at most one entry per live
+    /// session, so this is bounded by the session cap, and a reverse index would be
+    /// one more thing to keep consistent for no measurable gain.
+    pub(crate) fn unbind_live_pty(&self, session_id: &str) -> Vec<String> {
+        let orphaned: Vec<String> = self
+            .live_pty_by_tuic_session
+            .iter()
+            .filter(|entry| entry.value() == session_id)
+            .map(|entry| entry.key().clone())
+            .collect();
+        for identity in &orphaned {
+            self.live_pty_by_tuic_session.remove(identity);
+        }
+        orphaned
+    }
+
     /// Drop the waiter leases of a bridge that a reconnect just replaced.
     ///
     /// Leases carry no owning MCP session, but on a reconnect the distinction is
@@ -1828,6 +1891,7 @@ impl AppState {
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),
+            live_pty_by_tuic_session: DashMap::new(),
             session_parent: DashMap::new(),
             messaging_channels: DashMap::new(),
             pty_event_channels: DashMap::new(),
@@ -2239,6 +2303,31 @@ impl AppState {
         crate::prompt::invalidate_repo_vars(path);
     }
 
+    /// Announce that `branch`'s worktree is gone, so the sidebar drops its row.
+    ///
+    /// Every removal path must call this — UI, MCP `repo worktree_remove`, the HTTP
+    /// route, and merge&archive. Without it a backend-initiated removal leaves a
+    /// ghost row forever: the repo-watcher's git fingerprint covers HEAD, the index
+    /// and the working tree, so removing a worktree changes nothing it observes and
+    /// no `repo-changed` prune is ever emitted for the repo.
+    ///
+    /// Caches are invalidated first, so any refresh the event triggers reads
+    /// post-removal worktree state.
+    pub(crate) fn notify_worktree_removed(&self, repo_path: &str, branch: &str) {
+        self.invalidate_repo_caches(repo_path);
+        let _ = self.event_bus.send(AppEvent::WorktreeRemoved {
+            repo_path: repo_path.to_string(),
+            branch: branch.to_string(),
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(ref app) = *self.app_handle.read() {
+            let _ = app.emit(
+                "worktree-removed",
+                serde_json::json!({ "repo_path": repo_path, "branch": branch }),
+            );
+        }
+    }
+
     /// Default rate limit expiry when no retry_after_ms is provided (120s).
     const RATE_LIMIT_DEFAULT_EXPIRY_MS: u64 = 120_000;
 
@@ -2604,6 +2693,7 @@ impl AppState {
             | AppEvent::McpToast { .. }
             | AppEvent::DirChanged { .. }
             | AppEvent::WorktreeCreated { .. }
+            | AppEvent::WorktreeRemoved { .. }
             | AppEvent::PeerRegistered { .. }
             | AppEvent::PeerUnregistered { .. }
             | AppEvent::UiTab { .. }
@@ -3251,6 +3341,39 @@ fn trim_agent_chrome(mut lines: Vec<LogLine>) -> Vec<LogLine> {
 pub(crate) mod tests_support {
     use super::*;
 
+    /// A live `sessions` entry backed by a real PTY. `live_pty_for_peer` filters on
+    /// liveness, so a resolver test needs a session that genuinely exists rather
+    /// than a stub the filter would reject.
+    #[cfg(unix)]
+    pub fn insert_dummy_session(state: &AppState, session_id: &str) {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut command = CommandBuilder::new("/bin/sh");
+        command.args(["-c", "sleep 30"]);
+        let child = pair.slave.spawn_command(command).expect("spawn shell");
+        let writer = pair.master.take_writer().expect("writer");
+        state.sessions.insert(
+            session_id.to_string(),
+            parking_lot::Mutex::new(PtySession {
+                writer: std::sync::Arc::new(parking_lot::Mutex::new(writer)),
+                master: pair.master,
+                _child: child,
+                paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                worktree: None,
+                cwd: None,
+                display_name: None,
+                shell: "/bin/sh".to_string(),
+            }),
+        );
+    }
+
     pub fn make_test_app_state() -> AppState {
         // Unique data dir per call: AppState::new eagerly opens
         // `data_dir/tunnel_audit.db`, so a shared path makes parallel tests
@@ -3434,7 +3557,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     /// A bridge that reconnects leaves its old `agent wait` lease behind. Because
     /// any non-empty waiter set outranks terminal delivery, that dead lease kept
     /// winning `assign_agent_delivery` and the reconnected peer's PTY was never
@@ -3481,6 +3603,88 @@ mod tests {
             state.agent_delivery_owner(recipient, "already-seen"),
             observed,
             "re-delivering what the previous wait already returned would duplicate it"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    /// Boss's case: a Codex orchestrator running in a TUIC tab registers with its
+    /// `$TUIC_SESSION`, which is not the key `create_pty` filed its PTY under. The
+    /// old `sessions.contains_key(peer_id)` therefore reported "no terminal" and
+    /// every subagent message came back `delivery_path: inbox_only` while still
+    /// answering ok/accepted.
+    fn peer_resolves_to_the_pty_backing_its_tuic_session() {
+        let state = tests_support::make_test_app_state();
+        let pty_key = "pty-key";
+        let announced = "tuic-session-uuid";
+        tests_support::insert_dummy_session(&state, pty_key);
+        state.bind_live_pty(announced, pty_key);
+
+        assert_eq!(
+            state.live_pty_for_peer(announced),
+            Some(pty_key.to_string()),
+            "the identity an agent announces must resolve to the terminal behind it"
+        );
+        // A spawn-registered child is stamped with the PTY key itself; that must
+        // keep working without a binding.
+        assert_eq!(state.live_pty_for_peer(pty_key), Some(pty_key.to_string()));
+        assert_eq!(state.live_pty_for_peer("never-seen"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn teardown_reports_the_identities_that_lost_their_terminal() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-key");
+        state.bind_live_pty("announced-a", "pty-key");
+        state.bind_live_pty("announced-b", "pty-key");
+        state.bind_live_pty("other", "unrelated-pty");
+
+        let mut orphaned = state.unbind_live_pty("pty-key");
+        orphaned.sort();
+
+        assert_eq!(
+            orphaned,
+            vec!["announced-a".to_string(), "announced-b".to_string()],
+            "teardown must name the peer identities to retire — they are filed under \
+             the announced identity, not the PTY key, so the existing removal missed them"
+        );
+        assert_eq!(state.live_pty_for_peer("other"), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_binding_whose_pty_died_stops_resolving() {
+        let state = tests_support::make_test_app_state();
+        tests_support::insert_dummy_session(&state, "pty-key");
+        state.bind_live_pty("tuic-session-uuid", "pty-key");
+
+        state.unbind_live_pty("pty-key");
+
+        assert_eq!(
+            state.live_pty_for_peer("tuic-session-uuid"),
+            None,
+            "a stale binding must not offer a terminal that is gone"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn respawn_under_the_same_identity_resolves_to_the_new_pty() {
+        let state = tests_support::make_test_app_state();
+        let announced = "tuic-session-uuid";
+        tests_support::insert_dummy_session(&state, "pty-old");
+        state.bind_live_pty(announced, "pty-old");
+
+        // Tab respawns: teardown unbinds, the new PTY binds the same identity.
+        state.unbind_live_pty("pty-old");
+        tests_support::insert_dummy_session(&state, "pty-new");
+        state.bind_live_pty(announced, "pty-new");
+
+        assert_eq!(
+            state.live_pty_for_peer(announced),
+            Some("pty-new".to_string()),
+            "resolving per call is what lets a respawn be picked up with no re-register"
         );
     }
 
@@ -4442,6 +4646,7 @@ mod tests {
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),
+            live_pty_by_tuic_session: DashMap::new(),
             session_parent: DashMap::new(),
             messaging_channels: DashMap::new(),
             pty_event_channels: DashMap::new(),
