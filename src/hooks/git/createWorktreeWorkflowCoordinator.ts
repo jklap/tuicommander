@@ -134,16 +134,22 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 
 		try {
 			const result = await invoke<{
-				status: "clean" | "conflicts";
+				status: "clean" | "clean_unverified" | "conflicts";
 				worktree_path: string;
 				branch: string;
 				base: string;
+				base_source: "fetched_remote" | "existing_tracking" | "local_fallback";
+				base_warning: string | null;
 				conflicted_files: string[];
 				prompt: string;
 			}>("start_conflict_assist", { repoPath, prNumber });
 
-			if (result.status === "clean") {
-				deps.setStatusInfo(`PR #${prNumber} rebased cleanly onto ${result.base}`);
+			if (result.status === "clean" || result.status === "clean_unverified") {
+				deps.setStatusInfo(
+					result.base_warning
+						? `PR #${prNumber} rebased without conflicts onto ${result.base}. ${result.base_warning}`
+						: `PR #${prNumber} rebased cleanly onto ${result.base}`,
+				);
 				return;
 			}
 

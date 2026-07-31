@@ -569,30 +569,25 @@ fn map_key(name: &str) -> Result<(String, Option<SafeKey>), String> {
 /// Write to a PTY session — replicates sendCommand semantics from TypeScript.
 /// Ctrl-U prefix clears existing input, then text, then \r on separate write.
 fn safe_pty_write(state: &AppState, session_id: &str, command: &str) -> Result<(), String> {
-    let entry = state
-        .sessions
-        .get(session_id)
+    let writer = state
+        .pty_writer(session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    let mut session = entry.lock();
+    let mut writer = writer.lock();
 
     // Write 1: Ctrl-U + command text
     let payload = format!("\x15{command}");
-    session
-        .writer
+    writer
         .write_all(payload.as_bytes())
         .map_err(|e| format!("PTY write failed: {e}"))?;
-    session
-        .writer
+    writer
         .flush()
         .map_err(|e| format!("PTY flush failed: {e}"))?;
 
     // Write 2: Enter (separate write for Ink agent compat)
-    session
-        .writer
+    writer
         .write_all(b"\r")
         .map_err(|e| format!("PTY write \\r failed: {e}"))?;
-    session
-        .writer
+    writer
         .flush()
         .map_err(|e| format!("PTY flush failed: {e}"))?;
 
@@ -601,17 +596,14 @@ fn safe_pty_write(state: &AppState, session_id: &str, command: &str) -> Result<(
 
 /// Write raw bytes to a PTY (for send_key).
 fn raw_pty_write(state: &AppState, session_id: &str, data: &[u8]) -> Result<(), String> {
-    let entry = state
-        .sessions
-        .get(session_id)
+    let writer = state
+        .pty_writer(session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    let mut session = entry.lock();
-    session
-        .writer
+    let mut writer = writer.lock();
+    writer
         .write_all(data)
         .map_err(|e| format!("PTY write failed: {e}"))?;
-    session
-        .writer
+    writer
         .flush()
         .map_err(|e| format!("PTY flush failed: {e}"))?;
     Ok(())

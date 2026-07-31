@@ -137,6 +137,30 @@ def emit_slash_pressure(count: int) -> None:
         termios.tcsetattr(0, termios.TCSADRAIN, original)
 
 
+def emit_ink_repaint(count: int) -> None:
+    """Model Ink's tall-frame clear-and-reprint behavior.
+
+    Each synchronized update returns home, erases every row, and prints the
+    entire frame again. Because the frame is taller than the viewport, earlier
+    copies are pushed into normal-screen scrollback before Ink can repaint them.
+    A conforming terminal therefore retains exactly the copies present in the
+    raw stream; this scenario distinguishes upstream re-emission from grid-made
+    duplication.
+    """
+    frame = [b"TUIC_INK_BANNER"] + [record(index) for index in range(count)]
+    for repaint in range(4):
+        payload = bytearray(BSU + b"\x1b[H")
+        for line in frame:
+            payload.extend(b"\x1b[2K")
+            payload.extend(line)
+            payload.extend(b"\r\n")
+        payload.extend(ESU)
+        write_fragmented(bytes(payload), repaint)
+        time.sleep(0.01)
+
+    os.write(1, f"\r\nTUIC_STRESS_DONE:ink-repaint:{count}\r\n".encode())
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -148,6 +172,7 @@ def main() -> None:
             "slash-pressure",
             "reflow",
             "scrollout",
+            "ink-repaint",
         ),
         required=True,
     )
@@ -161,6 +186,8 @@ def main() -> None:
         emit_reflow(args.count)
     elif args.scenario == "scrollout":
         emit_scrollout(args.count)
+    elif args.scenario == "ink-repaint":
+        emit_ink_repaint(args.count)
     else:
         emit(args.scenario, args.count)
 

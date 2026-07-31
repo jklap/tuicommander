@@ -1431,6 +1431,66 @@ fn persist_secret(
     }
 }
 
+#[derive(Clone)]
+struct AppSecretSnapshot {
+    session_token: Option<String>,
+    relay_token: Option<String>,
+    vapid_private_key: Option<String>,
+}
+
+impl AppSecretSnapshot {
+    fn capture() -> Result<Self, String> {
+        Ok(Self {
+            session_token: read_secret(crate::credentials::Credential::RemoteSessionToken)?,
+            relay_token: read_secret(crate::credentials::Credential::RelayToken)?,
+            vapid_private_key: read_secret(crate::credentials::Credential::PushVapidPrivateKey)?,
+        })
+    }
+
+    fn restore(self) -> Result<(), String> {
+        fn restore_one(
+            cred: crate::credentials::Credential<'_>,
+            value: Option<String>,
+        ) -> Result<(), String> {
+            match value {
+                Some(value) => crate::credentials::set(cred, &value),
+                None => crate::credentials::delete(cred),
+            }
+        }
+
+        let mut errors = Vec::new();
+        for (label, result) in [
+            (
+                "session token",
+                restore_one(
+                    crate::credentials::Credential::RemoteSessionToken,
+                    self.session_token,
+                ),
+            ),
+            (
+                "relay token",
+                restore_one(crate::credentials::Credential::RelayToken, self.relay_token),
+            ),
+            (
+                "VAPID private key",
+                restore_one(
+                    crate::credentials::Credential::PushVapidPrivateKey,
+                    self.vapid_private_key,
+                ),
+            ),
+        ] {
+            if let Err(error) = result {
+                errors.push(format!("{label}: {error}"));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+}
+
 fn config_for_disk(mut config: AppConfig) -> Result<AppConfig, String> {
     config.services.auth.session_token_exists = persist_secret(
         crate::credentials::Credential::RemoteSessionToken,
@@ -1655,8 +1715,26 @@ pub(crate) fn load_app_config() -> AppConfig {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_app_config(config: AppConfig) -> Result<(), String> {
-    let disk_config = config_for_disk(config)?;
-    save_json_config(APP_CONFIG_FILE, &disk_config)
+    save_app_config_with(config, |disk_config| {
+        save_json_config(APP_CONFIG_FILE, disk_config)
+    })
+}
+
+fn save_app_config_with<F>(config: AppConfig, persist_disk: F) -> Result<(), String>
+where
+    F: FnOnce(&AppConfig) -> Result<(), String>,
+{
+    let snapshot = AppSecretSnapshot::capture()?;
+    let result = config_for_disk(config).and_then(|disk_config| persist_disk(&disk_config));
+    if let Err(primary) = result {
+        return match snapshot.restore() {
+            Ok(()) => Err(primary),
+            Err(rollback) => Err(format!(
+                "{primary}; credential rollback also failed: {rollback}"
+            )),
+        };
+    }
+    Ok(())
 }
 
 // Notification config
@@ -4368,5 +4446,112 @@ mod tests {
             load_app_config().disabled_mcp_agents,
             vec!["claude".to_string()]
         );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn failed_token_rotation_restores_vault_disk_and_runtime() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let invalid_config_dir = dir.path().join("not-a-directory");
+        std::fs::write(&invalid_config_dir, b"file blocks create_dir_all").unwrap();
+        let _guard = set_config_dir_override(invalid_config_dir);
+        crate::credentials::reset_test_faults();
+        crate::credentials::set(
+            crate::credentials::Credential::RemoteSessionToken,
+            "old-token",
+        )
+        .unwrap();
+        let state = crate::state::tests_support::make_test_app_state();
+        state.config.write().services.auth.session_token = "old-token".to_string();
+        state.config.write().services.auth.session_token_exists = true;
+        *state.session_token.write() = "old-token".to_string();
+
+        let error = rotate_session_token(&state).expect_err("disk persistence must fail");
+
+        assert!(error.contains("Failed to create directory"), "{error}");
+        assert_eq!(*state.session_token.read(), "old-token");
+        assert_eq!(state.config.read().services.auth.session_token, "old-token");
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteSessionToken).unwrap(),
+            Some("old-token".to_string())
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn failed_multi_secret_commit_restores_every_vault_value() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let invalid_config_dir = dir.path().join("not-a-directory");
+        std::fs::write(&invalid_config_dir, b"file blocks create_dir_all").unwrap();
+        let _guard = set_config_dir_override(invalid_config_dir);
+        crate::credentials::reset_test_faults();
+        for (credential, value) in [
+            (
+                crate::credentials::Credential::RemoteSessionToken,
+                "old-session",
+            ),
+            (crate::credentials::Credential::RelayToken, "old-relay"),
+            (
+                crate::credentials::Credential::PushVapidPrivateKey,
+                "old-vapid",
+            ),
+        ] {
+            crate::credentials::set(credential, value).unwrap();
+        }
+        let state = crate::state::tests_support::make_test_app_state();
+
+        let error = commit_config_change(&state, |current| {
+            let mut next = current.clone();
+            next.services.auth.session_token = "new-session".to_string();
+            next.services.auth.session_token_exists = true;
+            next.services.relay.token = "new-relay".to_string();
+            next.services.relay.token_exists = Some(true);
+            next.services.push.vapid_private_key = "new-vapid".to_string();
+            next.services.push.vapid_private_key_exists = true;
+            Ok(next)
+        })
+        .expect_err("disk persistence must fail");
+
+        assert!(error.contains("Failed to create directory"), "{error}");
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RemoteSessionToken).unwrap(),
+            Some("old-session".to_string())
+        );
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::RelayToken).unwrap(),
+            Some("old-relay".to_string())
+        );
+        assert_eq!(
+            crate::credentials::get(crate::credentials::Credential::PushVapidPrivateKey).unwrap(),
+            Some("old-vapid".to_string())
+        );
+        assert!(state.config.read().services.auth.session_token.is_empty());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn rollback_failure_is_reported_with_the_primary_save_error() {
+        use std::sync::atomic::Ordering;
+
+        crate::credentials::reset_test_faults();
+        crate::credentials::set(
+            crate::credentials::Credential::RemoteSessionToken,
+            "old-token",
+        )
+        .unwrap();
+        let mut config = AppConfig::default();
+        config.services.auth.session_token = "new-token".to_string();
+        config.services.auth.session_token_exists = true;
+
+        let error = save_app_config_with(config, |_| {
+            crate::credentials::MOCK_FAIL_WRITES.store(true, Ordering::SeqCst);
+            Err("forced disk failure".to_string())
+        })
+        .expect_err("save and rollback must fail");
+        crate::credentials::reset_test_faults();
+
+        assert!(error.contains("forced disk failure"), "{error}");
+        assert!(error.contains("credential rollback also failed"), "{error}");
+        assert!(error.contains("session token"), "{error}");
     }
 }

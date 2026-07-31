@@ -5,18 +5,35 @@ reviewers: "Multi-Agent swarm — 65 reviewers across 9 sections (security, perf
 branch: "main"
 target_ref: "d2d1f3c4d0d7e61f5f11b37929c0d7a5310b282c"
 scope: "entire repository (not a diff) — segmented into 9 functional blocks"
-status: "open"
+status: "superseded"
 ---
 
 # TUICommander — Full-Codebase Review (ALL-review)
+
+> **Reconciliation (2026-07-30).** This document is a historical snapshot of
+> `d2d1f3c4`, not the current backlog or an authoritative security model. Its
+> original checkboxes and recommendations remain below as review evidence, but
+> their open state must not be interpreted as current status. Stories and the
+> applicable project rules are the maintained sources of truth.
+>
+> - The plugin identity-by-assertion finding is an **accepted design decision**:
+>   same-realm plugins cannot be isolated by a caller token. Real isolation
+>   requires Worker/iframe boundaries and is intentionally deferred. The
+>   manifest-derived URL allowlist and vault-service denylist remain independent
+>   defenses and have since been implemented.
+> - The reported config, credential-migration, remote-URL parsing, Unicode alias,
+>   git-argument, CI-log framing, and case-insensitive safety defects were fixed
+>   after this snapshot. Their original descriptions are preserved for history.
+> - The remaining observations were either converted to stories, superseded by
+>   later architecture, or still require fresh verification against current code.
+>   They are not duplicated here as a live task list.
 
 **What this is.** A segmented review of the whole repository at `main` (HEAD `d2d1f3c4`), not a diff. The app was split into 9 functional blocks (S1–S9) and each was reviewed by 6–8 specialist agents (security, performance, architecture, simplicity, silent-failure, test-quality, plus the relevant language reviewer, and data-safety for the persistence-heavy core). Per-section raw reports live in the review directory under one file per reviewer; this document consolidates them.
 
 **Reviewer scope note.** All reviewers were briefed on the project's *Accepted Security Decisions* (local single-user tool, user is the trust boundary — wide CSP, loopback-without-auth, `opener` scope, agents keystroking TUIs are all intentional and NOT flagged). Findings below respect that scope. The exceptions where the trust boundary genuinely extends outward — third-party **plugins** (non-user code), **remote surfaces** (tunnels/relay/PWA), and **untrusted remote content** (GitHub PR/CI text, LLM output) — are where the real security findings concentrate.
 
-> **Progress tracking.** Every finding below carries a `- [ ]` checkbox.
-> Tick it (`- [x]`) **only** once the fix is implemented AND verified.
-> Findings: 9 P1 (headings) + 40 P2/P3 (list items). Started all-open.
+> **Historical progress tracking.** The checkboxes record the review's original
+> all-open state. Do not update them; track current work in `stories/`.
 
 ## Segmentation
 

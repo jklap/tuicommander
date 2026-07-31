@@ -2742,6 +2742,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_grok_initialize_gets_session_local_meta_tool_surface() {
+        let state = test_state();
+        assert!(!state.config.read().collapse_tools);
+        let app = build_router(state.clone(), false, true);
+        let init_body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-03-26", "capabilities": {},
+                "clientInfo": {
+                    "name": "grok-shell-tuicommander",
+                    "version": "1.0"
+                }
+            }
+        });
+        let init_response = app.oneshot(mcp_post("/mcp", &init_body)).await.unwrap();
+        assert_eq!(init_response.status(), StatusCode::OK);
+        let sid = init_response
+            .headers()
+            .get("mcp-session-id")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let init_bytes = axum::body::to_bytes(init_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let init_json: serde_json::Value = serde_json::from_slice(&init_bytes).unwrap();
+        assert!(
+            init_json["result"]["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("search_tools")
+        );
+        assert!(
+            state
+                .mcp_sessions
+                .get(&sid)
+                .is_some_and(|meta| meta.requires_meta_tools)
+        );
+
+        let list_body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}
+        });
+        let list_response = build_router(state.clone(), false, true)
+            .oneshot(mcp_post_with_session("/mcp", &list_body, &sid))
+            .await
+            .unwrap();
+        assert_eq!(list_response.status(), StatusCode::OK);
+        let list_bytes = axum::body::to_bytes(list_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let list_json: serde_json::Value = serde_json::from_slice(&list_bytes).unwrap();
+        let names: Vec<&str> = list_json["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        assert_eq!(names, vec!["search_tools", "get_tool_schema", "call_tool"]);
+        assert!(!state.config.read().collapse_tools);
+    }
+
+    #[tokio::test]
     async fn test_mcp_initialize_with_roots_populates_repo_path() {
         let state = test_state();
         let app = build_router(state.clone(), false, true);
@@ -3001,6 +3064,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: now,
                 is_claude_code: false,
+                requires_meta_tools: false,
                 has_sse_stream: false,
                 repo_path: None,
             },
@@ -3060,6 +3124,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now() - std::time::Duration::from_secs(60),
                 is_claude_code: true,
+                requires_meta_tools: false,
                 has_sse_stream: false,
                 repo_path: None,
             },
@@ -4436,6 +4501,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: now,
                 is_claude_code: false,
+                requires_meta_tools: false,
                 has_sse_stream: false,
                 repo_path: None,
             },
@@ -4473,6 +4539,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: now,
                 is_claude_code: false,
+                requires_meta_tools: false,
                 has_sse_stream: false,
                 repo_path: None,
             },

@@ -1,5 +1,9 @@
 # Terminal Stress Regression Suite
 
+For the complete evidence-capture, replay, classification, and regression
+workflow, follow [`SKILL.md`](SKILL.md). It is a repository-local operational
+skill intended for both humans and coding agents.
+
 This directory contains repeatable end-to-end regressions for terminal data
 integrity and agent lifecycle detection. It complements the in-process Rust
 tests in `src-tauri/src/terminal_grid.rs` and `src-tauri/src/pty.rs` by driving a
@@ -74,6 +78,11 @@ python3 tests/terminal-stress/run.py \
   handshake, then emits the atomic workload. This reproduces the per-chunk
   slash-menu parser pressure that once generated thousands of application-log
   records during sustained agent output.
+- `ink-repaint`: reproduces Claude/Ink's tall-frame behavior with four
+  synchronized `home → erase each row → full-frame reprint` cycles. The frame is
+  taller than the viewport, so previous copies enter normal-screen scrollback.
+  The verifier compares raw-ring and canonical-grid counts and requires them to
+  match exactly, proving whether copies came from the application or the grid.
 - During both scenarios the controller repeatedly scrolls and resizes the
   terminal while output is still arriving.
 
@@ -96,6 +105,11 @@ is the reported #498-7e3d shape. A worked example lives in
 `fixtures/capture-498-7e3d/` — raw ring, dimensions and canonical rows of a real
 captured occurrence, with a README explaining why that shape is correct output
 rather than a defect.
+
+`raw.bin` is the complete byte-for-byte response from the session's
+`/raw-ring` endpoint; it is never UTF-8 decoded or truncated to the terminal
+output snapshot limit. Capture stops with an error instead of creating a
+misleading artifact when the endpoint fails or the ring is empty.
 
 The suite does not erase legitimate terminal history. If an application scrolls
 a partial row into history and only later prints an extended version, both rows

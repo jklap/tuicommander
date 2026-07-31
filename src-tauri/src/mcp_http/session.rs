@@ -9,7 +9,6 @@ use axum::response::{IntoResponse, Response};
 use futures_util::stream::StreamExt;
 use parking_lot::Mutex;
 use portable_pty::PtySize;
-use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "desktop")]
@@ -103,21 +102,7 @@ pub(crate) fn write_pty_input(
     session_id: &str,
     data: &str,
 ) -> Result<(), String> {
-    let entry = state
-        .sessions
-        .get(session_id)
-        .ok_or_else(|| "Session not found".to_string())?;
-    {
-        let mut session = entry.lock();
-        session
-            .writer
-            .write_all(data.as_bytes())
-            .map_err(|e| format!("Write failed: {e}"))?;
-        if let Err(e) = session.writer.flush() {
-            tracing::warn!(session_id = %session_id, "PTY flush failed: {e}");
-        }
-    }
-    drop(entry);
+    state.write_pty_parts(session_id, &[data.as_bytes()])?;
 
     apply_input_bookkeeping(state, session_id, data);
 
@@ -137,25 +122,7 @@ pub(crate) fn write_pty_input_pair(
     text: &str,
     key: &str,
 ) -> Result<(), String> {
-    let entry = state
-        .sessions
-        .get(session_id)
-        .ok_or_else(|| "Session not found".to_string())?;
-    {
-        let mut session = entry.lock();
-        session
-            .writer
-            .write_all(text.as_bytes())
-            .map_err(|e| format!("Write failed: {e}"))?;
-        session
-            .writer
-            .write_all(key.as_bytes())
-            .map_err(|e| format!("Write failed: {e}"))?;
-        if let Err(e) = session.writer.flush() {
-            tracing::warn!(session_id = %session_id, "PTY flush failed: {e}");
-        }
-    }
-    drop(entry);
+    state.write_pty_parts(session_id, &[text.as_bytes(), key.as_bytes()])?;
 
     apply_input_bookkeeping(state, session_id, text);
     apply_input_bookkeeping(state, session_id, key);
@@ -400,11 +367,7 @@ pub(super) async fn close_session(
 ) -> impl IntoResponse {
     if state.sessions.contains_key(&session_id) {
         // Send Ctrl+C then cleanup
-        if let Some(entry) = state.sessions.get(&session_id) {
-            let mut session = entry.lock();
-            let _ = session.writer.write_all(&[0x03]);
-            let _ = session.writer.flush();
-        }
+        let _ = state.write_pty_parts(&session_id, &[&[0x03]]);
         // Broadcast to SSE/WebSocket consumers BEFORE cleanup: cleanup_session reaps
         // this session's per-session PTY channel, so the closed frame must be emitted
         // while the channel still exists. broadcast keeps the buffered frame available
@@ -494,7 +457,7 @@ pub(super) fn spawn_pty_session(
     state.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
             paused: paused.clone(),
@@ -579,7 +542,17 @@ pub(super) async fn create_session(
     }
     let shell = resolve_shell(body.shell);
 
-    match spawn_pty_session(state, shell, body.cwd, rows, cols, None, body.session_id) {
+    let spawn = tokio::task::spawn_blocking(move || {
+        spawn_pty_session(state, shell, body.cwd, rows, cols, None, body.session_id)
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("PTY spawn task panicked: {error}")})),
+        ))
+    });
+    match spawn {
         Ok(session_id) => (
             StatusCode::CREATED,
             Json(serde_json::json!({"session_id": session_id})),
@@ -871,15 +844,26 @@ pub(super) async fn create_session_with_worktree(
     }
     let shell = resolve_shell(body.config.shell);
 
-    match spawn_pty_session(
-        state,
-        shell,
-        Some(worktree_path_str.clone()),
-        rows,
-        cols,
-        Some(worktree),
-        body.config.session_id,
-    ) {
+    let spawn_cwd = worktree_path_str.clone();
+    let spawn = tokio::task::spawn_blocking(move || {
+        spawn_pty_session(
+            state,
+            shell,
+            Some(spawn_cwd),
+            rows,
+            cols,
+            Some(worktree),
+            body.config.session_id,
+        )
+    })
+    .await
+    .unwrap_or_else(|error| {
+        Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("PTY spawn task panicked: {error}")})),
+        ))
+    });
+    match spawn {
         Ok(session_id) => {
             let mut response = serde_json::json!({
                 "session_id": session_id,
@@ -1083,27 +1067,15 @@ async fn handle_ws_session(
     while let Some(Ok(msg)) = ws_receiver.next().await {
         match msg {
             Message::Text(text) => {
-                if let Some(session) = state_clone.sessions.get(&sid) {
-                    let mut s = session.lock();
-                    if let Err(e) = s.writer.write_all(text.as_bytes()) {
-                        tracing::error!(session_id = %sid, "PTY write failed: {e}");
-                        break;
-                    }
-                    if let Err(e) = s.writer.flush() {
-                        tracing::warn!(session_id = %sid, "PTY flush failed: {e}");
-                    }
+                if let Err(error) = state_clone.write_pty_parts(&sid, &[text.as_bytes()]) {
+                    tracing::error!(session_id = %sid, %error, "PTY write failed");
+                    break;
                 }
             }
             Message::Binary(data) => {
-                if let Some(session) = state_clone.sessions.get(&sid) {
-                    let mut s = session.lock();
-                    if let Err(e) = s.writer.write_all(&data) {
-                        tracing::error!(session_id = %sid, "PTY write failed: {e}");
-                        break;
-                    }
-                    if let Err(e) = s.writer.flush() {
-                        tracing::warn!(session_id = %sid, "PTY flush failed: {e}");
-                    }
+                if let Err(error) = state_clone.write_pty_parts(&sid, &[&data]) {
+                    tracing::error!(session_id = %sid, %error, "PTY write failed");
+                    break;
                 }
             }
             Message::Close(_) => break,
@@ -1306,29 +1278,15 @@ async fn handle_ws_log_session(
     while let Some(Ok(msg)) = ws_receiver.next().await {
         match msg {
             Message::Text(text) => {
-                if let Some(session) = state.sessions.get(&session_id) {
-                    let mut s = session.lock();
-                    if let Err(e) = s.writer.write_all(text.as_bytes()) {
-                        tracing::error!(session_id = %session_id, "PTY write failed: {e}");
-                        break;
-                    }
-                    if let Err(e) = s.writer.flush() {
-                        tracing::error!("PTY flush failed: {e}");
-                        break;
-                    }
+                if let Err(error) = state.write_pty_parts(&session_id, &[text.as_bytes()]) {
+                    tracing::error!(session_id = %session_id, %error, "PTY write failed");
+                    break;
                 }
             }
             Message::Binary(data) => {
-                if let Some(session) = state.sessions.get(&session_id) {
-                    let mut s = session.lock();
-                    if let Err(e) = s.writer.write_all(&data) {
-                        tracing::error!(session_id = %session_id, "PTY write failed: {e}");
-                        break;
-                    }
-                    if let Err(e) = s.writer.flush() {
-                        tracing::error!("PTY flush failed: {e}");
-                        break;
-                    }
+                if let Err(error) = state.write_pty_parts(&session_id, &[&data]) {
+                    tracing::error!(session_id = %session_id, %error, "PTY write failed");
+                    break;
                 }
             }
             Message::Close(_) => break,
@@ -1440,16 +1398,9 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
                 // No ACK needed — watch channel handles backpressure naturally.
             }
             Message::Binary(data) => {
-                if let Some(session) = state_clone.sessions.get(&sid) {
-                    let mut s = session.lock();
-                    if let Err(e) = s.writer.write_all(&data) {
-                        tracing::error!(session_id = %sid, "PTY write failed: {e}");
-                        break;
-                    }
-                    if let Err(e) = s.writer.flush() {
-                        tracing::error!("PTY flush failed: {e}");
-                        break;
-                    }
+                if let Err(error) = state_clone.write_pty_parts(&sid, &[&data]) {
+                    tracing::error!(session_id = %sid, %error, "PTY write failed");
+                    break;
                 }
             }
             Message::Close(_) => break,

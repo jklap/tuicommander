@@ -107,7 +107,7 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `run_pr_review` | `repo_path, pr_number` | `PrReviewResult` | AI review of a PR diff (multi-turn engine, Main slot) → line-level findings |
 | `get_merged_prs` | `repo_path, since_tag?` | `Vec<MergedPr>` | Merged PRs via GraphQL, optionally since a tag's date (AI changelog source) |
 | `generate_changelog` | `repo_path, since_tag?` | `{markdown, json}` | AI changelog from merged PRs (headless slot, one-shot) |
-| `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports clean/conflicts + agent prompt (push gated, never auto-merge) |
+| `start_conflict_assist` | `repo_path, pr_number` | `ConflictAssistResult` | Worktree on PR head + rebase onto base; reports verified/unverified clean or conflicts, base provenance/warning, and agent prompt (push gated, never auto-merge) |
 | `run_improvement_scan` | `repo_path, focus` | `ImprovementScanResult` | One-shot Headless-slot scan of local repo context for improvement proposals (`focus`: `refactor`, `testing`, `perf`); emits `proposals-ready` |
 | `create_issue_from_proposal` | `repo_path, proposal` | `CreatedIssue` | Human-gated issue creation from an improvement proposal |
 | `fetch_ci_failure_logs` | `repo_path, branch` | `String` | Fetch failed-job logs for the branch's latest GitHub Actions head, including partially completed workflow runs |

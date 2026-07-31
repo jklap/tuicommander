@@ -806,7 +806,19 @@ fn install_zip_inner(
 
     let target_dir = prepare_plugin_target(&manifest)?;
 
-    // Extract files
+    extract_zip_entries(&mut archive, &prefix, &target_dir.path)?;
+
+    finalize_plugin_install(target_dir, &manifest, app_handle)
+}
+
+/// Extract validated plugin entries into an already prepared target directory.
+/// This seam deliberately excludes Tauri state so archive safety and prefix
+/// handling can be characterized without installing or activating a plugin.
+fn extract_zip_entries(
+    archive: &mut zip::ZipArchive<std::fs::File>,
+    prefix: &str,
+    target_dir: &std::path::Path,
+) -> Result<(), String> {
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
@@ -821,7 +833,7 @@ fn install_zip_inner(
 
         // Strip prefix (if manifest was inside a subdirectory)
         let relative = if !prefix.is_empty() {
-            match entry_str.strip_prefix(&prefix) {
+            match entry_str.strip_prefix(prefix) {
                 Some(r) if !r.is_empty() => r.to_string(),
                 _ => continue,
             }
@@ -834,7 +846,7 @@ fn install_zip_inner(
             return Err(format!("ZIP entry attempts path traversal: {relative}"));
         }
 
-        let target = target_dir.path.join(&relative);
+        let target = target_dir.join(&relative);
 
         if entry.is_dir() {
             std::fs::create_dir_all(&target)
@@ -850,8 +862,7 @@ fn install_zip_inner(
                 .map_err(|e| format!("Failed to write {relative}: {e}"))?;
         }
     }
-
-    finalize_plugin_install(target_dir, &manifest, app_handle)
+    Ok(())
 }
 
 /// Find the path to manifest.json inside a ZIP archive.
@@ -1524,6 +1535,50 @@ mod tests {
         let result = find_manifest_in_zip(&archive);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("not found"));
+    }
+
+    #[test]
+    fn extract_zip_entries_strips_single_directory_prefix() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let zip_path = create_test_zip(
+            dir.path(),
+            &[
+                ("my-plugin/manifest.json", &valid_manifest_json("my-plugin")),
+                ("my-plugin/main.js", "export default {}"),
+                ("my-plugin/assets/icon.txt", "icon"),
+                ("unrelated.txt", "ignored"),
+            ],
+        );
+        let file = std::fs::File::open(&zip_path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let target = dir.path().join("out");
+        std::fs::create_dir(&target).unwrap();
+
+        extract_zip_entries(&mut archive, "my-plugin/", &target).unwrap();
+
+        assert!(target.join("manifest.json").is_file());
+        assert!(target.join("main.js").is_file());
+        assert_eq!(
+            std::fs::read_to_string(target.join("assets/icon.txt")).unwrap(),
+            "icon"
+        );
+        assert!(!target.join("unrelated.txt").exists());
+    }
+
+    #[test]
+    fn extract_zip_entries_rejects_parent_traversal() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let zip_path = create_test_zip(dir.path(), &[("../escape.txt", "escape")]);
+        let file = std::fs::File::open(&zip_path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let target = dir.path().join("out");
+        std::fs::create_dir(&target).unwrap();
+
+        let error = extract_zip_entries(&mut archive, "", &target)
+            .expect_err("parent traversal must be rejected");
+
+        assert!(error.contains("unsafe path") || error.contains("path traversal"));
+        assert!(!dir.path().join("escape.txt").exists());
     }
 
     // -- Capability enforcement --

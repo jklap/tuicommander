@@ -844,8 +844,12 @@ pub struct WorktreeInfo {
 }
 
 /// Represents a PTY session with optional worktree
+pub type SharedPtyWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
 pub struct PtySession {
-    pub writer: Box<dyn Write + Send>,
+    /// Kept outside the session mutex so terminal-generated replies can wait
+    /// for an in-flight user write without blocking the reader thread.
+    pub writer: SharedPtyWriter,
     pub master: Box<dyn portable_pty::MasterPty + Send>,
     pub(crate) _child: Box<dyn portable_pty::Child + Send + Sync>,
     pub(crate) paused: Arc<AtomicBool>,
@@ -892,6 +896,10 @@ pub struct McpSessionMeta {
     pub last_activity: Instant,
     /// Whether the client identified as Claude Code (or tuic-bridge) at initialize time
     pub is_claude_code: bool,
+    /// Whether this client needs the three meta-tool compatibility surface.
+    /// Grok rejects nested `server__upstream__tool` identifiers, so its MCP
+    /// session uses `search_tools` / `get_tool_schema` / `call_tool` instead.
+    pub requires_meta_tools: bool,
     /// Whether this session has an active SSE stream (GET /mcp connected)
     pub has_sse_stream: bool,
     /// Repo path extracted from MCP initialize `roots[0].uri` (file:// URI → absolute path).
@@ -1341,6 +1349,34 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Clone a session's independently serialized PTY writer.
+    ///
+    /// The session mutex is held only long enough to clone the handle. Callers
+    /// must release it before locking the writer so a blocked kernel write can
+    /// never prevent the reader from queuing a mandatory terminal reply.
+    pub(crate) fn pty_writer(&self, session_id: &str) -> Option<SharedPtyWriter> {
+        self.sessions
+            .get(session_id)
+            .map(|session| session.lock().writer.clone())
+    }
+
+    /// Write one atomic sequence of byte slices and flush it before another
+    /// user-input or terminal-reply writer can interleave.
+    pub(crate) fn write_pty_parts(&self, session_id: &str, parts: &[&[u8]]) -> Result<(), String> {
+        let writer = self
+            .pty_writer(session_id)
+            .ok_or_else(|| "Session not found".to_string())?;
+        let mut writer = writer.lock();
+        for part in parts {
+            writer
+                .write_all(part)
+                .map_err(|error| format!("Write failed: {error}"))?;
+        }
+        writer
+            .flush()
+            .map_err(|error| format!("Flush failed: {error}"))
+    }
+
     /// Emit a PTY-scoped `AppEvent` (`PtyParsed`/`PtyExit`/`SessionClosed`) to
     /// BOTH transports: the per-session channel (so the session-scoped WS
     /// handlers receive it directly, without every other session's receiver
@@ -6183,6 +6219,74 @@ mod tests {
         // Second span: " ok" with default color
         assert_eq!(line.spans[1].text, " ok");
         assert_eq!(line.spans[1].fg, None);
+    }
+
+    #[test]
+    fn log_color_maps_named_ansi_palette_exhaustively() {
+        use alacritty_terminal::vte::ansi::{Color, NamedColor};
+
+        let defaults = [
+            NamedColor::Foreground,
+            NamedColor::Background,
+            NamedColor::Cursor,
+            NamedColor::BrightForeground,
+            NamedColor::DimForeground,
+        ];
+        for named in defaults {
+            assert_eq!(LogColor::from_ansi_color(Color::Named(named)), None);
+        }
+
+        let palette = [
+            (NamedColor::Black, 0),
+            (NamedColor::Red, 1),
+            (NamedColor::Green, 2),
+            (NamedColor::Yellow, 3),
+            (NamedColor::Blue, 4),
+            (NamedColor::Magenta, 5),
+            (NamedColor::Cyan, 6),
+            (NamedColor::White, 7),
+            (NamedColor::BrightBlack, 8),
+            (NamedColor::BrightRed, 9),
+            (NamedColor::BrightGreen, 10),
+            (NamedColor::BrightYellow, 11),
+            (NamedColor::BrightBlue, 12),
+            (NamedColor::BrightMagenta, 13),
+            (NamedColor::BrightCyan, 14),
+            (NamedColor::BrightWhite, 15),
+            (NamedColor::DimBlack, 0),
+            (NamedColor::DimRed, 1),
+            (NamedColor::DimGreen, 2),
+            (NamedColor::DimYellow, 3),
+            (NamedColor::DimBlue, 4),
+            (NamedColor::DimMagenta, 5),
+            (NamedColor::DimCyan, 6),
+            (NamedColor::DimWhite, 7),
+        ];
+        for (named, index) in palette {
+            assert_eq!(
+                LogColor::from_ansi_color(Color::Named(named)),
+                Some(LogColor::Idx(index)),
+                "unexpected mapping for {named:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_color_preserves_indexed_and_rgb_values() {
+        use alacritty_terminal::vte::ansi::{Color, Rgb};
+
+        assert_eq!(
+            LogColor::from_ansi_color(Color::Indexed(231)),
+            Some(LogColor::Idx(231))
+        );
+        assert_eq!(
+            LogColor::from_ansi_color(Color::Spec(Rgb {
+                r: 12,
+                g: 34,
+                b: 56,
+            })),
+            Some(LogColor::Rgb(12, 34, 56))
+        );
     }
 
     /// Multi-span line with bold + color changes.

@@ -71,11 +71,13 @@ The active token source is tracked in `AppState.github_token_source` as a `Token
 **Every** call out to GitHub goes through the account's circuit breaker:
 GraphQL via `graphql_with_retry`, `gh api` writes via `run_gh_write`, and direct
 REST via `send_rest_with_breaker` (close/reopen issue, merge PR, approve PR,
-`fetch_github_json`, PR diff, PR refs). The REST helper only intercepts rate
-limits — every other response is handed back so each caller keeps its own status
-handling and error wording. A `403` counts as a rate limit only when the headers
-say so (`x-ratelimit-remaining: 0` for the primary limit, a `retry-after` for a
-secondary/abuse limit); a plain permission denial must not open the breaker.
+`fetch_github_json`, PR diff, PR refs). The availability breaker counts transport
+errors and `5xx` responses, not deterministic `4xx` caller outcomes such as a
+missing issue, merge conflict, validation failure, or permission denial. Rate
+limits use their separate backoff: `429`, primary-limit `403` headers,
+`retry-after`, or a secondary/abuse-limit message in an otherwise ambiguous
+`403` body. Non-rate-limit bodies remain available to caller-specific error
+formatting.
 
 ### Cached viewer login
 

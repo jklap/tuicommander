@@ -1022,51 +1022,82 @@ const App: Component = () => {
 			<ErrorLogPanel />
 
 			<ApplicationOverlays
-				settingsPanelVisible={settingsPanelVisible}
-				setSettingsPanelVisible={setSettingsPanelVisible}
-				settingsInitialTab={settingsInitialTab}
-				settingsContext={settingsContext}
-				taskQueueVisible={taskQueueVisible}
-				setTaskQueueVisible={setTaskQueueVisible}
+				panels={{
+					settingsVisible: settingsPanelVisible,
+					closeSettings: () => setSettingsPanelVisible(false),
+					settingsInitialTab,
+					settingsContext,
+					taskQueueVisible,
+					closeTaskQueue: () => setTaskQueueVisible(false),
+					helpVisible: helpPanelVisible,
+					closeHelp: () => setHelpPanelVisible(false),
+				}}
 				contextMenu={contextMenu}
 				getContextMenuItems={terminalContextMenus.getContextMenuItems}
-				renameBranchDialogVisible={renameBranchDialogVisible}
-				setRenameBranchDialogVisible={setRenameBranchDialogVisible}
-				createBranchDialogVisible={createBranchDialogVisible}
-				setCreateBranchDialogVisible={setCreateBranchDialogVisible}
-				runCommandDialogVisible={runCommandDialogVisible}
-				setRunCommandDialogVisible={setRunCommandDialogVisible}
-				termRenamePromptVisible={termRenamePromptVisible}
-				setTermRenamePromptVisible={setTermRenamePromptVisible}
-				termRenameDefault={termRenameDefault}
-				openPathPromptVisible={openPathPromptVisible}
-				resolveOpenPathPrompt={resolveOpenPathPrompt}
-				repoPathPromptVisible={repoPathPromptVisible}
-				resolveRepoPathPrompt={resolveRepoPathPrompt}
-				dialogs={dialogs}
-				pendingFolderDrop={pendingFolderDrop}
-				setPendingFolderDrop={setPendingFolderDrop}
-				showProcessManager={showProcessManager}
-				setShowProcessManager={setShowProcessManager}
-				showGenerators={showGenerators}
-				setShowGenerators={setShowGenerators}
-				showRemoteQr={showRemoteQr}
-				setShowRemoteQr={setShowRemoteQr}
-				whatsNewVersion={whatsNewVersion}
-				setWhatsNewVersion={setWhatsNewVersion}
-				gitOps={gitOps}
-				worktreeCleanupAction={worktreeCleanupAction}
-				setWorktreeCleanupAction={setWorktreeCleanupAction}
-				worktreeCleanupExecuting={worktreeCleanupExecuting}
-				worktreeCleanupStepStatuses={worktreeCleanupStepStatuses}
-				worktreeCleanupStepErrors={worktreeCleanupStepErrors}
-				worktreeCleanupStepNotes={worktreeCleanupStepNotes}
-				onWorktreeCleanupExecute={handleWorktreeCleanupExecute}
-				onWorktreeCleanupSkip={handleWorktreeCleanupSkip}
-				helpPanelVisible={helpPanelVisible}
-				setHelpPanelVisible={setHelpPanelVisible}
-				quitDialogVisible={quitDialogVisible}
-				setQuitDialogVisible={setQuitDialogVisible}
+				git={{
+					renameVisible: renameBranchDialogVisible,
+					closeRename: () => {
+						setRenameBranchDialogVisible(false);
+						gitOps.setBranchToRename(null);
+					},
+					branchToRename: gitOps.branchToRename,
+					onRename: gitOps.handleRenameBranch,
+					createVisible: createBranchDialogVisible,
+					closeCreate: () => {
+						setCreateBranchDialogVisible(false);
+						gitOps.setBranchToCreate(null);
+					},
+					branchToCreate: gitOps.branchToCreate,
+					onCreate: gitOps.handleCreateBranch,
+					worktreeState: gitOps.worktreeDialogState,
+					closeWorktree: () => gitOps.setWorktreeDialogState(null),
+					onGenerateWorktreeName: gitOps.generateWorktreeName,
+					onCreateWorktree: gitOps.confirmCreateWorktree,
+					runVisible: runCommandDialogVisible,
+					closeRun: () => setRunCommandDialogVisible(false),
+					activeRunCommand: gitOps.activeRunCommand,
+					onRun: gitOps.executeRunCommand,
+				}}
+				prompts={{
+					terminalRenameVisible: termRenamePromptVisible,
+					closeTerminalRename: () => setTermRenamePromptVisible(false),
+					terminalRenameDefault: termRenameDefault,
+					openPathVisible: openPathPromptVisible,
+					resolveOpenPath: resolveOpenPathPrompt,
+					repoPathVisible: repoPathPromptVisible,
+					resolveRepoPath: resolveRepoPathPrompt,
+				}}
+				confirmations={{
+					dialogState: dialogs.dialogState,
+					onClose: dialogs.handleClose,
+					onConfirm: dialogs.handleConfirm,
+					onDiscard: dialogs.handleDiscard,
+					pendingFolderDrop,
+					setPendingFolderDrop,
+				}}
+				utilities={{
+					processManagerVisible: showProcessManager,
+					closeProcessManager: () => setShowProcessManager(false),
+					generatorsVisible: showGenerators,
+					closeGenerators: () => setShowGenerators(false),
+					remoteQrVisible: showRemoteQr,
+					closeRemoteQr: () => setShowRemoteQr(false),
+					whatsNewVersion,
+					setWhatsNewVersion,
+				}}
+				cleanup={{
+					context: gitOps.mergePendingCtx,
+					action: worktreeCleanupAction,
+					setAction: setWorktreeCleanupAction,
+					executing: worktreeCleanupExecuting,
+					stepStatuses: worktreeCleanupStepStatuses,
+					stepErrors: worktreeCleanupStepErrors,
+					stepNotes: worktreeCleanupStepNotes,
+					onExecute: handleWorktreeCleanupExecute,
+					onSkip: handleWorktreeCleanupSkip,
+				}}
+				quitVisible={quitDialogVisible}
+				setQuitVisible={setQuitDialogVisible}
 				forceQuit={forceQuit}
 			/>
 		</div>

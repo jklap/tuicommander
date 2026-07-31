@@ -88,6 +88,16 @@ fn detect_claude_code_client(client_name: Option<&str>) -> bool {
     client_name.is_some_and(|n| n.contains("claude") || n.contains("tuic-bridge"))
 }
 
+/// Grok accepts exactly one `__` delimiter in a qualified MCP tool id. TUIC's
+/// upstream names would become `tuicommander__upstream__tool` after Grok adds
+/// the server namespace, so expose the existing meta-tool surface for that
+/// client instead of letting it silently discard every proxied tool.
+fn client_requires_meta_tools(client_name: Option<&str>) -> bool {
+    client_name
+        .map(str::to_ascii_lowercase)
+        .is_some_and(|name| name.starts_with("grok-shell-"))
+}
+
 /// Detect Claude Code from the User-Agent header when the MCP clientInfo is
 /// unavailable (e.g. after session auto-recovery following a TUIC restart).
 fn detect_claude_code_from_headers(headers: &HeaderMap) -> bool {
@@ -270,10 +280,7 @@ const ANONYMOUS_TASK_OWNER: &str = "loopback";
 /// its pending id, and once it auto-binds its specific identity changes — it must
 /// not lose the handle it was already given. `pending_parent_id` is the same alias
 /// `link_pending_children_to_parent` reconciles for child sessions.
-fn caller_task_identities(
-    caller_tuic: Option<&str>,
-    mcp_session_id: Option<&str>,
-) -> Vec<String> {
+fn caller_task_identities(caller_tuic: Option<&str>, mcp_session_id: Option<&str>) -> Vec<String> {
     let mut identities: Vec<String> = caller_tuic
         .map(str::to_string)
         .into_iter()
@@ -287,8 +294,7 @@ fn caller_task_identities(
 
 /// The identity a new task is stamped with.
 fn task_owner_identity(caller_tuic: Option<&str>, mcp_session_id: Option<&str>) -> String {
-    caller_task_identities(caller_tuic, mcp_session_id)
-        .swap_remove(0)
+    caller_task_identities(caller_tuic, mcp_session_id).swap_remove(0)
 }
 
 fn link_pending_children_to_parent(
@@ -543,6 +549,7 @@ fn refresh_mcp_session(
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
                 is_claude_code,
+                requires_meta_tools: false,
                 has_sse_stream: false,
                 repo_path: None,
             },
@@ -570,6 +577,15 @@ fn initialize_session_id(state: &AppState, headers: &HeaderMap) -> String {
 /// Tells the connecting agent what tools are available, which repos are managed,
 /// and what sessions are currently active so it can orient itself.
 fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> String {
+    let collapse_tools = state.config.read().collapse_tools;
+    build_mcp_instructions_for_mode(state, client_name, collapse_tools)
+}
+
+fn build_mcp_instructions_for_mode(
+    state: &Arc<AppState>,
+    client_name: Option<&str>,
+    collapse_tools: bool,
+) -> String {
     let ver = env!("CARGO_PKG_VERSION");
     let mut out = String::with_capacity(2048);
 
@@ -595,7 +611,7 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
     out.push('\n');
 
     // ── Tools ────────────────────────────────────────────────────────
-    if state.config.read().collapse_tools {
+    if collapse_tools {
         // Speakeasy mode: discovery flow and domain context live in the
         // meta-tool descriptions, NOT here, so they don't compete with
         // protocol markers for the model's attention at turn 1.
@@ -618,7 +634,7 @@ fn build_mcp_instructions(state: &Arc<AppState>, client_name: Option<&str>) -> S
     // 4 bullets by phase instead of 7 tool-by-tool steps. Details live in each
     // tool's description (JSON schema); this section gives the mental model.
     // Suppressed in collapse mode — concrete invocations go through call_tool.
-    if !state.config.read().collapse_tools {
+    if !collapse_tools {
         out.push_str("## Workflow\n\n");
         out.push_str("- **Discover:** `repo action=list|prs|active` · `agent action=detect`.\n");
         out.push_str("- **Spawn:** `session action=create` (shell) · `agent action=spawn` (AI) · `repo action=worktree_create` (isolated). `agent_type` resolves run config names first (case-insensitive), then agent binary names.\n");
@@ -995,7 +1011,18 @@ fn merged_tool_definitions(
     state: &Arc<AppState>,
     mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
-    if state.config.read().collapse_tools {
+    let force_meta_tools = mcp_session_id
+        .and_then(|sid| state.mcp_sessions.get(sid))
+        .is_some_and(|meta| meta.requires_meta_tools);
+    merged_tool_definitions_for_mode(state, mcp_session_id, force_meta_tools)
+}
+
+fn merged_tool_definitions_for_mode(
+    state: &Arc<AppState>,
+    mcp_session_id: Option<&str>,
+    force_meta_tools: bool,
+) -> serde_json::Value {
+    if force_meta_tools || state.config.read().collapse_tools {
         return meta_tool_definitions(state);
     }
 
@@ -1270,6 +1297,17 @@ where
     }
 }
 
+fn session_action_requires_blocking_pool(action: &str) -> bool {
+    matches!(
+        action,
+        "create" | "input" | "kill" | "close" | "process_stats"
+    )
+}
+
+fn agent_action_requires_blocking_pool(action: &str) -> bool {
+    matches!(action, "spawn" | "detect" | "send")
+}
+
 async fn handle_mcp_tool_call_with_context(
     state: &Arc<AppState>,
     addr: SocketAddr,
@@ -1319,17 +1357,20 @@ async fn handle_mcp_tool_call_with_context(
                 serde_json::json!({
                     "error": "This session action is restricted to localhost connections"
                 })
-            } else {
+            } else if session_action_requires_blocking_pool(action) {
                 let state = state.clone();
                 let args = args.clone();
                 let sid = mcp_session_id.map(str::to_owned);
                 run_blocking_handler(move || handle_session(&state, &args, sid.as_deref())).await
+            } else {
+                handle_session(state, args, mcp_session_id)
             }
         }
         "agent" => {
-            if args["action"].as_str() == Some("wait") {
+            let action = args["action"].as_str().unwrap_or("");
+            if action == "wait" {
                 handle_agent_wait(state, args, mcp_session_id).await
-            } else {
+            } else if agent_action_requires_blocking_pool(action) {
                 let state = state.clone();
                 let args = args.clone();
                 let sid = mcp_session_id.map(str::to_owned);
@@ -1344,6 +1385,14 @@ async fn handle_mcp_tool_call_with_context(
                     )
                 })
                 .await
+            } else {
+                handle_agent_unified_with_parent_cwd(
+                    state,
+                    addr,
+                    args,
+                    mcp_session_id,
+                    managed_parent_cwd,
+                )
             }
         }
         "task" => {
@@ -2856,7 +2905,7 @@ fn handle_agent_with_parent_cwd(
             state.sessions.insert(
                 session_id.clone(),
                 Mutex::new(PtySession {
-                    writer,
+                    writer: Arc::new(Mutex::new(writer)),
                     master: pair.master,
                     _child: child,
                     paused: paused.clone(),
@@ -3082,8 +3131,8 @@ fn handle_task(
         )});
     }
 
-    let caller_tuic: Option<String> = mcp_session_id
-        .and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()));
+    let caller_tuic: Option<String> =
+        mcp_session_id.and_then(|sid| state.mcp_to_session.get(sid).map(|e| e.value().clone()));
     let identities = caller_task_identities(caller_tuic.as_deref(), mcp_session_id);
 
     // A task handle is a capability over a spawned agent, so ownership is checked
@@ -4176,6 +4225,7 @@ pub(super) async fn mcp_post(
             let session_id = initialize_session_id(&state, &headers);
             let client_name = body["params"]["clientInfo"]["name"].as_str();
             let is_claude_code = detect_claude_code_client(client_name);
+            let requires_meta_tools = client_requires_meta_tools(client_name);
 
             // Extract repo_path from MCP initialize roots[0].uri (file:// URI)
             let repo_path = body["params"]["roots"]
@@ -4196,6 +4246,7 @@ pub(super) async fn mcp_post(
             if let Some(mut meta) = state.mcp_sessions.get_mut(&session_id) {
                 meta.last_activity = now;
                 meta.is_claude_code = is_claude_code;
+                meta.requires_meta_tools = requires_meta_tools;
                 if repo_path.is_some() {
                     meta.repo_path = repo_path;
                 }
@@ -4205,6 +4256,7 @@ pub(super) async fn mcp_post(
                     crate::state::McpSessionMeta {
                         last_activity: now,
                         is_claude_code,
+                        requires_meta_tools,
                         has_sse_stream: false,
                         repo_path,
                     },
@@ -4221,7 +4273,9 @@ pub(super) async fn mcp_post(
                 .and_then(|v| v.to_str().ok());
             apply_initialize_identity(&state, &session_id, tuic_session_header);
 
-            let instructions = build_mcp_instructions(&state, client_name);
+            let effective_collapse = state.config.read().collapse_tools || requires_meta_tools;
+            let instructions =
+                build_mcp_instructions_for_mode(&state, client_name, effective_collapse);
 
             let response = serde_json::json!({
                 "jsonrpc": "2.0",
@@ -4440,6 +4494,7 @@ pub(super) async fn mcp_get(
                     crate::state::McpSessionMeta {
                         last_activity: now,
                         is_claude_code: is_cc_ua,
+                        requires_meta_tools: false,
                         has_sse_stream: false,
                         repo_path: None,
                     },
@@ -5422,6 +5477,29 @@ mod tests {
         );
     }
 
+    #[test]
+    fn only_genuinely_blocking_session_and_agent_actions_are_offloaded() {
+        for action in ["list", "output", "status", "pause", "resume", "unknown"] {
+            assert!(!session_action_requires_blocking_pool(action), "{action}");
+        }
+        for action in ["create", "input", "kill", "close", "process_stats"] {
+            assert!(session_action_requires_blocking_pool(action), "{action}");
+        }
+        for action in [
+            "register",
+            "list_peers",
+            "inbox",
+            "stats",
+            "metrics",
+            "unknown",
+        ] {
+            assert!(!agent_action_requires_blocking_pool(action), "{action}");
+        }
+        for action in ["spawn", "detect", "send"] {
+            assert!(agent_action_requires_blocking_pool(action), "{action}");
+        }
+    }
+
     #[tokio::test]
     async fn mcp_post_collapsed_native_call_keeps_compact_text_envelope() {
         let state = test_state();
@@ -5516,6 +5594,53 @@ mod tests {
 
         let warned = worktree_remove_success_response(Some("branch retained".to_string()));
         assert_eq!(warned["branch_delete_warning"], "branch retained");
+    }
+
+    #[tokio::test]
+    async fn github_dispatch_reports_missing_and_unknown_actions() {
+        let state = test_state();
+
+        let missing = handle_github(&state, &serde_json::json!({})).await;
+        assert!(missing["error"].as_str().unwrap().contains("action"));
+
+        let unknown = handle_github(&state, &serde_json::json!({"action": "explode"})).await;
+        let error = unknown["error"].as_str().unwrap();
+        assert!(error.contains("Unknown action 'explode'"));
+        for action in ["prs", "status", "issues", "close_issue", "reopen_issue"] {
+            assert!(
+                error.contains(action),
+                "available actions omitted {action}: {error}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn github_dispatch_validates_required_paths_before_io() {
+        let state = test_state();
+
+        for action in ["prs", "issues", "close_issue", "reopen_issue"] {
+            let response = handle_github(&state, &serde_json::json!({"action": action})).await;
+            assert!(
+                response["error"].as_str().unwrap().contains("path"),
+                "{action} must reject a missing path: {response}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn github_issue_mutations_require_a_nonzero_issue_number() {
+        let state = test_state();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_string_lossy();
+
+        for action in ["close_issue", "reopen_issue"] {
+            let response =
+                handle_github(&state, &serde_json::json!({"action": action, "path": path})).await;
+            assert_eq!(
+                response["error"], "Missing required parameter: issue_number",
+                "{action} must validate issue_number before network access"
+            );
+        }
     }
 
     fn test_state() -> Arc<AppState> {
@@ -5844,7 +5969,7 @@ mod tests {
         state.sessions.insert(
             session_id.to_string(),
             parking_lot::Mutex::new(PtySession {
-                writer,
+                writer: Arc::new(parking_lot::Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
                 paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -5950,6 +6075,7 @@ mod tests {
                     - MCP_OWNER_ACTIVITY_GRACE
                     - std::time::Duration::from_secs(1),
                 is_claude_code: false,
+                requires_meta_tools: false,
                 has_sse_stream: true,
                 repo_path: None,
             },
@@ -6001,6 +6127,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
+                requires_meta_tools: false,
                 has_sse_stream: true,
                 repo_path: None,
             },
@@ -6203,16 +6330,18 @@ mod tests {
 
         let state = test_state();
 
-        let clean = state.tasks.create(TaskKind::AgentSpawn, "owner", Some("sess-clean"));
-        state
-            .exit_codes
-            .insert("sess-clean".to_string(), 0);
+        let clean = state
+            .tasks
+            .create(TaskKind::AgentSpawn, "owner", Some("sess-clean"));
+        state.exit_codes.insert("sess-clean".to_string(), 0);
         crate::pty::mark_session_exited("sess-clean", &state);
         let rec = state.tasks.get(&clean).expect("task must survive");
         assert_eq!(rec.status, TaskStatus::Completed);
         assert_eq!(rec.result.as_ref().unwrap()["exit_code"], 0);
 
-        let broken = state.tasks.create(TaskKind::AgentSpawn, "owner", Some("sess-broken"));
+        let broken = state
+            .tasks
+            .create(TaskKind::AgentSpawn, "owner", Some("sess-broken"));
         state.exit_codes.insert("sess-broken".to_string(), 137);
         crate::pty::mark_session_exited("sess-broken", &state);
         let rec = state.tasks.get(&broken).expect("task must survive");
@@ -6242,7 +6371,9 @@ mod tests {
         use crate::tasks::{TaskKind, TaskStatus, TaskUpdate};
 
         let state = test_state();
-        let id = state.tasks.create(TaskKind::AgentSpawn, "peer-a", Some("sess-1"));
+        let id = state
+            .tasks
+            .create(TaskKind::AgentSpawn, "peer-a", Some("sess-1"));
         state
             .mcp_to_session
             .insert("mcp-a".to_string(), "peer-a".to_string());
@@ -6369,7 +6500,10 @@ mod tests {
             &task_owner_identity(None, Some("mcp-late")),
             None,
         );
-        assert_eq!(state.tasks.get(&id).unwrap().owner, pending_parent_id("mcp-late"));
+        assert_eq!(
+            state.tasks.get(&id).unwrap().owner,
+            pending_parent_id("mcp-late")
+        );
 
         // Now it binds a real TUIC identity on the same MCP session.
         state
@@ -6382,7 +6516,10 @@ mod tests {
             serde_json::json!({"action": "get", "task_id": id}),
             Some("mcp-late"),
         );
-        assert_eq!(got["status"], "working", "own handle must stay reachable: {got}");
+        assert_eq!(
+            got["status"], "working",
+            "own handle must stay reachable: {got}"
+        );
     }
 
     #[test]
@@ -6390,7 +6527,9 @@ mod tests {
         use crate::tasks::{TaskKind, TaskStatus};
 
         let state = test_state();
-        let id = state.tasks.create(TaskKind::AgentSpawn, "peer-a", Some("sess-1"));
+        let id = state
+            .tasks
+            .create(TaskKind::AgentSpawn, "peer-a", Some("sess-1"));
         state
             .mcp_to_session
             .insert("mcp-a".to_string(), "peer-a".to_string());
@@ -6421,10 +6560,7 @@ mod tests {
         assert_eq!(again["cancelled"], false);
         assert_eq!(again["status"], "cancelled");
         assert!(again.get("error").is_none());
-        assert_eq!(
-            state.tasks.get(&id).unwrap().status,
-            TaskStatus::Cancelled
-        );
+        assert_eq!(state.tasks.get(&id).unwrap().status, TaskStatus::Cancelled);
     }
 
     /// `agent spawn` is loopback-only, so cancelling one must be too — otherwise a
@@ -6486,7 +6622,11 @@ mod tests {
             serde_json::json!({"action": "get"}),
             Some("mcp-a"),
         );
-        assert!(no_id["error"].as_str().is_some_and(|e| e.contains("task_id")));
+        assert!(
+            no_id["error"]
+                .as_str()
+                .is_some_and(|e| e.contains("task_id"))
+        );
 
         let bad = task_call(
             &state,
@@ -6533,7 +6673,9 @@ mod tests {
         use crate::tasks::{TaskKind, TaskStatus};
 
         let state = test_state();
-        let id = state.tasks.create(TaskKind::AgentSpawn, "owner", Some("sess-cancel"));
+        let id = state
+            .tasks
+            .create(TaskKind::AgentSpawn, "owner", Some("sess-cancel"));
         state.tasks.cancel(&id).expect("cancel");
 
         state.exit_codes.insert("sess-cancel".to_string(), 0);
@@ -6574,6 +6716,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
+                requires_meta_tools: false,
                 has_sse_stream: false,
                 repo_path: None,
             },
@@ -6687,6 +6830,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
+                requires_meta_tools: false,
                 has_sse_stream: false,
                 repo_path: None,
             },
@@ -7190,6 +7334,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
+                requires_meta_tools: false,
                 has_sse_stream: false,
                 repo_path: None,
             },
@@ -7315,6 +7460,7 @@ mod tests {
                     - MCP_OWNER_ACTIVITY_GRACE
                     - std::time::Duration::from_secs(1),
                 is_claude_code: true,
+                requires_meta_tools: false,
                 has_sse_stream: true, // historical flag alone is not live ownership
                 repo_path: None,
             },
@@ -7404,7 +7550,7 @@ mod tests {
         state.sessions.insert(
             session_id.to_string(),
             Mutex::new(PtySession {
-                writer,
+                writer: Arc::new(Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
                 paused: Arc::new(AtomicBool::new(false)),
@@ -7568,6 +7714,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
+                requires_meta_tools: false,
                 has_sse_stream: true,
                 repo_path: None,
             },
@@ -7634,6 +7781,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
+                requires_meta_tools: false,
                 has_sse_stream: true,
                 repo_path: None,
             },
@@ -7739,6 +7887,7 @@ mod tests {
                 // its managed terminal is actually Codex. The PTY type is the
                 // authoritative cross-check for channel-turn support.
                 is_claude_code: true,
+                requires_meta_tools: false,
                 has_sse_stream: true,
                 repo_path: None,
             },
@@ -8286,6 +8435,40 @@ mod tests {
 
         assert_eq!(names.len(), 3);
         assert_eq!(names, vec!["search_tools", "get_tool_schema", "call_tool"]);
+    }
+
+    #[test]
+    fn grok_session_uses_meta_tools_without_mutating_global_config() {
+        let state = test_state();
+        assert!(!state.config.read().collapse_tools);
+        state.mcp_sessions.insert(
+            "grok-session".to_string(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: false,
+                requires_meta_tools: true,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
+
+        let merged = merged_tool_definitions(&state, Some("grok-session"));
+        assert_eq!(
+            tool_names(&merged),
+            vec!["search_tools", "get_tool_schema", "call_tool"]
+        );
+        assert!(!state.config.read().collapse_tools);
+    }
+
+    #[test]
+    fn grok_client_requires_meta_tools() {
+        assert!(client_requires_meta_tools(Some("grok-shell-tuicommander")));
+        assert!(client_requires_meta_tools(Some("GROK-SHELL-tuicommander")));
+        assert!(!client_requires_meta_tools(Some("claude-code")));
+        assert!(!client_requires_meta_tools(Some(
+            "not-grok-shell-tuicommander"
+        )));
+        assert!(!client_requires_meta_tools(None));
     }
 
     /// Sanity check on the token-reduction claim for lazy tool loading.
@@ -9122,7 +9305,7 @@ mod tests {
         state.sessions.insert(
             tuic.clone(),
             parking_lot::Mutex::new(PtySession {
-                writer,
+                writer: Arc::new(parking_lot::Mutex::new(writer)),
                 master: pair.master,
                 _child: child,
                 paused: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -9165,6 +9348,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
                 is_claude_code: true,
+                requires_meta_tools: false,
                 has_sse_stream: false,
                 repo_path: Some("/Gits/personal/gamma".to_string()),
             },
@@ -10478,6 +10662,7 @@ mod tests {
             crate::state::McpSessionMeta {
                 last_activity: std::time::Instant::now(),
                 is_claude_code: false,
+                requires_meta_tools: false,
                 has_sse_stream: false,
                 repo_path: None,
             },

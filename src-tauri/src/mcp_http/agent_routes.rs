@@ -318,42 +318,51 @@ pub(super) async fn spawn_agent_session(
     }
     let session_id = Uuid::new_v4().to_string();
 
-    let (pair, child) = match crate::pty::spawn_pty_pair_with_retry(
+    let spawn_binary_path = binary_path.clone();
+    let spawn_args = body.args.clone();
+    let spawn_prompt = body.prompt.clone();
+    let spawn_model = body.model.clone();
+    let spawn_output_format = body.output_format.clone();
+    let spawn_print_mode = body.print_mode;
+    let spawn_cwd = body.cwd.clone();
+    let (pair, child) = match crate::pty::spawn_pty_pair_with_retry_async(
         PtySize {
             rows,
             cols,
             pixel_width: 0,
             pixel_height: 0,
         },
-        || {
-            let mut cmd = CommandBuilder::new(&binary_path);
+        move || {
+            let mut cmd = CommandBuilder::new(&spawn_binary_path);
             crate::pty::sanitize_pty_parent_env(&mut cmd);
 
-            if let Some(ref args) = body.args {
+            if let Some(ref args) = spawn_args {
                 for arg in args {
                     cmd.arg(arg);
                 }
             } else {
-                if body.print_mode.unwrap_or(false) {
+                if spawn_print_mode.unwrap_or(false) {
                     cmd.arg("--print");
                 }
-                if let Some(ref format) = body.output_format {
+                if let Some(ref format) = spawn_output_format {
                     cmd.arg("--output-format");
                     cmd.arg(format);
                 }
-                if let Some(ref model) = body.model {
+                if let Some(ref model) = spawn_model {
                     cmd.arg("--model");
                     cmd.arg(model);
                 }
-                cmd.arg(&body.prompt);
+                cmd.arg(&spawn_prompt);
             }
 
-            if let Some(ref cwd) = body.cwd {
+            if let Some(ref cwd) = spawn_cwd {
                 cmd.cwd(crate::cli::expand_tilde(cwd));
             }
             cmd
         },
-    ) {
+    )
+    .await
+    {
         Ok(pair_and_child) => pair_and_child,
         Err(e) => {
             return (
@@ -390,7 +399,7 @@ pub(super) async fn spawn_agent_session(
     state.sessions.insert(
         session_id.clone(),
         Mutex::new(PtySession {
-            writer,
+            writer: Arc::new(Mutex::new(writer)),
             master: pair.master,
             _child: child,
             paused: paused.clone(),
@@ -476,6 +485,33 @@ pub(super) async fn spawn_agent_session(
 mod tests {
     use super::*;
 
+    fn spawn_request() -> SpawnAgentRequest {
+        SpawnAgentRequest {
+            rows: Some(24),
+            cols: Some(80),
+            cwd: None,
+            prompt: "test prompt".into(),
+            model: None,
+            print_mode: None,
+            output_format: None,
+            agent_type: None,
+            binary_path: Some(
+                std::env::current_exe()
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+            args: Some(vec!["--help".into()]),
+        }
+    }
+
+    async fn response_json(response: Response) -> serde_json::Value {
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
+    }
+
     fn loopback() -> SocketAddr {
         "127.0.0.1:1".parse().unwrap()
     }
@@ -546,5 +582,97 @@ mod tests {
             execute_api_prompt_http(ConnectInfo(lan()), authed(), Json(serde_json::json!({})))
                 .await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_unauthenticated_remote_before_validation() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let response = spawn_agent_session(
+            State(state),
+            ConnectInfo(lan()),
+            None,
+            Json(spawn_request()),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_relative_and_missing_binary_paths() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut relative = spawn_request();
+        relative.binary_path = Some("bin/agent".into());
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(relative),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response_json(response).await["error"],
+            "binary_path must be an absolute path"
+        );
+
+        let mut missing = spawn_request();
+        missing.binary_path = Some(
+            std::env::temp_dir()
+                .join("definitely-not-a-tuic-agent")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let response =
+            spawn_agent_session(State(state), ConnectInfo(loopback()), None, Json(missing)).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            response_json(response).await["error"],
+            "binary_path does not point to an existing file"
+        );
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_non_claude_bare_prompt_before_pty_creation() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut request = spawn_request();
+        request.agent_type = Some("codex".into());
+        request.args = None;
+
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(
+            response_json(response).await["error"]
+                .as_str()
+                .unwrap()
+                .contains("bare prompt")
+        );
+        assert!(state.sessions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn spawn_agent_rejects_invalid_terminal_dimensions_before_pty_creation() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut request = spawn_request();
+        request.rows = Some(0);
+
+        let response = spawn_agent_session(
+            State(state.clone()),
+            ConnectInfo(loopback()),
+            None,
+            Json(request),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert!(response_json(response).await["error"].is_string());
+        assert!(state.sessions.is_empty());
     }
 }

@@ -58,7 +58,7 @@ process can never serve a configuration the disk disagrees with.
 | `default_font_size` | `u16` | `13` | Default font size for reset |
 | `mcp_server_enabled` | `bool` | `true` | Enable MCP HTTP server |
 | `mcp_port` | `u16` | `9876` | Fixed port for MCP server (0 = OS-assigned) |
-| `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`) — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools) |
+| `collapse_tools` | `bool` | `false` | Replace the full MCP tool list with 3 lazy-discovery meta-tools (`search_tools`, `get_tool_schema`, `call_tool`). Grok sessions use this surface automatically without changing the stored value — see [`mcp-http.md`](mcp-http.md#lazy-tool-discovery-collapse_tools) |
 | `services` | `ServicesConfig` | `{}` | Nested remote-access config: `server`, `auth`, `tls`, `relay`, `push` (replaces the former flat `remote_access_*`/`push_enabled`/`relay_enabled` fields) |
 
 Remote-access secrets under `services` are not persisted in plaintext
@@ -111,6 +111,15 @@ and the second silently erased the first one's fields. Rotation
 `POST /auth/rotate-session-token`) goes through the same path so the vault, the
 file and `state.config` cannot disagree — previously the in-memory config kept
 the pre-rotation token and the next unrelated save wrote it back.
+
+The vault and `config.json` are one logical commit. Before changing any of the
+three vault-backed fields, `save_app_config` snapshots their previous values.
+If either a later vault operation or the atomic file replacement fails, all
+three vault values are restored before the error returns; `state.config` and
+the live authentication token are updated only after success. A rollback
+failure is appended to the original persistence error instead of being hidden.
+Individual credential `set` and `delete` operations also publish their
+in-memory vault clone only after the OS keyring accepts it.
 
 Routing every writer through it also guarantees the file is produced by
 `config_for_disk`. A writer that serialized the config itself (the
