@@ -1675,6 +1675,27 @@ impl AppState {
         }
     }
 
+    /// Drop the waiter leases of a bridge that a reconnect just replaced.
+    ///
+    /// Leases carry no owning MCP session, but on a reconnect the distinction is
+    /// not needed: any wait registered before the rebind belongs to the connection
+    /// that just went away, because the replacement bridge has not issued one yet.
+    /// Leaving them would strand the peer — `assign_agent_delivery` gives any
+    /// non-empty waiter set priority over terminal delivery, so a half-dead wait
+    /// keeps winning and the freshly bound PTY is never woken until it times out.
+    ///
+    /// Messages that lease had merely claimed (`Waiter`) are released so the
+    /// terminal can take them. `WaiterObserved` is kept: the old wait already
+    /// returned those to the agent, and re-delivering them would duplicate.
+    pub(crate) fn revoke_waiters_for_reconnect(&self, tuic_session: &str) {
+        if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
+            let mut gate = gate.lock();
+            gate.active_waiters.clear();
+            gate.owners
+                .retain(|_, owner| *owner != AgentDeliveryOwner::Waiter);
+        }
+    }
+
     pub(crate) fn release_terminal_delivery(&self, tuic_session: &str, message_id: &str) {
         if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
             let mut gate = gate.lock();
@@ -3409,6 +3430,57 @@ mod tests {
         assert_eq!(
             state.agent_delivery_owner(recipient, "after-timeout"),
             Some(AgentDeliveryOwner::TerminalPending)
+        );
+    }
+
+    #[test]
+    #[test]
+    /// A bridge that reconnects leaves its old `agent wait` lease behind. Because
+    /// any non-empty waiter set outranks terminal delivery, that dead lease kept
+    /// winning `assign_agent_delivery` and the reconnected peer's PTY was never
+    /// woken until the stale wait timed out.
+    fn stale_waiter_lease_stops_blocking_terminal_delivery_after_reconnect() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+        let _stale_lease = state.begin_agent_wait(recipient);
+
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "before", true),
+            AgentDeliveryAssignment::Waiter,
+            "precondition: the stale lease wins while it is still registered"
+        );
+
+        state.revoke_waiters_for_reconnect(recipient);
+
+        assert_eq!(
+            state.assign_agent_delivery(recipient, "after", true),
+            AgentDeliveryAssignment::Terminal,
+            "the reconnected peer must be reachable through its terminal again"
+        );
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "before"),
+            None,
+            "a message the dead lease only claimed is handed back, not stranded"
+        );
+    }
+
+    #[test]
+    fn reconnect_revocation_keeps_messages_the_old_wait_already_returned() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "peer";
+        let lease = state.begin_agent_wait(recipient);
+        state.push_agent_inbox(recipient, make_msg("already-seen"));
+        // Observing marks it WaiterObserved — the agent has it.
+        let _ = state.waiter_fresh_message_count(recipient, 0);
+        state.finish_agent_wait(recipient, lease, 0, true);
+
+        let observed = state.agent_delivery_owner(recipient, "already-seen");
+        state.revoke_waiters_for_reconnect(recipient);
+
+        assert_eq!(
+            state.agent_delivery_owner(recipient, "already-seen"),
+            observed,
+            "re-delivering what the previous wait already returned would duplicate it"
         );
     }
 

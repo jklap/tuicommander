@@ -382,6 +382,10 @@ fn bind_peer_identity_locked(
         if remove_reverse {
             state.session_to_mcp.remove(tuic_session);
         }
+        // The retired bridge may still hold `agent wait` leases. They outlive its
+        // routing entries and keep beating terminal delivery, so the reconnected
+        // peer would go unwoken until they time out.
+        state.revoke_waiters_for_reconnect(tuic_session);
     }
 
     state.peer_agents.insert(
@@ -1624,11 +1628,8 @@ fn dispatch_waiter_handoff(state: &AppState, recipient: &str, message_ids: &[Str
         .unwrap_or_default();
     for message in messages {
         let framed = frame_peer_message(&message.from_name, &message.content);
-        if crate::pty::deliver_message_to_managed_pty(state, recipient, &framed) {
-            state.mark_terminal_delivery_dispatched(recipient, &message.id);
-        } else {
-            state.release_terminal_delivery(recipient, &message.id);
-        }
+        let outcome = crate::pty::deliver_message_to_managed_pty(state, recipient, &framed);
+        crate::pty::settle_terminal_delivery(state, recipient, &message.id, outcome);
     }
 }
 
@@ -3504,15 +3505,17 @@ fn handle_messaging(
             // channel (Claude Code consumes that notification itself, so PTY
             // injection would double-deliver). The inbox always holds the
             // authoritative copy.
-            let pty_dispatched = terminal_owned && !pushed && {
+            let terminal_outcome = (terminal_owned && !pushed).then(|| {
                 let framed = frame_peer_message(&sender_name, message);
                 crate::pty::deliver_message_to_managed_pty(state, to, &framed)
-            };
-            if pty_dispatched {
-                state.mark_terminal_delivery_dispatched(to, &msg_id);
-            } else if terminal_owned && !pushed {
-                state.release_terminal_delivery(to, &msg_id);
-                inbox_only = true;
+            });
+            if let Some(outcome) = terminal_outcome {
+                crate::pty::settle_terminal_delivery(state, to, &msg_id, outcome);
+                // Only a session that cannot take the message at all falls back to
+                // the inbox. `Queued` is still a terminal delivery — it types on the
+                // recipient's next idle transition — so reporting it as inbox_only
+                // would understate what happens.
+                inbox_only = outcome == crate::pty::PtyDelivery::Unavailable;
             }
             // Forensic trail: sender, recipient, size, and delivery path — but never the
             // content (it can be up to 64 KB and may carry sensitive coordination text).
