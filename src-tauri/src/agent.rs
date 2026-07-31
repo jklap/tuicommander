@@ -906,6 +906,9 @@ pub(crate) async fn spawn_agent(
     let spawn_binary_path = binary_path.clone();
     let spawn_agent_config = agent_config.clone();
     let spawn_pty_config = pty_config.clone();
+    let state_for_env = state.inner().clone();
+    let session_id_for_env = session_id.clone();
+    let spawn_tuic_session = pty_config.tuic_session.clone();
     let (pair, child) = crate::pty::spawn_pty_pair_with_retry_async(
         PtySize {
             rows: pty_config.rows,
@@ -949,6 +952,12 @@ pub(crate) async fn spawn_agent(
                 cmd.cwd(crate::cli::expand_tilde(cwd));
             }
 
+            crate::pty::bind_pty_identity(
+                &state_for_env,
+                &mut cmd,
+                &session_id_for_env,
+                spawn_tuic_session.as_deref(),
+            );
             // Inject env flags (feature flags configured in Settings → Agents)
             for (key, value) in &spawn_pty_config.env {
                 cmd.env(key, value);

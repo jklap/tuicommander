@@ -429,6 +429,12 @@ pub(super) fn spawn_pty_session(
                 let dir = crate::cli::expand_tilde(dir);
                 cmd.cwd(dir);
             }
+            // This path used to inject neither shell integration nor an identity, so
+            // every browser/remote/MCP-created session ran without OSC 133 markers and
+            // without a `$TUIC_SESSION` to announce. Bring it in line with the desktop
+            // path: no caller identity exists here, so the PTY key serves as both.
+            crate::shell_integration::inject(&state.data_dir, &shell, &mut cmd);
+            crate::pty::bind_pty_identity(&state, &mut cmd, &session_id, None);
             cmd
         },
     )

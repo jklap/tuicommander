@@ -2060,6 +2060,7 @@ mod tests {
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),
+            live_pty_by_tuic_session: DashMap::new(),
             session_parent: DashMap::new(),
             messaging_channels: DashMap::new(),
             pty_event_channels: DashMap::new(),
