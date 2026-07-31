@@ -120,5 +120,18 @@
       "Blocking MCP waits now honor their deadline (60s default, 300s max) instead of hitting a stray 10-second cutoff."
     ],
     "date": "2026-07-22"
+  },
+  "1.7.0": {
+    "highlights": [
+      "Spawned agents now return a durable task handle with a new `task` tool to poll status past the 5-minute wait ceiling, so long-running work survives a disconnect.",
+      "MCP `tools/call` works without a protocol session header — a plain curl against `POST /mcp` is now enough for actions that need no identity.",
+      "Agent tabs no longer flip falsely idle or falsely completed: Codex, Claude and Grok activity detection now tracks their current status rows, composers and background terminals.",
+      "Codex terminals no longer adopt another project's session, and heavy Codex streaming no longer stalls behind an unterminated synchronized update.",
+      "Grok can now call MCP tools proxied through TUICommander, which it previously discarded silently.",
+      "Saving part of the configuration no longer silently disables remote access, and a failed save no longer rotates vault-backed credentials.",
+      "F13–F20 can now be bound to shortcuts and the Global Hotkey on macOS, and the `tuic` CLI's session and agent commands now show real ids, names and status.",
+      "Fixed stuck SSH tunnels, ghost worktree branches in the sidebar, stacked Markdown viewer/editor panes, and directory traversal on absolute-path file endpoints."
+    ],
+    "date": "2026-07-31"
   }
 }
