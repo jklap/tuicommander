@@ -1888,7 +1888,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const fontWeight = settingsStore.state.fontWeight;
 		await Promise.all([
 			document.fonts.load(`${fontWeight} ${fontSize}px ${fontFamily}`, "M"),
-			document.fonts.load(`400 ${fontSize}px "Symbols Nerd Font Mono"`, ""),
+			// The 2nd arg is not decorative: fonts.load() only schedules the faces
+			// covering the characters in it — "" matches nothing and downloads
+			// nothing. Canvas 2D never pulls a webfont in by itself, so without a
+			// real powerline glyph here U+E0B0 & co. render with a system fallback.
+			document.fonts.load(`400 ${fontSize}px "Symbols Nerd Font Mono"`, "\ue0b0"),
 		]).catch(() => document.fonts.ready);
 		remeasure();
 
