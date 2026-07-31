@@ -21,6 +21,7 @@ dist
 dist-ssr
 dist-release
 coverage
+lcov.info
 *.local
 
 # Editor directories and files
@@ -89,3 +90,8 @@ PR.md
 
 # Scratch worktree consolidation / temp working dir (local only)
 .tmp/
+.screenshots/
+
+# Python bytecode from the terminal-stress harness
+__pycache__/
+*.pyc
