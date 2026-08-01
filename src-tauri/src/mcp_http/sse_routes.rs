@@ -96,6 +96,7 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::McpToast { .. } => "mcp-toast",
         AppEvent::DirChanged { .. } => "dir-changed",
         AppEvent::WorktreeCreated { .. } => "worktree-created",
+        AppEvent::WorktreeRemoved { .. } => "worktree-removed",
         AppEvent::PeerRegistered { .. } => "peer-registered",
         AppEvent::PeerUnregistered { .. } => "peer-unregistered",
         AppEvent::UiTab { .. } => "ui-tab",
@@ -173,6 +174,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             worktree_path,
         } => {
             serde_json::json!({ "repo_path": repo_path, "branch": branch, "worktree_path": worktree_path })
+        }
+        AppEvent::WorktreeRemoved { repo_path, branch } => {
+            serde_json::json!({ "repo_path": repo_path, "branch": branch })
         }
         AppEvent::PeerRegistered { tuic_session, name } => {
             serde_json::json!({ "tuic_session": tuic_session, "name": name })

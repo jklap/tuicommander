@@ -206,6 +206,7 @@ pub(super) async fn create_worktree_shared(
 }
 
 pub(super) async fn remove_worktree_http(
+    State(state): State<Arc<AppState>>,
     Path(branch): Path<String>,
     Query(q): Query<RemoveWorktreeQuery>,
 ) -> Response {
@@ -215,10 +216,14 @@ pub(super) async fn remove_worktree_http(
     let repo_path = q.repo_path.clone();
     let delete_branch = q.delete_branch.unwrap_or(true);
     let force = q.force.unwrap_or(false);
+    let branch_for_event = branch.clone();
     let result = tokio::task::spawn_blocking(move || {
         crate::worktree::remove_worktree_by_branch(&repo_path, &branch, delete_branch, None, force)
     })
     .await;
+    if matches!(result, Ok(Ok(_))) {
+        state.notify_worktree_removed(&q.repo_path, &branch_for_event);
+    }
     match result {
         Ok(Ok(outcome)) => (
             StatusCode::OK,
@@ -401,7 +406,8 @@ pub(super) async fn finalize_merged_worktree_http(
     let repo_path = body.repo_path.clone();
     match result {
         Ok(json) => {
-            state.invalidate_repo_caches(&repo_path);
+            // Both actions ("archive" and "delete") remove the worktree.
+            state.notify_worktree_removed(&repo_path, &body.branch_name);
             (StatusCode::OK, Json(json)).into_response()
         }
         Err(e) => err_500(&e),

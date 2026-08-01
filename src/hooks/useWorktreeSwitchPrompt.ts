@@ -10,6 +10,7 @@ import type { ConfirmOptions } from "./useConfirmDialog";
 interface WorktreeSwitchDeps {
 	confirm: (options: ConfirmOptions) => Promise<boolean>;
 	handleBranchSelect: (repoPath: string, branchName: string) => Promise<void>;
+	closeTerminalsForBranch: (repoPath: string, branchName: string) => Promise<void>;
 }
 
 interface WorktreeCreatedPayload {
@@ -18,12 +19,47 @@ interface WorktreeCreatedPayload {
 	worktree_path: string;
 }
 
+interface WorktreeRemovedPayload {
+	repo_path: string;
+	branch: string;
+}
+
 /**
- * Listens for worktree-created events (from MCP) and offers to switch
- * the active tab + terminal to the new worktree.
+ * Drop the sidebar row for a worktree the backend just removed.
+ *
+ * Backend-initiated removals (MCP `repo worktree_remove`, the HTTP route,
+ * merge&archive) have no other way to reach the store: the repo-watcher used to
+ * swallow worktree-only changes, and a row with a live terminal is deliberately
+ * kept by the refresh prune — which is how deleted worktrees stayed in the
+ * sidebar and even acquired fresh terminals in their missing directory.
+ *
+ * Idempotent, so the UI removal path (which prunes the row itself) can also emit.
+ * The main checkout is never removed: its `worktreePath` IS the repo root, and a
+ * branch delete there only means HEAD moved.
+ */
+export async function pruneRemovedWorktree(
+	repoPath: string,
+	branchName: string,
+	closeTerminalsForBranch: (repoPath: string, branchName: string) => Promise<void>,
+): Promise<void> {
+	const branch = repositoriesStore.get(repoPath)?.branches[branchName];
+	if (!branch) return;
+	if (branch.worktreePath === repoPath) return;
+
+	if (branch.terminals.length > 0) {
+		await closeTerminalsForBranch(repoPath, branchName);
+	}
+	repositoriesStore.removeBranch(repoPath, branchName);
+	appLogger.info("git", `Worktree removed — pruned sidebar row "${branchName}"`, { repoPath });
+}
+
+/**
+ * Listens for backend worktree lifecycle events: offers to switch the active tab
+ * + terminal to a newly created worktree, and prunes the row of a removed one.
  */
 export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 	let unlisten: (() => void) | null = null;
+	let unlistenRemoved: (() => void) | null = null;
 
 	listen<WorktreeCreatedPayload>("worktree-created", (event) => {
 		const { repo_path, branch, worktree_path } = event.payload;
@@ -54,7 +90,21 @@ export function useWorktreeSwitchPrompt(deps: WorktreeSwitchDeps): void {
 		})
 		.catch((err) => appLogger.error("app", "Failed to register worktree-created listener", err));
 
-	onCleanup(() => unlisten?.());
+	listen<WorktreeRemovedPayload>("worktree-removed", (event) => {
+		const { repo_path, branch } = event.payload;
+		pruneRemovedWorktree(repo_path, branch, deps.closeTerminalsForBranch).catch((err) =>
+			appLogger.warn("git", `Failed to prune removed worktree "${branch}"`, err),
+		);
+	})
+		.then((fn) => {
+			unlistenRemoved = fn;
+		})
+		.catch((err) => appLogger.error("app", "Failed to register worktree-removed listener", err));
+
+	onCleanup(() => {
+		unlisten?.();
+		unlistenRemoved?.();
+	});
 
 	async function handlePrompt(repoPath: string, branch: string, worktreePath: string): Promise<void> {
 		const activeTerm = terminalsStore.getActive();
