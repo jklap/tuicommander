@@ -122,6 +122,8 @@ When changing the tool list, tool handlers, `disabled_native_tools`, upstream al
 
 #### Agent tool actions added (swarm inbox)
 - `agent action=inbox` response now includes `missed_count` — number of messages evicted from the FIFO inbox since last read. Non-zero means the orchestrator missed messages and should increase polling frequency.
+- `agent action=send` response includes **`delivered`** (bool) plus, when false, `warning` and `recipient_has_terminal`. `delivered` is false exactly when `delivery_path == "inbox_only"`: no waiter, no SSE channel and no live terminal took the message, so it stays unread until the recipient polls. `accepted`/`ok` only mean "buffered". Keep the two distinct in every client and in the tool descriptions — reporting `inbox_only` as success is how a reply to an agent with no PTY silently vanished.
+- `agent action=register` response includes **`terminal`** (bool): false means the identity resolves to no live PTY (`live_pty_for_peer` → `None`), so it can never be typed into or woken, and the peer must consume its own inbox via `wait`/`inbox`. Identities without a PTY arise from a bridge that sent no `x-tuic-session` header (agent launched outside a TUIC PTY) — the server then mints an MCP-scoped UUID.
 
 ### Provider Registry
 When modifying provider types, slot names, credential storage, or the ProvidersTab UI:
