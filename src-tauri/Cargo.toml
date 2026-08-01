@@ -27,9 +27,22 @@ ignored = ["tauri-build"]
 
 [profile.dev]
 opt-level = 1
+# Full DWARF cost 82 GiB of target/ for this crate alone: 23.6 GiB of loose .o
+# (macOS split-debuginfo=unpacked), 24 GiB across 7 incremental sessions and 5
+# rlib variants at ~850 MiB each. line-tables-only keeps panic backtraces with
+# file:line and profiler symbols; it drops only variable/type inspection in a
+# debugger, which nothing here uses (no launch.json, no CodeLLDB config).
+# Measured over a full rebuild: loose .o dropped 25.3 -> 0.70 GiB, deps 29 ->
+# 3.8 GiB, incremental 18 -> 2.0 GiB, whole target/ 82.6 -> 8.4 GiB.
+# Bump back to `true` if you ever need to attach lldb, and expect target/ to
+# grow roughly tenfold.
+debug = "line-tables-only"
 
 # Dependencies compiled at opt-level 1 in dev (was 2): much faster first-build /
 # cold rebuild, runtime still acceptable for dev. whisper/audio only need O1.
+# NOTE: deliberately no `debug = false` here — deps account for only 1.7 GiB of
+# the 25 GiB of debug objects, so stripping them would force a full dependency
+# rebuild (whisper.cpp/cmake included) to reclaim under 2% of the tree.
 [profile.dev.package."*"]
 opt-level = 1
 
