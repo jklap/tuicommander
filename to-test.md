@@ -1516,4 +1516,52 @@ HEAD build, with zero `slash_menu` log records. What is left needs REAL agents:
 
 ## Config partial saves (2026-07-28, Rust — needs `make dev` restart)
 
-- [ ] With remote access ON, `curl -X PUT localhost:9876/config -H 'Content-Type: application/json' -d '{"font_size":18}'`, then `curl localhost:9876/config` and check `services.server.enabled` is still `true` — and that it survives an app restart.
+- [ ] With remote access ON, `curl -X PUT localhost:9876/config -H 'Content-Type: application/json' -d '{"font_size":18}'`, then `curl localhost:9876/config` and check `services.server.enabled` is still `true` — and that it survives an app restart. _(NOTE 2026-08-01: the write itself is fine — `PUT /config` with `services.server.enabled: true` lands in config.json immediately and the TCP listener comes up. It does NOT survive a restart: `settings.ts` rebuilds the WHOLE AppConfig from its own hydrated state and saves it, so any backend-side change made outside the UI is clobbered by the next UI-driven save. Same class as GH #107. Needs a partial/merge save, not a whole-object write.)_
+
+## Copy from a plugin-panel iframe (2026-08-01, TS only — Vite HMR)
+
+- [ ] Open the Build Artifacts Cleaner tab, select some text in the dashboard, press Cmd+C, paste elsewhere: the selected text must land on the clipboard. Before the fix the Edit>Copy accelerator (`menu.rs:58`, a custom item, not `PredefinedMenuItem::copy`) swallowed the keystroke and the handler only read the host `window.getSelection()`, blind to the iframe's own selection.
+- [ ] Same in another iframe panel (csv-preview, an HTML preview) — the fix is generic, not build-cleaner specific.
+- [ ] Regression: with text selected in a **terminal** (canvas selection) and a plugin tab NOT focused, Cmd+C must still copy the terminal selection, not "".
+- [ ] Regression: select text in a code editor / diff tab (host DOM selection) — Cmd+C must still work.
+
+## Silence completion chimes from MCP-spawned sessions (2026-08-01, Rust — needs `make dev` restart)
+
+- [x] Settings > Notifications > Orchestration: the "Silence completions from MCP sessions" toggle persists across an app restart (it is a new `silence_remote_completions` field in the Rust `NotificationConfig`). _(verified 2026-08-01: toggled through the web UI, value landed in `notifications.json` and is served by `GET /config/notifications`)_
+- [ ] With the toggle ON, spawn several agents via MCP (`agent spawn` / `session create`) and let them finish in background tabs: no completion chime for any of them.
+- [ ] With the toggle ON, those same finished sessions MUST still show up in Activity, mark the tab unseen, and bump the dock badge — only the audio is dropped.
+- [ ] With the toggle ON, a terminal you opened yourself in the UI that runs something long and finishes in the background MUST still chime.
+- [ ] With the toggle OFF (default), behaviour is unchanged: MCP-spawned sessions chime as before.
+
+## Off-domain OAuth authorization servers no longer blocked (2026-08-01, Rust — needs `make dev` restart)
+
+- [ ] Authorize an MCP upstream served through a gateway whose AS metadata carries a different `issuer` (e.g. a `*.mcp-s.com` tenant): the flow must reach the consent dialog instead of failing with "Issuer mismatch … mix-up attack".
+- [ ] That dialog must be the **warning** variant and say the authorization server is on a different domain, naming the AS origin — and Cancel must still abort cleanly (upstream back to `needs_auth`).
+- [ ] Authorize an upstream whose AS is on the same registrable domain: dialog stays the plain `info` variant with no cross-domain sentence.
+- [ ] `curl 'http://localhost:9876/logs?source=mcp_oauth'` after the gateway case shows the `AS metadata issuer differs from the discovery URL` warning (warn, not error).
+- [ ] Regression: an upstream with an explicit `authorization_endpoint`/`token_endpoint` override still skips discovery and gets the plain dialog.
+
+## Worktree mid-rebase stays alive (2026-08-01, Rust — needs `make dev` restart)
+
+- [x] Start a conflicting `git rebase` inside a TUIC worktree: the sidebar row must stay, its terminals must not close, and no archive/delete prompt may appear. _(verified 2026-08-01: drove a real conflicted rebase; porcelain reported `detached` with no branch line, `/worktrees/paths` still mapped the branch and `/repo/orphan-worktrees` returned `[]`)_
+- [ ] Finish the rebase (`--continue` through the conflicts): the row must survive the whole way and settle back on its branch.
+- [ ] `git rebase --abort` from the worktree: row still there, branch restored, no prompt.
+- [ ] Regression: delete a worktree's branch with `git branch -D` while the worktree exists and no operation is running — the archive/delete prompt MUST still appear.
+
+## Grok returns to idle after a long turn (2026-08-01, Rust — needs `make dev` restart)
+
+- [x] Ask Grok for output long enough to scroll (e.g. "list 1 to 60, one per line"): after the turn finishes the tab must go idle. _(verified 2026-08-01: idle in 3.0s; before the fix the same screen sat at `shell_state=busy` for 132s+)_
+- [ ] Watch the tab dot during the turn: it must stay busy while the `⠋ Waiting for response…` row is animating, and only then go green.
+- [ ] Regression: Aider — its Knight Rider `█░` spinner must still hold the tab busy (the fix only excludes a row trimmed to a *single* block glyph).
+- [ ] Regression: a short Grok turn whose output fits the viewport (no scrollbar column) still goes idle as before.
+
+## `agent detect` reports every supported agent (2026-08-01, Rust — needs `make dev` restart)
+
+- [x] MCP `agent detect` lists all 10 agents, not just claude/codex/aider/goose. _(verified 2026-08-01: grok and opencode now report their install paths; previously they were absent entirely)_
+- [ ] Settings > Agents still shows the same install states as before (that panel uses `detect_all_agent_binaries` with its own list, so it should be unaffected).
+
+## Notes survive a failed hydrate (2026-08-01, Rust + TS — needs `make dev` restart)
+
+- [ ] Corrupt `notes.json` by hand (write `{ broken`), start the app, then add a note. The original file must be preserved as `notes.json.corrupt-<uuid>`, the new note must NOT be written, and `GET :9876/logs?level=error` must carry the hydrate failure.
+- [ ] Delete `notes.json` entirely, start the app, add a note: it must persist normally (a missing file is legitimately empty, not an error).
+- [ ] Normal path: existing notes load, edits and deletes still persist.
