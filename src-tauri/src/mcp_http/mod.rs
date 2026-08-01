@@ -2605,9 +2605,11 @@ mod tests {
             .unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let agents = json.as_array().unwrap();
-        assert_eq!(agents.len(), 4);
         let names: Vec<&str> = agents.iter().map(|a| a["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"claude"));
+        // The route must report every agent TUIC can launch — an omission makes an installed
+        // agent invisible to an orchestrator, which is how grok and gemini went missing.
+        assert_eq!(names, crate::agent::KNOWN_AGENT_BINARIES.to_vec());
+        assert!(names.contains(&"grok"));
     }
 
     #[tokio::test]

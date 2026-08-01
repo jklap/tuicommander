@@ -583,6 +583,22 @@ pub(crate) struct AgentBinaryDetection {
     pub(crate) version: Option<String>,
 }
 
+/// Agent binaries TUIC knows how to launch — the Rust-side mirror of `AGENTS` in
+/// `src/agents.ts`. The MCP/HTTP detect surface reports exactly this set; anything missing
+/// here is invisible to an orchestrator even when it is installed.
+pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini",
+    "grok",
+    "opencode",
+    "aider",
+    "amp",
+    "cursor-agent",
+    "goose",
+    "droid",
+];
+
 /// Detect any agent binary location
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
@@ -1027,6 +1043,35 @@ mod tests {
     use super::*;
 
     // resolve_cli and extra_bin_dirs tests are now in cli.rs
+
+    /// The MCP/HTTP detect surface reports KNOWN_AGENT_BINARIES verbatim, so an agent added to
+    /// the frontend registry but not here is installed-yet-invisible to an orchestrator.
+    /// `git` and the empty-binary `api` entry are not agent CLIs.
+    #[test]
+    fn known_agent_binaries_cover_the_frontend_registry() {
+        let agents_ts = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/agents.ts"),
+        )
+        .expect("read src/agents.ts");
+
+        let declared: Vec<&str> = agents_ts
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("binary: \""))
+            .filter_map(|rest| rest.split('"').next())
+            .filter(|b| !b.is_empty() && *b != "git")
+            .collect();
+
+        assert!(
+            !declared.is_empty(),
+            "parser found no binaries — did the shape of agents.ts change?"
+        );
+        for binary in declared {
+            assert!(
+                KNOWN_AGENT_BINARIES.contains(&binary),
+                "agents.ts declares '{binary}' but KNOWN_AGENT_BINARIES omits it, so `agent detect` will never report it"
+            );
+        }
+    }
 
     #[test]
     fn only_claude_accepts_a_bare_prompt() {
