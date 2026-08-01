@@ -965,7 +965,7 @@ pub(crate) async fn remove_worktree(
             if outcome.branch_delete_warning.is_none() {
                 crate::config::remove_branch_label(&repo_path, &branch_name);
             }
-            state.invalidate_repo_caches(&repo_path);
+            state.notify_worktree_removed(&repo_path, &branch_name);
             Ok(outcome)
         }
         Err(e) => {
@@ -1080,8 +1080,14 @@ pub(crate) fn delete_local_branch(
     branch_name: String,
     keep_worktree: Option<bool>,
 ) -> Result<(), String> {
-    delete_local_branch_impl(&repo_path, &branch_name, keep_worktree.unwrap_or(false))?;
-    state.invalidate_repo_caches(&repo_path);
+    let keep_worktree = keep_worktree.unwrap_or(false);
+    delete_local_branch_impl(&repo_path, &branch_name, keep_worktree)?;
+    if keep_worktree {
+        state.invalidate_repo_caches(&repo_path);
+    } else {
+        // The branch's worktree went with it — the sidebar row must go too.
+        state.notify_worktree_removed(&repo_path, &branch_name);
+    }
     Ok(())
 }
 
@@ -1647,7 +1653,9 @@ pub(crate) fn finalize_merged_worktree(
     match action.as_str() {
         "archive" => {
             let archive_path = archive_worktree(&base_repo, &branch_name, script.as_deref())?;
-            state.invalidate_repo_caches(&repo_path);
+            // Archiving moves the worktree out of the repo — as far as the sidebar
+            // is concerned the row is gone, same as a delete.
+            state.notify_worktree_removed(&repo_path, &branch_name);
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "archived".to_string(),
@@ -1656,7 +1664,7 @@ pub(crate) fn finalize_merged_worktree(
         }
         "delete" => {
             remove_worktree_by_branch(&repo_path, &branch_name, true, script.as_deref(), false)?;
-            state.invalidate_repo_caches(&repo_path);
+            state.notify_worktree_removed(&repo_path, &branch_name);
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "deleted".to_string(),
@@ -1710,7 +1718,9 @@ pub(crate) fn merge_and_archive_worktree_impl(
     match after_merge.as_str() {
         "archive" => {
             let archive_path = archive_worktree(&base_repo, &branch_name, script.as_deref())?;
-            state.invalidate_repo_caches(&repo_path);
+            // Archiving moves the worktree out of the repo — as far as the sidebar
+            // is concerned the row is gone, same as a delete.
+            state.notify_worktree_removed(&repo_path, &branch_name);
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "archived".to_string(),
@@ -1719,7 +1729,7 @@ pub(crate) fn merge_and_archive_worktree_impl(
         }
         "delete" => {
             remove_worktree_by_branch(&repo_path, &branch_name, true, script.as_deref(), false)?;
-            state.invalidate_repo_caches(&repo_path);
+            state.notify_worktree_removed(&repo_path, &branch_name);
             Ok(MergeArchiveResult {
                 merged: true,
                 action: "deleted".to_string(),

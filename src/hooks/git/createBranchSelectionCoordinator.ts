@@ -297,6 +297,14 @@ export function createBranchSelectionCoordinator(deps: BranchSelectionCoordinato
 				}
 			} else if (!branch?.hadTerminals) {
 				// First time selecting this branch — auto-spawn a terminal
+				// DEFERRED (2026-07-31) — no existence check on branch.worktreePath: selecting
+				// a row whose worktree directory is gone spawns a terminal in a missing cwd
+				// ("Spawn failed (dir missing)" + a failed dir watcher), which is what kept
+				// deleted worktrees looking alive in the sidebar. The row itself is now pruned
+				// at the source (worktree-removed event + worktree set in the repo-watcher
+				// fingerprint), so the only way to reach this is a row hydrated from disk
+				// before the first refresh prunes it. Needs a backend path-exists round-trip
+				// on every branch select — not worth it until that window is observed.
 				paneLayoutStore.reset();
 				await handleAddTerminalToBranch(repoPath, branchName);
 			} else {

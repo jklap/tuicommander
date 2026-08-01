@@ -397,10 +397,12 @@ const App: Component = () => {
 	// Auto-delete local branches when their PR is merged/closed
 	useAutoDeleteBranch({ confirm: (opts) => dialogs.confirm(opts) });
 
-	// Offer to switch to newly created worktrees (from MCP) + activity notification
+	// Offer to switch to newly created worktrees (from MCP) + activity notification,
+	// and prune the sidebar row when a worktree is removed backend-side.
 	useWorktreeSwitchPrompt({
 		confirm: (opts) => dialogs.confirm(opts),
 		handleBranchSelect: gitOps.handleBranchSelect,
+		closeTerminalsForBranch: gitOps.closeTerminalsForBranch,
 	});
 
 	// Register built-in activity sections for git and worktree notifications
