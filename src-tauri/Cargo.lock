@@ -8766,6 +8766,7 @@ version = "1.7.0"
 dependencies = [
  "dirs",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 
