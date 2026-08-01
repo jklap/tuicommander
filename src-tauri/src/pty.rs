@@ -2488,6 +2488,19 @@ fn detect_aider_screen_activity(rows: &[String]) -> AgentScreenActivity {
     }
 }
 
+/// True for grok's composer row. Builds from 0.2.11x draw it inside a rounded box
+/// (`│ ❯                    │`); earlier builds emitted a bare `❯ Ask anything`. Missing the
+/// boxed form left the session stuck BUSY for the whole process, because Ready never fired.
+fn is_grok_composer_row(row: &str) -> bool {
+    let trimmed = row.trim_start();
+    let inner = trimmed
+        .strip_prefix('\u{2502}')
+        .unwrap_or(trimmed)
+        .trim_start();
+    let mut chars = inner.chars();
+    chars.next() == Some('\u{276F}') && chars.next().is_none_or(char::is_whitespace)
+}
+
 /// Grok keeps its composer visible while a turn is running, so the prompt
 /// alone is not enough to declare the session ready. Its turn-status row is
 /// structurally stronger: it starts with the animated braille spinner already
@@ -2503,10 +2516,7 @@ fn detect_grok_screen_activity(rows: &[String]) -> AgentScreenActivity {
     if footer.iter().any(|row| crate::chrome::is_spinner_row(row)) {
         return AgentScreenActivity::Working;
     }
-    if footer.iter().any(|row| {
-        let mut chars = row.trim_start().chars();
-        chars.next() == Some('\u{276F}') && chars.next().is_none_or(char::is_whitespace)
-    }) {
+    if footer.iter().any(|row| is_grok_composer_row(row)) {
         AgentScreenActivity::Ready
     } else {
         AgentScreenActivity::Unknown
@@ -10611,6 +10621,36 @@ mod tests {
         assert!(silence.note_ready_screen());
         assert!(!silence.explicit_busy);
         assert!(silence.idle_confirmed);
+    }
+
+    /// Captured live from grok 0.2.114: the composer moved inside a rounded box, so the old
+    /// bare-`❯` match never fired and the tab stayed BUSY minutes after the turn finished.
+    #[test]
+    fn test_grok_boxed_composer_is_ready_and_spinner_still_wins() {
+        let finished = vec![
+            "     ❯ List the numbers 1 to 60, one per line.                    5:42 PM".to_string(),
+            "     1 2 3 4 5 6 7 8 9 10                                                ".to_string(),
+            "     Worked for 2.6s                                   stop  [hooks: 1]  ".to_string(),
+            "  ╭────────────────────────────────────────────────────────────────────╮".to_string(),
+            "  │ ❯                                                                  │".to_string(),
+            "  ╰─────────────────────────────── Grok 4.5 (high) · always-approve ───╯".to_string(),
+            "  Shift+Tab:mode  │  Ctrl+.:shortcuts".to_string(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("grok"), &finished),
+            AgentScreenActivity::Ready
+        );
+
+        // Mid-turn grok keeps the same composer box on screen, so the spinner must outrank it.
+        let mut running = finished.clone();
+        running.insert(
+            2,
+            "    ⠋ Waiting for response… 1.1s                     1.1s ⇣6.98k [stop]".to_string(),
+        );
+        assert_eq!(
+            detect_agent_screen_activity(Some("grok"), &running),
+            AgentScreenActivity::Working
+        );
     }
 
     #[test]
