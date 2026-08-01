@@ -776,7 +776,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order plus next_since.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection.\n- list_peers: List peers. Optional: project filter. Absent project is omitted.\n- send: Message a peer (requires to, message). Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Optional: limit, since (logical unix-millis cursor).",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Messages are TYPED into an idle peer's terminal (it wakes and acts); inbox is the fallback for busy peers.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order plus next_since.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox.\n- list_peers: List peers. Optional: project filter. Absent project is omitted.\n- send: Message a peer (requires to, message). Returns `delivered`: false means no terminal, no channel and no active wait took it — it sits unread in the inbox, so do not wait for a reply. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Optional: limit, since (logical unix-millis cursor).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000, capped 300000). On timeout returns {timed_out:true}." },
@@ -3335,14 +3335,24 @@ fn handle_messaging(
             // static instructions can stay compact (AC1 token budget). Any agent
             // that registers immediately receives the operational details it needs
             // for spawn/monitor/cleanup.
+            // Whether this identity has a terminal behind it. An identity that
+            // resolves to no live PTY is a mailbox and nothing more: no `send` can be
+            // typed into it and no wake can reach it, so it must say so instead of
+            // implying the peer is addressable in the usual sense. That silence is
+            // how a self-registered identity with no PTY (headerless bridge, agent
+            // launched outside TUIC, invented UUID) ended up losing every reply.
+            let has_terminal = state.live_pty_for_peer(&tuic_session).is_some();
             serde_json::json!({
                 "ok": true,
                 "tuic_session": tuic_session,
                 "name": name,
                 "linked_children": linked_children,
                 "identity_generated": generated_identity,
-                "identity": if generated_identity {
-                    "This headerless caller now has an MCP-scoped UUID. It is stable for this MCP connection and requires no PTY. Supply an explicit UUID on a future connection when cross-reconnect identity stability is required."
+                "terminal": has_terminal,
+                "identity": if !has_terminal {
+                    "This identity has NO terminal behind it: nothing can be typed into it and no message can wake it. Incoming mail only lands in your inbox, so you MUST consume it yourself — `agent action=wait since=<ms>` (blocking) or `agent action=inbox`. To be reachable through a terminal, run inside a TUIC-managed PTY so the bridge asserts its $TUIC_SESSION, or let TUIC spawn you with agent action=spawn."
+                } else if generated_identity {
+                    "This headerless caller now has an MCP-scoped UUID. It is stable for this MCP connection. Supply an explicit UUID on a future connection when cross-reconnect identity stability is required."
                 } else {
                     "This MCP session is bound to its managed or explicitly supplied stable UUID."
                 },
@@ -3351,7 +3361,7 @@ fn handle_messaging(
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
                     "monitor": "Use blocking waits instead of polling: agent action=wait since=<last_ms> (wakes on new mail) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
                     "auto_state_change": "Spawned peers auto-post state only: {type:state_change, state:idle|completed|exited, session_id, exit_code?}. This is not task output. Every child must report its result or blocker with agent action=send; use session output only when a child anomalously failed to send.",
-                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is always buffered in the inbox and is TYPED into an idle peer's terminal so it acts immediately; a busy peer gets it on its next idle transition. Response `accepted=true` confirms delivery acceptance; `delivered_via_channel` only reports the optional SSE path.",
+                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is always buffered in the inbox and is TYPED into an idle peer's terminal so it acts immediately; a busy peer gets it on its next idle transition. Check `delivered`: false means nothing will surface it (no terminal, no channel, no active wait) and it sits unread — do not block on an answer. `accepted=true` only confirms it was buffered; `delivered_via_channel` reports the optional SSE path.",
                     "list_peers": "agent action=list_peers project=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
@@ -3549,6 +3559,14 @@ fn handle_messaging(
                 "accepted": true,
                 "message_id": msg_id,
                 "buffered_in_inbox": true,
+                // `delivered` answers the only question the sender actually has:
+                // will anything surface this message? A waiter consumed it, the SSE
+                // channel took it, or the terminal typed/queued it — those reach the
+                // recipient. `inbox_only` does not: it means no waiter, no channel and
+                // no live terminal, so the message sits unread until the recipient
+                // polls. Reporting that as a bare `ok` is how an orchestrator's reply
+                // vanished while both sides believed delivery had happened.
+                "delivered": !inbox_only,
                 "delivered_via_channel": pushed,
                 "delivery_path": if waiter_owned {
                     "waiter_and_inbox"
@@ -3560,6 +3578,23 @@ fn handle_messaging(
                     "terminal_or_queued_and_inbox"
                 },
             });
+            if inbox_only {
+                let object = response
+                    .as_object_mut()
+                    .expect("send response is an object");
+                object.insert(
+                    "warning".to_string(),
+                    serde_json::json!(if managed_recipient {
+                        "Recipient has a terminal but could not take the message and has no active wait — it stays in the inbox until the recipient reads it."
+                    } else {
+                        "Recipient has NO terminal and no active wait: nothing will wake it. The message stays in its inbox until it calls agent action=wait/inbox. If you need an answer, do not block on it."
+                    }),
+                );
+                object.insert(
+                    "recipient_has_terminal".to_string(),
+                    serde_json::json!(managed_recipient),
+                );
+            }
             insert_optional_value(
                 response
                     .as_object_mut()
@@ -10953,6 +10988,128 @@ mod tests {
         assert_eq!(inbox.len(), 1, "recipient should have 1 buffered message");
         assert_eq!(inbox[0].from_tuic_session, sender_tuic);
         assert_eq!(inbox[0].from_name, "alice");
+    }
+
+    /// A peer with no terminal must be told so at registration. Silence here is
+    /// what let an agent launched outside a TUIC PTY believe it was addressable:
+    /// it registered, mail arrived, and nothing ever surfaced it.
+    #[test]
+    fn register_reports_no_terminal_for_a_peer_without_a_pty() {
+        let state = test_state();
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register",
+                "tuic_session": "550e8400-e29b-41d4-a716-4466554400a1",
+                "name": "orphan",
+            }),
+            Some("mcp-orphan"),
+        );
+        assert_eq!(result["ok"], true);
+        assert_eq!(
+            result["terminal"], false,
+            "an identity with no live PTY must report terminal=false: {result}"
+        );
+        let identity = result["identity"].as_str().unwrap_or_default();
+        assert!(
+            identity.contains("NO terminal"),
+            "the identity note must state the consequence, got: {identity}"
+        );
+        assert!(
+            identity.contains("agent action=wait") || identity.contains("agent action=inbox"),
+            "it must name the way out (consume your own inbox), got: {identity}"
+        );
+    }
+
+    /// `send` to a terminal-less peer is accepted but NOT delivered: the sender must
+    /// be able to tell "it will act on this" from "it will never see this".
+    #[test]
+    fn send_to_a_peer_without_a_terminal_reports_not_delivered() {
+        let state = test_state();
+        let sender_mcp = "mcp-undeliverable-sender";
+        let sender_tuic = "550e8400-e29b-41d4-a716-4466554400b0";
+        let recipient_mcp = "mcp-undeliverable-recipient";
+        let recipient_tuic = "550e8400-e29b-41d4-a716-4466554400b1";
+        register_peer(&state, sender_tuic, "alice", sender_mcp);
+        register_peer(&state, recipient_tuic, "phantom", recipient_mcp);
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": recipient_tuic,
+                "message": "did you finish?",
+            }),
+            Some(sender_mcp),
+        );
+        // The mail is stored — that part did succeed.
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["accepted"], true);
+        assert_eq!(result["buffered_in_inbox"], true);
+        assert_eq!(result["delivery_path"], "inbox_only");
+        // …but nothing will surface it.
+        assert_eq!(
+            result["delivered"], false,
+            "inbox_only must not be reported as delivered: {result}"
+        );
+        assert_eq!(result["recipient_has_terminal"], false);
+        let warning = result["warning"].as_str().unwrap_or_default();
+        assert!(
+            warning.contains("NO terminal"),
+            "the warning must say the recipient cannot be woken, got: {warning}"
+        );
+    }
+
+    /// The counterpart: a waiter consumed the message, so `delivered` is true and no
+    /// warning is attached. Guards against flagging healthy deliveries.
+    #[tokio::test]
+    async fn send_claimed_by_a_waiter_reports_delivered_without_warning() {
+        let state = test_state();
+        let sender_mcp = "mcp-waiter-sender";
+        let sender_tuic = "550e8400-e29b-41d4-a716-4466554400c0";
+        let recipient_mcp = "mcp-waiter-recipient";
+        let recipient_tuic = "550e8400-e29b-41d4-a716-4466554400c1";
+        register_peer(&state, sender_tuic, "alice", sender_mcp);
+        register_peer(&state, recipient_tuic, "root", recipient_mcp);
+
+        let waiting_state = Arc::clone(&state);
+        let recipient = recipient_tuic.to_string();
+        let waiter = tokio::spawn(async move {
+            handle_agent_wait(
+                &waiting_state,
+                &serde_json::json!({"action": "wait", "timeout_ms": 5_000}),
+                Some("mcp-waiter-recipient"),
+            )
+            .await
+            .get("met")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null)
+            .as_bool()
+            .unwrap_or(false)
+                && !recipient.is_empty()
+        });
+        // Let the wait register its lease before sending.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send",
+                "to": recipient_tuic,
+                "message": "here is the result",
+            }),
+            Some(sender_mcp),
+        );
+        assert_eq!(result["delivery_path"], "waiter_and_inbox");
+        assert_eq!(
+            result["delivered"], true,
+            "a waiter-owned message is delivered: {result}"
+        );
+        assert!(
+            result.get("warning").is_none(),
+            "a healthy delivery must carry no warning: {result}"
+        );
+        assert!(waiter.await.expect("waiter task"), "the wait must wake");
     }
 
     #[tokio::test]
