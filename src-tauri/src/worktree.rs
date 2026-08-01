@@ -1110,6 +1110,120 @@ pub(crate) fn get_worktree_paths_cached(
     .clone()
 }
 
+/// One block of `git worktree list --porcelain` output.
+struct WorktreeEntry {
+    path: String,
+    /// Branch from the `branch refs/heads/...` line — absent while HEAD is detached.
+    branch: Option<String>,
+    detached: bool,
+}
+
+fn parse_worktree_entries(porcelain: &str) -> Vec<WorktreeEntry> {
+    let mut entries = Vec::new();
+
+    for block in porcelain.split("\n\n") {
+        let block = block.trim();
+        if block.is_empty() {
+            continue;
+        }
+
+        let mut path: Option<String> = None;
+        let mut branch: Option<String> = None;
+        let mut detached = false;
+
+        for line in block.lines() {
+            if let Some(p) = line.strip_prefix("worktree ") {
+                path = Some(p.to_string());
+            } else if let Some(b) = line.strip_prefix("branch refs/heads/") {
+                branch = Some(b.to_string());
+            } else if line == "detached" {
+                detached = true;
+            }
+        }
+
+        if let Some(path) = path {
+            entries.push(WorktreeEntry {
+                path,
+                branch,
+                detached,
+            });
+        }
+    }
+
+    entries
+}
+
+/// Marker files git writes into a worktree's admin dir while a multi-step operation is in
+/// flight. Rebase and bisect detach HEAD, so `git worktree list --porcelain` emits no branch
+/// line and the worktree reads as dead to anything keyed on that line (GH #112).
+const IN_PROGRESS_MARKERS: [&str; 6] = [
+    "rebase-merge",
+    "rebase-apply",
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "BISECT_LOG",
+];
+
+/// Admin dir of a linked worktree: its `.git` is a *file* holding
+/// `gitdir: <repo>/.git/worktrees/<name>`. Returns `None` for the main worktree (where `.git`
+/// is a directory) and for paths that no longer exist.
+fn worktree_admin_dir(worktree_path: &str) -> Option<PathBuf> {
+    let content = std::fs::read_to_string(Path::new(worktree_path).join(".git")).ok()?;
+    let gitdir = content.trim().strip_prefix("gitdir:")?.trim();
+    Some(PathBuf::from(gitdir))
+}
+
+/// True when the worktree is in the middle of a rebase / merge / cherry-pick / revert / bisect.
+fn has_operation_in_progress(worktree_path: &str) -> bool {
+    let Some(admin) = worktree_admin_dir(worktree_path) else {
+        return false;
+    };
+    IN_PROGRESS_MARKERS
+        .iter()
+        .any(|marker| admin.join(marker).exists())
+}
+
+/// Branch a detached worktree was on before the in-flight operation started. Git records it in
+/// `head-name` for both rebase backends; merge/cherry-pick/revert never detach, so they have no
+/// equivalent (and need none). Bisect records only a raw name in `BISECT_START`, which we do not
+/// trust as a branch — such a worktree stays alive as an in-progress op, just without a row.
+pub(crate) fn operation_head_branch(worktree_path: &str) -> Option<String> {
+    let admin = worktree_admin_dir(worktree_path)?;
+    for backend in ["rebase-merge", "rebase-apply"] {
+        let head_name = std::fs::read_to_string(admin.join(backend).join("head-name")).ok();
+        if let Some(branch) = head_name
+            .as_deref()
+            .and_then(|s| s.trim().strip_prefix("refs/heads/"))
+        {
+            return Some(branch.to_string());
+        }
+    }
+    None
+}
+
+/// Map branch name -> worktree directory. A worktree detached by an in-progress rebase keeps its
+/// row: its pre-rebase branch is recovered from git's own state files, so the sidebar entry
+/// survives and its terminals are not closed mid-conflict-resolution.
+fn map_worktree_branch_paths(porcelain: &str) -> HashMap<String, String> {
+    let mut result = HashMap::new();
+
+    for entry in parse_worktree_entries(porcelain) {
+        let branch = match entry.branch {
+            Some(branch) => Some(branch),
+            None => operation_head_branch(&entry.path),
+        };
+        // Skip entries whose directory no longer exists (double safety after prune)
+        if let Some(branch) = branch
+            && Path::new(&entry.path).exists()
+        {
+            result.insert(branch, entry.path);
+        }
+    }
+
+    result
+}
+
 /// Get worktree paths for a repo: maps branch name -> worktree directory
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn get_worktree_paths(repo_path: String) -> Result<HashMap<String, String>, String> {
@@ -1120,64 +1234,20 @@ pub(crate) fn get_worktree_paths(repo_path: String) -> Result<HashMap<String, St
         .run()
         .map_err(|e| format!("git worktree list failed: {e}"))?;
 
-    let mut result = HashMap::new();
-    let mut current_path: Option<String> = None;
-
-    for line in out.stdout.lines() {
-        if line.starts_with("worktree ") {
-            current_path = Some(line.trim_start_matches("worktree ").to_string());
-        } else if line.starts_with("branch refs/heads/") {
-            let branch = line.trim_start_matches("branch refs/heads/").to_string();
-            if let Some(ref path) = current_path {
-                // Skip entries whose directory no longer exists (double safety after prune)
-                if Path::new(path).exists() {
-                    result.insert(branch, path.clone());
-                }
-            }
-        }
-    }
-
-    Ok(result)
+    Ok(map_worktree_branch_paths(&out.stdout))
 }
 
 /// Parse `git worktree list --porcelain` output and return paths of linked worktrees that are in
 /// detached HEAD state (i.e. their branch has been deleted). The main worktree (first entry) is
-/// always skipped — it can't be removed without removing the repo itself.
+/// always skipped — it can't be removed without removing the repo itself. A worktree detached by
+/// an in-progress operation is not an orphan: its branch is coming back when the rebase ends.
 fn parse_orphan_worktrees(porcelain: &str) -> Vec<String> {
-    let mut orphans = Vec::new();
-    let mut is_first = true;
-
-    for block in porcelain.split("\n\n") {
-        let block = block.trim();
-        if block.is_empty() {
-            continue;
-        }
-
-        let mut path: Option<String> = None;
-        let mut has_branch = false;
-        let mut is_detached = false;
-
-        for line in block.lines() {
-            if line.starts_with("worktree ") {
-                path = Some(line.trim_start_matches("worktree ").to_string());
-            } else if line.starts_with("branch refs/heads/") {
-                has_branch = true;
-            } else if line == "detached" {
-                is_detached = true;
-            }
-        }
-
-        if is_first {
-            is_first = false;
-            continue;
-        }
-
-        if is_detached && !has_branch {
-            orphans.extend(path);
-        }
-    }
-
-    orphans
+    parse_worktree_entries(porcelain)
+        .into_iter()
+        .skip(1)
+        .filter(|e| e.detached && e.branch.is_none() && !has_operation_in_progress(&e.path))
+        .map(|e| e.path)
+        .collect()
 }
 
 /// Detect orphan worktrees: linked worktrees present on the filesystem but in detached HEAD
@@ -2822,6 +2892,97 @@ branch refs/heads/feat
 ";
         let orphans = super::parse_orphan_worktrees(porcelain);
         assert!(orphans.is_empty());
+    }
+
+    /// Build a linked-worktree fixture: `<root>/wt` with a `.git` file pointing at
+    /// `<root>/admin`, plus whichever in-progress marker files the test needs.
+    fn linked_worktree_fixture(root: &Path, markers: &[(&str, &str)]) -> String {
+        let wt = root.join("wt");
+        let admin = root.join("admin");
+        std::fs::create_dir_all(&wt).expect("worktree dir");
+        std::fs::create_dir_all(&admin).expect("admin dir");
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display()))
+            .expect("gitdir file");
+        for (rel, contents) in markers {
+            let target = admin.join(rel);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).expect("marker parent");
+            }
+            std::fs::write(target, contents).expect("marker file");
+        }
+        wt.to_string_lossy().into_owned()
+    }
+
+    fn detached_porcelain(wt_path: &str) -> String {
+        format!(
+            "worktree /repo/main\nHEAD abc123\nbranch refs/heads/main\n\nworktree {wt_path}\nHEAD deadbeef\ndetached\n\n"
+        )
+    }
+
+    #[test]
+    fn worktree_mid_rebase_is_not_orphan_and_keeps_its_branch() {
+        let dir = TempDir::new().expect("temp dir");
+        let wt = linked_worktree_fixture(
+            dir.path(),
+            &[("rebase-merge/head-name", "refs/heads/feat-auth\n")],
+        );
+        let porcelain = detached_porcelain(&wt);
+
+        assert!(super::parse_orphan_worktrees(&porcelain).is_empty());
+        assert_eq!(
+            super::map_worktree_branch_paths(&porcelain).get("feat-auth"),
+            Some(&wt)
+        );
+    }
+
+    #[test]
+    fn worktree_mid_rebase_apply_is_not_orphan_and_keeps_its_branch() {
+        let dir = TempDir::new().expect("temp dir");
+        let wt = linked_worktree_fixture(
+            dir.path(),
+            &[("rebase-apply/head-name", "refs/heads/feat-am\n")],
+        );
+        let porcelain = detached_porcelain(&wt);
+
+        assert!(super::parse_orphan_worktrees(&porcelain).is_empty());
+        assert_eq!(
+            super::map_worktree_branch_paths(&porcelain).get("feat-am"),
+            Some(&wt)
+        );
+    }
+
+    #[test]
+    fn interrupted_merge_and_cherry_pick_are_not_orphans() {
+        // Merge and cherry-pick never detach HEAD, but a worktree that is BOTH detached and
+        // mid-operation (e.g. a cherry-pick started from a detached HEAD) must not be archived.
+        for marker in [
+            "MERGE_HEAD",
+            "CHERRY_PICK_HEAD",
+            "REVERT_HEAD",
+            "BISECT_LOG",
+        ] {
+            let dir = TempDir::new().expect("temp dir");
+            let wt = linked_worktree_fixture(dir.path(), &[(marker, "deadbeef\n")]);
+            assert!(
+                super::parse_orphan_worktrees(&detached_porcelain(&wt)).is_empty(),
+                "{marker} should suppress the orphan verdict"
+            );
+        }
+    }
+
+    #[test]
+    fn genuinely_orphaned_worktree_is_still_reported() {
+        let dir = TempDir::new().expect("temp dir");
+        // Same fixture, no in-progress marker: the branch really is gone.
+        let wt = linked_worktree_fixture(dir.path(), &[]);
+        let porcelain = detached_porcelain(&wt);
+
+        assert_eq!(super::parse_orphan_worktrees(&porcelain), vec![wt.clone()]);
+        assert!(
+            !super::map_worktree_branch_paths(&porcelain)
+                .values()
+                .any(|p| *p == wt)
+        );
     }
 
     #[test]

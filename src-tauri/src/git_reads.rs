@@ -727,8 +727,14 @@ impl GitReads for GixGitReads {
             let Ok(wt_repo) = proxy.into_repo() else {
                 continue;
             };
-            if let Some(branch) = branch_of(&wt_repo) {
-                map.insert(branch, real(&base));
+            let path = real(&base);
+            // A worktree mid-rebase is on a detached HEAD, so gix reports no branch. Recover the
+            // pre-rebase branch from git's own state files, otherwise the row vanishes from the
+            // sidebar and its terminals are closed mid-conflict-resolution (GH #112).
+            let branch = branch_of(&wt_repo)
+                .or_else(|| crate::worktree::operation_head_branch(&base.to_string_lossy()));
+            if let Some(branch) = branch {
+                map.insert(branch, path);
             }
         }
         Ok(map)
