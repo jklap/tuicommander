@@ -168,6 +168,41 @@ fn load_json_config_from_path<T: DeserializeOwned + Default>(path: &std::path::P
     }
 }
 
+/// Load a JSON config file, distinguishing "not written yet" (legitimately empty) from
+/// "there but broken". Used where a silent fallback to `Default` would let the next write
+/// overwrite real user data — notes.json (GH #107). A file that parses as garbage is moved
+/// aside as `<name>.corrupt-<uuid>` so it survives for recovery.
+pub(crate) fn load_json_config_strict<T: DeserializeOwned + Default>(
+    filename: &str,
+) -> Result<T, String> {
+    let path = config_dir().join(filename);
+    load_json_config_strict_from_path(&path)
+}
+
+fn load_json_config_strict_from_path<T: DeserializeOwned + Default>(
+    path: &std::path::Path,
+) -> Result<T, String> {
+    if !path.exists() {
+        return Ok(T::default());
+    }
+    let content = std::fs::read_to_string(path).map_err(|e| {
+        tracing::error!(path = %path.display(), "Could not read config: {e}");
+        format!("Could not read {}: {e}", path.display())
+    })?;
+    serde_json::from_str(&content).map_err(|e| {
+        // Move the bad file aside: the caller refuses to write until a load succeeds, but a
+        // later code path (or a second instance) must not be able to clobber it either.
+        let aside = path.with_extension(format!("corrupt-{}", uuid::Uuid::new_v4()));
+        let preserved = std::fs::rename(path, &aside).is_ok();
+        tracing::error!(
+            path = %path.display(),
+            preserved_as = %if preserved { aside.display().to_string() } else { "<rename failed>".to_string() },
+            "Corrupt config: {e}"
+        );
+        format!("Corrupt {}: {e}", path.display())
+    })
+}
+
 /// Atomically write `data` to `target` via temp+rename with 0600 perms.
 pub(crate) fn persist_atomic(target: &std::path::Path, data: &[u8]) -> Result<(), String> {
     if let Some(dir) = target.parent() {
@@ -802,6 +837,12 @@ pub(crate) struct NotificationConfig {
     pub(crate) sounds: NotificationSounds,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) audio_device: Option<String>,
+    /// Drop the completion chime for sessions created over MCP/HTTP (`session
+    /// create`, `agent spawn`). An orchestration of many agents otherwise turns
+    /// every finished worker into a beep. Visual signals (activity item, badge,
+    /// OS notification) are unaffected.
+    #[serde(default)]
+    pub(crate) silence_remote_completions: bool,
 }
 
 fn default_true() -> bool {
@@ -819,6 +860,7 @@ impl Default for NotificationConfig {
             volume: 0.5,
             sounds: NotificationSounds::default(),
             audio_device: None,
+            silence_remote_completions: false,
         }
     }
 }
@@ -2131,9 +2173,13 @@ pub(crate) fn save_prompt_library(config: PromptLibraryConfig) -> Result<(), Str
 }
 
 // Notes (opaque JSON — schema owned by frontend)
+//
+// Unlike every other config this one FAILS instead of defaulting: the frontend refuses to
+// persist until a load succeeds, so an unreadable notes.json can no longer be silently
+// replaced by an empty array on the next mutation (GH #107).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn load_notes() -> serde_json::Value {
-    load_json_config(NOTES_FILE)
+pub(crate) fn load_notes() -> Result<serde_json::Value, String> {
+    load_json_config_strict(NOTES_FILE)
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -2326,6 +2372,50 @@ mod tests {
 
     fn read_json(path: &std::path::Path) -> serde_json::Value {
         serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
+    }
+
+    // GH #107 — notes must never fall back to Default on a broken file, or the frontend
+    // hydrates empty and the next mutation atomically overwrites the real notes.
+    #[test]
+    fn strict_load_returns_default_for_a_missing_file() {
+        let dir = TempDir::new().expect("temp dir");
+        let loaded =
+            load_json_config_strict_from_path::<serde_json::Value>(&dir.path().join("notes.json"));
+        assert_eq!(loaded, Ok(serde_json::Value::Null));
+    }
+
+    #[test]
+    fn strict_load_errors_and_preserves_a_corrupt_file() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("notes.json");
+        fs::write(&path, "{ this is not json").unwrap();
+
+        let loaded = load_json_config_strict_from_path::<serde_json::Value>(&path);
+        assert!(loaded.is_err(), "corrupt file must not load as Default");
+        assert!(!path.exists(), "corrupt file must be moved aside");
+
+        let preserved: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt-"))
+            .collect();
+        assert_eq!(preserved.len(), 1, "exactly one file kept aside");
+        assert_eq!(
+            fs::read_to_string(preserved[0].path()).unwrap(),
+            "{ this is not json"
+        );
+    }
+
+    #[test]
+    fn strict_load_reads_a_valid_file() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("notes.json");
+        fs::write(&path, r#"{"notes":[{"id":"n1"}]}"#).unwrap();
+
+        let loaded = load_json_config_strict_from_path::<serde_json::Value>(&path)
+            .expect("valid file loads");
+        assert_eq!(loaded["notes"][0]["id"], "n1");
+        assert!(path.exists(), "a valid file is left where it is");
     }
 
     #[test]
@@ -2978,6 +3068,7 @@ mod tests {
                 info: true,
             },
             audio_device: Some("Test Speaker".to_string()),
+            silence_remote_completions: true,
         };
         let loaded: NotificationConfig = round_trip_in_dir(dir.path(), "notifications.json", &cfg);
         assert!(!loaded.enabled);
@@ -2985,6 +3076,7 @@ mod tests {
         assert!(loaded.sounds.question);
         assert!(!loaded.sounds.error);
         assert_eq!(loaded.audio_device.as_deref(), Some("Test Speaker"));
+        assert!(loaded.silence_remote_completions);
     }
 
     #[test]
