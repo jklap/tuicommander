@@ -343,7 +343,14 @@ pub(super) async fn put_repo_defaults(
 // --- Notes ---
 
 pub(super) async fn get_notes() -> impl IntoResponse {
-    Json(crate::config::load_notes())
+    match crate::config::load_notes() {
+        Ok(v) => (StatusCode::OK, Json(v)),
+        // 500 so the client stays un-hydrated and never overwrites the file it could not read.
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
 }
 
 pub(super) async fn put_notes(
