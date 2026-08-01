@@ -504,6 +504,8 @@ enum UpstreamError {
 
 A `NeedsOAuth` on any request transitions the upstream registry to `needs_auth`. The Services tab in Settings surfaces an *Authorize* button that calls `start_mcp_upstream_oauth`. Auto-triggered OAuth is gated behind explicit user consent (the confirm dialog shows the AS origin so the user can refuse an Authorization Server mix-up attempt).
 
+**Off-domain authorization servers are never blocked.** MCP gateways, corporate proxies and hosted IdP tenants routinely serve AS metadata whose `issuer` and endpoints point at a different registrable domain than the MCP server — RFC 8414 §3.3 says the issuer must match the discovery URL, but refusing on that basis makes legitimate servers unusable. Discovery logs a warning on an issuer mismatch and continues; `start_mcp_upstream_oauth` returns `cross_domain_as: true` when the AS is off-domain, and the consent dialog switches to a `warning` kind naming the origin. The decision belongs to the user, not to a hard-coded gate.
+
 ### Flow
 
 1. **Start** — `start_mcp_upstream_oauth(name)` generates a PKCE verifier/challenge (S256), mints an opaque `state`, records the pending flow in a DashMap keyed by state, sets upstream status to `authenticating`, and returns the authorization URL + AS origin.

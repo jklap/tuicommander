@@ -54,11 +54,12 @@ export function authFromUpstreamForm(
 interface StartOAuthResponse {
 	authorization_url: string;
 	state: string;
+	cross_domain_as: boolean;
 }
 
 export async function startAuthorizeFlow(
 	name: string,
-	confirmAuthorization: (origin: string, name: string) => Promise<boolean>,
+	confirmAuthorization: (origin: string, name: string, crossDomain: boolean) => Promise<boolean>,
 ): Promise<void> {
 	let resp: StartOAuthResponse;
 	try {
@@ -72,17 +73,17 @@ export async function startAuthorizeFlow(
 	}
 
 	// Surface the AS origin before opening the browser so the user sees where
-	// they're being sent (AS mix-up defence, #1268-40e8). The backend already
-	// bails on cross-domain mismatches, but showing the hostname makes phishing
-	// attempts visible even when the mismatch check is bypassed by an explicit
-	// authorization_endpoint override.
+	// they're being sent (AS mix-up defence, #1268-40e8). The backend never
+	// blocks an off-domain authorization server — gateways and hosted IdPs make
+	// that routine — it flags it via `cross_domain_as` so this dialog can say so
+	// and let the user decide.
 	let asOrigin = resp.authorization_url;
 	try {
 		asOrigin = new URL(resp.authorization_url).origin;
 	} catch {
 		// keep full URL if parsing fails
 	}
-	const proceed = await confirmAuthorization(asOrigin, name);
+	const proceed = await confirmAuthorization(asOrigin, name, resp.cross_domain_as);
 	if (!proceed) {
 		try {
 			await rpc("cancel_mcp_upstream_oauth", { name });
@@ -136,13 +137,15 @@ export const UpstreamMcpPanel: Component = () => {
 	const [error, setError] = createSignal("");
 	const [editingId, setEditingId] = createSignal<string | null>(null);
 	const [editForm, setEditForm] = createSignal(emptyForm());
-	const confirmAuthorization = (origin: string, name: string) =>
+	const confirmAuthorization = (origin: string, name: string, crossDomain: boolean) =>
 		oauthDialog.confirm({
 			title: "Authorize MCP server",
-			message: `About to open ${origin} to authorize "${name}".\n\nContinue?`,
+			message: crossDomain
+				? `About to open ${origin} to authorize "${name}".\n\nThis authorization server is on a different domain than the MCP server. That is normal for gateways and hosted identity providers — but only continue if you recognise it.\n\nContinue?`
+				: `About to open ${origin} to authorize "${name}".\n\nContinue?`,
 			okLabel: "Continue",
 			cancelLabel: "Cancel",
-			kind: "info",
+			kind: crossDomain ? "warning" : "info",
 		});
 
 	const refreshStatus = async () => {
