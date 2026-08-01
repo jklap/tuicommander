@@ -11,6 +11,7 @@ import { settingsStore } from "../stores/settings";
 import { tabOrderingStore } from "../stores/tabOrdering";
 import { terminalsStore } from "../stores/terminals";
 import { readClipboard, writeClipboard } from "../utils/clipboard";
+import { getFocusedFrameSelection } from "../utils/focusedSelection";
 import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { filterValidTerminals } from "../utils/terminalFilter";
@@ -414,10 +415,13 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 
 	const copyFromTerminal = async () => {
 		try {
-			// Prefer xterm's selection (canvas-rendered, invisible to DOM).
-			// Fall back to DOM selection for non-terminal panels (code editor, etc.).
+			// A focused panel iframe (plugin dashboard, HTML preview) owns its own
+			// selection and wins outright — the active terminal may still be holding a
+			// stale highlight from before the user switched tabs.
+			// Otherwise prefer xterm's selection (canvas-rendered, invisible to DOM),
+			// then fall back to host DOM selection (code editor, diff panels, etc.).
 			const active = terminalsStore.getActive();
-			const rawSel = active?.ref?.getSelection() || window.getSelection()?.toString();
+			const rawSel = getFocusedFrameSelection() || active?.ref?.getSelection() || window.getSelection()?.toString();
 			const selection = rawSel
 				? rawSel
 						.split("\n")
