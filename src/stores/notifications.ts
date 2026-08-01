@@ -137,6 +137,14 @@ function createNotificationsStore() {
 			saveConfig(state.config);
 		},
 
+		/** Silence (or restore) the completion chime for MCP/HTTP-created sessions.
+		 *  Not forwarded to notificationManager: this is a per-terminal policy applied
+		 *  at the completion call site, not a property of the audio playback. */
+		setSilenceRemoteCompletions(silence: boolean): void {
+			setState("config", "silence_remote_completions", silence);
+			saveConfig(state.config);
+		},
+
 		/** Enable/disable a specific sound */
 		setSoundEnabled(sound: NotificationSound, enabled: boolean): void {
 			setState("config", "sounds", sound, enabled);

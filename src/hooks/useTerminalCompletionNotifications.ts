@@ -1,5 +1,5 @@
 import { onCleanup } from "solid-js";
-import { getCompletionSuppression } from "../components/Terminal/completionDecision";
+import { getCompletionSuppression, shouldPlayCompletionSound } from "../components/Terminal/completionDecision";
 import { getAgentIconSvg } from "../components/ui/AgentIcon";
 import { listen } from "../invoke";
 import { activityStore } from "../stores/activityStore";
@@ -67,7 +67,16 @@ export function useTerminalCompletionNotifications(options: TerminalCompletionNo
 
 			appLogger.info("terminal", `[Notify] ${id} completion — busy for ${Math.round(durationMs / 1000)}s then idle`);
 			terminalsStore.update(id, { activity: true, unseen: true });
-			notificationsStore.playCompletion(id);
+			if (
+				shouldPlayCompletionSound({
+					isRemoteSession: terminal.isRemote,
+					silenceRemoteCompletions: notificationsStore.state.config.silence_remote_completions,
+				})
+			) {
+				notificationsStore.playCompletion(id);
+			} else {
+				appLogger.debug("terminal", `[Notify] ${id} completion chime muted — orchestrated (remote) session`);
+			}
 			const agentLabel = terminal.agentType ? terminal.agentType[0].toUpperCase() + terminal.agentType.slice(1) : null;
 			const repoPath = repositoriesStore.getRepoPathForTerminal(id);
 			const repoName = repoPath ? pathBasename(repoPath) : null;
