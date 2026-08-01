@@ -117,6 +117,13 @@ pub fn is_spinner_row(text: &str) -> bool {
         Some(c) => c,
         None => return false,
     };
+    // A lone block glyph is a scrollbar thumb, not a spinner: grok paints one per row down
+    // the right edge as soon as its output outgrows the viewport, so every otherwise-blank
+    // row trimmed down to a single `█` and the session never left BUSY. Aider's Knight Rider
+    // bar always carries more cells plus its status text, so it is unaffected.
+    if matches!(lead, '\u{2588}' | '\u{2591}') && text.trim().chars().count() == 1 {
+        return false;
+    }
     matches!(lead,
         '\u{00B7}'        // · — Claude Code middle-dot spinner prefix
         | '\u{2591}'      // ░ — Aider Knight Rider spinner (light shade)
@@ -978,6 +985,21 @@ mod tests {
     fn not_spinner_plain_text() {
         assert!(!is_spinner_row("Hello world"));
         assert!(!is_spinner_row(""));
+    }
+
+    #[test]
+    fn not_spinner_lone_scrollbar_thumb() {
+        // grok paints a scrollbar column down the right edge once its output outgrows the
+        // viewport; the otherwise-blank rows trim to a single block glyph. Reading those as
+        // Aider's spinner pinned the session BUSY for the rest of the process.
+        assert!(!is_spinner_row(
+            "                                                            █"
+        ));
+        assert!(!is_spinner_row("█"));
+        assert!(!is_spinner_row("░"));
+        // Aider's Knight Rider bar carries more cells and its status text — still a spinner.
+        assert!(is_spinner_row("█░  Waiting for model"));
+        assert!(is_spinner_row("░░█░"));
     }
 
     #[test]
