@@ -21,6 +21,7 @@ import { safeUnlisten } from "../../utils/safeUnlisten";
 import { getAwaitingInputSound } from "./awaitingInputSound";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
+import { shouldPlayCompletionSound } from "./completionDecision";
 import { getSharedMetrics } from "./glyphCache";
 import { shouldApplyIntentTitle } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
@@ -586,7 +587,14 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				// A plain shell exit closes its tab, so it stays silent.
 				if (hadAgent && terminalsStore.state.activeId !== props.id) {
 					appLogger.info("terminal", `[Notify] ${props.id} completion — session exited (background tab)`);
-					notificationsStore.playCompletion();
+					if (
+						shouldPlayCompletionSound({
+							isRemoteSession: terminalsStore.get(props.id)?.isRemote ?? false,
+							silenceRemoteCompletions: notificationsStore.state.config.silence_remote_completions,
+						})
+					) {
+						notificationsStore.playCompletion();
+					}
 				}
 				// Plain shell exit: close the tab via the app-level onShellExit handler.
 				// This is the single owner of local session-exit handling; the global

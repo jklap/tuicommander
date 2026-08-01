@@ -225,6 +225,24 @@ export const NotificationsTab: Component = () => {
 					</For>
 				</div>
 
+				<div class={s.group}>
+					<label>{t("notifications.label.orchestration", "Orchestration")}</label>
+					<div class={s.toggle}>
+						<input
+							type="checkbox"
+							checked={notificationsStore.state.config.silence_remote_completions}
+							onChange={(e) => notificationsStore.setSilenceRemoteCompletions(e.currentTarget.checked)}
+						/>
+						<span>{t("notifications.label.silenceRemoteCompletions", "Silence completions from MCP sessions")}</span>
+					</div>
+					<p class={s.hint} style={{ "margin-top": "6px" }}>
+						{t(
+							"notifications.hint.silenceRemoteCompletions",
+							"Sessions started by an agent orchestrator (session create, agent spawn) finish without a chime. They still appear in Activity and update the badge.",
+						)}
+					</p>
+				</div>
+
 				<div class={s.actions}>
 					<button onClick={() => notificationsStore.reset()}>
 						{t("notifications.btn.resetDefaults", "Reset Defaults")}

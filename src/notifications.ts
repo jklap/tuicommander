@@ -11,6 +11,10 @@ export interface NotificationConfig {
 	volume: number; // 0.0 to 1.0
 	sounds: Record<NotificationSound, boolean>;
 	audio_device: string | null;
+	/** Drop the completion chime for MCP/HTTP-created sessions (`session create`,
+	 *  `agent spawn`) — an orchestration of many agents otherwise beeps per worker.
+	 *  Visual signals (activity item, badge, OS notification) are unaffected. */
+	silence_remote_completions: boolean;
 }
 
 /** Default notification configuration */
@@ -25,6 +29,7 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
 		info: true,
 	},
 	audio_device: null,
+	silence_remote_completions: false,
 };
 
 /** Notification manager — delegates audio playback to Rust via Tauri IPC.
