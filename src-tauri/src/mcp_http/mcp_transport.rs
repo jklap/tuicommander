@@ -7,6 +7,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use parking_lot::Mutex;
 use portable_pty::{CommandBuilder, PtySize};
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, LazyLock};
@@ -247,6 +248,61 @@ static PEER_IDENTITY_BIND_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::ne
 /// liveness: entries intentionally remain for up to one hour.
 const MCP_OWNER_ACTIVITY_GRACE: std::time::Duration = std::time::Duration::from_secs(6);
 
+/// Takeover rejection is a *permanent* condition while the incumbent lives, and
+/// the loser retries every three seconds forever — one duplicated MCP
+/// registration produced 5004 identical WARN lines in a single day, burying
+/// every other log. Report the first rejection per claimant pair in full, then
+/// one periodic summary carrying the suppressed count.
+const TAKEOVER_REJECT_SUMMARY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(300);
+
+/// Drop claimants idle for this long, so a long-lived app does not accumulate
+/// one entry per short-lived MCP session.
+const TAKEOVER_REJECT_ENTRY_TTL: std::time::Duration = std::time::Duration::from_secs(3600);
+
+struct TakeoverRejectLog {
+    suppressed: u64,
+    last_reported: std::time::Instant,
+}
+
+static TAKEOVER_REJECT_LOG: LazyLock<Mutex<HashMap<(String, String), TakeoverRejectLog>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Decide how to report one takeover rejection.
+///
+/// Returns `Some(suppressed_since_last_report)` when this occurrence must be
+/// logged at WARN — `Some(0)` is the first sighting of the pair — and `None`
+/// when it is a repeat that the caller should log at debug instead.
+fn takeover_rejection_report(tuic_session: &str, mcp_sid: &str) -> Option<u64> {
+    let now = std::time::Instant::now();
+    let mut log = TAKEOVER_REJECT_LOG.lock();
+
+    log.retain(|_, entry| now.duration_since(entry.last_reported) < TAKEOVER_REJECT_ENTRY_TTL);
+
+    match log.get_mut(&(tuic_session.to_string(), mcp_sid.to_string())) {
+        None => {
+            log.insert(
+                (tuic_session.to_string(), mcp_sid.to_string()),
+                TakeoverRejectLog {
+                    suppressed: 0,
+                    last_reported: now,
+                },
+            );
+            Some(0)
+        }
+        Some(entry) => {
+            if now.duration_since(entry.last_reported) >= TAKEOVER_REJECT_SUMMARY_INTERVAL {
+                let suppressed = entry.suppressed;
+                entry.suppressed = 0;
+                entry.last_reported = now;
+                Some(suppressed)
+            } else {
+                entry.suppressed += 1;
+                None
+            }
+        }
+    }
+}
+
 /// Cap for a peer message typed into a terminal. Longer messages become a
 /// pointer to the inbox rather than flooding the recipient's screen.
 const INJECT_MAX_BYTES: usize = 2048;
@@ -481,14 +537,24 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
     let prior_mcp = match reclaimable_prior_peer_owner_locked(state, mcp_sid, tuic) {
         Ok(prior) => prior,
         Err(error) => {
-            tracing::warn!(
-                source = "mcp_initialize",
-                event = "live_binding_takeover_rejected",
-                tuic_session = %tuic,
-                mcp_session = %mcp_sid,
-                error = %error,
-                "Rejected initialize identity takeover from a second live bridge"
-            );
+            match takeover_rejection_report(tuic, mcp_sid) {
+                Some(suppressed) => tracing::warn!(
+                    source = "mcp_initialize",
+                    event = "live_binding_takeover_rejected",
+                    tuic_session = %tuic,
+                    mcp_session = %mcp_sid,
+                    suppressed_since_last_report = suppressed,
+                    error = %error,
+                    "Rejected initialize identity takeover from a second live bridge"
+                ),
+                None => tracing::debug!(
+                    source = "mcp_initialize",
+                    event = "live_binding_takeover_rejected",
+                    tuic_session = %tuic,
+                    mcp_session = %mcp_sid,
+                    "Rejected initialize identity takeover (repeat)"
+                ),
+            }
             return false;
         }
     };
@@ -6075,6 +6141,103 @@ mod tests {
         ));
         assert!(state.mcp_to_session.is_empty(), "no binding on bad header");
         assert!(state.peer_agents.is_empty());
+    }
+
+    #[test]
+    fn takeover_rejection_reports_first_then_suppresses_repeats() {
+        // A duplicated MCP registration retries every 3s forever. The first
+        // rejection must be visible; the rest must not bury the log.
+        let pair = ("takeover-tuic-a", "takeover-mcp-a");
+
+        assert_eq!(
+            takeover_rejection_report(pair.0, pair.1),
+            Some(0),
+            "first sighting of a claimant pair must be reported in full"
+        );
+
+        for _ in 0..2000 {
+            assert!(
+                takeover_rejection_report(pair.0, pair.1).is_none(),
+                "repeats inside the summary window must not reach WARN"
+            );
+        }
+    }
+
+    #[test]
+    fn takeover_rejection_reports_each_distinct_pair() {
+        // Suppression is per claimant: a genuinely new offender must never be
+        // hidden by an unrelated pair already in its silent window.
+        assert_eq!(takeover_rejection_report("tuic-x", "mcp-1"), Some(0));
+        assert!(takeover_rejection_report("tuic-x", "mcp-1").is_none());
+
+        assert_eq!(
+            takeover_rejection_report("tuic-x", "mcp-2"),
+            Some(0),
+            "a different claiming MCP session is a distinct event"
+        );
+        assert_eq!(
+            takeover_rejection_report("tuic-y", "mcp-1"),
+            Some(0),
+            "a different TUIC identity is a distinct event"
+        );
+    }
+
+    #[test]
+    fn takeover_rejection_summary_carries_suppressed_count() {
+        let pair = ("takeover-tuic-b", "takeover-mcp-b");
+        assert_eq!(takeover_rejection_report(pair.0, pair.1), Some(0));
+
+        for _ in 0..7 {
+            assert!(takeover_rejection_report(pair.0, pair.1).is_none());
+        }
+
+        // Force the summary window open without sleeping 5 minutes.
+        {
+            let mut log = TAKEOVER_REJECT_LOG.lock();
+            let entry = log
+                .get_mut(&(pair.0.to_string(), pair.1.to_string()))
+                .expect("entry recorded on first sighting");
+            entry.last_reported -= TAKEOVER_REJECT_SUMMARY_INTERVAL;
+        }
+
+        assert_eq!(
+            takeover_rejection_report(pair.0, pair.1),
+            Some(7),
+            "the summary must state how many occurrences were swallowed"
+        );
+        assert!(
+            takeover_rejection_report(pair.0, pair.1).is_none(),
+            "counter resets after a summary — the next window starts silent"
+        );
+    }
+
+    #[test]
+    fn takeover_rejection_forgets_idle_claimants() {
+        // Without eviction a long-lived app leaks one entry per short-lived
+        // MCP session.
+        let pair = ("takeover-tuic-c", "takeover-mcp-c");
+        assert_eq!(takeover_rejection_report(pair.0, pair.1), Some(0));
+
+        {
+            let mut log = TAKEOVER_REJECT_LOG.lock();
+            let entry = log
+                .get_mut(&(pair.0.to_string(), pair.1.to_string()))
+                .expect("entry recorded on first sighting");
+            entry.last_reported -= TAKEOVER_REJECT_ENTRY_TTL;
+        }
+
+        assert_eq!(
+            takeover_rejection_report(pair.0, pair.1),
+            Some(0),
+            "an evicted pair is reported as new, not as a suppressed repeat"
+        );
+        assert!(
+            !TAKEOVER_REJECT_LOG.lock().contains_key(&(
+                "takeover-tuic-c".to_string(),
+                "stale-never-seen".to_string()
+            )),
+            "eviction must not resurrect unrelated keys"
+        );
     }
 
     #[test]
