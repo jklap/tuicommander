@@ -1,9 +1,34 @@
 # TUICommander — Complete Feature Reference
 
-> Canonical feature inventory. Update this file when adding, changing, or removing features.
+> Canonical capability inventory. Update this file when adding, changing, or removing user-visible features.
 > See [AGENTS.md](../AGENTS.md) for the maintenance requirement.
+>
+> This document intentionally serves two audiences: users need a searchable overview of what exists, while LLMs and contributors need stable names, shortcuts, settings, and implementation anchors. It is an inventory, not a replacement for the chronological [CHANGELOG](../CHANGELOG.md).
 
-**Version:** 1.7.0 | **Last verified:** 2026-07-31 (delta since 1.5.1: features added in 1.6.0–1.7.0 reconciled against code)
+**Current version:** 1.7.0  
+**Last verified:** 2026-07-31  
+**Recent feature delta:** See the [Unreleased](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#unreleased) and [1.7.0](https://github.com/sstraus/tuicommander/blob/main/CHANGELOG.md#170---2026-07-31) changelog sections for what changed recently. Keep this page focused on the current state; do not duplicate the full changelog here.
+
+## How to use this reference
+
+- **Users:** start with the relevant section, then follow its user-guide link.
+- **LLMs and contributors:** search for the feature name, shortcut, setting, command, or source anchor. The bullets describe current behavior, including important limitations.
+- **Release work:** update the relevant section when behavior changes, and add the chronological explanation to `CHANGELOG.md`.
+
+## User-guide map
+
+| Feature area | User guide |
+|---|---|
+| Terminal, tabs, splits, and search | [Terminal Features](user-guide/terminals.md) |
+| Sidebar, repositories, and branches | [Sidebar](user-guide/sidebar.md) · [Branch Management](user-guide/branches.md) |
+| Git worktrees | [Worktrees](user-guide/worktrees.md) |
+| AI agents and agent teams | [AI Agents](user-guide/ai-agents.md) · [Agent Teams](user-guide/agent-teams.md) |
+| GitHub, PRs, and CI | [GitHub Integration](user-guide/github-integration.md) |
+| Smart Prompts and Prompt Library | [Smart Prompts](user-guide/smart-prompts.md) · [Prompt Library](user-guide/prompt-library.md) |
+| Settings and shortcuts | [Settings](user-guide/settings.md) · [Keyboard Shortcuts](user-guide/keyboard-shortcuts.md) |
+| Plugins and MCP | [Plugins](user-guide/plugins.md) · [MCP Proxy Hub](user-guide/mcp-proxy.md) |
+| Remote, mobile, and browser modes | [TUICommander Modes](user-guide/modes.md) · [Remote Access](user-guide/remote-access.md) |
+| Setup and recovery | [Getting Started](user-guide/getting-started.md) · [Troubleshooting](user-guide/troubleshooting.md) |
 
 ---
 
