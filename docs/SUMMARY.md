@@ -8,6 +8,8 @@
 # User Guide
 
 - [Getting Started](./user-guide/getting-started.md)
+- [TUICommander Modes](./user-guide/modes.md)
+- [Troubleshooting](./user-guide/troubleshooting.md)
 
 ## Workspace
 

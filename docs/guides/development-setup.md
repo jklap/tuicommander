@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- **Node.js** (LTS)
+- **Node.js 24+** (the repository version is pinned in [`.nvmrc`](https://github.com/sstraus/tuicommander/blob/main/.nvmrc))
 - **Rust** (stable toolchain via rustup)
 - **Tauri CLI** (`cargo install tauri-cli`)
 - **git** and **gh** (GitHub CLI) for git/GitHub features
@@ -23,7 +23,7 @@ pnpm install
 pnpm tauri dev
 ```
 
-Starts Vite dev server + Tauri app with hot reload.
+Starts the Vite dev server and Tauri app. Frontend files use Vite HMR; Rust changes require restarting the development process.
 
 ### Browser Mode
 
@@ -83,7 +83,7 @@ See [Architecture Overview](../architecture/overview.md) for full directory stru
 | `src/stores/terminals.ts` | Terminal state |
 | `src/stores/repositories.ts` | Repository state |
 | `SPEC.md` | Feature specification |
-| `IDEAS.md` | Feature concepts under evaluation |
+| `ideas/index.md` | Feature concepts under evaluation |
 
 ## Configuration
 

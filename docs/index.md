@@ -4,6 +4,13 @@
 
 Run multiple AI coding agents in parallel across isolated Git worktrees. Observe, control, and merge AI development from a single terminal workspace.
 
+## Start here
+
+- [Getting Started](./user-guide/getting-started.md) — first repository, branch, terminal, and agent workflow
+- [TUICommander modes](./user-guide/modes.md) — desktop, browser, mobile, and remote daemon
+- [Troubleshooting](./user-guide/troubleshooting.md) — common setup and runtime problems
+- [Feature Reference](./FEATURES.md) — current capability inventory for users, contributors, and LLMs
+
 ## Key Features
 
 - **Terminal Management** — Tabbed terminals with split panes, drag-and-drop reordering, and per-branch isolation via Git worktrees

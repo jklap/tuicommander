@@ -302,8 +302,10 @@ Rust + [Tauri v2](https://tauri.app) backend, [SolidJS](https://solidjs.com) UI,
 | [AI Agents](docs/user-guide/ai-agents.md) | Agent detection, rate limits, question detection |
 | [Plugin API](docs/plugins.md) | Build plugins for TUICommander |
 | [HTTP API](docs/api/http-api.md) | REST/WebSocket/SSE endpoints |
-| [Architecture](docs/ARCHITECTURE.md) | System design and component overview |
+| [Architecture](docs/architecture/overview.md) | System design and component overview |
 | [Development Setup](docs/guides/development-setup.md) | Build from source |
+| [Modes](docs/user-guide/modes.md) | Desktop, browser, mobile, and remote daemon |
+| [Troubleshooting](docs/user-guide/troubleshooting.md) | Common setup and runtime problems |
 
 ---
 
