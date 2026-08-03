@@ -3,6 +3,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MdkbPing {
+    pub pong: bool,
+    pub version: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MdkbSymbol {
     pub name: String,
@@ -36,8 +42,11 @@ mod platform {
             bail!("mdkb: not available on this platform")
         }
 
-        pub async fn ping(&mut self) -> Result<bool> {
-            Ok(false)
+        pub async fn ping_info(&mut self) -> Result<MdkbPing> {
+            Ok(MdkbPing {
+                pong: false,
+                version: None,
+            })
         }
 
         pub async fn symbols_in_file(
@@ -177,9 +186,15 @@ mod platform {
                 .ok_or_else(|| anyhow::anyhow!("mdkb: response missing both result and error"))
         }
 
-        pub async fn ping(&mut self) -> Result<bool> {
+        pub async fn ping_info(&mut self) -> Result<MdkbPing> {
             let resp = self.call("ping", json!({})).await?;
-            Ok(resp.get("pong").and_then(|v| v.as_bool()).unwrap_or(false))
+            Ok(MdkbPing {
+                pong: resp.get("pong").and_then(Value::as_bool).unwrap_or(false),
+                version: resp
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+            })
         }
 
         pub async fn symbols_in_file(&mut self, root: &str, file: &str) -> Result<Vec<MdkbSymbol>> {
@@ -298,7 +313,11 @@ mod tests {
                 let method = req.get("method").and_then(Value::as_str).unwrap_or("");
 
                 let response = match method {
-                    "ping" => json!({"jsonrpc": "2.0", "id": id, "result": {"pong": true}}),
+                    "ping" => json!({
+                        "jsonrpc": "2.0",
+                        "id": id,
+                        "result": {"pong": true, "version": "9.8.7"}
+                    }),
                     "symbols_in_file" => {
                         let symbols = json!([
                             {"name": "foo", "kind": "Function", "file_path": "src/main.rs", "line_start": 1, "line_end": 10, "signature": "fn foo()", "scope_context": null},
@@ -338,10 +357,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ping() {
+    async fn test_ping_reports_daemon_version() {
         let (path, _server) = spawn_mock_server().await;
         let mut client = connect_to_mock(&path).await;
-        assert!(client.ping().await.unwrap());
+        assert_eq!(
+            client.ping_info().await.unwrap(),
+            MdkbPing {
+                pong: true,
+                version: Some("9.8.7".to_string()),
+            }
+        );
     }
 
     #[tokio::test]
