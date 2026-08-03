@@ -1565,3 +1565,23 @@ HEAD build, with zero `slash_menu` log records. What is left needs REAL agents:
 - [ ] Corrupt `notes.json` by hand (write `{ broken`), start the app, then add a note. The original file must be preserved as `notes.json.corrupt-<uuid>`, the new note must NOT be written, and `GET :9876/logs?level=error` must carry the hydrate failure.
 - [ ] Delete `notes.json` entirely, start the app, add a note: it must persist normally (a missing file is legitimately empty, not an error).
 - [ ] Normal path: existing notes load, edits and deletes still persist.
+
+## OpenCode returns to idle after a finished turn (2026-08-02, Rust — needs `make dev` restart)
+
+- [x] `detect_agent_screen_activity(Some("opencode"), …)` reads a finished-turn screen as Ready and a mid-turn screen as Working. _(verified: `src-tauri/src/pty.rs` `detect_opencode_screen_activity`, fixtures transcribed from live opencode v1.18.5 captures — see `test_opencode_finished_turn_is_ready_and_interrupt_hint_wins`)_
+- [ ] Run an OpenCode turn: the tab dot must go green within seconds of the composer coming back, instead of sitting busy for the whole process.
+- [ ] Watch the dot DURING the turn (including a tool phase such as a long `bash` call): it must stay busy while the footer shows `⬝⬝⬝■■■  esc interrupt`.
+- [ ] Auto-standby must not SIGSTOP an OpenCode session mid-turn.
+- [ ] Regression: with OpenCode exited and a plain shell on screen, the session must not report Ready off the leftover frame (the adapter requires both the `┃`/`╹▀▀▀` frame and the `ctrl+p commands` status bar).
+
+## Screen adapters still missing for amp / cursor / goose / droid (2026-08-02, audit — blocked on installs)
+
+Audited while fixing OpenCode (#535-d4f5): these four have no ready-screen adapter, so if
+their foreground command is long-lived they hit the same OSC 133 "busy forever" failure.
+None of the binaries is installed on this machine, and writing an adapter from documentation
+rather than a live capture is exactly how grok shipped green tests over a stuck UI.
+
+- [ ] [HUMAN] Install `amp` and capture its idle + mid-turn screens, then decide whether it needs an adapter.
+- [ ] [HUMAN] Same for `cursor-agent`.
+- [ ] [HUMAN] Same for `goose`.
+- [ ] [HUMAN] Same for `droid`.

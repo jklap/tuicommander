@@ -150,6 +150,28 @@ describe("sendCommand", () => {
 		expect(stamps[1] - stamps[0]).toBeLessThan(AGENT_ENTER_GAP_MS);
 	});
 
+	/**
+	 * pi (0.83.0) accepts BOTH shapes — verified live against a real pi PTY:
+	 * a single combined `text\r` write submits, and so does the split
+	 * Ctrl-U + text / gap / CR sequence this function emits. Ctrl-U is consumed
+	 * as a line-kill, never echoed literally. So pi needs no special-casing: it
+	 * takes the same agent path as every other agent. This pins that — a future
+	 * "optimization" that routes pi around the gap would be a silent regression
+	 * on the agents that DO need it, for no gain on pi.
+	 */
+	it("routes pi through the standard agent path (Ctrl-U + gapped Enter)", async () => {
+		setPlatform("MacIntel");
+		const stamps: number[] = [];
+		const calls: string[] = [];
+		const writeFn = async (data: string): Promise<void> => {
+			calls.push(data);
+			stamps.push(performance.now());
+		};
+		await sendCommand(writeFn, "say only the word OK", "pi", "posix");
+		expect(calls).toEqual(["\x15say only the word OK", "\r"]);
+		expect(stamps[1] - stamps[0]).toBeGreaterThanOrEqual(AGENT_ENTER_GAP_MS - 5);
+	});
+
 	it("does not delay when the Enter is withheld", async () => {
 		setPlatform("MacIntel");
 		const started = performance.now();

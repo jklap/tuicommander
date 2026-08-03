@@ -59,7 +59,7 @@ agent is considered fully supported.
 | **Time display** | `(1m 32s)` | `(10s • esc to interrupt)` | `(esc to cancel, Ns)` | None | None |
 | **Token display** | `↓ 2.2k tokens` | None | None | `Tokens: Nk sent, N received. Cost: $X.XX` | None |
 | **Tip text** | Spinner verb names | None | Italic tips during spinner | None | None |
-| **Detected by** | `is_chrome_row` ✓ | `is_chrome_row` ✓ | `parse_status_line` ✓ | `parse_status_line` ✓ | N/A (full TUI) |
+| **Detected by** | `is_chrome_row` ✓ | `is_chrome_row` ✓ | `parse_status_line` ✓ | `parse_status_line` ✓ | `detect_opencode_screen_activity` ✓ (footer `esc interrupt`, not the bar glyphs) |
 
 ### 6. Interactive Menus
 

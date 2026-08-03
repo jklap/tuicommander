@@ -30,6 +30,7 @@ const AGENT_BINARIES: Record<AgentType, string> = {
 	goose: "goose",
 	grok: "grok",
 	droid: "droid",
+	pi: "pi",
 	git: "git",
 	api: "", // Not a binary — LLM API is always "available"
 };

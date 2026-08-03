@@ -59,6 +59,7 @@
 - [Aider](./architecture/agents/aider.md)
 - [Gemini CLI](./architecture/agents/gemini-cli.md)
 - [OpenCode](./architecture/agents/opencode.md)
+- [pi](./architecture/agents/pi.md)
 
 ---
 

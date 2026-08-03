@@ -14,6 +14,9 @@ TUICommander detects, monitors, and manages AI coding agents running in your ter
 | Amp | `amp` | `amp threads continue` | — |
 | Cursor Agent | `cursor-agent` | `cursor-agent resume` | — |
 | Droid (Factory) | `droid` | — | — |
+| Goose | `goose` | `goose session --resume` | `goose session --resume --name $TUIC_SESSION` |
+| Grok | `grok` | `grok --continue` | `grok --resume <discovered id>` |
+| pi | `pi` | `pi --continue` | — |
 
 ## Agent Detection
 

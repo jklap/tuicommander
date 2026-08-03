@@ -123,16 +123,35 @@ pipelines (pty.rs, session.rs, state.rs) all import from this single module:
 src-tauri/src/chrome.rs
 ├── is_separator_line()    — run-of-4 box-drawing chars (─ ━ ═ — ╌ ╍)
 ├── is_prompt_line()       — all agent prompt chars: ❯ › >
+├── is_agent_prompt_row()  — BARE prompt only (no echoed user message, no `> quote`)
 ├── is_chrome_row()        — 10 marker chars + dingbat range + Codex • disambiguation
 ├── CHROME_SCAN_ROWS       — single constant (15)
-└── find_chrome_cutoff()   — unified trim logic for REST and mobile pipelines
+├── find_chrome_cutoff()   — screen trim (transient: over-trim self-corrects next repaint)
+└── find_scrollback_chrome_cutoff() — history trim (permanent: prompt anchor only)
 ```
 
 | Pipeline | File | What it uses from `chrome.rs` |
 |----------|------|------------------------------|
 | Changed-rows parser | `pty.rs` | `is_chrome_row` (for `chrome_only`), `is_separator_line`, `is_prompt_line` |
 | Screen trim (REST) | `session.rs` | `find_chrome_cutoff` (replaces local `trim_screen_chrome` body) |
-| Log trim (mobile) | `state.rs` | `find_chrome_cutoff` (replaces local `find_prompt_cutoff` body) |
+| Log trim (mobile) | `state.rs` | `find_scrollback_chrome_cutoff` via `mark_agent_chrome` |
+
+#### Screen trim vs scrollback trim
+
+The two cutoffs are deliberately different because the cost of a false positive is
+different. The **screen** is re-rendered every frame, so an over-trim disappears on
+the next repaint — `find_chrome_cutoff` can afford a separator-only anchor and the
+loose `is_prompt_line`. **Scrollback is permanent history**, so
+`find_scrollback_chrome_cutoff` anchors only on a bare prompt row:
+
+- A standalone separator is **not** an anchor — markdown tables, progress bars and
+  Codex's `└ ────` dividers all carry box-drawing runs mid-output.
+- A prompt row carrying text is the agent echoing the **user's submitted message**
+  (`❯ rename is broken`, `› riprendiamo`) — that is the conversation, not chrome.
+
+Scrollback classification also **marks** rather than deletes (`LogLine::chrome`);
+readers skip flagged lines, so a misclassification hides text instead of destroying
+it.
 
 ### Parsing Functions
 

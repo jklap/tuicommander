@@ -298,6 +298,11 @@ pub(super) async fn get_output(
             None => total.saturating_sub(limit),
         };
         let (lines, _) = buf.lines_since_owned(offset, limit);
+        // Absolute offset of the first line actually returned. `lines.len()` cannot
+        // stand in for it: chrome lines occupy offset slots without being returned,
+        // so a client subtracting the length would land inside the window it already
+        // holds and replay those lines when scrolling up.
+        let window_start = offset.max(buf.oldest_offset()).min(total);
         let trim = trim_screen_chrome(buf.screen_rows());
         // Get styled screen rows, trimmed to same cutoff
         let styled = buf.screen_log_lines();
@@ -306,6 +311,7 @@ pub(super) async fn get_output(
         let mut resp = serde_json::json!({
             "lines": lines,
             "total_lines": total,
+            "offset": window_start,
             "screen": screen,
         });
         if let Some(il) = &input_line {

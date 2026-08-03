@@ -6,8 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-08-03
+
 ### Added
 
+- **pi is a tracked agent** — A pi session was invisible to TUICommander: the process path resolves to the Node interpreter, so classification saw `node`, there was no screen adapter, and a finished turn left the tab busy forever — reproduced live at 71.6 seconds with the composer already back. pi is now classified from its own command line, its animated `Working…` footer and bare composer row drive busy and idle, and resume runs `pi --continue`. Session discovery over `~/.pi/agent/sessions/` stays unwired on purpose: `--continue` already resumes the newest session for the working directory, which is exactly what discovery would compute.
 - **Completion chimes can be silenced for MCP-spawned sessions** — An agent orchestration turned every finished remote worker into a beep. Settings > Notifications gains an Orchestration toggle: remote-spawned sessions still land in Activity and bump the badge, they just do not chime. Locally created terminals are unaffected.
 
 ### Changed
@@ -18,6 +21,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Scrolled-off output is no longer deleted from the mobile log** — Agent chrome was trimmed from each batch of lines as it left the screen, anchored on any separator row. Tool output, markdown tables and Codex's own divider lines all carry box-drawing runs, so a false positive silently dropped the rest of the batch from history for good: the mobile log showed paragraphs starting on their second line, and user messages echoed on a prompt row vanished. Chrome is now marked rather than truncated — readers skip it, the lines stay — and only a genuinely empty prompt row anchors the cut, never a blockquote or a table rule.
+- **Renaming a file to a different case now works** — `rename_path` canonicalized the destination, and on a case-insensitive filesystem (macOS APFS, Windows NTFS) `readme.md` resolves to the existing `README.md`, so the rename collapsed to `rename(X, X)` and did nothing at all — no error, no change. The destination now keeps the spelling that was asked for; only its parent directory is resolved, so the repo boundary check is unaffected.
 - **A scrollbar column no longer pins a tab busy forever** — Grok paints a scrollbar down the right edge once its output outgrows the viewport, which trims every otherwise-blank row to a single block glyph. Spinner detection read that as Aider's animated bar, so the screen never classified as ready and the tab stayed busy for the rest of the process — reproduced live on a finished turn still reporting busy two minutes later. Aider's bar always carries more cells plus its status text, so it is untouched.
 - **`agent detect` reports every supported agent** — The surface hardcoded four binaries, leaving Grok, Gemini, OpenCode, Amp, Cursor, and Droid invisible to an orchestrator even when installed, and the HTTP route rejected them as unknown. Both routes read one shared constant, and a test parses the frontend registry to fail the build if it gains an agent the backend does not report.
 - **A finished Grok turn goes idle again** — Grok moved its composer inside a rounded box, and the ready-screen adapter only matched a bare prompt character, which no current build emits. Ready never fired and the tab stayed busy — observed live 132 seconds after the turn had visibly finished, while the fixtures still encoded the older layout and passed. The spinner check still runs first, so a mid-turn screen remains working.

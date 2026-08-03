@@ -1,12 +1,12 @@
 {
   "name": "tuicommander",
   "private": true,
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Multi-agent terminal orchestrator with native terminal and Tauri",
   "type": "module",
   "packageManager": "pnpm@11.15.1",
   "scripts": {
-    "dev": "vite",
+    "dev": "node scripts/dev-server.mjs",
     "build": "tsc && vite build && node scripts/report-frontend-bundles.mjs --check",
     "bundle:report": "node scripts/report-frontend-bundles.mjs",
     "architecture:cycles": "node scripts/check-frontend-cycles.mjs",

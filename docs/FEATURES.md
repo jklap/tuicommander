@@ -588,6 +588,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 | Cursor Agent | `cursor-agent` | `cursor-agent resume` |
 | Goose | `goose` | `goose session --resume --name <uuid>` (session-aware) / `goose session --resume` (fallback) |
 | Droid (Factory) | `droid` | — |
+| pi | `pi` | `pi --continue` |
 | Git (background) | `git` | — |
 
 ### 6.1.1 Session-Aware Resume

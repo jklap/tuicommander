@@ -193,8 +193,7 @@ impl VtLogBuffer {
     fn resize(&mut self, rows: u16, cols: u16)              // Update terminal dimensions
     fn screen_rows(&self) -> Vec<String>                    // Current VT100 screen content (for slash menu detection)
     fn screen_log_lines(&self) -> Vec<LogLine>              // Styled screen rows for mobile/REST (structural tokens stripped)
-    fn trim_agent_chrome(&mut self, rows: &[ChangedRow]) -> Vec<ChangedRow> // Strip agent prompt/chrome from full-screen redraws
-    fn lines_since_owned(&self, offset: usize, limit: usize) -> (Vec<LogLine>, usize) // Paginated reads (absolute offset, structural tokens stripped)
+    fn lines_since_owned(&self, offset: usize, limit: usize) -> (Vec<LogLine>, usize) // Paginated reads (absolute offset, structural tokens stripped, chrome lines skipped)
     fn total_lines(&self) -> usize                          // Monotonic counter (never decreases on eviction)
     fn oldest_offset(&self) -> usize                        // Absolute offset of oldest retained line
 }

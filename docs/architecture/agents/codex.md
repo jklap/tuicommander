@@ -3,7 +3,7 @@
 Agent-specific layout reference for Codex CLI (OpenAI).
 See [agent-ui-analysis.md](../agent-ui-analysis.md) for shared concepts.
 
-**Observed version**: v0.116.0 → latest (2026-04-19)
+**Observed version**: v0.116.0 (2026-04-19), re-audited on v0.146.0 (2026-08-02)
 **Rendering engine**: Ink (React for terminals)
 **Rendering approach**: ANSI absolute positioning (`\033[row;colH`) + scroll regions
 
@@ -149,19 +149,37 @@ tricky — sending text + Enter may add a newline instead of submitting.
 
 ## Status Line
 
-Single line below the prompt area, always present:
+Single line below the prompt area, always present.
+
+**v0.146.0 (audited live 2026-08-02)** — five `·`-separated fields:
+
+```
+  gpt-5.6-luna xhigh · ~/Gits/personal/tuicommander · main · Context 100% left · 260K window
+```
+
+Format: `  <model> <effort> · <directory> · <git branch> · Context <N>% left · <N>K window`
+
+Two changes since v0.116.0:
+
+- A **git branch** field was added after the directory. It is the checked-out
+  branch of the session cwd, so its presence and value both vary.
+- The context gauge moved after the directory and gained the `Context ` label
+  plus a trailing `<N>K window` field: `100% left` became `Context 100% left · 260K window`.
+
+**v0.116.0 (historical)** — `  <model> <effort> · [<quota>% left ·] <directory>`:
 
 ```
   gpt-5.4 high · 100% left · ~/Gits/personal/tuicommander
   gpt-5.4 high · ~/Gits/personal/steps
 ```
 
-Format: `  <model> <effort> · [<quota>% left ·] <directory>`
-
-The quota segment (`N% left`) is optional — observed absent in some sessions
-(possibly when quota is unlimited or when using API keys without usage tracking).
-
 Rendered in dim (`\033[2m`) with normal background (not dark bg).
+
+**Detection is unaffected by this drift.** `detect_codex_screen_activity`
+(`src-tauri/src/pty.rs`) never reads the status line: it anchors on the lowest
+`›` prompt row and looks for `is_working_status_row` in the six rows above it.
+Both anchors are branch- and gauge-independent, which is why the shape can keep
+moving without breaking busy/idle.
 
 ---
 
@@ -201,6 +219,29 @@ The `•` is already in `is_chrome_row`'s marker set.
 
 No `\033]777;notify;` observed — Codex does not emit terminal notifications
 for approval prompts.
+
+### Animated OSC 0 title (v0.146.0, audited 2026-08-02)
+
+While a turn is running Codex repaints the window title on every spinner frame,
+prefixing the cwd basename with a braille glyph:
+
+```
+\033]0;⠋ tuicommander\007      — U+280B
+\033]0;⠙ tuicommander\007      — U+2819
+\033]0;⠹ tuicommander\007      — U+2839
+… ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏                — U+2838 U+283C U+2834 U+2826 U+2827 U+2807 U+280F
+\033]0;tuicommander\007        — plain title, emitted once when the turn ends
+```
+
+A single 900-word turn produced 152 braille-prefixed titles and 2 plain ones
+(one at startup, one at turn end).
+
+**TUIC deliberately does not consume this for activity.** The busy/idle
+transition is owned solely by `detect_codex_screen_activity`. Reading the title
+as a second source of the *same* transition would be a race, not a safety net:
+two independent producers of one state edge cannot be ordered, so a late title
+frame could reopen a turn the screen already closed (or the reverse). The screen
+adapter stays the single writer; the title is documentation only.
 
 ---
 

@@ -901,6 +901,7 @@ impl TerminalGrid {
         LogLine {
             spans,
             cols: num_cols as u16,
+            chrome: false,
         }
     }
 

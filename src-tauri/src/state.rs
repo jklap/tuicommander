@@ -2855,11 +2855,18 @@ pub struct LogSpan {
 }
 
 /// A single log line composed of styled spans.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct LogLine {
     pub spans: Vec<LogSpan>,
     #[serde(skip_serializing_if = "is_zero_u16")]
     pub cols: u16,
+    /// True when this line is agent UI chrome (prompt box, footer, status bar)
+    /// rather than agent output. Set once, at capture time, by
+    /// [`mark_agent_chrome`]; readers skip these lines instead of the buffer
+    /// dropping them, so a misclassification hides text rather than destroying
+    /// it. Never serialized — consumers receive the already-filtered view.
+    #[serde(skip)]
+    pub chrome: bool,
 }
 
 fn is_zero_u16(v: &u16) -> bool {
@@ -3008,10 +3015,10 @@ impl VtLogBuffer {
             let delta = total_sb.saturating_sub(self.scrollback_read);
             if delta > 0 {
                 if !self.suppress_capture {
-                    let new_lines = self.grid.read_scrollback_log_lines(delta);
-                    let trimmed = trim_agent_chrome(new_lines);
+                    let mut new_lines = self.grid.read_scrollback_log_lines(delta);
+                    mark_agent_chrome(&mut new_lines);
                     let pty_cols = self.pty_cols;
-                    for mut ll in trimmed {
+                    for mut ll in new_lines {
                         ll.cols = pty_cols;
                         self.push_log_line(ll);
                     }
@@ -3067,6 +3074,11 @@ impl VtLogBuffer {
     /// Offset is in the same coordinate space as `total_lines()` — monotonically
     /// increasing, not relative to the current buffer contents.
     /// Returns `(lines, new_offset)` where `new_offset = total_lines()`.
+    ///
+    /// Chrome lines (agent prompt box and footer) occupy offset slots but are
+    /// omitted from the result, so the returned count can be smaller than
+    /// `limit`. Callers deriving a window start from the result length must use
+    /// [`Self::oldest_offset`] instead.
     pub fn lines_since_owned(&self, offset: usize, limit: usize) -> (Vec<LogLine>, usize) {
         let oldest = self.oldest_offset();
         let total = self.total_pushed;
@@ -3076,7 +3088,14 @@ impl VtLogBuffer {
         // Clamp to oldest retained line if the requested offset was evicted
         let effective = offset.max(oldest);
         let skip = effective - oldest;
-        let mut slice: Vec<LogLine> = self.log.iter().skip(skip).take(limit).cloned().collect();
+        let mut slice: Vec<LogLine> = self
+            .log
+            .iter()
+            .skip(skip)
+            .take(limit)
+            .filter(|line| !line.chrome)
+            .cloned()
+            .collect();
         for line in &mut slice {
             line.strip_structural_tokens();
         }
@@ -3313,27 +3332,27 @@ impl VtLogBuffer {
 // redraw batches so they don't pollute the mobile log.
 // ---------------------------------------------------------------------------
 
-use crate::chrome::find_chrome_cutoff;
+use crate::chrome::find_scrollback_chrome_cutoff;
 
-/// Find chrome cutoff for `LogLine` slices (mobile log trim).
-fn find_prompt_cutoff_loglines(lines: &[LogLine]) -> Option<usize> {
+/// Flags the agent prompt box and footer in a batch of scrolled-off lines.
+///
+/// When a prompt row is found in the last [`crate::chrome::CHROME_SCAN_ROWS`]
+/// rows, it and everything below it (plus the separator/blank rows directly
+/// above) are marked [`LogLine::chrome`]. Every CLI agent renders context info
+/// below its prompt that has no place in the log.
+///
+/// Marking, not truncating: the lines stay in the buffer and readers skip them.
+/// The previous implementation dropped them at capture, so a false positive —
+/// a markdown blockquote, a table rule — silently deleted the rest of the batch
+/// from history, and the mobile log showed paragraphs starting mid-sentence.
+fn mark_agent_chrome(lines: &mut [LogLine]) {
     let texts: Vec<String> = lines.iter().map(|l| l.text()).collect();
     let refs: Vec<&str> = texts.iter().map(|s| s.as_str()).collect();
-    find_chrome_cutoff(&refs)
-}
-
-/// Trims agent prompt and chrome from a batch of scrolled-off lines.
-///
-/// When a prompt line is found in the last [`CHROME_SCAN_ROWS`] rows, everything
-/// from the prompt (and any immediately preceding separator/empty lines) to the
-/// end of the batch is discarded. Applied to all batches regardless of size —
-/// every CLI agent renders context info below the prompt that should not appear
-/// in the log.
-fn trim_agent_chrome(mut lines: Vec<LogLine>) -> Vec<LogLine> {
-    if let Some(cutoff) = find_prompt_cutoff_loglines(&lines) {
-        lines.truncate(cutoff);
+    if let Some(cutoff) = find_scrollback_chrome_cutoff(&refs) {
+        for line in &mut lines[cutoff..] {
+            line.chrome = true;
+        }
     }
-    lines
 }
 
 /// Test helper: construct a minimal `AppState` for unit tests in other modules.
@@ -6345,7 +6364,7 @@ mod tests {
         );
     }
 
-    // --- trim_agent_chrome / find_prompt_cutoff tests ---
+    // --- mark_agent_chrome tests ---
 
     /// Helper: create plain LogLine vec from string slices for testing.
     fn make_log_lines(items: &[&str]) -> Vec<LogLine> {
@@ -6365,50 +6384,69 @@ mod tests {
                     }]
                 },
                 cols: 0,
+                chrome: false,
             })
             .collect()
     }
 
-    // find_prompt_cutoff tests live in chrome.rs (canonical location)
+    /// Helper: mark a batch and return the texts readers would see.
+    fn visible_texts(items: &[&str]) -> Vec<String> {
+        let mut lines = make_log_lines(items);
+        mark_agent_chrome(&mut lines);
+        lines
+            .iter()
+            .filter(|l| !l.chrome)
+            .map(|l| l.text())
+            .collect()
+    }
 
-    /// Large batch (>= 2/3 of screen height) with an Ink prompt → chrome trimmed.
+    // find_scrollback_chrome_cutoff tests live in chrome.rs (canonical location)
+
+    /// Large batch with an Ink prompt → prompt and everything below marked chrome.
     #[test]
-    fn test_trim_agent_chrome_large_batch_ink_prompt() {
-        // 21 lines for a 24-row screen (threshold = 16) — large batch
+    fn test_mark_agent_chrome_large_batch_ink_prompt() {
         let mut items: Vec<&str> = vec!["real content"; 18];
-        items.push("❯ command"); // index 18
+        items.push("❯"); // index 18
         items.push(""); // index 19
         items.push("Model: x"); // index 20
-        let lines = make_log_lines(&items);
-        let result = trim_agent_chrome(lines);
-        assert_eq!(result.len(), 18, "lines before prompt kept");
-        assert!(result.iter().all(|l| l.text() == "real content"));
+        let visible = visible_texts(&items);
+        assert_eq!(visible.len(), 18, "lines before prompt stay visible");
+        assert!(visible.iter().all(|t| t == "real content"));
     }
 
-    /// Large batch with `> ` prompt → chrome trimmed.
+    /// Regression: agents echo the submitted user message on a prompt row. That
+    /// row is the conversation, and marking it chrome deleted both the message
+    /// and the reply that followed it in the same batch.
     #[test]
-    fn test_trim_agent_chrome_large_batch_gt_prompt() {
+    fn test_mark_agent_chrome_keeps_echoed_user_message() {
+        let visible = visible_texts(&[
+            "❯ rename non funziona nel filebrowser",
+            "  intent: investigating FileBrowser rename bug",
+            "• Ho trovato il punto: la closure leggeva previousFocus azzerato.",
+        ]);
+        assert_eq!(visible.len(), 3, "user message and reply must survive");
+    }
+
+    /// A bare `> ` row is still a prompt (Gemini/generic).
+    #[test]
+    fn test_mark_agent_chrome_bare_gt_prompt() {
         let mut items: Vec<&str> = vec!["output"; 17];
-        items.push("> "); // index 17 — bare "> " treated as prompt
+        items.push("> "); // index 17 — bare prompt, no input typed
         items.push("chrome"); // index 18
-        let lines = make_log_lines(&items);
-        let result = trim_agent_chrome(lines);
-        assert_eq!(result.len(), 17);
+        assert_eq!(visible_texts(&items).len(), 17);
     }
 
-    /// Small batch with a prompt in the scan window → chrome trimmed.
+    /// Small batch with a prompt in the scan window → still marked.
     #[test]
-    fn test_trim_agent_chrome_small_batch_with_prompt_trims() {
-        let lines = make_log_lines(&["line 1", "❯ command", "chrome"]);
-        let result = trim_agent_chrome(lines);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text(), "line 1");
+    fn test_mark_agent_chrome_small_batch_with_prompt() {
+        let visible = visible_texts(&["line 1", "❯", "chrome"]);
+        assert_eq!(visible, vec!["line 1"]);
     }
 
-    /// Separator lines immediately above a prompt are included in the cutoff.
+    /// Separator lines immediately above a prompt are part of the prompt box.
     #[test]
-    fn test_trim_agent_chrome_separator_above_prompt_trimmed() {
-        let lines = make_log_lines(&[
+    fn test_mark_agent_chrome_separator_above_prompt() {
+        let visible = visible_texts(&[
             "real output",
             "more output",
             "────────────────────", // separator above prompt
@@ -6417,44 +6455,164 @@ mod tests {
             "[Opus 4.6 | Max]",
             "Context ███░░░",
         ]);
-        let result = trim_agent_chrome(lines);
-        assert_eq!(result.len(), 2, "only real output lines kept");
-        assert_eq!(result[0].text(), "real output");
-        assert_eq!(result[1].text(), "more output");
+        assert_eq!(visible, vec!["real output", "more output"]);
     }
 
-    /// Empty lines above a prompt are included in the cutoff.
+    /// Empty lines above a prompt are part of the prompt box.
     #[test]
-    fn test_trim_agent_chrome_empty_lines_above_prompt_trimmed() {
-        let lines = make_log_lines(&["real output", "", "", "❯", "Model: x"]);
-        let result = trim_agent_chrome(lines);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].text(), "real output");
+    fn test_mark_agent_chrome_empty_lines_above_prompt() {
+        let visible = visible_texts(&["real output", "", "", "❯", "Model: x"]);
+        assert_eq!(visible, vec!["real output"]);
     }
 
     // is_separator_line tests live in chrome.rs (canonical location)
 
-    /// Batch with no prompt → all lines kept, regardless of size.
+    /// Batch with no prompt → nothing marked, regardless of size.
     #[test]
-    fn test_trim_agent_chrome_no_prompt_any_size_passthrough() {
-        let lines = make_log_lines(&["a", "b", "c"]);
-        let result = trim_agent_chrome(lines.clone());
-        assert_eq!(result, lines);
+    fn test_mark_agent_chrome_no_prompt_any_size_passthrough() {
+        let mut lines = make_log_lines(&["a", "b", "c"]);
+        let before = lines.clone();
+        mark_agent_chrome(&mut lines);
+        assert_eq!(lines, before);
     }
 
-    /// Large batch without any prompt → all lines kept.
+    /// Large batch without any prompt → nothing marked.
     #[test]
-    fn test_trim_agent_chrome_large_batch_no_prompt_passthrough() {
+    fn test_mark_agent_chrome_large_batch_no_prompt_passthrough() {
         let items: Vec<&str> = vec!["output line"; 20];
-        let lines = make_log_lines(&items);
-        let result = trim_agent_chrome(lines.clone());
-        assert_eq!(result, lines);
+        let mut lines = make_log_lines(&items);
+        let before = lines.clone();
+        mark_agent_chrome(&mut lines);
+        assert_eq!(lines, before);
     }
 
-    /// Empty batch → no panic, returns empty.
+    /// Empty batch → no panic.
     #[test]
-    fn test_trim_agent_chrome_empty_batch() {
-        assert!(trim_agent_chrome(vec![]).is_empty());
+    fn test_mark_agent_chrome_empty_batch() {
+        let mut lines: Vec<LogLine> = Vec::new();
+        mark_agent_chrome(&mut lines);
+        assert!(lines.is_empty());
+    }
+
+    /// Regression: a markdown blockquote is prose, not a prompt. Everything after
+    /// it used to be deleted from history, so paragraphs arrived mid-sentence.
+    #[test]
+    fn test_mark_agent_chrome_markdown_quote_is_not_a_prompt() {
+        let visible = visible_texts(&[
+            "Here is what the docs say:",
+            "> quoted guidance from the manual",
+            "verificabile; non è un force-push e non sovrascrive alcun branch",
+            "esistente.",
+        ]);
+        assert_eq!(visible.len(), 4, "quoted prose must not truncate the batch");
+    }
+
+    /// Regression: a separator alone is not chrome. Tables, progress bars and
+    /// Codex's `└ ────` dividers all carry box-drawing runs mid-output.
+    #[test]
+    fn test_mark_agent_chrome_standalone_separator_is_not_a_prompt() {
+        let visible = visible_texts(&[
+            "• Ran cargo nextest run",
+            "  └ ──────────────────────",
+            "    Summary [ 12.4s ] 91 tests run",
+            "    all passed",
+        ]);
+        assert_eq!(visible.len(), 4, "a divider must not truncate the batch");
+    }
+
+    /// Regression: markdown table rules are box-drawing runs. They anchored the
+    /// cut and swallowed the rest of the table plus whatever followed it.
+    #[test]
+    fn test_mark_agent_chrome_markdown_table_survives() {
+        let visible = visible_texts(&[
+            "  │ Livello                                   │ Esito                 │",
+            "  ├───────────────────────────────────────────┼───────────────────────┤",
+            "  │ fs.rs:1239 rename_path + route /fs/rename │ ✅ rinomina realmente │",
+            "  └───────────────────────────────────────────┴───────────────────────┘",
+            "Conclusione: il rename funziona lato backend.",
+        ]);
+        assert_eq!(visible.len(), 5, "table and trailing prose must survive");
+    }
+
+    /// Chrome is hidden from readers but never dropped from the buffer, so a
+    /// misclassification costs visibility, not history.
+    #[test]
+    fn test_mark_agent_chrome_keeps_lines_in_the_batch() {
+        let mut lines = make_log_lines(&["real output", "❯ ", "Context ███░░░"]);
+        mark_agent_chrome(&mut lines);
+        assert_eq!(lines.len(), 3, "no line is discarded");
+        assert!(!lines[0].chrome);
+        assert!(lines[1].chrome && lines[2].chrome);
+    }
+
+    /// End-to-end through the buffer: chrome occupies offset slots but is not
+    /// returned, and real content after a false-positive anchor survives.
+    #[test]
+    fn test_lines_since_owned_filters_chrome_without_losing_content() {
+        let mut buf = VtLogBuffer::new(3, 80, 1000);
+        // 3-row screen: everything but the last 3 rows scrolls into history, so the
+        // trailing padding lines push the content under test off the screen.
+        buf.process(b"alpha\r\n> quoted prose\r\nbravo\r\ncharlie\r\npad1\r\npad2\r\npad3\r\n");
+        let (lines, total) = buf.lines_since_owned(0, usize::MAX);
+        let texts: Vec<String> = lines.iter().map(|l| l.text()).collect();
+        for expected in ["alpha", "> quoted prose", "bravo", "charlie"] {
+            assert!(
+                texts.iter().any(|t| t.trim() == expected),
+                "{expected:?} missing from {texts:?}"
+            );
+        }
+        assert!(total >= texts.len(), "offset space includes chrome slots");
+    }
+
+    /// Replays the live reproduction that exposed the bug: numbered content with
+    /// chrome-shaped anchors (`> `, `────`, `›`, `❯`) landing near batch ends.
+    /// Against the old truncating capture this lost 6 of 100 lines.
+    #[test]
+    fn test_scrollback_survives_chrome_shaped_anchors_in_content() {
+        let anchors = [
+            "> markdown quote anchor",
+            "──────────────────────",
+            "› codex prompt anchor",
+            "❯ ink prompt anchor",
+        ];
+        let mut stream = Vec::new();
+        let mut n = 1;
+        for anchor in anchors {
+            for _ in 0..20 {
+                stream.extend_from_slice(format!("LINE-{n:03} normal content row\r\n").as_bytes());
+                n += 1;
+            }
+            stream.extend_from_slice(anchor.as_bytes());
+            stream.extend_from_slice(b"\r\n");
+            for _ in 0..5 {
+                stream.extend_from_slice(format!("LINE-{n:03} normal content row\r\n").as_bytes());
+                n += 1;
+            }
+        }
+        // Push the tail off the screen so every numbered row reaches history.
+        for _ in 0..30 {
+            stream.extend_from_slice(b"pad\r\n");
+        }
+
+        let mut buf = VtLogBuffer::new(24, 80, 10_000);
+        // Feed in 512-byte chunks: batch boundaries are what put an anchor inside
+        // the scan window, which is exactly how the live session tripped this.
+        for chunk in stream.chunks(512) {
+            buf.process(chunk);
+        }
+
+        let (lines, _) = buf.lines_since_owned(0, usize::MAX);
+        let seen: Vec<String> = lines.iter().map(|l| l.text().trim().to_string()).collect();
+        let missing: Vec<usize> = (1..=100)
+            .filter(|i| {
+                let needle = format!("LINE-{i:03}");
+                !seen.iter().any(|t| t.starts_with(&needle))
+            })
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "content lines lost from history: {missing:?}"
+        );
     }
 
     // --- LogLine / extract_log_line tests ---
@@ -6625,6 +6783,7 @@ mod tests {
                 },
             ],
             cols: 0,
+            chrome: false,
         };
         assert_eq!(line.text(), "hello world");
     }
@@ -6671,6 +6830,7 @@ mod tests {
                 },
             ],
             cols: 0,
+            chrome: false,
         };
         let json = serde_json::to_value(&line).unwrap();
         let spans = json["spans"].as_array().unwrap();
@@ -6692,6 +6852,7 @@ mod tests {
                 ..Default::default()
             }],
             cols: 0,
+            chrome: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "normal output");
@@ -6705,6 +6866,7 @@ mod tests {
                 ..Default::default()
             }],
             cols: 0,
+            chrome: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -6721,6 +6883,7 @@ mod tests {
                 ..Default::default()
             }],
             cols: 0,
+            chrome: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -6737,6 +6900,7 @@ mod tests {
                 ..Default::default()
             }],
             cols: 0,
+            chrome: false,
         };
         line.strip_structural_tokens();
         assert_eq!(line.spans[0].text, "The intent: of this code is clear");
@@ -6751,6 +6915,7 @@ mod tests {
                 ..Default::default()
             }],
             cols: 0,
+            chrome: false,
         };
         line.strip_structural_tokens();
         assert!(line.spans.is_empty(), "indented suggest should be stripped");
@@ -6764,6 +6929,7 @@ mod tests {
                 ..Default::default()
             }],
             cols: 0,
+            chrome: false,
         };
         line.strip_structural_tokens();
         assert!(line.spans.is_empty(), "indented intent should be stripped");
@@ -6778,6 +6944,7 @@ mod tests {
                 ..Default::default()
             }],
             cols: 0,
+            chrome: false,
         };
         line.strip_structural_tokens();
         assert!(
@@ -6794,6 +6961,7 @@ mod tests {
                 ..Default::default()
             }],
             cols: 0,
+            chrome: false,
         };
         line.strip_structural_tokens();
         assert!(

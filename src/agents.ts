@@ -10,6 +10,7 @@ export type AgentType =
 	| "goose"
 	| "grok"
 	| "droid"
+	| "pi"
 	| "git"
 	| "api";
 
@@ -25,6 +26,7 @@ export const AGENT_TYPES: readonly AgentType[] = [
 	"goose",
 	"grok",
 	"droid",
+	"pi",
 	"git",
 	"api",
 ] as const;
@@ -284,6 +286,32 @@ export const AGENTS: Record<AgentType, AgentConfig> = {
 			prompt: [/\[y\/n\]/i],
 		},
 	},
+	pi: {
+		type: "pi",
+		name: "pi",
+		binary: "pi",
+		description: "Earendil's pi coding agent",
+		defaultHeadlessTemplate: 'pi --print "{prompt}"',
+		resumeCommand: "pi --continue",
+		// Sessions live in ~/.pi/agent/sessions/<encoded-cwd>/ as `<ts>_<uuid7>.jsonl`, but
+		// `--continue` already resumes the newest session for the cwd, which is what resume
+		// needs. Disk discovery stays unwired until something requires a specific session id.
+		sessionDiscovery: null,
+		spawnArgs: (prompt, options = {}) => {
+			const args: string[] = [];
+			if (options.printMode) args.push("--print");
+			if (options.model) args.push("--model", options.model);
+			args.push(prompt);
+			return args;
+		},
+		outputFormat: "text",
+		detectPatterns: {
+			rateLimit: [/rate.?limit/i, /429/, /too many requests/i, /overloaded/i],
+			completion: [],
+			error: [/error:/i, /failed:/i],
+			prompt: [/\[y\/n\]/i],
+		},
+	},
 	git: {
 		type: "git",
 		name: "Git",
@@ -369,6 +397,8 @@ export const MCP_SUPPORT: Record<AgentType, boolean> = {
 	goose: true,
 	grok: false,
 	droid: false,
+	// pi deliberately ships no built-in MCP — it is an extension/package concern there.
+	pi: false,
 	git: false,
 	api: false,
 };
@@ -388,6 +418,9 @@ export const HOOK_SUPPORT: Record<AgentType, boolean> = {
 	goose: false,
 	grok: true,
 	droid: false,
+	// pi exposes lifecycle events to extensions, but TUIC has no managed installer for
+	// them yet — its screen adapter covers busy/idle without instrumentation.
+	pi: false,
 	git: false,
 	api: false,
 };
@@ -404,6 +437,7 @@ export const AGENT_DISPLAY: Record<AgentType, { icon: string; color: string }> =
 	goose: { icon: "G", color: "#f59e0b" },
 	grok: { icon: "G", color: "#1a1a1a" },
 	droid: { icon: "D", color: "#f97316" },
+	pi: { icon: "π", color: "#c4a7e7" },
 	git: { icon: "G", color: "#f05032" },
 	api: { icon: "⚡", color: "#06b6d4" },
 };

@@ -133,5 +133,18 @@
       "Fixed stuck SSH tunnels, ghost worktree branches in the sidebar, stacked Markdown viewer/editor panes, and directory traversal on absolute-path file endpoints."
     ],
     "date": "2026-07-31"
+  },
+  "1.8.0": {
+    "highlights": [
+      "pi is now a fully tracked agent: correct classification, busy/idle detection, and resume via `pi --continue`.",
+      "Completion chimes can be muted for MCP-spawned sessions via Settings > Notifications > Orchestration.",
+      "Grok tabs now go idle after a finished turn instead of staying busy forever (new composer layout plus scrollbar false positive).",
+      "Scrolled-off agent output stays in the mobile log instead of being silently dropped from history.",
+      "Renaming a file to a different case now works on macOS and Windows.",
+      "Notes survive a failed config load: a corrupt file is moved aside instead of being overwritten with an empty list.",
+      "Worktrees survive a rebase, merge, cherry-pick, revert, or bisect, and removed worktrees now disappear from the sidebar.",
+      "Cmd+C copies text selected inside plugin dashboards and other panel iframes."
+    ],
+    "date": "2026-08-03"
   }
 }
