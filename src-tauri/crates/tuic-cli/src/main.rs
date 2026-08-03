@@ -48,7 +48,11 @@ enum Command {
     },
     /// List sessions
     #[command(alias = "list-sessions")]
-    Ls,
+    Ls {
+        /// Print the raw server payload instead of the table (for scripts)
+        #[arg(long)]
+        json: bool,
+    },
     /// Create a new terminal session
     #[command(alias = "new-session", alias = "new-window")]
     New {
@@ -56,6 +60,18 @@ enum Command {
         #[arg(short, long)]
         name: Option<String>,
         /// Repository path
+        repo: Option<String>,
+    },
+    /// Create a session and run a command in it (shells only)
+    Run {
+        /// Command to run, e.g. `tuic run pnpm dev`
+        #[arg(required = true, trailing_var_arg = true)]
+        command: Vec<String>,
+        /// Session name
+        #[arg(short, long)]
+        name: Option<String>,
+        /// Repository path (defaults to the current directory)
+        #[arg(long)]
         repo: Option<String>,
     },
     /// Send input to a session
@@ -74,6 +90,9 @@ enum Command {
         /// Output format: raw, text, log
         #[arg(short, long, default_value = "text")]
         format: String,
+        /// Only the last N lines
+        #[arg(short = 'n', long)]
+        lines: Option<usize>,
     },
     /// Kill a session
     #[command(alias = "kill-session")]
@@ -187,10 +206,19 @@ fn dispatch(cmd: Command) -> Result<(), String> {
     match cmd {
         Command::Open { path, wait, goto } => cmd_open(path, wait, goto),
         Command::Diff { file_a, file_b } => cmd_diff(&file_a, &file_b),
-        Command::Ls => cmd_ls(),
-        Command::New { name, repo } => cmd_new(name.as_deref(), repo.as_deref()),
+        Command::Ls { json } => cmd_ls(json),
+        Command::New { name, repo } => cmd_new(name.as_deref(), repo.as_deref()).map(|_| ()),
+        Command::Run {
+            command,
+            name,
+            repo,
+        } => cmd_run(&command, name.as_deref(), repo.as_deref()),
         Command::Send { target, keys } => cmd_send(&target, &keys),
-        Command::Capture { target, format } => cmd_capture(&target, &format),
+        Command::Capture {
+            target,
+            format,
+            lines,
+        } => cmd_capture(&target, &format, lines),
         Command::Kill { target } => cmd_kill(&target),
         Command::Resize { target, size } => cmd_resize(&target, &size),
         Command::Agent { action } => cmd_agent(action),
@@ -232,25 +260,13 @@ fn cmd_open(path: Option<String>, _wait: bool, goto: Option<String>) -> Result<(
     // Check if path is a directory → open as repo, file → open in editor
     let metadata = std::fs::metadata(actual_path);
     if metadata.as_ref().map(|m| m.is_dir()).unwrap_or(false) {
-        // Open repo. Server's CreateSessionRequest reads `cwd` (not `repo_path`).
-        let resp = ipc::post(
-            "/sessions",
-            &serde_json::json!({
-                "cwd": actual_path,
-                "rows": 24,
-                "cols": 80,
-            })
-            .to_string(),
-        )
-        .map_err(|e| e.to_string())?;
-
-        if resp.is_success() {
-            eprintln!("Opened {actual_path}");
-        } else {
-            // Maybe it's already a known repo — try activating it via deep link
-            let _ = open_deep_link(&format!("tuic://open-repo?path={}", urlencod(actual_path)));
-            eprintln!("Activated {actual_path}");
-        }
+        // A directory is a REPO, not a terminal: hand it to the app, which adds it
+        // to the sidebar if it is new (asking first) and activates it. Creating a
+        // PTY here instead — as this used to — left the sidebar untouched, which is
+        // never what `tuic .` means. Use `tuic new` when you want a shell.
+        open_deep_link(&format!("tuic://open-repo?path={}", urlencod(actual_path)))
+            .map_err(|e| e.to_string())?;
+        eprintln!("Opening {actual_path}");
     } else {
         // Open file in editor via deep link
         let mut url = format!("tuic://edit/{}", urlencod(actual_path));
@@ -318,36 +334,63 @@ fn session_status(s: &serde_json::Value) -> String {
     "-".to_string()
 }
 
-fn cmd_ls() -> Result<(), String> {
+/// First segment of a session UUID — enough to identify a session by eye and
+/// accepted everywhere a target is taken (`resolve_session_id` prefix-matches).
+fn short_id(id: &str) -> &str {
+    id.split('-').next().unwrap_or(id)
+}
+
+fn fetch_sessions() -> Result<Vec<serde_json::Value>, String> {
     let resp = ipc::get("/sessions").map_err(|e| e.to_string())?;
     if !resp.is_success() {
         return Err(format!("Server error: {}", resp.status));
     }
-
     let sessions: serde_json::Value = resp.json().map_err(|e| e.to_string())?;
-    let arr = sessions.as_array().unwrap_or(&Vec::new()).clone();
+    Ok(sessions.as_array().cloned().unwrap_or_default())
+}
+
+fn cmd_ls(json: bool) -> Result<(), String> {
+    let arr = fetch_sessions()?;
+
+    if json {
+        // Scripts get the untouched server payload; humans get the table.
+        println!("{}", serde_json::Value::Array(arr));
+        return Ok(());
+    }
 
     if arr.is_empty() {
         println!("No active sessions.");
         return Ok(());
     }
 
-    // Header
-    println!("{:<38} {:<20} {:<10} REPO", "ID", "NAME", "STATUS");
-    println!("{}", "-".repeat(90));
+    println!("{:<10} {:<24} {:<10} REPO", "ID", "NAME", "STATUS");
 
     for s in &arr {
-        let id = s["session_id"].as_str().unwrap_or("-");
-        let name = truncate(s["display_name"].as_str().unwrap_or("-"), 20);
+        let id = short_id(s["session_id"].as_str().unwrap_or("-"));
+        let name = truncate(s["display_name"].as_str().unwrap_or("-"), 24);
         let status = session_status(s);
         let repo = short_repo(s["cwd"].as_str().unwrap_or("-"));
-        println!("{:<38} {:<20} {:<10} {}", id, name, status, repo);
+        println!("{:<10} {:<24} {:<10} {}", id, name, status, repo);
     }
 
     Ok(())
 }
 
-fn cmd_new(name: Option<&str>, repo: Option<&str>) -> Result<(), String> {
+/// Create a session, then type a command into it. Two round-trips because the
+/// create endpoint takes no command — same thing you would do by hand.
+fn cmd_run(command: &[String], name: Option<&str>, repo: Option<&str>) -> Result<(), String> {
+    let id = cmd_new(name, repo)?;
+    let body = serde_json::json!({ "data": format!("{}\r", command.join(" ")) });
+    let resp = ipc::post(&format!("/sessions/{id}/write"), &body.to_string())
+        .map_err(|e| e.to_string())?;
+    if !resp.is_success() {
+        return Err(format!("Session created but command failed: {}", resp.body));
+    }
+    Ok(())
+}
+
+/// Returns the new session id so callers can keep driving it.
+fn cmd_new(name: Option<&str>, repo: Option<&str>) -> Result<String, String> {
     ipc::ensure_running().map_err(|e| e.to_string())?;
 
     let repo_path = match repo {
@@ -364,37 +407,33 @@ fn cmd_new(name: Option<&str>, repo: Option<&str>) -> Result<(), String> {
     });
 
     let resp = ipc::post("/sessions", &body.to_string()).map_err(|e| e.to_string())?;
-
-    if resp.is_success() {
-        if let Ok(v) = resp.json() {
-            let id = v["session_id"].as_str().unwrap_or("?").to_string();
-            // Naming is a separate endpoint — the create request has no name field.
-            if let Some(n) = name {
-                let name_body = serde_json::json!({ "name": n });
-                match ipc::put(&format!("/sessions/{id}/name"), &name_body.to_string()) {
-                    Ok(r) if r.is_success() => {}
-                    Ok(r) => eprintln!("tuic: warning: could not set session name: {}", r.body),
-                    Err(e) => eprintln!("tuic: warning: could not set session name: {e}"),
-                }
-            }
-            let name_display = name.unwrap_or(&id);
-            println!("{name_display}: {id}");
-        }
-    } else {
+    if !resp.is_success() {
         return Err(format!("Failed to create session: {}", resp.body));
     }
 
-    Ok(())
+    let created = resp.json().map_err(|e| e.to_string())?;
+    let id = created["session_id"]
+        .as_str()
+        .ok_or("Server returned no session id")?
+        .to_string();
+
+    // Naming is a separate endpoint — the create request has no name field.
+    if let Some(n) = name {
+        let name_body = serde_json::json!({ "name": n });
+        match ipc::put(&format!("/sessions/{id}/name"), &name_body.to_string()) {
+            Ok(r) if r.is_success() => {}
+            Ok(r) => eprintln!("tuic: warning: could not set session name: {}", r.body),
+            Err(e) => eprintln!("tuic: warning: could not set session name: {e}"),
+        }
+    }
+
+    println!("{}: {}", name.unwrap_or(short_id(&id)), short_id(&id));
+    Ok(id)
 }
 
 fn cmd_send(target: &str, keys: &[String]) -> Result<(), String> {
     let id = resolve_session_id(target)?;
-    let text = keys.join(" ");
-
-    // Translate tmux-style key names
-    let translated = translate_keys(&text);
-
-    let body = serde_json::json!({ "data": translated });
+    let body = serde_json::json!({ "data": translate_keys(keys) });
     let resp = ipc::post(&format!("/sessions/{id}/write"), &body.to_string())
         .map_err(|e| e.to_string())?;
 
@@ -405,13 +444,28 @@ fn cmd_send(target: &str, keys: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_capture(target: &str, format: &str) -> Result<(), String> {
+/// Build the `/output` query for `capture`. `raw` takes no format so the server
+/// returns the untouched byte tail; `lines` maps to the server's `limit`.
+fn capture_query(format: &str, lines: Option<usize>) -> String {
+    let mut params: Vec<String> = Vec::new();
+    match format {
+        "raw" => {}
+        "log" => params.push("format=log".to_string()),
+        _ => params.push("format=text".to_string()),
+    }
+    if let Some(n) = lines {
+        params.push(format!("limit={n}"));
+    }
+    if params.is_empty() {
+        String::new()
+    } else {
+        format!("?{}", params.join("&"))
+    }
+}
+
+fn cmd_capture(target: &str, format: &str, lines: Option<usize>) -> Result<(), String> {
     let id = resolve_session_id(target)?;
-    let fmt_param = match format {
-        "raw" => "",
-        "log" => "?format=log",
-        _ => "?format=text",
-    };
+    let fmt_param = capture_query(format, lines);
 
     let resp = ipc::get(&format!("/sessions/{id}/output{fmt_param}")).map_err(|e| e.to_string())?;
 
@@ -582,16 +636,32 @@ fn cmd_status() -> Result<(), String> {
         .and_then(|v| v["version"].as_str().map(String::from))
         .unwrap_or_else(|| "unknown".to_string());
 
-    let sessions_resp = ipc::get("/sessions").map_err(|e| e.to_string())?;
-    let session_count = sessions_resp
-        .json()
-        .ok()
-        .and_then(|v| v.as_array().map(|a| a.len()))
-        .unwrap_or(0);
+    let sessions = fetch_sessions()?;
+    let agents = sessions
+        .iter()
+        .filter(|s| s["state"]["agent_type"].as_str().is_some())
+        .count();
+    let waiting: Vec<&serde_json::Value> = sessions
+        .iter()
+        .filter(|s| s["state"]["awaiting_input"].as_bool().unwrap_or(false))
+        .collect();
 
     println!("TUICommander v{version}");
     println!("Status: running");
-    println!("Sessions: {session_count}");
+    println!("Sessions: {} ({agents} agents)", sessions.len());
+
+    // The only genuinely actionable line: who is blocked on you right now.
+    if !waiting.is_empty() {
+        println!("Awaiting input:");
+        for s in waiting {
+            let id = short_id(s["session_id"].as_str().unwrap_or("-"));
+            let name = s["display_name"].as_str().unwrap_or("-");
+            println!(
+                "  {id}  {name}  ({})",
+                short_repo(s["cwd"].as_str().unwrap_or("-"))
+            );
+        }
+    }
 
     Ok(())
 }
@@ -844,7 +914,7 @@ fn tmux_compat() {
             let name = find_flag(rest, "-s").or_else(|| find_flag(rest, "-n"));
             dispatch(Command::New { name, repo: None })
         }
-        "list-sessions" | "ls" => dispatch(Command::Ls),
+        "list-sessions" | "ls" => dispatch(Command::Ls { json: false }),
         "kill-session" => {
             let target = find_flag(rest, "-t").unwrap_or_default();
             dispatch(Command::Kill { target })
@@ -865,18 +935,17 @@ fn tmux_compat() {
         }
         "send-keys" => {
             let target = find_flag(rest, "-t").unwrap_or_default();
-            let keys: Vec<String> = rest
-                .iter()
-                .filter(|a| *a != "-t" && find_flag(rest, "-t").as_deref() != Some(a.as_str()))
-                .cloned()
-                .collect();
-            dispatch(Command::Send { target, keys })
+            dispatch(Command::Send {
+                target,
+                keys: without_flag(rest, "-t"),
+            })
         }
         "capture-pane" => {
             let target = find_flag(rest, "-t").unwrap_or_default();
             dispatch(Command::Capture {
                 target,
                 format: "text".to_string(),
+                lines: None,
             })
         }
         "resize-pane" => {
@@ -925,6 +994,22 @@ fn tmux_compat() {
 // ---------------------------------------------------------------------------
 
 fn resolve_path(path: &str) -> String {
+    let absolute = absolute_path(path);
+    // `tuic .` must not register the repo as `/repo/.` — canonicalize when the
+    // path exists. Non-existent paths (a file being created, `file.rs:42` before
+    // the line suffix is split off) keep the plain absolute form.
+    std::fs::canonicalize(&absolute)
+        .map(|p| strip_verbatim(&p.to_string_lossy()))
+        .unwrap_or(absolute)
+}
+
+/// Windows canonicalization yields verbatim paths (`\\?\C:\src`). The app stores
+/// and displays plain paths, so drop the prefix to keep both sides comparable.
+fn strip_verbatim(path: &str) -> String {
+    path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+}
+
+fn absolute_path(path: &str) -> String {
     if path.starts_with('/') || path.starts_with('\\') {
         return path.to_string();
     }
@@ -983,14 +1068,21 @@ fn resolve_session_id(target: &str) -> Result<String, String> {
         }
     }
 
-    // Try prefix match on ID
+    // Then ID prefix (what `tuic ls` prints) or name prefix, case-insensitive —
+    // typing `tuic send buil…` should not require the full name.
+    let needle = target.to_lowercase();
     let matches: Vec<_> = arr
         .iter()
         .filter(|s| {
-            s["session_id"]
+            let id_match = s["session_id"]
                 .as_str()
                 .map(|id| id.starts_with(target))
-                .unwrap_or(false)
+                .unwrap_or(false);
+            let name_match = s["display_name"]
+                .as_str()
+                .map(|n| n.to_lowercase().starts_with(&needle))
+                .unwrap_or(false);
+            id_match || name_match
         })
         .collect();
 
@@ -1006,27 +1098,93 @@ fn resolve_session_id(target: &str) -> Result<String, String> {
     }
 }
 
-fn translate_keys(text: &str) -> String {
-    // Translate tmux key names to actual characters
-    text.replace("Enter", "\r")
-        .replace("Space", " ")
-        .replace("Tab", "\t")
-        .replace("Escape", "\x1b")
-        .replace("BSpace", "\x7f")
-        .replace("C-c", "\x03")
-        .replace("C-d", "\x04")
-        .replace("C-z", "\x1a")
-        .replace("C-l", "\x0c")
-        .replace("C-a", "\x01")
-        .replace("C-e", "\x05")
-        .replace("C-k", "\x0b")
-        .replace("C-u", "\x15")
+/// Translate one argument if it is EXACTLY a key name, else `None`.
+///
+/// Whole-token matching is the point: the old substring rewrite turned
+/// `tuic send x "Enter the room"` into a carriage return followed by
+/// "the room", and any text containing "Tab", "Space" or "C-c" was
+/// corrupted the same way. tmux resolves key names per argument too.
+fn key_sequence(token: &str) -> Option<String> {
+    let named = match token {
+        "Enter" | "C-m" => "\r",
+        "Space" => " ",
+        "Tab" => "\t",
+        "Escape" | "Esc" => "\x1b",
+        "BSpace" | "BackSpace" => "\x7f",
+        "Up" => "\x1b[A",
+        "Down" => "\x1b[B",
+        "Right" => "\x1b[C",
+        "Left" => "\x1b[D",
+        "Home" => "\x1b[H",
+        "End" => "\x1b[F",
+        "PageUp" | "PPage" => "\x1b[5~",
+        "PageDown" | "NPage" => "\x1b[6~",
+        _ => return control_key(token),
+    };
+    Some(named.to_string())
+}
+
+/// `C-a` … `C-z` → the matching control byte, so the whole range works without
+/// a hand-maintained table.
+fn control_key(token: &str) -> Option<String> {
+    let letter = token.strip_prefix("C-")?;
+    let mut chars = letter.chars();
+    let c = chars.next()?;
+    if chars.next().is_some() || !c.is_ascii_alphabetic() {
+        return None;
+    }
+    let byte = c.to_ascii_lowercase() as u8 - b'a' + 1;
+    Some((byte as char).to_string())
+}
+
+/// Join `send` arguments the way tmux does: key names become their escape
+/// sequence, everything else is literal text, and only adjacent literals are
+/// separated by a space.
+fn translate_keys(tokens: &[String]) -> String {
+    let mut out = String::new();
+    let mut previous_was_literal = false;
+    for token in tokens {
+        match key_sequence(token) {
+            Some(seq) => {
+                out.push_str(&seq);
+                previous_was_literal = false;
+            }
+            None => {
+                if previous_was_literal {
+                    out.push(' ');
+                }
+                out.push_str(token);
+                previous_was_literal = true;
+            }
+        }
+    }
+    out
 }
 
 fn find_flag(args: &[String], flag: &str) -> Option<String> {
     args.iter()
         .position(|a| a == flag)
         .and_then(|i| args.get(i + 1).cloned())
+}
+
+/// Drop `flag` and the value right after it, keeping every other argument —
+/// including one that happens to equal the flag's value (`tmux send-keys -t
+/// build build` must still send "build").
+fn without_flag(args: &[String], flag: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut skip_next = false;
+    for arg in args {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if arg == flag {
+            skip_next = true;
+            continue;
+        }
+        out.push(arg.clone());
+    }
+    out
 }
 
 fn urlencod(s: &str) -> String {
@@ -1091,8 +1249,97 @@ fn remove_with_elevation(path: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{agent_send_parts, session_status, short_repo, truncate};
+    use super::{
+        agent_send_parts, capture_query, resolve_path, session_status, short_id, short_repo,
+        strip_verbatim, translate_keys, truncate, without_flag,
+    };
     use serde_json::json;
+
+    fn tokens(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn send_translates_only_whole_key_tokens() {
+        assert_eq!(
+            translate_keys(&tokens(&["make test", "Enter"])),
+            "make test\r"
+        );
+    }
+
+    #[test]
+    fn send_leaves_text_that_merely_contains_a_key_name_alone() {
+        // The regression: substring replacement turned this into "\rthe room".
+        assert_eq!(
+            translate_keys(&tokens(&["Enter the room"])),
+            "Enter the room"
+        );
+        assert_eq!(
+            translate_keys(&tokens(&["Tab completion"])),
+            "Tab completion"
+        );
+        assert_eq!(translate_keys(&tokens(&["C-c is SIGINT"])), "C-c is SIGINT");
+    }
+
+    #[test]
+    fn send_joins_adjacent_literals_with_one_space_and_keys_without() {
+        assert_eq!(
+            translate_keys(&tokens(&["git", "status", "Enter"])),
+            "git status\r"
+        );
+        assert_eq!(translate_keys(&tokens(&["Escape", "Escape"])), "\x1b\x1b");
+    }
+
+    #[test]
+    fn send_maps_control_letters_and_navigation_keys() {
+        assert_eq!(translate_keys(&tokens(&["C-c"])), "\x03");
+        assert_eq!(translate_keys(&tokens(&["C-U"])), "\x15");
+        assert_eq!(translate_keys(&tokens(&["Up", "Down"])), "\x1b[A\x1b[B");
+        // Not a control key: two letters after C-, so it stays literal.
+        assert_eq!(translate_keys(&tokens(&["C-ab"])), "C-ab");
+    }
+
+    #[test]
+    fn capture_query_combines_format_and_line_limit() {
+        assert_eq!(capture_query("text", None), "?format=text");
+        assert_eq!(capture_query("log", Some(50)), "?format=log&limit=50");
+        // raw means "give me the bytes"; only the limit may narrow it.
+        assert_eq!(capture_query("raw", None), "");
+        assert_eq!(capture_query("raw", Some(10)), "?limit=10");
+    }
+
+    #[test]
+    fn short_id_is_the_first_uuid_group() {
+        assert_eq!(short_id("43263870-7ac5-4091-9dca-c4acd22ad78f"), "43263870");
+        assert_eq!(short_id("plain"), "plain");
+    }
+
+    #[test]
+    fn without_flag_drops_the_pair_but_keeps_a_repeated_value() {
+        assert_eq!(
+            without_flag(&tokens(&["-t", "build", "build", "Enter"]), "-t"),
+            tokens(&["build", "Enter"])
+        );
+    }
+
+    #[test]
+    fn resolve_path_canonicalizes_dot_so_a_repo_is_not_registered_with_a_trailing_component() {
+        let resolved = resolve_path(".");
+        assert!(!resolved.ends_with("/."), "got {resolved}");
+        assert!(!resolved.ends_with("\\."), "got {resolved}");
+    }
+
+    #[test]
+    fn resolve_path_keeps_paths_that_do_not_exist_yet() {
+        let resolved = resolve_path("/definitely/not/here/new-file.rs");
+        assert_eq!(resolved, "/definitely/not/here/new-file.rs");
+    }
+
+    #[test]
+    fn strip_verbatim_removes_the_windows_prefix_only() {
+        assert_eq!(strip_verbatim(r"\\?\C:\src\repo"), r"C:\src\repo");
+        assert_eq!(strip_verbatim("/Users/dev/repo"), "/Users/dev/repo");
+    }
 
     #[test]
     fn short_repo_keeps_last_two_components() {

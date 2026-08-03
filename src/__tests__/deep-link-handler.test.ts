@@ -9,11 +9,15 @@ import { mockInvoke } from "./mocks/tauri";
 (globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
 
 import { handleDeepLink } from "../deep-link-handler";
+import { repositoriesStore } from "../stores/repositories";
+
+const setActiveSpy = vi.spyOn(repositoriesStore, "setActive").mockImplementation(() => {});
 
 const callbacks = {
 	openSettings: vi.fn(),
 	confirm: vi.fn().mockResolvedValue(true),
 	onInstallError: vi.fn(),
+	openRepoPath: vi.fn().mockResolvedValue(undefined),
 };
 
 describe("deep link handler — OAuth callback", () => {
@@ -59,6 +63,47 @@ describe("deep link handler — OAuth callback", () => {
 
 		expect(mockInvoke).not.toHaveBeenCalled();
 		expect(callbacks.onInstallError).toHaveBeenCalledWith(expect.stringContaining("access_denied"));
+	});
+});
+
+describe("deep link handler — open-repo (`tuic <dir>`)", () => {
+	beforeEach(() => {
+		callbacks.confirm.mockReset().mockResolvedValue(true);
+		callbacks.openRepoPath.mockReset().mockResolvedValue(undefined);
+		setActiveSpy.mockReset();
+	});
+
+	it("activates a repo that is already in the list, without asking", async () => {
+		repositoriesStore.add({ path: "/src/known", displayName: "known" });
+
+		await handleDeepLink("tuic://open-repo?path=/src/known", callbacks);
+
+		expect(setActiveSpy).toHaveBeenCalledWith("/src/known");
+		expect(callbacks.confirm).not.toHaveBeenCalled();
+		expect(callbacks.openRepoPath).not.toHaveBeenCalled();
+	});
+
+	it("adds an unknown repo after confirmation — this is what `tuic .` does in a new project", async () => {
+		await handleDeepLink("tuic://open-repo?path=/src/new-project", callbacks);
+
+		expect(callbacks.confirm).toHaveBeenCalledTimes(1);
+		expect(callbacks.openRepoPath).toHaveBeenCalledWith("/src/new-project");
+	});
+
+	it("adds nothing when the confirmation is denied", async () => {
+		callbacks.confirm.mockResolvedValue(false);
+
+		await handleDeepLink("tuic://open-repo?path=/src/new-project", callbacks);
+
+		expect(callbacks.openRepoPath).not.toHaveBeenCalled();
+		expect(setActiveSpy).not.toHaveBeenCalled();
+	});
+
+	it("ignores a link with no path", async () => {
+		await handleDeepLink("tuic://open-repo", callbacks);
+
+		expect(callbacks.confirm).not.toHaveBeenCalled();
+		expect(callbacks.openRepoPath).not.toHaveBeenCalled();
 	});
 });
 

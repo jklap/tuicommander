@@ -437,6 +437,7 @@ const App: Component = () => {
 		restoreDetachedPanels: detachedPanelBridge.restoreDetachedPanels,
 		setWhatsNewVersion,
 		openSettings,
+		openRepoPath: gitOps.addRepoByPath,
 		confirm: (options) => dialogs.confirm(options),
 	});
 
