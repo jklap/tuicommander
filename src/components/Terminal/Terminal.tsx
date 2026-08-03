@@ -102,10 +102,17 @@ export function cleanOscTitle(title: string): string {
 
 	// Strip leading spinner/symbol noise: *, middle dots, bullets, braille patterns,
 	// dingbats, geometric shapes, and other non-alphanumeric decorators agents prepend.
+	// The dingbat range starts at U+2713 (\u2713\u2714\u2715\u2716\u2717\u2718) rather than U+2720 so completion and
+	// error indicators are stripped too \u2014 pi ends a turn with "\u2713 | \u03C0 | repo" and a failure
+	// with "\u2717 | \u03C0 | repo", which would otherwise leak a status glyph into the tab name.
 	let cleaned = title.replace(
-		/^[\s*\u00B7\u2022\u2219\u22C5\u2027\u25A0-\u25FF\u2800-\u28FF\u2720-\u273F\u2580-\u259F]+/,
+		/^[\s*\u00B7\u2022\u2219\u22C5\u2027\u25A0-\u25FF\u2800-\u28FF\u2713-\u273F\u2580-\u259F]+/,
 		"",
 	);
+	// Then drop the separator the indicator was attached to, so a status-prefixed title
+	// (pi emits "\u2826 | \u03C0 | repo", "\u25CB | \u03C0 | repo", "\u2713 | \u03C0 | repo") does not leave a dangling
+	// "| " once the animated glyph is gone.
+	cleaned = cleaned.replace(/^[|\u2502\u00B7\-\u2013\u2014:]+\s*/, "");
 	// Strip "user@host:" or bare "user@host" prefix
 	cleaned = cleaned.replace(/^[^@\s]+@[^:\s]+(:\s*)?/, "");
 	// Strip leading env var assignments (KEY=value pairs, including empty values)

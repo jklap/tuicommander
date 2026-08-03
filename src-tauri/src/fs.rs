@@ -1238,11 +1238,11 @@ pub fn delete_path(repo_path: String, path: String) -> Result<(), String> {
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn rename_path(repo_path: String, from: String, to: String) -> Result<(), String> {
     let (_canonical_repo, canonical_from) = validate_path(&repo_path, &from)?;
-    let (_, canonical_to) = if PathBuf::from(&repo_path).join(&to).exists() {
-        validate_path(&repo_path, &to)?
-    } else {
-        validate_path_for_creation(&repo_path, &to)?
-    };
+    // NEVER canonicalize the destination — only its parent. On case-insensitive
+    // filesystems (macOS APFS, Windows NTFS) `canonicalize("readme.md")` resolves
+    // to the existing on-disk `README.md`, so a case-only rename would collapse to
+    // `rename(README.md, README.md)` and silently do nothing.
+    let (_, canonical_to) = validate_path_for_creation(&repo_path, &to)?;
 
     std::fs::rename(&canonical_from, &canonical_to).map_err(|e| format!("Failed to rename: {e}"))
 }
@@ -1251,14 +1251,21 @@ pub fn rename_path(repo_path: String, from: String, to: String) -> Result<(), St
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn copy_path(repo_path: String, from: String, to: String) -> Result<(), String> {
     let (_canonical_repo, canonical_from) = validate_path(&repo_path, &from)?;
-    let (_, canonical_to) = if PathBuf::from(&repo_path).join(&to).exists() {
-        validate_path(&repo_path, &to)?
-    } else {
-        validate_path_for_creation(&repo_path, &to)?
-    };
+    // Same rule as `rename_path`: the destination keeps the requested spelling.
+    let (_, canonical_to) = validate_path_for_creation(&repo_path, &to)?;
 
     if canonical_from.is_dir() {
         return Err("Cannot copy directories. Only files can be copied.".to_string());
+    }
+
+    // On a case-insensitive filesystem `README.md` and `readme.md` are the same
+    // file: copying it onto itself opens the source for truncation and destroys
+    // the content. Compare resolved paths, not the literal ones.
+    if canonical_to
+        .canonicalize()
+        .is_ok_and(|resolved| resolved == canonical_from)
+    {
+        return Err("Source and destination are the same file".to_string());
     }
 
     std::fs::copy(&canonical_from, &canonical_to)
@@ -1936,6 +1943,42 @@ mod tests {
 
         assert!(!dir.path().join("main.rs").exists());
         assert!(dir.path().join("app.rs").exists());
+    }
+
+    /// A case-only rename must actually change the name on disk. On
+    /// case-insensitive filesystems this used to no-op because the destination
+    /// was canonicalized back to the source's existing spelling.
+    /// `exists()` is case-insensitive there too, so assert on the real dir entry.
+    #[test]
+    fn test_rename_path_case_only() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+
+        rename_path(repo_path, "main.rs".to_string(), "MAIN.rs".to_string()).unwrap();
+
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(names.contains(&"MAIN.rs".to_string()), "got {names:?}");
+        assert!(!names.contains(&"main.rs".to_string()), "got {names:?}");
+    }
+
+    /// Copying a file onto itself would open the source for truncation and wipe
+    /// it — the guard must reject it instead.
+    #[test]
+    fn test_copy_path_onto_itself_rejected() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+        let before = std::fs::read_to_string(dir.path().join("main.rs")).unwrap();
+
+        let result = copy_path(repo_path, "main.rs".to_string(), "main.rs".to_string());
+
+        assert!(result.is_err());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("main.rs")).unwrap(),
+            before
+        );
     }
 
     #[test]

@@ -43,7 +43,12 @@ export function OutputView(props: OutputViewProps) {
 				appLogger.warn("terminal", "fetchInitialOutput non-ok response, will rely on WS", { status: resp.status });
 				return 0;
 			}
-			const json = (await resp.json()) as { lines: unknown[]; total_lines: number; screen?: string[] };
+			const json = (await resp.json()) as {
+				lines: unknown[];
+				total_lines: number;
+				offset?: number;
+				screen?: string[];
+			};
 			if (json.lines && json.lines.length > 0) {
 				setLogLines(json.lines.map(normalizeLogLine));
 			}
@@ -56,7 +61,11 @@ export function OutputView(props: OutputViewProps) {
 				props.onInputLine(typeof il === "string" ? il : null);
 			}
 			const total = json.total_lines ?? 0;
-			oldestLoadedOffset = Math.max(0, total - (json.lines?.length ?? 0));
+			// The backend reports where the returned window actually starts. Deriving it
+			// from lines.length would drift: chrome lines (agent prompt box, footer)
+			// occupy offsets without being returned, so the subtraction lands inside the
+			// window we already hold and replays those lines on scroll-up.
+			oldestLoadedOffset = json.offset ?? Math.max(0, total - (json.lines?.length ?? 0));
 			scrollToBottom(true);
 			return total;
 		} catch (err) {

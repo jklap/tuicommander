@@ -2523,6 +2523,102 @@ fn detect_grok_screen_activity(rows: &[String]) -> AgentScreenActivity {
     }
 }
 
+/// True for pi's bottom status row: `↑1.3k ↓1.8k … 3.4%/272k (auto)   (openai) gpt-5.6-sol • medium`.
+/// The context-usage `N%/Nk` pair plus the ` • ` model separator is unique to that row and
+/// present in every state, so it identifies a pi screen without asserting readiness.
+fn is_pi_status_row(row: &str) -> bool {
+    let trimmed = row.trim();
+    if !trimmed.contains(" \u{2022} ") {
+        return false;
+    }
+    // `%/` only ever appears in the context gauge (`3.4%/272k`).
+    let Some(pos) = trimmed.find("%/") else {
+        return false;
+    };
+    trimmed[..pos]
+        .chars()
+        .next_back()
+        .is_some_and(|c| c.is_ascii_digit())
+}
+
+/// pi keeps its composer, separators and status row on screen for the whole turn, and the
+/// composer carries no prompt glyph (it is a bare reverse-video cursor block), so readiness
+/// cannot be read from a prompt char. What does change is the composer row itself: while a
+/// turn runs it is replaced by an animated ` ⠏ Working...` row that `is_spinner_row` already
+/// recognises. Ready is therefore "this is a pi screen and nothing is spinning".
+fn detect_pi_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    let content_end = rows
+        .iter()
+        .rposition(|row| !row.trim().is_empty())
+        .map_or(0, |idx| idx + 1);
+    let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
+    let footer = &rows[chrome_start..content_end];
+
+    if footer.iter().any(|row| crate::chrome::is_spinner_row(row)) {
+        return AgentScreenActivity::Working;
+    }
+    if footer.iter().any(|row| is_pi_status_row(row)) {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
+/// True for a row of OpenCode's composer frame: the heavy vertical `┃` (U+2503)
+/// running down the left edge of the prompt box.
+fn is_opencode_frame_row(row: &str) -> bool {
+    row.trim_start().starts_with('\u{2503}')
+}
+
+/// True for the row that closes OpenCode's composer frame: `╹` (U+2579) followed by a
+/// run of `▀` (U+2580). Present in every OpenCode state — welcome, mid-turn, finished.
+fn is_opencode_frame_close_row(row: &str) -> bool {
+    row.trim_start()
+        .strip_prefix('\u{2579}')
+        .is_some_and(|rest| rest.starts_with("\u{2580}\u{2580}\u{2580}\u{2580}"))
+}
+
+/// OpenCode is a full-screen Bubble Tea TUI, so neither of the two generic signals works:
+/// it paints no prompt glyph (`❯`/`›`/`>`), and its activity indicator is a `⬝`/`■`
+/// progress bar rather than anything `is_spinner_row` recognises. What IS stable across
+/// every state is the composer frame — `┃` rows closed by a `╹▀▀▀…` run — with the status
+/// bar painted underneath it. OpenCode only offers `esc interrupt` in that status bar while
+/// a turn is running (verified live on v1.18.5 across the model phase AND a tool phase, at
+/// both 120 and 62 columns), so Ready is "this is an OpenCode screen and nothing down there
+/// is offering an interrupt".
+///
+/// Declaring Ready additionally requires the status bar's `ctrl+p commands` hint, which is
+/// present in every state: without it a frame whose status bar has not been painted yet
+/// would read Ready mid-turn — exactly the false idle that lets auto-standby SIGSTOP a live
+/// session. The interrupt hint is checked first so a working screen is never downgraded.
+fn detect_opencode_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    const STATUS_BAR_HINT: &str = "ctrl+p commands";
+    const INTERRUPT_HINT: &str = "esc interrupt";
+
+    let Some(close_idx) = rows
+        .iter()
+        .rposition(|row| is_opencode_frame_close_row(row))
+    else {
+        return AgentScreenActivity::Unknown;
+    };
+    if !rows[..close_idx]
+        .iter()
+        .any(|row| is_opencode_frame_row(row))
+    {
+        return AgentScreenActivity::Unknown;
+    }
+    let status_bar = &rows[close_idx + 1..];
+
+    if status_bar.iter().any(|row| row.contains(INTERRUPT_HINT)) {
+        return AgentScreenActivity::Working;
+    }
+    if status_bar.iter().any(|row| row.contains(STATUS_BAR_HINT)) {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
 fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> AgentScreenActivity {
     match agent_type {
         Some("claude") => detect_claude_screen_activity(rows),
@@ -2530,14 +2626,26 @@ fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> Ag
         Some("gemini") => detect_gemini_screen_activity(rows),
         Some("aider") => detect_aider_screen_activity(rows),
         Some("grok") => detect_grok_screen_activity(rows),
+        Some("pi") => detect_pi_screen_activity(rows),
+        Some("opencode") => detect_opencode_screen_activity(rows),
         _ => AgentScreenActivity::Unknown,
     }
 }
 
+/// Agents listed here recover to idle from the screen. An agent that is MISSING here and
+/// whose foreground command is long-lived stays busy for the whole process, because OSC 133
+/// marks that command busy once and nothing else ever clears it (#523-1df4, #534-e30c,
+/// #535-d4f5).
+///
+/// DEFERRED (2026-08-02) — amp, cursor, goose and droid were audited for the same failure
+/// while fixing opencode and could NOT be verified: none of the four binaries is installed
+/// on this machine, and an adapter written from documentation instead of a live capture is
+/// how grok first shipped green tests over a UI that stayed stuck BUSY. They are tracked in
+/// `to-test.md`; give each one an adapter only after capturing its real screens.
 pub(crate) fn has_ready_screen_adapter(agent_type: Option<&str>) -> bool {
     matches!(
         agent_type,
-        Some("claude" | "codex" | "gemini" | "aider" | "grok")
+        Some("claude" | "codex" | "gemini" | "aider" | "grok" | "pi" | "opencode")
     )
 }
 
@@ -7671,6 +7779,16 @@ pub(crate) fn close_pty(
     Ok(())
 }
 
+/// Script interpreters that execute an agent CLI in their own process image.
+/// For these the executable path names the interpreter, not the tool the user
+/// launched, so the real identity has to come from argv[0].
+fn is_script_interpreter(name: &str) -> bool {
+    matches!(
+        name,
+        "node" | "bun" | "deno" | "python" | "python3" | "ruby" | "perl"
+    )
+}
+
 /// Look up the process name for a given PID using OS-native syscalls.
 /// On macOS uses `proc_pidpath`, on Linux reads `/proc/{pid}/comm`.
 /// Returns None if the lookup fails.
@@ -7687,15 +7805,39 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
     if let Some(agent_type) = classify_agent_name_or_path(path) {
         return Some(agent_type.to_string());
     }
-    Some(normalized_process_name(path).to_string())
+    let basename = normalized_process_name(path);
+    // An npm-installed agent CLI (pi ships as a node script) reports the node
+    // binary here, so classify_agent would never see the tool's own name and the
+    // session stayed an unclassified shell — no ready-screen adapter, stuck BUSY.
+    // Only interpreters pay the extra syscall; every native binary returns above.
+    if is_script_interpreter(basename)
+        && let Some(argv0) = crate::process_env::read_process_argv0(pid)
+    {
+        if let Some(agent_type) = classify_agent_name_or_path(&argv0) {
+            return Some(agent_type.to_string());
+        }
+        return Some(normalized_process_name(&argv0).to_string());
+    }
+    Some(basename.to_string())
 }
 
 #[cfg(target_os = "linux")]
 pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
-    std::fs::read_to_string(format!("/proc/{pid}/comm"))
+    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
         .ok()
         .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
+        .filter(|s| !s.is_empty())?;
+    // See the macOS arm: an npm-installed agent CLI reports its interpreter here,
+    // so fall back to argv[0] to recover the tool's own name.
+    if is_script_interpreter(&comm)
+        && let Some(argv0) = std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
+            .ok()
+            .and_then(|raw| raw.split('\0').next().map(str::to_string))
+            .filter(|s| !s.is_empty())
+    {
+        return Some(normalized_process_name(&argv0).to_string());
+    }
+    Some(comm)
 }
 
 #[cfg(windows)]
@@ -7859,6 +8001,7 @@ pub(crate) fn classify_agent(process_name: &str) -> Option<&'static str> {
         "goose" => Some("goose"),
         "grok" => Some("grok"),
         "droid" => Some("droid"),
+        "pi" => Some("pi"),
         _ => None,
     }
 }
@@ -10590,6 +10733,48 @@ mod tests {
         );
     }
 
+    /// Codex v0.146.0 grew its status row from `<model> <effort> · <N>% left · <dir>` to
+    /// `<model> <effort> · <dir> · <branch> · Context <N>% left · <N>K window`. The adapter
+    /// must stay blind to that row: it anchors on the `›` prompt plus the interrupt hint,
+    /// both branch- and gauge-independent. Rows transcribed from a live v0.146.0 session
+    /// captured 2026-08-02.
+    #[test]
+    fn test_codex_v0_146_status_row_with_git_branch_does_not_change_detection() {
+        const STATUS_ROW: &str = "  gpt-5.6-luna xhigh \u{00B7} ~/Gits/personal/tuicommander \u{00B7} main \u{00B7} Context 96% left \u{00B7} 247K window";
+
+        let working = vec![
+            "\u{203A} Run this shell command with your tool: sleep 25 && echo hello".to_string(),
+            "\u{2022} Boss, eseguo il comando richiesto.".to_string(),
+            "\u{2022} Working (3s \u{2022} esc to interrupt) \u{00B7} 1 background terminal running \u{00B7} /ps to view".to_string(),
+            "\u{203A} Explain this codebase".to_string(),
+            STATUS_ROW.to_string(),
+        ];
+        assert_eq!(
+            detect_codex_screen_activity(&working),
+            AgentScreenActivity::Working
+        );
+
+        // Finished turn: separators and `• Output:` sit in the prompt neighborhood, and the
+        // status row still carries the branch. Nothing there is an interrupt hint.
+        let finished = vec![
+            "\u{2022} Ran sleep 25 && echo hello".to_string(),
+            "  \u{2514} hello".to_string(),
+            "\u{2500}".repeat(120),
+            "\u{2022} Output:".to_string(),
+            "  hello".to_string(),
+            "\u{2500}".repeat(120),
+            "\u{203A} Explain this codebase".to_string(),
+            STATUS_ROW.to_string(),
+        ];
+        assert_eq!(
+            detect_codex_screen_activity(&finished),
+            AgentScreenActivity::Ready
+        );
+
+        // The branch field itself must never be mistaken for chrome that holds BUSY.
+        assert!(!crate::chrome::is_working_status_row(STATUS_ROW));
+    }
+
     #[test]
     fn test_agent_ready_requires_stable_observation() {
         let mut silence = SilenceState::new();
@@ -10651,6 +10836,198 @@ mod tests {
             detect_agent_screen_activity(Some("grok"), &running),
             AgentScreenActivity::Working
         );
+    }
+
+    /// Captured live from pi 0.83.0. pi's composer is a bare reverse-video cursor block with
+    /// no prompt glyph, so readiness rests on the status row plus the absence of a spinner.
+    #[test]
+    fn test_pi_finished_turn_is_ready_and_working_row_wins() {
+        let separator = "─".repeat(100);
+        let finished = vec![
+            " Count from 1 to 40, one number per line, no tools, no commentary.".to_string(),
+            " 1".to_string(),
+            " 2".to_string(),
+            separator.clone(),
+            "                                                                  ".to_string(),
+            separator.clone(),
+            "~/Gits/personal/tuicommander (main)".to_string(),
+            "↑1.3k ↓1.8k R15k W6.0k CH88.5% $0.104 3.4%/272k (auto)      (openai) gpt-5.6-sol • medium".to_string(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("pi"), &finished),
+            AgentScreenActivity::Ready
+        );
+
+        // Mid-turn pi keeps the same separators and status row; only the composer row swaps.
+        let mut running = finished.clone();
+        running[4] = " ⠏ Working...".to_string();
+        assert_eq!(
+            detect_agent_screen_activity(Some("pi"), &running),
+            AgentScreenActivity::Working
+        );
+    }
+
+    /// A pi screen must be identified by its own status row, not by any bottom row: without
+    /// this the adapter would report Ready for whatever happens to be on screen after pi exits.
+    #[test]
+    fn test_pi_screen_without_status_row_is_unknown() {
+        let rows = vec![
+            "$ ls".to_string(),
+            "README.md  src".to_string(),
+            "$ ".to_string(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("pi"), &rows),
+            AgentScreenActivity::Unknown
+        );
+    }
+
+    #[test]
+    fn test_pi_status_row_needs_the_context_gauge_and_model_separator() {
+        assert!(is_pi_status_row(
+            "0.0%/272k (auto)                          (openai) gpt-5.6-sol • medium"
+        ));
+        // Prose carrying a bullet but no context gauge is not chrome.
+        assert!(!is_pi_status_row("read the file • then summarise it"));
+        // A percentage that is not the context gauge must not qualify.
+        assert!(!is_pi_status_row("coverage 88.5% • done"));
+        assert!(!is_pi_status_row(""));
+    }
+
+    #[test]
+    fn test_pi_is_recognised_as_an_agent() {
+        assert_eq!(classify_agent("pi"), Some("pi"));
+        assert!(has_ready_screen_adapter(Some("pi")));
+    }
+
+    /// Rows below are transcribed from live opencode v1.18.5 screens captured on
+    /// 2026-08-02 in this repo (welcome, mid-turn, and finished-turn). The frame glyphs
+    /// were confirmed against a `script(1)` byte log: `┃` U+2503, `╹` U+2579, `▀` U+2580.
+    fn opencode_finished_screen() -> Vec<String> {
+        vec![
+            "     VT100 is dead. The terminal it defined will be with us for a long time.".into(),
+            "     \u{25A3}  Build \u{00B7} Big Pickle \u{00B7} 31.3s".into(),
+            "  \u{2503}".into(),
+            "  \u{2503}".into(),
+            "  \u{2503}".into(),
+            "  \u{2503}  Build \u{00B7} Big Pickle OpenCode Zen".into(),
+            format!("  \u{2579}{}", "\u{2580}".repeat(98)),
+            "   /Users/stefano.straus/Gits/personal/tuicommander       18.1K (9%)  ctrl+p commands"
+                .into(),
+        ]
+    }
+
+    #[test]
+    fn test_opencode_finished_turn_is_ready_and_interrupt_hint_wins() {
+        assert_eq!(
+            detect_agent_screen_activity(Some("opencode"), &opencode_finished_screen()),
+            AgentScreenActivity::Ready
+        );
+
+        // Mid-turn opencode keeps the very same composer frame on screen; only the status
+        // bar swaps the cwd for a `⬝`/`■` progress bar plus the interrupt hint.
+        let mut working = opencode_finished_screen();
+        let last = working.len() - 1;
+        working[last] = "   \u{2B1D}\u{2B1D}\u{2B1D}\u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}  esc interrupt        18.1K (9%)  ctrl+p commands".into();
+        assert_eq!(
+            detect_agent_screen_activity(Some("opencode"), &working),
+            AgentScreenActivity::Working
+        );
+    }
+
+    /// The welcome screen (before any turn) carries a different status bar — `tab agents`
+    /// plus a tip row and a `path:branch … version` row — and must still read Ready.
+    #[test]
+    fn test_opencode_welcome_screen_is_ready() {
+        let rows = vec![
+            "                    \u{2588}\u{2580}\u{2580}\u{2588} \u{2588}\u{2580}\u{2580}\u{2588} \u{2588}\u{2580}\u{2580}\u{2588}".into(),
+            "                       \u{2503}".into(),
+            "                       \u{2503}  Ask anything... \"Fix a TODO in the codebase\"".into(),
+            "                       \u{2503}".into(),
+            "                       \u{2503}  Build \u{00B7} Big Pickle OpenCode Zen".into(),
+            format!("                       \u{2579}{}", "\u{2580}".repeat(78)),
+            "                       tab agents  ctrl+p commands".into(),
+            "                                \u{25CF} Tip Run /connect to add an AI provider".into(),
+            "  ~/Gits/personal/tuicommander:main                                        1.18.5".into(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("opencode"), &rows),
+            AgentScreenActivity::Ready
+        );
+    }
+
+    /// The interrupt hint survives a tool phase — captured while opencode ran
+    /// `sleep 20 && echo done` — which is precisely when a false idle would let
+    /// auto-standby SIGSTOP the session.
+    #[test]
+    fn test_opencode_tool_phase_is_working() {
+        let mut rows = opencode_finished_screen();
+        rows.insert(2, "  \u{2503}  \u{283C} sleep 20 && echo done".into());
+        rows.insert(3, "     \u{25A3}  Build \u{00B7} Big Pickle".into());
+        let last = rows.len() - 1;
+        rows[last] = "   \u{2B1D}\u{2B1D}\u{2B1D}\u{2B1D}\u{25A0}\u{25A0}\u{25A0}\u{25A0}  esc interrupt        18.1K (9%)  ctrl+p commands".into();
+        assert_eq!(
+            detect_agent_screen_activity(Some("opencode"), &rows),
+            AgentScreenActivity::Working
+        );
+    }
+
+    /// Readiness must rest on OpenCode's own frame, not on whatever happens to be on
+    /// screen: a plain shell — and a frame whose status bar has not been painted — are
+    /// both Unknown rather than Ready.
+    #[test]
+    fn test_opencode_requires_its_own_frame_and_status_bar() {
+        let shell = vec![
+            "$ ls".to_string(),
+            "README.md  src".to_string(),
+            "$ ".to_string(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("opencode"), &shell),
+            AgentScreenActivity::Unknown
+        );
+
+        // Frame close row without any `┃` frame row above it is not an OpenCode composer.
+        let close_only = vec![
+            format!("  \u{2579}{}", "\u{2580}".repeat(98)),
+            "   /Users/x  ctrl+p commands".to_string(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("opencode"), &close_only),
+            AgentScreenActivity::Unknown
+        );
+
+        // Half-painted screen: frame present, status bar not yet drawn.
+        let mut unpainted = opencode_finished_screen();
+        unpainted.pop();
+        assert_eq!(
+            detect_agent_screen_activity(Some("opencode"), &unpainted),
+            AgentScreenActivity::Unknown
+        );
+    }
+
+    #[test]
+    fn test_opencode_ready_screen_recovers_long_lived_shell_busy() {
+        assert_eq!(classify_agent("opencode"), Some("opencode"));
+        assert!(has_ready_screen_adapter(Some("opencode")));
+
+        let mut silence = SilenceState::new();
+        // OSC 133 marks the long-lived `opencode` foreground command busy. Without a
+        // ready-screen adapter this bit survived for the whole process (#535-d4f5).
+        silence.note_explicit_state(SHELL_BUSY, false);
+        silence.note_real_activity();
+        silence.ready_since = Some(std::time::Instant::now() - AGENT_READY_CONFIRM);
+        assert!(silence.note_ready_screen());
+        assert!(!silence.explicit_busy);
+        assert!(silence.idle_confirmed);
+    }
+
+    #[test]
+    fn test_only_interpreters_take_the_argv0_detour() {
+        assert!(is_script_interpreter("node"));
+        assert!(is_script_interpreter("bun"));
+        assert!(!is_script_interpreter("claude"));
+        assert!(!is_script_interpreter("zsh"));
     }
 
     #[test]

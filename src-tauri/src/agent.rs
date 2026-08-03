@@ -597,6 +597,7 @@ pub(crate) const KNOWN_AGENT_BINARIES: &[&str] = &[
     "cursor-agent",
     "goose",
     "droid",
+    "pi",
 ];
 
 /// Detect any agent binary location

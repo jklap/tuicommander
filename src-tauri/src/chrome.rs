@@ -42,6 +42,25 @@ pub fn is_prompt_line(text: &str) -> bool {
     t.starts_with('❯') || t.starts_with('›') || t == ">" || t.starts_with("> ")
 }
 
+/// Returns true if `text` is an agent's *empty* interactive prompt row.
+///
+/// Stricter than [`is_prompt_line`] on both counts, because what it anchors is
+/// deleted from history rather than from a screen that repaints next frame:
+///
+/// - The prompt glyph must carry **no text**. Agents echo the user's submitted
+///   message back into the transcript on a prompt row (`❯ rename is broken`,
+///   `› riprendiamo`) — that is the conversation, not chrome. The prompt box
+///   that scrolls off is empty: the input cleared on submit.
+/// - `> text` is a markdown blockquote, so only a bare `>` qualifies.
+pub fn is_agent_prompt_row(text: &str) -> bool {
+    let t = text.trim();
+    let rest = match t.strip_prefix(['❯', '›', '>']) {
+        Some(rest) => rest,
+        None => return false,
+    };
+    rest.trim().is_empty()
+}
+
 /// Returns true if a terminal row contains agent UI chrome (mode-line,
 /// status-line, spinner) rather than real agent output.
 ///
@@ -256,10 +275,52 @@ pub fn find_chrome_cutoff(rows: &[&str]) -> Option<usize> {
         (None, None) => None,
     };
 
-    let mut cutoff = anchor?;
-    // Extend cutoff up past separators, empty lines, and task list rows (⎿ ◻ ✔)
-    // above the anchor. Note: is_chrome_row is NOT included here — spinners above
-    // the separator are agent output indicators (e.g. Gemini braille), not footer chrome.
+    Some(extend_cutoff_upward(rows, anchor?))
+}
+
+/// Find the row index where agent chrome starts in a batch of lines that
+/// scrolled off into **history**.
+///
+/// Same contract as [`find_chrome_cutoff`] but deliberately conservative,
+/// because what it cuts is gone from the user's scrollback for good:
+///
+/// - A separator alone is **not** an anchor. Tool output, tables, progress bars
+///   and Codex's `└ ────` dividers all carry box-drawing runs; anchoring on them
+///   truncated real prose mid-sentence (issue: mobile log showed paragraphs
+///   starting on their second line).
+/// - The prompt must be a real agent prompt row ([`is_agent_prompt_row`]), not
+///   any line opening with `> `.
+///
+/// Separators, blank rows and task-list rows still extend the cut upward once a
+/// genuine prompt anchors it — that is the prompt box, not content.
+pub fn find_scrollback_chrome_cutoff(rows: &[&str]) -> Option<usize> {
+    if rows.is_empty() {
+        return None;
+    }
+
+    let content_end = rows
+        .iter()
+        .rposition(|r| !r.is_empty())
+        .map_or(0, |i| i + 1);
+    if content_end == 0 {
+        return None;
+    }
+
+    let scan_start = content_end.saturating_sub(CHROME_SCAN_ROWS);
+    let anchor = (scan_start..content_end)
+        .rev()
+        .find(|&i| is_agent_prompt_row(rows[i]))?;
+
+    Some(extend_cutoff_upward(rows, anchor))
+}
+
+/// Extend a chrome cutoff up past separators, empty lines, and task list rows
+/// (⎿ ◻ ✔) sitting above the anchor.
+///
+/// `is_chrome_row` is deliberately NOT included: spinners above the separator
+/// are agent output indicators (e.g. Gemini braille), not footer chrome.
+fn extend_cutoff_upward(rows: &[&str], anchor: usize) -> usize {
+    let mut cutoff = anchor;
     while cutoff > 0 {
         let above = rows[cutoff - 1].trim();
         if above.is_empty() || is_separator_line(above) || is_task_list_row(above) {
@@ -268,8 +329,7 @@ pub fn find_chrome_cutoff(rows: &[&str]) -> Option<usize> {
             break;
         }
     }
-
-    Some(cutoff)
+    cutoff
 }
 
 #[cfg(test)]
@@ -1092,5 +1152,99 @@ mod tests {
             "  ⏵⏵ bypass permissions on (shift+tab to cycle)",
         ];
         assert_eq!(find_chrome_cutoff(&rows), Some(1));
+    }
+
+    // --- is_agent_prompt_row ---
+
+    #[test]
+    fn agent_prompt_row_accepts_bare_prompt_glyphs() {
+        assert!(is_agent_prompt_row("❯"));
+        assert!(is_agent_prompt_row("› "));
+        assert!(is_agent_prompt_row("  ❯  "));
+        assert!(is_agent_prompt_row(">"));
+        assert!(is_agent_prompt_row("> "), "bare prompt, nothing typed");
+    }
+
+    /// The transcript echo of a submitted user message sits on a prompt row.
+    /// Anchoring there deleted the conversation from the mobile log.
+    #[test]
+    fn agent_prompt_row_rejects_echoed_user_message() {
+        assert!(!is_agent_prompt_row(
+            "❯ rename non funziona nel filebrowser"
+        ));
+        assert!(!is_agent_prompt_row("› riprendiamo"));
+    }
+
+    #[test]
+    fn agent_prompt_row_rejects_markdown_quote() {
+        assert!(!is_agent_prompt_row("> quoted guidance from the manual"));
+        assert!(!is_agent_prompt_row("  > indented blockquote"));
+    }
+
+    // --- find_scrollback_chrome_cutoff ---
+
+    #[test]
+    fn scrollback_cutoff_marks_prompt_box() {
+        let rows: Vec<&str> = vec![
+            "Here is the answer to your question.",
+            "",
+            "────────────────────────────────────────────",
+            "❯",
+            "────────────────────────────────────────────",
+            "  [Opus 4.6 | Team] tuicommander git:(main*)",
+        ];
+        assert_eq!(find_scrollback_chrome_cutoff(&rows), Some(1));
+    }
+
+    #[test]
+    fn scrollback_cutoff_ignores_markdown_quote() {
+        let rows: Vec<&str> = vec![
+            "Here is what the docs say:",
+            "> quoted guidance from the manual",
+            "verificabile; non è un force-push e non sovrascrive alcun branch",
+        ];
+        assert_eq!(
+            find_scrollback_chrome_cutoff(&rows),
+            None,
+            "prose after a blockquote must survive in history"
+        );
+    }
+
+    #[test]
+    fn scrollback_cutoff_ignores_standalone_separator() {
+        let rows: Vec<&str> = vec![
+            "• Ran cargo nextest run",
+            "  └ ──────────────────────",
+            "    Summary [ 12.4s ] 91 tests run",
+        ];
+        assert_eq!(
+            find_scrollback_chrome_cutoff(&rows),
+            None,
+            "a divider is not a prompt — screen trim may cut here, history may not"
+        );
+    }
+
+    #[test]
+    fn scrollback_cutoff_still_extends_past_separator_above_prompt() {
+        let rows: Vec<&str> = vec![
+            "real output",
+            "────────────────────",
+            "❯ ",
+            "  Context ███░░░",
+        ];
+        assert_eq!(find_scrollback_chrome_cutoff(&rows), Some(1));
+    }
+
+    #[test]
+    fn scrollback_cutoff_empty_and_blank_batches() {
+        assert_eq!(find_scrollback_chrome_cutoff(&[]), None);
+        assert_eq!(find_scrollback_chrome_cutoff(&["", "", ""]), None);
+    }
+
+    #[test]
+    fn scrollback_cutoff_prompt_outside_scan_window_is_ignored() {
+        let mut rows: Vec<&str> = vec!["❯"];
+        rows.extend(std::iter::repeat_n("content", CHROME_SCAN_ROWS + 2));
+        assert_eq!(find_scrollback_chrome_cutoff(&rows), None);
     }
 }

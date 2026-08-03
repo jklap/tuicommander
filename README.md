@@ -63,7 +63,7 @@ Launch Claude Code on five branches at once — or mix agents. Each session runs
 
 ### Agent observability — not just terminals
 
-TUICommander auto-detects **10 AI coding agents** (Claude Code, Codex CLI, Aider, Gemini CLI, Amp, Cursor Agent, OpenCode, Droid, Goose, Grok) and understands what they're doing:
+TUICommander auto-detects **11 AI coding agents** (Claude Code, Codex CLI, Aider, Gemini CLI, Amp, Cursor Agent, OpenCode, Droid, Goose, Grok, pi) and understands what they're doing:
 
 - **Rate limit detection** — Provider-specific patterns with countdown timers per session.
 - **Question detection** — Y/N prompts, numbered options, inquirer-style menus. Tab indicator, notification sound, keyboard overlay.

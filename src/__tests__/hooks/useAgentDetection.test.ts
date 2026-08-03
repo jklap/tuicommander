@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import "../mocks/tauri";
+import { AGENT_TYPES } from "../../agents";
 import { useAgentDetection } from "../../hooks/useAgentDetection";
 import { testInScope, testInScopeAsync } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
@@ -35,7 +36,9 @@ describe("useAgentDetection", () => {
 				});
 
 				const map = detections();
-				expect(map.size).toBe(12);
+				// Every registered agent type must get a detection entry — derived from the
+				// registry so adding an agent doesn't silently leave one undetected.
+				expect(map.size).toBe(AGENT_TYPES.length);
 				expect(map.get("claude")?.available).toBe(true);
 				expect(map.get("gemini")?.available).toBe(false);
 				expect(map.get("opencode")?.available).toBe(true);
