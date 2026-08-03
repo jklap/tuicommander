@@ -164,19 +164,102 @@ impl Transcriber for WhisperTranscriber {
 }
 
 /// Known hallucination phrases Whisper produces on silence/noise.
-/// These are artifacts of YouTube subtitle training data.
+/// These are artifacts of YouTube subtitle training data, so they come in the
+/// language Whisper was told to transcribe: quiet Italian audio yields a bare
+/// "Grazie.", quiet English audio a bare "Thank you.".
+///
+/// Two lists, because the two shapes need different matching:
+///
+/// - [`HALLUCINATION_EXACT`] holds words a person genuinely dictates ("grazie",
+///   "thank you"). Substring matching would delete a real sentence that merely
+///   contains one, so these only count when they ARE the whole transcript.
+/// - [`HALLUCINATION_SUBSTRING`] holds channel boilerplate nobody dictates into
+///   a terminal; it may appear anywhere in the text.
+///
+/// Both lists cover every language offered in `WHISPER_LANGUAGES`, because the
+/// default setting is `auto`: the language of the hallucination is whatever
+/// Whisper decided the silence was.
+const HALLUCINATION_EXACT: &[&str] = &[
+    // en
+    "thank you",
+    "thanks",
+    "thank you very much",
+    // es
+    "gracias",
+    "muchas gracias",
+    // fr
+    "merci",
+    "merci beaucoup",
+    // de
+    "danke",
+    "danke schön",
+    "vielen dank",
+    // it
+    "grazie",
+    "grazie mille",
+    // pt
+    "obrigado",
+    "obrigada",
+    // nl
+    "bedankt",
+    "dank je wel",
+    // ja
+    "ご視聴ありがとうございました",
+    // zh
+    "谢谢观看",
+    "谢谢大家",
+    // ko
+    "감사합니다",
+    "시청해주셔서 감사합니다",
+    // ru
+    "спасибо",
+    "спасибо за просмотр",
+];
+
+const HALLUCINATION_SUBSTRING: &[&str] = &[
+    // The Amara subtitle credit is the single most common one and appears
+    // translated into every language, so match the domain and cover them all.
+    "amara.org",
+    // en
+    "thanks for watching",
+    "thanks for listening",
+    "subtitles by",
+    "transcribed by",
+    "subscribe",
+    "like and subscribe",
+    // es
+    "gracias por ver el video",
+    "subtítulos realizados por",
+    // fr
+    "sous-titres réalisés par",
+    "merci d'avoir regardé cette vidéo",
+    "sous-titrage société radio-canada",
+    // de
+    "untertitel der",
+    "untertitelung im auftrag des",
+    // it
+    "grazie per aver guardato il video",
+    "sottotitoli e revisione a cura di",
+    // pt
+    "legendas pela comunidade",
+    "obrigado por assistir",
+    // nl
+    "ondertiteld door",
+    // zh
+    "请不吝点赞",
+    // ko
+    "시청해주셔서",
+    // ru
+    "субтитры сделал",
+    "редактор субтитров",
+];
+
 fn is_hallucination(text: &str) -> bool {
     let lower = text.to_lowercase();
-    const HALLUCINATIONS: &[&str] = &[
-        "thank you",
-        "thanks for watching",
-        "thanks for listening",
-        "subtitles by",
-        "transcribed by",
-        "subscribe",
-        "like and subscribe",
-    ];
-    HALLUCINATIONS.iter().any(|h| lower.contains(h))
+    // Whisper punctuates its hallucinations ("Grazie." / "Thank you!"), so the
+    // exact match compares against the bare words.
+    let bare = lower.trim_matches(|c: char| !c.is_alphanumeric());
+    HALLUCINATION_EXACT.contains(&bare) || HALLUCINATION_SUBSTRING.iter().any(|h| lower.contains(h))
 }
 
 #[cfg(test)]
@@ -201,5 +284,62 @@ mod tests {
     #[test]
     fn build_context_params_does_not_panic() {
         let _params = build_context_params();
+    }
+
+    #[test]
+    fn bare_thanks_in_any_language_is_a_hallucination() {
+        // What quiet audio actually produces, punctuation and casing included.
+        assert!(is_hallucination("Grazie."));
+        assert!(is_hallucination("grazie"));
+        assert!(is_hallucination("Grazie mille!"));
+        assert!(is_hallucination("Thank you."));
+        assert!(is_hallucination("  Thanks!  "));
+        assert!(is_hallucination("Gracias."));
+        assert!(is_hallucination("Merci."));
+        assert!(is_hallucination("Vielen Dank!"));
+        assert!(is_hallucination("Obrigado."));
+        assert!(is_hallucination("Bedankt."));
+        assert!(is_hallucination("Спасибо."));
+        assert!(is_hallucination("ご視聴ありがとうございました。"));
+        assert!(is_hallucination("谢谢观看"));
+        assert!(is_hallucination("감사합니다."));
+    }
+
+    #[test]
+    fn the_amara_credit_is_caught_in_every_language() {
+        // One pattern, every translation of the same subtitle credit.
+        assert!(is_hallucination(
+            "Sottotitoli creati dalla comunità Amara.org"
+        ));
+        assert!(is_hallucination("Subtitles by the Amara.org community"));
+        assert!(is_hallucination("Untertitel der Amara.org-Community"));
+        assert!(is_hallucination(
+            "Sous-titres réalisés par la communauté d'Amara.org"
+        ));
+    }
+
+    #[test]
+    fn channel_boilerplate_is_a_hallucination_anywhere_in_the_text() {
+        assert!(is_hallucination(
+            "Grazie per aver guardato il video, ci vediamo alla prossima"
+        ));
+        assert!(is_hallucination("Sottotitoli e revisione a cura di QTSS"));
+        assert!(is_hallucination("Thanks for watching!"));
+    }
+
+    #[test]
+    fn a_real_sentence_containing_thanks_survives() {
+        // The whole reason the short phrases are matched exactly: these are
+        // things Boss dictates on purpose.
+        assert!(!is_hallucination("grazie, ora committa e pusha"));
+        assert!(!is_hallucination("thank you for the review, apply it"));
+        assert!(!is_hallucination("scrivi grazie nel commento"));
+    }
+
+    #[test]
+    fn ordinary_dictation_is_not_filtered() {
+        assert!(!is_hallucination("apri il file browser"));
+        assert!(!is_hallucination("run the tests"));
+        assert!(!is_hallucination(""));
     }
 }
