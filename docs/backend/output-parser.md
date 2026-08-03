@@ -267,6 +267,8 @@ Detected by `parse_slash_menu()` when `slash_mode` is active — scans the botto
 
 Primary entry point for VT100-aware parsing. Accepts `ChangedRow` vectors from `VtLogBuffer.process()` — each row contains clean text extracted from the VT100 screen emulator. This replaces the legacy ANSI-stripping pipeline for mobile/MCP consumers.
 
+`ChangedRow` production remains active on both the primary and alternate screens. This is intentional: fullscreen agents still emit lifecycle, intent, suggestion, and question surfaces that the parser must observe. It is independent from `VtLogBuffer`'s durable log, which reads only primary-screen scrollback. Enabling alternate-screen history therefore makes the UI scrollable without feeding repeated fullscreen snapshots into persistent logs.
+
 ### `parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent>`
 
 Scans screen bottom rows (from VtLogBuffer) for slash command menus. Only called when `slash_mode` is active (user typed `/`). Returns `SlashMenu` event with all detected commands.

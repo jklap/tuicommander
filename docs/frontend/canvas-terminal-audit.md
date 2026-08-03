@@ -1,6 +1,6 @@
 # CanvasTerminal Feature Audit
 
-**Last updated:** 2026-07-21
+**Last updated:** 2026-08-03
 **Branch:** refactor/solid-architecture
 
 CanvasTerminal is the sole terminal renderer. xterm.js has been fully removed. The renderer is powered by `alacritty_terminal` (Rust) sending binary grid frames over a Tauri Channel.
@@ -45,7 +45,9 @@ Key insight: Terminal.tsx handles parsed events, session lifecycle, banners, and
 
 ## Binary Frame Format
 
-Each frame: 26-byte header + variable row data. The header ends with a `historyBase: u32` (lines evicted from the history top so far); `historyBase + (historySize - displayOffset + screenRow)` is the eviction-stable absolute index the smooth-scroll row cache keys by, so a cached row never aliases onto a different line after the scrollback cap rotates. Per cell: 4 bytes codepoint + 3 bytes fg RGB + 3 bytes bg RGB + 1 byte attrs bitmask = 11 bytes. Decoded in `decodeBinaryFrame` using struct-of-arrays (SoA) typed arrays — zero per-cell object allocation.
+Each frame: 26-byte header + variable row data. The header ends with a `historyBase: u32` (lines evicted from the history top so far); `historyBase + (historySize - displayOffset + screenRow)` is the eviction-stable absolute index the smooth-scroll row cache keys by, so a cached row never aliases onto a different line after the scrollback cap rotates. `keyboard_flags` bits 0–4 remain the public keyboard-mode mask; bit 5 carries the active primary/alternate-screen identity and is removed before exposing `keyboardFlags` to input code. Per cell: 4 bytes codepoint + 3 bytes fg RGB + 3 bytes bg RGB + 1 byte attrs bitmask = 11 bytes. Decoded in `decodeBinaryFrame` using struct-of-arrays (SoA) typed arrays — zero per-cell object allocation.
+
+Primary and alternate grids can reuse identical numeric row coordinates while representing unrelated content. A bit-5 transition therefore starts a new renderer generation: smooth-scroll animation, delayed row fetches, selection, search, link verification, reconciliation, and absolute-row caches are invalidated as one transaction. Partial transition frames wait for a full replacement instead of merging into the previous grid.
 
 ## Performance Notes
 

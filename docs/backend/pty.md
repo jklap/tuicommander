@@ -82,7 +82,7 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 2. Strip Kitty keyboard protocol sequences (non-printable noise for consumers)
 3. Push through `Utf8ReadBuffer` — accumulates bytes until valid UTF-8 boundary, returns safe string
 4. Push through `EscapeAwareBuffer` — holds incomplete ANSI escape sequences (CSI, OSC, etc.)
-5. Feed into `VtLogBuffer` for VT100-aware log extraction (mobile/MCP consumers)
+5. Feed into `VtLogBuffer` for VT100-aware changed-row parsing and primary-screen log extraction (mobile/MCP consumers)
 6. Write to `OutputRingBuffer` (64KB circular buffer for MCP access)
 7. Serialize parsed events once with `serde_json::to_value` — reused for both Tauri IPC and event bus (avoids double serialization)
 8. Broadcast to WebSocket clients (if any connected)
@@ -213,11 +213,11 @@ struct ChangedRow {
 1. Maintains a `vt100::Parser` — a full VT100 screen emulator (24 rows × 220 cols default)
 2. On each `process()` call, compares current screen rows against previous snapshot
 3. Lines that have scrolled off the top are emitted to the log (diff-based detection)
-4. **Alternate screen suppression:** When a TUI app activates alternate screen (`ESC[?1049h`), extraction is paused — no garbage from vim, htop, or Claude Code's TUI surfaces
+4. **Separate alternate-screen contracts:** changed rows are still returned while a TUI app owns the alternate screen, so status/intent/question parsers keep working. Durable log extraction reads only primary-screen history, so fullscreen repaint noise never reaches mobile/MCP logs
 5. Bounded by `VT_LOG_BUFFER_CAPACITY` (10,000 lines); oldest lines are dropped when full
 6. **Monotonic cursor:** `total_lines()` returns a monotonically increasing count of all lines ever pushed (not the current buffer length). Clients use this as a stable cursor for paginated reads via `lines_since_owned(offset, limit)`. If a client's saved offset falls in the evicted range, it is clamped to `oldest_offset()`
 
-**Resize:** When the PTY is resized, `VtLogBuffer.resize()` is called to keep the parser in sync and clear the prev-row snapshot (avoids false scroll detection after resize).
+**Resize:** When the PTY is resized, `VtLogBuffer.resize()` keeps the parser in sync and clears the previous-row snapshot (avoids false scroll detection after resize). If an alternate-screen app is active, the durable-log cursor is synchronized against the inactive primary grid, not the unrelated alternate history; normal shell capture therefore resumes on the first line after exit.
 
 Each session gets its own `VtLogBuffer` stored in `AppState.vt_log_buffers: DashMap<String, Mutex<VtLogBuffer>>`.
 

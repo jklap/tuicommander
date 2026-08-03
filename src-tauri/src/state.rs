@@ -2987,8 +2987,9 @@ impl VtLogBuffer {
     /// output parsers can match status lines and intent tokens emitted by
     /// agents that use the alternate screen (e.g. Claude Code / Ink).
     ///
-    /// Log extraction reads new scrollback lines from the grid's history
-    /// (normal-screen-only — alternate screen does not produce scrollback).
+    /// Log extraction reads new primary-screen scrollback lines from the grid's
+    /// history. Alternate history may exist for interactive scrolling, but it is
+    /// deliberately excluded from the durable log.
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
         let is_alternate = self.grid.is_alternate_screen();
 
@@ -3061,7 +3062,11 @@ impl VtLogBuffer {
             ReflowMode::All
         };
         self.grid.resize_with_mode(rows, cols, mode);
-        self.scrollback_read = self.grid.scrollback_count();
+        // A resize can change the inactive primary grid's history length while an
+        // alternate-screen app is active. Keep the durable-log cursor in the
+        // primary coordinate space; syncing it to alt history suppresses normal
+        // shell capture after exit until primary history catches up.
+        self.scrollback_read = self.grid.primary_scrollback_count();
     }
 
     /// All finalized log lines (oldest first).
@@ -5819,6 +5824,63 @@ mod tests {
         );
     }
 
+    /// A resize while an alternate-screen app owns a large history must not move
+    /// the primary screen's log cursor into that unrelated coordinate space.
+    ///
+    /// This models `gh run watch`: every refresh homes, erases, and prints a frame
+    /// taller than the viewport. After leaving the app, ordinary shell output must
+    /// be captured immediately instead of being suppressed until primary history
+    /// catches up with the much larger alternate history.
+    #[test]
+    fn test_vt_log_alt_resize_keeps_primary_capture_cursor() {
+        let mut buf = VtLogBuffer::new(4, 80, 1000);
+
+        for i in 0..8 {
+            buf.process(format!("before-watch-{i}\r\n").as_bytes());
+        }
+        let before_watch_total = buf.total_lines();
+        assert!(
+            before_watch_total > 0,
+            "sanity: primary output reached the log"
+        );
+
+        buf.process(b"\x1b[?1049h");
+        for refresh in 0..4 {
+            buf.process(b"\x1b[0;0H\x1b[J");
+            buf.process(
+                format!("Refreshing run status every 3 seconds [{refresh}]\r\n").as_bytes(),
+            );
+            for job in 0..12 {
+                buf.process(format!("  job-{job:02}: running\r\n").as_bytes());
+            }
+        }
+        assert!(
+            buf.grid_history_size() > 20,
+            "sanity: the synthetic watch built substantial alternate history"
+        );
+
+        // Real panel/layout changes resize the PTY while the watch is still active.
+        buf.resize(5, 72);
+        buf.process(b"\x1b[?1049l");
+
+        for i in 0..10 {
+            buf.process(format!("after-watch-{i}\r\n").as_bytes());
+        }
+
+        let texts = log_texts(&buf);
+        assert!(
+            texts.iter().any(|line| line == "after-watch-0"),
+            "primary capture must resume immediately after alt exit; log tail: {:?}",
+            texts.iter().rev().take(12).collect::<Vec<_>>()
+        );
+        assert!(
+            !texts
+                .iter()
+                .any(|line| line.contains("Refreshing run status") || line.contains("job-")),
+            "alternate-screen rows must remain excluded from the durable log"
+        );
+    }
+
     /// resize() updates parser dimensions.
     #[test]
     fn test_vt_log_resize() {
@@ -6252,6 +6314,68 @@ mod tests {
             !has_garbage,
             "alternate-screen content should be suppressed, but found TUI-GARBAGE in: {:?}",
             lines,
+        );
+    }
+
+    /// End-to-end through a real PTY: replaying the recorded `gh run watch`
+    /// stream must build alt-screen scrollback (the scrollbar's precondition)
+    /// while the log/agent-hook pipeline stays suppressed. Those two must hold
+    /// *together* — scrollback the user can scroll, no alt noise in the logs.
+    #[test]
+    fn test_vt_log_real_pty_gh_run_watch_builds_alt_scrollback() {
+        use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+        use std::io::Read;
+
+        let fixture = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/fixtures/alt_screen/gh-run-watch.raw");
+
+        let pty_system = native_pty_system();
+        let pair = match pty_system.openpty(PtySize {
+            rows: 24,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        }) {
+            Ok(p) => p,
+            Err(e) if e.to_string().contains("Operation not permitted") => {
+                eprintln!("Skipping test: PTY not available in sandbox");
+                return;
+            }
+            Err(e) => panic!("open pty: {e}"),
+        };
+
+        let mut cmd = CommandBuilder::new("/bin/cat");
+        cmd.arg(&fixture);
+        let mut child = pair.slave.spawn_command(cmd).expect("spawn");
+        drop(pair.slave);
+
+        let mut reader = pair.master.try_clone_reader().expect("reader");
+        let mut buf = VtLogBuffer::new(24, 120, 1000);
+        let mut raw = [0u8; 4096];
+        loop {
+            match reader.read(&mut raw) {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.process(&raw[..n]);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(_) => break,
+            }
+        }
+        let _ = child.wait();
+
+        assert!(buf.is_alternate_screen(), "stream leaves us in alt screen");
+        assert!(
+            buf.grid_history_size() > 0,
+            "alt-screen scrollback must exist — 0 is the bug (no scrollbar, no scrollback)"
+        );
+
+        // The harness contract: none of that alt output may reach the log buffer
+        // that feeds agent hooks and log extraction.
+        let lines = log_texts(&buf);
+        assert!(
+            !lines.iter().any(|l| l.contains("Refreshing run status")),
+            "alt-screen content must stay out of the log buffer, got: {lines:?}",
         );
     }
 

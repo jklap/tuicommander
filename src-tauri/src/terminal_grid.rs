@@ -405,6 +405,13 @@ impl TerminalGrid {
     pub fn new(rows: u16, cols: u16, scrollback: usize) -> Self {
         let config = Config {
             scrolling_history: scrollback,
+            // User-visible parity with iTerm2's "save lines to scrollback in
+            // alternate screen mode" option:
+            // alt-screen apps that print more than a screenful (`gh run watch`,
+            // `less`, `man`) stay scrollable instead of dropping what rolls off
+            // the top. Same cap as the primary screen; wiped on every alt
+            // enter/exit, so no inactive alternate lines remain addressable.
+            alt_scrolling_history: scrollback,
             kitty_keyboard: true,
             default_cursor_style: CursorStyle {
                 shape: CursorShape::Beam,
@@ -617,6 +624,11 @@ impl TerminalGrid {
     /// Number of scrollback lines above the visible screen.
     pub fn scrollback_count(&self) -> usize {
         self.term.grid().history_size()
+    }
+
+    /// Number of primary-screen scrollback lines, regardless of the active screen.
+    pub fn primary_scrollback_count(&self) -> usize {
+        self.term.primary_history_size()
     }
 
     /// Read a range of scrollback lines as plain text.
@@ -1489,7 +1501,7 @@ impl TerminalGrid {
     ///        bit4=dim, bit5=inverse, bit6=default_fg, bit7=default_bg
     /// keyboard_flags: bit0=disambiguate_esc_codes, bit1=report_event_types,
     ///                 bit2=report_alternate_keys, bit3=report_all_keys_as_esc,
-    ///                 bit4=report_associated_text
+    ///                 bit4=report_associated_text, bit5=alternate_screen
     /// frame_flags: bit0=bell, bits1-2=cursor_shape (0=block,1=underline,2=beam),
     ///              bits3-4=mouse_mode (0=none,1=click,2=drag,3=motion),
     ///              bit5=sgr_mouse, bit6=focus_reporting, bit7=bracketed_paste
@@ -1525,6 +1537,16 @@ impl TerminalGrid {
         }
         if mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) {
             keyboard_flags |= 0x10;
+        }
+        // bit 5: alternate screen active. Not a keyboard flag — it rides in this
+        // byte because `frame_flags` has no bit left, and adding a header byte
+        // would desync any frontend running against an older backend (Rust does
+        // not hot-reload in dev). An unused bit degrades to 0 instead.
+        // The frontend keys its absolute-row cache off `history_base`, which
+        // restarts from 0 on every alt enter/exit (`reset_history_era`), so it
+        // must drop that cache whenever this bit flips.
+        if mode.contains(TermMode::ALT_SCREEN) {
+            keyboard_flags |= 0x20;
         }
 
         let viewport_changed = self.last_frame_display_offset != Some(display_offset)
@@ -3926,5 +3948,227 @@ mod tests {
             (bg_r2, bg_g2, bg_b2),
             "bg must match on resize+redraw wrap"
         );
+    }
+
+    // --- Alternate-screen scrollback --------------------------------------
+    //
+    // Driven by a REAL PTY capture of `gh run watch <run-id>` — the command that
+    // exposed the bug. Fixture: src/fixtures/alt_screen/gh-run-watch.raw,
+    // recorded with `script -q /dev/null gh run watch <id> | head -c 60000`.
+    // It opens with `ESC[?1049h` (alt screen), then repeatedly homes the cursor
+    // (`ESC[0;0H ESC[J`) and reprints a job list far taller than the viewport —
+    // that reprint is what scrolls lines off the top. gh never exits while the
+    // run is live, so the capture has no `ESC[?1049l`; tests that need the exit
+    // append it explicitly.
+
+    fn gh_run_watch_capture() -> Vec<u8> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/fixtures/alt_screen/gh-run-watch.raw");
+        std::fs::read(&path).unwrap_or_else(|e| panic!("missing fixture {}: {e}", path.display()))
+    }
+
+    /// The reported bug: text renders but there is no scrollbar, because the alt
+    /// grid had no history at all. The frontend hides the scrollbar exactly when
+    /// `historySize == 0` (CanvasTerminal.tsx), so a non-zero history IS the fix.
+    #[test]
+    fn gh_run_watch_builds_alt_screen_scrollback() {
+        let mut grid = TerminalGrid::new(24, 120, 1000);
+        let _ = grid.process(&gh_run_watch_capture());
+
+        assert!(
+            grid.is_alternate_screen(),
+            "fixture must leave the terminal in the alternate screen"
+        );
+        assert!(
+            grid.scrollback_count() > 0,
+            "alt-screen scrollback must accumulate — 0 means the scrollbar stays hidden"
+        );
+    }
+
+    /// Scrolling back must reach the lines the app pushed off the top, not just
+    /// show an empty history. The gh banner is printed once at the very top of
+    /// every refresh, so it is guaranteed to have scrolled away.
+    #[test]
+    fn gh_run_watch_scrollback_holds_the_lines_that_scrolled_off() {
+        let mut grid = TerminalGrid::new(24, 120, 1000);
+        let _ = grid.process(&gh_run_watch_capture());
+
+        let history = grid.scrollback_count();
+        let lines = grid.read_scrollback_lines(0, history);
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("Refreshing run status every 3 seconds")),
+            "the banner scrolled off the top must be recoverable from alt scrollback"
+        );
+        assert!(
+            lines.iter().any(|l| l.contains("JOBS")),
+            "job list header must be recoverable from alt scrollback"
+        );
+    }
+
+    /// The frame protocol has to tell the frontend it is looking at the alternate
+    /// screen (keyboard_flags bit5), because `history_base` restarts at 0 there and
+    /// the client row cache — keyed by absolute row — must be dropped on the flip.
+    #[test]
+    fn frame_flags_report_alternate_screen() {
+        // Header layout (see serialize_dirty_rows): row_count u16, cursor_row u16,
+        // cursor_col u16, cursor_visible u8, display_offset u32, history_size u32,
+        // has_selection u8 → keyboard_flags lands at byte 16.
+        const KEYBOARD_FLAGS_OFFSET: usize = 16;
+
+        let mut grid = TerminalGrid::new(24, 120, 1000);
+        let _ = grid.process(b"plain shell output\r\n");
+        let frame = grid.serialize_dirty_rows();
+        assert_eq!(
+            frame[KEYBOARD_FLAGS_OFFSET] & 0x20,
+            0,
+            "primary screen must not set the alt-screen bit"
+        );
+
+        let _ = grid.process(&gh_run_watch_capture());
+        let frame = grid.serialize_dirty_rows();
+        assert_eq!(
+            frame[KEYBOARD_FLAGS_OFFSET] & 0x20,
+            0x20,
+            "alt screen must set keyboard_flags bit5"
+        );
+    }
+
+    /// An alt session never inherits the previous one's lines: `swap_alt` resets
+    /// the alt history era on both enter and exit.
+    #[test]
+    fn alt_screen_history_is_wiped_between_sessions() {
+        let mut grid = TerminalGrid::new(24, 120, 1000);
+        let _ = grid.process(&gh_run_watch_capture());
+        assert!(
+            grid.scrollback_count() > 0,
+            "first alt session builds history"
+        );
+
+        // Leave the alternate screen (gh does this on Ctrl+C / completion).
+        let _ = grid.process(b"\x1b[?1049l");
+        assert!(!grid.is_alternate_screen());
+
+        // Re-enter: the new session starts from an empty history, never showing
+        // the previous app's leftovers.
+        let _ = grid.process(b"\x1b[?1049h");
+        assert_eq!(
+            grid.scrollback_count(),
+            0,
+            "a fresh alt session must start with no scrollback"
+        );
+    }
+
+    /// Leaving the alternate screen must restore the primary screen's own history
+    /// untouched — the alt lines must not leak into the shell's scrollback.
+    #[test]
+    fn alt_screen_scrollback_never_leaks_into_primary() {
+        let mut grid = TerminalGrid::new(24, 120, 1000);
+        for i in 0..40 {
+            let _ = grid.process(format!("shell line {i}\r\n").as_bytes());
+        }
+        let primary_history = grid.scrollback_count();
+        assert!(primary_history > 0, "sanity: primary built scrollback");
+
+        let _ = grid.process(&gh_run_watch_capture());
+        let _ = grid.process(b"\x1b[?1049l");
+
+        assert!(!grid.is_alternate_screen());
+        assert_eq!(
+            grid.scrollback_count(),
+            primary_history,
+            "primary scrollback must be exactly what it was before the alt app ran"
+        );
+        let lines = grid.read_scrollback_lines(0, grid.scrollback_count());
+        assert!(
+            !lines.iter().any(|l| l.contains("Refreshing run status")),
+            "no alt-screen line may end up in the primary scrollback"
+        );
+    }
+
+    /// Alt-screen apps that redraw in place (`ESC[H` + `ESC[J`, no scrolling) must
+    /// not manufacture history: only lines that actually scroll off the top count.
+    /// This is what keeps `vim`/`htop` from flooding the scrollback.
+    #[test]
+    fn alt_screen_redraw_without_scrolling_creates_no_history() {
+        let mut grid = TerminalGrid::new(24, 120, 1000);
+        let _ = grid.process(b"\x1b[?1049h");
+        for _ in 0..20 {
+            let _ = grid.process(b"\x1b[0;0H\x1b[Jstatus pane redraw");
+        }
+        assert_eq!(
+            grid.scrollback_count(),
+            0,
+            "an in-place redraw must not produce scrollback"
+        );
+    }
+
+    /// Resizing while the alt screen holds history exercises grid paths that were
+    /// unreachable when the alt grid had capacity 0. It must not panic or lose the
+    /// alt-screen state.
+    #[test]
+    fn alt_screen_with_history_survives_resize() {
+        let mut grid = TerminalGrid::new(24, 120, 1000);
+        let _ = grid.process(&gh_run_watch_capture());
+        assert!(grid.scrollback_count() > 0);
+
+        grid.resize(40, 80);
+        grid.resize(12, 200);
+        grid.resize(24, 120);
+
+        assert!(grid.is_alternate_screen(), "resize must not drop alt mode");
+        let _ = grid.serialize_dirty_rows();
+    }
+
+    /// The user-visible half of the fix: the viewport must actually move through
+    /// the alt history. `scroll()` is the wheel path, `scroll_to_offset()` the
+    /// scrollbar-drag / coalesced-wheel path — both must reach content that
+    /// scrolled off, clamp at the top, and return to the live tail.
+    #[test]
+    fn alt_screen_wheel_and_drag_scroll_reach_the_scrolled_off_lines() {
+        let mut grid = TerminalGrid::new(24, 120, 1000);
+        let _ = grid.process(&gh_run_watch_capture());
+
+        let history = grid.scrollback_count();
+        assert!(
+            history > 3,
+            "fixture must leave enough alt history to scroll"
+        );
+        assert_eq!(grid.display_offset(), 0, "starts pinned to the live tail");
+
+        // Wheel up three lines.
+        grid.scroll(3);
+        assert_eq!(grid.display_offset(), 3, "wheel must move the alt viewport");
+
+        // Scrollbar drag straight to a line that scrolled off: it must land in
+        // the viewport, which is what makes the history usable rather than merely
+        // present. `read_scrollback_lines` is oldest-first, so its index IS the
+        // absolute history row.
+        let banner = grid
+            .read_scrollback_lines(0, history)
+            .iter()
+            .position(|l| l.contains("Refreshing run status every 3 seconds"))
+            .expect("the gh banner must have scrolled off into alt history");
+        grid.scroll_to_line(banner);
+        assert_eq!(grid.display_offset(), history - banner);
+        assert!(
+            grid.get_row_text(0)
+                .contains("Refreshing run status every 3 seconds"),
+            "scrolled-to line must be the top viewport row, got: {:?}",
+            grid.get_row_text(0)
+        );
+
+        // Scrollbar drag to the very top of the alt history.
+        grid.scroll_to_offset(history);
+        assert_eq!(grid.display_offset(), history);
+
+        // Dragging past the top clamps instead of running off the grid.
+        grid.scroll_to_offset(history + 500);
+        assert_eq!(grid.display_offset(), history, "top of history must clamp");
+
+        // Wheel back down: the viewport returns to the live tail.
+        grid.scroll(-(history as i32 + 10));
+        assert_eq!(grid.display_offset(), 0, "must snap back to the live tail");
     }
 }

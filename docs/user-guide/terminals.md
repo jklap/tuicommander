@@ -96,6 +96,16 @@ Hover a tab to see its shortcut badge: "Terminal N (Cmd+N)". Use `Cmd+1` through
 | `Shift+PageUp` | Scroll one page up |
 | `Shift+PageDown` | Scroll one page down |
 
+### Scrollback in fullscreen apps
+
+Apps that take over the screen (`gh run watch`, `less`, `man`, TUIs) run on the terminal's *alternate screen*, which by the original terminal spec has no scrollback at all — anything printed past the bottom of the window is gone. TUICommander enables an isolated alternate-screen history, giving the same user-visible result as iTerm2's save-to-scrollback option: the scrollbar stays available and you can reach what rolled off the top.
+
+Two details worth knowing:
+
+- The scrollback of a fullscreen app is **wiped when it exits**, and never mixes with your shell's history.
+- TUICommander preserves the application's actual output. A live view that reprints a frame taller than the viewport can therefore leave repeated snapshots in history; they are not deduplicated.
+- Apps with mouse support (`vim`, `htop`, `lazygit`) receive the wheel themselves — use **Shift+wheel** or drag the scrollbar to scroll TUICommander's history instead.
+
 ## Zoom
 
 Per-terminal font size control:

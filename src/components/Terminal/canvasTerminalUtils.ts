@@ -42,6 +42,10 @@ export interface DecodedFrame {
 	historyBase: number;
 	hasSelection: boolean;
 	keyboardFlags: number;
+	/** Alternate screen active. `historyBase` restarts from 0 on every alt
+	 *  enter/exit, so the absolute-row cache MUST be dropped when this flips —
+	 *  otherwise a primary-screen row can alias onto an alt row at the same key. */
+	altScreen: boolean;
 	bell: boolean;
 	mouseMode: 0 | 1 | 2 | 3;
 	sgrMouse: boolean;
@@ -58,12 +62,15 @@ export interface FrameGridPrev {
 	lastScreenCols: number;
 	lastDisplayOffset: number;
 	lastHistorySize: number;
+	lastAltScreen: boolean;
 }
 
 /** What a newly-decoded frame means for the rowMap. */
 export interface FrameGridDecision {
 	geomChanged: boolean;
 	scrollChanged: boolean;
+	/** Primary/alternate grid swap: all absolute row state belongs to a new era. */
+	screenChanged: boolean;
 	/** The frame carries a full screen of rows → replace the rowMap wholesale. */
 	fullReplace: boolean;
 	/** Partial frame after a scroll → clear and wait for a full frame; do NOT merge. */
@@ -82,10 +89,11 @@ export interface FrameGridDecision {
 export function decideFrameGrid(prev: FrameGridPrev, frame: DecodedFrame, fallbackRows: number): FrameGridDecision {
 	const geomChanged = frame.screenRows !== prev.lastScreenRows || frame.screenCols !== prev.lastScreenCols;
 	const scrollChanged = frame.displayOffset !== prev.lastDisplayOffset || frame.historySize !== prev.lastHistorySize;
+	const screenChanged = frame.altScreen !== prev.lastAltScreen;
 	const screenRowCount = frame.screenRows || fallbackRows || 24;
 	const fullReplace = frame.rows.length >= screenRowCount;
-	const scrollWait = !fullReplace && scrollChanged && !geomChanged;
-	return { geomChanged, scrollChanged, fullReplace, scrollWait };
+	const scrollWait = !fullReplace && (screenChanged || (scrollChanged && !geomChanged));
+	return { geomChanged, scrollChanged, screenChanged, fullReplace, scrollWait };
 }
 
 /** Inputs to the reconcile-fire gate (see shouldFireReconcile). */
@@ -190,7 +198,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 	offset += 4;
 	const hasSelection = view.getUint8(offset) !== 0;
 	offset += 1;
-	const keyboardFlags = view.getUint8(offset);
+	const rawKeyboardFlags = view.getUint8(offset);
 	offset += 1;
 	const frameFlags = view.getUint8(offset);
 	offset += 1;
@@ -200,6 +208,10 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 	offset += 2;
 	const historyBase = view.getUint32(offset, true);
 	offset += 4;
+	// bit5 of keyboard_flags is the alt-screen state, not a keyboard flag — it
+	// rides there because frame_flags is full (see serialize_dirty_rows).
+	const altScreen = (rawKeyboardFlags & 0x20) !== 0;
+	const keyboardFlags = rawKeyboardFlags & 0x1f;
 	const bell = (frameFlags & 0x01) !== 0;
 	const cursorShapeRaw = (frameFlags >> 1) & 0x03;
 	const cursorShape: "block" | "underline" | "beam" =
@@ -250,6 +262,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 		historyBase,
 		hasSelection,
 		keyboardFlags,
+		altScreen,
 		bell,
 		mouseMode,
 		sgrMouse,

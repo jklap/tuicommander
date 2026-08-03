@@ -403,6 +403,19 @@ pub struct Config {
     /// The maximum amount of scrolling history.
     pub scrolling_history: usize,
 
+    /// The maximum amount of scrolling history kept for the *alternate* screen.
+    ///
+    /// By the XTerm spec the alternate screen has no scrollback, and `0` (the
+    /// default) reproduces that. TUICommander sets a real cap to get the
+    /// user-visible behaviour compatible with iTerm2's "save lines to
+    /// scrollback in alternate screen mode" option:
+    /// lines that scroll off the top of an alt-screen app (`gh run watch`,
+    /// `less`, `man`) stay reachable instead of being dropped.
+    ///
+    /// The alt history is wiped on every enter/exit of the alternate screen —
+    /// it is never carried across two alt sessions.
+    pub alt_scrolling_history: usize,
+
     /// Default cursor style to reset the cursor to.
     pub default_cursor_style: CursorStyle,
 
@@ -425,6 +438,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             scrolling_history: 10000,
+            alt_scrolling_history: 0,
             semantic_escape_chars: SEMANTIC_ESCAPE_CHARS.to_owned(),
             default_cursor_style: Default::default(),
             vi_mode_cursor_style: Default::default(),
@@ -485,7 +499,7 @@ impl<T> Term<T> {
 
         let history_size = config.scrolling_history;
         let grid = Grid::new(num_lines, num_cols, history_size);
-        let inactive_grid = Grid::new(num_lines, num_cols, 0);
+        let inactive_grid = Grid::new(num_lines, num_cols, config.alt_scrolling_history);
 
         let tabs = TabStops::new(grid.columns());
 
@@ -603,11 +617,16 @@ impl<T> Term<T> {
 
         self.event_proxy.send_event(title_event);
 
+        // The primary grid always gets `scrolling_history`, the alternate one
+        // `alt_scrolling_history` — whichever of the two is currently active.
         if self.mode.contains(TermMode::ALT_SCREEN) {
+            self.grid.update_history(self.config.alt_scrolling_history);
             self.inactive_grid
                 .update_history(self.config.scrolling_history);
         } else {
             self.grid.update_history(self.config.scrolling_history);
+            self.inactive_grid
+                .update_history(self.config.alt_scrolling_history);
         }
 
         if self.config.kitty_keyboard != old_config.kitty_keyboard {
@@ -772,6 +791,19 @@ impl<T> Term<T> {
         &mut self.grid
     }
 
+    /// Scrollback owned by the primary screen, even while the alternate grid is active.
+    ///
+    /// Consumers that persist primary-screen output must not synchronize their
+    /// cursors against the active alternate grid's unrelated history era.
+    #[inline]
+    pub fn primary_history_size(&self) -> usize {
+        if self.mode.contains(TermMode::ALT_SCREEN) {
+            self.inactive_grid.history_size()
+        } else {
+            self.grid.history_size()
+        }
+    }
+
     /// Resize terminal to new dimensions.
     pub fn resize<S: Dimensions>(&mut self, size: S) {
         self.resize_reflow(size, crate::grid::ReflowMode::All);
@@ -856,6 +888,9 @@ impl<T> Term<T> {
 
             // Reset alternate screen contents.
             self.inactive_grid.reset_region(..);
+            // …and its scrollback, if alt scrollback is enabled: an alt session
+            // never inherits the lines of the previous one.
+            self.inactive_grid.reset_history_era();
         }
 
         mem::swap(
@@ -872,6 +907,13 @@ impl<T> Term<T> {
 
         mem::swap(&mut self.grid, &mut self.inactive_grid);
         self.mode ^= TermMode::ALT_SCREEN;
+
+        // Leaving the alternate screen: clear the logical alt scrollback right
+        // away instead of retaining a second active history until the next app.
+        if !self.mode.contains(TermMode::ALT_SCREEN) {
+            self.inactive_grid.reset_history_era();
+        }
+
         self.selection = None;
         self.mark_fully_damaged();
     }
@@ -3368,6 +3410,72 @@ mod tests {
 
         assert_eq!(term.history_size(), 0);
         assert_eq!(term.grid.cursor.point, Point::new(Line(19), Column(0)));
+    }
+
+    #[test]
+    fn alt_screen_scrollback_disabled_by_default() {
+        let size = TermSize::new(100, 10);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+
+        term.set_private_mode(NamedPrivateMode::SwapScreenAndSetRestoreCursor.into());
+        for _ in 0..30 {
+            term.newline();
+        }
+
+        // XTerm semantics: no scrollback on the alternate screen unless the
+        // embedder opts in via `alt_scrolling_history`.
+        assert_eq!(term.history_size(), 0);
+    }
+
+    #[test]
+    fn alt_screen_scrollback_accumulates_when_enabled() {
+        let size = TermSize::new(100, 10);
+        let config = Config {
+            alt_scrolling_history: 100,
+            ..Config::default()
+        };
+        let mut term = Term::new(config, &size, VoidListener);
+
+        term.set_private_mode(NamedPrivateMode::SwapScreenAndSetRestoreCursor.into());
+        for _ in 0..19 {
+            term.newline();
+        }
+        assert_eq!(term.history_size(), 10, "alt screen must keep scrollback");
+    }
+
+    #[test]
+    fn alt_screen_history_era_resets_on_enter_and_exit() {
+        let size = TermSize::new(100, 10);
+        let config = Config {
+            alt_scrolling_history: 100,
+            ..Config::default()
+        };
+        let mut term = Term::new(config, &size, VoidListener);
+
+        // Session 1.
+        term.set_private_mode(NamedPrivateMode::SwapScreenAndSetRestoreCursor.into());
+        for _ in 0..19 {
+            term.newline();
+        }
+        assert_eq!(term.history_size(), 10);
+        let scrolled_in_alt = term.grid.total_scrolled();
+        assert!(scrolled_in_alt > 0);
+
+        // Leaving drops the logical alt history right away — the primary screen
+        // is back and must not expose a second active scrollback.
+        term.unset_private_mode(NamedPrivateMode::SwapScreenAndSetRestoreCursor.into());
+        assert_eq!(term.history_size(), 0, "primary history is untouched");
+        assert_eq!(term.inactive_grid.history_size(), 0, "alt history released");
+        assert_eq!(
+            term.inactive_grid.total_scrolled(),
+            0,
+            "alt absolute-row era is reset, so history_base restarts at 0"
+        );
+
+        // Session 2 starts clean.
+        term.set_private_mode(NamedPrivateMode::SwapScreenAndSetRestoreCursor.into());
+        assert_eq!(term.history_size(), 0);
+        assert_eq!(term.grid.total_scrolled(), 0);
     }
 
     #[test]

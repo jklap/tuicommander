@@ -9,7 +9,7 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `create_pty` | `config: PtyConfig` | `String` (session ID) | Create PTY session |
 | `create_pty_with_worktree` | `pty_config, worktree_config` | `WorktreeResult` | Create worktree + PTY |
 | `write_pty` | `session_id, data` | `()` | Write to PTY |
-| `resize_pty` | `session_id, rows, cols` | `()` | Resize PTY |
+| `resize_pty` | `session_id, rows, cols` | `()` | Resize PTY; alternate-screen resizes preserve primary-log continuity |
 | `pause_pty` | `session_id` | `()` | Pause reader thread |
 | `resume_pty` | `session_id` | `()` | Resume reader thread |
 | `close_pty` | `session_id, cleanup_worktree` | `()` | Close PTY session |

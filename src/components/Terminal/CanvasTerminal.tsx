@@ -120,6 +120,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const isTouchDevice = navigator.maxTouchPoints > 0 || "ontouchstart" in window;
 	let currentFrame: DecodedFrame | null = null;
 	let lastDisplayOffset = -1;
+	let lastAltScreen = false;
+	let screenGeneration = 0;
 	let lastScreenRows = -1;
 	let lastScreenCols = -1;
 	const search = createCanvasSearchController();
@@ -401,8 +403,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				octxOverscan.translate(GUTTER_PX, 0);
 				overscanRenderer.setTheme(cachedBgDefault, cachedFgDefault);
 			}
-			rowCache.clear();
-			requestedChunks.clear();
+			scroll.clearCache();
 		}
 		if (
 			cols > 0 &&
@@ -1108,6 +1109,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	async function fetchChunk(chunk: number) {
 		if (!invokeRef) return;
 		const start = chunk * ROW_CACHE_CHUNK;
+		const cacheGeneration = scroll.cacheGeneration;
 		try {
 			const res = (await invokeRef("terminal_styled_rows", {
 				sessionId: props.sessionId,
@@ -1116,7 +1118,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			})) as number[] | undefined;
 			// Unmounted during the await: the row cache is released, so don't
 			// repopulate it or schedule a render against it.
-			if (!alive) return;
+			if (!alive || !scroll.isCacheGenerationCurrent(cacheGeneration)) return;
 			// Guard the shape, not just falsiness: a wrong-typed/object response
 			// would throw in the Uint8Array constructor if the command ever changes.
 			if (!Array.isArray(res)) return;
@@ -1124,11 +1126,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (!decoded) return;
 			for (const { abs, row } of decoded.rows) rowCache.set(abs, row);
 			if (rowCache.size > ROW_CACHE_MAX) {
-				rowCache.clear();
-				requestedChunks.clear();
+				scroll.clearCache();
 			}
 			if (scroll.position != null) scheduleSmoothRender();
 		} catch (e) {
+			if (!scroll.isCacheGenerationCurrent(cacheGeneration)) return;
 			requestedChunks.delete(chunk);
 			ipcErr("terminal_styled_rows")(e);
 		}
@@ -1171,8 +1173,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// Cancel an in-flight smooth gesture and restore the resting state. Self-contained:
 	// also cancels the wheel gesture-end timer so a late resetScrollGesture can't fire
 	// after we've handed control to another scroll path (scrollbar, programmatic jump).
-	function resetSmoothScroll() {
+	function resetSmoothScroll(repaint = true) {
 		clearTimeout(scrollGestureEndTimer);
+		if (scrollRafId) {
+			cancelAnimationFrame(scrollRafId);
+			scrollRafId = 0;
+		}
 		if (smoothRafId) {
 			cancelAnimationFrame(smoothRafId);
 			smoothRafId = 0;
@@ -1180,7 +1186,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const hadSmoothPosition = scroll.position != null;
 		clearSettlePending();
 		scroll.cancel();
-		if (hadSmoothPosition) endSmoothScroll();
+		if (hadSmoothPosition && repaint) {
+			endSmoothScroll();
+		} else if (!repaint) {
+			setScrollOverlaysHidden(false);
+			if (stageRef) stageRef.style.transform = "";
+			clearOverscan();
+		}
 	}
 
 	// Seed the cache with the current viewport's rows so the first frame of a gesture
@@ -1273,11 +1285,34 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 		// Grid decision: geom/scroll/full-replace/scroll-wait for the rowMap.
 		const decision = decideFrameGrid(
-			{ lastScreenRows, lastScreenCols, lastDisplayOffset, lastHistorySize },
+			{ lastScreenRows, lastScreenCols, lastDisplayOffset, lastHistorySize, lastAltScreen },
 			frame,
 			lastResizeRows,
 		);
-		const { geomChanged, scrollChanged } = decision;
+		const { geomChanged, scrollChanged, screenChanged } = decision;
+
+		// A primary/alternate swap replaces the entire absolute-row universe. Reset
+		// every stateful consumer as one transaction, and never repaint the old smooth
+		// frame while adopting the new one.
+		if (screenChanged) {
+			screenGeneration++;
+			resetSmoothScroll(false);
+			scroll.clearCache();
+			selection.clear();
+			stopSelectionScroll();
+			search.clear();
+			rowMap.clear();
+			pendingDirtyRows.clear();
+			clearDetectedLinks();
+			linkMenu.close();
+			hoveredLink = null;
+			canvasRef.style.cursor = "text";
+			if (reconcileTimer) clearTimeout(reconcileTimer);
+			reconcileTimer = undefined;
+			reconcileBurstStart = null;
+			reconcileHealPending = false;
+			fullRepaintNeeded = true;
+		}
 
 		// When geometry changes, viewport is entirely different — must clear and repaint
 		if (geomChanged) {
@@ -1287,11 +1322,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			fullRepaintNeeded = true;
 		}
 
-		if (scrollChanged || geomChanged) {
+		if (scrollChanged || geomChanged || screenChanged) {
 			lastDisplayOffset = frame.displayOffset;
 			lastHistorySize = frame.historySize;
 			lastScreenRows = frame.screenRows;
 			lastScreenCols = frame.screenCols;
+			lastAltScreen = frame.altScreen;
 			if (hoveredLink) {
 				hoveredLink = null;
 				canvasRef.style.cursor = "text";
@@ -1469,6 +1505,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	async function verifyVisibleFileLinks() {
 		const ref = invokeRef;
 		if (!ref || !alive) return;
+		const generation = screenGeneration;
 		const maxRow = currentFrame?.screenRows || lastResizeRows;
 		const cols = lastScreenCols > 0 ? lastScreenCols : currentFrame?.screenCols || 80;
 		const now = Date.now();
@@ -1521,6 +1558,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					}
 				}),
 			);
+			if (!alive || generation !== screenGeneration) return;
 			const verified = resolved.filter((r): r is { colStart: number; colEnd: number } => r !== null);
 			if (fileLinkCache.size >= FILE_LINK_CACHE_MAX) {
 				const oldest = fileLinkCache.keys().next().value;
@@ -1567,7 +1605,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					sessionId: props.sessionId,
 					row: i,
 				})) as [number, string];
-				if (!alive) return;
+				if (!alive || generation !== screenGeneration) return;
 				if (startRow === i && logicalText === text) continue; // single row
 				if (checkedLogicalStarts.has(startRow)) continue;
 				checkedLogicalStarts.add(startRow);
@@ -1593,6 +1631,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 							absolute_path: string;
 							is_directory: boolean;
 						} | null;
+						if (!alive || generation !== screenGeneration) return;
 						if (!r) continue;
 						recordWrappedSpans(startRow, m.index, matchEnd);
 						anyFound = true;
@@ -1607,6 +1646,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		}
 
 		if (anyFound) {
+			if (generation !== screenGeneration) return;
 			for (let i = 0; i < maxRow; i++) scanRowForLinks(i);
 			scheduleRepaint();
 		}
@@ -2811,10 +2851,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					if (currentFrame && m) paintFrame(currentFrame, m);
 					return { index: -1, count: 0 };
 				}
+				const generation = screenGeneration;
 				let matches = (await invokeRef("terminal_search", {
 					sessionId: props.sessionId,
 					query,
 				})) as { row: number; col_start: number; col_end: number }[];
+				if (generation !== screenGeneration) return { index: -1, count: 0 };
 				if (blockScope && currentFrame) {
 					const term = terminalsStore.get(props.terminalId);
 					if (term) {
