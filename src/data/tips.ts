@@ -46,6 +46,12 @@ export const TIPS: Tip[] = [
 		shortcut: `${mod}+=`,
 	},
 	{
+		feature: "Fullscreen App Scrollback",
+		description:
+			"Fullscreen apps keep a separate scrollback. Hold Shift while using the wheel, or drag the scrollbar, when the app captures mouse input.",
+		shortcut: "Shift+wheel",
+	},
+	{
 		feature: "File Browser",
 		description: "Browse repo files in a side panel with live diff preview.",
 		shortcut: `${mod}+E`,

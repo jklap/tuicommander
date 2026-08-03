@@ -3,6 +3,7 @@ import type { DecodedRow } from "./canvasTerminalUtils";
 export interface CanvasScrollController {
 	readonly rowCache: Map<number, DecodedRow>;
 	readonly requestedChunks: Set<number>;
+	readonly cacheGeneration: number;
 	position: number | null;
 	pendingOffset: number | null;
 	inFlight: boolean;
@@ -10,6 +11,7 @@ export interface CanvasScrollController {
 	settleTarget: number | null;
 	gestureDistancePx: number;
 	clearCache: () => void;
+	isCacheGenerationCurrent: (generation: number) => boolean;
 	applyDelta: (deltaLines: number, currentOffset: number, historySize: number) => number;
 	snap: () => number | null;
 	acceptSettledFrame: (displayOffset: number) => boolean;
@@ -25,10 +27,14 @@ export function createCanvasScrollController(): CanvasScrollController {
 	let scrolling = false;
 	let settleTarget: number | null = null;
 	let gestureDistancePx = 0;
+	let cacheGeneration = 0;
 
 	return {
 		rowCache,
 		requestedChunks,
+		get cacheGeneration() {
+			return cacheGeneration;
+		},
 		get position() {
 			return position;
 		},
@@ -66,8 +72,12 @@ export function createCanvasScrollController(): CanvasScrollController {
 			gestureDistancePx = value;
 		},
 		clearCache() {
+			cacheGeneration++;
 			rowCache.clear();
 			requestedChunks.clear();
+		},
+		isCacheGenerationCurrent(generation) {
+			return generation === cacheGeneration;
 		},
 		applyDelta(deltaLines, currentOffset, historySize) {
 			scrolling = true;

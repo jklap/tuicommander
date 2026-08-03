@@ -40,4 +40,19 @@ describe("canvas terminal scroll controller", () => {
 		expect(scroll.settleTarget).toBeNull();
 		expect(scroll.gestureDistancePx).toBe(0);
 	});
+
+	it("invalidates delayed cache responses when the screen generation changes", () => {
+		const scroll = createCanvasScrollController();
+		const requestGeneration = scroll.cacheGeneration;
+		expect(requestGeneration).toBeTypeOf("number");
+
+		scroll.rowCache.set(7, {} as never);
+		scroll.requestedChunks.add(0);
+		scroll.clearCache();
+
+		expect(scroll.cacheGeneration).toBe(requestGeneration + 1);
+		expect(scroll.isCacheGenerationCurrent(requestGeneration)).toBe(false);
+		expect(scroll.rowCache.size).toBe(0);
+		expect(scroll.requestedChunks.size).toBe(0);
+	});
 });

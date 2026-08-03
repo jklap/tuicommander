@@ -352,6 +352,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Prompt token carry-forward across windows
 
 ### Completed (P2)
+- [x] Alternate-screen scrollback — isolated bounded history for fullscreen apps, primary-only durable logs, and atomic renderer-generation transitions
 - [x] Task completion detection
 - [x] Audio notification when agent awaits input
 - [x] IDE launcher with app icons
