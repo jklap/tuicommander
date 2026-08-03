@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-08-03
+
 ### Added
 
 - **`tuic run` and a `tuic ls` you can read** — `tuic run pnpm dev` creates a session and starts the command in it. `tuic ls` prints short IDs instead of full UUIDs (targets already accept prefixes) and gained `--json` for scripts, `tuic capture -n 50` returns just the tail, and `tuic status` names the sessions that are waiting on you. Session targets now also match a name prefix, case-insensitively.
@@ -18,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Workspace crates are actually tested** — `make check` and CI ran only the main package, silently skipping 267 tests: the entire `tuic-cli` crate plus our patched `alacritty_terminal` and `vte` forks. Both now run the whole workspace.
 
-- **Fullscreen terminal output can be scrolled without corrupting shell history** — Alternate-screen applications now receive their own bounded, ephemeral scrollback, while persistent logs remain tied to the primary grid. Enter/exit transitions invalidate every renderer cache as one generation, and resizing a live fullscreen app no longer suppresses the first shell lines after it exits. Oversized refreshes remain byte-faithful, so repeated snapshots are expected rather than silently deduplicated.
+- **Fullscreen terminal output can be scrolled without corrupting shell history** — Alternate-screen applications now receive their own bounded, ephemeral scrollback, while persistent logs remain tied to the primary grid. Enter/exit transitions invalidate every renderer cache as one generation, and resizing a live fullscreen app no longer suppresses the first shell lines after it exits. Oversized refreshes remain byte-faithful, so repeated snapshots are expected rather than silently deduplicated. Editors and monitors that paint in place (`vim`, `htop`) produce no history at all; a pager like `less` paints its first page by printing lines, so it leaves roughly one screen of history behind — the same artifact iTerm2's equivalent option has.
 
 - **Updating mdkb no longer leaves TUICommander connected to the old daemon.**
   The detached daemon now identifies its version through the existing ping, and
