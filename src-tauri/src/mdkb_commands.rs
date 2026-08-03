@@ -296,9 +296,14 @@ pub async fn install_mdkb(state: State<'_, Arc<AppState>>) -> Result<String, Str
 
     tracing::info!(source = "mdkb", path = %install_path.display(), "mdkb installed");
 
-    // Re-initialize daemon so it picks up the new binary
+    // Re-initialize and connect now: version-aware startup will stop an older
+    // detached daemon before this installation is reported as complete.
     let mut daemon = state.mdkb_daemon.lock().await;
     *daemon = crate::mdkb_daemon::MdkbDaemon::new();
+    daemon
+        .ensure_running()
+        .await
+        .map_err(|e| format!("Installed mdkb but failed to start its daemon: {e}"))?;
 
     Ok(install_path.display().to_string())
 }
