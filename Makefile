@@ -224,22 +224,24 @@ release-notes:
 # To bump first: make bump BUMP=patch (or minor|major), then make github-release.
 # NOTE: sed -i '' is macOS syntax — run this from macOS only.
 github-release:
-	@BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	@set -e; \
+	BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
 	if [ "$$BRANCH" != "main" ]; then echo "ERROR: must be on main (currently on $$BRANCH)" && exit 1; fi; \
 	if [ -n "$$(git status --porcelain)" ]; then echo "ERROR: working tree is dirty — commit or stash first" && exit 1; fi; \
 	CUR=$$(grep '^version' src-tauri/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/'); \
 	TAG="v$$CUR"; \
 	if git rev-parse "$$TAG" >/dev/null 2>&1; then echo "ERROR: tag $$TAG already exists" && exit 1; fi; \
 	echo "==> Releasing $$TAG"; \
-	git tag "$$TAG"; \
+	git tag -a -m "$$TAG" "$$TAG"; \
 	COMMIT=$$(git rev-parse HEAD); \
 	echo "--- Pushing..."; \
-	git push origin main --tags; \
+	git push origin main; \
+	git push origin "$$TAG" || { git tag -d "$$TAG"; echo "ERROR: tag push failed — local tag removed, fix and re-run"; exit 1; }; \
 	echo "--- Waiting for Release workflow on $$COMMIT..."; \
 	sleep 10; \
 	RUN_ID=""; \
 	for i in 1 2 3 4 5; do \
-		RUN_ID=$$(gh run list -w Release --limit 5 --json databaseId,headSha --jq ".[] | select(.headSha == \"$$COMMIT\") | .databaseId" | head -1); \
+		RUN_ID=$$(gh run list -w Release --limit 5 --json databaseId,headSha --jq ".[] | select(.headSha == \"$$COMMIT\") | .databaseId" 2>/dev/null | head -1) || true; \
 		if [ -n "$$RUN_ID" ]; then break; fi; \
 		echo "  run not found yet, retrying ($$i/5)..."; \
 		sleep 5; \
