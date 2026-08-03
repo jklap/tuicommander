@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Quiet dictation no longer types "Grazie."** — Whisper answers near-silence with a subtitle credit learned from YouTube, in whatever language it guessed the silence was, and the filter behind the RMS gate only knew English phrases: an Italian bare `Grazie.` went straight into the terminal. All eleven offered languages are covered now, and the matching was split in two — a short thanks is dropped only when it is the entire transcript, so a dictated sentence that contains one is no longer destroyed, while channel boilerplate is dropped wherever it appears. The Amara credit is matched by its domain, which catches every translation of it at once.
+
 ## [1.8.0] - 2026-08-03
 
 ### Added
