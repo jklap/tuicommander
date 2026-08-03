@@ -6,6 +6,15 @@ on:
     tags:
       - 'v*'
 
+# sccache's 600s idle timer counts time without *new* requests, so the final
+# single-codegen-unit compile of the tuicommander lib — well over ten minutes on
+# the Windows runner — outlives it: the server exits and the in-flight rustc dies
+# with "connection forcibly closed" (os error 10054). 0 keeps the server alive for
+# the whole job. It sits at workflow level because sccache-action starts the
+# server, so a step-level value would never reach it.
+env:
+  SCCACHE_IDLE_TIMEOUT: "0"
+
 jobs:
   build:
     permissions:
