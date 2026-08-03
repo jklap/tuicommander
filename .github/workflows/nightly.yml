@@ -15,6 +15,11 @@ concurrency:
   group: nightly
   cancel-in-progress: true
 
+# Keep the sccache server alive across a compile longer than its 600s idle timer —
+# see the note in release.yml.
+env:
+  SCCACHE_IDLE_TIMEOUT: "0"
+
 jobs:
   cleanup:
     permissions:
