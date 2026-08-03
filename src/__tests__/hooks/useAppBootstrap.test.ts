@@ -67,6 +67,7 @@ function makeOptions(overrides: Partial<AppBootstrapOptions> = {}): AppBootstrap
 		restoreDetachedPanels: vi.fn(),
 		setWhatsNewVersion: vi.fn(),
 		openSettings: vi.fn(),
+		openRepoPath: vi.fn().mockResolvedValue(undefined),
 		confirm: vi.fn().mockResolvedValue(false),
 		...overrides,
 	};

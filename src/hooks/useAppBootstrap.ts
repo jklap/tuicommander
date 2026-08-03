@@ -34,6 +34,8 @@ export type AppBootstrapOptions = InitOptions & {
 	restoreDetachedPanels: () => void;
 	setWhatsNewVersion: (version: string) => void;
 	openSettings: (tab?: string) => void;
+	/** Add a repo by path — wired to the deep link `tuic://open-repo` (`tuic <dir>`). */
+	openRepoPath: (path: string) => Promise<void>;
 	confirm: (options: {
 		title: string;
 		message: string;
@@ -117,7 +119,15 @@ function offerCliInstall(confirm: AppBootstrapOptions["confirm"]): void {
 
 /** Initializes the main window and starts post-hydration native integrations. */
 export async function runAppBootstrap(options: AppBootstrapOptions): Promise<void> {
-	const { detectAgents, restoreDetachedPanels, setWhatsNewVersion, openSettings, confirm, ...initOptions } = options;
+	const {
+		detectAgents,
+		restoreDetachedPanels,
+		setWhatsNewVersion,
+		openSettings,
+		openRepoPath,
+		confirm,
+		...initOptions
+	} = options;
 
 	await initApp({
 		...initOptions,
@@ -153,6 +163,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 		openSettings,
 		confirm: (title, message) => confirm({ title, message, kind: "warning" }),
 		onInstallError: (message) => appLogger.error("plugin", message),
+		openRepoPath,
 	});
 }
 

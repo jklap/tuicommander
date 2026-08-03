@@ -160,7 +160,15 @@
 ### 1.16 Terminal Bell
 - **Terminal Bell** — Configurable bell behavior when the terminal receives a BEL character (`\x07`). Four modes: `none` (silent), `visual` (screen flash animation), `sound` (plays the Info notification sound), `both` (flash + sound). Configure in Settings > Appearance.
 
-### 1.17 Scrollback History Overlay (Experimental)
+### 1.17 Alternate-Screen Scrollback
+- Fullscreen apps (`gh run watch`, `less`, `man`, TUIs) run on the terminal's alternate screen, which per XTerm semantics has no scrollback — output past the bottom of the window is normally lost and no scrollbar is shown
+- TUICommander keeps those lines with user-visible behavior equivalent to iTerm2's "save lines to scrollback in alternate screen mode" option: scrollbar, wheel, and scrollbar drag all work while the app is running
+- Output is byte-faithful: only lines that genuinely scroll off the top are kept. An in-place redraw produces no history, while a refresh taller than the viewport (as emitted by `gh run watch`) keeps each overflowing snapshot, including repetitions
+- The alternate grid has its own bounded, ephemeral history. It is wiped on every enter/exit and never mixes with the shell's history
+- Entering or leaving the alternate screen atomically invalidates scroll, selection, search, link, and row-cache state before the new grid is painted
+- Apps with mouse reporting (`vim`, `htop`, `lazygit`) still receive the wheel themselves — `Shift+wheel` or a scrollbar drag scrolls TUICommander's history
+
+### 1.18 Scrollback History Overlay (Experimental)
 - Read-only overlay for viewing full terminal scrollback beyond the visible buffer
 - Gated behind `scrollHistoryEnabled` settings flag (Settings > General > Experimental Features)
 - Content reconstructed from `VtLogBuffer` via LogSpan ANSI reconstruction — preserves colors, bold, underline, and other SGR attributes
@@ -170,7 +178,7 @@
 - Theme-synced: ANSI CSS variables follow the active terminal theme
 - Grid-aligned positioning matches the underlying terminal metrics
 
-### 1.18 Command Blocks
+### 1.19 Command Blocks
 
 Terminal output is segmented into command blocks — one per prompt+output cycle. Blocks are detected via OSC 133 shell integration markers (A/C/D sequences) or OSC 7770;block= agent-emitted markers. For Claude Code, heuristic detection synthesizes blocks from tool call headers (`⏺ ToolName(args)`).
 
@@ -184,7 +192,7 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 - **Block cap** — Sessions are capped at 500 command blocks; oldest blocks are evicted when the cap is reached
 - **Settings** — Configure block features at Settings > Terminal > Blocks: show/hide timestamps, enable/disable folding
 
-### 1.19 Auto-Standby (Unix)
+### 1.20 Auto-Standby (Unix)
 
 Idle, unfocused terminals are suspended to stop them consuming CPU and battery. A background checker (every 30s) sends `SIGSTOP` to the entire process group of a session — `kill(-pgid, …)`, so children (dev servers, agent processes) are paused too, not just the shell.
 
@@ -1304,6 +1312,7 @@ All data persisted to platform config directory via Rust:
 - Symbol outline: file-level symbol tree via `mdkb_outline` (functions, types, structs)
 - Install/uninstall managed from Settings → General → Code Intelligence
 - `is_available()` checks binary existence on disk (not cached path) — survives external uninstalls
+- The daemon ping version must match the installed binary; an older detached daemon is restarted automatically after upgrades
 - Homebrew-managed installs show `brew uninstall mdkb` guidance instead of silent failure
 - Graceful fallback: all commands return empty results when mdkb is unavailable
 
@@ -1548,7 +1557,7 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 
 ### 17.4 Deep Links (`tuic://`)
 - `tuic://install-plugin?url=https://...` — Download and install plugin (HTTPS only, confirmation dialog)
-- `tuic://open-repo?path=/path` — Switch to repo (must be in sidebar)
+- `tuic://open-repo?path=/path` — Activate a repo already in the sidebar; a folder that is not in it yet is added after one confirmation (this is what `tuic <dir>` sends)
 - `tuic://settings?tab=plugins` — Open Settings to specific tab
 - `tuic://open/<path>` — Open markdown file in tab (iframe SDK only, path validated against repos)
 - Focused absolute `tuic://open`/`tuic://edit` targets switch to their owning registered repository so the native file tab remains visible; background opens preserve the current repository

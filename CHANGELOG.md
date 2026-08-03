@@ -6,7 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`tuic run` and a `tuic ls` you can read** — `tuic run pnpm dev` creates a session and starts the command in it. `tuic ls` prints short IDs instead of full UUIDs (targets already accept prefixes) and gained `--json` for scripts, `tuic capture -n 50` returns just the tail, and `tuic status` names the sessions that are waiting on you. Session targets now also match a name prefix, case-insensitively.
+
 ### Fixed
+
+- **`tuic .` opens the repository again** — a directory used to create a stray terminal session and leave the sidebar untouched; the repo-opening branch behind it could never run, and even when reached it refused any folder that was not already registered. A directory is now handed to the app as a repo: known ones activate silently, a new one is confirmed once and then added through the same path as the sidebar's "Add Repository". `tuic .` also stops registering the repo as `/path/.`.
+
+- **`tuic send` no longer mangles text containing a key name** — key names were substituted anywhere in the argument, so `tuic send build "Enter the room"` pressed Return and typed "the room". Arguments are now matched as whole tokens, and the key set covers arrows, Home/End, PageUp/PageDown and the full `C-<letter>` range.
+
+- **Workspace crates are actually tested** — `make check` and CI ran only the main package, silently skipping 267 tests: the entire `tuic-cli` crate plus our patched `alacritty_terminal` and `vte` forks. Both now run the whole workspace.
+
+- **Fullscreen terminal output can be scrolled without corrupting shell history** — Alternate-screen applications now receive their own bounded, ephemeral scrollback, while persistent logs remain tied to the primary grid. Enter/exit transitions invalidate every renderer cache as one generation, and resizing a live fullscreen app no longer suppresses the first shell lines after it exits. Oversized refreshes remain byte-faithful, so repeated snapshots are expected rather than silently deduplicated.
+
+- **Updating mdkb no longer leaves TUICommander connected to the old daemon.**
+  The detached daemon now identifies its version through the existing ping, and
+  TUICommander compares it with the installed binary before accepting a cached
+  or global socket. A missing or mismatched version triggers `mdkb daemon
+  restart`; the in-app installer performs that check before reporting success.
 
 - **Quiet dictation no longer types "Grazie."** — Whisper answers near-silence with a subtitle credit learned from YouTube, in whatever language it guessed the silence was, and the filter behind the RMS gate only knew English phrases: an Italian bare `Grazie.` went straight into the terminal. All eleven offered languages are covered now, and the matching was split in two — a short thanks is dropped only when it is the entire transcript, so a dictated sentence that contains one is no longer destroyed, while channel boilerplate is dropped wherever it appears. The Amara credit is matched by its domain, which catches every translation of it at once.
 

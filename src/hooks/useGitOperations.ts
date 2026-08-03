@@ -268,27 +268,9 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		return activeRepo.branches[activeRepo.activeBranch]?.runCommand;
 	};
 
-	const handleAddRepo = async () => {
-		let path: string | null = null;
-
-		if (isTauri()) {
-			const selected = await open({
-				directory: true,
-				multiple: false,
-				title: "Select Repository Folder",
-				defaultPath: repositoriesStore.getActive()?.path ?? "/",
-			});
-			if (!selected) return;
-			path = typeof selected === "string" ? selected : selected[0];
-		} else {
-			// Browser mode: no native file picker — use in-app text input dialog
-			const input = await deps.dialogs.promptRepoPath?.();
-			if (!input?.trim()) return;
-			path = input.trim();
-		}
-
-		if (!path) return;
-
+	/** Add a repo by path and make it active. Shared by the sidebar picker and
+	 *  the `tuic <dir>` deep link — both must land on the exact same state. */
+	const addRepoByPath = async (path: string) => {
 		try {
 			const info = await deps.repo.getInfo(path);
 
@@ -348,6 +330,30 @@ export function useGitOperations(deps: GitOperationsDeps) {
 			appLogger.error("git", "Failed to add repository", err);
 			deps.setStatusInfo(`Failed to add repo: ${err}`);
 		}
+	};
+
+	const handleAddRepo = async () => {
+		let path: string | null = null;
+
+		if (isTauri()) {
+			const selected = await open({
+				directory: true,
+				multiple: false,
+				title: "Select Repository Folder",
+				defaultPath: repositoriesStore.getActive()?.path ?? "/",
+			});
+			if (!selected) return;
+			path = typeof selected === "string" ? selected : selected[0];
+		} else {
+			// Browser mode: no native file picker — use in-app text input dialog
+			const input = await deps.dialogs.promptRepoPath?.();
+			if (!input?.trim()) return;
+			path = input.trim();
+		}
+
+		if (!path) return;
+
+		await addRepoByPath(path);
 	};
 
 	const handleAddRemoteRepo = async (connectionId: string) => {
@@ -735,6 +741,7 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		activeWorktreePath,
 		activeRunCommand,
 		handleAddRepo,
+		addRepoByPath,
 		handleAddRemoteRepo,
 		handleAddWorktree,
 		confirmCreateWorktree,

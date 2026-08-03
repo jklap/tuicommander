@@ -1585,3 +1585,48 @@ rather than a live capture is exactly how grok shipped green tests over a stuck 
 - [ ] [HUMAN] Same for `cursor-agent`.
 - [ ] [HUMAN] Same for `goose`.
 - [ ] [HUMAN] Same for `droid`.
+
+## Alternate-screen scrollback (2026-08-03, Rust — needs `make dev` restart / `make build`)
+
+Reported by Boss: `gh run watch <id>` renders but has no scrollbar. Root cause: the alternate
+screen had scrollback capacity 0, so `historySize` was always 0 and the scrollbar hid itself.
+Now the separate alt grid keeps the lines that scroll off, with the same user-visible result as
+iTerm2's save-to-scrollback option but a different internal architecture. Backend is covered by
+tests replaying a real `gh run watch` PTY capture
+(`src-tauri/src/fixtures/alt_screen/gh-run-watch.raw`); canvas rendering is not observable over HTTP.
+
+- [x] Alt-screen scrollback accumulates and holds the lines that scrolled off. _(verified: `terminal_grid.rs` `gh_run_watch_builds_alt_screen_scrollback` + `gh_run_watch_scrollback_holds_the_lines_that_scrolled_off`, replaying the real capture)_
+- [x] Alt history is wiped on enter and on exit, and never leaks into the shell's scrollback. _(verified: `alt_screen_history_is_wiped_between_sessions`, `alt_screen_scrollback_never_leaks_into_primary`, fork `alt_screen_history_era_resets_on_enter_and_exit`)_
+- [x] In-place redraws (`ESC[H` + `ESC[J`) create no scrollback, so vim/htop don't flood it. _(verified: `alt_screen_redraw_without_scrolling_creates_no_history`)_
+- [x] Repeated oversized refresh frames are retained byte-for-byte rather than deduplicated. _(verified: the captured fixture contains 13 home+erase refreshes and 1,268 CRLF line advances; the real-capture tests retain the resulting history)_
+- [x] Durable log extraction stays primary-only while alternate `ChangedRow` events remain available to lifecycle parsers. _(verified: `state.rs` `test_vt_log_real_pty_gh_run_watch_builds_alt_scrollback` and existing alternate-screen parser tests)_
+- [x] A resize during a long alternate-screen watch does not suppress primary log capture after exit. _(verified: red→green `test_vt_log_alt_resize_keeps_primary_capture_cursor`)_
+- [x] Renderer screen transitions invalidate partial frames and stale scroll/link caches. _(verified: `decideFrameGrid`, `canvasTerminalScroll`, `canvasTerminalLinks`, and `frameAltScreen` Vitest regressions)_
+- [x] Scrollback and both scroll paths work on a live alt-screen app. _(verified 2026-08-03 against the running app over :9876 — replayed the `gh run watch` capture in a throwaway session: `scroll-info` went from 24 total lines to 1018 (994 alt history), `terminal/scroll {delta:300}` and `scroll-to-offset` moved `display_offset` and clamped at 994, `terminal/lines?start=0` returned the scrolled-off "Refreshing run status…" banner. Canvas pixels — thumb size, smooth-scroll — still unseen.)_
+- [x] Leaving the alternate screen restores the primary screen and its history exactly. _(verified 2026-08-03: `tput rmcup` after the alt session returned `total_lines` to its pre-alt value of 44 with `seq` output back on screen; searching the primary grid for "Refreshing run status" returns no matches, and the pre-alt command line is still in history.)_
+- [x] A real pager enters and leaves the alternate screen cleanly. _(verified 2026-08-03: `less /etc/services` → alt, `q` → primary restored (44→47→45 lines); the primary grid contains no `less` content afterwards.)_
+- [ ] [VISUAL] Open `vim`/`htop`/`lazygit`: wheel still goes to the app; `Shift+wheel` scrolls TUIC history; quitting restores the shell scrollback unchanged. _(only the mouse-reporting forwarding is left unverified — the enter/exit half is covered above.)_
+
+## tuic CLI: repo opening + command ergonomics (2026-08-03)
+
+The `tuic` sidecar was rebuilt (`node src-tauri/build-sidecar.mjs`), so the CLI half is live
+immediately. The app half — the `open-repo` deep link adding an unknown folder — is frontend
+code and needs the WebView to have reloaded.
+
+- [x] `tuic .` no longer creates a stray terminal session and no longer registers the repo as `/path/.`. _(verified 2026-08-03 against the running app: session count unchanged 4 → 4, printed path canonicalized)_
+- [x] `tuic ls` shows short IDs, `tuic status` lists sessions awaiting input. _(verified live: agent `b7cd7501` reported as awaiting)_
+- [x] `tuic send` treats key names as whole tokens. _(verified: `send_leaves_text_that_merely_contains_a_key_name_alone` and 3 sibling tests)_
+- [ ] [HUMAN] `tuic <dir>` on a folder NOT in the sidebar: one confirmation appears, then the repo is added and activated exactly like the "Add Repository" button (branch selected, terminal opened, watcher started).
+- [ ] [HUMAN] `tuic run pnpm dev` in a repo: a session appears and the command is running in it.
+
+## Whisper hallucination filter (2026-08-03, Rust — needs `make dev` restart / `make build`)
+
+Quiet audio made Whisper emit a subtitle credit in whatever language it guessed the silence was, and
+the filter behind the RMS gate only knew English phrases — an Italian bare `Grazie.` was typed into
+the terminal. Matching is now split: a short thanks is dropped only when it is the whole transcript,
+channel boilerplate is dropped anywhere. Covered by `dictation::transcribe` unit tests; the audio
+path itself needs a real microphone.
+
+- [x] Short thanks dropped only as a whole transcript; boilerplate dropped anywhere; all 11 offered languages covered. _(verified: `dictation` transcribe tests, 8 passing)_
+- [ ] [HUMAN] Hold the dictation key with no speech: nothing is typed, no bare "Grazie."
+- [ ] [HUMAN] Dictate a sentence that contains the word *grazie*: the whole sentence is typed.

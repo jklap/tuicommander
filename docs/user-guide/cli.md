@@ -28,7 +28,7 @@ tuic file.rs:42
 tuic file.rs:42:10
 tuic open --goto file.rs:42
 
-# Open the current directory as a repo
+# Open the current directory as a repo (adds it to the sidebar and activates it)
 tuic .
 tuic /path/to/project
 
@@ -38,6 +38,8 @@ tuic open --wait file.rs
 # Diff two files
 tuic diff old.rs new.rs
 ```
+
+A directory is treated as a **repo**, not as a terminal: it lands in the sidebar and becomes the active repo. A folder TUICommander does not know yet is confirmed once in the app before it is added — after that, `tuic .` activates it silently. Use `tuic new` when what you want is a shell.
 
 ### Using as $EDITOR
 
@@ -51,19 +53,25 @@ git commit  # opens commit message in TUICommander
 These commands mirror tmux semantics:
 
 ```bash
-# List all sessions
+# List all sessions (short IDs; --json for scripts)
 tuic ls
+tuic ls --json
 
 # Create a new session
 tuic new
 tuic new -n "my-session"
 tuic new -n "build" /path/to/repo
 
+# Create a session and run something in it
+tuic run pnpm dev
+tuic run -n "tests" cargo nextest run
+
 # Send input to a session
 tuic send <id-or-name> "make test" Enter
 
 # Capture session output
 tuic capture <id-or-name>
+tuic capture <id-or-name> -n 50          # last 50 lines
 tuic capture <id-or-name> --format raw
 
 # Kill a session
@@ -77,7 +85,13 @@ tuic pause <id-or-name>
 tuic resume <id-or-name>
 ```
 
-Session targets accept full UUIDs, ID prefixes, or session names.
+Session targets accept full UUIDs, ID prefixes (the short ID `tuic ls` prints), exact names, or a name prefix — case-insensitive. An ambiguous target is rejected rather than guessed.
+
+### Sending keys
+
+Each argument is either a **key name** or **literal text** — matched whole, never as a substring, so `tuic send build "Enter the room"` types the sentence instead of pressing Return mid-word. Adjacent literals are joined with a single space.
+
+Key names: `Enter`, `Space`, `Tab`, `Escape`, `BSpace`, `Up`, `Down`, `Left`, `Right`, `Home`, `End`, `PageUp`, `PageDown`, and any `C-<letter>` (`C-c`, `C-d`, `C-u`, …).
 
 ## Agent Orchestration
 
@@ -129,7 +143,8 @@ Key names are translated: `Enter`, `Space`, `Tab`, `Escape`, `C-c`, `C-d`, `C-z`
 ## System Commands
 
 ```bash
-# Check TUICommander status
+# Check TUICommander status — version, session/agent counts, and which
+# sessions are waiting on you right now
 tuic status
 
 # Install CLI to system PATH
