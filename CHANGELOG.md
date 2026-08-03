@@ -6,11 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [1.9.0] - 2026-08-03
+## [1.7.1] - 2026-08-03
 
 ### Added
 
 - **`tuic run` and a `tuic ls` you can read** — `tuic run pnpm dev` creates a session and starts the command in it. `tuic ls` prints short IDs instead of full UUIDs (targets already accept prefixes) and gained `--json` for scripts, `tuic capture -n 50` returns just the tail, and `tuic status` names the sessions that are waiting on you. Session targets now also match a name prefix, case-insensitively.
+
+- **pi is a tracked agent** — A pi session was invisible to TUICommander: the process path resolves to the Node interpreter, so classification saw `node`, there was no screen adapter, and a finished turn left the tab busy forever — reproduced live at 71.6 seconds with the composer already back. pi is now classified from its own command line, its animated `Working…` footer and bare composer row drive busy and idle, and resume runs `pi --continue`. Session discovery over `~/.pi/agent/sessions/` stays unwired on purpose: `--continue` already resumes the newest session for the working directory, which is exactly what discovery would compute.
+
+- **Completion chimes can be silenced for MCP-spawned sessions** — An agent orchestration turned every finished remote worker into a beep. Settings > Notifications gains an Orchestration toggle: remote-spawned sessions still land in Activity and bump the badge, they just do not chime. Locally created terminals are unaffected.
+
+### Changed
+
+- **An off-domain MCP authorization server is now a warning, not a block** — Discovery hard-failed with an issuer mix-up error whenever a gateway served metadata naming the real upstream identity provider — the normal topology for gateways, corporate proxies, and hosted tenants, with no way past it. Both issuer gates are advisory now: discovery warns and continues, and the consent dialog names the authorization server's origin so the decision belongs to the user. Discovery also tries the standard insertion form before the non-normative append form for path-bearing issuers (they describe different servers), falls through on any non-2xx candidate instead of aborting the chain, and reports the response body of a failed client registration instead of discarding it.
+
+- **`agent send` and `register` now report whether a message will actually surface** — `send` answered `ok`/`accepted` for a message that only landed in the inbox, and `register` said nothing about whether the identity had a terminal behind it; together that is how an orchestrator's reply to an agent launched outside a TUIC PTY vanished with both sides believing it had been delivered. `send` returns `delivered`, a warning, and `recipient_has_terminal`; `register` returns `terminal` and, when false, states the consequence and the way out.
+
+- **Debug builds carry line-tables-only debug info** — Full DWARF cost 82 GiB of `target/` for this crate alone. Panic backtraces keep file and line, and profilers keep their symbols; only debugger variable inspection is dropped. Measured over a full rebuild: 82.6 GiB down to 8.4 GiB.
 
 ### Fixed
 
@@ -29,21 +41,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   restart`; the in-app installer performs that check before reporting success.
 
 - **Quiet dictation no longer types "Grazie."** — Whisper answers near-silence with a subtitle credit learned from YouTube, in whatever language it guessed the silence was, and the filter behind the RMS gate only knew English phrases: an Italian bare `Grazie.` went straight into the terminal. All eleven offered languages are covered now, and the matching was split in two — a short thanks is dropped only when it is the entire transcript, so a dictated sentence that contains one is no longer destroyed, while channel boilerplate is dropped wherever it appears. The Amara credit is matched by its domain, which catches every translation of it at once.
-
-## [1.8.0] - 2026-08-03
-
-### Added
-
-- **pi is a tracked agent** — A pi session was invisible to TUICommander: the process path resolves to the Node interpreter, so classification saw `node`, there was no screen adapter, and a finished turn left the tab busy forever — reproduced live at 71.6 seconds with the composer already back. pi is now classified from its own command line, its animated `Working…` footer and bare composer row drive busy and idle, and resume runs `pi --continue`. Session discovery over `~/.pi/agent/sessions/` stays unwired on purpose: `--continue` already resumes the newest session for the working directory, which is exactly what discovery would compute.
-- **Completion chimes can be silenced for MCP-spawned sessions** — An agent orchestration turned every finished remote worker into a beep. Settings > Notifications gains an Orchestration toggle: remote-spawned sessions still land in Activity and bump the badge, they just do not chime. Locally created terminals are unaffected.
-
-### Changed
-
-- **An off-domain MCP authorization server is now a warning, not a block** — Discovery hard-failed with an issuer mix-up error whenever a gateway served metadata naming the real upstream identity provider — the normal topology for gateways, corporate proxies, and hosted tenants, with no way past it. Both issuer gates are advisory now: discovery warns and continues, and the consent dialog names the authorization server's origin so the decision belongs to the user. Discovery also tries the standard insertion form before the non-normative append form for path-bearing issuers (they describe different servers), falls through on any non-2xx candidate instead of aborting the chain, and reports the response body of a failed client registration instead of discarding it.
-- **`agent send` and `register` now report whether a message will actually surface** — `send` answered `ok`/`accepted` for a message that only landed in the inbox, and `register` said nothing about whether the identity had a terminal behind it; together that is how an orchestrator's reply to an agent launched outside a TUIC PTY vanished with both sides believing it had been delivered. `send` returns `delivered`, a warning, and `recipient_has_terminal`; `register` returns `terminal` and, when false, states the consequence and the way out.
-- **Debug builds carry line-tables-only debug info** — Full DWARF cost 82 GiB of `target/` for this crate alone. Panic backtraces keep file and line, and profilers keep their symbols; only debugger variable inspection is dropped. Measured over a full rebuild: 82.6 GiB down to 8.4 GiB.
-
-### Fixed
 
 - **Scrolled-off output is no longer deleted from the mobile log** — Agent chrome was trimmed from each batch of lines as it left the screen, anchored on any separator row. Tool output, markdown tables and Codex's own divider lines all carry box-drawing runs, so a false positive silently dropped the rest of the batch from history for good: the mobile log showed paragraphs starting on their second line, and user messages echoed on a prompt row vanished. Chrome is now marked rather than truncated — readers skip it, the lines stay — and only a genuinely empty prompt row anchors the cut, never a blockquote or a table rule.
 - **Renaming a file to a different case now works** — `rename_path` canonicalized the destination, and on a case-insensitive filesystem (macOS APFS, Windows NTFS) `readme.md` resolves to the existing `README.md`, so the rename collapsed to `rename(X, X)` and did nothing at all — no error, no change. The destination now keeps the spelling that was asked for; only its parent directory is resolved, so the repo boundary check is unaffected.

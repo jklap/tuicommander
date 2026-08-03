@@ -134,20 +134,7 @@
     ],
     "date": "2026-07-31"
   },
-  "1.8.0": {
-    "highlights": [
-      "pi is now a fully tracked agent: correct classification, busy/idle detection, and resume via `pi --continue`.",
-      "Completion chimes can be muted for MCP-spawned sessions via Settings > Notifications > Orchestration.",
-      "Grok tabs now go idle after a finished turn instead of staying busy forever (new composer layout plus scrollbar false positive).",
-      "Scrolled-off agent output stays in the mobile log instead of being silently dropped from history.",
-      "Renaming a file to a different case now works on macOS and Windows.",
-      "Notes survive a failed config load: a corrupt file is moved aside instead of being overwritten with an empty list.",
-      "Worktrees survive a rebase, merge, cherry-pick, revert, or bisect, and removed worktrees now disappear from the sidebar.",
-      "Cmd+C copies text selected inside plugin dashboards and other panel iframes."
-    ],
-    "date": "2026-08-03"
-  },
-  "1.9.0": {
+  "1.7.1": {
     "highlights": [
       "tuic run starts a command in a fresh session, and tuic ls now prints short IDs plus --json for scripting.",
       "tuic capture -n tails recent output, tuic status names sessions waiting on you, and targets match name prefixes case-insensitively.",
@@ -156,7 +143,15 @@
       "Fullscreen apps that print past the bottom of the window — gh run watch, long build monitors — now keep a scrollback you can actually scroll, isolated from your shell history.",
       "Updating mdkb now reconnects to the new daemon instead of silently talking to the stale one.",
       "Quiet dictation no longer types phantom subtitle credits like \"Grazie.\" in any of the eleven supported languages.",
-      "The whole Rust workspace is now tested in make check and CI, covering 267 previously skipped tests."
+      "The whole Rust workspace is now tested in make check and CI, covering 267 previously skipped tests.",
+      "pi is now a fully tracked agent: correct classification, busy/idle detection, and resume via `pi --continue`.",
+      "Completion chimes can be muted for MCP-spawned sessions via Settings > Notifications > Orchestration.",
+      "Grok tabs now go idle after a finished turn instead of staying busy forever (new composer layout plus scrollbar false positive).",
+      "Scrolled-off agent output stays in the mobile log instead of being silently dropped from history.",
+      "Renaming a file to a different case now works on macOS and Windows.",
+      "Notes survive a failed config load: a corrupt file is moved aside instead of being overwritten with an empty list.",
+      "Worktrees survive a rebase, merge, cherry-pick, revert, or bisect, and removed worktrees now disappear from the sidebar.",
+      "Cmd+C copies text selected inside plugin dashboards and other panel iframes."
     ],
     "date": "2026-08-03"
   }
