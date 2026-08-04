@@ -1478,7 +1478,8 @@ worktree build's HTTP API on :9877 or the desktop app._
 
 ## CI auto-heal with a partially completed workflow (2026-07-13)
 
-- [x] A failed job is selected and its log is downloadable while a sibling job leaves the workflow `in_progress`; failed log retrieval or PTY delivery leaves the attempt count unchanged. _(verified: GitHub CLI probe against `Lansweeper/wiz-agents` run `29193902748` returned failed job `86653322376` logs while sibling job `86653322370` was still running; Rust parser tests and `useCiHeal.hook.test.ts` cover job selection and attempt accounting.)_
+- [x] A failed job is selected and its log is downloadable while a sibling job leaves the workflow `in_progress`; failed log retrieval or PTY delivery leaves the attempt count unchanged. _(verified: GitHub CLI probe against a private repo's run `29193902748` returned failed job `86653322376` logs while sibling job `86653322370` was still running; Rust parser tests and `useCiHeal.hook.test.ts` cover job selection and attempt accounting.)_
+
 
 ## Markdown preview: inline comments anchor + highlight correctly (2026-07-15)
 

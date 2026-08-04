@@ -3708,24 +3708,24 @@ mod tests {
     #[test]
     fn github_actions_run_link_is_recognized() {
         assert!(is_github_actions_link(
-            "https://github.com/Lansweeper/agent2/actions/runs/29229498673/job/86750457823"
+            "https://github.com/sstraus/tuicommander/actions/runs/29229498673/job/86750457823"
         ));
     }
 
     #[test]
     fn circleci_link_is_not_github_actions() {
         assert!(!is_github_actions_link(
-            "https://circleci.com/gh/Lansweeper/agent2/1328"
+            "https://circleci.com/gh/sstraus/tuicommander/1328"
         ));
         assert!(!is_github_actions_link(
-            "https://app.circleci.com/pipelines/gh/Lansweeper/agent2/229/workflows/abc"
+            "https://app.circleci.com/pipelines/gh/sstraus/tuicommander/229/workflows/abc"
         ));
     }
 
     #[test]
     fn codacy_and_empty_links_are_not_github_actions() {
         assert!(!is_github_actions_link(
-            "https://app.codacy.com/gh/Lansweeper/agent2/pull-requests/38"
+            "https://app.codacy.com/gh/sstraus/tuicommander/pull-requests/38"
         ));
         assert!(!is_github_actions_link(""));
     }
