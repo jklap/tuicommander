@@ -610,6 +610,14 @@ requests (`focus=false`) do not change repository context.
    caller may omit `tuic_session`; the server generates an MCP-scoped UUID that remains stable for
    that connection and does not create a PTY. Supplying an explicit UUID preserves identity across
    reconnects and retains the live-owner takeover guard.
+   When the announced UUID differs from the one already bound to the MCP session, the two are
+   ranked by whether they resolve to a live PTY rather than merely compared: an identity backed by
+   a terminal outranks one that is not. A caller that registered an invented UUID may therefore
+   repair itself by announcing its real `$TUIC_SESSION`, while the reverse — wandering off a
+   terminal-backed identity onto a fabricated one — is refused with an error naming the identity to
+   use. Two identities that both lack a terminal keep the original "already bound to a different
+   peer identity" rejection. A repaired identity carries over any mail buffered under the abandoned
+   one and retires it, so `list_peers` stops advertising an address that can never be reached.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by project).
 3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
    `accepted=true` and `buffered_in_inbox=true` acknowledge success;

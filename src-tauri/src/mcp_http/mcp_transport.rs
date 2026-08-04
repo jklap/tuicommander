@@ -504,6 +504,43 @@ fn reclaimable_prior_peer_owner_locked(
     Ok(prior_mcp)
 }
 
+/// Retire the identity a caller just abandoned by registering a different one.
+///
+/// Only a terminal-less identity is retired: it is a mailbox nobody can reach any
+/// more once its single owner has moved on, and leaving it behind is how
+/// `list_peers` accumulates addresses that silently swallow every message sent to
+/// them. Mail already buffered under it is carried over rather than dropped —
+/// those are the replies the caller went looking for in the first place. An
+/// abandoned identity that still owns a PTY is left alone; its terminal, not this
+/// registration, decides its lifetime.
+fn retire_repaired_phantom_identity(state: &AppState, phantom: &str, repaired: &str) {
+    if state.live_pty_for_peer(phantom).is_some() {
+        return;
+    }
+    if let Some((_, pending)) = state.agent_inbox.remove(phantom) {
+        for message in pending {
+            state.push_agent_inbox(repaired, message);
+        }
+    }
+    state.peer_agents.remove(phantom);
+    state.agent_inbox_evictions.remove(phantom);
+    state.active_agent_waiters.remove(phantom);
+    state.pending_injections.remove(phantom);
+    state.session_to_mcp.remove(phantom);
+    tracing::info!(
+        source = "agent_msg",
+        event = "phantom_identity_retired",
+        phantom = %phantom,
+        repaired = %repaired,
+        "Retired a terminal-less identity its owner abandoned"
+    );
+    let _ = state
+        .event_bus
+        .send(crate::state::AppEvent::PeerUnregistered {
+            tuic_session: phantom.to_string(),
+        });
+}
+
 fn register_peer_identity(
     state: &AppState,
     mcp_sid: &str,
@@ -3282,10 +3319,26 @@ fn resolve_registration_identity(
                 "error": "tuic_session must be a UUID (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx)"
             }));
         }
-        if current.as_deref().is_some_and(|bound| bound != explicit) {
-            return Err(serde_json::json!({
-                "error": "This MCP session is already bound to a different peer identity"
-            }));
+        // Authority, not mere difference. An identity that resolves to a live PTY
+        // outranks one that does not: the caller announcing its real `$TUIC_SESSION`
+        // after having registered an invented UUID is repairing itself, and refusing
+        // that leaves an orchestrator permanently unreachable through its terminal.
+        if let Some(bound) = current.as_deref().filter(|bound| *bound != explicit) {
+            if state.live_pty_for_peer(bound).is_some() {
+                return Err(serde_json::json!({
+                    "error": format!(
+                        "This MCP session is bound to '{bound}', which owns a live terminal. \
+                         That is your $TUIC_SESSION — register it instead of '{explicit}', \
+                         or omit tuic_session entirely. An identity with no PTY behind it \
+                         can never be typed into or woken."
+                    )
+                }));
+            }
+            if state.live_pty_for_peer(explicit).is_none() {
+                return Err(serde_json::json!({
+                    "error": "This MCP session is already bound to a different peer identity"
+                }));
+            }
         }
         return Ok((explicit.to_string(), false));
     }
@@ -3336,6 +3389,10 @@ fn handle_messaging(
                     return serde_json::json!({"error": "Registration needs an MCP protocol session, and this request carried no `mcp-session-id`. Run `initialize` first — managed PTYs auto-bind from $TUIC_SESSION. Tools that need no caller identity work without it."});
                 }
             };
+            let previously_bound = state
+                .mcp_to_session
+                .get(&mcp_sid)
+                .map(|entry| entry.value().clone());
             let (tuic_session, generated_identity) =
                 match resolve_registration_identity(state, args, &mcp_sid) {
                     Ok(identity) => identity,
@@ -3380,6 +3437,9 @@ fn handle_messaging(
                     mcp_session = %mcp_sid,
                     "Reclaimed stale MCP peer binding after reconnect"
                 );
+            }
+            if let Some(phantom) = previously_bound.filter(|prior| prior != &tuic_session) {
+                retire_repaired_phantom_identity(state, &phantom, &tuic_session);
             }
             let linked_children = link_pending_children_to_parent(state, &mcp_sid, &tuic_session);
             // Identity bindings are security-relevant; record them (no message content).
@@ -7062,6 +7122,201 @@ mod tests {
         );
         assert_eq!(r["ok"], true, "self-rename after auto-bind must succeed");
         assert_eq!(state.peer_agents.get(TEST_UUID_A).unwrap().name, "renamed");
+    }
+
+    /// An agent that registered a made-up UUID must be able to repair itself by
+    /// announcing the `$TUIC_SESSION` TUIC actually injected. The bound identity
+    /// resolves to no terminal; the announced one does. Refusing the real identity
+    /// to protect the phantom is how an orchestrator loses every reply it is owed.
+    #[cfg(unix)]
+    #[test]
+    fn register_accepts_the_real_identity_over_a_bound_phantom() {
+        let state = test_state();
+        let mcp = "mcp-self-repair";
+        insert_managed_test_session(&state, "pty-repair", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-repair");
+
+        // First registration files the caller under a fabricated identity.
+        let phantom = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+        assert_eq!(phantom["ok"], true);
+        assert_eq!(phantom["terminal"], false, "the phantom has no terminal");
+
+        // Self-repair: same MCP session announces the identity that owns the PTY.
+        let repaired = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_A, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+        assert_eq!(
+            repaired["ok"], true,
+            "an identity backed by a live PTY must win over a bound one that is not: {repaired}"
+        );
+        assert_eq!(
+            repaired["terminal"], true,
+            "after the repair the peer must report a terminal: {repaired}"
+        );
+        assert_eq!(
+            state
+                .mcp_to_session
+                .get(mcp)
+                .map(|e| e.value().clone())
+                .unwrap_or_default(),
+            TEST_UUID_A,
+            "routing must follow the repaired identity"
+        );
+    }
+
+    /// The mirror case: a caller already bound to an identity that owns a PTY may
+    /// not wander off to an invented one, and the refusal must name the identity
+    /// it should be using instead of just stating that something is bound.
+    #[cfg(unix)]
+    #[test]
+    fn register_rejects_a_fabricated_identity_and_names_the_real_one() {
+        let state = test_state();
+        let mcp = "mcp-fabricator";
+        insert_managed_test_session(&state, "pty-real", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-real");
+        apply_initialize_identity(&state, mcp, Some(TEST_UUID_A));
+
+        let rejected = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+        let error = rejected["error"].as_str().unwrap_or_default();
+        assert!(
+            !error.is_empty(),
+            "a fabricated identity must not be accepted while a real one is bound: {rejected}"
+        );
+        assert!(
+            error.contains(TEST_UUID_A),
+            "the refusal must name the identity to use, got: {error}"
+        );
+        assert_eq!(
+            state
+                .mcp_to_session
+                .get(mcp)
+                .map(|e| e.value().clone())
+                .unwrap_or_default(),
+            TEST_UUID_A,
+            "the real binding must survive the rejected call"
+        );
+    }
+
+    /// Repairing an identity must not strand the mail already sent to the phantom —
+    /// those are exactly the replies the caller was missing — and must not leave the
+    /// dead address in `list_peers` for workers to keep writing to.
+    #[cfg(unix)]
+    #[test]
+    fn repairing_an_identity_carries_its_mail_over_and_retires_the_phantom() {
+        let state = test_state();
+        let mcp = "mcp-carryover";
+        insert_managed_test_session(&state, "pty-carryover", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-carryover");
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "msg-stranded".to_string(),
+                from_tuic_session: "worker".to_string(),
+                from_name: "worker".to_string(),
+                content: "findings ready".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_A, "name": "orchestrator"
+            }),
+            Some(mcp),
+        );
+
+        assert!(
+            state.peer_agents.get(TEST_UUID_B).is_none(),
+            "the abandoned terminal-less identity must not stay addressable"
+        );
+        let carried = state
+            .agent_inbox
+            .get(TEST_UUID_A)
+            .map(|inbox| inbox.iter().any(|m| m.content == "findings ready"))
+            .unwrap_or(false);
+        assert!(
+            carried,
+            "mail buffered under the phantom must survive the repair"
+        );
+    }
+
+    /// After the repair the peer is addressable in the normal sense: `send` must
+    /// resolve it to the live PTY rather than parking the message in the inbox.
+    #[cfg(unix)]
+    #[test]
+    fn send_reaches_a_repaired_peer_through_its_terminal() {
+        let state = test_state();
+        insert_managed_test_session(&state, "pty-addressable", "/tmp");
+        state.shell_states.insert(
+            "pty-addressable".to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_IDLE),
+        );
+        state.session_states.insert(
+            "pty-addressable".to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                ..Default::default()
+            },
+        );
+        state.bind_live_pty(TEST_UUID_A, "pty-addressable");
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "orchestrator"
+            }),
+            Some("mcp-recipient"),
+        );
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_A, "name": "orchestrator"
+            }),
+            Some("mcp-recipient"),
+        );
+
+        let sender_tuic = "550e8400-e29b-41d4-a716-4466554400c1";
+        register_peer(&state, sender_tuic, "worker", "mcp-worker");
+        let sent = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": TEST_UUID_A, "message": "findings ready"
+            }),
+            Some("mcp-worker"),
+        );
+        assert_eq!(sent["delivered"], true, "delivery must succeed: {sent}");
+        assert_eq!(
+            sent["delivery_path"], "terminal_or_queued_and_inbox",
+            "the message must go to the terminal, not sit in the inbox: {sent}"
+        );
+        assert_eq!(
+            sent["recipient_state"]["shell_state"], "idle",
+            "recipient_state is only reported for a real managed PTY: {sent}"
+        );
     }
 
     #[test]
