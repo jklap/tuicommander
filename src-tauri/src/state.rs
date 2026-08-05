@@ -973,6 +973,9 @@ pub(crate) struct AgentDeliveryGate {
     active_waiters: std::collections::HashSet<u64>,
     owners: HashMap<String, AgentDeliveryOwner>,
     orchestrator_wake_pending_through: Option<u64>,
+    orchestrator_wake_needed_through: Option<u64>,
+    orchestrator_observed_through: u64,
+    orchestrator_wake_attempt: u64,
     inbox_revision: u64,
     inbox_events: tokio::sync::watch::Sender<u64>,
 }
@@ -985,6 +988,9 @@ impl Default for AgentDeliveryGate {
             active_waiters: std::collections::HashSet::new(),
             owners: HashMap::new(),
             orchestrator_wake_pending_through: None,
+            orchestrator_wake_needed_through: None,
+            orchestrator_observed_through: 0,
+            orchestrator_wake_attempt: 0,
             inbox_revision: 0,
             inbox_events,
         }
@@ -1571,6 +1577,30 @@ impl AppState {
             .filter(|message| observed_ids.contains(&message.id))
             .collect();
         finish.fresh_count = finish.messages.len();
+        if observed {
+            let read_through = finish
+                .messages
+                .iter()
+                .map(|message| message.timestamp)
+                .max()
+                .unwrap_or(since);
+            gate.orchestrator_observed_through =
+                gate.orchestrator_observed_through.max(read_through);
+            if read_through == 0
+                || gate
+                    .orchestrator_wake_pending_through
+                    .is_some_and(|pending| read_through >= pending)
+            {
+                gate.orchestrator_wake_pending_through = None;
+            }
+            if read_through == 0
+                || gate
+                    .orchestrator_wake_needed_through
+                    .is_some_and(|needed| read_through >= needed)
+            {
+                gate.orchestrator_wake_needed_through = None;
+            }
+        }
         finish
     }
 
@@ -1675,47 +1705,72 @@ impl AppState {
     where
         F: FnOnce() -> bool,
     {
-        let gate = self
-            .active_agent_waiters
-            .entry(tuic_session.to_string())
-            .or_default();
-        let mut gate = gate.lock();
+        let attempt = {
+            let gate_entry = self
+                .active_agent_waiters
+                .entry(tuic_session.to_string())
+                .or_default();
+            let mut gate = gate_entry.lock();
+            if matches!(
+                gate.owners.get(message_id),
+                Some(AgentDeliveryOwner::Waiter | AgentDeliveryOwner::WaiterObserved)
+            ) {
+                return OrchestratorDeliveryAssignment::Waiter;
+            }
+            // A cancelled wait may have prepared an ordinary terminal handoff
+            // before learning that this peer uses orchestrator routing. That
+            // ownership cannot hide an inbox payload behind a generic notice.
+            if matches!(
+                gate.owners.get(message_id),
+                Some(
+                    AgentDeliveryOwner::TerminalPending | AgentDeliveryOwner::TerminalDispatched
+                )
+            ) {
+                gate.owners.remove(message_id);
+            }
+            if message_timestamp <= gate.orchestrator_observed_through {
+                return OrchestratorDeliveryAssignment::InboxOnly;
+            }
+            if !gate.active_waiters.is_empty() {
+                gate.owners
+                    .insert(message_id.to_string(), AgentDeliveryOwner::Waiter);
+                return OrchestratorDeliveryAssignment::Waiter;
+            }
 
-        if matches!(
-            gate.owners.get(message_id),
-            Some(AgentDeliveryOwner::Waiter | AgentDeliveryOwner::WaiterObserved)
-        ) {
-            return OrchestratorDeliveryAssignment::Waiter;
-        }
-        if gate.owners.get(message_id) == Some(&AgentDeliveryOwner::TerminalDispatched) {
-            return OrchestratorDeliveryAssignment::WakeCoalesced;
-        }
-        if !gate.active_waiters.is_empty() {
-            gate.owners
-                .insert(message_id.to_string(), AgentDeliveryOwner::Waiter);
-            return OrchestratorDeliveryAssignment::Waiter;
-        }
-        if let Some(pending_through) = gate.orchestrator_wake_pending_through.as_mut() {
-            *pending_through = (*pending_through).max(message_timestamp);
-            gate.owners.insert(
-                message_id.to_string(),
-                AgentDeliveryOwner::TerminalDispatched,
-            );
-            return OrchestratorDeliveryAssignment::WakeCoalesced;
-        }
-        if !wake_allowed {
-            gate.owners.remove(message_id);
+            let needed = gate
+                .orchestrator_wake_needed_through
+                .get_or_insert(message_timestamp);
+            *needed = (*needed).max(message_timestamp);
+            if let Some(pending_through) = gate.orchestrator_wake_pending_through.as_mut() {
+                *pending_through = (*pending_through).max(message_timestamp);
+                return OrchestratorDeliveryAssignment::WakeCoalesced;
+            }
+            if !wake_allowed {
+                return OrchestratorDeliveryAssignment::InboxOnly;
+            }
+
+            gate.orchestrator_wake_attempt = gate.orchestrator_wake_attempt.wrapping_add(1).max(1);
+            let attempt = gate.orchestrator_wake_attempt;
+            // Reserve the logical notice before dropping the lock. Concurrent mail
+            // coalesces into this cursor while terminal I/O happens without holding
+            // either the delivery mutex or its DashMap guard.
+            gate.orchestrator_wake_pending_through = gate.orchestrator_wake_needed_through;
+            attempt
+        };
+
+        let submitted = attempt_wake();
+        let Some(gate_entry) = self.active_agent_waiters.get(tuic_session) else {
+            return OrchestratorDeliveryAssignment::InboxOnly;
+        };
+        let mut gate = gate_entry.lock();
+        if gate.orchestrator_wake_attempt != attempt {
             return OrchestratorDeliveryAssignment::InboxOnly;
         }
-        if attempt_wake() {
-            gate.orchestrator_wake_pending_through = Some(message_timestamp);
-            gate.owners.insert(
-                message_id.to_string(),
-                AgentDeliveryOwner::TerminalDispatched,
-            );
+        if submitted {
+            gate.orchestrator_wake_needed_through = None;
             OrchestratorDeliveryAssignment::WakeSubmitted
         } else {
-            gate.owners.remove(message_id);
+            gate.orchestrator_wake_pending_through = None;
             OrchestratorDeliveryAssignment::InboxOnly
         }
     }
@@ -1723,12 +1778,94 @@ impl AppState {
     pub(crate) fn acknowledge_orchestrator_wake(&self, tuic_session: &str, read_through: u64) {
         if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
             let mut gate = gate.lock();
-            if gate
-                .orchestrator_wake_pending_through
-                .is_some_and(|pending_through| read_through >= pending_through)
+            // Zero is the cursor of an authoritative empty-inbox snapshot.
+            // It acknowledges a stale notice even though there is no returned
+            // message timestamp to compare with its covered cursor.
+            if read_through == 0
+                || gate
+                    .orchestrator_wake_pending_through
+                    .is_some_and(|pending_through| read_through >= pending_through)
             {
                 gate.orchestrator_wake_pending_through = None;
             }
+            if read_through == 0
+                || gate
+                    .orchestrator_wake_needed_through
+                    .is_some_and(|needed_through| read_through >= needed_through)
+            {
+                gate.orchestrator_wake_needed_through = None;
+            }
+            gate.orchestrator_observed_through =
+                gate.orchestrator_observed_through.max(read_through);
+        }
+    }
+
+    /// Snapshot an inbox and acknowledge exactly that snapshot under the same
+    /// delivery gate used by wake assignment. A sender that buffered before this
+    /// read but has not assigned delivery yet therefore observes the advanced
+    /// cursor and cannot wake already-read mail.
+    pub(crate) fn observe_agent_inbox(
+        &self,
+        tuic_session: &str,
+        since: u64,
+        limit: usize,
+    ) -> Vec<AgentMessage> {
+        let gate_entry = self
+            .active_agent_waiters
+            .entry(tuic_session.to_string())
+            .or_default();
+        let mut gate = gate_entry.lock();
+        let mut messages: Vec<_> = self
+            .agent_inbox
+            .get(tuic_session)
+            .map(|inbox| {
+                inbox
+                    .iter()
+                    .rev()
+                    .filter(|message| message.timestamp > since)
+                    .take(limit)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        messages.reverse();
+        let read_through = messages
+            .iter()
+            .map(|message| message.timestamp)
+            .max()
+            .unwrap_or(since);
+        gate.orchestrator_observed_through = gate.orchestrator_observed_through.max(read_through);
+        if read_through == 0
+            || gate
+                .orchestrator_wake_pending_through
+                .is_some_and(|pending| read_through >= pending)
+        {
+            gate.orchestrator_wake_pending_through = None;
+        }
+        if read_through == 0
+            || gate
+                .orchestrator_wake_needed_through
+                .is_some_and(|needed| read_through >= needed)
+        {
+            gate.orchestrator_wake_needed_through = None;
+        }
+        messages
+    }
+
+    pub(crate) fn orchestrator_wake_needed_through(&self, tuic_session: &str) -> Option<u64> {
+        self.active_agent_waiters.get(tuic_session).and_then(|gate| {
+            let gate = gate.lock();
+            gate.orchestrator_wake_needed_through
+                .or(gate.orchestrator_wake_pending_through)
+        })
+    }
+
+    pub(crate) fn clear_orchestrator_delivery(&self, tuic_session: &str) {
+        if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
+            let mut gate = gate.lock();
+            gate.orchestrator_wake_attempt = gate.orchestrator_wake_attempt.wrapping_add(1).max(1);
+            gate.orchestrator_wake_pending_through = None;
+            gate.orchestrator_wake_needed_through = None;
         }
     }
 

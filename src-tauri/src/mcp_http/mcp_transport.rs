@@ -370,12 +370,6 @@ fn link_pending_children_to_parent(
             .session_parent
             .insert(child.clone(), parent_tuic_session.to_string());
     }
-    if !children.is_empty() {
-        state
-            .orchestrator_peers
-            .insert(parent_tuic_session.to_string());
-    }
-
     if let Some((_, messages)) = state.agent_inbox.remove(&pending_parent) {
         for message in messages {
             let message_id = message.id.clone();
@@ -801,6 +795,7 @@ fn build_mcp_instructions_for_mode(
         out.push_str("There is no separate `swarm` action; multi-agent orchestration uses `agent` and `session` primitives.\n\n");
     }
     out.push_str("- **Identity:** managed PTYs auto-bind from `$TUIC_SESSION`. Headerless external callers use `agent action=register` without a UUID to receive an MCP-scoped identity; pass `tuic_session` only to reclaim an explicit stable UUID.\n");
+    out.push_str("- **Orchestrator role:** declare it with `agent action=register orchestrator=true`; use `false` to remove it. Spawn never infers the role. `mail_wake=managed_pty_lifecycle` is server-derived; external/headerless peers remain wait/inbox-only.\n");
     out.push_str("- **Same repo:** `agent action=spawn` peers; wait with `agent action=wait since=<last_ms>`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`. Use `session output` only as an anomaly fallback when a child failed to send its result.\n");
     out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
     if is_claude_code {
@@ -928,6 +923,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "tuic_session": { "type": "string", "description": "Optional explicit stable UUID (action=register). Managed PTYs normally auto-bind; a headerless caller may omit this to receive an MCP-scoped UUID." },
                 "name": { "type": "string", "description": "Non-empty peer/session display name (action=spawn optional; action=register optional; default: 'agent')" },
                 "project": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
+                "orchestrator": { "type": "boolean", "description": "Explicitly enable or remove orchestrator inbox-only routing (action=register). Omission preserves the current role; spawning a child never infers it." },
                 "to": { "type": "string", "description": "Recipient tuic_session UUID (action=send, required)" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
                 "since": { "type": "integer", "description": "Logical unix-millis cursor — return messages after this (action=inbox), or wake on mail newer than this (action=wait)" }
@@ -2048,7 +2044,7 @@ fn handle_session(
                 Ok(id) => id,
                 Err(e) => return e,
             };
-            let limit = args["limit"].as_u64().unwrap_or(50) as usize;
+            let limit = (args["limit"].as_u64().unwrap_or(50) as usize).max(1);
 
             // Resolve the session's lifecycle state.
             //
@@ -3163,10 +3159,6 @@ fn handle_agent_with_parent_cwd(
                 .or_else(|| mcp_session_id.map(pending_parent_id))
             {
                 state.session_parent.insert(session_id.clone(), parent_id);
-                if let Some(parent_id) = caller_tuic.as_ref() {
-                    state.orchestrator_peers.insert(parent_id.clone());
-                }
-
                 if state.pending_initial_prompts.contains_key(&session_id) {
                     let watchdog_state = Arc::clone(state);
                     let watchdog_session = session_id.clone();
@@ -3447,6 +3439,14 @@ fn handle_messaging(
                 .peer_agents
                 .get(&tuic_session)
                 .map(|peer| (peer.name.clone(), peer.project.clone()));
+            let orchestrator = args["orchestrator"]
+                .as_bool()
+                .unwrap_or_else(|| {
+                    state.orchestrator_peers.contains(&tuic_session)
+                        || previously_bound
+                            .as_ref()
+                            .is_some_and(|prior| state.orchestrator_peers.contains(prior))
+                });
             let name = args["name"]
                 .as_str()
                 .map(str::to_string)
@@ -3486,6 +3486,12 @@ fn handle_messaging(
             if let Some(phantom) = previously_bound.filter(|prior| prior != &tuic_session) {
                 retire_repaired_phantom_identity(state, &phantom, &tuic_session);
             }
+            if orchestrator {
+                state.orchestrator_peers.insert(tuic_session.clone());
+            } else {
+                state.orchestrator_peers.remove(&tuic_session);
+                state.clear_orchestrator_delivery(&tuic_session);
+            }
             let linked_children = link_pending_children_to_parent(state, &mcp_sid, &tuic_session);
             // Identity bindings are security-relevant; record them (no message content).
             tracing::info!(
@@ -3513,6 +3519,20 @@ fn handle_messaging(
             // how a self-registered identity with no PTY (headerless bridge, agent
             // launched outside TUIC, invented UUID) ended up losing every reply.
             let has_terminal = state.live_pty_for_peer(&tuic_session).is_some();
+            let has_managed_lifecycle = state
+                .live_pty_for_peer(&tuic_session)
+                .and_then(|session_id| {
+                    state
+                        .session_states
+                        .get(&session_id)
+                        .map(|session| session.agent_type.is_some())
+                })
+                .unwrap_or(false);
+            let wake_capability = if orchestrator && has_managed_lifecycle {
+                "managed_pty_lifecycle"
+            } else {
+                "none"
+            };
             serde_json::json!({
                 "ok": true,
                 "tuic_session": tuic_session,
@@ -3520,6 +3540,8 @@ fn handle_messaging(
                 "linked_children": linked_children,
                 "identity_generated": generated_identity,
                 "terminal": has_terminal,
+                "orchestrator": orchestrator,
+                "mail_wake": wake_capability,
                 "identity": if !has_terminal {
                     "This identity has NO terminal behind it: nothing can be typed into it and no message can wake it. Incoming mail only lands in your inbox, so you MUST consume it yourself — `agent action=wait since=<ms>` (blocking) or `agent action=inbox`. To be reachable through a terminal, run inside a TUIC-managed PTY so the bridge asserts its $TUIC_SESSION, or let TUIC spawn you with agent action=spawn."
                 } else if generated_identity {
@@ -3532,7 +3554,7 @@ fn handle_messaging(
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
                     "monitor": "Use blocking waits instead of polling: agent action=wait since=<last_ms> (wakes on new mail) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
                     "auto_state_change": "Spawned peers auto-post state only: {type:state_change, state:idle|completed|exited, session_id, exit_code?}. This is not task output. Every child must report its result or blocker with agent action=send; use session output only when a child anomalously failed to send.",
-                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is always buffered in the inbox. Ordinary managed agents retain direct channel/terminal delivery. Once a registered peer has spawned a child, it is an orchestrator: peer payloads never enter its active turn or composer; idle/completed state may submit one coalesced, payload-free wake instructing `agent action=inbox`, while working or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path`; `accepted=true` only confirms buffering.",
+                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle may submit one coalesced, payload-free wake instructing `agent action=inbox`, while working, external, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path`; `accepted=true` only confirms buffering.",
                     "list_peers": "agent action=list_peers project=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
@@ -3557,6 +3579,22 @@ fn handle_messaging(
                         "tuic_session": p.tuic_session,
                         "name": p.name,
                         "registered_at": p.registered_at,
+                        "orchestrator": state.orchestrator_peers.contains(&p.tuic_session),
+                        "mail_wake": if state.orchestrator_peers.contains(&p.tuic_session)
+                            && state
+                                .live_pty_for_peer(&p.tuic_session)
+                                .and_then(|session_id| {
+                                    state
+                                        .session_states
+                                        .get(&session_id)
+                                        .map(|session| session.agent_type.is_some())
+                                })
+                                .unwrap_or(false)
+                        {
+                            "managed_pty_lifecycle"
+                        } else {
+                            "none"
+                        },
                     });
                     insert_optional_value(
                         peer.as_object_mut().expect("peer entry is an object"),
@@ -3856,19 +3894,7 @@ fn handle_messaging(
             };
             let limit = args["limit"].as_u64().unwrap_or(50) as usize;
             let since = args["since"].as_u64().unwrap_or(0);
-            let messages: Vec<crate::state::AgentMessage> = state
-                .agent_inbox
-                .get(&tuic_session)
-                .map(|inbox| {
-                    bounded_agent_messages(
-                        inbox.iter().filter(|message| message.timestamp > since),
-                        limit,
-                    )
-                })
-                .unwrap_or_default();
-            if let Some(read_through) = messages.iter().map(|message| message.timestamp).max() {
-                state.acknowledge_orchestrator_wake(&tuic_session, read_through);
-            }
+            let messages = state.observe_agent_inbox(&tuic_session, since, limit);
             // Consume and reset eviction counter (so caller knows since last read)
             let missed_count = state
                 .agent_inbox_evictions
