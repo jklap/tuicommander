@@ -10,6 +10,10 @@
 
 Features to test when TUICommander is more usable.
 
+## Agent worktree creation prompt (2026-08-05)
+
+- [ ] Create a worktree through MCP while an agent terminal is active, then choose **Open Worktree**: the worktree's terminal must open while the agent terminal remains attached to its original branch and working directory, with no injected stop/switch message.
+
 ## Browser verification pass (2026-08-04)
 
 - [x] Web UI loads at `http://127.0.0.1:9876/` in browser mode; sidebar, repository selector, terminal tabs, file panel controls, toolbar, Help, and Settings render _(verified with `agent-browser` on the live web instance; `navigator.webdriver` was `true` because the project stealth wrapper was unavailable)_

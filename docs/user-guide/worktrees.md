@@ -146,7 +146,9 @@ Use the **Select All** checkbox in the toolbar to toggle all non-main worktrees.
 
 ## MCP Worktree Creation (AI Agents)
 
-AI agents connected via MCP can create worktrees using the `worktree action=create` tool.
+AI agents connected via MCP can create worktrees using `repo action=worktree_create`.
+
+When TUICommander receives a worktree creation event while the active terminal is running an agent, the confirmation offers **Open Worktree**. Accepting selects an existing terminal in the new worktree or creates one when needed. The running agent stays in its original terminal, branch, and working directory; TUICommander does not relabel or interrupt it.
 
 ### Claude Code — Agent Bridge
 
