@@ -1927,7 +1927,7 @@ mod tests {
     use axum::body::Body;
     use axum::extract::connect_info::ConnectInfo;
     use axum::http::{Request, StatusCode};
-    use dashmap::DashMap;
+    use dashmap::{DashMap, DashSet};
     use tower::ServiceExt;
 
     /// Build a POST request with ConnectInfo from the given address.
