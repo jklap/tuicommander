@@ -48,6 +48,7 @@ benchmarks
 CLAUDE.md
 .mdkb
 scripts/*
+!scripts/build-docs.sh
 !scripts/dev-install.sh
 !scripts/dev-server.mjs
 !scripts/generate-release-notes.sh

@@ -45,8 +45,9 @@ jobs:
         with:
           mdbook-version: "latest"
 
+      # Also generates the Pagefind search index — same script as `make docs`.
       - name: Build docs
-        run: mdbook build docs --dest-dir ${{ github.workspace }}/website/dist/docs
+        run: ./scripts/build-docs.sh "${{ github.workspace }}/website/dist/docs"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
