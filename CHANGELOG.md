@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Managed Codex peers auto-register with their real terminal identity** — Codex intentionally filters the environment inherited by stdio MCP servers, while TUICommander's generated MCP entry configured only the bridge command. The Codex process had `TUIC_SESSION`, but `tuic-bridge` did not, so initialize carried no identity header and the peer's first `agent send` failed until it registered manually. New and existing Codex entries now whitelist `TUIC_SESSION` through `env_vars` while preserving other server settings.
+
 ## [1.7.1] - 2026-08-03
 
 ### Added

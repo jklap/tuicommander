@@ -333,16 +333,39 @@ fn write_toml_file(path: &std::path::Path, value: &toml::Value) -> Result<(), St
 fn ensure_codex_mcp_entry(config_path: &std::path::Path, bridge_path: &str) -> bool {
     let mut root = read_toml_file(config_path);
 
-    // Check existing: mcp_servers.tuicommander.command
-    let existing_command = root
+    let existing_entry = root
         .get("mcp_servers")
         .and_then(|s| s.get(TUIC_MCP_KEY))
-        .and_then(|e| e.get("command"))
-        .and_then(|v| v.as_str());
+        .and_then(|entry| entry.as_table());
+    let existing_command = existing_entry
+        .and_then(|entry| entry.get("command"))
+        .and_then(toml::Value::as_str);
+    let forwards_tuic_session = existing_entry
+        .and_then(|entry| entry.get("env_vars"))
+        .and_then(toml::Value::as_array)
+        .is_some_and(|env_vars| {
+            env_vars.iter().any(|value| {
+                value.as_str() == Some("TUIC_SESSION")
+                    || value.as_table().is_some_and(|entry| {
+                        entry.get("name").and_then(toml::Value::as_str) == Some("TUIC_SESSION")
+                            && entry
+                                .get("source")
+                                .and_then(toml::Value::as_str)
+                                .is_none_or(|source| source == "local")
+                    })
+            })
+        });
 
     match existing_command {
-        Some(cmd) if cmd == bridge_path => {
+        Some(cmd) if cmd == bridge_path && forwards_tuic_session => {
             return false;
+        }
+        Some(cmd) if cmd == bridge_path => {
+            tracing::info!(
+                source = "mcp",
+                agent = "codex",
+                "Enabling TUIC_SESSION forwarding for bridge identity"
+            );
         }
         Some(old) => {
             tracing::info!(
@@ -366,12 +389,31 @@ fn ensure_codex_mcp_entry(config_path: &std::path::Path, bridge_path: &str) -> b
         .or_insert_with(|| toml::Value::Table(Default::default()));
 
     if let Some(servers) = mcp_servers.as_table_mut() {
-        let mut entry = toml::value::Table::new();
+        let entry = servers
+            .entry(TUIC_MCP_KEY.to_string())
+            .or_insert_with(|| toml::Value::Table(Default::default()));
+        if !entry.is_table() {
+            *entry = toml::Value::Table(Default::default());
+        }
+        let entry = entry
+            .as_table_mut()
+            .expect("entry was normalized to a table");
         entry.insert(
             "command".to_string(),
             toml::Value::String(bridge_path.to_string()),
         );
-        servers.insert(TUIC_MCP_KEY.to_string(), toml::Value::Table(entry));
+        let env_vars = entry
+            .entry("env_vars".to_string())
+            .or_insert_with(|| toml::Value::Array(Vec::new()));
+        if !env_vars.is_array() {
+            *env_vars = toml::Value::Array(Vec::new());
+        }
+        if !forwards_tuic_session {
+            env_vars
+                .as_array_mut()
+                .expect("env_vars was normalized to an array")
+                .push(toml::Value::String("TUIC_SESSION".to_string()));
+        }
     }
 
     match write_toml_file(config_path, &root) {
@@ -1059,6 +1101,12 @@ mod tests {
             .as_str()
             .unwrap();
         assert_eq!(cmd, "/usr/local/bin/tuic-bridge");
+        assert_eq!(
+            root["mcp_servers"][TUIC_MCP_KEY]["env_vars"]
+                .as_array()
+                .unwrap(),
+            &[toml::Value::String("TUIC_SESSION".to_string())],
+        );
     }
 
     #[test]
@@ -1113,6 +1161,60 @@ mod tests {
                 .as_str()
                 .unwrap(),
             "/new/path",
+        );
+    }
+
+    #[test]
+    fn codex_updates_matching_path_to_forward_managed_identity() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let initial = toml::toml! {
+            [mcp_servers.tuicommander]
+            command = "/correct/path"
+            args = ["--keep"]
+            env_vars = ["EXISTING_VAR"]
+            enabled = false
+        };
+        write_toml_file(&config_path, &toml::Value::Table(initial)).unwrap();
+
+        let wrote = ensure_codex_mcp_entry(&config_path, "/correct/path");
+        assert!(wrote, "missing TUIC_SESSION forwarding must be repaired");
+
+        let root = read_toml_file(&config_path);
+        let entry = &root["mcp_servers"][TUIC_MCP_KEY];
+        assert_eq!(entry["command"].as_str(), Some("/correct/path"));
+        assert_eq!(
+            entry["args"].as_array().unwrap(),
+            &[toml::Value::String("--keep".to_string())],
+        );
+        assert_eq!(entry["enabled"].as_bool(), Some(false));
+        assert_eq!(
+            entry["env_vars"].as_array().unwrap(),
+            &[
+                toml::Value::String("EXISTING_VAR".to_string()),
+                toml::Value::String("TUIC_SESSION".to_string()),
+            ],
+        );
+    }
+
+    #[test]
+    fn codex_accepts_local_object_env_var_without_rewriting() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let initial = toml::toml! {
+            [mcp_servers.tuicommander]
+            command = "/correct/path"
+            env_vars = [{ name = "TUIC_SESSION", source = "local" }]
+        };
+        write_toml_file(&config_path, &toml::Value::Table(initial)).unwrap();
+        let mtime_before = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let wrote = ensure_codex_mcp_entry(&config_path, "/correct/path");
+        assert!(!wrote, "a local object whitelist is already sufficient");
+        assert_eq!(
+            mtime_before,
+            std::fs::metadata(&config_path).unwrap().modified().unwrap(),
         );
     }
 

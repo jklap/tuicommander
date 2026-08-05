@@ -596,8 +596,9 @@ requests (`focus=false`) do not change repository context.
 
 ### Protocol
 
-0. **Auto-identity** *(no call needed)*: `tuic-bridge` inherits `$TUIC_SESSION` from the agent
-   PTY and sends it as the `x-tuic-session` header on the initialize `POST /mcp`. The server
+0. **Auto-identity** *(no call needed)*: TUICommander's Codex MCP entry explicitly whitelists
+   `TUIC_SESSION` through `env_vars`; other supported clients inherit it from the agent PTY.
+   `tuic-bridge` sends the value as the `x-tuic-session` header on the initialize `POST /mcp`. The server
    validates the UUID and binds the MCP session to that tuic session (`apply_initialize_identity`
    → the shared locked live-owner policy), auto-registering the peer. `agent action=register`
    becomes an optional rename. The same MCP session may refresh its binding, and a fresh session
