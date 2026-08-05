@@ -4973,6 +4973,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     // process lifetime. Retire the identities this PTY was backing as well.
     for orphaned in state.unbind_live_pty(session_id) {
         state.peer_agents.remove(&orphaned);
+        state.orchestrator_peers.remove(&orphaned);
         state.agent_inbox.remove(&orphaned);
         state.agent_inbox_evictions.remove(&orphaned);
         state.active_agent_waiters.remove(&orphaned);
@@ -4987,6 +4988,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     state.pending_initial_prompts.remove(session_id);
     state.active_agent_waiters.remove(session_id);
     state.peer_agents.remove(session_id);
+    state.orchestrator_peers.remove(session_id);
     state.agent_inbox.remove(session_id);
     state.agent_inbox_evictions.remove(session_id);
     #[cfg(unix)]
@@ -5005,6 +5007,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
 struct ParentLifecycleDispatch {
     parent_id: String,
     message_id: String,
+    message_timestamp: u64,
     framed: String,
 }
 
@@ -5049,15 +5052,7 @@ fn enqueue_state_change_to_parent(
         delivered_via_channel: false,
     };
     let message_id = msg.id.clone();
-    state.push_agent_inbox(&parent_id, msg);
-    if state.assign_agent_delivery(
-        &parent_id,
-        &message_id,
-        state.sessions.contains_key(&parent_id),
-    ) != crate::state::AgentDeliveryAssignment::Terminal
-    {
-        return None;
-    }
+    let message_timestamp = state.push_agent_inbox(&parent_id, msg);
     let state_desc = payload
         .get("state")
         .and_then(|s| s.as_str())
@@ -5075,16 +5070,42 @@ fn enqueue_state_change_to_parent(
             state_desc
         ),
     };
-    Some(ParentLifecycleDispatch {
-        parent_id,
-        message_id,
+    let dispatch = ParentLifecycleDispatch {
+        parent_id: parent_id.clone(),
+        message_id: message_id.clone(),
+        message_timestamp,
         framed,
-    })
+    };
+    // Decide after releasing the child lifecycle lock. A waiter may claim the
+    // fresh message in that interval; otherwise orchestrators receive only the
+    // generic mail wake when their own lifecycle is authoritatively idle.
+    if state.orchestrator_peers.contains(&parent_id) {
+        return Some(dispatch);
+    }
+    if state.assign_agent_delivery(
+        &parent_id,
+        &message_id,
+        state.sessions.contains_key(&parent_id),
+    ) != crate::state::AgentDeliveryAssignment::Terminal
+    {
+        return None;
+    }
+    Some(dispatch)
 }
 
 /// Wake/dispatch only after the child lifecycle lock has been released. This
 /// may acquire the parent's SilenceState lock through terminal delivery.
 fn dispatch_parent_lifecycle(state: &AppState, dispatch: ParentLifecycleDispatch) {
+    if route_registered_orchestrator_mail(
+        state,
+        &dispatch.parent_id,
+        &dispatch.message_id,
+        dispatch.message_timestamp,
+    )
+    .is_some()
+    {
+        return;
+    }
     let outcome = deliver_message_to_managed_pty(state, &dispatch.parent_id, &dispatch.framed);
     settle_terminal_delivery(state, &dispatch.parent_id, &dispatch.message_id, outcome);
 }
@@ -5119,7 +5140,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
         "session_id": session_id,
     });
     let message_id = format!("tuic-auto-prompt-{session_id}-{now_ms}");
-    state.push_agent_inbox(
+    let message_timestamp = state.push_agent_inbox(
         &parent_id,
         crate::state::AgentMessage {
             id: message_id.clone(),
@@ -5130,6 +5151,16 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
             delivered_via_channel: false,
         },
     );
+    if route_registered_orchestrator_mail(
+        state,
+        &parent_id,
+        &message_id,
+        message_timestamp,
+    )
+    .is_some()
+    {
+        return true;
+    }
     if state.assign_agent_delivery(
         &parent_id,
         &message_id,
@@ -5446,6 +5477,65 @@ fn run_claimed_injection(
 ) -> InjectionOutcome {
     let outcome = write_claimed_agent_command(state, session_id, text);
     apply_claimed_injection_outcome(state, session_id, text, claim, outcome)
+}
+
+const ORCHESTRATOR_MAIL_WAKE: &str =
+    "[TUIC] mail is available — read it with: agent action=inbox";
+
+/// Submit one payload-free notification only when the registered parent's
+/// canonical lifecycle still says idle/completed. Unlike ordinary managed-peer
+/// delivery, a lost idle race is never queued: working and unknown lifecycle
+/// states remain inbox-only and are not steered on a later transition.
+fn submit_orchestrator_mail_wake(state: &AppState, session_id: &str) -> bool {
+    let wake_allowed = state
+        .session_state_with_shell(session_id)
+        .and_then(|session| session.agent_state)
+        .is_some_and(|agent_state| matches!(agent_state.as_str(), "idle" | "completed"));
+    if !wake_allowed {
+        return false;
+    }
+    #[cfg(unix)]
+    if let Err(error) = wake_session(state, session_id) {
+        tracing::debug!(session = %session_id, error, "Orchestrator mail wake failed");
+    }
+    let Some(claim) = claim_idle_for_injection(state, session_id) else {
+        return false;
+    };
+    !matches!(
+        run_claimed_injection(state, session_id, ORCHESTRATOR_MAIL_WAKE, claim),
+        InjectionOutcome::NotStarted(_)
+    )
+}
+
+/// Route mail for a peer that has authoritatively acted as an orchestrator by
+/// spawning a managed child. Returns `None` for ordinary managed agents so their
+/// existing direct payload/channel delivery remains unchanged.
+pub(crate) fn route_registered_orchestrator_mail(
+    state: &AppState,
+    recipient: &str,
+    message_id: &str,
+    message_timestamp: u64,
+) -> Option<crate::state::OrchestratorDeliveryAssignment> {
+    if !state.orchestrator_peers.contains(recipient) {
+        return None;
+    }
+    let pty_session = state.live_pty_for_peer(recipient);
+    let wake_allowed = pty_session
+        .as_deref()
+        .and_then(|session_id| state.session_state_with_shell(session_id))
+        .and_then(|session| session.agent_state)
+        .is_some_and(|agent_state| matches!(agent_state.as_str(), "idle" | "completed"));
+    Some(state.assign_orchestrator_delivery_with_wake_attempt(
+        recipient,
+        message_id,
+        message_timestamp,
+        wake_allowed,
+        || {
+            pty_session
+                .as_deref()
+                .is_some_and(|session_id| submit_orchestrator_mail_wake(state, session_id))
+        },
+    ))
 }
 
 fn apply_claimed_injection_outcome(

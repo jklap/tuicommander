@@ -30,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Peer results no longer steer a working orchestrator or leak their payload into its composer** — A registered parent now keeps every peer message in the authoritative inbox. An active `agent wait` owns delivery; otherwise only an authoritatively idle/completed parent receives one coalesced, payload-free notice to call `agent action=inbox`. Working, awaiting, starting, missing, and unknown lifecycle states fail closed to inbox-only. Ordinary managed-agent delivery is unchanged.
+
 - **`tuic .` opens the repository again** — a directory used to create a stray terminal session and leave the sidebar untouched; the repo-opening branch behind it could never run, and even when reached it refused any folder that was not already registered. A directory is now handed to the app as a repo: known ones activate silently, a new one is confirmed once and then added through the same path as the sidebar's "Add Repository". `tuic .` also stops registering the repo as `/path/.`.
 
 - **`tuic send` no longer mangles text containing a key name** — key names were substituted anywhere in the argument, so `tuic send build "Enter the room"` pressed Return and typed "the room". Arguments are now matched as whole tokens, and the key set covers arrows, Home/End, PageUp/PageDown and the full `C-<letter>` range.
