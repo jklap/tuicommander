@@ -5538,25 +5538,31 @@ const ORCHESTRATOR_MAIL_WAKE: &str = "[TUIC] mail is available — read it with:
 /// canonical lifecycle still says idle/completed. Unlike ordinary managed-peer
 /// delivery, a lost idle race is never queued: working and unknown lifecycle
 /// states remain inbox-only and are not steered on a later transition.
-fn submit_orchestrator_mail_wake(state: &AppState, session_id: &str) -> bool {
+fn submit_orchestrator_mail_wake(
+    state: &AppState,
+    session_id: &str,
+) -> crate::state::OrchestratorWakeAttemptOutcome {
+    use crate::state::OrchestratorWakeAttemptOutcome;
+
     let wake_allowed = state
         .session_state_with_shell(session_id)
         .and_then(|session| session.agent_state)
         .is_some_and(|agent_state| matches!(agent_state.as_str(), "idle" | "completed"));
     if !wake_allowed {
-        return false;
+        return OrchestratorWakeAttemptOutcome::NotStarted;
     }
     #[cfg(unix)]
     if let Err(error) = wake_session(state, session_id) {
         tracing::debug!(session = %session_id, error, "Orchestrator mail wake failed");
     }
     let Some(claim) = claim_idle_for_injection(state, session_id) else {
-        return false;
+        return OrchestratorWakeAttemptOutcome::NotStarted;
     };
-    matches!(
-        run_claimed_injection(state, session_id, ORCHESTRATOR_MAIL_WAKE, claim),
-        InjectionOutcome::Submitted
-    )
+    match run_claimed_injection(state, session_id, ORCHESTRATOR_MAIL_WAKE, claim) {
+        InjectionOutcome::Submitted => OrchestratorWakeAttemptOutcome::Submitted,
+        InjectionOutcome::NotStarted(_) => OrchestratorWakeAttemptOutcome::NotStarted,
+        InjectionOutcome::Uncertain(_) => OrchestratorWakeAttemptOutcome::Uncertain,
+    }
 }
 
 /// Route mail for a peer that has authoritatively acted as an orchestrator by
@@ -5577,15 +5583,14 @@ pub(crate) fn route_registered_orchestrator_mail(
         .and_then(|session_id| state.session_state_with_shell(session_id))
         .and_then(|session| session.agent_state)
         .is_some_and(|agent_state| matches!(agent_state.as_str(), "idle" | "completed"));
-    Some(state.assign_orchestrator_delivery_with_wake_attempt(
+    Some(state.assign_orchestrator_delivery_with_wake_outcome(
         recipient,
         message_id,
         message_timestamp,
         wake_allowed,
-        || {
-            pty_session
-                .as_deref()
-                .is_some_and(|session_id| submit_orchestrator_mail_wake(state, session_id))
+        || match pty_session.as_deref() {
+            Some(session_id) => submit_orchestrator_mail_wake(state, session_id),
+            None => crate::state::OrchestratorWakeAttemptOutcome::NotStarted,
         },
     ))
 }

@@ -100,6 +100,8 @@ When a channel-enabled Claude Code worker is connected via SSE and already worki
 
 Once a registered peer spawns a managed child through TUICommander, it is treated as an orchestrator. Peer results and lifecycle payloads stay in its inbox: a working orchestrator is never injected or steered, while an idle/completed orchestrator receives only one coalesced notice that mail is available and should be read with `agent action=inbox`. An active `agent wait` receives the mail directly and suppresses that notice.
 
+If writing that payload-free notice has an uncertain outcome, TUICommander retries it at most once after five seconds. A second uncertain result exhausts the wake budget for the whole unread-mail group; later and newly coalesced mail stays inbox-only until a successful `agent action=inbox` or `agent action=wait` observation clears the group. Later mail then receives a fresh initial wake and one-retry budget.
+
 ### What Gets Injected Automatically
 
 TUICommander injects these into every Claude Code PTY session — no manual configuration needed:
