@@ -2,6 +2,7 @@ import { createStore } from "solid-js/store";
 import { invoke, listen } from "../invoke";
 import type { TerminalMatch } from "../types";
 import type { ContentMatch, ContentSearchBatch, DirEntry } from "../types/fs";
+import { startContentSearch } from "../utils/contentSearch";
 import { appLogger } from "./appLogger";
 import { repositoriesStore } from "./repositories";
 import { terminalsStore } from "./terminals";
@@ -166,8 +167,8 @@ function createCommandPaletteStore() {
 		if (cancelled) return;
 
 		const invocation = allRepos
-			? invoke("search_content_all", { query: searchQuery, caseSensitive: false })
-			: invoke("search_content", {
+			? startContentSearch("search_content_all", { query: searchQuery, caseSensitive: false })
+			: startContentSearch("search_content", {
 					repoPath,
 					query: searchQuery,
 					caseSensitive: false,

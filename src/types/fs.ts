@@ -24,6 +24,18 @@ export interface ContentMatch {
 	repo_path?: string;
 }
 
+/** The whole result of a content search, as returned by the HTTP routes
+ *  (`/fs/search-content`, `/fs/search-content-all`). The Tauri commands answer
+ *  with a stream of `ContentSearchBatch` events instead. */
+export interface ContentSearchResult {
+	matches: ContentMatch[];
+	files_searched: number;
+	files_skipped: number;
+	truncated: boolean;
+	repos_pending: number;
+	repos_searched: number;
+}
+
 /** A batch of content search results, emitted progressively via events */
 export interface ContentSearchBatch {
 	matches: ContentMatch[];
