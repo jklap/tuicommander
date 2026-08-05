@@ -26,6 +26,7 @@ import {
 	RepoScriptsTab,
 	RepoWorktreeTab,
 	ServicesTab,
+	SmartPromptsTab,
 } from "./tabs";
 import { ProvidersTab } from "./tabs/ProvidersTab";
 
@@ -47,6 +48,7 @@ const BASE_GLOBAL_TABS: SettingsShellTab[] = [
 	{ key: "github", label: "Git & GitHub" },
 	{ key: "services", label: t("settings.services", "Services") },
 	{ key: "plugins", label: t("settings.plugins", "Plugins") },
+	{ key: "smart-prompts", label: t("settings.smartPrompts", "Smart Prompts") },
 	{ key: "providers", label: "Providers" },
 	{ key: "agents", label: t("settings.agents", "Agents") },
 ];
@@ -225,6 +227,9 @@ export const SettingsPanel: Component<SettingsPanelProps> = (props) => {
 			</Show>
 			<Show when={activeTab() === "plugins"}>
 				<PluginsTab onClose={props.onClose} />
+			</Show>
+			<Show when={activeTab() === "smart-prompts"}>
+				<SmartPromptsTab />
 			</Show>
 			<Show when={activeTab() === "providers"}>
 				<ProvidersTab />

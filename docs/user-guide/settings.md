@@ -124,6 +124,7 @@ The keybinding UI lives in the **Help panel** (Help > Keyboard Shortcuts), not t
 - Click any action row and press a new key combination to rebind it
 - Custom bindings are stored in `keybindings.json` in the platform config directory
 - Auto-populated from the action registry — new actions appear automatically
+- The Help panel notes that most shortcuts are also listed in the native system menu bar (desktop app only — browser/PWA clients have no native menu)
 
 See [Keyboard Shortcuts](keyboard-shortcuts.md) for the full reference and customization guide.
 
@@ -133,6 +134,17 @@ Install, manage, and browse plugins. See [Plugins](plugins.md) for the full guid
 
 - **Installed** — List all plugins with enable/disable toggle, logs viewer, uninstall
 - **Browse** — Discover and install from the community registry
+
+## Smart Prompts Tab
+
+Manage the AI-powered actions surfaced in the toolbar, context menus, and command palette. Reachable from the nav or directly via "Manage Smart Prompts..." in the Smart Prompts drawer.
+
+- **Headless Agent** — default agent for headless prompts; individual prompts can override it
+- **Prompt list** — grouped by category, with enable/disable toggle and placement/mode badges
+- **Editor** (click a row) — name, description, content with variable insertion, placement checkboxes, Execution Mode, inject target, Auto-execute, output target, system prompt, keyboard shortcut
+- Built-in prompts show "Reset to Default" once overridden; custom prompts can be deleted
+
+See [Smart Prompts](smart-prompts.md) for the full guide.
 
 ## Repository Settings
 

@@ -818,7 +818,7 @@ const App: Component = () => {
 				}}
 				onRun={(shiftKey) => gitOps.handleRunCommand(shiftKey, () => setRunCommandDialogVisible(true))}
 				onReviewPr={gitOps.handleReviewPr}
-				onOpenSettings={() => setSettingsPanelVisible(true)}
+				onOpenSettings={() => openSettings("smart-prompts")}
 				onShowWhatsNew={(v) => setWhatsNewVersion(v)}
 			/>
 
