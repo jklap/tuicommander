@@ -1,6 +1,7 @@
 import { type Component, createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { t } from "../../i18n";
 import { registerModal } from "../../stores/modalStack";
+import { isTauri } from "../../transport";
 import { writeClipboard } from "../../utils/clipboard";
 import { handleOpenUrl } from "../../utils/openUrl";
 import { KeyboardShortcutsTab } from "../SettingsPanel/tabs/KeyboardShortcutsTab";
@@ -117,6 +118,16 @@ export const HelpPanel: Component<HelpPanelProps> = (props) => {
 										{t("helpPanel.uiLegend", "UI Legend")}
 									</button>
 								</div>
+								{/* Desktop only: browser/PWA clients have no native menu, so the hint
+								    would point at something that does not exist there. */}
+								<Show when={isTauri()}>
+									<p class={s.menuNote}>
+										{t(
+											"helpPanel.systemMenuHint",
+											"Most shortcuts are also listed in the native system menu bar, grouped by menu.",
+										)}
+									</p>
+								</Show>
 							</div>
 
 							<div class={s.section}>
