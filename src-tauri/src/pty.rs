@@ -623,6 +623,10 @@ const SHELL_IDLE_MS: u64 = 500;
 /// Combined with the 2s frontend debounce, this gives ~4.5s total hold.
 const AGENT_IDLE_MS: u64 = 2500;
 
+/// Retry horizon for the payload-free orchestrator mail notice after an
+/// ambiguous PTY write. Ordinary payload injection remains non-retriable.
+const ORCHESTRATOR_WAKE_UNCERTAIN_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// A ready prompt must remain visible across multiple silence-timer ticks before
 /// it can end an agent turn. Ink redraws are multi-chunk (erase, then repaint),
 /// so a single snapshot can briefly show the prompt without its working row.
@@ -934,6 +938,8 @@ pub(crate) struct SilenceState {
     /// Enter. Such sessions remain conservatively BUSY and are surfaced in
     /// status; automatic retry would risk duplicate or corrupted input.
     pub(crate) injection_delivery_uncertain: bool,
+    injection_uncertain_since: Option<std::time::Instant>,
+    injection_uncertainty_retryable: bool,
     /// Deadline until which an in-flight API connection-retry holds the agent
     /// BUSY. Armed by `mark_api_retry` when `is_retry_line` matches a changed
     /// row; blocks both the ready-screen and silence idle paths until it expires
@@ -974,6 +980,8 @@ impl SilenceState {
             active_injection_claim: None,
             next_injection_claim: 0,
             injection_delivery_uncertain: false,
+            injection_uncertain_since: None,
+            injection_uncertainty_retryable: false,
             api_retry_hold_until: None,
         }
     }
@@ -983,6 +991,8 @@ impl SilenceState {
         let token = self.next_injection_claim;
         self.active_injection_claim = Some((token, prior_idle_confirmed));
         self.injection_delivery_uncertain = false;
+        self.injection_uncertain_since = None;
+        self.injection_uncertainty_retryable = false;
         token
     }
 
@@ -993,6 +1003,8 @@ impl SilenceState {
         {
             self.active_injection_claim = None;
             self.injection_delivery_uncertain = false;
+            self.injection_uncertain_since = None;
+            self.injection_uncertainty_retryable = false;
             true
         } else {
             false
@@ -1009,23 +1021,53 @@ impl SilenceState {
         }
         self.active_injection_claim = None;
         self.injection_delivery_uncertain = false;
+        self.injection_uncertain_since = None;
+        self.injection_uncertainty_retryable = false;
         self.idle_confirmed = prior_idle_confirmed;
         Some(prior_idle_confirmed)
     }
 
     fn mark_injection_uncertain(&mut self, token: u64) {
+        self.mark_injection_uncertain_with_retry(token, false);
+    }
+
+    fn mark_orchestrator_notice_uncertain(&mut self, token: u64) {
+        self.mark_injection_uncertain_with_retry(token, true);
+    }
+
+    fn mark_injection_uncertain_with_retry(&mut self, token: u64, retryable: bool) {
         if self
             .active_injection_claim
             .is_some_and(|(owner, _)| owner == token)
         {
             self.active_injection_claim = None;
             self.injection_delivery_uncertain = true;
+            self.injection_uncertain_since = Some(std::time::Instant::now());
+            self.injection_uncertainty_retryable = retryable;
         }
     }
 
     fn invalidate_injection_claim(&mut self) {
         self.active_injection_claim = None;
         self.injection_delivery_uncertain = false;
+        self.injection_uncertain_since = None;
+        self.injection_uncertainty_retryable = false;
+    }
+
+    fn expire_orchestrator_notice_uncertainty(&mut self) -> bool {
+        if !self.injection_delivery_uncertain
+            || !self.injection_uncertainty_retryable
+            || self
+                .injection_uncertain_since
+                .is_none_or(|since| since.elapsed() < ORCHESTRATOR_WAKE_UNCERTAIN_RETRY)
+        {
+            return false;
+        }
+        self.injection_delivery_uncertain = false;
+        self.injection_uncertain_since = None;
+        self.injection_uncertainty_retryable = false;
+        self.ready_since = None;
+        true
     }
 
     fn note_explicit_state(&mut self, state: u8, hook_state: bool) {
@@ -2903,6 +2945,7 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         // this order leaves the backend BUSY while the frontend's last event is
         // the stale IDLE emitted by this caller.
         if target == SHELL_IDLE {
+            reevaluate_orchestrator_mail_wake(state, session_id);
             flush_pending_injections(state, session_id);
         }
     }
@@ -3279,6 +3322,13 @@ fn spawn_silence_timer(
                 continue;
             }
 
+            if orchestrator_recipient_for_pty(&state, &session_id)
+                .and_then(|recipient| state.orchestrator_wake_needed_through(&recipient))
+                .is_some()
+            {
+                silence.lock().expire_orchestrator_notice_uncertainty();
+            }
+
             // Reconcile high-confidence screen evidence before the silence
             // fallback. Working here means Codex's presence-based status line
             // (the only screen classifier that returns Working, #446-596f); it
@@ -3352,6 +3402,7 @@ fn spawn_silence_timer(
                         "Shell state → idle"
                     );
                     emit_shell_state(&state, &session_id, "idle");
+                    reevaluate_orchestrator_mail_wake(&state, &session_id);
                     flush_pending_injections(&state, &session_id);
                     record_inferred_outcome_if_no_osc133(&state, &session_id);
                 }
@@ -3538,6 +3589,7 @@ fn emit_pending_suggest_if_idle(
     if let Some(dispatch) = parent_dispatch {
         dispatch_parent_lifecycle(state, dispatch);
     }
+    reevaluate_orchestrator_mail_wake(state, session_id);
     true
 }
 
@@ -4999,6 +5051,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     // process lifetime. Retire the identities this PTY was backing as well.
     for orphaned in state.unbind_live_pty(session_id) {
         state.peer_agents.remove(&orphaned);
+        state.orchestrator_peers.remove(&orphaned);
         state.agent_inbox.remove(&orphaned);
         state.agent_inbox_evictions.remove(&orphaned);
         state.active_agent_waiters.remove(&orphaned);
@@ -5013,6 +5066,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     state.pending_initial_prompts.remove(session_id);
     state.active_agent_waiters.remove(session_id);
     state.peer_agents.remove(session_id);
+    state.orchestrator_peers.remove(session_id);
     state.agent_inbox.remove(session_id);
     state.agent_inbox_evictions.remove(session_id);
     #[cfg(unix)]
@@ -5031,6 +5085,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
 struct ParentLifecycleDispatch {
     parent_id: String,
     message_id: String,
+    message_timestamp: u64,
     framed: String,
 }
 
@@ -5075,15 +5130,7 @@ fn enqueue_state_change_to_parent(
         delivered_via_channel: false,
     };
     let message_id = msg.id.clone();
-    state.push_agent_inbox(&parent_id, msg);
-    if state.assign_agent_delivery(
-        &parent_id,
-        &message_id,
-        state.sessions.contains_key(&parent_id),
-    ) != crate::state::AgentDeliveryAssignment::Terminal
-    {
-        return None;
-    }
+    let message_timestamp = state.push_agent_inbox(&parent_id, msg);
     let state_desc = payload
         .get("state")
         .and_then(|s| s.as_str())
@@ -5125,16 +5172,40 @@ fn enqueue_state_change_to_parent(
             state_desc
         ),
     };
-    Some(ParentLifecycleDispatch {
-        parent_id,
-        message_id,
+    let dispatch = ParentLifecycleDispatch {
+        parent_id: parent_id.clone(),
+        message_id: message_id.clone(),
+        message_timestamp,
         framed,
-    })
+    };
+    // Role selection and ownership are deliberately deferred together until
+    // after the child lifecycle lock is released. Splitting those decisions
+    // allowed a concurrent orchestrator-role removal to create a generic wake
+    // and an ordinary payload delivery for the same buffered notification.
+    Some(dispatch)
 }
 
 /// Wake/dispatch only after the child lifecycle lock has been released. This
 /// may acquire the parent's SilenceState lock through terminal delivery.
 fn dispatch_parent_lifecycle(state: &AppState, dispatch: ParentLifecycleDispatch) {
+    if route_registered_orchestrator_mail(
+        state,
+        &dispatch.parent_id,
+        &dispatch.message_id,
+        dispatch.message_timestamp,
+    )
+    .is_some()
+    {
+        return;
+    }
+    if state.assign_agent_delivery(
+        &dispatch.parent_id,
+        &dispatch.message_id,
+        state.live_pty_for_peer(&dispatch.parent_id).is_some(),
+    ) != crate::state::AgentDeliveryAssignment::Terminal
+    {
+        return;
+    }
     let outcome = deliver_message_to_managed_pty(state, &dispatch.parent_id, &dispatch.framed);
     settle_terminal_delivery(state, &dispatch.parent_id, &dispatch.message_id, outcome);
 }
@@ -5173,7 +5244,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
         "session_id": session_id,
     });
     let message_id = format!("tuic-auto-prompt-{session_id}-{now_ms}");
-    state.push_agent_inbox(
+    let message_timestamp = state.push_agent_inbox(
         &parent_id,
         crate::state::AgentMessage {
             id: message_id.clone(),
@@ -5184,6 +5255,11 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
             delivered_via_channel: false,
         },
     );
+    if route_registered_orchestrator_mail(state, &parent_id, &message_id, message_timestamp)
+        .is_some()
+    {
+        return true;
+    }
     if state.assign_agent_delivery(
         &parent_id,
         &message_id,
@@ -5318,6 +5394,14 @@ fn rollback_injection_claim(state: &AppState, session_id: &str, claim: Injection
 fn mark_injection_uncertain(state: &AppState, session_id: &str, claim: InjectionClaim) {
     if let Some(silence) = state.silence_states.get(session_id) {
         silence.lock().mark_injection_uncertain(claim.token);
+    }
+}
+
+fn mark_orchestrator_notice_uncertain(state: &AppState, session_id: &str, claim: InjectionClaim) {
+    if let Some(silence) = state.silence_states.get(session_id) {
+        silence
+            .lock()
+            .mark_orchestrator_notice_uncertain(claim.token);
     }
 }
 
@@ -5502,6 +5586,98 @@ fn run_claimed_injection(
     apply_claimed_injection_outcome(state, session_id, text, claim, outcome)
 }
 
+const ORCHESTRATOR_MAIL_WAKE: &str = "[TUIC] mail is available — read it with: agent action=inbox";
+
+/// Submit one payload-free notification only when the registered parent's
+/// canonical lifecycle still says idle/completed. Unlike ordinary managed-peer
+/// delivery, a lost idle race is never queued: working and unknown lifecycle
+/// states remain inbox-only and are not steered on a later transition.
+fn submit_orchestrator_mail_wake(
+    state: &AppState,
+    session_id: &str,
+) -> crate::state::OrchestratorWakeAttemptOutcome {
+    use crate::state::OrchestratorWakeAttemptOutcome;
+
+    let wake_allowed = state
+        .session_state_with_shell(session_id)
+        .and_then(|session| session.agent_state)
+        .is_some_and(|agent_state| matches!(agent_state.as_str(), "idle" | "completed"));
+    if !wake_allowed {
+        return OrchestratorWakeAttemptOutcome::NotStarted;
+    }
+    #[cfg(unix)]
+    if let Err(error) = wake_session(state, session_id) {
+        tracing::debug!(session = %session_id, error, "Orchestrator mail wake failed");
+    }
+    let Some(claim) = claim_idle_for_injection(state, session_id) else {
+        return OrchestratorWakeAttemptOutcome::NotStarted;
+    };
+    match run_claimed_injection(state, session_id, ORCHESTRATOR_MAIL_WAKE, claim) {
+        InjectionOutcome::Submitted => OrchestratorWakeAttemptOutcome::Submitted,
+        InjectionOutcome::NotStarted(_) => OrchestratorWakeAttemptOutcome::NotStarted,
+        InjectionOutcome::Uncertain(_) => OrchestratorWakeAttemptOutcome::Uncertain,
+    }
+}
+
+/// Route mail for a peer that has authoritatively acted as an orchestrator by
+/// spawning a managed child. Returns `None` for ordinary managed agents so their
+/// existing direct payload/channel delivery remains unchanged.
+pub(crate) fn route_registered_orchestrator_mail(
+    state: &AppState,
+    recipient: &str,
+    message_id: &str,
+    message_timestamp: u64,
+) -> Option<crate::state::OrchestratorDeliveryAssignment> {
+    if !state.orchestrator_peers.contains(recipient) {
+        return None;
+    }
+    let pty_session = state.live_pty_for_peer(recipient);
+    let wake_allowed = pty_session
+        .as_deref()
+        .and_then(|session_id| state.session_state_with_shell(session_id))
+        .and_then(|session| session.agent_state)
+        .is_some_and(|agent_state| matches!(agent_state.as_str(), "idle" | "completed"));
+    Some(state.assign_orchestrator_delivery_with_wake_outcome(
+        recipient,
+        message_id,
+        message_timestamp,
+        wake_allowed,
+        || match pty_session.as_deref() {
+            Some(session_id) => submit_orchestrator_mail_wake(state, session_id),
+            None => crate::state::OrchestratorWakeAttemptOutcome::NotStarted,
+        },
+    ))
+}
+
+/// Retry buffered orchestrator mail when the managed PTY has reached a
+/// canonical idle/completed lifecycle. Busy and unknown states remain inbox-only.
+fn orchestrator_recipient_for_pty(state: &AppState, pty_session: &str) -> Option<String> {
+    if state.orchestrator_peers.contains(pty_session) {
+        Some(pty_session.to_string())
+    } else {
+        state.orchestrator_peers.iter().find_map(|peer| {
+            let peer_id = peer.key();
+            (state.live_pty_for_peer(peer_id).as_deref() == Some(pty_session))
+                .then(|| peer_id.clone())
+        })
+    }
+}
+
+fn reevaluate_orchestrator_mail_wake(state: &AppState, pty_session: &str) {
+    let Some(recipient) = orchestrator_recipient_for_pty(state, pty_session) else {
+        return;
+    };
+    let Some(needed_through) = state.orchestrator_wake_needed_through(&recipient) else {
+        return;
+    };
+    let _ = route_registered_orchestrator_mail(
+        state,
+        &recipient,
+        "tuic-orchestrator-mail-notice",
+        needed_through,
+    );
+}
+
 fn apply_claimed_injection_outcome(
     state: &AppState,
     session_id: &str,
@@ -5526,7 +5702,11 @@ fn apply_claimed_injection_outcome(
         }
         InjectionOutcome::Uncertain(error) => {
             tracing::warn!(session = %session_id, error, "agent command injection outcome uncertain; preserving busy state");
-            mark_injection_uncertain(state, session_id, claim);
+            if text == ORCHESTRATOR_MAIL_WAKE {
+                mark_orchestrator_notice_uncertain(state, session_id, claim);
+            } else {
+                mark_injection_uncertain(state, session_id, claim);
+            }
         }
     }
     outcome

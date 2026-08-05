@@ -1589,6 +1589,8 @@ pub async fn start_server(
                         .collect();
                     for tuic in &removed {
                         reaper_state.peer_agents.remove(tuic);
+                        reaper_state.orchestrator_peers.remove(tuic);
+                        reaper_state.active_agent_waiters.remove(tuic);
                         let _ =
                             reaper_state
                                 .event_bus
@@ -1926,7 +1928,7 @@ mod tests {
     use axum::body::Body;
     use axum::extract::connect_info::ConnectInfo;
     use axum::http::{Request, StatusCode};
-    use dashmap::DashMap;
+    use dashmap::{DashMap, DashSet};
     use tower::ServiceExt;
 
     /// Build a POST request with ConnectInfo from the given address.
@@ -2057,6 +2059,7 @@ mod tests {
             pending_injections: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             active_agent_waiters: DashMap::new(),
+            orchestrator_peers: DashSet::new(),
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),
