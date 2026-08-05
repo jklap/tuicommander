@@ -3677,6 +3677,55 @@ mod tests {
     }
 
     #[test]
+    fn orchestrator_mail_while_working_is_retried_at_idle_without_payload_wake() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        state.push_agent_inbox(recipient, make_msg("working-mail"));
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient, "working-mail", 1, false, || panic!("busy must not wake")
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
+        let wakes = std::cell::Cell::new(0);
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient, "working-mail", 1, true, || { wakes.set(wakes.get() + 1); true }
+            ),
+            OrchestratorDeliveryAssignment::WakeSubmitted
+        );
+        assert_eq!(wakes.get(), 1);
+    }
+
+    #[test]
+    fn empty_and_cursor_inbox_reads_acknowledge_pending_wake() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        assert_eq!(state.assign_orchestrator_delivery_with_wake_attempt(recipient, "m", 10, true, || true), OrchestratorDeliveryAssignment::WakeSubmitted);
+        state.acknowledge_orchestrator_wake(recipient, 0);
+        assert_eq!(state.assign_orchestrator_delivery_with_wake_attempt(recipient, "new", 20, true, || true), OrchestratorDeliveryAssignment::WakeSubmitted);
+    }
+
+    #[test]
+    fn coalesced_mail_remains_visible_to_a_later_wait() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        state.push_agent_inbox(recipient, make_msg("coalesced"));
+        assert_eq!(state.assign_orchestrator_delivery_with_wake_attempt(recipient, "coalesced", 1, true, || true), OrchestratorDeliveryAssignment::WakeSubmitted);
+        let lease = state.begin_agent_wait(recipient);
+        assert_eq!(state.waiter_fresh_message_count(recipient, 0), 1, "wake ownership must not hide inbox mail");
+        state.finish_agent_wait(recipient, lease, 0, true);
+    }
+
+    #[test]
+    fn failed_wake_attempt_can_be_retried_after_stale_pending_state() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        assert_eq!(state.assign_orchestrator_delivery_with_wake_attempt(recipient, "m", 1, true, || false), OrchestratorDeliveryAssignment::InboxOnly);
+        assert_eq!(state.assign_orchestrator_delivery_with_wake_attempt(recipient, "m", 1, true, || true), OrchestratorDeliveryAssignment::WakeSubmitted);
+    }
+
+    #[test]
     fn active_waiter_owns_orchestrator_mail_without_wake_attempt() {
         let state = tests_support::make_test_app_state();
         let recipient = "orchestrator";
