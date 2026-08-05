@@ -1775,6 +1775,7 @@ impl AppState {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn acknowledge_orchestrator_wake(&self, tuic_session: &str, read_through: u64) {
         if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
             let mut gate = gate.lock();
