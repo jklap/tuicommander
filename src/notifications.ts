@@ -29,7 +29,7 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
 		info: true,
 	},
 	audio_device: null,
-	silence_remote_completions: false,
+	silence_remote_completions: true,
 };
 
 /** Notification manager — delegates audio playback to Rust via Tauri IPC.

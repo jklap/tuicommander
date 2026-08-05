@@ -841,7 +841,7 @@ pub(crate) struct NotificationConfig {
     /// create`, `agent spawn`). An orchestration of many agents otherwise turns
     /// every finished worker into a beep. Visual signals (activity item, badge,
     /// OS notification) are unaffected.
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub(crate) silence_remote_completions: bool,
 }
 
@@ -860,7 +860,7 @@ impl Default for NotificationConfig {
             volume: 0.5,
             sounds: NotificationSounds::default(),
             audio_device: None,
-            silence_remote_completions: false,
+            silence_remote_completions: true,
         }
     }
 }
@@ -3077,6 +3077,21 @@ mod tests {
         assert!(!loaded.sounds.error);
         assert_eq!(loaded.audio_device.as_deref(), Some("Test Speaker"));
         assert!(loaded.silence_remote_completions);
+    }
+
+    /// Orchestrations spawn many workers; a chime per finished worker is noise, so
+    /// silencing them is the default. Both the struct default and an older config
+    /// file written before the field existed must land on `true`.
+    #[test]
+    fn silence_remote_completions_defaults_on() {
+        assert!(NotificationConfig::default().silence_remote_completions);
+        let legacy: NotificationConfig =
+            serde_json::from_str(r#"{"enabled":true,"volume":0.5}"#).unwrap();
+        assert!(legacy.silence_remote_completions);
+        // An explicit opt-out still wins — the default must not overwrite a choice.
+        let opted_out: NotificationConfig =
+            serde_json::from_str(r#"{"silence_remote_completions":false}"#).unwrap();
+        assert!(!opted_out.silence_remote_completions);
     }
 
     #[test]

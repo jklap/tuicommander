@@ -179,14 +179,6 @@ interface TerminalsStoreState {
 /** Debounce hold time: how long isBusy() stays true after shellState goes idle */
 const BUSY_HOLD_MS = 2000;
 
-/** Once a confident question was last (re)detected this long ago while the
- *  terminal is still busy (producing output), treat the prompt as answered and
- *  clear the awaiting badge. Ink menus repaint and re-emit the question, which
- *  refreshes this timer; a statically-waiting prompt leaves the terminal idle,
- *  so it is never cleared. Backstops the user-input clear (Terminal.tsx) for
- *  inputs that don't go through a real keystroke (channel/MCP prompts). */
-const SUSTAINED_BUSY_CLEAR_MS = 2500;
-
 /** Create the terminals store */
 function createTerminalsStore() {
 	const [state, setState] = createStore<TerminalsStoreState>({
@@ -208,15 +200,6 @@ function createTerminalsStore() {
 	const busySinceMap = new Map<string, number>();
 	const busyDurationMap = new Map<string, number>();
 	const cooldownTimers = new Map<string, ReturnType<typeof setTimeout>>();
-	// Per-terminal timer clearing a stale confident question — see SUSTAINED_BUSY_CLEAR_MS.
-	const staleQuestionTimers = new Map<string, ReturnType<typeof setTimeout>>();
-	function cancelStaleQuestionTimer(id: string): void {
-		const t = staleQuestionTimers.get(id);
-		if (t != null) {
-			clearTimeout(t);
-			staleQuestionTimers.delete(id);
-		}
-	}
 	const busyToIdleCallbacks: Array<(id: string, durationMs: number) => void> = [];
 	const idleToBusyCallbacks: Array<(id: string) => void> = [];
 	const onRemoveCallbacks: Array<(id: string) => void> = [];
@@ -301,8 +284,9 @@ function createTerminalsStore() {
 			// like an Ink "Enter to select" menu stays awaiting even while the TUI repaints
 			// (cursor blink, animation, scrollbar) — those repaints oscillate idle→busy and
 			// would otherwise wrongly clear a genuine interactive prompt. Confident questions
-			// instead clear on real user-input (Terminal.tsx), process exit (below), or
-			// sustained busy with no re-detection (setAwaitingInput / SUSTAINED_BUSY_CLEAR_MS).
+			// instead clear on real user-input (Terminal.tsx) or process exit (below) —
+			// the same policy the backend applies in state.rs (`question_confident` is
+			// sticky across busy status-line ticks, cleared by the user-input arm).
 			if (prev === "idle" && state.terminals[id]?.awaitingInput && !state.terminals[id]?.awaitingInputConfident) {
 				setState("terminals", id, "awaitingInput", null);
 				setState("terminals", id, "awaitingInputConfident", false);
@@ -378,7 +362,6 @@ function createTerminalsStore() {
 		);
 		busySinceMap.delete(id);
 		busyDurationMap.delete(id);
-		cancelStaleQuestionTimer(id);
 	}
 
 	const actions = {
@@ -717,39 +700,25 @@ function createTerminalsStore() {
 			setState("terminals", id, "fontSize", fontSize);
 		},
 
-		/** Set terminal awaiting input state */
+		/** Set terminal awaiting input state.
+		 *
+		 *  A confident question is sticky: it is NOT expired by a timer. An Ink
+		 *  dialog repaints (spinner, cursor) while it waits for an answer, so
+		 *  "the terminal is still producing output" does not mean "the prompt was
+		 *  answered". The answer itself is the signal — `user-input` (Terminal.tsx),
+		 *  which also covers channel/MCP writes because they reach the PTY through
+		 *  the same path — plus process exit and explicit clearAwaitingInput. */
 		setAwaitingInput(id: string, type: AwaitingInputType, confident = false): void {
 			if (!has(id)) return;
 			batch(() => {
 				setState("terminals", id, "awaitingInput", type);
 				setState("terminals", id, "awaitingInputConfident", confident);
 			});
-			// Arm/refresh the sustained-busy clear for confident questions. Each fresh
-			// detection (e.g. an Ink menu repaint) refreshes the timer; if detections
-			// stop while the terminal keeps producing output, the prompt was answered
-			// and the badge would otherwise stay stuck — so clear it.
-			cancelStaleQuestionTimer(id);
-			if (type === "question" && confident) {
-				staleQuestionTimers.set(
-					id,
-					setTimeout(() => {
-						staleQuestionTimers.delete(id);
-						if (state.terminals[id]?.awaitingInputConfident && state.terminals[id]?.shellState === "busy") {
-							batch(() => {
-								setState("terminals", id, "awaitingInput", null);
-								setState("terminals", id, "awaitingInputConfident", false);
-							});
-							appLogger.debug("terminal", `[Awaiting] ${id} confident question cleared — sustained busy, no re-detect`);
-						}
-					}, SUSTAINED_BUSY_CLEAR_MS),
-				);
-			}
 		},
 
 		/** Clear terminal awaiting input state */
 		clearAwaitingInput(id: string): void {
 			if (!has(id)) return;
-			cancelStaleQuestionTimer(id);
 			batch(() => {
 				setState("terminals", id, "awaitingInput", null);
 				setState("terminals", id, "awaitingInputConfident", false);
@@ -956,8 +925,6 @@ function createTerminalsStore() {
 		_testCancelPendingTimers(): void {
 			for (const timer of cooldownTimers.values()) clearTimeout(timer);
 			cooldownTimers.clear();
-			for (const timer of staleQuestionTimers.values()) clearTimeout(timer);
-			staleQuestionTimers.clear();
 			if (lastDataAtFlushTimer) {
 				clearInterval(lastDataAtFlushTimer);
 				lastDataAtFlushTimer = null;

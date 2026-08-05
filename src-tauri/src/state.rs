@@ -2463,6 +2463,9 @@ impl AppState {
 
                 // Collect push notification data outside the DashMap lock
                 let mut push_data: Option<(String, String)> = None;
+                // Prompt text of a confident question that just parked this session,
+                // routed to the spawning orchestrator's inbox outside the lock below.
+                let mut parked_prompt: Option<String> = None;
 
                 state
                     .session_states
@@ -2484,12 +2487,25 @@ impl AppState {
                                 // making the approval state flicker. The confident question
                                 // clears on user-input instead.
                                 if !(s.awaiting_input && s.question_confident && !new_confident) {
+                                    let was_awaiting = s.awaiting_input;
                                     s.awaiting_input = true;
                                     s.question_text = parsed
                                         .get("prompt_text")
                                         .and_then(|t| t.as_str())
                                         .map(|t| t.to_string());
                                     s.question_confident = new_confident;
+
+                                    // A spawned peer has nobody at the keyboard: an
+                                    // interactive prompt parks it forever unless whoever
+                                    // spawned it is told. Only the transition into
+                                    // awaiting_input notifies, and only for CONFIDENT
+                                    // prompts — the silence heuristic ("last line ends
+                                    // with ?") is exactly the false-positive-prone one and
+                                    // must not spam an orchestrator's inbox.
+                                    if new_confident && !was_awaiting {
+                                        parked_prompt =
+                                            Some(s.question_text.clone().unwrap_or_default());
+                                    }
 
                                     // Rate limit: skip if last push for this session was < 30s ago
                                     let should_push = !state.push_store.is_empty()
@@ -2635,6 +2651,22 @@ impl AppState {
                 // outside the session_states entry lock to avoid re-entrancy.
                 if event_type == "user-input" {
                     crate::pty::flush_pending_injections(state, session_id);
+                }
+
+                // Route the parked prompt to the spawning orchestrator, outside the
+                // session_states entry lock: delivery reaches into the PARENT's
+                // SilenceState and re-entering this shard would deadlock.
+                if let Some(prompt) = parked_prompt {
+                    crate::pty::push_state_change_to_parent(
+                        state,
+                        session_id,
+                        serde_json::json!({
+                            "type": "state_change",
+                            "state": "awaiting_input",
+                            "session_id": session_id,
+                            "prompt": prompt,
+                        }),
+                    );
                 }
 
                 // Spawn push notification outside the DashMap lock
@@ -5337,6 +5369,117 @@ mod tests {
             s.question_confident,
             "Ink menu question should be confident"
         );
+    }
+
+    /// Read the state_change payloads TUIC auto-posted to a parent's inbox.
+    fn parent_state_changes(state: &Arc<AppState>, parent: &str) -> Vec<serde_json::Value> {
+        state
+            .agent_inbox
+            .get(parent)
+            .map(|inbox| {
+                inbox
+                    .iter()
+                    .filter(|m| m.from_name == "tuic")
+                    .filter_map(|m| serde_json::from_str::<serde_json::Value>(&m.content).ok())
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A spawned peer has nobody at its keyboard, so an interactive prompt parks it
+    /// forever. Whoever spawned it must be told, or the whole branch of the
+    /// orchestration silently stalls.
+    #[test]
+    fn confident_question_routes_awaiting_input_to_the_spawning_parent() {
+        let state = fresh_state();
+        state
+            .session_parent
+            .insert("s1".to_string(), "parent-1".to_string());
+        state.agent_inbox.entry("parent-1".to_string()).or_default();
+
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({
+                    "prompt_text": "Enter to select · ↑/↓ to navigate · Esc to cancel",
+                    "confident": true,
+                }),
+            ),
+        );
+
+        let posted = parent_state_changes(&state, "parent-1");
+        assert_eq!(posted.len(), 1, "parent must be told exactly once");
+        assert_eq!(posted[0]["state"], "awaiting_input");
+        assert_eq!(posted[0]["session_id"], "s1");
+        assert_eq!(
+            posted[0]["prompt"], "Enter to select · ↑/↓ to navigate · Esc to cancel",
+            "the parent needs the prompt text to answer without reading the pane"
+        );
+    }
+
+    /// The silence heuristic ("last line ends with ?") is the false-positive-prone
+    /// path — it must never wake an orchestrator.
+    #[test]
+    fn low_confidence_question_does_not_notify_the_parent() {
+        let state = fresh_state();
+        state
+            .session_parent
+            .insert("s1".to_string(), "parent-1".to_string());
+        state.agent_inbox.entry("parent-1".to_string()).or_default();
+
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "Did that work?" }),
+            ),
+        );
+
+        assert!(parent_state_changes(&state, "parent-1").is_empty());
+    }
+
+    /// Only the transition into awaiting_input notifies: an Ink menu that re-emits
+    /// while already parked must not flood the parent's inbox.
+    #[test]
+    fn repeated_confident_question_notifies_the_parent_only_once() {
+        let state = fresh_state();
+        state
+            .session_parent
+            .insert("s1".to_string(), "parent-1".to_string());
+        state.agent_inbox.entry("parent-1".to_string()).or_default();
+
+        let q = make_parsed(
+            "question",
+            serde_json::json!({ "prompt_text": "Enter to select", "confident": true }),
+        );
+        apply(&state, &q);
+        apply(&state, &q);
+
+        assert_eq!(parent_state_changes(&state, "parent-1").len(), 1);
+
+        // Answered, then a NEW prompt appears: that is a fresh transition and must
+        // notify again, otherwise the second question of a session is invisible.
+        apply(
+            &state,
+            &make_parsed("user-input", serde_json::json!({ "content": "1" })),
+        );
+        apply(&state, &q);
+        assert_eq!(parent_state_changes(&state, "parent-1").len(), 2);
+    }
+
+    /// A session nobody spawned (a tab Boss opened by hand) has no parent to notify.
+    #[test]
+    fn confident_question_without_a_parent_notifies_nobody() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "Enter to select", "confident": true }),
+            ),
+        );
+        assert!(state.agent_inbox.is_empty());
     }
 
     #[test]
