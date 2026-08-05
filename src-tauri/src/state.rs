@@ -3906,6 +3906,85 @@ mod tests {
     }
 
     #[test]
+    fn uncertain_payload_free_wake_has_one_retry_until_mail_is_acknowledged() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        let attempts = std::cell::Cell::new(0);
+        let uncertain_wake = || {
+            attempts.set(attempts.get() + 1);
+            false
+        };
+
+        // Initial wake and the first deterministic expiry retry are allowed.
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient,
+                "mail-1",
+                10,
+                true,
+                uncertain_wake,
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient,
+                "mail-1",
+                10,
+                true,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    false
+                },
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
+        assert_eq!(attempts.get(), 2);
+
+        // A second uncertain result exhausts the budget. Later idle/expiry
+        // reevaluations, including coalesced mail, must remain inbox-only.
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient,
+                "mail-1",
+                10,
+                true,
+                || panic!("uncertain wake retry budget must be exhausted"),
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient,
+                "mail-2",
+                20,
+                true,
+                || panic!("coalesced mail must not reset uncertain wake budget"),
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
+        assert_eq!(attempts.get(), 2);
+
+        // An authoritative observation clears the group; later mail gets a
+        // fresh initial wake plus one retry budget.
+        state.acknowledge_orchestrator_wake(recipient, 20);
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient,
+                "mail-3",
+                30,
+                true,
+                || {
+                    attempts.set(attempts.get() + 1);
+                    false
+                },
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[test]
     fn active_waiter_owns_orchestrator_mail_without_wake_attempt() {
         let state = tests_support::make_test_app_state();
         let recipient = "orchestrator";
