@@ -3439,14 +3439,12 @@ fn handle_messaging(
                 .peer_agents
                 .get(&tuic_session)
                 .map(|peer| (peer.name.clone(), peer.project.clone()));
-            let orchestrator = args["orchestrator"]
-                .as_bool()
-                .unwrap_or_else(|| {
-                    state.orchestrator_peers.contains(&tuic_session)
-                        || previously_bound
-                            .as_ref()
-                            .is_some_and(|prior| state.orchestrator_peers.contains(prior))
-                });
+            let orchestrator = args["orchestrator"].as_bool().unwrap_or_else(|| {
+                state.orchestrator_peers.contains(&tuic_session)
+                    || previously_bound
+                        .as_ref()
+                        .is_some_and(|prior| state.orchestrator_peers.contains(prior))
+            });
             let name = args["name"]
                 .as_str()
                 .map(str::to_string)
