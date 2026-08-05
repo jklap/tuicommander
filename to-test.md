@@ -1667,3 +1667,29 @@ Build with `make docs-serve` (needs `mdbook` + `npx`); CI runs the same `scripts
 - [x] Dark themes render the menu bar and hero correctly. _(verified: coal-theme screenshot; the hardcoded white `#mdbook-menu-bar` background is now `var(--bg)`)_
 - [ ] [HUMAN] Deployed site (tuicommander.com/docs) after the next `main` push: search works over GitHub Pages, and the first query feels fast.
 - [ ] [HUMAN] Mobile/narrow viewport: the menu-bar search panel and the hero box stay usable.
+
+## Smart Prompts settings tab + HelpPanel system-menu note (2026-08-05, frontend only — Vite HMR is enough)
+
+`SmartPromptsTab` existed but was never registered in `SettingsPanel`, so the drawer's
+"Manage Smart Prompts..." landed on General. Now it is a nav entry (`smart-prompts`) and the
+drawer opens it directly. Separately, HelpPanel gained the missing note pointing at the native
+system menu bar (desktop only — browser mode has no native menu).
+
+- [x] Settings nav lists "Smart Prompts" and the tab renders the prompt list + editor. _(verified: `SmartPromptsNav.test.tsx`, 4 tests)_
+- [x] "Manage Smart Prompts..." opens Settings on that tab. _(verified: `App.tsx:821` passes `openSettings("smart-prompts")` into the Toolbar's `SmartPromptsDropdown`)_
+- [x] HelpPanel shows the system-menu note on desktop and hides it in browser mode. _(verified: `HelpPanel.systemMenu.test.tsx`, 4 tests)_
+- [ ] Visual pass: the Smart Prompts tab layout (category groups, expanded editor) and the HelpPanel note spacing under Quick Actions. No dev instance was running (9876/1420 refused), so nothing was screenshotted.
+
+## File Browser content search in browser mode (2026-08-05, frontend only — Vite HMR is enough)
+
+Desktop `search_content` returns void and streams matches as `content-search-batch` events;
+the HTTP route returns the whole result in the response body and pushes nothing, so a browser
+client stayed on "Searching…" forever. `startContentSearch()` now republishes the HTTP body as
+one final batch, locally — not over the `/events` SSE bus, which is global and would leak one
+client's hits into every other client's panel.
+
+- [x] A valid query renders result rows instead of spinning. _(verified: `contentSearch.test.ts` asserts a final batch carrying the HTTP matches; `FileBrowserPanel.tsx:487` clears `contentSearching` on `is_final`)_
+- [x] Empty results reach a completed empty state. _(verified: final empty batch test + `FileBrowserPanel.tsx:1302` empty-state guard)_
+- [x] Rows show path, line number, and match context. _(verified: `FileBrowserPanel.tsx:1331-1337`)_
+- [x] Clicking a result opens the file at the matched line. _(verified: `FileBrowserPanel.tsx:1312,1327` → `onFileOpen(root, path, line_number)`)_
+- [ ] End-to-end in a real browser against a running instance: type a query in File Browser content search and confirm rows appear and a click opens the editor at the line. No instance was running during this work.

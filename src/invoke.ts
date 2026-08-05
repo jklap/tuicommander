@@ -147,6 +147,20 @@ function attachSseEventType(eventType: string) {
 	}) as EventListener);
 }
 
+/**
+ * Dispatch an event to browser-mode `listen()` subscribers without a round-trip.
+ *
+ * For a command whose desktop half answers over `AppHandle.emit` while its HTTP
+ * half answers in the response body, this republishes the body on the same event
+ * name so subscribers stay transport-agnostic. In Tauri mode the browser registry
+ * is empty (listen() goes to the Tauri bridge), so this is inert.
+ */
+export function emitLocalEvent(event: string, payload: unknown): void {
+	const listeners = _sseListeners.get(event);
+	if (!listeners) return;
+	for (const handler of listeners) handler(payload);
+}
+
 export function listen<T>(event: string, handler: (event: { payload: T }) => void): Promise<() => void> {
 	if (isTauri()) {
 		return tauriListen<T>(event, handler).then((unlisten) => {

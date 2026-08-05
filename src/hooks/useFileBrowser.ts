@@ -1,5 +1,6 @@
 import { invoke, listen } from "../invoke";
 import type { ContentSearchBatch, DirEntry } from "../types/fs";
+import { startContentSearch } from "../utils/contentSearch";
 
 export interface ContentSearchOptions {
 	caseSensitive?: boolean;
@@ -58,7 +59,7 @@ export function useFileBrowser() {
 
 	/** Start a streaming content search. Results arrive via content-search-batch events. */
 	async function searchContent(repoPath: string, query: string, opts?: ContentSearchOptions): Promise<void> {
-		await invoke("search_content", {
+		await startContentSearch("search_content", {
 			repoPath,
 			query,
 			caseSensitive: opts?.caseSensitive ?? false,
