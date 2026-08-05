@@ -1589,6 +1589,7 @@ pub async fn start_server(
                         .collect();
                     for tuic in &removed {
                         reaper_state.peer_agents.remove(tuic);
+                        reaper_state.orchestrator_peers.remove(tuic);
                         let _ =
                             reaper_state
                                 .event_bus
@@ -2057,6 +2058,7 @@ mod tests {
             pending_injections: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             active_agent_waiters: DashMap::new(),
+            orchestrator_peers: DashSet::new(),
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),

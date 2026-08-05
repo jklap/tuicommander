@@ -569,11 +569,21 @@ submission removes the marker silently. A prompt still pending after 30 seconds
 emits one `prompt_delivery_failed` message to the parent; there is no success
 event, delivery polling, or public delivery-state machine.
 
-PTY wake-up injection is allowed only when the recipient is idle, its composer
-buffer is empty, and no confident question or approval is active. Busy agents
-and recipients with partially typed input keep the message queued. Clearing or
-submitting the composer rechecks the queue; an active `agent wait` wakes from the
-inbox instead of requiring terminal injection or client polling.
+Ordinary managed-agent PTY injection is allowed only when the recipient is idle,
+its composer buffer is empty, and no confident question or approval is active.
+Busy workers and recipients with partially typed input keep the message queued.
+Clearing or submitting the composer rechecks the queue.
+
+A registered peer becomes an orchestrator after it successfully spawns a managed
+child. Its routing is intentionally stricter: every peer and child-lifecycle
+message remains in the authoritative inbox, and peer payloads never enter its
+channel, active turn, pending-injection queue, or composer. An active `agent wait`
+owns delivery and suppresses terminal wake. Without a waiter, only canonical
+`idle` or `completed` lifecycle may submit the payload-free notification
+`[TUIC] mail is available — read it with: agent action=inbox`. Working,
+awaiting-input, starting, missing, and unknown state fail closed to inbox-only.
+One pending wake covers later unread mail through its logical inbox cursor; an
+inbox read clears it only after that cursor catches up.
 
 The final injection decision atomically claims `idle -> busy`, closing the race
 between observing a ready screen and writing to the PTY. Idle is published before
@@ -623,12 +633,13 @@ requests (`focus=false`) do not change repository context.
 3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
    `accepted=true` and `buffered_in_inbox=true` acknowledge success;
    `delivered_via_channel` describes only the optional SSE path, while
-   `delivery_path` distinguishes SSE, terminal-or-queued, waiter, and inbox-only delivery. When the recipient is a
+   `delivery_path` distinguishes SSE, terminal-or-queued, waiter, generic/coalesced
+   orchestrator wake, and inbox-only delivery. When the recipient is a
    real managed PTY, `recipient_state` contains only its current `shell_state` and `agent_state`;
    external generated peers omit `recipient_state`.
 4. **Receive** — three layers, most-immediate first:
-   - **Channel push**: real-time `notifications/claude/channel` only when a managed Claude Code recipient already has a working turn and holds an SSE stream (CC + channels flag). A managed non-Claude agent, or an idle/completed Claude composer, uses PTY delivery even if its MCP bridge has an SSE stream.
-   - **PTY injection**: for any idle or completed managed agent, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it submits a real next turn without polling. A busy recipient without active Claude channel support gets the message on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead.
+   - **Channel push**: real-time `notifications/claude/channel` only when an ordinary managed Claude Code recipient already has a working turn and holds an SSE stream (CC + channels flag). A managed non-Claude worker, or an idle/completed Claude worker, uses PTY delivery even if its MCP bridge has an SSE stream. Registered orchestrators never receive peer payloads through this channel.
+   - **PTY injection**: for an ordinary idle or completed managed agent, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it submits a real next turn without polling. A busy ordinary recipient without active Claude channel support gets the message on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead. An idle/completed orchestrator receives only the generic inbox wake described above; a busy orchestrator is never queued or steered.
    - **Inbox poll**: `agent action=inbox since=<ms>` — always the authoritative store.
 5. **Wait** *(prefer over polling)*: `agent action=wait since=<ms>` blocks until new mail;
    `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. The default
@@ -655,14 +666,22 @@ back to terminal delivery. This removes both duplicate inbox+terminal turns and
 the missed-wake race at the wait timeout boundary; inbox visibility itself is
 unchanged and remains backward compatible.
 
+The server can identify orchestrator role only after a registered peer has used
+TUICommander's `agent action=spawn` path (or a pre-registration spawn is linked
+to that peer). There is no trustworthy role declaration in MCP itself. A process
+that coordinates externally without spawning through TUIC therefore retains the
+ordinary managed-agent delivery contract; guessing from its name or prompt would
+misclassify workers and weaken the fail-closed routing guarantee.
+
 Spawned peers additionally auto-post a `state_change` (`idle` / `completed` / `exited`) to the
-parent's inbox and wake the parent's terminal. These notifications carry state only, never task
+parent's inbox. They use the same waiter-or-generic-wake orchestrator routing and never inject the
+state payload into the parent composer. These notifications carry state only, never task
 output. Each child must send its result or blocker with `agent action=send`; `session action=output`
 is reserved for diagnosing the anomaly where that result message never arrived.
 
 ### Channel Push Delivery
 
-When an already working Claude Code recipient has an active SSE stream (`GET /mcp`), messages are pushed into that turn as `notifications/claude/channel` JSON-RPC notifications. Idle or completed managed recipients use PTY submission instead:
+When an already working ordinary Claude Code worker has an active SSE stream (`GET /mcp`), messages are pushed into that turn as `notifications/claude/channel` JSON-RPC notifications. Idle or completed ordinary managed recipients use PTY submission instead. Registered orchestrators never use this payload-bearing route:
 
 A channel notification is transport delivery into an existing turn, not proof that the recipient submitted a new one. It does not mutate the recipient's task epoch or lifecycle. Managed Codex and other non-Claude agents never receive this extension; an idle or completed Claude composer also takes the PTY split-write payload plus Enter path so delivery owns a real submitted turn.
 

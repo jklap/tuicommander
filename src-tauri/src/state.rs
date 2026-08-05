@@ -959,11 +959,20 @@ pub(crate) enum AgentDeliveryAssignment {
     InboxOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OrchestratorDeliveryAssignment {
+    Waiter,
+    WakeSubmitted,
+    WakeCoalesced,
+    InboxOnly,
+}
+
 #[derive(Debug)]
 pub(crate) struct AgentDeliveryGate {
     next_lease: u64,
     active_waiters: std::collections::HashSet<u64>,
     owners: HashMap<String, AgentDeliveryOwner>,
+    orchestrator_wake_pending_through: Option<u64>,
     inbox_revision: u64,
     inbox_events: tokio::sync::watch::Sender<u64>,
 }
@@ -975,6 +984,7 @@ impl Default for AgentDeliveryGate {
             next_lease: 0,
             active_waiters: std::collections::HashSet::new(),
             owners: HashMap::new(),
+            orchestrator_wake_pending_through: None,
             inbox_revision: 0,
             inbox_events,
         }
@@ -1252,6 +1262,11 @@ pub struct AppState {
     /// Each message has exactly one wake-up owner while remaining visible in
     /// the authoritative inbox for backward-compatible reads.
     pub(crate) active_agent_waiters: DashMap<String, Mutex<AgentDeliveryGate>>,
+    /// Peers that have successfully spawned at least one managed child during
+    /// their current registration lifetime. Only these registered parents use
+    /// inbox-only delivery while working and generic, coalesced wake notices
+    /// while idle; ordinary managed agents retain direct message delivery.
+    pub(crate) orchestrator_peers: DashSet<String>,
     /// HTML tab IDs (pluginIds) created by each session (tuic_session → [tab_id]).
     /// Populated by ui(tab) calls from registered agents; cleared on session exit
     /// so orphan tabs can be auto-closed by the frontend.
@@ -1447,8 +1462,8 @@ impl AppState {
     /// is entirely lifecycle notifications (orchestrator badly stuck). Every
     /// genuine eviction bumps `agent_inbox_evictions`, surfaced as
     /// `missed_count` on the next `inbox` read — nothing is dropped silently.
-    pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) {
-        let evicted_id = {
+    pub(crate) fn push_agent_inbox(&self, recipient: &str, mut msg: AgentMessage) -> u64 {
+        let (evicted_id, stored_timestamp) = {
             let mut inbox = self.agent_inbox.entry(recipient.to_string()).or_default();
             if let Some(last_timestamp) = inbox.back().map(|message| message.timestamp)
                 && msg.timestamp <= last_timestamp
@@ -1467,8 +1482,9 @@ impl AppState {
             } else {
                 None
             };
+            let stored_timestamp = msg.timestamp;
             inbox.push_back(msg);
-            evicted
+            (evicted, stored_timestamp)
         };
         if let Some(evicted_id) = evicted_id {
             *self
@@ -1485,6 +1501,7 @@ impl AppState {
             let revision = gate.inbox_revision;
             gate.inbox_events.send_replace(revision);
         }
+        stored_timestamp
     }
 
     #[cfg(test)]
@@ -1640,6 +1657,79 @@ impl AppState {
             return (AgentDeliveryAssignment::Terminal, false);
         }
         (AgentDeliveryAssignment::InboxOnly, false)
+    }
+
+    /// Assign delivery for a registered orchestrator without ever exposing the
+    /// peer payload to its active turn or composer. An active waiter retains
+    /// first ownership. Otherwise an authoritative idle/completed lifecycle may
+    /// submit one generic wake, and later mail is covered by that wake until an
+    /// inbox read acknowledges the covered logical cursor.
+    pub(crate) fn assign_orchestrator_delivery_with_wake_attempt<F>(
+        &self,
+        tuic_session: &str,
+        message_id: &str,
+        message_timestamp: u64,
+        wake_allowed: bool,
+        attempt_wake: F,
+    ) -> OrchestratorDeliveryAssignment
+    where
+        F: FnOnce() -> bool,
+    {
+        let gate = self
+            .active_agent_waiters
+            .entry(tuic_session.to_string())
+            .or_default();
+        let mut gate = gate.lock();
+
+        if matches!(
+            gate.owners.get(message_id),
+            Some(AgentDeliveryOwner::Waiter | AgentDeliveryOwner::WaiterObserved)
+        ) {
+            return OrchestratorDeliveryAssignment::Waiter;
+        }
+        if gate.owners.get(message_id) == Some(&AgentDeliveryOwner::TerminalDispatched) {
+            return OrchestratorDeliveryAssignment::WakeCoalesced;
+        }
+        if !gate.active_waiters.is_empty() {
+            gate.owners
+                .insert(message_id.to_string(), AgentDeliveryOwner::Waiter);
+            return OrchestratorDeliveryAssignment::Waiter;
+        }
+        if let Some(pending_through) = gate.orchestrator_wake_pending_through.as_mut() {
+            *pending_through = (*pending_through).max(message_timestamp);
+            gate.owners.insert(
+                message_id.to_string(),
+                AgentDeliveryOwner::TerminalDispatched,
+            );
+            return OrchestratorDeliveryAssignment::WakeCoalesced;
+        }
+        if !wake_allowed {
+            gate.owners.remove(message_id);
+            return OrchestratorDeliveryAssignment::InboxOnly;
+        }
+        if attempt_wake() {
+            gate.orchestrator_wake_pending_through = Some(message_timestamp);
+            gate.owners.insert(
+                message_id.to_string(),
+                AgentDeliveryOwner::TerminalDispatched,
+            );
+            OrchestratorDeliveryAssignment::WakeSubmitted
+        } else {
+            gate.owners.remove(message_id);
+            OrchestratorDeliveryAssignment::InboxOnly
+        }
+    }
+
+    pub(crate) fn acknowledge_orchestrator_wake(&self, tuic_session: &str, read_through: u64) {
+        if let Some(gate) = self.active_agent_waiters.get(tuic_session) {
+            let mut gate = gate.lock();
+            if gate
+                .orchestrator_wake_pending_through
+                .is_some_and(|pending_through| read_through >= pending_through)
+            {
+                gate.orchestrator_wake_pending_through = None;
+            }
+        }
     }
 
     pub(crate) fn waiter_fresh_message_count(&self, tuic_session: &str, since: u64) -> usize {
@@ -1888,6 +1978,7 @@ impl AppState {
             pending_injections: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             active_agent_waiters: DashMap::new(),
+            orchestrator_peers: DashSet::new(),
             session_html_tabs: DashMap::new(),
             mcp_to_session: DashMap::new(),
             session_to_mcp: DashMap::new(),
@@ -3533,6 +3624,75 @@ mod tests {
         assert!(state.has_active_agent_waiter("peer"));
         state.finish_agent_wait("peer", second, 0, true);
         assert!(!state.has_active_agent_waiter("peer"));
+    }
+
+    #[test]
+    fn orchestrator_wake_coalesces_until_inbox_cursor_catches_up() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient,
+                "first",
+                10,
+                true,
+                || true,
+            ),
+            OrchestratorDeliveryAssignment::WakeSubmitted
+        );
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient,
+                "second",
+                20,
+                false,
+                || panic!("a pending wake must cover later mail"),
+            ),
+            OrchestratorDeliveryAssignment::WakeCoalesced
+        );
+
+        state.acknowledge_orchestrator_wake(recipient, 10);
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient,
+                "third",
+                30,
+                false,
+                || panic!("a partial inbox read must not clear the pending wake"),
+            ),
+            OrchestratorDeliveryAssignment::WakeCoalesced
+        );
+
+        state.acknowledge_orchestrator_wake(recipient, 30);
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient,
+                "fourth",
+                40,
+                true,
+                || true,
+            ),
+            OrchestratorDeliveryAssignment::WakeSubmitted
+        );
+    }
+
+    #[test]
+    fn active_waiter_owns_orchestrator_mail_without_wake_attempt() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        let lease = state.begin_agent_wait(recipient);
+        state.push_agent_inbox(recipient, make_msg("message"));
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_attempt(
+                recipient,
+                "message",
+                10,
+                true,
+                || panic!("an active waiter must suppress the wake"),
+            ),
+            OrchestratorDeliveryAssignment::Waiter
+        );
+        state.finish_agent_wait(recipient, lease, 0, true);
     }
 
     #[test]
