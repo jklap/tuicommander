@@ -472,6 +472,16 @@ fn bind_peer_identity_locked(
     }
 }
 
+/// Who holds an identity when another protocol session asks for it.
+enum PeerIdentityOwnership {
+    /// Nothing live stands in the way. The payload is the stale prior owner,
+    /// whose routing entries and wait leases must be retired on the way in.
+    Vacant(Option<String>),
+    /// Another protocol session owns it and is still live. Whether that means
+    /// "share" or "refuse" is the caller's call, not this predicate's.
+    LiveOwner,
+}
+
 fn mcp_session_has_live_owner(state: &AppState, mcp_sid: &str) -> bool {
     let has_sse_subscriber = state
         .messaging_channels
@@ -486,14 +496,14 @@ fn mcp_session_has_live_owner(state: &AppState, mcp_sid: &str) -> bool {
         .is_some_and(|meta| meta.last_activity.elapsed() <= MCP_OWNER_ACTIVITY_GRACE)
 }
 
-/// Return the prior owner that may be reclaimed, or reject takeover while it is
-/// still live. The caller must hold `PEER_IDENTITY_BIND_LOCK` so the liveness
-/// decision and routing-map replacement form one critical section.
-fn reclaimable_prior_peer_owner_locked(
+/// Report who holds the identity. The caller must hold `PEER_IDENTITY_BIND_LOCK`
+/// so the liveness answer and the routing-map change it drives form one critical
+/// section.
+fn peer_identity_ownership_locked(
     state: &AppState,
     mcp_sid: &str,
     tuic_session: &str,
-) -> Result<Option<String>, String> {
+) -> PeerIdentityOwnership {
     let prior_mcp = state
         .peer_agents
         .get(tuic_session)
@@ -504,10 +514,37 @@ fn reclaimable_prior_peer_owner_locked(
         .as_deref()
         .is_some_and(|prior| mcp_session_has_live_owner(state, prior))
     {
-        return Err("tuic_session is already registered to another active MCP session".into());
+        return PeerIdentityOwnership::LiveOwner;
     }
 
-    Ok(prior_mcp)
+    PeerIdentityOwnership::Vacant(prior_mcp)
+}
+
+/// True when this protocol session already routes to the identity, which only
+/// happens after an earlier header assertion or registration bound the two.
+fn mcp_session_routes_to(state: &AppState, mcp_sid: &str, tuic_session: &str) -> bool {
+    state
+        .mcp_to_session
+        .get(mcp_sid)
+        .is_some_and(|bound| bound.value() == tuic_session)
+}
+
+/// Add a co-owner to an identity a live sibling already owns: routing entries
+/// only, so the sibling keeps delivery ownership. Two live bridges that traded
+/// ownership on every request would flip the delivery channel back and forth;
+/// the inbox is keyed by the PTY identity, so sharing the routes is enough for
+/// both to read the same mail.
+fn join_peer_identity_locked(state: &AppState, mcp_sid: &str, tuic_session: &str) {
+    state
+        .mcp_to_session
+        .insert(mcp_sid.to_string(), tuic_session.to_string());
+    let mut reverse = state
+        .session_to_mcp
+        .entry(tuic_session.to_string())
+        .or_default();
+    if !reverse.iter().any(|s| s == mcp_sid) {
+        reverse.push(mcp_sid.to_string());
+    }
 }
 
 /// Retire the identity a caller just abandoned by registering a different one.
@@ -520,39 +557,60 @@ fn reclaimable_prior_peer_owner_locked(
 /// abandoned identity that still owns a PTY is left alone; its terminal, not this
 /// registration, decides its lifetime.
 fn retire_repaired_phantom_identity(state: &AppState, phantom: &str, repaired: &str) {
-    if state.live_pty_for_peer(phantom).is_some() {
-        return;
-    }
-    let was_orchestrator = state.orchestrator_peers.remove(phantom).is_some();
-    if was_orchestrator {
-        let children: Vec<String> = state
-            .session_parent
-            .iter()
-            .filter(|entry| entry.value() == phantom)
-            .map(|entry| entry.key().clone())
-            .collect();
-        for child in children {
-            state.session_parent.insert(child, repaired.to_string());
+    // The retire spans several maps, and `send` reads one of them (`peer_agents`)
+    // to decide whether a recipient exists before buffering. Both halves take
+    // `PEER_IDENTITY_BIND_LOCK` so a send can only land entirely before the
+    // retire — and be carried over with the rest of the inbox — or entirely
+    // after it, where the missing peer makes it an explicit refusal. Routing the
+    // carried mail happens after the guard drops: it wakes PTYs and must not
+    // hold an identity lock across that I/O.
+    let carried: Vec<(String, u64)> = {
+        let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+        if state.live_pty_for_peer(phantom).is_some() {
+            return;
         }
-        state.orchestrator_peers.insert(repaired.to_string());
-    }
-    if let Some((_, pending)) = state.agent_inbox.remove(phantom) {
-        for message in pending {
-            let message_id = message.id.clone();
-            let message_timestamp = state.push_agent_inbox(repaired, message);
-            crate::pty::route_registered_orchestrator_mail(
-                state,
-                repaired,
-                &message_id,
-                message_timestamp,
-            );
+        let was_orchestrator = state.orchestrator_peers.remove(phantom).is_some();
+        if was_orchestrator {
+            let children: Vec<String> = state
+                .session_parent
+                .iter()
+                .filter(|entry| entry.value() == phantom)
+                .map(|entry| entry.key().clone())
+                .collect();
+            for child in children {
+                state.session_parent.insert(child, repaired.to_string());
+            }
+            state.orchestrator_peers.insert(repaired.to_string());
         }
+        // Drop the addressable identity before draining: a send blocked on the
+        // guard then finds no recipient instead of refilling the inbox we just
+        // emptied.
+        state.peer_agents.remove(phantom);
+        let carried = match state.agent_inbox.remove(phantom) {
+            Some((_, pending)) => pending
+                .into_iter()
+                .map(|message| {
+                    let message_id = message.id.clone();
+                    let message_timestamp = state.push_agent_inbox(repaired, message);
+                    (message_id, message_timestamp)
+                })
+                .collect(),
+            None => Vec::new(),
+        };
+        state.agent_inbox_evictions.remove(phantom);
+        state.active_agent_waiters.remove(phantom);
+        state.pending_injections.remove(phantom);
+        state.session_to_mcp.remove(phantom);
+        carried
+    };
+    for (message_id, message_timestamp) in carried {
+        crate::pty::route_registered_orchestrator_mail(
+            state,
+            repaired,
+            &message_id,
+            message_timestamp,
+        );
     }
-    state.peer_agents.remove(phantom);
-    state.agent_inbox_evictions.remove(phantom);
-    state.active_agent_waiters.remove(phantom);
-    state.pending_injections.remove(phantom);
-    state.session_to_mcp.remove(phantom);
     tracing::info!(
         source = "agent_msg",
         event = "phantom_identity_retired",
@@ -576,9 +634,30 @@ fn register_peer_identity(
     registered_at: u64,
 ) -> Result<Option<String>, String> {
     let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
-    let prior_mcp = reclaimable_prior_peer_owner_locked(state, mcp_sid, tuic_session)?;
-    bind_peer_identity_locked(state, mcp_sid, tuic_session, name, project, registered_at);
-    Ok(prior_mcp)
+    match peer_identity_ownership_locked(state, mcp_sid, tuic_session) {
+        PeerIdentityOwnership::Vacant(prior_mcp) => {
+            bind_peer_identity_locked(state, mcp_sid, tuic_session, name, project, registered_at);
+            Ok(prior_mcp)
+        }
+        // A session that already routes to the identity was bound to it by an
+        // earlier header assertion, so it is a sibling bridge inside the same
+        // PTY rather than a claimant — register is its rename, not a takeover.
+        PeerIdentityOwnership::LiveOwner
+            if mcp_session_routes_to(state, mcp_sid, tuic_session) =>
+        {
+            join_peer_identity_locked(state, mcp_sid, tuic_session);
+            if let Some(mut peer) = state.peer_agents.get_mut(tuic_session) {
+                peer.name = name;
+                if project.is_some() {
+                    peer.project = project;
+                }
+            }
+            Ok(None)
+        }
+        PeerIdentityOwnership::LiveOwner => {
+            Err("tuic_session is already registered to another active MCP session".to_string())
+        }
+    }
 }
 
 /// Auto-bind an MCP session to its PTY identity from the `x-tuic-session` header
@@ -597,28 +676,16 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
         return false;
     }
     let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
-    let prior_mcp = match reclaimable_prior_peer_owner_locked(state, mcp_sid, tuic) {
-        Ok(prior) => prior,
-        Err(error) => {
-            match takeover_rejection_report(tuic, mcp_sid) {
-                Some(suppressed) => tracing::warn!(
-                    source = "mcp_initialize",
-                    event = "live_binding_takeover_rejected",
-                    tuic_session = %tuic,
-                    mcp_session = %mcp_sid,
-                    suppressed_since_last_report = suppressed,
-                    error = %error,
-                    "Rejected initialize identity takeover from a second live bridge"
-                ),
-                None => tracing::debug!(
-                    source = "mcp_initialize",
-                    event = "live_binding_takeover_rejected",
-                    tuic_session = %tuic,
-                    mcp_session = %mcp_sid,
-                    "Rejected initialize identity takeover (repeat)"
-                ),
-            }
-            return false;
+    // Only a process that inherited this PTY's `$TUIC_SESSION` can assert the
+    // header, so a second asserting bridge is a sibling inside that PTY, not a
+    // claimant from outside it — Codex opens two. It joins the identity's routing
+    // instead of taking it over; ownership stays with the bridge that has it, so
+    // two live siblings cannot trade the delivery channel on every request.
+    let prior_mcp = match peer_identity_ownership_locked(state, mcp_sid, tuic) {
+        PeerIdentityOwnership::Vacant(prior_mcp) => prior_mcp,
+        PeerIdentityOwnership::LiveOwner => {
+            join_peer_identity_locked(state, mcp_sid, tuic);
+            return true;
         }
     };
     let (name, project, registered_at) = match state.peer_agents.get(tuic) {
@@ -3469,7 +3536,29 @@ fn handle_messaging(
                 now_ms,
             ) {
                 Ok(prior) => prior,
-                Err(error) => return serde_json::json!({"error": error}),
+                Err(error) => {
+                    // A refused claimant retries; report the first sighting in
+                    // full and keep the repeats out of the log.
+                    match takeover_rejection_report(&tuic_session, &mcp_sid) {
+                        Some(suppressed) => tracing::warn!(
+                            source = "agent_msg",
+                            event = "live_binding_takeover_rejected",
+                            tuic_session = %tuic_session,
+                            mcp_session = %mcp_sid,
+                            suppressed_since_last_report = suppressed,
+                            error = %error,
+                            "Refused a register takeover of a live peer identity"
+                        ),
+                        None => tracing::debug!(
+                            source = "agent_msg",
+                            event = "live_binding_takeover_rejected",
+                            tuic_session = %tuic_session,
+                            mcp_session = %mcp_sid,
+                            "Refused a register takeover (repeat)"
+                        ),
+                    }
+                    return serde_json::json!({"error": error});
+                }
             };
             if let Some(prior_mcp) = prior_mcp {
                 tracing::warn!(
@@ -3634,10 +3723,6 @@ fn handle_messaging(
                     return serde_json::json!({"error": "You are not registered. Register first with agent action=register"});
                 }
             };
-            // Check recipient exists
-            if !state.peer_agents.contains_key(to) {
-                return serde_json::json!({"error": format!("Recipient '{}' is not registered. Use list_peers to find valid targets.", to)});
-            }
             let now_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
@@ -3656,7 +3741,18 @@ fn handle_messaging(
             // Buffer first, then assign exactly one wake-up owner. Assignment preserves
             // a claim made by a concurrent waiter between these two operations.
             // External peers without a live SSE subscriber remain inbox-only.
-            let message_timestamp = state.push_agent_inbox(to, msg);
+            //
+            // The existence check and the buffering are one critical section under
+            // the identity lock: `retire_repaired_phantom_identity` deletes the
+            // recipient and drains its inbox under the same guard, so a message can
+            // never be filed under an identity that is removed a moment later.
+            let message_timestamp = {
+                let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+                if !state.peer_agents.contains_key(to) {
+                    return serde_json::json!({"error": format!("Recipient '{}' is not registered. Use list_peers to find valid targets.", to)});
+                }
+                state.push_agent_inbox(to, msg)
+            };
             // Resolve, do not compare. A self-registering agent announces its
             // `$TUIC_SESSION`, which is not the key its PTY was filed under, so the
             // old `sessions.contains_key(to)` answered "no terminal" for every peer
@@ -4907,7 +5003,48 @@ pub(super) async fn mcp_delete(
         .and_then(|v| v.to_str().ok())
     {
         state.mcp_sessions.remove(sid);
-        // Clean up peer agents and inboxes for this MCP session
+        // Now that an identity can have co-owners, teardown has to read the
+        // survivor list and act on it as one step: a bridge joining in the middle
+        // would otherwise re-create the routes this loop is about to delete and be
+        // left pointing at an identity that no longer exists. Same lock as the
+        // binds, so a join lands entirely before or entirely after the teardown.
+        // No `.await` inside — the guard never crosses a suspension point.
+        let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
+        // Routes belong to the protocol session, so a sibling bridge that never
+        // became delivery owner still drops its own — otherwise its mapping
+        // outlives it and keeps resolving to an identity it no longer serves.
+        state.mcp_to_session.remove(sid);
+        let routed: Vec<String> = state
+            .session_to_mcp
+            .iter()
+            .filter(|entry| entry.value().iter().any(|mapped| mapped == sid))
+            .map(|entry| entry.key().clone())
+            .collect();
+        for tuic in &routed {
+            let survivors = match state.session_to_mcp.get_mut(tuic) {
+                Some(mut reverse) => {
+                    reverse.retain(|mapped_sid| mapped_sid != sid);
+                    reverse.clone()
+                }
+                None => Vec::new(),
+            };
+            match survivors.first() {
+                // Another bridge in this PTY is still reading the identity, so
+                // hand it the delivery ownership rather than tearing down a
+                // mailbox and a role that are still in use.
+                Some(next_owner) => {
+                    if let Some(mut peer) = state.peer_agents.get_mut(tuic)
+                        && peer.mcp_session_id == sid
+                    {
+                        peer.mcp_session_id = next_owner.clone();
+                    }
+                }
+                None => {
+                    state.session_to_mcp.remove(tuic);
+                }
+            }
+        }
+        // Clean up peer agents and inboxes left with no protocol session at all.
         let removed_tuic: Vec<String> = state
             .peer_agents
             .iter()
@@ -4921,18 +5058,7 @@ pub(super) async fn mcp_delete(
             state.agent_inbox_evictions.remove(tuic);
             state.active_agent_waiters.remove(tuic);
             state.pending_injections.remove(tuic);
-            state
-                .mcp_to_session
-                .remove_if(sid, |_, mapped| mapped == tuic);
-            let remove_reverse = if let Some(mut reverse) = state.session_to_mcp.get_mut(tuic) {
-                reverse.retain(|mapped_sid| mapped_sid != sid);
-                reverse.is_empty()
-            } else {
-                false
-            };
-            if remove_reverse {
-                state.session_to_mcp.remove(tuic);
-            }
+            state.session_to_mcp.remove(tuic);
             let _ = state
                 .event_bus
                 .send(crate::state::AppEvent::PeerUnregistered {
@@ -6266,6 +6392,14 @@ mod tests {
 
     // ── initialize auto-identity tests (Step 1) ─────────────────────
 
+    /// Spawn binary for tests that read state belonging to the child *after* the
+    /// spawn returns — its inbox, its peer entry, its parent link, its task
+    /// status. `/usr/bin/true` exits before the first read and the exit cleanup
+    /// deletes the very state under test, so those tests only passed by winning a
+    /// race. `/bin/cat` blocks on stdin; every test using it kills the session at
+    /// the end. Tests that only read the spawn response keep `/usr/bin/true`.
+    const LONG_LIVED_TEST_BINARY: &str = "/bin/cat";
+
     const TEST_UUID_A: &str = "550e8400-e29b-41d4-a716-446655440a01";
     const TEST_UUID_B: &str = "550e8400-e29b-41d4-a716-446655440a02";
 
@@ -6440,8 +6574,12 @@ mod tests {
         );
     }
 
+    /// Codex opens two bridge processes inside one PTY. Both inherit the same
+    /// `$TUIC_SESSION`, so both assert the same header — they are one agent, not
+    /// competing claimants. The second must become routable instead of being
+    /// locked out, or every tool call it makes reports "not registered".
     #[test]
-    fn initialize_identity_rejects_takeover_of_live_owner() {
+    fn initialize_identity_joins_live_sibling_bridge_in_same_pty() {
         let state = test_state();
         assert!(apply_initialize_identity(
             &state,
@@ -6451,30 +6589,100 @@ mod tests {
         live_mcp_session(&state, "mcp-live");
 
         assert!(
-            !apply_initialize_identity(&state, "mcp-claimant", Some(TEST_UUID_A)),
-            "a second bridge must not steal a live TUIC identity during initialize"
+            apply_initialize_identity(&state, "mcp-sibling", Some(TEST_UUID_A)),
+            "a second bridge asserting the same $TUIC_SESSION must join the identity"
         );
         assert_eq!(
-            state.peer_agents.get(TEST_UUID_A).unwrap().mcp_session_id,
-            "mcp-live"
+            state
+                .mcp_to_session
+                .get("mcp-sibling")
+                .map(|entry| entry.value().clone()),
+            Some(TEST_UUID_A.to_string()),
+            "the sibling needs a forward route or inbox/send stay unreachable"
         );
         assert_eq!(
             state
                 .mcp_to_session
                 .get("mcp-live")
                 .map(|entry| entry.value().clone()),
-            Some(TEST_UUID_A.to_string())
+            Some(TEST_UUID_A.to_string()),
+            "joining must not evict the bridge that was already routed"
         );
-        assert!(
-            state.mcp_to_session.get("mcp-claimant").is_none(),
-            "rejected claimant must gain no forward route"
+        assert_eq!(
+            state.peer_agents.get(TEST_UUID_A).unwrap().mcp_session_id,
+            "mcp-live",
+            "delivery ownership stays put: two live siblings must not trade it \
+             back and forth on every request"
         );
         assert_eq!(
             state
                 .session_to_mcp
                 .get(TEST_UUID_A)
                 .map(|entry| entry.clone()),
-            Some(vec!["mcp-live".to_string()])
+            Some(vec!["mcp-live".to_string(), "mcp-sibling".to_string()])
+        );
+    }
+
+    /// The joined sibling is the bridge the agent actually talks through, so the
+    /// rename it performs must land instead of being refused as a takeover.
+    #[test]
+    fn register_from_joined_sibling_bridge_renames_shared_identity() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-live", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-live");
+        apply_initialize_identity(&state, "mcp-sibling", Some(TEST_UUID_A));
+
+        let registered = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_A, "name": "rose-root-orchestrator"
+            }),
+            Some("mcp-sibling"),
+        );
+
+        assert_eq!(
+            registered["ok"], true,
+            "a co-owner of the identity must not be refused: {registered}"
+        );
+        assert_eq!(
+            state.peer_agents.get(TEST_UUID_A).unwrap().name,
+            "rose-root-orchestrator"
+        );
+        assert_eq!(
+            state.peer_agents.get(TEST_UUID_A).unwrap().mcp_session_id,
+            "mcp-live",
+            "a rename must not move delivery ownership"
+        );
+    }
+
+    /// The guard still has a job: a session with no route to the identity and no
+    /// header behind it is a stranger, not a sibling.
+    #[test]
+    fn register_rejects_takeover_from_unrouted_session_while_owner_is_live() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-live", Some(TEST_UUID_A));
+        live_mcp_session(&state, "mcp-live");
+
+        let rejected = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": TEST_UUID_A}),
+            Some("mcp-stranger"),
+        );
+
+        assert!(
+            rejected["error"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("already registered to another active MCP session"),
+            "an unrouted claimant must still be refused: {rejected}"
+        );
+        assert_eq!(
+            state.peer_agents.get(TEST_UUID_A).unwrap().mcp_session_id,
+            "mcp-live"
+        );
+        assert!(
+            !state.mcp_to_session.contains_key("mcp-stranger"),
+            "a rejected claimant must gain no forward route"
         );
     }
 
@@ -6598,6 +6806,10 @@ mod tests {
             "the live SSE owner must retain its peer binding"
         );
 
+        // The `/usr/bin/true` spawns still in this module were audited: each one
+        // reads only the spawn response, or asserts that a *refused* spawn left
+        // nothing behind. Anything that reads state owned by a living child uses
+        // `LONG_LIVED_TEST_BINARY` instead — see its comment for why.
         let spawned = handle_agent(
             &state,
             "127.0.0.1:1".parse().unwrap(),
@@ -6636,7 +6848,7 @@ mod tests {
             &serde_json::json!({
                 "action": "spawn",
                 "prompt": "task handle additivity",
-                "binary_path": "/usr/bin/true",
+                "binary_path": LONG_LIVED_TEST_BINARY,
                 "cwd": "/tmp",
             }),
             Some("mcp-classic"),
@@ -6692,6 +6904,15 @@ mod tests {
             rec.session_id.as_deref(),
             spawned["session_id"].as_str(),
             "the task must point at the spawned session"
+        );
+        drop(rec);
+
+        handle_session(
+            &state,
+            &serde_json::json!({
+                "action": "kill", "session_id": spawned["session_id"].as_str().unwrap()
+            }),
+            None,
         );
     }
 
@@ -7235,6 +7456,162 @@ mod tests {
         assert!(!state.session_to_mcp.contains_key(&generated));
     }
 
+    fn join_two_bridges_to_one_pty(state: &Arc<AppState>) {
+        apply_initialize_identity(state, "mcp-primary", Some(TEST_UUID_A));
+        live_mcp_session(state, "mcp-primary");
+        apply_initialize_identity(state, "mcp-sibling", Some(TEST_UUID_A));
+        live_mcp_session(state, "mcp-sibling");
+        state.orchestrator_peers.insert(TEST_UUID_A.to_string());
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: "msg-shared".to_string(),
+                from_tuic_session: "worker".to_string(),
+                from_name: "worker".to_string(),
+                content: "preflight done".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+    }
+
+    async fn end_mcp_session(state: &Arc<AppState>, sid: &str) {
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, sid.parse().unwrap());
+        let _ = mcp_delete(State(Arc::clone(state)), headers).await;
+    }
+
+    /// The reported symptom: the agent talks through the second bridge, so a
+    /// locked-out sibling answers "You are not registered" to every inbox read
+    /// while its mail piles up under the identity it cannot reach.
+    #[test]
+    fn joined_sibling_bridge_reads_the_shared_inbox() {
+        let state = test_state();
+        join_two_bridges_to_one_pty(&state);
+
+        let inbox = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "since": 0}),
+            Some("mcp-sibling"),
+        );
+
+        assert!(
+            inbox.get("error").is_none(),
+            "a joined sibling must not be told it is unregistered: {inbox}"
+        );
+        assert_eq!(
+            inbox["messages"][0]["id"], "msg-shared",
+            "both bridges in one PTY read the same mailbox: {inbox}"
+        );
+    }
+
+    /// The inbox and the orchestrator role belong to the PTY, not to one protocol
+    /// session. When one of two bridges in that PTY goes away, tearing the identity
+    /// down would strand the sibling that is still reading it.
+    #[tokio::test]
+    async fn ending_one_co_owner_keeps_the_identity_for_the_sibling() {
+        let state = test_state();
+        join_two_bridges_to_one_pty(&state);
+
+        end_mcp_session(&state, "mcp-primary").await;
+
+        assert_eq!(
+            state
+                .peer_agents
+                .get(TEST_UUID_A)
+                .map(|peer| peer.mcp_session_id.clone()),
+            Some("mcp-sibling".to_string()),
+            "the surviving co-owner must be promoted to delivery owner"
+        );
+        assert!(
+            state
+                .agent_inbox
+                .get(TEST_UUID_A)
+                .is_some_and(|inbox| inbox.iter().any(|m| m.id == "msg-shared")),
+            "buffered mail must survive: the sibling has not read it yet"
+        );
+        assert!(
+            state.orchestrator_peers.contains(TEST_UUID_A),
+            "the orchestrator role belongs to the PTY, not to the departed bridge"
+        );
+        assert_eq!(
+            state
+                .session_to_mcp
+                .get(TEST_UUID_A)
+                .map(|entry| entry.clone()),
+            Some(vec!["mcp-sibling".to_string()]),
+            "the departed session must drop its own route"
+        );
+        assert!(!state.mcp_to_session.contains_key("mcp-primary"));
+    }
+
+    /// A bridge joining while the last co-owner tears the identity down must not
+    /// end up holding a route to a peer that no longer exists — that is the shape
+    /// of every silent-delivery-loss bug in this module.
+    #[tokio::test]
+    async fn joining_a_bridge_while_the_owner_tears_down_leaves_no_dangling_route() {
+        for round in 0..200 {
+            let state = test_state();
+            apply_initialize_identity(&state, "mcp-primary", Some(TEST_UUID_A));
+            live_mcp_session(&state, "mcp-primary");
+
+            let joiner_state = Arc::clone(&state);
+            let joiner = tokio::task::spawn_blocking(move || {
+                apply_initialize_identity(&joiner_state, "mcp-joiner", Some(TEST_UUID_A));
+            });
+            end_mcp_session(&state, "mcp-primary").await;
+            joiner.await.expect("joining task panicked");
+
+            if state.mcp_to_session.contains_key("mcp-joiner") {
+                assert!(
+                    state.peer_agents.contains_key(TEST_UUID_A),
+                    "round {round}: the joiner kept a route to an identity that was torn down"
+                );
+                assert!(
+                    state
+                        .session_to_mcp
+                        .get(TEST_UUID_A)
+                        .is_some_and(|reverse| reverse.iter().any(|s| s == "mcp-joiner")),
+                    "round {round}: forward route with no reverse entry to clean it up"
+                );
+            } else {
+                assert!(
+                    !state.peer_agents.contains_key(TEST_UUID_A),
+                    "round {round}: identity survived with nobody routed to it"
+                );
+            }
+        }
+    }
+
+    /// A co-owner that never became delivery owner still has to clean up after
+    /// itself, and the last one out tears the identity down as before.
+    #[tokio::test]
+    async fn ending_the_last_co_owner_removes_the_identity() {
+        let state = test_state();
+        join_two_bridges_to_one_pty(&state);
+
+        end_mcp_session(&state, "mcp-sibling").await;
+        assert!(
+            state.peer_agents.contains_key(TEST_UUID_A),
+            "a non-owner leaving must not retire the identity"
+        );
+        assert!(!state.mcp_to_session.contains_key("mcp-sibling"));
+        assert_eq!(
+            state
+                .session_to_mcp
+                .get(TEST_UUID_A)
+                .map(|entry| entry.clone()),
+            Some(vec!["mcp-primary".to_string()])
+        );
+
+        end_mcp_session(&state, "mcp-primary").await;
+        assert!(!state.peer_agents.contains_key(TEST_UUID_A));
+        assert!(!state.agent_inbox.contains_key(TEST_UUID_A));
+        assert!(!state.orchestrator_peers.contains(TEST_UUID_A));
+        assert!(!state.session_to_mcp.contains_key(TEST_UUID_A));
+        assert!(!state.mcp_to_session.contains_key("mcp-primary"));
+    }
+
     #[test]
     fn register_renames_auto_bound_caller_without_hijack_rejection() {
         // After the initialize auto-bind, the SAME mcp session may still call
@@ -7403,6 +7780,70 @@ mod tests {
             carried,
             "mail buffered under the phantom must survive the repair"
         );
+    }
+
+    /// A `send` landing in the middle of the retire must not vanish. The retire
+    /// mutates several maps; without a shared critical section a message could
+    /// be buffered under an identity that is deleted a moment later, which is
+    /// exactly the silent drop the repair set out to end. Either the message
+    /// reaches the repaired inbox, or the send is refused — never neither.
+    #[test]
+    fn a_send_racing_the_retire_is_never_silently_dropped() {
+        const ROUNDS: usize = 300;
+
+        for round in 0..ROUNDS {
+            let state = test_state();
+            let sender = TEST_UUID_A;
+            let phantom = TEST_UUID_B;
+            let repaired = "550e8400-e29b-41d4-a716-446655440a03";
+            register_peer(&state, sender, "sender", "mcp-sender");
+            register_peer(&state, phantom, "phantom", "mcp-phantom");
+            register_peer(&state, repaired, "repaired", "mcp-repaired");
+
+            let send_state = Arc::clone(&state);
+            let content = format!("payload-{round}");
+            let sent = content.clone();
+            let sender_thread = std::thread::spawn(move || {
+                handle_messaging(
+                    &send_state,
+                    &serde_json::json!({
+                        "action": "send", "to": phantom, "message": sent
+                    }),
+                    Some("mcp-sender"),
+                )
+            });
+
+            let retire_state = Arc::clone(&state);
+            let retire_thread = std::thread::spawn(move || {
+                retire_repaired_phantom_identity(&retire_state, phantom, repaired);
+            });
+
+            let send_result = sender_thread.join().expect("send thread panicked");
+            retire_thread.join().expect("retire thread panicked");
+
+            let accepted = send_result.get("error").is_none();
+            let in_repaired = state
+                .agent_inbox
+                .get(repaired)
+                .map(|inbox| inbox.iter().any(|m| m.content == content))
+                .unwrap_or(false);
+            let stranded = state
+                .agent_inbox
+                .get(phantom)
+                .map(|inbox| inbox.iter().any(|m| m.content == content))
+                .unwrap_or(false);
+
+            assert!(
+                !stranded,
+                "round {round}: message left in the retired phantom's inbox, addressable by nobody"
+            );
+            if accepted {
+                assert!(
+                    in_repaired,
+                    "round {round}: send reported success but the message reached no inbox"
+                );
+            }
+        }
     }
 
     /// After the repair the peer is addressable in the normal sense: `send` must
@@ -8408,7 +8849,7 @@ mod tests {
         let output = submitted_output
             .recv_timeout(std::time::Duration::from_secs(2))
             .expect("generic wake should submit a new turn");
-        assert!(output.contains("mail is available"), "{output:?}");
+        assert!(output.contains("message available"), "{output:?}");
         assert!(output.contains("agent action=inbox"), "{output:?}");
         assert!(
             !output.contains("secret peer payload"),
@@ -10815,7 +11256,7 @@ mod tests {
             &serde_json::json!({
                 "action": "spawn",
                 "prompt": "hello",
-                "binary_path": "/usr/bin/true",
+                "binary_path": LONG_LIVED_TEST_BINARY,
                 "cwd": "/tmp",
             }),
             Some("mcp-orch"),
@@ -10847,6 +11288,12 @@ mod tests {
             sessions.contains(&session_id),
             "child {session_id} not in list_peers: {sessions:?}"
         );
+
+        handle_session(
+            &state,
+            &serde_json::json!({"action": "kill", "session_id": session_id}),
+            None,
+        );
     }
 
     #[cfg(unix)]
@@ -10869,7 +11316,7 @@ mod tests {
                 "action": "spawn",
                 "name": "linux-primary",
                 "prompt": "hello",
-                "binary_path": "/usr/bin/true",
+                "binary_path": LONG_LIVED_TEST_BINARY,
                 "cwd": "/tmp",
             }),
             Some("mcp-orch"),
@@ -10960,6 +11407,12 @@ mod tests {
             caller["is_caller"], true,
             "the caller's managed PTY must be explicit so it is never self-closed"
         );
+
+        handle_session(
+            &state,
+            &serde_json::json!({"action": "kill", "session_id": session_id}),
+            None,
+        );
     }
 
     #[test]
@@ -11002,7 +11455,7 @@ mod tests {
             &serde_json::json!({
                 "action": "spawn",
                 "prompt": "hello",
-                "binary_path": "/usr/bin/true",
+                "binary_path": LONG_LIVED_TEST_BINARY,
                 "cwd": "/tmp",
             }),
             Some("mcp-orch"),
@@ -11022,6 +11475,12 @@ mod tests {
         assert!(
             state.agent_inbox.contains_key(session_id),
             "child inbox must be pre-initialized after spawn"
+        );
+
+        handle_session(
+            &state,
+            &serde_json::json!({"action": "kill", "session_id": session_id}),
+            None,
         );
     }
 
@@ -11283,7 +11742,7 @@ mod tests {
             &serde_json::json!({
                 "action": "spawn",
                 "prompt": "hello",
-                "binary_path": "/usr/bin/true",
+                "binary_path": LONG_LIVED_TEST_BINARY,
                 "cwd": "/tmp",
             }),
             Some("mcp-orch"),
@@ -11335,6 +11794,12 @@ mod tests {
             state.agent_inbox.contains_key(session_id),
             "every managed child must have an inbox immediately after spawn"
         );
+
+        handle_session(
+            &state,
+            &serde_json::json!({"action": "kill", "session_id": session_id}),
+            None,
+        );
     }
 
     #[cfg(unix)]
@@ -11350,7 +11815,7 @@ mod tests {
             &serde_json::json!({
                 "action": "spawn",
                 "prompt": "hello",
-                "binary_path": "/usr/bin/true",
+                "binary_path": LONG_LIVED_TEST_BINARY,
                 "cwd": "/tmp",
             }),
             Some(parent_mcp),
@@ -11421,7 +11886,7 @@ mod tests {
             &serde_json::json!({
                 "action": "spawn",
                 "prompt": "report with agent send",
-                "binary_path": "/usr/bin/true",
+                "binary_path": LONG_LIVED_TEST_BINARY,
                 "cwd": "/tmp",
             }),
             Some(parent_mcp),
@@ -11434,6 +11899,14 @@ mod tests {
         assert_eq!(ready_child["parent_session_id"], parent_tuic);
         let ready_child_id = ready_child["session_id"].as_str().unwrap();
         assert!(state.agent_inbox.contains_key(ready_child_id));
+
+        for session_id in [child, ready_child_id] {
+            handle_session(
+                &state,
+                &serde_json::json!({"action": "kill", "session_id": session_id}),
+                None,
+            );
+        }
     }
 
     #[cfg(unix)]

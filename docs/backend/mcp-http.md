@@ -188,7 +188,9 @@ it internally after reconnecting to a restarted TUIC process. This restores
 session-scoped metadata such as Grok compatibility mode without sending a
 second initialize response to the client.
 
-On reconnect, a peer may reclaim its stable TUIC identity after the prior MCP protocol session has no live SSE subscriber and has missed the bridge activity grace period. The takeover retires the old forward and reverse routing entries atomically. A currently subscribed or recently active owner cannot be replaced.
+On reconnect, a peer may reclaim its stable TUIC identity after the prior MCP protocol session has no live SSE subscriber and has missed the bridge activity grace period. The takeover retires the old forward and reverse routing entries atomically.
+
+A currently subscribed or recently active owner is never replaced — but it can be *joined*. One PTY may hold more than one bridge (Codex opens two), and both inherit the same `$TUIC_SESSION`, so both assert the same `x-tuic-session`. Only a process that inherited that PTY's environment can assert it, so a second asserting bridge is a sibling, not a claimant: it is added to the identity's routing (`mcp_to_session` plus the `session_to_mcp` list) while the live owner keeps delivery ownership. Ownership stays put on purpose — two live siblings that traded it on every request would flip the delivery channel back and forth. The inbox is keyed by the PTY identity, so both bridges read the same mail. `agent action=register` from a joined sibling is a rename, not a takeover; a protocol session with neither the header nor an existing route is still refused with "already registered to another active MCP session" (throttled to one WARN per claimant pair). Ending one co-owner's protocol session drops only its own routes and promotes a survivor to delivery owner; the peer entry, inbox and orchestrator role are torn down only when the last co-owner goes.
 
 **Blocking tool actions run off the runtime worker.** Dispatch is action-aware:
 session create/input/close/kill/process-stats, agent spawn/detect/send, and config
@@ -582,7 +584,7 @@ child-lifecycle message remains in the authoritative inbox, and peer payloads
 never enter its channel, active turn, pending-injection queue, or composer. An
 active `agent wait` owns delivery and suppresses terminal wake. Without a waiter,
 only canonical `idle` or `completed` lifecycle may submit the payload-free notification
-`[TUIC] mail is available — read it with: agent action=inbox`. Working,
+`[TUIC] message available — read it with: agent action=inbox`. Working,
 awaiting-input, starting, missing, and unknown state fail closed to inbox-only.
 Mail received while working remains eligible and is re-evaluated at the next
 authoritative idle/completed transition. One pending wake covers later unread
@@ -632,7 +634,8 @@ requests (`focus=false`) do not change repository context.
    validates the UUID and binds the MCP session to that tuic session (`apply_initialize_identity`
    → the shared locked live-owner policy), auto-registering the peer. `agent action=register`
    becomes an optional rename. The same MCP session may refresh its binding, and a fresh session
-   may reclaim a stale owner; a subscribed or recently active owner rejects takeover. An existing
+   may reclaim a stale owner; a subscribed or recently active owner is not replaced but is joined,
+   so a second bridge in the same PTY becomes routable instead of being locked out. An existing
    peer's display name is preserved. The bridge's eager initialize and the downstream client's
    proxied initialize reuse the same existing `mcp-session-id`; this prevents the bridge's own live
    SSE stream from being mistaken for a competing identity owner. External bridges without
@@ -642,7 +645,8 @@ requests (`focus=false`) do not change repository context.
    preserves the current declaration. A headerless external
    caller may omit `tuic_session`; the server generates an MCP-scoped UUID that remains stable for
    that connection and does not create a PTY. Supplying an explicit UUID preserves identity across
-   reconnects and retains the live-owner takeover guard.
+   reconnects and retains the live-owner takeover guard, which now refuses only callers that hold
+   no route to the identity — a bridge already joined to it is renaming, not taking over.
    When the announced UUID differs from the one already bound to the MCP session, the two are
    ranked by whether they resolve to a live PTY rather than merely compared: an identity backed by
    a terminal outranks one that is not. A caller that registered an invented UUID may therefore
@@ -650,7 +654,11 @@ requests (`focus=false`) do not change repository context.
    terminal-backed identity onto a fabricated one — is refused with an error naming the identity to
    use. Two identities that both lack a terminal keep the original "already bound to a different
    peer identity" rejection. A repaired identity carries over any mail buffered under the abandoned
-   one and retires it, so `list_peers` stops advertising an address that can never be reached.
+   one and retires it, so `list_peers` stops advertising an address that can never be reached. The
+   retire and the recipient check inside `send` share one identity lock, so a message aimed at the
+   abandoned identity either arrives before the retire and is carried over with the rest of the
+   inbox, or arrives after it and is refused with "is not registered" — it is never buffered under
+   an address that is deleted a moment later.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by project).
 3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
    `accepted=true` and `buffered_in_inbox=true` acknowledge success;
