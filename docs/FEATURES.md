@@ -122,6 +122,7 @@
 - Selecting a worktree sends `cd` to the PTY; OSC 7 auto-reassigns the terminal to the target branch
 - Also available via Command Palette: dynamic "Move to worktree: \<branch\>" entries appear when the active terminal belongs to a repo with multiple worktrees
 - Only shown when the repo has more than one worktree
+- When a worktree is created while an agent is running, **Open Worktree** opens or focuses a terminal rooted there; the agent terminal remains attached to its original branch and working directory
 
 ### 1.11 OSC 7 CWD Tracking
 - Terminals report their current working directory via OSC 7 escape sequences

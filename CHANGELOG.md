@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Creating a worktree no longer moves a running agent into the wrong sidebar branch** — The “Move & Notify” action only changed the terminal's UI ownership while the agent process stayed in its original working directory, then interrupted the agent to explain that it had not moved. The prompt now opens the worktree in its own terminal and leaves the running agent attached to its real branch and working directory.
+
 - **Managed Codex peers auto-register with their real terminal identity** — Codex intentionally filters the environment inherited by stdio MCP servers, while TUICommander's generated MCP entry configured only the bridge command. The Codex process had `TUIC_SESSION`, but `tuic-bridge` did not, so initialize carried no identity header and the peer's first `agent send` failed until it registered manually. New and existing Codex entries now whitelist `TUIC_SESSION` through `env_vars` while preserving other server settings.
 
 ## [1.7.1] - 2026-08-03

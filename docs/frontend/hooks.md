@@ -380,7 +380,7 @@ Creates long-press keyboard handlers for push-to-talk dictation and other hold-t
 
 **File:** `src/hooks/useWorktreeSwitchPrompt.ts`
 
-Prompts the user when switching to a branch that has a worktree in a different location, offering to open it or stay.
+Handles worktree lifecycle events. A newly created worktree can be opened or declined; when an agent is active, opening the worktree selects its own terminal without changing the agent terminal's branch or working directory. Removed worktrees are pruned from the sidebar.
 
 ---
 
