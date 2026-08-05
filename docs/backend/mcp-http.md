@@ -590,8 +590,13 @@ mail through its logical inbox cursor. Inbox and successful wait observations
 acknowledge the same cursor atomically with their snapshot, including an empty
 snapshot, so a read cannot race a delayed wake assignment. A generic notice never
 hides the underlying payload from a later wait. PTY I/O happens outside the
-delivery gate; an ambiguous payload-free notice expires and is retried after the
-managed lifecycle reconfirms readiness.
+delivery gate. An ambiguous payload-free notice expires after five seconds and
+may be retried once after the managed lifecycle reconfirms readiness. A second
+uncertain result exhausts that unread-mail group's wake budget: later expiry or
+idle/completed reevaluations, including newly coalesced mail, remain inbox-only
+until a successful inbox or wait observation acknowledges the group. An attempt
+that writes no bytes remains `NotStarted` and does not enter an automatic retry
+loop.
 
 `register` and `list_peers` also return `mail_wake`. Its only current non-`none`
 value is `managed_pty_lifecycle`, derived from a live TUIC-managed PTY rather than

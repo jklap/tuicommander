@@ -967,6 +967,26 @@ pub(crate) enum OrchestratorDeliveryAssignment {
     InboxOnly,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OrchestratorWakeAttemptOutcome {
+    Submitted,
+    NotStarted,
+    Uncertain,
+}
+
+#[cfg(test)]
+impl From<bool> for OrchestratorWakeAttemptOutcome {
+    fn from(submitted: bool) -> Self {
+        if submitted {
+            Self::Submitted
+        } else {
+            Self::Uncertain
+        }
+    }
+}
+
+const ORCHESTRATOR_WAKE_ATTEMPT_LIMIT: u8 = 2;
+
 #[derive(Debug)]
 pub(crate) struct AgentDeliveryGate {
     next_lease: u64,
@@ -976,6 +996,7 @@ pub(crate) struct AgentDeliveryGate {
     orchestrator_wake_needed_through: Option<u64>,
     orchestrator_observed_through: u64,
     orchestrator_wake_attempt: u64,
+    orchestrator_wake_attempts_in_group: u8,
     inbox_revision: u64,
     inbox_events: tokio::sync::watch::Sender<u64>,
 }
@@ -991,8 +1012,19 @@ impl Default for AgentDeliveryGate {
             orchestrator_wake_needed_through: None,
             orchestrator_observed_through: 0,
             orchestrator_wake_attempt: 0,
+            orchestrator_wake_attempts_in_group: 0,
             inbox_revision: 0,
             inbox_events,
+        }
+    }
+}
+
+impl AgentDeliveryGate {
+    fn reset_orchestrator_wake_budget_if_observed(&mut self) {
+        if self.orchestrator_wake_pending_through.is_none()
+            && self.orchestrator_wake_needed_through.is_none()
+        {
+            self.orchestrator_wake_attempts_in_group = 0;
         }
     }
 }
@@ -1600,6 +1632,7 @@ impl AppState {
             {
                 gate.orchestrator_wake_needed_through = None;
             }
+            gate.reset_orchestrator_wake_budget_if_observed();
         }
         finish
     }
@@ -1689,11 +1722,7 @@ impl AppState {
         (AgentDeliveryAssignment::InboxOnly, false)
     }
 
-    /// Assign delivery for a registered orchestrator without ever exposing the
-    /// peer payload to its active turn or composer. An active waiter retains
-    /// first ownership. Otherwise an authoritative idle/completed lifecycle may
-    /// submit one generic wake, and later mail is covered by that wake until an
-    /// inbox read acknowledges the covered logical cursor.
+    #[cfg(test)]
     pub(crate) fn assign_orchestrator_delivery_with_wake_attempt<F>(
         &self,
         tuic_session: &str,
@@ -1704,6 +1733,32 @@ impl AppState {
     ) -> OrchestratorDeliveryAssignment
     where
         F: FnOnce() -> bool,
+    {
+        self.assign_orchestrator_delivery_with_wake_outcome(
+            tuic_session,
+            message_id,
+            message_timestamp,
+            wake_allowed,
+            || attempt_wake().into(),
+        )
+    }
+
+    /// Assign delivery for a registered orchestrator without ever exposing the
+    /// peer payload to its active turn or composer. An active waiter retains
+    /// first ownership. Otherwise an authoritative idle/completed lifecycle may
+    /// submit one generic wake plus at most one retry after an uncertain write.
+    /// Later mail joins the same bounded group until an inbox read acknowledges
+    /// the covered logical cursor.
+    pub(crate) fn assign_orchestrator_delivery_with_wake_outcome<F>(
+        &self,
+        tuic_session: &str,
+        message_id: &str,
+        message_timestamp: u64,
+        wake_allowed: bool,
+        attempt_wake: F,
+    ) -> OrchestratorDeliveryAssignment
+    where
+        F: FnOnce() -> OrchestratorWakeAttemptOutcome,
     {
         let attempt = {
             let gate_entry = self
@@ -1746,8 +1801,12 @@ impl AppState {
             if !wake_allowed {
                 return OrchestratorDeliveryAssignment::InboxOnly;
             }
+            if gate.orchestrator_wake_attempts_in_group >= ORCHESTRATOR_WAKE_ATTEMPT_LIMIT {
+                return OrchestratorDeliveryAssignment::InboxOnly;
+            }
 
             gate.orchestrator_wake_attempt = gate.orchestrator_wake_attempt.wrapping_add(1).max(1);
+            gate.orchestrator_wake_attempts_in_group += 1;
             let attempt = gate.orchestrator_wake_attempt;
             // Reserve the logical notice before dropping the lock. Concurrent mail
             // coalesces into this cursor while terminal I/O happens without holding
@@ -1756,7 +1815,7 @@ impl AppState {
             attempt
         };
 
-        let submitted = attempt_wake();
+        let outcome = attempt_wake();
         let Some(gate_entry) = self.active_agent_waiters.get(tuic_session) else {
             return OrchestratorDeliveryAssignment::InboxOnly;
         };
@@ -1764,12 +1823,23 @@ impl AppState {
         if gate.orchestrator_wake_attempt != attempt {
             return OrchestratorDeliveryAssignment::InboxOnly;
         }
-        if submitted {
-            gate.orchestrator_wake_needed_through = None;
-            OrchestratorDeliveryAssignment::WakeSubmitted
-        } else {
-            gate.orchestrator_wake_pending_through = None;
-            OrchestratorDeliveryAssignment::InboxOnly
+        match outcome {
+            OrchestratorWakeAttemptOutcome::Submitted => {
+                gate.orchestrator_wake_needed_through = None;
+                OrchestratorDeliveryAssignment::WakeSubmitted
+            }
+            OrchestratorWakeAttemptOutcome::NotStarted => {
+                gate.orchestrator_wake_pending_through = None;
+                // No PTY byte was written, so this is not an ambiguous delivery.
+                // Leave the mail inbox-only instead of repeatedly reclaiming an
+                // authoritative idle lifecycle that could not start a write.
+                gate.orchestrator_wake_attempts_in_group = ORCHESTRATOR_WAKE_ATTEMPT_LIMIT;
+                OrchestratorDeliveryAssignment::InboxOnly
+            }
+            OrchestratorWakeAttemptOutcome::Uncertain => {
+                gate.orchestrator_wake_pending_through = None;
+                OrchestratorDeliveryAssignment::InboxOnly
+            }
         }
     }
 
@@ -1796,6 +1866,7 @@ impl AppState {
             }
             gate.orchestrator_observed_through =
                 gate.orchestrator_observed_through.max(read_through);
+            gate.reset_orchestrator_wake_budget_if_observed();
         }
     }
 
@@ -1848,6 +1919,7 @@ impl AppState {
         {
             gate.orchestrator_wake_needed_through = None;
         }
+        gate.reset_orchestrator_wake_budget_if_observed();
         messages
     }
 
@@ -1867,6 +1939,7 @@ impl AppState {
             gate.orchestrator_wake_attempt = gate.orchestrator_wake_attempt.wrapping_add(1).max(1);
             gate.orchestrator_wake_pending_through = None;
             gate.orchestrator_wake_needed_through = None;
+            gate.orchestrator_wake_attempts_in_group = 0;
         }
     }
 
