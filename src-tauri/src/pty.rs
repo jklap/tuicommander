@@ -5152,7 +5152,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
         },
     );
     if route_registered_orchestrator_mail(state, &parent_id, &message_id, message_timestamp)
-    .is_some()
+        .is_some()
     {
         return true;
     }
