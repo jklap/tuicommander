@@ -623,6 +623,11 @@ const SHELL_IDLE_MS: u64 = 500;
 /// Combined with the 2s frontend debounce, this gives ~4.5s total hold.
 const AGENT_IDLE_MS: u64 = 2500;
 
+/// Retry horizon for the payload-free orchestrator mail notice after an
+/// ambiguous PTY write. Ordinary payload injection remains non-retriable.
+const ORCHESTRATOR_WAKE_UNCERTAIN_RETRY: std::time::Duration =
+    std::time::Duration::from_secs(5);
+
 /// A ready prompt must remain visible across multiple silence-timer ticks before
 /// it can end an agent turn. Ink redraws are multi-chunk (erase, then repaint),
 /// so a single snapshot can briefly show the prompt without its working row.
@@ -934,6 +939,8 @@ pub(crate) struct SilenceState {
     /// Enter. Such sessions remain conservatively BUSY and are surfaced in
     /// status; automatic retry would risk duplicate or corrupted input.
     pub(crate) injection_delivery_uncertain: bool,
+    injection_uncertain_since: Option<std::time::Instant>,
+    injection_uncertainty_retryable: bool,
     /// Deadline until which an in-flight API connection-retry holds the agent
     /// BUSY. Armed by `mark_api_retry` when `is_retry_line` matches a changed
     /// row; blocks both the ready-screen and silence idle paths until it expires
@@ -974,6 +981,8 @@ impl SilenceState {
             active_injection_claim: None,
             next_injection_claim: 0,
             injection_delivery_uncertain: false,
+            injection_uncertain_since: None,
+            injection_uncertainty_retryable: false,
             api_retry_hold_until: None,
         }
     }
@@ -983,6 +992,8 @@ impl SilenceState {
         let token = self.next_injection_claim;
         self.active_injection_claim = Some((token, prior_idle_confirmed));
         self.injection_delivery_uncertain = false;
+        self.injection_uncertain_since = None;
+        self.injection_uncertainty_retryable = false;
         token
     }
 
@@ -993,6 +1004,8 @@ impl SilenceState {
         {
             self.active_injection_claim = None;
             self.injection_delivery_uncertain = false;
+            self.injection_uncertain_since = None;
+            self.injection_uncertainty_retryable = false;
             true
         } else {
             false
@@ -1009,23 +1022,53 @@ impl SilenceState {
         }
         self.active_injection_claim = None;
         self.injection_delivery_uncertain = false;
+        self.injection_uncertain_since = None;
+        self.injection_uncertainty_retryable = false;
         self.idle_confirmed = prior_idle_confirmed;
         Some(prior_idle_confirmed)
     }
 
     fn mark_injection_uncertain(&mut self, token: u64) {
+        self.mark_injection_uncertain_with_retry(token, false);
+    }
+
+    fn mark_orchestrator_notice_uncertain(&mut self, token: u64) {
+        self.mark_injection_uncertain_with_retry(token, true);
+    }
+
+    fn mark_injection_uncertain_with_retry(&mut self, token: u64, retryable: bool) {
         if self
             .active_injection_claim
             .is_some_and(|(owner, _)| owner == token)
         {
             self.active_injection_claim = None;
             self.injection_delivery_uncertain = true;
+            self.injection_uncertain_since = Some(std::time::Instant::now());
+            self.injection_uncertainty_retryable = retryable;
         }
     }
 
     fn invalidate_injection_claim(&mut self) {
         self.active_injection_claim = None;
         self.injection_delivery_uncertain = false;
+        self.injection_uncertain_since = None;
+        self.injection_uncertainty_retryable = false;
+    }
+
+    fn expire_orchestrator_notice_uncertainty(&mut self) -> bool {
+        if !self.injection_delivery_uncertain
+            || !self.injection_uncertainty_retryable
+            || self
+                .injection_uncertain_since
+                .is_none_or(|since| since.elapsed() < ORCHESTRATOR_WAKE_UNCERTAIN_RETRY)
+        {
+            return false;
+        }
+        self.injection_delivery_uncertain = false;
+        self.injection_uncertain_since = None;
+        self.injection_uncertainty_retryable = false;
+        self.ready_since = None;
+        true
     }
 
     fn note_explicit_state(&mut self, state: u8, hook_state: bool) {
@@ -2903,6 +2946,7 @@ fn transition_explicit_shell_state_with_hook<F: FnOnce()>(
         // this order leaves the backend BUSY while the frontend's last event is
         // the stale IDLE emitted by this caller.
         if target == SHELL_IDLE {
+            reevaluate_orchestrator_mail_wake(state, session_id);
             flush_pending_injections(state, session_id);
         }
     }
@@ -3279,6 +3323,13 @@ fn spawn_silence_timer(
                 continue;
             }
 
+            if orchestrator_recipient_for_pty(&state, &session_id)
+                .and_then(|recipient| state.orchestrator_wake_needed_through(&recipient))
+                .is_some()
+            {
+                silence.lock().expire_orchestrator_notice_uncertainty();
+            }
+
             // Reconcile high-confidence screen evidence before the silence
             // fallback. Working here means Codex's presence-based status line
             // (the only screen classifier that returns Working, #446-596f); it
@@ -3352,6 +3403,7 @@ fn spawn_silence_timer(
                         "Shell state → idle"
                     );
                     emit_shell_state(&state, &session_id, "idle");
+                    reevaluate_orchestrator_mail_wake(&state, &session_id);
                     flush_pending_injections(&state, &session_id);
                     record_inferred_outcome_if_no_osc133(&state, &session_id);
                 }
@@ -3538,6 +3590,7 @@ fn emit_pending_suggest_if_idle(
     if let Some(dispatch) = parent_dispatch {
         dispatch_parent_lifecycle(state, dispatch);
     }
+    reevaluate_orchestrator_mail_wake(state, session_id);
     true
 }
 
@@ -5076,20 +5129,10 @@ fn enqueue_state_change_to_parent(
         message_timestamp,
         framed,
     };
-    // Decide after releasing the child lifecycle lock. A waiter may claim the
-    // fresh message in that interval; otherwise orchestrators receive only the
-    // generic mail wake when their own lifecycle is authoritatively idle.
-    if state.orchestrator_peers.contains(&parent_id) {
-        return Some(dispatch);
-    }
-    if state.assign_agent_delivery(
-        &parent_id,
-        &message_id,
-        state.sessions.contains_key(&parent_id),
-    ) != crate::state::AgentDeliveryAssignment::Terminal
-    {
-        return None;
-    }
+    // Role selection and ownership are deliberately deferred together until
+    // after the child lifecycle lock is released. Splitting those decisions
+    // allowed a concurrent orchestrator-role removal to create a generic wake
+    // and an ordinary payload delivery for the same buffered notification.
     Some(dispatch)
 }
 
@@ -5103,6 +5146,14 @@ fn dispatch_parent_lifecycle(state: &AppState, dispatch: ParentLifecycleDispatch
         dispatch.message_timestamp,
     )
     .is_some()
+    {
+        return;
+    }
+    if state.assign_agent_delivery(
+        &dispatch.parent_id,
+        &dispatch.message_id,
+        state.live_pty_for_peer(&dispatch.parent_id).is_some(),
+    ) != crate::state::AgentDeliveryAssignment::Terminal
     {
         return;
     }
@@ -5290,6 +5341,18 @@ fn rollback_injection_claim(state: &AppState, session_id: &str, claim: Injection
 fn mark_injection_uncertain(state: &AppState, session_id: &str, claim: InjectionClaim) {
     if let Some(silence) = state.silence_states.get(session_id) {
         silence.lock().mark_injection_uncertain(claim.token);
+    }
+}
+
+fn mark_orchestrator_notice_uncertain(
+    state: &AppState,
+    session_id: &str,
+    claim: InjectionClaim,
+) {
+    if let Some(silence) = state.silence_states.get(session_id) {
+        silence
+            .lock()
+            .mark_orchestrator_notice_uncertain(claim.token);
     }
 }
 
@@ -5495,9 +5558,9 @@ fn submit_orchestrator_mail_wake(state: &AppState, session_id: &str) -> bool {
     let Some(claim) = claim_idle_for_injection(state, session_id) else {
         return false;
     };
-    !matches!(
+    matches!(
         run_claimed_injection(state, session_id, ORCHESTRATOR_MAIL_WAKE, claim),
-        InjectionOutcome::NotStarted(_)
+        InjectionOutcome::Submitted
     )
 }
 
@@ -5532,6 +5595,35 @@ pub(crate) fn route_registered_orchestrator_mail(
     ))
 }
 
+/// Retry buffered orchestrator mail when the managed PTY has reached a
+/// canonical idle/completed lifecycle. Busy and unknown states remain inbox-only.
+fn orchestrator_recipient_for_pty(state: &AppState, pty_session: &str) -> Option<String> {
+    if state.orchestrator_peers.contains(pty_session) {
+        Some(pty_session.to_string())
+    } else {
+        state.orchestrator_peers.iter().find_map(|peer| {
+            let peer_id = peer.key();
+            (state.live_pty_for_peer(peer_id).as_deref() == Some(pty_session))
+                .then(|| peer_id.clone())
+        })
+    }
+}
+
+fn reevaluate_orchestrator_mail_wake(state: &AppState, pty_session: &str) {
+    let Some(recipient) = orchestrator_recipient_for_pty(state, pty_session) else {
+        return;
+    };
+    let Some(needed_through) = state.orchestrator_wake_needed_through(&recipient) else {
+        return;
+    };
+    let _ = route_registered_orchestrator_mail(
+        state,
+        &recipient,
+        "tuic-orchestrator-mail-notice",
+        needed_through,
+    );
+}
+
 fn apply_claimed_injection_outcome(
     state: &AppState,
     session_id: &str,
@@ -5556,7 +5648,11 @@ fn apply_claimed_injection_outcome(
         }
         InjectionOutcome::Uncertain(error) => {
             tracing::warn!(session = %session_id, error, "agent command injection outcome uncertain; preserving busy state");
-            mark_injection_uncertain(state, session_id, claim);
+            if text == ORCHESTRATOR_MAIL_WAKE {
+                mark_orchestrator_notice_uncertain(state, session_id, claim);
+            } else {
+                mark_injection_uncertain(state, session_id, claim);
+            }
         }
     }
     outcome

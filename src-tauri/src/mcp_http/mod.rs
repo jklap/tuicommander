@@ -1590,6 +1590,7 @@ pub async fn start_server(
                     for tuic in &removed {
                         reaper_state.peer_agents.remove(tuic);
                         reaper_state.orchestrator_peers.remove(tuic);
+                        reaper_state.active_agent_waiters.remove(tuic);
                         let _ =
                             reaper_state
                                 .event_bus

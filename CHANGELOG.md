@@ -30,6 +30,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Orchestrator inbox notices remain live without steering active work** — Orchestrator role is now declared explicitly by `agent register` and surfaced with the server-derived `mail_wake` capability instead of being inferred forever from one child spawn. Mail buffered while working is re-evaluated at authoritative idle/completed lifecycle, generic coalesced notices never hide payloads from `agent wait`, inbox/wait observation closes the read-versus-wake race, PTY I/O no longer holds delivery-gate locks, and ambiguous payload-free notices can expire and retry. Headerless orchestrators remain honestly inbox/wait-only because MCP/SSE has no trustworthy lifecycle or turn-starting wake surface.
+
 - **Peer results no longer steer a working orchestrator or leak their payload into its composer** — A registered parent now keeps every peer message in the authoritative inbox. An active `agent wait` owns delivery; otherwise only an authoritatively idle/completed parent receives one coalesced, payload-free notice to call `agent action=inbox`. Working, awaiting, starting, missing, and unknown lifecycle states fail closed to inbox-only. Ordinary managed-agent delivery is unchanged.
 
 - **`tuic .` opens the repository again** — a directory used to create a stray terminal session and leave the sidebar untouched; the repo-opening branch behind it could never run, and even when reached it refused any folder that was not already registered. A directory is now handed to the app as a repo: known ones activate silently, a new one is confirmed once and then added through the same path as the sidebar's "Add Repository". `tuic .` also stops registering the repo as `/path/.`.

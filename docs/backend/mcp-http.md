@@ -574,16 +574,31 @@ its composer buffer is empty, and no confident question or approval is active.
 Busy workers and recipients with partially typed input keep the message queued.
 Clearing or submitting the composer rechecks the queue.
 
-A registered peer becomes an orchestrator after it successfully spawns a managed
-child. Its routing is intentionally stricter: every peer and child-lifecycle
-message remains in the authoritative inbox, and peer payloads never enter its
-channel, active turn, pending-injection queue, or composer. An active `agent wait`
-owns delivery and suppresses terminal wake. Without a waiter, only canonical
-`idle` or `completed` lifecycle may submit the payload-free notification
+An orchestrator role is declared explicitly with
+`agent action=register orchestrator=true` and removed with `orchestrator=false`; spawning a child never
+infers or permanently grants the role. The declaration is returned by `register`
+and `list_peers`. Its routing is intentionally stricter: every peer and
+child-lifecycle message remains in the authoritative inbox, and peer payloads
+never enter its channel, active turn, pending-injection queue, or composer. An
+active `agent wait` owns delivery and suppresses terminal wake. Without a waiter,
+only canonical `idle` or `completed` lifecycle may submit the payload-free notification
 `[TUIC] mail is available — read it with: agent action=inbox`. Working,
 awaiting-input, starting, missing, and unknown state fail closed to inbox-only.
-One pending wake covers later unread mail through its logical inbox cursor; an
-inbox read clears it only after that cursor catches up.
+Mail received while working remains eligible and is re-evaluated at the next
+authoritative idle/completed transition. One pending wake covers later unread
+mail through its logical inbox cursor. Inbox and successful wait observations
+acknowledge the same cursor atomically with their snapshot, including an empty
+snapshot, so a read cannot race a delayed wake assignment. A generic notice never
+hides the underlying payload from a later wait. PTY I/O happens outside the
+delivery gate; an ambiguous payload-free notice expires and is retried after the
+managed lifecycle reconfirms readiness.
+
+`register` and `list_peers` also return `mail_wake`. Its only current non-`none`
+value is `managed_pty_lifecycle`, derived from a live TUIC-managed PTY rather than
+claimed by the caller. Headerless/external orchestrators have a mailbox and MCP/SSE
+transport but no authoritative model lifecycle or host wake adapter capable of
+starting a turn, so they honestly report `mail_wake: "none"` and must use
+`agent wait`/`inbox`. MCP activity and SSE presence are not treated as idle proof.
 
 The final injection decision atomically claims `idle -> busy`, closing the race
 between observing a ready screen and writing to the PTY. Idle is published before
@@ -617,7 +632,9 @@ requests (`focus=false`) do not change repository context.
    proxied initialize reuse the same existing `mcp-session-id`; this prevents the bridge's own live
    SSE stream from being mistaken for a competing identity owner. External bridges without
    `$TUIC_SESSION` are not auto-bound at initialize.
-1. **Register**: optional rename/project update for an auto-bound peer. A headerless external
+1. **Register**: optional rename/project/role update for an auto-bound peer. Pass
+   `orchestrator=true` to declare the role or `false` to remove it; omission
+   preserves the current declaration. A headerless external
    caller may omit `tuic_session`; the server generates an MCP-scoped UUID that remains stable for
    that connection and does not create a PTY. Supplying an explicit UUID preserves identity across
    reconnects and retains the live-owner takeover guard.
@@ -666,12 +683,10 @@ back to terminal delivery. This removes both duplicate inbox+terminal turns and
 the missed-wake race at the wait timeout boundary; inbox visibility itself is
 unchanged and remains backward compatible.
 
-The server can identify orchestrator role only after a registered peer has used
-TUICommander's `agent action=spawn` path (or a pre-registration spawn is linked
-to that peer). There is no trustworthy role declaration in MCP itself. A process
-that coordinates externally without spawning through TUIC therefore retains the
-ordinary managed-agent delivery contract; guessing from its name or prompt would
-misclassify workers and weaken the fail-closed routing guarantee.
+The server never infers orchestrator role from child spawn, peer name, prompt, MCP
+activity, or SSE presence. Registration is the sole declaration seam. Wake
+capability remains server-derived: without a live managed PTY and its canonical
+lifecycle, an explicitly declared external orchestrator is inbox/wait-only.
 
 Spawned peers additionally auto-post a `state_change` (`idle` / `completed` / `exited`) to the
 parent's inbox. They use the same waiter-or-generic-wake orchestrator routing and never inject the
