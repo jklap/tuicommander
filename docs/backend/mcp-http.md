@@ -673,7 +673,13 @@ requests (`focus=false`) do not change repository context.
    - **Inbox poll**: `agent action=inbox since=<ms>` — always the authoritative store.
 5. **Wait** *(prefer over polling)*: `agent action=wait since=<ms>` blocks until new mail;
    `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. The default
-   is 60 seconds and the server cap is 300000 ms. Agent-wait success preserves
+   is 60 seconds and the advertised cap is 300000 ms — a request at or above that runs as 295000 ms.
+   The 5-second margin exists because a client aborts its own `tools/call` on its own deadline, and
+   at least one shipping client (Codex) uses exactly 300s: a wait running the full cap would answer
+   right on that deadline and return a client-side error instead of `{timed_out:true}`, making the
+   advertised maximum unusable. The clamp is deliberately client-agnostic — a per-client table would
+   need maintaining against every client release, and ending 5s early is invisible to the caller.
+   Agent-wait success preserves
    `{met,timed_out,new_messages}` and directly includes every retained fresh message (up to the
    100-message inbox capacity) plus `next_since`, in chronological order. Per-recipient logical
    unix-millisecond cursors make equal-clock-millisecond bursts safe. Wait never consumes the
