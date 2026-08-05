@@ -22,7 +22,7 @@ export MACOSX_DEPLOYMENT_TARGET ?= 10.15
 DIST_DIR=dist-release
 
 .PHONY: all clean dev test build build-dmg check cov crap fmt sign verify-sign notarize release dist \
-       nightly github-release preview bump release-notes hooks \
+       nightly github-release preview bump release-notes hooks docs docs-serve \
        gh-debug-on gh-debug-off gh-debug-status gh-debug-logs gh-rate logs
 
 all: build sign
@@ -263,7 +263,17 @@ preview:
 	@echo "Launching TUIC-preview..."
 	open "src-tauri/target/debug/bundle/macos/TUIC-preview.app"
 
+# Build the documentation book + Pagefind search index into docs/book.
+# Same script CI runs, so a local preview matches the deployed site exactly.
+docs:
+	@./scripts/build-docs.sh
+
+# Preview the docs locally — the search needs to be served over HTTP, file:// won't do.
+docs-serve: docs
+	@echo "Docs at http://127.0.0.1:8123 (ctrl+c to stop)"
+	@cd docs/book && python3 -m http.server 8123
+
 # Clean build artifacts
 clean:
-	rm -rf $(DIST_DIR)
+	rm -rf $(DIST_DIR) docs/book
 	cd src-tauri && cargo clean

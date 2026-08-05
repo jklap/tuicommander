@@ -99,12 +99,36 @@ See [Configuration docs](../backend/config.md) for all config files.
 ## Makefile Targets
 
 ```bash
-make dev      # Tauri dev mode
-make build    # Production build
-make test     # Run tests
-make lint     # Run linter
-make clean    # Clean build artifacts
+make dev         # Tauri dev mode
+make build       # Production build
+make test        # Run tests
+make lint        # Run linter
+make docs        # Build this documentation + search index into docs/book
+make docs-serve  # …and serve it at http://127.0.0.1:8123
+make clean       # Clean build artifacts
 ```
+
+---
+
+## Documentation Site
+
+The book you are reading is [mdBook](https://rust-lang.github.io/mdBook/), built
+by `scripts/build-docs.sh` and deployed to GitHub Pages by
+`.github/workflows/website.yml`. The script is the single source of truth — CI
+runs the same one, so a local build matches the deployed site.
+
+```bash
+make docs-serve     # build + serve; open http://127.0.0.1:8123
+```
+
+Requires `mdbook` (`brew install mdbook` or `cargo install mdbook`) and `npx`.
+
+Search is [Pagefind](https://pagefind.app/), generated after the mdBook build,
+which is why `file://` previews have no search — the index is fetched over HTTP.
+mdBook's own elasticlunr search is disabled in `book.toml`.
+
+Adding a page means adding it to `SUMMARY.md`: mdBook only renders — and
+Pagefind only indexes — chapters listed there.
 
 ---
 

@@ -349,6 +349,16 @@ When adding or changing `tuic://` schemes:
 | `docs/FEATURES.md` | Section 17.4 (Deep Links) |
 | `docs/plugins.md` | If affecting plugin contentUri format |
 
+### Documentation Site (mdBook + Pagefind)
+When adding, renaming or moving a docs page:
+
+| File | What to update |
+|------|----------------|
+| `docs/SUMMARY.md` | **Required** — mdBook only renders, and Pagefind only indexes, chapters listed here. A file that is not in `SUMMARY.md` is invisible to readers and to search |
+| `docs/index.md` | "Popular articles" cards and "Browse by section" list, if the page belongs there |
+| `scripts/build-docs.sh` | Only when the pipeline changes (excluded pages, Pagefind flags, HTML rewrites) — CI and `make docs` both run this one script |
+| `docs/guides/development-setup.md` | "Documentation Site" section, if the build steps change |
+
 ## Documentation File Index
 
 | Path | Purpose |

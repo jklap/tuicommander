@@ -179,10 +179,16 @@ from `parse_status_line` events (for Gemini braille/Aider spinners). Gates:
 - `SilenceState::on_chunk()`
 
 **Gaps:**
-- Missing `⏸` (U+23F8) — plan mode chunks not classified as chrome
-- `1 shell` (no ⏵⏵) not detected — new CC format without mode-line markers
 - No positional awareness — cannot use "last row = always chrome" heuristic
-- CC status lines (below separator) transit PTY but have no chrome markers
+- A bare subprocess count (`1 shell`, no `⏵⏵`) carries no chrome glyph, so
+  `is_chrome_row` returns false for it — `parse_active_subtasks` still reads the
+  count via its bare-count path
+- User-defined status lines are only partially covered: a row with block glyphs
+  (`Context █░░░ 8%`) is chrome, a plain one (`[Opus 4.6 | Max] │ repo`) is not.
+  This is a *classification* gap only — no detection logic reads status-line
+  content, and `is_spinner_row`'s leading-glyph rule keeps a HUD progress bar
+  from faking liveness (#446-596f). See
+  [Claude Code § Status Lines](./agents/claude-code.md#status-lines-between-lower-separator-and-mode-line).
 
 #### Subprocess Count (`parse_active_subtasks`) — output_parser.rs:706
 
@@ -193,7 +199,11 @@ Extracts subprocess count from the mode line. Must handle:
 3. **Count only**: `N <type>` — no markers at all (e.g., `1 shell`)
 4. **Bare mode**: `⏵⏵ <mode>` — markers only, no count (count = 0)
 
-**Gap**: Only format 1 and 4 are currently implemented.
+All four formats are implemented: formats 1, 2 and 4 by the mode-marker path
+(`⏵⏵`/`››` anywhere on the row, count extracted from either side of the `·`),
+format 3 by the bare-count path, which is restricted to known subprocess types
+(`agents`, `shells`, `bash`, `background tasks`) so ordinary numbers in output
+cannot trigger it.
 
 #### Question Detection (`extract_last_chat_line`) — pty.rs:207
 
