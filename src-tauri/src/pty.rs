@@ -5130,6 +5130,13 @@ fn enqueue_state_change_to_parent(
         delivered_via_channel: false,
     };
     let message_id = msg.id.clone();
+    // DEFERRED (2026-08-05) — this push does not take PEER_IDENTITY_BIND_LOCK, so a
+    // lifecycle notice resolved against a parent that is being retired
+    // (retire_repaired_phantom_identity) can still land in a drained inbox. The
+    // peer-to-peer `send` path was serialized against the retire in story 546-33cb;
+    // this one needs the resolution of `parent_id` and the push to share that guard
+    // too. Left out of that story's scope deliberately — it needs its own repro,
+    // since the parent id here comes from session_parent rather than a caller.
     let message_timestamp = state.push_agent_inbox(&parent_id, msg);
     let state_desc = payload
         .get("state")
@@ -5335,11 +5342,19 @@ pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
         .get(session_id)
         .map(|s| s.question_confident)
         .unwrap_or(false);
-    let has_partial_user_input = state
+    idle
+        && idle_is_confirmed(state, session_id)
+        && !blocked_on_question
+        && !has_partial_user_input(state, session_id)
+}
+
+/// True while the user has characters sitting in the composer. Injecting then
+/// would splice our text into what they are typing.
+fn has_partial_user_input(state: &AppState, session_id: &str) -> bool {
+    state
         .input_buffers
         .get(session_id)
-        .is_some_and(|buffer| !buffer.lock().content().is_empty());
-    idle && idle_is_confirmed(state, session_id) && !blocked_on_question && !has_partial_user_input
+        .is_some_and(|buffer| !buffer.lock().content().is_empty())
 }
 
 /// Reserve an idle agent composer for one injected command.
@@ -5363,6 +5378,13 @@ fn claim_idle_for_injection(state: &AppState, session_id: &str) -> Option<Inject
         .map(|silence| silence.lock().idle_confirmed)
         .unwrap_or(false);
     if !try_shell_transition(state, session_id, SHELL_IDLE, SHELL_BUSY, true) {
+        return None;
+    }
+    // The composer is re-read after the atom is ours: `should_inject_now` was a
+    // snapshot, and the user can start typing in between. Revert before the
+    // claim exists so no spurious busy/idle pair reaches the UI.
+    if has_partial_user_input(state, session_id) {
+        try_shell_transition(state, session_id, SHELL_BUSY, SHELL_IDLE, true);
         return None;
     }
     let token = state
@@ -5586,7 +5608,7 @@ fn run_claimed_injection(
     apply_claimed_injection_outcome(state, session_id, text, claim, outcome)
 }
 
-const ORCHESTRATOR_MAIL_WAKE: &str = "[TUIC] mail is available — read it with: agent action=inbox";
+const ORCHESTRATOR_MAIL_WAKE: &str = "[TUIC] message available — read it with: agent action=inbox";
 
 /// Submit one payload-free notification only when the registered parent's
 /// canonical lifecycle still says idle/completed. Unlike ordinary managed-peer
@@ -16787,6 +16809,39 @@ mod tests {
         assert!(
             claim_idle_for_injection(&state, "race-agent").is_none(),
             "a sender that observed idle before the agent became busy must queue instead of writing into the active composer"
+        );
+    }
+
+    /// Typing into an idle agent must block injection outright — and a rejected
+    /// claim must leave the shell atom exactly as it found it, so the user's
+    /// half-typed line is never followed by a stray busy state. The post-CAS
+    /// re-check inside `claim_idle_for_injection` uses this same predicate for
+    /// the case where typing starts after the delivery decision.
+    #[test]
+    fn injection_claim_is_refused_while_the_user_is_typing() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "typing-agent", SHELL_IDLE);
+        assert!(should_inject_now(&state, "typing-agent"));
+
+        let mut buffer = InputLineBuffer::new();
+        buffer.feed("half typed prompt");
+        state
+            .input_buffers
+            .insert("typing-agent".to_string(), parking_lot::Mutex::new(buffer));
+
+        assert!(has_partial_user_input(&state, "typing-agent"));
+        assert!(!should_inject_now(&state, "typing-agent"));
+        assert!(
+            claim_idle_for_injection(&state, "typing-agent").is_none(),
+            "a partially typed composer must never be written into"
+        );
+        assert_eq!(
+            state
+                .shell_states
+                .get("typing-agent")
+                .map(|a| a.load(std::sync::atomic::Ordering::Relaxed)),
+            Some(SHELL_IDLE),
+            "a refused claim must not leave the session marked busy"
         );
     }
 
