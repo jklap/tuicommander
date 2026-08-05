@@ -4471,10 +4471,33 @@ impl ChunkProcessor {
         // Parser uses a strict shape (title with ?/verb + ≥2 numbered options)
         // so false-positive cost is low. Dedup via last_choice_prompt_sig
         // guards against repaint re-emission.
-        if let Some(screen) = &screen_cache
-            && let Some(evt) = crate::output_parser::parse_choice_prompt(screen)
-        {
-            events.push(evt);
+        if let Some(screen) = &screen_cache {
+            match crate::output_parser::parse_choice_prompt(screen) {
+                Some(evt) => events.push(evt),
+                // Dialog is no longer on screen — retire its dedup signature so the
+                // same dialog is detected again the next time it appears, instead of
+                // being swallowed for the rest of the session.
+                None => self.last_choice_prompt_sig = None,
+            }
+        }
+
+        // Retire the question dedup as soon as its prompt leaves the screen. The
+        // marker exists only to stop an Ink menu repaint from re-notifying while
+        // the SAME prompt is still displayed; it used to live for the session's
+        // lifetime, and since every Ink footer is the byte-identical
+        // "Enter to select · ↑/↓ to navigate · Esc to cancel", the first menu of a
+        // session permanently swallowed every later one — the awaiting badge was a
+        // one-shot per session. Screen absence is the real end-of-prompt signal:
+        // the user answering, the agent withdrawing the prompt, and a repaint that
+        // scrolls it away all collapse into it.
+        if let Some(screen) = &screen_cache {
+            let prompt_gone = self
+                .last_question_text
+                .as_deref()
+                .is_some_and(|last| !screen.iter().any(|row| row.contains(last)));
+            if prompt_gone {
+                self.last_question_text = None;
+            }
         }
 
         let regex_found_question = if suppress_notifications {
@@ -4541,7 +4564,9 @@ impl ChunkProcessor {
                 self.last_status_task = Some(seen);
             }
 
-            // Dedup question: skip if same prompt_text already emitted.
+            // Dedup question: skip if same prompt_text already emitted. Retired as
+            // soon as the prompt leaves the screen (see the screen-absence reset
+            // above), so this guards one pending prompt, not the whole session.
             if let ParsedEvent::Question { prompt_text, .. } = event {
                 if self.last_question_text.as_deref() == Some(prompt_text.as_str()) {
                     continue;
@@ -4551,7 +4576,8 @@ impl ChunkProcessor {
 
             // Dedup choice-prompt: skip if same (title + option keys) already emitted.
             // Signature keeps option order but ignores highlighted drift so cursor
-            // movement within the dialog doesn't re-fire.
+            // movement within the dialog doesn't re-fire. Retired when the dialog
+            // leaves the screen (see the parse site above).
             if let ParsedEvent::ChoicePrompt { title, options, .. } = event {
                 let sig = format!(
                     "{}|{}",
@@ -5062,14 +5088,38 @@ fn enqueue_state_change_to_parent(
         .get("state")
         .and_then(|s| s.as_str())
         .unwrap_or("changed");
-    let framed = match payload.get("exit_code").and_then(|c| c.as_i64()) {
-        Some(code) => format!(
+    // The framed text is injected into the PARENT's PTY, so it must stay a single
+    // short line — a multi-line prompt pasted into an agent's composer submits
+    // itself halfway through.
+    let prompt_excerpt = payload
+        .get("prompt")
+        .and_then(|p| p.as_str())
+        .map(|p| {
+            let flat = p.split_whitespace().collect::<Vec<_>>().join(" ");
+            if flat.chars().count() > 120 {
+                format!("{}…", flat.chars().take(120).collect::<String>())
+            } else {
+                flat
+            }
+        })
+        .filter(|p| !p.is_empty());
+    let framed = match (
+        payload.get("exit_code").and_then(|c| c.as_i64()),
+        prompt_excerpt,
+    ) {
+        (Some(code), _) => format!(
             "[TUIC] child agent {} {} (exit {})",
             short_session(session_id),
             state_desc,
             code
         ),
-        None => format!(
+        (None, Some(prompt)) => format!(
+            "[TUIC] child agent {} is now {} — answer it with session action=input: {}",
+            short_session(session_id),
+            state_desc,
+            prompt
+        ),
+        (None, None) => format!(
             "[TUIC] child agent {} is now {}",
             short_session(session_id),
             state_desc
@@ -5091,7 +5141,11 @@ fn dispatch_parent_lifecycle(state: &AppState, dispatch: ParentLifecycleDispatch
 
 /// Push a state_change message and wake the parent when no child lifecycle
 /// transaction is active (for example, process exit and direct test helpers).
-fn push_state_change_to_parent(state: &AppState, session_id: &str, payload: serde_json::Value) {
+pub(crate) fn push_state_change_to_parent(
+    state: &AppState,
+    session_id: &str,
+    payload: serde_json::Value,
+) {
     if let Some(dispatch) = enqueue_state_change_to_parent(state, session_id, payload) {
         dispatch_parent_lifecycle(state, dispatch);
     }
@@ -14435,6 +14489,164 @@ mod tests {
         assert!(
             cp.last_choice_prompt_sig.is_some(),
             "signature must be stored after first emission"
+        );
+    }
+
+    /// Every Ink menu footer is byte-identical, so a session-lifetime question
+    /// dedup made the awaiting badge a one-shot: the first menu of a session
+    /// silently swallowed every later one. The marker must retire as soon as the
+    /// prompt leaves the screen.
+    #[test]
+    fn test_chunk_processor_question_dedup_retires_when_prompt_leaves_screen() {
+        use crate::state::VtLogBuffer;
+        use std::sync::atomic::AtomicU64;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "test-cp-question-dedup";
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        state
+            .silence_states
+            .insert(sid.to_string(), silence.clone());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_NULL),
+        );
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .output_buffers
+            .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(0));
+
+        let mut cp = ChunkProcessor::new(None, None);
+        let mut utf8_buf = Utf8ReadBuffer::new();
+        let mut esc_buf = EscapeAwareBuffer::new();
+        let mut feed = |cp: &mut ChunkProcessor, bytes: &[u8]| {
+            let utf8_data = utf8_buf.push(bytes);
+            let esc_data = esc_buf.push(&utf8_data);
+            let _ = cp.process_chunk(&esc_data, &silence, sid, state.as_ref());
+        };
+        let count_questions =
+            |rx: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>| {
+                let mut n = 0;
+                while let Ok(evt) = rx.try_recv() {
+                    if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt
+                        && parsed.get("type").and_then(|t| t.as_str()) == Some("question")
+                    {
+                        n += 1;
+                    }
+                }
+                n
+            };
+
+        // Ink menu footer — identical bytes for every Claude Code menu.
+        const FOOTER: &[u8] =
+            "\x1b[2J\x1b[HEnter to select · ↑/↓ to navigate · Esc to cancel\r\n".as_bytes();
+
+        let mut rx = state.event_bus.subscribe();
+        feed(&mut cp, FOOTER);
+        assert_eq!(count_questions(&mut rx), 1, "first menu must be detected");
+
+        // Repaint while the prompt is still on screen: must stay deduped.
+        feed(&mut cp, "\x1b[H".as_bytes());
+        feed(&mut cp, FOOTER);
+        assert_eq!(
+            count_questions(&mut rx),
+            0,
+            "a repaint of the same on-screen prompt must not re-notify"
+        );
+
+        // The user answers: the prompt leaves the screen and the agent works.
+        feed(&mut cp, "\x1b[2J\x1b[Hrunning the fix\r\n".as_bytes());
+        assert!(
+            cp.last_question_text.is_none(),
+            "dedup marker must retire once the prompt is off screen"
+        );
+
+        // A second menu, byte-identical footer: must be detected again.
+        feed(&mut cp, FOOTER);
+        assert_eq!(
+            count_questions(&mut rx),
+            1,
+            "a later menu with the same footer must be detected again"
+        );
+    }
+
+    /// Same one-shot trap as the question dedup: a dialog the user answers must be
+    /// detectable again the next time the agent raises it.
+    #[test]
+    fn test_chunk_processor_choice_prompt_dedup_retires_when_dialog_leaves_screen() {
+        use crate::state::VtLogBuffer;
+        use std::sync::atomic::AtomicU64;
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "test-cp-choice-retire";
+        let silence = Arc::new(Mutex::new(SilenceState::new()));
+        state
+            .silence_states
+            .insert(sid.to_string(), silence.clone());
+        state.shell_states.insert(
+            sid.to_string(),
+            std::sync::atomic::AtomicU8::new(SHELL_NULL),
+        );
+        state
+            .vt_log_buffers
+            .insert(sid.to_string(), Mutex::new(VtLogBuffer::new(24, 80, 1000)));
+        state
+            .output_buffers
+            .insert(sid.to_string(), Mutex::new(OutputRingBuffer::new(4096)));
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(0));
+
+        let mut cp = ChunkProcessor::new(None, None);
+        let mut utf8_buf = Utf8ReadBuffer::new();
+        let mut esc_buf = EscapeAwareBuffer::new();
+        let mut feed = |cp: &mut ChunkProcessor, bytes: &[u8]| {
+            let utf8_data = utf8_buf.push(bytes);
+            let esc_data = esc_buf.push(&utf8_data);
+            let _ = cp.process_chunk(&esc_data, &silence, sid, state.as_ref());
+        };
+        let count_choices = |rx: &mut tokio::sync::broadcast::Receiver<crate::state::AppEvent>| {
+            let mut n = 0;
+            while let Ok(evt) = rx.try_recv() {
+                if let crate::state::AppEvent::PtyParsed { parsed, .. } = evt
+                    && parsed.get("type").and_then(|t| t.as_str()) == Some("choice-prompt")
+                {
+                    n += 1;
+                }
+            }
+            n
+        };
+
+        const DIALOG: &[u8] = "\x1b[2J\x1b[HDo you want to make this edit to CLAUDE.md?\r\n\
+              ❯ 1. Yes\r\n\
+                2. Yes, allow all edits (shift+tab)\r\n\
+                3. No\r\n\
+              \r\n\
+              Esc to cancel · Tab to amend\r\n"
+            .as_bytes();
+
+        let mut rx = state.event_bus.subscribe();
+        feed(&mut cp, DIALOG);
+        assert_eq!(count_choices(&mut rx), 1, "first dialog must be detected");
+
+        // Answered: the dialog leaves the screen while the agent applies the edit.
+        feed(&mut cp, "\x1b[2J\x1b[Happlying the edit\r\n".as_bytes());
+        assert!(
+            cp.last_choice_prompt_sig.is_none(),
+            "signature must retire once the dialog is off screen"
+        );
+
+        // The agent raises the identical dialog again.
+        feed(&mut cp, DIALOG);
+        assert_eq!(
+            count_choices(&mut rx),
+            1,
+            "the same dialog raised again must be detected again"
         );
     }
 

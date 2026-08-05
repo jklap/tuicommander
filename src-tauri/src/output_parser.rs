@@ -1771,6 +1771,14 @@ pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
 ///      `Do you want` / `Proceed` / `Continue` / `Should I` verb (guardrail
 ///      against markdown numbered lists).
 ///   4. Require ≥ 2 options to reduce false positives.
+///
+/// Deliberately does NOT match Claude Code's `AskUserQuestion` dialog: its
+/// options are separated by wrapped description lines and a `───` rule, and its
+/// footer is `Enter to select · …`, not `Esc to … · Tab to …`. Relaxing steps 1–2
+/// enough to absorb it would also match any prose "Which one do you want?\n1. …
+/// \n   detail\n2. …" an agent prints — and a false ChoicePrompt renders a real
+/// interactive overlay. That dialog is covered by the `Enter to select` question
+/// footer in `parse_question` instead.
 pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     lazy_static::lazy_static! {
         // Option: optional ❯/›/> marker, digit(s), . or ), space, label.
