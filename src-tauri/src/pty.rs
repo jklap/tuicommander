@@ -5151,12 +5151,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
             delivered_via_channel: false,
         },
     );
-    if route_registered_orchestrator_mail(
-        state,
-        &parent_id,
-        &message_id,
-        message_timestamp,
-    )
+    if route_registered_orchestrator_mail(state, &parent_id, &message_id, message_timestamp)
     .is_some()
     {
         return true;
@@ -5479,8 +5474,7 @@ fn run_claimed_injection(
     apply_claimed_injection_outcome(state, session_id, text, claim, outcome)
 }
 
-const ORCHESTRATOR_MAIL_WAKE: &str =
-    "[TUIC] mail is available — read it with: agent action=inbox";
+const ORCHESTRATOR_MAIL_WAKE: &str = "[TUIC] mail is available — read it with: agent action=inbox";
 
 /// Submit one payload-free notification only when the registered parent's
 /// canonical lifecycle still says idle/completed. Unlike ordinary managed-peer

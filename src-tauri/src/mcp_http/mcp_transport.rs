@@ -538,9 +538,7 @@ fn retire_repaired_phantom_identity(state: &AppState, phantom: &str, repaired: &
             .map(|entry| entry.key().clone())
             .collect();
         for child in children {
-            state
-                .session_parent
-                .insert(child, repaired.to_string());
+            state.session_parent.insert(child, repaired.to_string());
         }
         state.orchestrator_peers.insert(repaired.to_string());
     }
@@ -6027,6 +6025,7 @@ mod tests {
             pending_injections: dashmap::DashMap::new(),
             pending_initial_prompts: dashmap::DashMap::new(),
             active_agent_waiters: dashmap::DashMap::new(),
+            orchestrator_peers: dashmap::DashSet::new(),
             session_html_tabs: dashmap::DashMap::new(),
             mcp_to_session: dashmap::DashMap::new(),
             session_to_mcp: dashmap::DashMap::new(),
