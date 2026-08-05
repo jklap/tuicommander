@@ -10,6 +10,10 @@
 
 Features to test when TUICommander is more usable.
 
+## Agent worktree creation prompt (2026-08-05)
+
+- [ ] Create a worktree through MCP while an agent terminal is active, then choose **Open Worktree**: the worktree's terminal must open while the agent terminal remains attached to its original branch and working directory, with no injected stop/switch message.
+
 ## MCP OAuth in-app authorization confirmation (2026-07-22)
 
 - [ ] With an OAuth upstream in **Authorization required**, click **Authorize**: the in-app confirmation must appear above Settings immediately after OAuth preparation; underlying **Cancel** must not be clickable. **Continue** must open a valid browser flow, while dismissing the dialog must return the upstream to **Authorization required** without opening a browser.
