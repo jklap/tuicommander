@@ -958,7 +958,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "action": { "type": "string", "description": "One of: list, create, input, output, status, wait, resize, close, kill, pause, resume, process_stats" },
                 "session_id": { "type": "string", "description": "Session ID (required for input, output, resize, close, pause, resume, wait)" },
                 "until": { "type": "string", "description": "Wait target: 'idle' or 'exited' (action=wait, default idle)" },
-                "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000, capped 300000). On timeout returns {timed_out:true}." },
+                "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
                 "input": { "type": "string", "description": "Raw text to write (action=input)" },
                 "special_key": { "type": "string", "description": "Special key: enter, tab, ctrl+c, ctrl+d, ctrl+z, ctrl+l, ctrl+a, ctrl+e, ctrl+k, ctrl+u, ctrl+w, ctrl+r, up, down, left, right, home, end, backspace, delete, escape (action=input)" },
                 "rows": { "type": "integer", "description": "Terminal rows (action=create or resize)" },
@@ -976,7 +976,7 @@ fn native_tool_definitions() -> serde_json::Value {
             "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Ordinary managed agents keep direct delivery. A registered orchestrator keeps peer payloads in its inbox; only idle/completed lifecycle may submit a generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order plus next_since. An active wait suppresses terminal wake.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox.\n- list_peers: List peers. Optional: project filter. Absent project is omitted.\n- send: Message a peer (requires to, message). Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` distinguishes waiter, generic/coalesced orchestrator wake, channel, terminal, and inbox-only routes. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Optional: limit, since (logical unix-millis cursor).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
-                "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000, capped 300000). On timeout returns {timed_out:true}." },
+                "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
                 "prompt": { "type": "string", "description": "Task prompt for the agent (action=spawn)" },
                 "cwd": { "type": "string", "description": "Working directory (action=spawn)" },
                 "model": { "type": "string", "description": "Structured model flag; preserved when args is also set (action=spawn)" },
@@ -1637,14 +1637,27 @@ async fn handle_mcp_tool_call_with_context(
 
 /// Default `wait` timeout when the caller omits `timeout_ms`.
 const WAIT_DEFAULT_MS: u64 = 60_000;
-/// Hard cap on a single server-side wait.
+/// Advertised cap on a single server-side wait — the number in the tool schema.
 const WAIT_MAX_MS: u64 = 300_000;
+/// Headroom between the advertised cap and the wait we actually run.
+///
+/// A client aborts its own `tools/call` on a deadline of its own, and at least
+/// one shipping client (Codex) uses exactly 300s — the same round number as our
+/// cap. A wait that runs the full `WAIT_MAX_MS` therefore answers right on that
+/// deadline and loses the race every time, turning the advertised maximum into a
+/// guaranteed error instead of `{timed_out:true}`. The bridge already reserves
+/// the same margin on its own response deadline. Kept client-agnostic on
+/// purpose: a per-client table would have to be maintained against every client
+/// release, and a wait that ends 5s early is indistinguishable to the caller.
+const WAIT_CLIENT_DEADLINE_MARGIN_MS: u64 = 5_000;
+/// The wait actually run for a caller asking for the cap or more.
+const WAIT_EFFECTIVE_MAX_MS: u64 = WAIT_MAX_MS - WAIT_CLIENT_DEADLINE_MARGIN_MS;
 
-/// Resolve the effective wait timeout: default when absent/zero, capped at the
-/// bridge-safe maximum.
+/// Resolve the effective wait timeout: default when absent/zero, capped so the
+/// reply beats the caller's own tool-call deadline.
 fn clamp_wait_timeout(requested: Option<u64>) -> u64 {
     match requested {
-        Some(ms) if ms > 0 => ms.min(WAIT_MAX_MS),
+        Some(ms) if ms > 0 => ms.min(WAIT_EFFECTIVE_MAX_MS),
         _ => WAIT_DEFAULT_MS,
     }
 }
@@ -7932,11 +7945,36 @@ mod tests {
         assert_eq!(clamp_wait_timeout(Some(1_000)), 1_000, "in-range preserved");
         assert_eq!(
             clamp_wait_timeout(Some(300_001)),
-            WAIT_MAX_MS,
-            "over-cap clamped at five minutes"
+            WAIT_EFFECTIVE_MAX_MS,
+            "over-cap clamped"
         );
         assert_eq!(WAIT_DEFAULT_MS, 60_000);
         assert_eq!(WAIT_MAX_MS, 300_000);
+    }
+
+    /// A caller that asks for the advertised maximum must get an answer, not a
+    /// client-side abort. Codex ends a tools/call at exactly 300s, so a wait that
+    /// runs the full 300000 ms loses that race every time.
+    #[test]
+    fn the_advertised_maximum_wait_answers_before_a_client_deadline() {
+        assert_eq!(
+            clamp_wait_timeout(Some(WAIT_MAX_MS)),
+            WAIT_EFFECTIVE_MAX_MS,
+            "asking for the documented maximum must not run to the client's ceiling"
+        );
+        assert!(
+            WAIT_EFFECTIVE_MAX_MS < WAIT_MAX_MS,
+            "the effective cap has to leave the client room to receive the reply"
+        );
+        assert!(
+            WAIT_MAX_MS - WAIT_EFFECTIVE_MAX_MS >= 5_000,
+            "margin must at least match the bridge's own response margin"
+        );
+        assert_eq!(
+            clamp_wait_timeout(Some(WAIT_EFFECTIVE_MAX_MS - 1)),
+            WAIT_EFFECTIVE_MAX_MS - 1,
+            "a request below the effective cap is untouched"
+        );
     }
 
     #[test]
