@@ -625,8 +625,7 @@ const AGENT_IDLE_MS: u64 = 2500;
 
 /// Retry horizon for the payload-free orchestrator mail notice after an
 /// ambiguous PTY write. Ordinary payload injection remains non-retriable.
-const ORCHESTRATOR_WAKE_UNCERTAIN_RETRY: std::time::Duration =
-    std::time::Duration::from_secs(5);
+const ORCHESTRATOR_WAKE_UNCERTAIN_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A ready prompt must remain visible across multiple silence-timer ticks before
 /// it can end an agent turn. Ink redraws are multi-chunk (erase, then repaint),
@@ -5344,11 +5343,7 @@ fn mark_injection_uncertain(state: &AppState, session_id: &str, claim: Injection
     }
 }
 
-fn mark_orchestrator_notice_uncertain(
-    state: &AppState,
-    session_id: &str,
-    claim: InjectionClaim,
-) {
+fn mark_orchestrator_notice_uncertain(state: &AppState, session_id: &str, claim: InjectionClaim) {
     if let Some(silence) = state.silence_states.get(session_id) {
         silence
             .lock()
