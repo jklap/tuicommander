@@ -529,6 +529,43 @@ describe("uiStore", () => {
 		});
 	});
 
+	describe("githubSectionCollapsed", () => {
+		it("reports undefined for a section nobody has toggled", () => {
+			testInScope(() => {
+				expect(store.getGithubSectionCollapsed("issues")).toBeUndefined();
+			});
+		});
+
+		it("stores the collapsed flag per section id", () => {
+			testInScope(() => {
+				store.setGithubSectionCollapsed("issues", true);
+				store.setGithubSectionCollapsed("prs", false);
+				expect(store.getGithubSectionCollapsed("issues")).toBe(true);
+				expect(store.getGithubSectionCollapsed("prs")).toBe(false);
+			});
+		});
+
+		it("persists to the backend so the state survives a restart", () => {
+			testInScope(() => {
+				store.setGithubSectionCollapsed("issues", true);
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					config: expect.objectContaining({ github_section_collapsed: { issues: true } }),
+				});
+			});
+		});
+
+		it("hydrates the map from the backend", async () => {
+			mockInvoke.mockResolvedValueOnce({ github_section_collapsed: { issues: true, "my-prs": false } });
+
+			await testInScopeAsync(async () => {
+				await store.hydrate();
+				expect(store.getGithubSectionCollapsed("issues")).toBe(true);
+				expect(store.getGithubSectionCollapsed("my-prs")).toBe(false);
+				expect(store.getGithubSectionCollapsed("prs")).toBeUndefined();
+			});
+		});
+	});
+
 	describe("loading state", () => {
 		it("setLoading sets loading and message", () => {
 			testInScope(() => {

@@ -904,6 +904,10 @@ pub(crate) struct UIPrefsConfig {
     pub(crate) diff_view_mode: String,
     #[serde(default)]
     pub(crate) detached_panels: std::collections::HashMap<String, String>,
+    /// Collapsed state of the GitHub panel sections, keyed by section id
+    /// (`my-prs`, `prs`, `issues`). Absent key = the section's own default.
+    #[serde(default)]
+    pub(crate) github_section_collapsed: std::collections::HashMap<String, bool>,
 }
 
 fn default_diff_view_mode() -> String {
@@ -929,6 +933,7 @@ impl Default for UIPrefsConfig {
             settings_nav_width: default_settings_nav_width(),
             diff_view_mode: default_diff_view_mode(),
             detached_panels: std::collections::HashMap::new(),
+            github_section_collapsed: std::collections::HashMap::new(),
         }
     }
 }
@@ -3117,6 +3122,10 @@ mod tests {
                 "activity".to_string(),
                 "panel-activity".to_string(),
             )]),
+            github_section_collapsed: std::collections::HashMap::from([
+                ("issues".to_string(), true),
+                ("prs".to_string(), false),
+            ]),
         };
         let loaded: UIPrefsConfig = round_trip_in_dir(dir.path(), "ui-prefs.json", &cfg);
         assert!(!loaded.sidebar_visible);
@@ -3130,6 +3139,16 @@ mod tests {
         assert_eq!(loaded.notes_panel_width, 320);
         assert_eq!(loaded.settings_nav_width, 200);
         assert_eq!(loaded.diff_view_mode, "split");
+        assert_eq!(loaded.github_section_collapsed.get("issues"), Some(&true));
+        assert_eq!(loaded.github_section_collapsed.get("prs"), Some(&false));
+    }
+
+    /// A prefs file written before the field existed must still load, with the
+    /// map empty so every section falls back to its own default.
+    #[test]
+    fn ui_prefs_without_github_section_collapsed_defaults_to_empty() {
+        let loaded: UIPrefsConfig = serde_json::from_str(r#"{"sidebar_visible":true}"#).unwrap();
+        assert!(loaded.github_section_collapsed.is_empty());
     }
 
     #[test]

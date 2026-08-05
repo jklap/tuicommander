@@ -1502,6 +1502,13 @@
   background: var(--bg-tertiary);
 }
 
+/* Keyboard-navigated row. Distinct from :hover so arrow keys stay visible
+   while the pointer rests elsewhere; DOM focus stays on the panel. */
+.ghItemRowActive {
+  background: var(--bg-tertiary);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .ghItemNum {
   font-size: var(--font-xs);
   color: var(--fg-muted);

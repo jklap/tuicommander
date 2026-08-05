@@ -983,9 +983,9 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [x] Issue accordion: labels, assignees, milestone, timestamps, comment count _(verified: IssueDetailContent.tsx component renders these fields)_
 - [x] Issue actions: Open in GitHub, Close/Reopen, Copy #number _(verified: GitHubPanel.tsx:161-170 handleCloseReopenIssue invokes close_issue/reopen_issue; Open in GitHub + Copy # in actions)_
 - [x] Filter dropdown (Assigned/Created/Mentioned/All) changes issue list _(verified: GitHubPanel.tsx:24-30 FILTER_OPTIONS with disabled/assigned/created/mentioned/all; github store setIssueFilter calls backend)_
-- [ ] Section collapse state persists in localStorage _(NOT IMPLEMENTED: issuesCollapsed is createSignal(false) with no localStorage persistence; tracked in story `549-c0c3`)_
+- [x] Section collapse state persists _(implemented in story `549-c0c3`: not localStorage — `uiStore.githubSectionCollapsed` keyed by section id, persisted through `save_ui_prefs` like every other panel pref. NOTE: needs a `make dev` restart, the `UIPrefsConfig` field is a Rust change)_
 - [x] Escape key: closes expanded item first, then panel _(verified: GitHubPanel.tsx:151-158 Escape checks expandedIssue() first, then calls onClose)_
-- [ ] Arrow keys navigate items, Enter expands/collapses _(NOT IMPLEMENTED: no ArrowUp/ArrowDown/Enter keyboard handling in GitHubPanel or PrSection; tracked in story `549-c0c3`)_
+- [x] Arrow keys navigate items, Enter expands/collapses _(implemented in story `549-c0c3`; verified by `GitHubPanel.keyboard.test.tsx`, 12 tests: cross-section walk, clamping at both ends, collapsed sections skipped, Enter toggling PR and issue rows, DOM focus never leaving the panel)_
 - [x] Rate limit: banner appears when circuit breaker trips, Retry button works _(verified: GitHubPanel.tsx:211-220 Show when={circuitOpen()} renders banner with Retry button)_
 - [x] Loading: skeleton rows shown during first issues fetch _(verified: GitHubPanel.tsx:278-293 skeleton rows shown when issuesLoading && issues.length === 0)_
 - [x] Empty state: "No remote-only PRs" / "No issues found" messages _(verified: GitHubPanel.tsx:298 fallback renders "No issues found" via i18n key)_
@@ -1693,3 +1693,17 @@ client's hits into every other client's panel.
 - [x] Rows show path, line number, and match context. _(verified: `FileBrowserPanel.tsx:1331-1337`)_
 - [x] Clicking a result opens the file at the matched line. _(verified: `FileBrowserPanel.tsx:1312,1327` → `onFileOpen(root, path, line_number)`)_
 - [ ] End-to-end in a real browser against a running instance: type a query in File Browser content search and confirm rows appear and a click opens the editor at the line. No instance was running during this work.
+
+## GitHub panel keyboard UX + persisted collapse (2026-08-05, **Rust change — needs `make dev` restart**)
+
+Arrow/Enter navigation across the three GitHub panel sections, plus collapse state persisted through
+`save_ui_prefs`. PrSection is now fully controlled by GitHubPanel (collapse, expansion, dismissed
+PRs lifted) so the navigable row list and the rendered rows cannot drift apart.
+
+- [x] ArrowUp/ArrowDown walk rows across sections and clamp at both ends. _(verified: `GitHubPanel.keyboard.test.tsx`)_
+- [x] Enter toggles the highlighted PR or issue row. _(verified: same suite)_
+- [x] Rows of a collapsed section are skipped. _(verified: same suite)_
+- [x] Escape keeps its old behaviour — expanded issue first, then close. _(verified: same suite)_
+- [x] Collapse writes to `uiStore.githubSectionCollapsed` and hydrates back. _(verified: `stores/ui.test.ts`, 4 tests + Rust `ui_prefs_round_trip`)_
+- [ ] **After a `make dev` restart**: collapse a section, quit, relaunch — the section is still collapsed. Without the restart the Rust `UIPrefsConfig` field is absent and serde silently drops it, so it only persists in-session.
+- [ ] Visual: the `.ghItemRowActive` highlight (inset accent bar) reads clearly in light and dark themes, and the active row scrolls into view on long lists.
