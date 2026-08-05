@@ -52,6 +52,11 @@ interface UIStoreState {
 	aiTriagePanelVisible: boolean;
 	detachedPanels: Record<string, string>;
 
+	/** Collapsed state of the GitHub panel sections, keyed by section id
+	 *  (`my-prs`, `prs`, `issues`). A missing key means the section has never
+	 *  been toggled and keeps its own default. */
+	githubSectionCollapsed: Record<string, boolean>;
+
 	// Knowledge history overlay — ephemeral, not persisted. Full-screen modal
 	// opened from SessionKnowledgeBar's "History" button.
 	knowledgeHistoryOverlayVisible: boolean;
@@ -109,6 +114,7 @@ function createUIStore() {
 		aiChatPanelVisible: false,
 		aiTriagePanelVisible: false,
 		detachedPanels: {} as Record<string, string>,
+		githubSectionCollapsed: {} as Record<string, boolean>,
 		knowledgeHistoryOverlayVisible: false,
 		gitPanelRequestedTab: null,
 		markdownPanelWidth: MARKDOWN_PANEL_DEFAULT_WIDTH,
@@ -144,6 +150,7 @@ function createUIStore() {
 				diff_view_mode: state.diffViewMode,
 				file_browser_view_mode: state.fileBrowserViewMode,
 				detached_panels: state.detachedPanels,
+				github_section_collapsed: state.githubSectionCollapsed,
 			},
 		}).catch((err) => appLogger.debug("store", "Failed to save UI prefs", err));
 	}
@@ -219,6 +226,7 @@ function createUIStore() {
 					diff_view_mode?: string;
 					file_browser_view_mode?: string;
 					detached_panels?: Record<string, string>;
+					github_section_collapsed?: Record<string, boolean>;
 				}>("load_ui_prefs");
 				if (loaded) {
 					if (loaded.sidebar_visible !== undefined) {
@@ -271,6 +279,9 @@ function createUIStore() {
 					}
 					if (loaded.detached_panels && typeof loaded.detached_panels === "object") {
 						setState("detachedPanels", loaded.detached_panels);
+					}
+					if (loaded.github_section_collapsed && typeof loaded.github_section_collapsed === "object") {
+						setState("githubSectionCollapsed", loaded.github_section_collapsed);
 					}
 				}
 			} catch (err) {
@@ -400,6 +411,17 @@ function createUIStore() {
 
 		isDetached(panelId: string): boolean {
 			return panelId in state.detachedPanels;
+		},
+
+		/** Collapsed flag for a GitHub panel section, or undefined when the user
+		 *  has never toggled it — the caller then applies its own default. */
+		getGithubSectionCollapsed(sectionId: string): boolean | undefined {
+			return state.githubSectionCollapsed[sectionId];
+		},
+
+		setGithubSectionCollapsed(sectionId: string, collapsed: boolean): void {
+			setState("githubSectionCollapsed", sectionId, collapsed);
+			saveUIPrefs();
 		},
 
 		setKnowledgeHistoryOverlayVisible(visible: boolean): void {
