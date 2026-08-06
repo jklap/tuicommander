@@ -154,5 +154,18 @@
       "Cmd+C copies text selected inside plugin dashboards and other panel iframes."
     ],
     "date": "2026-08-03"
+  },
+  "1.7.2": {
+    "highlights": [
+      "Agent wait and inbox now always return next_since, so a timeout no longer forces a full history reload",
+      "since is now optional on wait and inbox: omit it to resume from a server-side per-identity cursor, or pass 0 to replay",
+      "delivered_via_channel is gone from send responses; delivery_path names the actual route and is the single field to read",
+      "register now accepts replaces=<old_uuid> to hand a mailbox over to a new identity across MCP connections, with a warning when the old peer still owns a live terminal",
+      "The find shortcut re-focuses an already-open search bar in the terminal, code editor, diff, HTML preview and markdown",
+      "Orchestrator inbox wakes retry at most once per unread group instead of looping every five seconds forever",
+      "Creating a worktree opens it in its own terminal and leaves a running agent on its real branch and directory",
+      "Managed Codex peers now inherit TUIC_SESSION through the MCP entry, so their first agent send works without manual registration"
+    ],
+    "date": "2026-08-06"
   }
 }
