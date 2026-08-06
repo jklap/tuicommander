@@ -120,9 +120,12 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
 > name/project, or from a standalone/external session where the env-var route is unavailable.
 > External MCP clients do not need a plain-shell identity tab: call `agent action=register`
 > without `tuic_session` to receive an MCP-scoped UUID, or supply an explicit UUID when the same
-> identity must be reclaimed after reconnect.
+> identity must be reclaimed after reconnect. Reconnecting under a *new* UUID? Add
+> `replaces="<old-uuid>"` or the old inbox is left behind — nothing links the two identities
+> otherwise, and TUIC never guesses one from a name. The reply reports `mail_migrated`, or
+> `mail_stranded` with a warning when the old identity still has a live terminal of its own.
 
-> **Prefer blocking waits over polling.** `agent action=wait since=<ms>` returns as soon
+> **Prefer blocking waits over polling.** `agent action=wait` returns as soon
 > as new mail arrives; `session action=wait session_id=<id> until=idle|exited` blocks on a
 > peer's lifecycle. Both default to 60 seconds, cap at 300000 ms, and return
 > `{met, timed_out}`. They are event-driven end to end; the bridge deadline follows the
@@ -149,9 +152,12 @@ TUICommander injects these into every Claude Code PTY session — no manual conf
 
 4. **Wait for and receive messages** — one blocking call returns the message bodies:
    ```
-   agent action=wait since=1712000000000
+   agent action=wait
    ```
-   Pass the returned `next_since` to the next wait.
+   Omit `since`: the server remembers where you got to and resumes from there, so a plain
+   `wait` never re-reads mail you already saw. Pass it only to override — `since=0`
+   deliberately replays the whole inbox. `next_since` comes back on every response,
+   timeouts included.
 
 5. **Check inbox directly** — useful after a reported FIFO eviction or if channel push was missed:
    ```

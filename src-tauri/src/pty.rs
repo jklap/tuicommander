@@ -5342,8 +5342,7 @@ pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
         .get(session_id)
         .map(|s| s.question_confident)
         .unwrap_or(false);
-    idle
-        && idle_is_confirmed(state, session_id)
+    idle && idle_is_confirmed(state, session_id)
         && !blocked_on_question
         && !has_partial_user_input(state, session_id)
 }

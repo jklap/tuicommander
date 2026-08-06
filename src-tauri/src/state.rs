@@ -940,7 +940,17 @@ pub struct AgentMessage {
     pub content: String,
     /// Per-recipient logical unix-millis cursor
     pub timestamp: u64,
-    /// Whether this message was pushed via SSE channel notification
+    /// Whether this message was pushed via SSE channel notification.
+    ///
+    /// Server-side forensics only — never serialized. It reports ONE sub-route,
+    /// but every reader so far has parsed it as a delivery verdict: it stays
+    /// `false` when a waiter or the terminal carried the message, i.e. exactly
+    /// when delivery worked best. That ambiguity already removed it from the
+    /// `send` response; emitting it on `inbox`/`wait` is the same trap aimed at
+    /// the recipient, who is by definition holding the message it describes.
+    /// The route lives in `delivery_path` (sender) and the `agent_msg` tracing
+    /// line (operator).
+    #[serde(skip)]
     pub delivered_via_channel: bool,
 }
 
@@ -1287,6 +1297,14 @@ pub struct AppState {
     /// Cumulative eviction count per agent since last inbox read (tuic_session → count).
     /// Incremented on each FIFO eviction; consumed and reset by the inbox action.
     pub(crate) agent_inbox_evictions: DashMap<String, u64>,
+    /// Last read position per agent (tuic_session → logical unix-millis cursor).
+    ///
+    /// `since` used to be entirely the caller's problem, and a wait that timed out
+    /// answered without a `next_since` — leaving `since=0` as the only recoverable
+    /// value and replaying the whole inbox on the next call. The server remembers
+    /// the position instead: an omitted `since` resumes from here, an explicit one
+    /// overrides it, and `since=0` stays the deliberate replay escape hatch.
+    pub(crate) agent_read_cursor: DashMap<String, u64>,
     /// Peer messages queued to be typed into a recipient's PTY on its next
     /// BUSY→IDLE transition (tuic_session → framed lines). Populated when a message
     /// arrives for a busy/awaiting agent; drained by `flush_pending_injections`.
@@ -2186,6 +2204,7 @@ impl AppState {
             peer_agents: DashMap::new(),
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
+            agent_read_cursor: DashMap::new(),
             pending_injections: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             active_agent_waiters: DashMap::new(),
@@ -5237,6 +5256,7 @@ mod tests {
             peer_agents: DashMap::new(),
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
+            agent_read_cursor: DashMap::new(),
             pending_injections: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             active_agent_waiters: DashMap::new(),

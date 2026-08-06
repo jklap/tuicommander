@@ -659,19 +659,34 @@ requests (`focus=false`) do not change repository context.
    abandoned identity either arrives before the retire and is carried over with the rest of the
    inbox, or arrives after it and is refused with "is not registered" — it is never buffered under
    an address that is deleted a moment later.
+
+   That carry-over only has an *implicit* trigger when the same protocol session rebinds. A caller
+   that reconnects and registers a brand-new UUID arrives with no link to its old identity, so it
+   must name it: `register replaces=<old_uuid>`. Identity is never inferred from a name or project —
+   it decides who may read whose mail. The response reports the outcome instead of staying silent:
+   `superseded_identity` plus `mail_migrated`, and — when the superseded identity still owns a live
+   PTY — `mail_stranded` and an `identity_warning`. That last case deliberately moves nothing: an
+   identity with a terminal is a reachable peer, and taking its inbox would strand a working agent.
 2. **Discover**: `agent action=list_peers` returns all registered peers (filterable by project).
 3. **Send**: `agent action=send to=<tuic_session> message="..."` buffers to the recipient's inbox.
    `accepted=true` and `buffered_in_inbox=true` acknowledge success;
-   `delivered_via_channel` describes only the optional SSE path, while
-   `delivery_path` distinguishes SSE, terminal-or-queued, waiter, generic/coalesced
-   orchestrator wake, and inbox-only delivery. When the recipient is a
+   `delivery_path` is the single source of truth for the route and distinguishes SSE,
+   terminal-or-queued, waiter, generic/coalesced orchestrator wake, and inbox-only
+   delivery. It replaced `delivered_via_channel` on this response, which reported only
+   the SSE sub-route yet read as a delivery verdict — `false` next to a `delivered:true`
+   and a confirming `delivery_path` was pure ambiguity. The field remains on the stored
+   `AgentMessage` as in-memory forensics but is `#[serde(skip)]` — it reaches no MCP
+   response at all, including `inbox`/`wait`. Emitting it to the recipient repeated the
+   same trap: it is `false` precisely when a waiter or the terminal carried the message,
+   and the recipient reading it is already holding the message it describes. The route is
+   `delivery_path` for the sender and the `agent_msg` tracing line for the operator. When the recipient is a
    real managed PTY, `recipient_state` contains only its current `shell_state` and `agent_state`;
    external generated peers omit `recipient_state`.
 4. **Receive** — three layers, most-immediate first:
    - **Channel push**: real-time `notifications/claude/channel` only when an ordinary managed Claude Code recipient already has a working turn and holds an SSE stream (CC + channels flag). A managed non-Claude worker, or an idle/completed Claude worker, uses PTY delivery even if its MCP bridge has an SSE stream. Registered orchestrators never receive peer payloads through this channel.
    - **PTY injection**: for an ordinary idle or completed managed agent, the message is *typed into its terminal* (framed single line; split write, Ink-safe) so it submits a real next turn without polling. A busy ordinary recipient without active Claude channel support gets the message on its next BUSY→IDLE transition. Oversized (>2 KB) bodies inject a pointer to `agent action=inbox` instead. An idle/completed orchestrator receives only the generic inbox wake described above; a busy orchestrator is never queued or steered.
-   - **Inbox poll**: `agent action=inbox since=<ms>` — always the authoritative store.
-5. **Wait** *(prefer over polling)*: `agent action=wait since=<ms>` blocks until new mail;
+   - **Inbox poll**: `agent action=inbox` — always the authoritative store.
+5. **Wait** *(prefer over polling)*: `agent action=wait` blocks until new mail;
    `session action=wait session_id=<id> until=idle|exited` blocks on a peer's lifecycle. The default
    is 60 seconds and the advertised cap is 300000 ms — a request at or above that runs as 295000 ms.
    The 5-second margin exists because a client aborts its own `tools/call` on its own deadline, and
@@ -682,7 +697,15 @@ requests (`focus=false`) do not change repository context.
    Agent-wait success preserves
    `{met,timed_out,new_messages}` and directly includes every retained fresh message (up to the
    100-message inbox capacity) plus `next_since`, in chronological order. Per-recipient logical
-   unix-millisecond cursors make equal-clock-millisecond bursts safe. Wait never consumes the
+   unix-millisecond cursors make equal-clock-millisecond bursts safe.
+
+   **The cursor is kept server-side.** `since` is optional on both `wait` and `inbox`: omitting it
+   resumes from the caller's stored read position (`agent_read_cursor`), passing it overrides, and
+   `since=0` stays the deliberate "replay everything" escape hatch — a replay never rewinds the
+   stored cursor. `next_since` is now returned on *every* response, timeout included, falling back
+   to the stored position when the batch is empty. Previously it was omitted whenever there were no
+   messages, which left a timed-out waiter with `since=0` as its only recoverable value and made it
+   reload the whole history on the next call. Wait never consumes the
    authoritative inbox; actual FIFO eviction is still reported by `missed_count` on inbox reads.
    Both wait actions subscribe before their initial state check and then sleep on inbox or
    per-session lifecycle events; they do not run an internal polling loop.
