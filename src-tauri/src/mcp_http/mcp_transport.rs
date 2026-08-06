@@ -556,7 +556,23 @@ fn join_peer_identity_locked(state: &AppState, mcp_sid: &str, tuic_session: &str
 /// those are the replies the caller went looking for in the first place. An
 /// abandoned identity that still owns a PTY is left alone; its terminal, not this
 /// registration, decides its lifetime.
-fn retire_repaired_phantom_identity(state: &AppState, phantom: &str, repaired: &str) {
+/// What a retire attempt actually did. The skip case used to be a silent early
+/// return, which is how mail addressed to a superseded identity sat unread with
+/// nobody told: `register` now reports it back to the caller.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum IdentityHandoff {
+    /// The prior identity was abandoned; its mail moved and was re-routed.
+    Migrated { messages: usize },
+    /// The prior identity still owns a live PTY, so it is a reachable peer rather
+    /// than an abandoned one. Migrating would take mail from a working agent.
+    SkippedLivePty { pending: usize },
+}
+
+fn retire_repaired_phantom_identity(
+    state: &AppState,
+    phantom: &str,
+    repaired: &str,
+) -> IdentityHandoff {
     // The retire spans several maps, and `send` reads one of them (`peer_agents`)
     // to decide whether a recipient exists before buffering. Both halves take
     // `PEER_IDENTITY_BIND_LOCK` so a send can only land entirely before the
@@ -567,7 +583,12 @@ fn retire_repaired_phantom_identity(state: &AppState, phantom: &str, repaired: &
     let carried: Vec<(String, u64)> = {
         let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
         if state.live_pty_for_peer(phantom).is_some() {
-            return;
+            let pending = state
+                .agent_inbox
+                .get(phantom)
+                .map(|inbox| inbox.len())
+                .unwrap_or(0);
+            return IdentityHandoff::SkippedLivePty { pending };
         }
         let was_orchestrator = state.orchestrator_peers.remove(phantom).is_some();
         if was_orchestrator {
@@ -603,6 +624,7 @@ fn retire_repaired_phantom_identity(state: &AppState, phantom: &str, repaired: &
         state.session_to_mcp.remove(phantom);
         carried
     };
+    let migrated = carried.len();
     for (message_id, message_timestamp) in carried {
         crate::pty::route_registered_orchestrator_mail(
             state,
@@ -623,6 +645,7 @@ fn retire_repaired_phantom_identity(state: &AppState, phantom: &str, repaired: &
         .send(crate::state::AppEvent::PeerUnregistered {
             tuic_session: phantom.to_string(),
         });
+    IdentityHandoff::Migrated { messages: migrated }
 }
 
 fn register_peer_identity(
@@ -642,9 +665,7 @@ fn register_peer_identity(
         // A session that already routes to the identity was bound to it by an
         // earlier header assertion, so it is a sibling bridge inside the same
         // PTY rather than a claimant — register is its rename, not a takeover.
-        PeerIdentityOwnership::LiveOwner
-            if mcp_session_routes_to(state, mcp_sid, tuic_session) =>
-        {
+        PeerIdentityOwnership::LiveOwner if mcp_session_routes_to(state, mcp_sid, tuic_session) => {
             join_peer_identity_locked(state, mcp_sid, tuic_session);
             if let Some(mut peer) = state.peer_agents.get_mut(tuic_session) {
                 peer.name = name;
@@ -863,7 +884,7 @@ fn build_mcp_instructions_for_mode(
     }
     out.push_str("- **Identity:** managed PTYs auto-bind from `$TUIC_SESSION`. Headerless external callers use `agent action=register` without a UUID to receive an MCP-scoped identity; pass `tuic_session` only to reclaim an explicit stable UUID.\n");
     out.push_str("- **Orchestrator role:** declare it with `agent action=register orchestrator=true`; use `false` to remove it. Spawn never infers the role. `mail_wake=managed_pty_lifecycle` is server-derived; external/headerless peers remain wait/inbox-only.\n");
-    out.push_str("- **Same repo:** `agent action=spawn` peers; wait with `agent action=wait since=<last_ms>`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`. Use `session output` only as an anomaly fallback when a child failed to send its result.\n");
+    out.push_str("- **Same repo:** `agent action=spawn` peers; wait with `agent action=wait`, then read `agent action=inbox`. Lifecycle notifications carry state only; workers must report results with `agent action=send`. Use `session output` only as an anomaly fallback when a child failed to send its result.\n");
     out.push_str("- **Isolated branches:** `repo action=worktree_create spawn_session=true`.\n");
     if is_claude_code {
         out.push_str("- **Single isolated task (CC only):** `repo action=worktree_create` then delegate via returned `cc_agent_hint` (absolute paths). ONLY valid use of native Agent/Task.\n");
@@ -973,7 +994,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "agent",
-            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait since=<ms> (new mail) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Ordinary managed agents keep direct delivery. A registered orchestrator keeps peer payloads in its inbox; only idle/completed lifecycle may submit a generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail (since=<ms>). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order plus next_since. An active wait suppresses terminal wake.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox.\n- list_peers: List peers. Optional: project filter. Absent project is omitted.\n- send: Message a peer (requires to, message). Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` distinguishes waiter, generic/coalesced orchestrator wake, channel, terminal, and inbox-only routes. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Optional: limit, since (logical unix-millis cursor).",
+            "description": "AI agent orchestration. There is no separate swarm action: use these agent/session primitives to spawn and coordinate managed peers.\n\nOrchestration in 5 lines:\n1. Managed PTYs auto-bind from $TUIC_SESSION. A headerless external caller calls register without tuic_session to receive an MCP-scoped UUID, or supplies an explicit stable UUID to reclaim it.\n2. Spawn a named peer: spawn name=worker prompt=<task> [agent_type=codex|gemini|...] → {session_id, name}.\n3. Wait for it: agent action=wait (new mail; omit since, the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Cheap blocking call — do NOT poll in a loop. Both cap at 300s: for work that runs longer, or across a reconnect, poll the spawn's task_id with task action=get instead — the outcome is recorded even with nobody waiting.\n4. Talk to it: send to=<peer> message=<text>. Ordinary managed agents keep direct delivery. A registered orchestrator keeps peer payloads in its inbox; only idle/completed lifecycle may submit a generic `agent action=inbox` wake.\n5. Lifecycle notifications carry state only. Every worker must report task output or blockers with send; use session output only if a child anomalously failed to send.\n\nActions:\n- spawn: Launch agent in new PTY (localhost only). Optional name is assigned before prompt delivery. Returns {session_id, name, task_id, poll_interval_ms, monitor_with, peer_monitor_with?}.\n- wait: Block until new inbox mail. Omit `since` — the server resumes from your last read position; pass it only to override (since=0 replays everything). Success inlines every retained fresh message (up to the 100-message inbox capacity) in chronological order. Every response carries next_since, timeout included. An active wait suppresses terminal wake.\n- detect: Installed agents [{name, path, version}].\n- stats: {active_sessions, max_sessions, available_slots}.\n- metrics: Cumulative {total_spawned, total_failed, bytes_emitted, pauses_triggered}.\n- register: Bind an external/headerless caller, or rename/set the project of an auto-bound managed peer. tuic_session is optional; omission generates a stable identity for this MCP connection. Reconnecting under a NEW uuid? Pass `replaces=<old_uuid>` or its inbox is stranded — the response reports superseded_identity, mail_migrated, and mail_stranded + identity_warning when the old identity still owns a live PTY (its mail is left alone). Check `terminal` in the response: false means nothing can be typed into you and no message can wake you — you must consume your own inbox with wait/inbox.\n- list_peers: List peers. Optional: project filter. Absent project is omitted.\n- send: Message a peer (requires to, message). Returns `delivered`: false means no active wait or safe wake surfaced it, so it remains inbox-only. `delivery_path` is the single source of truth for the route: waiter, generic/coalesced orchestrator wake, sse channel, terminal, or inbox-only. Adds recipient_state={shell_state?,agent_state?} only for a real managed PTY.\n- inbox: Read messages. Returns next_since. Optional: limit, since (omit to resume from the server-side cursor).",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
@@ -988,12 +1009,13 @@ fn native_tool_definitions() -> serde_json::Value {
                 "rows": { "type": "integer", "description": "Terminal rows (action=spawn)" },
                 "cols": { "type": "integer", "description": "Terminal cols (action=spawn)" },
                 "tuic_session": { "type": "string", "description": "Optional explicit stable UUID (action=register). Managed PTYs normally auto-bind; a headerless caller may omit this to receive an MCP-scoped UUID." },
+                "replaces": { "type": "string", "description": "Prior tuic_session this registration supersedes (action=register). Required to inherit the old identity's inbox when reconnecting under a new UUID — there is no implicit link across protocol sessions, and identity is never guessed. Ignored when that identity still owns a live PTY; the response then reports mail_stranded." },
                 "name": { "type": "string", "description": "Non-empty peer/session display name (action=spawn optional; action=register optional; default: 'agent')" },
                 "project": { "type": "string", "description": "Git repo root path (action=register optional, action=list_peers filter)" },
                 "orchestrator": { "type": "boolean", "description": "Explicitly enable or remove orchestrator inbox-only routing (action=register). Omission preserves the current role; spawning a child never infers it." },
                 "to": { "type": "string", "description": "Recipient tuic_session UUID (action=send, required)" },
                 "message": { "type": "string", "description": "Message content, max 64KB (action=send, required)" },
-                "since": { "type": "integer", "description": "Logical unix-millis cursor — return messages after this (action=inbox), or wake on mail newer than this (action=wait)" }
+                "since": { "type": "integer", "description": "Logical unix-millis cursor (action=inbox|wait). OMIT IT: the server remembers your last read position and resumes from there. Pass it only to override — since=0 deliberately replays the whole inbox. Every wait/inbox response carries next_since, including on timeout" }
             }, "required": ["action"] }
         },
         {
@@ -1865,22 +1887,57 @@ fn bounded_agent_messages<'a>(
     page
 }
 
-fn agent_wait_success_response(finish: crate::state::AgentWaitFinish) -> serde_json::Value {
+/// Resolve the read position for a wait/inbox call.
+///
+/// An explicit `since` always wins — `since=0` is the deliberate "replay
+/// everything" escape hatch and must stay honoured. Omitting it resumes from the
+/// server-side cursor, so a caller that cannot thread the value (or that lost it
+/// to a timeout) no longer falls back to replaying the whole inbox.
+fn resolve_agent_since(state: &AppState, tuic_session: &str, args: &serde_json::Value) -> u64 {
+    match args["since"].as_u64() {
+        Some(explicit) => explicit,
+        None => state
+            .agent_read_cursor
+            .get(tuic_session)
+            .map(|entry| *entry.value())
+            .unwrap_or(0),
+    }
+}
+
+/// Advance the stored read position. Never moves backwards: a deliberate replay
+/// (`since=0`) must not rewind the cursor for the next omitted-`since` call.
+fn advance_agent_cursor(state: &AppState, tuic_session: &str, cursor: u64) {
+    let mut entry = state
+        .agent_read_cursor
+        .entry(tuic_session.to_string())
+        .or_insert(0);
+    if cursor > *entry {
+        *entry = cursor;
+    }
+}
+
+fn agent_wait_success_response(
+    state: &AppState,
+    tuic_session: &str,
+    since: u64,
+    finish: crate::state::AgentWaitFinish,
+) -> serde_json::Value {
     let messages = bounded_agent_messages(finish.messages.iter(), AGENT_WAIT_INLINE_LIMIT);
-    let next_since = messages.iter().map(|message| message.timestamp).max();
-    let mut response = serde_json::json!({
+    // Fall back to the position we read from, so `next_since` is present even when
+    // the batch is empty — losing the cursor is what drove callers back to since=0.
+    let next_since = messages
+        .iter()
+        .map(|message| message.timestamp)
+        .max()
+        .unwrap_or(since);
+    advance_agent_cursor(state, tuic_session, next_since);
+    serde_json::json!({
         "met": true,
         "timed_out": false,
         "new_messages": finish.fresh_count,
         "messages": messages,
-    });
-    let object = response
-        .as_object_mut()
-        .expect("wait response is an object");
-    if let Some(next_since) = next_since {
-        object.insert("next_since".to_string(), serde_json::json!(next_since));
-    }
-    response
+        "next_since": next_since,
+    })
 }
 
 async fn handle_agent_wait(
@@ -1896,11 +1953,11 @@ async fn handle_agent_wait(
             return serde_json::json!({"error": "You are not registered. Identity normally auto-binds at initialize; ensure $TUIC_SESSION is set or call agent action=register."});
         }
     };
-    let since = args["since"].as_u64().unwrap_or(0);
+    let since = resolve_agent_since(state, &caller_tuic, args);
     let (mut active_wait, mut inbox_events) = ActiveAgentWaitGuard::new(state, &caller_tuic, since);
     let timeout_ms = clamp_wait_timeout(args["timeout_ms"].as_u64());
     if state.waiter_fresh_message_count(&caller_tuic, since) > 0 {
-        return agent_wait_success_response(active_wait.finish(true));
+        return agent_wait_success_response(state, &caller_tuic, since, active_wait.finish(true));
     }
     let woke = tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), async {
         loop {
@@ -1916,9 +1973,19 @@ async fn handle_agent_wait(
     .unwrap_or(false);
     let finish = active_wait.finish(true);
     if woke || finish.fresh_count > 0 {
-        return agent_wait_success_response(finish);
+        return agent_wait_success_response(state, &caller_tuic, since, finish);
     }
-    serde_json::json!({"met": false, "timed_out": true, "new_messages": 0})
+    // A timed-out wait must still hand back a usable cursor, or the caller has
+    // nothing to pass but `since=0`. Prefer the stored position over the requested
+    // one: a deliberate `since=0` replay that finds nothing new should resume from
+    // where reading actually got to, not send the caller back to the start.
+    let resume = state
+        .agent_read_cursor
+        .get(&caller_tuic)
+        .map(|entry| *entry.value())
+        .unwrap_or(0)
+        .max(since);
+    serde_json::json!({"met": false, "timed_out": true, "new_messages": 0, "next_since": resume})
 }
 
 fn handle_session(
@@ -3583,9 +3650,24 @@ fn handle_messaging(
                     "Reclaimed stale MCP peer binding after reconnect"
                 );
             }
-            if let Some(phantom) = previously_bound.filter(|prior| prior != &tuic_session) {
-                retire_repaired_phantom_identity(state, &phantom, &tuic_session);
-            }
+            // Which prior identity is this registration superseding? The implicit
+            // answer only exists when the SAME protocol session rebinds. A caller
+            // that reconnects and registers a new UUID arrives with no link at all,
+            // so its old inbox used to be stranded with nobody told — it must say
+            // which identity it replaces. Guessing (by name, by project) is not an
+            // option: peer identity decides who may read whose mail.
+            let superseded = previously_bound
+                .filter(|prior| prior != &tuic_session)
+                .or_else(|| {
+                    args["replaces"]
+                        .as_str()
+                        .map(str::to_string)
+                        .filter(|prior| prior != &tuic_session)
+                        .filter(|prior| state.peer_agents.contains_key(prior))
+                });
+            let handoff = superseded
+                .as_ref()
+                .map(|phantom| retire_repaired_phantom_identity(state, phantom, &tuic_session));
             if orchestrator {
                 state.orchestrator_peers.insert(tuic_session.clone());
             } else {
@@ -3633,7 +3715,7 @@ fn handle_messaging(
             } else {
                 "none"
             };
-            serde_json::json!({
+            let mut response = serde_json::json!({
                 "ok": true,
                 "tuic_session": tuic_session,
                 "name": name,
@@ -3643,7 +3725,7 @@ fn handle_messaging(
                 "orchestrator": orchestrator,
                 "mail_wake": wake_capability,
                 "identity": if !has_terminal {
-                    "This identity has NO terminal behind it: nothing can be typed into it and no message can wake it. Incoming mail only lands in your inbox, so you MUST consume it yourself — `agent action=wait since=<ms>` (blocking) or `agent action=inbox`. To be reachable through a terminal, run inside a TUIC-managed PTY so the bridge asserts its $TUIC_SESSION, or let TUIC spawn you with agent action=spawn."
+                    "This identity has NO terminal behind it: nothing can be typed into it and no message can wake it. Incoming mail only lands in your inbox, so you MUST consume it yourself — `agent action=wait` (blocking) or `agent action=inbox`. To be reachable through a terminal, run inside a TUIC-managed PTY so the bridge asserts its $TUIC_SESSION, or let TUIC spawn you with agent action=spawn."
                 } else if generated_identity {
                     "This headerless caller now has an MCP-scoped UUID. It is stable for this MCP connection. Supply an explicit UUID on a future connection when cross-reconnect identity stability is required."
                 } else {
@@ -3652,14 +3734,36 @@ fn handle_messaging(
                 "workflow": {
                     "spawn_same_repo": "agent action=spawn prompt=<task> cwd=<repo_path> — returns {session_id, monitor_with, peer_monitor_with?, wait_with}. As orchestrator, prefer wait/inbox over raw session output to avoid token burn.",
                     "spawn_isolated": "repo action=worktree_create path=<repo> branch=<name> spawn_session=true — worktree + PTY in one call.",
-                    "monitor": "Use blocking waits instead of polling: agent action=wait since=<last_ms> (wakes on new mail) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
+                    "monitor": "Use blocking waits instead of polling: agent action=wait (wakes on new mail; the cursor is kept server-side) or session action=wait session_id=<id> until=idle|exited. Task results arrive through agent send/inbox. Use session output only as an anomaly fallback when a child failed to send.",
                     "auto_state_change": "Spawned peers auto-post state only: {type:state_change, state:idle|completed|exited|awaiting_input, session_id, exit_code?, prompt?}. This is not task output. awaiting_input means the child hit an interactive prompt and is parked with nobody at its keyboard — it will NOT progress until you answer it with session action=input (the `prompt` field carries the question). Every child must report its result or blocker with agent action=send; use session output only when a child anomalously failed to send.",
-                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle may submit one coalesced, payload-free wake instructing `agent action=inbox`, while working, external, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path`; `accepted=true` only confirms buffering.",
+                    "send": "agent action=send to=<peer_tuic_session> message=<text, max 64KB>. The message is always buffered in the inbox. A peer explicitly registered with orchestrator=true keeps payloads out of its active turn and composer; managed idle/completed lifecycle may submit one coalesced, payload-free wake instructing `agent action=inbox`, while working, external, or unknown state stays inbox-only. An active agent wait owns delivery and suppresses that wake. Check `delivered` and `delivery_path` (the only route field); `accepted=true` only confirms buffering.",
                     "list_peers": "agent action=list_peers project=<optional filter> — see who else is connected.",
                     "conflict_control": "Use send/inbox to serialize shared-file edits: child sends 'claim <path>', orchestrator replies 'ack'/'deny'; child sends 'release <path>' on commit. Orchestrator is the arbiter — children never ack each other directly.",
                     "cleanup": "On MCP session close, peer routes and inbox are drained. Managed PTY lifecycle remains separate; an MCP-scoped external identity has no PTY to reap."
                 }
-            })
+            });
+            // Say what happened to the superseded identity's mail. Both outcomes were
+            // silent before: a migration looked like nothing happened, and a skip left
+            // messages addressed to the old UUID unread with no wake and no notice.
+            if let (Some(prior), Some(handoff)) = (superseded.as_deref(), handoff) {
+                let object = response
+                    .as_object_mut()
+                    .expect("register response is an object");
+                object.insert("superseded_identity".to_string(), serde_json::json!(prior));
+                match handoff {
+                    IdentityHandoff::Migrated { messages } => {
+                        object.insert("mail_migrated".to_string(), serde_json::json!(messages));
+                    }
+                    IdentityHandoff::SkippedLivePty { pending } => {
+                        object.insert("mail_migrated".to_string(), serde_json::json!(0));
+                        object.insert("mail_stranded".to_string(), serde_json::json!(pending));
+                        object.insert("identity_warning".to_string(), serde_json::json!(format!(
+                            "'{prior}' still owns a live PTY, so it is a reachable peer and its mail was NOT moved: {pending} message(s) remain addressed to it. Taking them would strand a working agent. Read them as that identity, or have it hand over by registering from its own session."
+                        )));
+                    }
+                }
+            }
+            response
         }
         "list_peers" => {
             let project_filter = args["project"].as_str();
@@ -3807,7 +3911,10 @@ fn handle_messaging(
                     "message_id": msg_id,
                     "buffered_in_inbox": true,
                     "delivered": delivered,
-                    "delivered_via_channel": false,
+                    // See the note on the other send response: `delivery_path` is the
+                    // single source of truth for the route. This branch used to
+                    // hardcode `delivered_via_channel: false` next to a `delivered:
+                    // true` — factually correct, and unreadable.
                     "delivery_path": delivery_path,
                 });
                 if !delivered {
@@ -3949,7 +4056,10 @@ fn handle_messaging(
                 // polls. Reporting that as a bare `ok` is how an orchestrator's reply
                 // vanished while both sides believed delivery had happened.
                 "delivered": !inbox_only,
-                "delivered_via_channel": pushed,
+                // No `delivered_via_channel` here: it reported one sub-route (SSE)
+                // but read as a delivery verdict, so `false` alongside a confirming
+                // `delivery_path` was pure ambiguity. `delivery_path` names the SSE
+                // case as `sse_channel_and_inbox` and subsumes it.
                 "delivery_path": if waiter_owned {
                     "waiter_and_inbox"
                 } else if pushed {
@@ -4000,15 +4110,27 @@ fn handle_messaging(
                 }
             };
             let limit = args["limit"].as_u64().unwrap_or(50) as usize;
-            let since = args["since"].as_u64().unwrap_or(0);
+            let since = resolve_agent_since(state, &tuic_session, args);
             let messages = state.observe_agent_inbox(&tuic_session, since, limit);
+            // Same contract as wait: always hand back a usable cursor, falling back
+            // to the position we read from when the batch is empty.
+            let next_since = messages
+                .iter()
+                .map(|message| message.timestamp)
+                .max()
+                .unwrap_or(since);
+            advance_agent_cursor(state, &tuic_session, next_since);
             // Consume and reset eviction counter (so caller knows since last read)
             let missed_count = state
                 .agent_inbox_evictions
                 .remove(&tuic_session)
                 .map(|(_, n)| n)
                 .unwrap_or(0);
-            let mut resp = serde_json::json!({"messages": messages, "count": messages.len()});
+            let mut resp = serde_json::json!({
+                "messages": messages,
+                "count": messages.len(),
+                "next_since": next_since,
+            });
             if missed_count > 0 {
                 resp["missed_count"] = serde_json::json!(missed_count);
             }
@@ -6185,6 +6307,7 @@ mod tests {
             peer_agents: dashmap::DashMap::new(),
             agent_inbox: dashmap::DashMap::new(),
             agent_inbox_evictions: dashmap::DashMap::new(),
+            agent_read_cursor: dashmap::DashMap::new(),
             pending_injections: dashmap::DashMap::new(),
             pending_initial_prompts: dashmap::DashMap::new(),
             active_agent_waiters: dashmap::DashMap::new(),
@@ -7795,6 +7918,155 @@ mod tests {
         );
     }
 
+    /// A caller that reconnects and registers a NEW uuid arrives with no implicit
+    /// link to its old identity, so its inbox used to be stranded with nobody told.
+    /// `replaces` is how it says which identity it supersedes — guessing by name
+    /// is not an option, since peer identity decides who may read whose mail.
+    #[test]
+    fn replaces_carries_mail_over_from_a_new_protocol_session() {
+        let state = test_state();
+        insert_managed_test_session(&state, "pty-replaces", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-replaces");
+        // The old identity registers on its own (now gone) connection.
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "root"
+            }),
+            Some("mcp-old-connection"),
+        );
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "msg-orphan".to_string(),
+                from_tuic_session: "worker".to_string(),
+                from_name: "worker".to_string(),
+                content: "results".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+
+        // A different protocol session claims the new identity: previously_bound is
+        // None here, so only `replaces` can tie the two together.
+        let response = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register",
+                "tuic_session": TEST_UUID_A,
+                "name": "root",
+                "replaces": TEST_UUID_B,
+            }),
+            Some("mcp-new-connection"),
+        );
+
+        assert_eq!(response["superseded_identity"], TEST_UUID_B);
+        assert_eq!(response["mail_migrated"], 1);
+        assert!(state.peer_agents.get(TEST_UUID_B).is_none());
+        let carried = state
+            .agent_inbox
+            .get(TEST_UUID_A)
+            .map(|inbox| inbox.iter().any(|m| m.content == "results"))
+            .unwrap_or(false);
+        assert!(carried, "orphaned mail must reach the replacing identity");
+    }
+
+    /// The other half of the contract: an identity that still owns a live PTY is a
+    /// reachable peer, not an abandoned one. Taking its mail would strand a working
+    /// agent — so nothing moves, and the caller is told in so many words instead of
+    /// the silent early return this used to be.
+    #[cfg(unix)]
+    #[test]
+    fn replaces_refuses_to_take_mail_from_a_live_identity_and_says_so() {
+        let state = test_state();
+        insert_managed_test_session(&state, "pty-new", "/tmp");
+        state.bind_live_pty(TEST_UUID_A, "pty-new");
+        insert_managed_test_session(&state, "pty-still-alive", "/tmp");
+        state.bind_live_pty(TEST_UUID_B, "pty-still-alive");
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "root"
+            }),
+            Some("mcp-live-owner"),
+        );
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "msg-theirs".to_string(),
+                from_tuic_session: "worker".to_string(),
+                from_name: "worker".to_string(),
+                content: "not yours".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+
+        let response = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register",
+                "tuic_session": TEST_UUID_A,
+                "name": "root",
+                "replaces": TEST_UUID_B,
+            }),
+            Some("mcp-claimant"),
+        );
+
+        assert_eq!(response["mail_migrated"], 0);
+        assert_eq!(response["mail_stranded"], 1);
+        assert!(
+            response["identity_warning"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("live PTY"),
+            "the skip must be reported, not silent: {:?}",
+            response["identity_warning"]
+        );
+        let kept = state
+            .agent_inbox
+            .get(TEST_UUID_B)
+            .map(|inbox| inbox.iter().any(|m| m.content == "not yours"))
+            .unwrap_or(false);
+        assert!(kept, "a live peer keeps its own mail");
+        assert!(
+            state.peer_agents.get(TEST_UUID_B).is_some(),
+            "a live peer must stay addressable"
+        );
+    }
+
+    /// `delivered_via_channel` reported one sub-route but read as a delivery
+    /// verdict, so `false` next to a confirming `delivery_path` was pure noise.
+    /// `delivery_path` is now the single source of truth for the route.
+    #[test]
+    fn send_reports_the_route_only_through_delivery_path() {
+        let state = test_state();
+        handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": TEST_UUID_A, "name": "sender"}),
+            Some("mcp-route-sender"),
+        );
+        handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register", "tuic_session": TEST_UUID_B, "name": "peer"}),
+            Some("mcp-route-peer"),
+        );
+
+        let result = handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "send", "to": TEST_UUID_B, "message": "hello"
+            }),
+            Some("mcp-route-sender"),
+        );
+
+        assert_eq!(result["delivery_path"], "inbox_only");
+        assert!(
+            result.get("delivered_via_channel").is_none(),
+            "the ambiguous field must be gone from the send response: {result:?}"
+        );
+    }
+
     /// A `send` landing in the middle of the retire must not vanish. The retire
     /// mutates several maps; without a shared critical section a message could
     /// be buffered under an identity that is deleted a moment later, which is
@@ -8142,7 +8414,13 @@ mod tests {
         assert_eq!(r["messages"][0]["from_name"], "lead");
         assert_eq!(r["messages"][0]["content"], "go");
         assert_eq!(r["messages"][0]["timestamp"], 5_000);
-        assert_eq!(r["messages"][0]["delivered_via_channel"], false);
+        // The recipient is holding the message; which sub-route carried it is
+        // server-side forensics, and a `false` here read as "not delivered" is
+        // the same ambiguity that removed the field from the send response.
+        assert!(
+            r["messages"][0].get("delivered_via_channel").is_none(),
+            "delivered_via_channel must not reach the recipient"
+        );
         assert!(
             r.get("hint").is_none(),
             "steady-state success needs no hint"
@@ -8240,7 +8518,99 @@ mod tests {
         assert_eq!(replay["timed_out"], true);
         assert_eq!(replay["new_messages"], 0);
         assert!(replay.get("messages").is_none());
-        assert!(replay.get("next_since").is_none());
+        // A timed-out replay still answers with a usable cursor — and with the
+        // position reading actually reached, not the `since=0` it was asked with.
+        // Losing the cursor here is what drove callers back to replaying everything.
+        assert_eq!(replay["next_since"], 5_000);
+    }
+
+    /// The point of the server-side cursor: a caller that never threads `since`
+    /// must not keep re-reading the same mail. Before this, an omitted `since`
+    /// defaulted to 0 and replayed the whole inbox on every call.
+    #[tokio::test]
+    async fn omitting_since_resumes_from_the_server_cursor() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-w-cursor", Some(TEST_UUID_A));
+        let push = |id: &str, timestamp: u64| {
+            state.push_agent_inbox(
+                TEST_UUID_A,
+                crate::state::AgentMessage {
+                    id: id.into(),
+                    from_tuic_session: "lead".into(),
+                    from_name: "lead".into(),
+                    content: "payload".into(),
+                    timestamp,
+                    delivered_via_channel: false,
+                },
+            );
+        };
+        push("m-1", 1_000);
+
+        let first = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "timeout_ms": 1}),
+            Some("mcp-w-cursor"),
+        )
+        .await;
+        assert_eq!(first["new_messages"], 1);
+        assert_eq!(first["next_since"], 1_000);
+
+        push("m-2", 2_000);
+        let second = handle_agent_wait(
+            &state,
+            &serde_json::json!({"action": "wait", "timeout_ms": 1}),
+            Some("mcp-w-cursor"),
+        )
+        .await;
+        assert_eq!(
+            second["new_messages"], 1,
+            "only the new message — the cursor moved past m-1"
+        );
+        assert_eq!(second["messages"][0]["id"], "m-2");
+        assert_eq!(second["next_since"], 2_000);
+    }
+
+    /// `since=0` stays the deliberate replay escape hatch, and must not rewind the
+    /// stored cursor for the next omitted-`since` caller.
+    #[tokio::test]
+    async fn explicit_since_overrides_the_cursor_without_rewinding_it() {
+        let state = test_state();
+        apply_initialize_identity(&state, "mcp-w-override", Some(TEST_UUID_A));
+        state.push_agent_inbox(
+            TEST_UUID_A,
+            crate::state::AgentMessage {
+                id: "m-only".into(),
+                from_tuic_session: "lead".into(),
+                from_name: "lead".into(),
+                content: "payload".into(),
+                timestamp: 7_000,
+                delivered_via_channel: false,
+            },
+        );
+
+        let inbox = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-w-override"),
+        );
+        assert_eq!(inbox["count"], 1);
+        assert_eq!(inbox["next_since"], 7_000);
+
+        let replay = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox", "since": 0}),
+            Some("mcp-w-override"),
+        );
+        assert_eq!(replay["count"], 1, "since=0 still replays on demand");
+
+        assert_eq!(
+            state
+                .agent_read_cursor
+                .get(TEST_UUID_A)
+                .map(|entry| *entry.value()),
+            Some(7_000),
+            "a replay must not rewind the stored cursor"
+        );
     }
 
     #[tokio::test]
@@ -8828,7 +9198,6 @@ mod tests {
             Some("mcp-sender"),
         );
 
-        assert_eq!(result["delivered_via_channel"], false);
         assert_eq!(result["delivery_path"], "terminal_or_queued_and_inbox");
         assert!(
             matches!(
@@ -9010,7 +9379,6 @@ mod tests {
             Some("mcp-sender"),
         );
 
-        assert_eq!(result["delivered_via_channel"], true);
         assert_eq!(result["delivery_path"], "sse_channel_and_inbox");
         assert!(receiver.try_recv().is_ok());
         let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
@@ -9055,7 +9423,6 @@ mod tests {
 
         assert_eq!(result["accepted"], true);
         assert_eq!(result["delivery_path"], "inbox_only");
-        assert_eq!(result["delivered_via_channel"], false);
         let snapshot = state.session_state_with_shell(TEST_UUID_B).unwrap();
         assert_eq!(snapshot.agent_state.as_deref(), Some("completed"));
         assert_eq!(snapshot.turn_epoch, 0);
@@ -9102,7 +9469,6 @@ mod tests {
         );
 
         assert_eq!(result["accepted"], true);
-        assert_eq!(result["delivered_via_channel"], false);
         assert_eq!(result["delivery_path"], "terminal_or_queued_and_inbox");
         assert!(
             matches!(
