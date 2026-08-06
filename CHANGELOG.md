@@ -6,13 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.7.2] - 2026-08-06
+
+### Changed
+
+- **`agent wait` and `inbox` keep your place, and one field names the delivery route** — `next_since` was emitted only when there were messages, so after a timeout the only recoverable value was `0` and the model reloaded its entire history. It is now always present, including on timeout and with zero messages, and `since` became optional: omit it and the server resumes from a per-identity read cursor, pass it to override, pass `0` for a deliberate replay. On the send side, `delivered_via_channel` is gone from every response. It reported one sub-route (the SSE push) but read as a delivery verdict — it is `false` precisely when a waiter or the terminal carried the message, which are the best outcomes. `delivery_path` already names all four routes and subsumes it. The field survives on the stored message as server-side forensics and in the `agent_msg` log line, where an operator, not a model, reads it.
+
+- **An identity change can hand over its mailbox across MCP connections** — Retiring a superseded identity silently did nothing when the new one registered on a different MCP connection, stranding mail with no wake. `register` now accepts `replaces=<old_uuid>` and reports the outcome: `superseded_identity` and `mail_migrated`, or — when the old identity still owns a live PTY — `mail_stranded` with an `identity_warning`. That last case deliberately moves nothing: an identity with a terminal is a reachable peer, and taking its inbox would strand a working agent.
+
 ### Fixed
+
+- **The find shortcut re-focuses a search bar that is already open** — Pressing it a second time did nothing: after clicking into the content the input has lost focus, but the bar is still visible, and an unchanged boolean notifies nothing, so the auto-focus effect never re-ran. Re-opening is now expressible as a state change, and every search surface behaves the same — terminal, code editor, diff, HTML preview and markdown.
 
 - **Orchestrator inbox wake retries are bounded per unread-mail group** — A payload-free wake whose PTY write was uncertain could expire every five seconds and retry forever. Each unread group now gets its initial wake plus at most one retry after an uncertain result; a second uncertain result and all coalesced mail remain inbox-only until a successful inbox or wait observation clears the group.
 
 - **Creating a worktree no longer moves a running agent into the wrong sidebar branch** — The “Move & Notify” action only changed the terminal's UI ownership while the agent process stayed in its original working directory, then interrupted the agent to explain that it had not moved. The prompt now opens the worktree in its own terminal and leaves the running agent attached to its real branch and working directory.
 
 - **Managed Codex peers auto-register with their real terminal identity** — Codex intentionally filters the environment inherited by stdio MCP servers, while TUICommander's generated MCP entry configured only the bridge command. The Codex process had `TUIC_SESSION`, but `tuic-bridge` did not, so initialize carried no identity header and the peer's first `agent send` failed until it registered manually. New and existing Codex entries now whitelist `TUIC_SESSION` through `env_vars` while preserving other server settings.
+
+- **The undici advisory is closed, and the test suite stops leaking a timer** — GHSA-4cwx-7wf7-3272 could not be resolved by pinning undici, because jsdom 29 reaches into the old line's internal modules; jsdom moves to 30 instead. Separately, the deep-link test left a pending debounce timer behind and now cancels it through the hook that already existed for that purpose.
 
 ## [1.7.1] - 2026-08-03
 
