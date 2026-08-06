@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { mockInvoke } from "./mocks/tauri";
 
@@ -19,6 +19,10 @@ const callbacks = {
 	onInstallError: vi.fn(),
 	openRepoPath: vi.fn().mockResolvedValue(undefined),
 };
+
+// Mutating the repositories store schedules its debounced save; without this the
+// timer outlives the run and vitest reports an async leak.
+afterEach(() => repositoriesStore._testCancelPendingSave());
 
 describe("deep link handler — OAuth callback", () => {
 	beforeEach(() => {
@@ -70,7 +74,7 @@ describe("deep link handler — open-repo (`tuic <dir>`)", () => {
 	beforeEach(() => {
 		callbacks.confirm.mockReset().mockResolvedValue(true);
 		callbacks.openRepoPath.mockReset().mockResolvedValue(undefined);
-		setActiveSpy.mockReset();
+		setActiveSpy.mockClear();
 	});
 
 	it("activates a repo that is already in the list, without asking", async () => {
