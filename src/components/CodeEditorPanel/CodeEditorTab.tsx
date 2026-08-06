@@ -38,6 +38,7 @@ import { openFileAction } from "../../utils/filePreview";
 import { isAbsolutePath } from "../../utils/pathUtils";
 import { ContextMenu, createContextMenu } from "../ContextMenu";
 import e from "../shared/editor-header.module.css";
+import { createSearchVisibility } from "../shared/SearchBar";
 import s from "./CodeEditorTab.module.css";
 import { EditorSearch } from "./EditorSearch";
 import { type GutterChange, gitChangeGutter, setChangesEffect } from "./gitGutter";
@@ -185,7 +186,12 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	/** Reactive dirty flag — only transitions on save/load, not every keystroke */
 	const [dirty, setDirty] = createSignal(false);
 	/** Shared <SearchBar> overlay visibility (replaces CodeMirror's built-in panel) */
-	const [searchVisible, setSearchVisible] = createSignal(false);
+	const {
+		visible: searchVisible,
+		focusToken: searchFocusToken,
+		open: openSearchBar,
+		close: closeSearchBar,
+	} = createSearchVisibility();
 
 	// Expose openSearch to the global Cmd+F router (App.tsx findInTerminal) so the
 	// shortcut works even when focus left the CodeMirror content (e.g. while
@@ -193,7 +199,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 	// save/isDirty let the close-tab flow persist unsaved changes (issue #104)
 	// without reaching into this component's internal state.
 	editorTabsStore.setHandle(props.id, {
-		openSearch: () => setSearchVisible(true),
+		openSearch: () => openSearchBar(),
 		save: () => handleSave(),
 		isDirty: () => dirty(),
 	});
@@ -522,14 +528,14 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 				{
 					key: "Mod-f",
 					run: () => {
-						setSearchVisible(true);
+						openSearchBar();
 						return true;
 					},
 				},
 				{
 					key: "Mod-Alt-f",
 					run: () => {
-						setSearchVisible(true);
+						openSearchBar();
 						return true;
 					},
 				},
@@ -537,7 +543,7 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 					key: "Escape",
 					run: () => {
 						if (!searchVisible()) return false;
-						setSearchVisible(false);
+						closeSearchBar();
 						editorView()?.focus();
 						return true;
 					},
@@ -842,10 +848,11 @@ export const CodeEditorTab: Component<CodeEditorTabProps> = (props) => {
 				/>
 				<EditorSearch
 					visible={searchVisible()}
+					focusToken={searchFocusToken()}
 					view={editorView()}
 					editable={!isReadOnly()}
 					onClose={() => {
-						setSearchVisible(false);
+						closeSearchBar();
 						editorView()?.focus();
 					}}
 				/>
