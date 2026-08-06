@@ -18,6 +18,7 @@ import { writeClipboard } from "../../utils/clipboard";
 import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { safeUnlisten } from "../../utils/safeUnlisten";
+import { createSearchVisibility } from "../shared/SearchBar";
 import { getAwaitingInputSound } from "./awaitingInputSound";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
@@ -162,7 +163,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const [canvasTerminalRef, setCanvasTerminalRef] = createSignal<CanvasTerminalRef | undefined>();
 	let pendingCanvasFocus = false;
 
-	const [searchVisible, setSearchVisible] = createSignal(false);
+	const {
+		visible: searchVisible,
+		focusToken: searchFocusToken,
+		open: openSearchBar,
+		close: closeSearchBar,
+	} = createSearchVisibility();
 	const [composeOpen, setComposeOpen] = createSignal(false);
 	const [pendingComposeText, setPendingComposeText] = createSignal("");
 	const [reconnecting, setReconnecting] = createSignal<{ attempt: number; max: number } | null>(null);
@@ -958,8 +964,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			else pendingCanvasFocus = true;
 		},
 		getSessionId: () => sessionId,
-		openSearch: () => setSearchVisible(true),
-		closeSearch: () => setSearchVisible(false),
+		openSearch: () => openSearchBar(),
+		closeSearch: () => closeSearchBar(),
 		toggleCompose: () => {
 			if (composeOpen()) {
 				setComposeOpen(false);
@@ -1118,9 +1124,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		>
 			<TerminalSearch
 				visible={searchVisible()}
+				focusToken={searchFocusToken()}
 				canvasRef={canvasTerminalRef()}
 				onClose={() => {
-					setSearchVisible(false);
+					closeSearchBar();
 					canvasTerminalRef()?.focus();
 				}}
 			/>
@@ -1171,8 +1178,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							sessionId={sid}
 							terminalId={props.id}
 							onOpenFilePath={props.onOpenFilePath}
-							onSearchOpen={() => setSearchVisible(true)}
-							onSearchClose={() => setSearchVisible(false)}
+							onSearchOpen={() => openSearchBar()}
+							onSearchClose={() => closeSearchBar()}
 							searchVisible={searchVisible()}
 							onResume={handleResume}
 							onResumeDismiss={() => terminalsStore.update(props.id, { pendingResumeCommand: null })}
