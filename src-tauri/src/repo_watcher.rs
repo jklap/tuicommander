@@ -25,11 +25,16 @@ pub(crate) enum EventCategory {
 /// Classify a filesystem event path into an `EventCategory`.
 ///
 /// Pure function: no I/O, no side effects. The `gitignore` matcher is used
-/// to filter out ignored working-tree files.
+/// to filter out ignored working-tree files. `worktree_roots` holds the working
+/// tree roots of the repo's linked worktrees (see `linked_worktree_roots`);
+/// they are matched before `repo_root` so a worktree stored *inside* the repo
+/// (`.worktrees/`, `.claude/worktrees/` — both typically gitignored) is still
+/// classified as a working-tree change rather than being dropped as noise.
 pub(crate) fn classify_path(
     path: &Path,
     repo_root: &Path,
     git_dir: &Path,
+    worktree_roots: &[PathBuf],
     gitignore: &Gitignore,
 ) -> EventCategory {
     // Check if the path is inside .git/
@@ -74,10 +79,35 @@ pub(crate) fn classify_path(
         return EventCategory::Noise;
     }
 
-    // Always-excluded directories — noise regardless of .gitignore
-    if let Ok(rel) = path.strip_prefix(repo_root)
-        && let Some(first) = rel.components().next()
-    {
+    // Linked worktrees first: one stored inside the repo (`.worktrees/`,
+    // `.claude/worktrees/`) is normally gitignored, so the `repo_root` rules
+    // below would drop its edits as noise.
+    for wt_root in worktree_roots {
+        if let Ok(rel) = path.strip_prefix(wt_root) {
+            return classify_in_working_tree(rel, path, gitignore);
+        }
+    }
+
+    if let Ok(rel) = path.strip_prefix(repo_root) {
+        return classify_in_working_tree(rel, path, gitignore);
+    }
+
+    // Path outside repo root entirely — shouldn't happen, treat as noise
+    EventCategory::Noise
+}
+
+/// Classify a path already known to sit under a working-tree root, given its
+/// path relative to that root. Shared by the main checkout and every linked
+/// worktree so both obey the same exclusion rules.
+///
+/// The `gitignore` matcher is always the main checkout's — linked worktrees
+/// share the tracked `.gitignore`, and a branch that diverges on it only shifts
+/// what we treat as noise, never what git reports.
+fn classify_in_working_tree(rel: &Path, path: &Path, gitignore: &Gitignore) -> EventCategory {
+    // Always-excluded directories — noise regardless of .gitignore. Covers a
+    // linked worktree's `.git` *file*, whose real state lives in the admin dir
+    // under the main `.git` (already watched and classified there).
+    if let Some(first) = rel.components().next() {
         let name = first.as_os_str();
         if crate::fs::ALWAYS_EXCLUDED_DIRS
             .iter()
@@ -87,20 +117,44 @@ pub(crate) fn classify_path(
         }
     }
 
-    // Path is outside .git/ — check gitignore
-    if let Ok(rel) = path.strip_prefix(repo_root) {
-        let is_dir = path.is_dir();
-        if gitignore
-            .matched_path_or_any_parents(rel, is_dir)
-            .is_ignore()
-        {
-            return EventCategory::Noise;
-        }
-        return EventCategory::WorkingTree;
+    if gitignore
+        .matched_path_or_any_parents(rel, path.is_dir())
+        .is_ignore()
+    {
+        return EventCategory::Noise;
     }
+    EventCategory::WorkingTree
+}
 
-    // Path outside repo root entirely — shouldn't happen, treat as noise
-    EventCategory::Noise
+/// Working-tree roots of the repo's linked worktrees, resolved from
+/// `.git/worktrees/*/gitdir` — each holds the absolute path of that worktree's
+/// `.git` file, whose parent is the working-tree root.
+///
+/// A linked worktree usually lives OUTSIDE the repo root (the `Sibling` and
+/// `AppDir` storage strategies), so the root's watch never sees it. Without its
+/// own watch an agent editing files there produces no event at all, and the
+/// branch's diff badge in the sidebar stays stale until the user selects it.
+/// The git-state fingerprint is no fallback either: it is computed from the
+/// main checkout's index and porcelain status, so a worktree-local change
+/// leaves it identical and the emit is suppressed.
+fn linked_worktree_roots(git_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(git_dir.join("worktrees")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| std::fs::read_to_string(e.path().join("gitdir")).ok())
+        .filter_map(|gitdir| {
+            PathBuf::from(gitdir.trim())
+                .parent()
+                .map(|p| p.to_path_buf())
+        })
+        .filter(|root| root.is_dir())
+        // Canonicalized because these roots are prefix-matched against event
+        // paths, and the backends report resolved paths (on macOS FSEvents
+        // reports `/private/var/…` for a `/var/…` worktree).
+        .map(|root| root.canonicalize().unwrap_or(root))
+        .collect()
 }
 
 /// Per-category debounce delays. CategoryEmitter applies these app-level
@@ -353,12 +407,122 @@ pub(crate) struct WatchHandle(#[allow(dead_code)] pub(crate) Mutex<RecommendedWa
 /// requests that create-event bursts would otherwise fire repeatedly; it is
 /// dropped with the handle, so a stopped+restarted watcher starts cold.
 pub(crate) struct RepoWatchHandle {
-    // Read only on Linux (dynamic add-watch); elsewhere it's kept alive to keep
-    // the watcher running but never accessed.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) watcher: Mutex<RecommendedWatcher>,
-    #[cfg(target_os = "linux")]
+    /// Linux only: the directories holding a non-recursive watch. Stays empty on
+    /// macOS/Windows, where one recursive registration covers a whole root.
     watched_dirs: Mutex<std::collections::HashSet<PathBuf>>,
+    /// Linked-worktree roots that currently hold a watch. Diffed against disk by
+    /// `sync_worktree_watches` so worktrees added or removed at runtime are
+    /// picked up without restarting the watcher. Held across the `watch()`
+    /// syscalls, which also serializes concurrent syncs — never touched on the
+    /// event hot path, which reads `worktree_snapshot` instead.
+    worktree_roots: Mutex<std::collections::HashSet<PathBuf>>,
+    /// Lock-cheap copy of the registered roots for `classify_path`, shared with
+    /// the event callback. Refreshed at the end of each sync.
+    worktree_snapshot: Arc<parking_lot::RwLock<Vec<PathBuf>>>,
+}
+
+/// Register the watches for one working-tree root: the main checkout at startup,
+/// or a linked worktree as it appears. On macOS/Windows a single recursive
+/// registration; on Linux one non-recursive watch per surviving directory, since
+/// a recursive one would also cover `node_modules`/`target` and flood the
+/// callback (issue #82). Returns the number of directories it failed to watch.
+fn watch_working_tree_root(
+    watcher: &mut RecommendedWatcher,
+    root: &Path,
+    watched: &mut std::collections::HashSet<PathBuf>,
+) -> usize {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = watched;
+        if let Err(e) = watcher.watch(root, RecursiveMode::Recursive) {
+            tracing::warn!(source = "repo_watcher", path = %root.display(), "Failed to watch working tree: {e}");
+            return 1;
+        }
+        0
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let mut failures = 0usize;
+        for dir in collect_working_tree_dirs(root) {
+            if !watched.insert(dir.clone()) {
+                continue;
+            }
+            if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
+                watched.remove(&dir);
+                failures += 1;
+                tracing::debug!(source = "repo_watcher", path = %dir.display(), "Failed to watch working-tree dir: {e}");
+            }
+        }
+        failures
+    }
+}
+
+/// Drop the watches registered for a working-tree root. `unwatch` errors are
+/// expected and ignored: the usual reason a root disappears is that the
+/// directory was deleted, which already invalidated the watch.
+fn unwatch_working_tree_root(
+    watcher: &mut RecommendedWatcher,
+    root: &Path,
+    watched: &mut std::collections::HashSet<PathBuf>,
+) {
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = watched;
+        let _ = watcher.unwatch(root);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let gone: Vec<PathBuf> = watched
+            .iter()
+            .filter(|d| d.starts_with(root))
+            .cloned()
+            .collect();
+        for dir in gone {
+            watched.remove(&dir);
+            let _ = watcher.unwatch(&dir);
+        }
+    }
+}
+
+/// Make the registered linked-worktree watches match what's on disk.
+///
+/// Called once at registration and again after every git-state change: adding or
+/// removing a worktree writes under `.git/worktrees`, which classifies as
+/// `GitState`, so the sync rides the emit that change already produces. Cheap
+/// when nothing moved — a `read_dir` plus a set comparison, syscalls only on a
+/// delta.
+fn sync_worktree_watches(state: &Arc<AppState>, repo_path: &str, git_dir: &Path) {
+    let Some(handle) = state.repo_watchers.get(repo_path).map(|r| r.value().clone()) else {
+        return;
+    };
+    let desired: std::collections::HashSet<PathBuf> =
+        linked_worktree_roots(git_dir).into_iter().collect();
+
+    let mut registered = handle.worktree_roots.lock();
+    if *registered == desired {
+        return;
+    }
+
+    {
+        // `watched_dirs` before `watcher`, the order the Linux add-watch path
+        // uses (one lock at a time there, so neither can wedge the other).
+        let mut watched = handle.watched_dirs.lock();
+        let mut watcher = handle.watcher.lock();
+        for root in desired.difference(&registered) {
+            tracing::debug!(source = "repo_watcher", repo = %repo_path, path = %root.display(), "Watching linked worktree");
+            watch_working_tree_root(&mut watcher, root, &mut watched);
+        }
+        for root in registered.difference(&desired) {
+            tracing::debug!(source = "repo_watcher", repo = %repo_path, path = %root.display(), "Dropping linked-worktree watch");
+            unwatch_working_tree_root(&mut watcher, root, &mut watched);
+        }
+    }
+
+    *handle.worktree_snapshot.write() = desired.iter().cloned().collect();
+    *registered = desired;
 }
 
 /// Whether a filesystem event denotes a newly created working-tree directory
@@ -421,6 +585,10 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
     // sub-watches below are skipped until it actually exists.
     let git_dir = crate::git::resolve_git_dir(&repo).unwrap_or_else(|| repo.join(".git"));
     let gitignore = Arc::new(parking_lot::RwLock::new(build_gitignore(&repo)));
+    // Filled in by `sync_worktree_watches` once the handle is registered; the
+    // event callback reads it to classify paths inside linked worktrees.
+    let worktree_snapshot: Arc<parking_lot::RwLock<Vec<PathBuf>>> =
+        Arc::new(parking_lot::RwLock::new(Vec::new()));
 
     let repo_path_owned = repo_path.to_string();
     #[cfg(feature = "desktop")]
@@ -447,6 +615,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
     let repo_for_cb = repo.clone();
     let git_dir_for_cb = git_dir.clone();
     let gitignore_cb = Arc::clone(&gitignore);
+    let worktrees_cb = Arc::clone(&worktree_snapshot);
 
     let mut watcher = notify::recommended_watcher(
         move |result: Result<notify::Event, notify::Error>| {
@@ -475,12 +644,14 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
 
             // Classify all event paths and collect which categories fired
             let gi = gitignore_cb.read();
+            let worktrees = worktrees_cb.read();
             let mut has_head = false;
             let mut has_git_state = false;
             let mut has_working_tree = false;
 
             for path in &event.paths {
-                let category = classify_path(path, &repo_for_cb, &git_dir_for_cb, &gi);
+                let category =
+                    classify_path(path, &repo_for_cb, &git_dir_for_cb, &worktrees, &gi);
                 match category {
                     EventCategory::Head => has_head = true,
                     EventCategory::GitState => has_git_state = true,
@@ -518,6 +689,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 }
             }
             drop(gi);
+            drop(worktrees);
 
             // Trigger per-category delayed emits
             if has_head {
@@ -589,6 +761,10 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                         return;
                     }
                     st.repo_git_fingerprints.insert(repo_path.clone(), fp);
+                    // The worktree admin set is part of the fingerprint, so a
+                    // worktree added or removed (by us or by an outside agent)
+                    // always lands here — catch its watches up before emitting.
+                    sync_worktree_watches(&st, &repo_path, &git_dir);
                     tracing::debug!(source = "repo_watcher", path = %repo_path, "Emit repo-changed (git-state)");
                     st.invalidate_repo_caches(&repo_path);
                     let _ = bus.send(AppEvent::RepoChanged {
@@ -634,36 +810,22 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
     )
     .map_err(|e| format!("Failed to create repo watcher: {e}"))?;
 
-    // macOS (FSEvents) / Windows (ReadDirectoryChangesW): a single recursive
-    // registration is an OS-level operation with near-zero cost — no directory
-    // traversal — so we watch the whole repo root in one call.
-    #[cfg(not(target_os = "linux"))]
-    watcher
-        .watch(repo.as_path(), RecursiveMode::Recursive)
-        .map_err(|e| format!("Failed to watch repo: {e}"))?;
+    // Watch the main checkout. macOS (FSEvents) / Windows
+    // (ReadDirectoryChangesW): one recursive registration, an OS-level operation
+    // with near-zero cost. Linux (inotify): one non-recursive watch per
+    // surviving directory — a recursive watch makes `notify` walk the whole tree
+    // and add a watch per directory, including `node_modules`, `target` and
+    // `.git/objects`, whose churn floods the callback and pins CPU (issue #82).
+    let mut watched_dirs = std::collections::HashSet::new();
+    let watch_failures = watch_working_tree_root(&mut watcher, repo.as_path(), &mut watched_dirs);
 
-    // Linux (inotify): a recursive watch makes `notify` walk the entire tree and
-    // add a watch per directory — including `node_modules`, `target`, and
-    // `.git/objects` — so every churn in those subtrees floods our callback and
-    // pins CPU (issue #82). Split the watch instead:
-    //   1. working tree — one non-recursive watch per directory, pruning the
-    //      always-excluded dirs and gitignored paths up front; new dirs created
-    //      after launch are picked up dynamically in the callback;
-    //   2. `.git` — targeted watches (root non-recursive for HEAD/index/
-    //      sentinels/packed-refs, `refs` and `worktrees` recursive) so we never
-    //      watch `objects`/`logs`/`hooks`, the high-churn part of `.git`.
+    #[cfg(not(target_os = "linux"))]
+    if watch_failures > 0 {
+        return Err(format!("Failed to watch repo {}", repo.display()));
+    }
+
     #[cfg(target_os = "linux")]
-    let watched_dirs = {
-        let mut set = std::collections::HashSet::new();
-        let mut watch_failures = 0usize;
-        for dir in collect_working_tree_dirs(&repo) {
-            if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
-                watch_failures += 1;
-                tracing::debug!(source = "repo_watcher", path = %dir.display(), "Failed to watch working-tree dir: {e}");
-            } else {
-                set.insert(dir);
-            }
-        }
+    {
         // Surface partial watching instead of degrading silently: on Linux this
         // is almost always inotify watch exhaustion (one watch per dir), which
         // leaves those subtrees unmonitored with no user-visible signal.
@@ -676,6 +838,10 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                  The kernel inotify limit may be exhausted; raise /proc/sys/fs/inotify/max_user_watches."
             );
         }
+        // `.git` gets targeted watches (root non-recursive for HEAD/index/
+        // sentinels/packed-refs, `refs` and `worktrees` recursive) so we never
+        // watch `objects`/`logs`/`hooks`, the high-churn part of `.git`.
+        //
         // Non-git directories have no `.git` to sub-watch yet. The working-tree
         // watches above include the repo root (WalkBuilder yields it first), so
         // the `.git` *creation* event is still caught and classified as GitState;
@@ -696,17 +862,20 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 tracing::warn!(source = "repo_watcher", path = %worktrees_dir.display(), "Failed to watch .git/worktrees: {e}");
             }
         }
-        Mutex::new(set)
-    };
+    }
 
     let handle = RepoWatchHandle {
         watcher: Mutex::new(watcher),
-        #[cfg(target_os = "linux")]
-        watched_dirs,
+        watched_dirs: Mutex::new(watched_dirs),
+        worktree_roots: Mutex::new(std::collections::HashSet::new()),
+        worktree_snapshot,
     };
     state
         .repo_watchers
         .insert(repo_path.to_string(), Arc::new(handle));
+    // Linked worktrees get their own watches — the handle must be registered
+    // first, since the sync reaches it through `state.repo_watchers`.
+    sync_worktree_watches(state, repo_path, &git_dir);
     Ok(())
 }
 
@@ -752,8 +921,7 @@ mod tests {
 
     /// Build an empty Gitignore matcher (matches nothing).
     fn empty_gitignore() -> Gitignore {
-        let gi = Gitignore::empty();
-        gi
+        Gitignore::empty()
     }
 
     /// Build a Gitignore matcher from pattern strings.
@@ -772,7 +940,7 @@ mod tests {
         let gi = empty_gitignore();
 
         assert_eq!(
-            classify_path(Path::new("/repo/.git/HEAD"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/HEAD"), root, git, &[], &gi),
             EventCategory::Head
         );
     }
@@ -787,7 +955,7 @@ mod tests {
         let gi = empty_gitignore();
 
         assert_eq!(
-            classify_path(Path::new("/repo/.git"), root, git, &gi),
+            classify_path(Path::new("/repo/.git"), root, git, &[], &gi),
             EventCategory::GitState
         );
     }
@@ -800,38 +968,38 @@ mod tests {
 
         // index
         assert_eq!(
-            classify_path(Path::new("/repo/.git/index"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/index"), root, git, &[], &gi),
             EventCategory::GitState
         );
         // refs
         assert_eq!(
-            classify_path(Path::new("/repo/.git/refs/heads/main"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/refs/heads/main"), root, git, &[], &gi),
             EventCategory::GitState
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/refs/tags/v1.0"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/refs/tags/v1.0"), root, git, &[], &gi),
             EventCategory::GitState
         );
         // sentinel files
         assert_eq!(
-            classify_path(Path::new("/repo/.git/MERGE_HEAD"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/MERGE_HEAD"), root, git, &[], &gi),
             EventCategory::GitState
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/REBASE_HEAD"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/REBASE_HEAD"), root, git, &[], &gi),
             EventCategory::GitState
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/CHERRY_PICK_HEAD"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/CHERRY_PICK_HEAD"), root, git, &[], &gi),
             EventCategory::GitState
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/REVERT_HEAD"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/REVERT_HEAD"), root, git, &[], &gi),
             EventCategory::GitState
         );
         // worktrees
         assert_eq!(
-            classify_path(Path::new("/repo/.git/worktrees/my-wt"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/worktrees/my-wt"), root, git, &[], &gi),
             EventCategory::GitState
         );
     }
@@ -843,12 +1011,135 @@ mod tests {
         let gi = empty_gitignore();
 
         assert_eq!(
-            classify_path(Path::new("/repo/src/main.rs"), root, git, &gi),
+            classify_path(Path::new("/repo/src/main.rs"), root, git, &[], &gi),
             EventCategory::WorkingTree
         );
         assert_eq!(
-            classify_path(Path::new("/repo/README.md"), root, git, &gi),
+            classify_path(Path::new("/repo/README.md"), root, git, &[], &gi),
             EventCategory::WorkingTree
+        );
+    }
+
+    /// A linked worktree lives outside the repo root, so without its roots the
+    /// classifier drops every edit an agent makes there — the stale-diff-badge
+    /// bug: the sidebar only caught up when the user selected the branch.
+    #[test]
+    fn test_classify_linked_worktree_outside_repo_root() {
+        let root = Path::new("/repo");
+        let git = Path::new("/repo/.git");
+        let gi = empty_gitignore();
+        let worktrees = vec![PathBuf::from("/repo__wt/feat")];
+
+        assert_eq!(
+            classify_path(Path::new("/repo__wt/feat/src/main.rs"), root, git, &[], &gi),
+            EventCategory::Noise,
+            "without the worktree roots the path is outside everything we watch"
+        );
+        assert_eq!(
+            classify_path(
+                Path::new("/repo__wt/feat/src/main.rs"),
+                root,
+                git,
+                &worktrees,
+                &gi
+            ),
+            EventCategory::WorkingTree
+        );
+    }
+
+    /// A worktree stored inside the repo (`.worktrees/`, `.claude/worktrees/`)
+    /// is normally gitignored, so the repo-root rules would classify it as
+    /// noise. The worktree roots are matched first precisely to prevent that.
+    #[test]
+    fn test_classify_gitignored_worktree_inside_repo_root() {
+        let root = Path::new("/repo");
+        let git = Path::new("/repo/.git");
+        let gi = gitignore_from_patterns(root, &[".worktrees/"]);
+        let worktrees = vec![PathBuf::from("/repo/.worktrees/feat")];
+
+        assert_eq!(
+            classify_path(Path::new("/repo/.worktrees/feat/a.rs"), root, git, &[], &gi),
+            EventCategory::Noise,
+            "gitignored under the repo root"
+        );
+        assert_eq!(
+            classify_path(
+                Path::new("/repo/.worktrees/feat/a.rs"),
+                root,
+                git,
+                &worktrees,
+                &gi
+            ),
+            EventCategory::WorkingTree
+        );
+    }
+
+    #[test]
+    fn test_classify_worktree_noise() {
+        let root = Path::new("/repo");
+        let git = Path::new("/repo/.git");
+        let gi = gitignore_from_patterns(root, &["*.log"]);
+        let worktrees = vec![PathBuf::from("/repo__wt/feat")];
+
+        // The worktree's `.git` is a file pointing at the admin dir under the
+        // main `.git`, which is watched and classified there.
+        assert_eq!(
+            classify_path(Path::new("/repo__wt/feat/.git"), root, git, &worktrees, &gi),
+            EventCategory::Noise
+        );
+        // Always-excluded dirs and gitignored files follow the same rules as the
+        // main checkout — build churn must not wake the sidebar.
+        assert_eq!(
+            classify_path(
+                Path::new("/repo__wt/feat/node_modules/x/i.js"),
+                root,
+                git,
+                &worktrees,
+                &gi
+            ),
+            EventCategory::Noise
+        );
+        assert_eq!(
+            classify_path(
+                Path::new("/repo__wt/feat/debug.log"),
+                root,
+                git,
+                &worktrees,
+                &gi
+            ),
+            EventCategory::Noise
+        );
+        // `.gitignore` itself is not `.git`.
+        assert_eq!(
+            classify_path(
+                Path::new("/repo__wt/feat/.gitignore"),
+                root,
+                git,
+                &worktrees,
+                &gi
+            ),
+            EventCategory::WorkingTree
+        );
+    }
+
+    /// `.git/worktrees/**` keeps classifying as GitState even with the roots
+    /// known — that's the admin side, and it's what drives the watch sync.
+    #[test]
+    fn test_classify_worktree_admin_dir_still_git_state() {
+        let root = Path::new("/repo");
+        let git = Path::new("/repo/.git");
+        let gi = empty_gitignore();
+        let worktrees = vec![PathBuf::from("/repo__wt/feat")];
+
+        assert_eq!(
+            classify_path(
+                Path::new("/repo/.git/worktrees/feat/gitdir"),
+                root,
+                git,
+                &worktrees,
+                &gi
+            ),
+            EventCategory::GitState
         );
     }
 
@@ -859,27 +1150,27 @@ mod tests {
         let gi = empty_gitignore();
 
         assert_eq!(
-            classify_path(Path::new("/repo/.git/objects/ab/cdef"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/objects/ab/cdef"), root, git, &[], &gi),
             EventCategory::Noise
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/config"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/config"), root, git, &[], &gi),
             EventCategory::Noise
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/hooks/pre-commit"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/hooks/pre-commit"), root, git, &[], &gi),
             EventCategory::Noise
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/logs/HEAD"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/logs/HEAD"), root, git, &[], &gi),
             EventCategory::Noise
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/description"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/description"), root, git, &[], &gi),
             EventCategory::Noise
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/info/exclude"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/info/exclude"), root, git, &[], &gi),
             EventCategory::Noise
         );
     }
@@ -891,11 +1182,11 @@ mod tests {
         let gi = gitignore_from_patterns(root, &["node_modules/", "*.log"]);
 
         assert_eq!(
-            classify_path(Path::new("/repo/node_modules/foo/bar.js"), root, git, &gi),
+            classify_path(Path::new("/repo/node_modules/foo/bar.js"), root, git, &[], &gi),
             EventCategory::Noise
         );
         assert_eq!(
-            classify_path(Path::new("/repo/debug.log"), root, git, &gi),
+            classify_path(Path::new("/repo/debug.log"), root, git, &[], &gi),
             EventCategory::Noise
         );
     }
@@ -908,12 +1199,12 @@ mod tests {
 
         // .git/index → GitState
         assert_eq!(
-            classify_path(Path::new("/repo/.git/index"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/index"), root, git, &[], &gi),
             EventCategory::GitState
         );
         // .git/some_subdir/index → Noise (not directly under .git/)
         assert_eq!(
-            classify_path(Path::new("/repo/.git/some_subdir/index"), root, git, &gi),
+            classify_path(Path::new("/repo/.git/some_subdir/index"), root, git, &[], &gi),
             EventCategory::Noise
         );
     }
@@ -1179,6 +1470,124 @@ mod tests {
         // must hash the same as one whose worktrees were all removed.
         let dir = tempfile::tempdir().unwrap();
         assert!(worktree_admin_names(dir.path()).is_empty());
+    }
+
+    /// End-to-end proof of the fix: an edit inside a linked worktree, made by
+    /// anyone (an agent driven from another repo, in the original report), must
+    /// reach the frontend as a `RepoChanged` for the parent repo. Before the
+    /// worktree watches existed this produced no event at all and the branch's
+    /// sidebar diff badge only caught up when the user selected the branch.
+    #[tokio::test]
+    async fn test_edit_in_linked_worktree_emits_repo_changed() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str], cwd: &Path| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-b", "main"], &repo);
+        git(&["config", "user.email", "t@t.com"], &repo);
+        git(&["config", "user.name", "T"], &repo);
+        std::fs::write(repo.join("a.txt"), "hi\n").unwrap();
+        git(&["add", "a.txt"], &repo);
+        git(&["commit", "-m", "init"], &repo);
+        let wt = dir.path().join("wt-feat");
+        git(
+            &["worktree", "add", "-b", "feat", wt.to_str().unwrap()],
+            &repo,
+        );
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.to_string_lossy().to_string();
+        // Hot (a repo with open terminals) so the working-tree debounce is 1.5s
+        // instead of the 15s cold one — the delay is not what's under test.
+        state.hot_repo_paths.write().insert(repo_path.clone());
+        let mut rx = state.event_bus.subscribe();
+        start_watching(&repo_path, &state).unwrap();
+
+        std::fs::write(wt.join("a.txt"), "edited by an agent\n").unwrap();
+
+        let waited = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                match rx.recv().await {
+                    Ok(AppEvent::RepoChanged { repo_path: p }) if p == repo_path => return,
+                    Ok(_) => continue,
+                    Err(e) => panic!("event bus closed: {e}"),
+                }
+            }
+        })
+        .await;
+        assert!(
+            waited.is_ok(),
+            "an edit inside the linked worktree must emit repo-changed for {repo_path}"
+        );
+
+        stop_watching(&repo_path, &state);
+    }
+
+    #[test]
+    fn test_linked_worktree_roots_empty_without_worktrees_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(linked_worktree_roots(dir.path()).is_empty());
+    }
+
+    /// The watch target for a linked worktree comes from `.git/worktrees/*/gitdir`
+    /// — resolve it against real git rather than trusting the layout by memory,
+    /// and check it disappears again once the worktree is removed.
+    #[test]
+    fn test_linked_worktree_roots_resolves_real_worktree() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str], cwd: &Path| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(cwd)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-b", "main"], &repo);
+        git(&["config", "user.email", "t@t.com"], &repo);
+        git(&["config", "user.name", "T"], &repo);
+        std::fs::write(repo.join("a.txt"), "hi\n").unwrap();
+        git(&["add", "a.txt"], &repo);
+        git(&["commit", "-m", "init"], &repo);
+
+        let git_dir = repo.join(".git");
+        assert!(linked_worktree_roots(&git_dir).is_empty());
+
+        let wt = dir.path().join("wt-feat");
+        git(
+            &["worktree", "add", "-b", "feat", wt.to_str().unwrap()],
+            &repo,
+        );
+        assert_eq!(
+            linked_worktree_roots(&git_dir),
+            vec![wt.canonicalize().unwrap()],
+            "the worktree's working-tree root must be watchable"
+        );
+
+        git(&["worktree", "remove", wt.to_str().unwrap()], &repo);
+        assert!(
+            linked_worktree_roots(&git_dir).is_empty(),
+            "a removed worktree must drop out so its watch is released"
+        );
     }
 
     #[test]
