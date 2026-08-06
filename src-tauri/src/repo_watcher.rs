@@ -495,7 +495,11 @@ fn unwatch_working_tree_root(
 /// when nothing moved — a `read_dir` plus a set comparison, syscalls only on a
 /// delta.
 fn sync_worktree_watches(state: &Arc<AppState>, repo_path: &str, git_dir: &Path) {
-    let Some(handle) = state.repo_watchers.get(repo_path).map(|r| r.value().clone()) else {
+    let Some(handle) = state
+        .repo_watchers
+        .get(repo_path)
+        .map(|r| r.value().clone())
+    else {
         return;
     };
     let desired: std::collections::HashSet<PathBuf> =
@@ -990,7 +994,13 @@ mod tests {
             EventCategory::GitState
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/CHERRY_PICK_HEAD"), root, git, &[], &gi),
+            classify_path(
+                Path::new("/repo/.git/CHERRY_PICK_HEAD"),
+                root,
+                git,
+                &[],
+                &gi
+            ),
             EventCategory::GitState
         );
         assert_eq!(
@@ -1158,7 +1168,13 @@ mod tests {
             EventCategory::Noise
         );
         assert_eq!(
-            classify_path(Path::new("/repo/.git/hooks/pre-commit"), root, git, &[], &gi),
+            classify_path(
+                Path::new("/repo/.git/hooks/pre-commit"),
+                root,
+                git,
+                &[],
+                &gi
+            ),
             EventCategory::Noise
         );
         assert_eq!(
@@ -1182,7 +1198,13 @@ mod tests {
         let gi = gitignore_from_patterns(root, &["node_modules/", "*.log"]);
 
         assert_eq!(
-            classify_path(Path::new("/repo/node_modules/foo/bar.js"), root, git, &[], &gi),
+            classify_path(
+                Path::new("/repo/node_modules/foo/bar.js"),
+                root,
+                git,
+                &[],
+                &gi
+            ),
             EventCategory::Noise
         );
         assert_eq!(
@@ -1204,7 +1226,13 @@ mod tests {
         );
         // .git/some_subdir/index → Noise (not directly under .git/)
         assert_eq!(
-            classify_path(Path::new("/repo/.git/some_subdir/index"), root, git, &[], &gi),
+            classify_path(
+                Path::new("/repo/.git/some_subdir/index"),
+                root,
+                git,
+                &[],
+                &gi
+            ),
             EventCategory::Noise
         );
     }
