@@ -28,6 +28,10 @@ export interface RepoSettings {
 	/** null = inherit from repoDefaultsStore */
 	archiveScript: string | null;
 	color: string;
+	/** Gather every worktree of this repo into one consolidated screen (#e767).
+	 *  Repo-specific, not inheritable — it describes how you want to look at THIS
+	 *  repo, and a global default would consolidate repos you never asked about. */
+	autoConsolidateWorktrees: boolean;
 	/** null = inherit global default (true on macOS). When false: left-Option sends composition chars instead of meta sequences */
 	terminalMetaHotkeys: boolean | null;
 	/** null = inherit from repoDefaultsStore */
@@ -216,6 +220,7 @@ function createRepoSettingsStore() {
 				path,
 				displayName,
 				color: "",
+				autoConsolidateWorktrees: false,
 				branchLabels: {},
 				...OVERRIDABLE_NULL_DEFAULTS,
 			};

@@ -1070,6 +1070,11 @@ pub(crate) struct RepoSettingsEntry {
     /// Human-readable labels for branches/worktrees, keyed by branch name
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub(crate) branch_labels: HashMap<String, String>,
+    /// Gather every worktree of this repo into one consolidated screen (#e767).
+    /// Repo-specific, not inheritable: it describes how you want to look at THIS
+    /// repo, and a global default would consolidate repos you never asked about.
+    #[serde(default)]
+    pub(crate) auto_consolidate_worktrees: bool,
 }
 
 impl RepoSettingsEntry {
@@ -1093,6 +1098,7 @@ impl RepoSettingsEntry {
             || self.auto_delete_on_pr_close.is_some()
             || self.mcp_upstreams.is_some()
             || !self.branch_labels.is_empty()
+            || self.auto_consolidate_worktrees
     }
 }
 
@@ -3160,6 +3166,7 @@ mod tests {
             RepoSettingsEntry {
                 path: "/my/repo".to_string(),
                 display_name: "my-repo".to_string(),
+                auto_consolidate_worktrees: true,
                 base_branch: Some("main".to_string()),
                 copy_ignored_files: Some(true),
                 copy_untracked_files: None,
@@ -3188,6 +3195,9 @@ mod tests {
         assert_eq!(entry.copy_ignored_files, Some(true));
         assert_eq!(entry.copy_untracked_files, None);
         assert_eq!(entry.archive_script, Some("cleanup.sh".to_string()));
+        // The frontend owns several repo fields that never reached this struct and
+        // are therefore dropped on every save; consolidation must not join them.
+        assert!(entry.auto_consolidate_worktrees);
     }
 
     #[test]

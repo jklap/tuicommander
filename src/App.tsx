@@ -50,6 +50,7 @@ import { useDictationHotkey } from "./hooks/useDictationHotkey";
 import { useFileOpenBridge } from "./hooks/useFileOpenBridge";
 import { useFocusRestore } from "./hooks/useFocusRestore";
 import { useFocusTracker } from "./hooks/useFocusTracker";
+import { useWorktreeConsolidation } from "./hooks/useWorktreeConsolidation";
 import { useGitOperations } from "./hooks/useGitOperations";
 import { useIdleTriage } from "./hooks/useIdleTriage";
 import { useKeyboardRedirect } from "./hooks/useKeyboardRedirect";
@@ -288,6 +289,10 @@ const App: Component = () => {
 	// Remember last-focused element per-repo + globally, and restore it on
 	// repo switch / window focus regain.
 	useFocusTracker();
+
+	// Keep each repo's consolidated worktree view in sync with its worktrees,
+	// and show it when the active repo has the toggle on (#e767).
+	useWorktreeConsolidation();
 
 	const terminalLifecycle = useTerminalLifecycle({
 		pty,
