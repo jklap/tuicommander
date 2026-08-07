@@ -92,6 +92,42 @@ pub(crate) async fn diagnostics_get() -> Json<serde_json::Value> {
     }))
 }
 
+/// GET /diagnostics/markers — per-session protocol-marker compliance.
+///
+/// Exists because the only way to ask "are the agents still emitting `intent:`
+/// and `suggest:`?" used to be grepping scrollback, which counts every mention
+/// of the word and is capped by buffer size (#4421). These are counts of parsed
+/// events against submitted turns.
+///
+/// A session whose markers are switched off reports `enabled: false` rather than
+/// zero compliance — the difference between an agent ignoring the protocol and
+/// an agent that was never asked to follow it.
+pub(crate) async fn marker_compliance_get(
+    State(state): State<std::sync::Arc<crate::state::AppState>>,
+) -> Json<serde_json::Value> {
+    let sessions: Vec<serde_json::Value> = state
+        .session_states
+        .iter()
+        .map(|entry| {
+            let session_id = entry.key().clone();
+            let agent_type = entry.value().agent_type.clone();
+            let stats = state.marker_stats_for(&session_id);
+            let (intent_enabled, suggest_enabled) =
+                crate::mcp_http::mcp_transport::marker_flags_for_agent(&state, agent_type.as_deref());
+            serde_json::json!({
+                "session_id": session_id,
+                "agent_type": agent_type,
+                "turns": stats.turns,
+                "intent": stats.intent,
+                "suggest": stats.suggest,
+                "intent_enabled": intent_enabled,
+                "suggest_enabled": suggest_enabled,
+            })
+        })
+        .collect();
+    Json(serde_json::json!({ "sessions": sessions }))
+}
+
 /// POST /diagnostics — toggle diagnostic mode. Body: `{ "enabled": true }`.
 pub(crate) async fn diagnostics_set(
     Json(body): Json<super::types::SetApiDebugRequest>,

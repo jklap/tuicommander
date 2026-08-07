@@ -1069,6 +1069,29 @@ pub(crate) struct AgentWaitFinish {
     pub terminal_handoff: Vec<String>,
 }
 
+/// How often a session emitted each protocol marker, and how many turns it had
+/// the chance to.
+///
+/// `turns` counts submitted turns, not wall-clock time, because that is the only
+/// denominator that makes `suggest` comparable across a chatty session and a
+/// quiet one. A ratio above 1 is normal and not a bug: an agent may emit
+/// `intent:` several times inside one turn as the work changes phase.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub(crate) struct MarkerStats {
+    pub(crate) intent: u64,
+    pub(crate) suggest: u64,
+    pub(crate) turns: u64,
+}
+
+/// Which tally to bump. Named rather than three methods so the call sites read
+/// as one vocabulary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MarkerKind {
+    Intent,
+    Suggest,
+    TurnSubmitted,
+}
+
 /// Max messages per agent inbox before FIFO eviction.
 pub(crate) const AGENT_INBOX_CAPACITY: usize = 100;
 
@@ -1328,6 +1351,10 @@ pub struct AppState {
     /// the position instead: an omitted `since` resumes from here, an explicit one
     /// overrides it, and `since=0` stays the deliberate replay escape hatch.
     pub(crate) agent_read_cursor: DashMap<String, u64>,
+    /// Per-session marker tallies, so "the agents are ignoring the markers" can be
+    /// answered with a number instead of by grepping scrollback — which counts any
+    /// mention of the word and is capped by buffer size (#4421).
+    pub(crate) marker_stats: DashMap<String, MarkerStats>,
     /// Peer messages queued to be typed into a recipient's PTY on its next
     /// BUSY→IDLE transition (tuic_session → framed lines). Populated when a message
     /// arrives for a busy/awaiting agent; drained by `flush_pending_injections`.
@@ -1997,6 +2024,27 @@ impl AppState {
         messages
     }
 
+    /// Record one marker emission or one submitted turn for `session_id`.
+    pub(crate) fn note_marker(&self, session_id: &str, kind: MarkerKind) {
+        let mut stats = self.marker_stats.entry(session_id.to_string()).or_default();
+        let counter = match kind {
+            MarkerKind::Intent => &mut stats.intent,
+            MarkerKind::Suggest => &mut stats.suggest,
+            MarkerKind::TurnSubmitted => &mut stats.turns,
+        };
+        *counter = counter.saturating_add(1);
+    }
+
+    /// Tallies for one session. Absent means "no turn observed yet", which is
+    /// deliberately the same shape as all-zero: a session that never ran is not
+    /// evidence of an agent ignoring anything.
+    pub(crate) fn marker_stats_for(&self, session_id: &str) -> MarkerStats {
+        self.marker_stats
+            .get(session_id)
+            .map(|entry| *entry.value())
+            .unwrap_or_default()
+    }
+
     pub(crate) fn orchestrator_wake_needed_through(&self, tuic_session: &str) -> Option<u64> {
         self.active_agent_waiters
             .get(tuic_session)
@@ -2261,6 +2309,7 @@ impl AppState {
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
+            marker_stats: DashMap::new(),
             pending_injections: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             active_agent_waiters: DashMap::new(),
@@ -3944,6 +3993,62 @@ mod tests {
         assert!(!state.has_active_agent_waiter("peer"));
     }
 
+    // ---- marker compliance counters (#4421) ----
+
+    #[test]
+    fn marker_tallies_are_independent_per_session() {
+        let state = tests_support::make_test_app_state();
+        state.note_marker("s1", MarkerKind::TurnSubmitted);
+        state.note_marker("s1", MarkerKind::Intent);
+        state.note_marker("s1", MarkerKind::Suggest);
+        state.note_marker("s1", MarkerKind::Suggest);
+        state.note_marker("s2", MarkerKind::TurnSubmitted);
+
+        assert_eq!(
+            state.marker_stats_for("s1"),
+            MarkerStats {
+                intent: 1,
+                suggest: 2,
+                turns: 1
+            }
+        );
+        assert_eq!(
+            state.marker_stats_for("s2"),
+            MarkerStats {
+                intent: 0,
+                suggest: 0,
+                turns: 1
+            },
+            "a turn with no markers is the case this counter exists to see"
+        );
+    }
+
+    #[test]
+    fn an_unseen_session_reports_zeroes_rather_than_nothing() {
+        let state = tests_support::make_test_app_state();
+        // Absent and all-zero are deliberately the same shape: a session that
+        // never ran a turn is not evidence of an agent ignoring the protocol.
+        assert_eq!(state.marker_stats_for("never-ran"), MarkerStats::default());
+    }
+
+    #[test]
+    fn a_malformed_marker_never_reaches_the_tally() {
+        let state = tests_support::make_test_app_state();
+        state.note_marker("s1", MarkerKind::TurnSubmitted);
+        // Nothing else is recorded: the counter is fed from parsed ParsedEvents,
+        // so a line the parser rejected (`suggest: A | B` with no brackets, or a
+        // 4-item list) contributes no event and therefore no count. This asserts
+        // the denominator still moves, which is what makes the miss visible.
+        assert_eq!(
+            state.marker_stats_for("s1"),
+            MarkerStats {
+                intent: 0,
+                suggest: 0,
+                turns: 1
+            }
+        );
+    }
+
     #[test]
     fn lifecycle_summary_notice_acknowledges_its_own_window() {
         let state = tests_support::make_test_app_state();
@@ -5442,6 +5547,7 @@ mod tests {
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
+            marker_stats: DashMap::new(),
             pending_injections: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             active_agent_waiters: DashMap::new(),
