@@ -120,7 +120,9 @@ function emptyForm() {
 		cwd: "",
 		credential: "",
 		timeout: 30,
-		authMethod: "bearer" as "bearer" | "oauth2",
+		// OAuth is the default: remote MCP servers overwhelmingly speak OAuth, and a
+		// pasted bearer token is the fallback for the few that only take an API key.
+		authMethod: "oauth2" as "bearer" | "oauth2",
 		oauthClientId: "",
 		oauthClientSecret: "",
 		oauthScopes: "",
@@ -522,11 +524,16 @@ export const UpstreamMcpPanel: Component = () => {
 								style={{ width: "70px" }}
 								onInput={(e) => setForm((f) => ({ ...f, timeout: parseInt(e.currentTarget.value, 10) || 30 }))}
 							/>
-							<button class={s.copyBtn} onClick={addUpstream} disabled={saving()} style={{ "margin-left": "auto" }}>
+						</div>
+						{/* Same shape as the edit form below: primary + secondary on their own
+						    right-aligned row, so the pair is never squeezed by the timeout field
+						    and both buttons use the shared save/cancel styling. */}
+						<div style={{ display: "flex", gap: "8px", "justify-content": "flex-end" }}>
+							<button class={s.saveBtn} onClick={addUpstream} disabled={saving()}>
 								{saving() ? "Adding…" : "Add"}
 							</button>
 							<button
-								class={s.copyBtn}
+								class={s.testBtn}
 								onClick={() => {
 									setShowAdd(false);
 									setForm(emptyForm());
