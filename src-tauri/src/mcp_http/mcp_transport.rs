@@ -9414,7 +9414,10 @@ mod tests {
             .recv_timeout(std::time::Duration::from_secs(2))
             .expect("a lifecycle notice should submit a new turn");
         assert!(
-            output.contains(&format!("child agent {} exited (exit 0)", &TEST_UUID_A[..8])),
+            output.contains(&format!(
+                "child agent {} exited (exit 0)",
+                &TEST_UUID_A[..8]
+            )),
             "{output:?}"
         );
         assert!(
