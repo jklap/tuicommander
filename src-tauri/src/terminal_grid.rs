@@ -1280,10 +1280,21 @@ impl TerminalGrid {
             let m_end = *m.end();
 
             let abs_row = (m_start.line.0 + history as i32) as usize;
+            // A match can span a wrapped line. `SearchMatch` carries a single row, so
+            // taking `m_end.column` from a DIFFERENT row would paint a highlight on the
+            // start row covering cells that never matched. Clip to the end of the start
+            // row instead: an under-highlight is invisible, an over-highlight is a bug.
+            // DEFERRED (2026-08-07) — full multi-row highlighting needs SearchMatch to
+            // carry per-row segments and the match count to stay 1 per logical hit.
+            let col_end = if m_end.line == m_start.line {
+                m_end.column.0 + 1
+            } else {
+                last_col.0 + 1
+            };
             matches.push(SearchMatch {
                 row: abs_row,
                 col_start: m_start.column.0,
-                col_end: m_end.column.0 + 1,
+                col_end,
             });
 
             // Advance past this match
@@ -2679,6 +2690,69 @@ mod tests {
         let _ = grid.process(b"test content");
         let matches = grid.search("[invalid");
         assert!(matches.is_empty());
+    }
+
+    /// A match that wraps onto the next row must never report an end column taken
+    /// from that next row: `SearchMatch` carries a single row, so the renderer would
+    /// paint the highlight on the START row across cells that never matched.
+    #[test]
+    fn search_clips_wrapped_match_to_the_start_row() {
+        let cols = 10;
+        let mut grid = TerminalGrid::new(5, cols, 0);
+        // "abcdefgh" starts at col 6 of row 0 and wraps: "abcd" on row 0, "efgh" on row 1.
+        let _ = grid.process(b"......abcdefgh");
+        let matches = grid.search("abcdefgh");
+        assert_eq!(matches.len(), 1, "one logical hit");
+        let m = &matches[0];
+        assert_eq!(m.col_start, 6);
+        assert_eq!(
+            m.col_end,
+            usize::from(cols),
+            "end column clipped to the start row, not carried over from the wrapped row"
+        );
+        assert!(
+            m.col_end > m.col_start,
+            "highlight width must stay positive"
+        );
+    }
+
+    /// Same clip when the hit spans three rows — the end column must still come
+    /// from the START row, never from the row two lines further down.
+    #[test]
+    fn search_clips_match_wrapping_across_three_rows() {
+        let cols = 10;
+        let mut grid = TerminalGrid::new(5, cols, 0);
+        // 25 chars at col 0 of a 10-column grid occupy rows 0, 1 and 2.
+        let needle = "abcdefghijklmnopqrstuvwxy";
+        assert_eq!(needle.len(), 25, "needle must span three 10-column rows");
+        let _ = grid.process(needle.as_bytes());
+        let matches = grid.search(needle);
+        assert_eq!(matches.len(), 1, "one logical hit");
+        assert_eq!(matches[0].col_start, 0);
+        assert_eq!(matches[0].col_end, usize::from(cols));
+    }
+
+    /// The clip must not shrink a match that fits on one row.
+    #[test]
+    fn search_keeps_full_span_for_single_row_match() {
+        let mut grid = TerminalGrid::new(5, 40, 0);
+        let _ = grid.process(b"..hello..");
+        let matches = grid.search("hello");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].col_start, 2);
+        assert_eq!(matches[0].col_end, 7, "exclusive end of 'hello' at col 2");
+    }
+
+    /// A match ending exactly on the last column stays on its own row.
+    #[test]
+    fn search_match_ending_at_last_column_is_not_clipped_short() {
+        let cols = 10;
+        let mut grid = TerminalGrid::new(5, cols, 0);
+        let _ = grid.process(b".....World");
+        let matches = grid.search("World");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].col_start, 5);
+        assert_eq!(matches[0].col_end, usize::from(cols));
     }
 
     #[test]

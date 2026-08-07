@@ -77,6 +77,11 @@ export interface CanvasTerminalProps {
 const SUGGEST_ANCHOR_RE = /^[\s●⏺]*suggest:\s+\S/;
 const INTENT_RE = /^[\s●⏺]*intent:\s+/;
 
+/** How long to wait after the last grid change before re-running the open search.
+ *  A redrawing TUI emits frames far faster than a regex sweep over the whole
+ *  scrollback is worth running. */
+const SEARCH_REFRESH_DEBOUNCE_MS = 150;
+
 const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let canvasRef!: HTMLCanvasElement;
 	let overlayCanvasRef!: HTMLCanvasElement;
@@ -125,6 +130,15 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let lastScreenRows = -1;
 	let lastScreenCols = -1;
 	const search = createCanvasSearchController();
+	// Live search query, kept so incoming frames can re-run it. Search matches are
+	// anchored to ABSOLUTE rows, but a TUI (ink agents, vim, lazygit) rewrites the
+	// live screen rows in place: the text under a highlight changes while the
+	// highlight stays pinned, painting an orange box over cells that no longer
+	// match. Rewritten rows drop their matches immediately; this re-search restores
+	// the ones that still hit.
+	let searchQuery = "";
+	let searchBlockScope = false;
+	let searchRefreshTimer: ReturnType<typeof setTimeout> | undefined;
 	let cursorBlinkOn = true;
 	let blinkInterval: ReturnType<typeof setInterval> | undefined;
 	let blinkResetAt = 0;
@@ -505,6 +519,67 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (delta !== 0) {
 			invokeRef("terminal_scroll", { sessionId: props.sessionId, delta }).catch(ipcErr("terminal_scroll"));
 		}
+	}
+
+	/** Run `searchQuery` against the backend grid and adopt the result.
+	 *
+	 *  Shared by the `searchFind` ref method and by the frame-driven refresh, so a
+	 *  live TUI redraw re-derives matches through exactly the same path as a fresh
+	 *  find — no second copy of the block-scope / viewport-anchoring rules. */
+	async function runSearchQuery(scrollToActive: boolean): Promise<{ index: number; count: number }> {
+		if (!searchQuery || !invokeRef) {
+			search.clear();
+			return { index: -1, count: 0 };
+		}
+		const generation = screenGeneration;
+		let matches = (await invokeRef("terminal_search", {
+			sessionId: props.sessionId,
+			query: searchQuery,
+		})) as { row: number; col_start: number; col_end: number }[];
+		if (generation !== screenGeneration) return { index: -1, count: 0 };
+		if (searchBlockScope && currentFrame) {
+			const term = terminalsStore.get(props.terminalId);
+			if (term) {
+				const allBlocks = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
+				const viewTop = currentFrame.historySize - currentFrame.displayOffset;
+				const viewCenter = viewTop + Math.floor(currentFrame.screenRows / 2);
+				matches = filterMatchesToBlock(matches, allBlocks, viewCenter);
+			}
+		}
+		const activeMatch = search.replace(
+			matches,
+			currentFrame
+				? {
+						historySize: currentFrame.historySize,
+						displayOffset: currentFrame.displayOffset,
+						screenRows: currentFrame.screenRows || lastResizeRows,
+					}
+				: undefined,
+		);
+		// Only a user-driven find/next/prev may move the viewport. A refresh triggered
+		// by the agent repainting must never yank the screen out from under the user.
+		if (scrollToActive && activeMatch) scrollToMatch(activeMatch);
+		const m = metrics();
+		if (currentFrame && m) paintFrame(currentFrame, m);
+		return { index: search.activeIndex, count: matches.length };
+	}
+
+	/** Coalesce the re-search: a redrawing TUI emits frames far faster than a
+	 *  regex sweep over the whole scrollback is worth running. */
+	function scheduleSearchRefresh(): void {
+		if (!searchQuery) return;
+		clearTimeout(searchRefreshTimer);
+		searchRefreshTimer = setTimeout(() => {
+			searchRefreshTimer = undefined;
+			void runSearchQuery(false);
+		}, SEARCH_REFRESH_DEBOUNCE_MS);
+	}
+
+	function clearSearchState(): void {
+		searchQuery = "";
+		clearTimeout(searchRefreshTimer);
+		searchRefreshTimer = undefined;
+		search.clear();
 	}
 
 	function absRowToViewport(absRow: number): number | null {
@@ -1300,7 +1375,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			scroll.clearCache();
 			selection.clear();
 			stopSelectionScroll();
-			search.clear();
+			clearSearchState();
 			rowMap.clear();
 			pendingDirtyRows.clear();
 			clearDetectedLinks();
@@ -1368,6 +1443,21 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			rowMap.set(row.index, row);
 			pendingDirtyRows.add(row.index);
 			scanRowForLinks(row.index);
+		}
+
+		// Every row in this frame just had its text replaced. A search match anchored
+		// to one of those absolute rows describes text that no longer exists, so drop
+		// it now rather than painting a highlight over whatever the TUI wrote there
+		// (ink agents repaint their bottom rows continuously). The debounced re-search
+		// then re-establishes the matches that still hit.
+		if (searchQuery && frame.rows.length > 0) {
+			const viewportTop = frame.historySize - frame.displayOffset;
+			const rewritten = new Set<number>();
+			for (const row of frame.rows) rewritten.add(viewportTop + row.index);
+			// No repaint flag needed: repaintOverlay() clears and redraws the overlay
+			// canvas (where highlights live) on every frame.
+			search.dropRows(rewritten);
+			scheduleSearchRefresh();
 		}
 
 		// [dup] desync detector: diff the pre-heal snapshot against the now-authoritative
@@ -2846,40 +2936,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			},
 			searchFind: async (query: string, blockScope?: boolean) => {
 				if (!query || !invokeRef) {
-					search.clear();
+					clearSearchState();
 					const m = metrics();
 					if (currentFrame && m) paintFrame(currentFrame, m);
 					return { index: -1, count: 0 };
 				}
-				const generation = screenGeneration;
-				let matches = (await invokeRef("terminal_search", {
-					sessionId: props.sessionId,
-					query,
-				})) as { row: number; col_start: number; col_end: number }[];
-				if (generation !== screenGeneration) return { index: -1, count: 0 };
-				if (blockScope && currentFrame) {
-					const term = terminalsStore.get(props.terminalId);
-					if (term) {
-						const allBlocks = term.activeBlock ? [...term.commandBlocks, term.activeBlock] : term.commandBlocks;
-						const viewTop = currentFrame.historySize - currentFrame.displayOffset;
-						const viewCenter = viewTop + Math.floor(currentFrame.screenRows / 2);
-						matches = filterMatchesToBlock(matches, allBlocks, viewCenter);
-					}
-				}
-				const activeMatch = search.replace(
-					matches,
-					currentFrame
-						? {
-								historySize: currentFrame.historySize,
-								displayOffset: currentFrame.displayOffset,
-								screenRows: currentFrame.screenRows || lastResizeRows,
-							}
-						: undefined,
-				);
-				if (activeMatch) scrollToMatch(activeMatch);
-				const m = metrics();
-				if (currentFrame && m) paintFrame(currentFrame, m);
-				return { index: search.activeIndex, count: matches.length };
+				searchQuery = query;
+				searchBlockScope = blockScope ?? false;
+				return runSearchQuery(true);
 			},
 			searchNext: () => {
 				const match = search.next();
@@ -2898,7 +2962,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				return { index: search.activeIndex, count: search.matches.length };
 			},
 			searchClear: () => {
-				search.clear();
+				clearSearchState();
 				const m = metrics();
 				if (currentFrame && m) paintFrame(currentFrame, m);
 			},
@@ -3025,6 +3089,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		cleanupTouch?.();
 		clearTimeout(linkThrottle);
 		clearTimeout(scrollGestureEndTimer);
+		clearTimeout(searchRefreshTimer);
 		linkController.dispose();
 		resetFrameTiming(props.sessionId);
 		rowMap.clear();
