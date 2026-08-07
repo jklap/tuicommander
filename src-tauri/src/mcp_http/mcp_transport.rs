@@ -168,10 +168,15 @@ fn resolve_agent_type(client_name: Option<&str>) -> Option<&'static str> {
 /// the whole feature; per-agent is an escape hatch (default ON) to disable the
 /// marker on a specific agent where rendering or parsing misbehaves.
 fn resolve_marker_flags(state: &Arc<AppState>, client_name: Option<&str>) -> (bool, bool) {
+    marker_flags_for_agent(state, resolve_agent_type(client_name))
+}
+
+/// Same rule, keyed by agent type instead of by client name, so a caller that
+/// already knows the agent (a live session, the marker diagnostics) does not
+/// have to reverse-engineer a client name to ask the question (#4421).
+pub(crate) fn marker_flags_for_agent(state: &AppState, agent_type: Option<&str>) -> (bool, bool) {
     let global_intent = state.config.read().intent_tab_title;
     let global_suggest = state.config.read().suggest_followups;
-
-    let agent_type = resolve_agent_type(client_name);
 
     let agents_cfg = crate::config::load_agents_config();
     let agent_settings = agent_type.and_then(|t| agents_cfg.agents.get(t));
@@ -6333,6 +6338,7 @@ mod tests {
             agent_inbox: dashmap::DashMap::new(),
             agent_inbox_evictions: dashmap::DashMap::new(),
             agent_read_cursor: dashmap::DashMap::new(),
+            marker_stats: dashmap::DashMap::new(),
             pending_injections: dashmap::DashMap::new(),
             pending_initial_prompts: dashmap::DashMap::new(),
             active_agent_waiters: dashmap::DashMap::new(),

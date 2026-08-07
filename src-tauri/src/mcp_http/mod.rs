@@ -688,6 +688,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/diagnostics",
             get(log_routes::diagnostics_get).post(log_routes::diagnostics_set),
         )
+        .route(
+            "/diagnostics/markers",
+            get(log_routes::marker_compliance_get),
+        )
         // Worktrees
         .route(
             "/worktrees",
@@ -2057,6 +2061,7 @@ mod tests {
             agent_inbox: DashMap::new(),
             agent_inbox_evictions: DashMap::new(),
             agent_read_cursor: DashMap::new(),
+            marker_stats: DashMap::new(),
             pending_injections: DashMap::new(),
             pending_initial_prompts: DashMap::new(),
             active_agent_waiters: DashMap::new(),

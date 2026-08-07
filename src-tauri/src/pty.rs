@@ -2796,6 +2796,9 @@ fn note_submitted_input_with_hook<F: FnOnce()>(state: &AppState, session_id: &st
         if let Some(mut session) = state.session_states.get_mut(session_id) {
             session.turn_epoch = session.turn_epoch.wrapping_add(1);
             session.suggested_actions = None;
+            // The denominator for marker compliance (#4421): one submitted turn
+            // is one chance for the agent to emit its markers.
+            state.note_marker(session_id, crate::state::MarkerKind::TurnSubmitted);
         }
         after_epoch();
         silence.note_user_submission(has_ready_screen_adapter(Some(&agent_type)));
@@ -4584,6 +4587,20 @@ impl ChunkProcessor {
                 };
             if suppress_this {
                 continue;
+            }
+
+            // Count what the model actually emitted, at the funnel every parsed
+            // event passes through. Counted here rather than at emission because a
+            // suggest parked for a turn that ends early is still a marker the
+            // agent produced (#4421).
+            match event {
+                ParsedEvent::Intent { .. } => {
+                    state.note_marker(session_id, crate::state::MarkerKind::Intent)
+                }
+                ParsedEvent::Suggest { .. } => {
+                    state.note_marker(session_id, crate::state::MarkerKind::Suggest)
+                }
+                _ => {}
             }
 
             if let ParsedEvent::AgentSessionConflict { kind, .. } = event
