@@ -553,4 +553,42 @@ describe("Toolbar", () => {
 			expect(btn?.textContent).toContain("hotfix/critical");
 		});
 	});
+
+	// The app name used to be position:absolute at left:50% inside .left, so at a
+	// narrow sidebar it was painted straight over the right-aligned toggles.
+	describe("left region layout", () => {
+		// sidebarWidth is module-level state; don't leak a narrow width into later tests.
+		afterEach(() => uiStore.setSidebarWidth(300));
+
+		it("keeps the app name in the flex flow, never absolutely positioned", () => {
+			const { container } = render(() => <Toolbar />);
+			const left = container.querySelector(".left");
+			expect(left).not.toBeNull();
+			// Spacers on both sides make the name a shrinkable flex item that stays
+			// visually centred without being able to overlap the toggles.
+			expect(left?.querySelectorAll(".leftSpacer").length).toBe(2);
+			const name = left?.querySelector(".appName");
+			expect(name).not.toBeNull();
+			expect(name?.previousElementSibling?.classList.contains("leftSpacer")).toBe(true);
+		});
+
+		it("switches to the short wordmark only below the width where the full one fits", () => {
+			// 254 = 78 traffic-light inset + 110 wordmark + ~56 toggles + 10 padding.
+			uiStore.setSidebarWidth(254);
+			const wide = render(() => <Toolbar />);
+			expect(wide.container.querySelector(".left")?.classList.contains("narrowSidebar")).toBe(false);
+			wide.unmount();
+
+			uiStore.setSidebarWidth(253);
+			const narrow = render(() => <Toolbar />);
+			expect(narrow.container.querySelector(".left")?.classList.contains("narrowSidebar")).toBe(true);
+			narrow.unmount();
+		});
+
+		it("still marks narrow at the minimum sidebar width", () => {
+			uiStore.setSidebarWidth(200);
+			const { container } = render(() => <Toolbar />);
+			expect(container.querySelector(".left")?.classList.contains("narrowSidebar")).toBe(true);
+		});
+	});
 });
