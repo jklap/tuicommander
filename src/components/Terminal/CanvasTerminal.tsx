@@ -909,7 +909,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			((i: number) => {
 				const row = rowMap.get(i);
 				if (!row) return null;
-				return { text: rowToText(row), isWrapped: false };
+				return { text: rowToText(row), isWrapped: row.wrapped };
 			});
 
 		// Build new overlay key to detect changes
@@ -1136,7 +1136,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			updateSuggestOverlay(currentFrame, m, undefined, (i) => {
 				const cached = cacheRow(hist - intOffset + i);
 				if (!cached) return null;
-				return { text: rowToText(cached), isWrapped: false };
+				return { text: rowToText(cached), isWrapped: cached.wrapped };
 			});
 		}
 	}

@@ -6,6 +6,7 @@ function makeRow(index: number, count = 8): DecodedRow {
 	return {
 		index,
 		count,
+		wrapped: false,
 		codepoints: new Uint32Array(count),
 		fg: new Uint32Array(count),
 		bg: new Uint32Array(count),
