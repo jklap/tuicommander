@@ -16,9 +16,17 @@ export const ATTR_INVERSE = 0x20;
 export const ATTR_DEFAULT_FG = 0x40;
 export const ATTR_DEFAULT_BG = 0x80;
 
+/** Bit 15 of the wire `col_count`: this row continues onto the next display row.
+ *  Mirrors `ROW_WRAPPED_FLAG` in src-tauri/src/terminal_grid.rs — the grid is the
+ *  only place that knows a line wrapped, and the overlay needs it to mask a
+ *  wrapped `suggest:` block (#8fc7). */
+const ROW_WRAPPED_FLAG = 0x8000;
+
 export interface DecodedRow {
 	index: number;
 	count: number;
+	/** True when the line continues onto the next display row. */
+	wrapped: boolean;
 	/** Unicode codepoints; 0 = empty cell */
 	codepoints: Uint32Array;
 	/** Packed fg color: r<<16|g<<8|b (valid when ATTR_DEFAULT_FG not set) */
@@ -226,8 +234,10 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 		if (offset + 4 > buffer.byteLength) break;
 		const rowIndex = view.getUint16(offset, true);
 		offset += 2;
-		const colCount = view.getUint16(offset, true);
+		const rawColCount = view.getUint16(offset, true);
 		offset += 2;
+		const wrapped = (rawColCount & ROW_WRAPPED_FLAG) !== 0;
+		const colCount = rawColCount & ~ROW_WRAPPED_FLAG;
 
 		const codepoints = new Uint32Array(colCount);
 		const fg = new Uint32Array(colCount);
@@ -249,7 +259,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 			bg[c] = (bgR << 16) | (bgG << 8) | bgB;
 		}
 
-		rows.push({ index: rowIndex, count: colCount, codepoints, fg, bg, attrs });
+		rows.push({ index: rowIndex, count: colCount, wrapped, codepoints, fg, bg, attrs });
 	}
 
 	return {
@@ -312,8 +322,10 @@ export function decodeStyledRange(buffer: ArrayBuffer): StyledRange | null {
 		if (offset + 6 > buffer.byteLength) break;
 		const abs = view.getUint32(offset, true);
 		offset += 4;
-		const colCount = view.getUint16(offset, true);
+		const rawColCount = view.getUint16(offset, true);
 		offset += 2;
+		const wrapped = (rawColCount & ROW_WRAPPED_FLAG) !== 0;
+		const colCount = rawColCount & ~ROW_WRAPPED_FLAG;
 		const codepoints = new Uint32Array(colCount);
 		const fg = new Uint32Array(colCount);
 		const bg = new Uint32Array(colCount);
@@ -332,7 +344,7 @@ export function decodeStyledRange(buffer: ArrayBuffer): StyledRange | null {
 			fg[c] = (fgR << 16) | (fgG << 8) | fgB;
 			bg[c] = (bgR << 16) | (bgG << 8) | bgB;
 		}
-		rows.push({ abs, row: { index: 0, count: colCount, codepoints, fg, bg, attrs } });
+		rows.push({ abs, row: { index: 0, count: colCount, wrapped, codepoints, fg, bg, attrs } });
 	}
 	return { startAbs, historySize, cols, rows };
 }

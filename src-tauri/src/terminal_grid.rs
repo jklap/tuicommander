@@ -165,6 +165,20 @@ pub(crate) struct LogicalPrefix {
 }
 
 // Attrs byte bit positions for binary cell encoding.
+/// Bit 15 of a serialized row's `col_count` carries alacritty's WRAPLINE: the
+/// row is not a line of its own, it continues onto the next display row.
+///
+/// Stolen from the count rather than added as a new per-row byte on purpose. The
+/// row header is 4 bytes and both frontend decoders — plus every offset
+/// assertion in their tests — are written against that; a column count is a
+/// terminal width, so the top bit is dead space. Same trade, same reasoning as
+/// `keyboard_flags` bit 5 carrying the alt-screen state.
+///
+/// Without it the frontend cannot tell a wrapped continuation from a fresh line,
+/// which is what left a wrapped `suggest:` block unmasked on screen (#8fc7):
+/// the grid is the only place that knows.
+pub(crate) const ROW_WRAPPED_FLAG: u16 = 0x8000;
+
 const ATTR_BOLD: u8 = 0b0000_0001;
 const ATTR_ITALIC: u8 = 0b0000_0010;
 const ATTR_UNDERLINE: u8 = 0b0000_0100;
@@ -318,6 +332,25 @@ fn resolve_color(c: Color, colors: &Colors) -> Option<Rgb> {
             }
         }
     }
+}
+
+/// Encode a row's `col_count` field, tagging [`ROW_WRAPPED_FLAG`] when the line
+/// continues onto the next display row.
+///
+/// alacritty marks the wrap on the LAST cell of the row it wraps out of, so the
+/// flag answers "does this row continue?", not "is this row a continuation?".
+/// The frontend walks forward from an anchor, which is the direction that
+/// matches.
+fn encode_col_count(
+    grid: &alacritty_terminal::grid::Grid<Cell>,
+    line: Line,
+    num_cols: usize,
+) -> u16 {
+    let wrapped = num_cols > 0
+        && grid[line][Column(num_cols - 1)]
+            .flags
+            .contains(Flags::WRAPLINE);
+    (num_cols as u16) | if wrapped { ROW_WRAPPED_FLAG } else { 0 }
 }
 
 /// Encode one grid cell into the 11-byte wire format shared by the dirty-row and
@@ -1648,7 +1681,7 @@ impl TerminalGrid {
         for &row_idx in &dirty_lines {
             let line = Line(row_idx as i32 - display_offset as i32);
             buf.extend_from_slice(&(row_idx as u16).to_le_bytes());
-            buf.extend_from_slice(&(num_cols as u16).to_le_bytes());
+            buf.extend_from_slice(&encode_col_count(grid, line, num_cols).to_le_bytes());
 
             for col in 0..num_cols {
                 encode_cell(&mut buf, &grid[line][Column(col)], colors);
@@ -1709,7 +1742,7 @@ impl TerminalGrid {
         for rel in rows {
             let line = Line(rel as i32 - history_size as i32);
             buf.extend_from_slice(&((rel + history_base) as u32).to_le_bytes());
-            buf.extend_from_slice(&(num_cols as u16).to_le_bytes());
+            buf.extend_from_slice(&encode_col_count(grid, line, num_cols).to_le_bytes());
             for col in 0..num_cols {
                 encode_cell(&mut buf, &grid[line][Column(col)], colors);
             }
@@ -2409,6 +2442,43 @@ mod tests {
         )
     }
 
+    /// A `suggest:` line longer than the terminal is one logical line split over
+    /// two display rows. The frontend overlay has to know that to mask the block
+    /// (#8fc7) — and the frame is its only source of truth about the grid.
+    #[test]
+    fn serialized_rows_carry_the_wrapline_flag() {
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"abcdefghijklmno");
+        let buf = grid.serialize_dirty_rows();
+
+        let h = TEST_HEADER_SIZE;
+        let first = u16::from_le_bytes([buf[h + 2], buf[h + 3]]);
+        assert_eq!(
+            first & ROW_WRAPPED_FLAG,
+            ROW_WRAPPED_FLAG,
+            "row 0 continues onto row 1"
+        );
+        assert_eq!(first & !ROW_WRAPPED_FLAG, 10, "column count survives the flag");
+
+        // Row 1 holds the tail: nothing continues after it.
+        let second = h + 4 + 10 * 11;
+        let tail = u16::from_le_bytes([buf[second + 2], buf[second + 3]]);
+        assert_eq!(tail & ROW_WRAPPED_FLAG, 0, "the last row of a line is not wrapped");
+        assert_eq!(tail & !ROW_WRAPPED_FLAG, 10);
+    }
+
+    #[test]
+    fn styled_range_rows_carry_the_wrapline_flag() {
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"abcdefghijklmno");
+        let buf = grid.serialize_styled_range(0, 2);
+
+        // Header: start_abs u32, history_size u32, cols u16, row_count u16.
+        let first = u16::from_le_bytes([buf[12 + 4], buf[12 + 5]]);
+        assert_eq!(first & ROW_WRAPPED_FLAG, ROW_WRAPPED_FLAG);
+        assert_eq!(first & !ROW_WRAPPED_FLAG, 10);
+    }
+
     #[test]
     fn serialize_plain_text_roundtrip() {
         let mut grid = TerminalGrid::new(5, 10, 0);
@@ -2425,7 +2495,7 @@ mod tests {
         // First dirty row header starts after header
         let h = TEST_HEADER_SIZE;
         let row_idx = u16::from_le_bytes([buf[h], buf[h + 1]]);
-        let col_count = u16::from_le_bytes([buf[h + 2], buf[h + 3]]);
+        let col_count = row_col_count(u16::from_le_bytes([buf[h + 2], buf[h + 3]]));
         assert_eq!(row_idx, 0);
         assert_eq!(col_count, 10);
 
@@ -2863,7 +2933,7 @@ mod tests {
         for _ in 0..count {
             let abs = u32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
             off += 4;
-            let col_count = u16::from_le_bytes([buf[off], buf[off + 1]]) as usize;
+            let col_count = row_col_count(u16::from_le_bytes([buf[off], buf[off + 1]]));
             off += 2;
             let mut text = String::new();
             for _ in 0..col_count {
@@ -3689,6 +3759,14 @@ mod tests {
         );
     }
 
+    /// Strip [`ROW_WRAPPED_FLAG`] from a serialized row's `col_count`.
+    ///
+    /// Every reader of the wire format has to do this before using the value as a
+    /// stride — forgetting it walks 32768 cells past the end of the buffer.
+    fn row_col_count(raw: u16) -> usize {
+        (raw & !ROW_WRAPPED_FLAG) as usize
+    }
+
     /// Helper: find the cell data offset for a given (row_index, col) in a serialized frame.
     /// Returns the byte offset of the cell's 11-byte block, or None if not found.
     fn find_cell_offset(buf: &[u8], target_row: u16, target_col: u16) -> Option<usize> {
@@ -3696,12 +3774,12 @@ mod tests {
         let mut offset = TEST_HEADER_SIZE;
         for _ in 0..num_rows {
             let row_idx = u16::from_le_bytes([buf[offset], buf[offset + 1]]);
-            let col_count = u16::from_le_bytes([buf[offset + 2], buf[offset + 3]]);
+            let col_count = row_col_count(u16::from_le_bytes([buf[offset + 2], buf[offset + 3]]));
             offset += 4;
-            if row_idx == target_row && target_col < col_count {
+            if row_idx == target_row && (target_col as usize) < col_count {
                 return Some(offset + target_col as usize * 11);
             }
-            offset += col_count as usize * 11;
+            offset += col_count * 11;
         }
         None
     }

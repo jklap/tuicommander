@@ -7,6 +7,7 @@ function row(text: string): DecodedRow {
 	return {
 		index: 0,
 		count: codepoints.length,
+		wrapped: false,
 		codepoints,
 		fg: new Uint32Array(codepoints.length),
 		bg: new Uint32Array(codepoints.length),
