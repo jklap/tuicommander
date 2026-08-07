@@ -5181,7 +5181,10 @@ fn enqueue_state_change_to_parent(
     // too. Left out of that story's scope deliberately — it needs its own repro,
     // since the parent id here comes from session_parent rather than a caller.
     let message_timestamp = state.push_agent_inbox(&parent_id, msg);
-    let framed = format!("[TUIC] {}", describe_lifecycle_payload(session_id, &payload));
+    let framed = format!(
+        "[TUIC] {}",
+        describe_lifecycle_payload(session_id, &payload)
+    );
     let dispatch = ParentLifecycleDispatch {
         parent_id: parent_id.clone(),
         message_id: message_id.clone(),
@@ -5281,7 +5284,10 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
     let outcome = deliver_message_to_managed_pty(
         state,
         &parent_id,
-        &format!("[TUIC] {}", describe_lifecycle_payload(session_id, &payload)),
+        &format!(
+            "[TUIC] {}",
+            describe_lifecycle_payload(session_id, &payload)
+        ),
     );
     settle_terminal_delivery(state, &parent_id, &message_id, outcome);
     true
@@ -5657,7 +5663,10 @@ fn summarize_lifecycle_group(
         for message in inbox.iter().filter(|message| {
             message.timestamp > group.observed_through && message.timestamp <= group.wake_through
         }) {
-            if !message.id.starts_with(crate::state::LIFECYCLE_MSG_ID_PREFIX) {
+            if !message
+                .id
+                .starts_with(crate::state::LIFECYCLE_MSG_ID_PREFIX)
+            {
                 return None;
             }
             let payload = serde_json::from_str::<serde_json::Value>(&message.content).ok()?;
@@ -15704,8 +15713,14 @@ mod tests {
         )
         .expect("a lifecycle-only window must summarize");
 
-        assert!(summary.contains("child agent 8c261794 is now idle"), "{summary}");
-        assert!(summary.contains("child agent 8c261794 exited (exit 0)"), "{summary}");
+        assert!(
+            summary.contains("child agent 8c261794 is now idle"),
+            "{summary}"
+        );
+        assert!(
+            summary.contains("child agent 8c261794 exited (exit 0)"),
+            "{summary}"
+        );
         assert!(
             !summary.contains("action=inbox"),
             "a self-acknowledging notice must not send the reader to the inbox: {summary}"
