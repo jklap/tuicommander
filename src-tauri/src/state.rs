@@ -973,6 +973,9 @@ pub(crate) enum AgentDeliveryAssignment {
 pub(crate) enum OrchestratorDeliveryAssignment {
     Waiter,
     WakeSubmitted,
+    /// The notice typed the covered payloads themselves, so the recipient owes
+    /// no `inbox` round-trip for that window.
+    WakeSummarySubmitted,
     WakeCoalesced,
     InboxOnly,
 }
@@ -980,8 +983,28 @@ pub(crate) enum OrchestratorDeliveryAssignment {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OrchestratorWakeAttemptOutcome {
     Submitted,
+    /// Submitted, and the written line already carried every payload in the
+    /// reserved group. Reportable ONLY for a group that is entirely made of
+    /// server-authored lifecycle notifications — that is what makes the notice
+    /// self-acknowledging instead of a pointer into the inbox.
+    SummarySubmitted,
     NotStarted,
     Uncertain,
+}
+
+/// The inbox window a single wake notice is reserved to cover, as the
+/// half-open range `(observed_through, wake_through]` in per-recipient logical
+/// cursor units.
+///
+/// The generic wake ignores it: one payload-free notice covers an unbounded
+/// group because the recipient answers it by reading the whole inbox. A
+/// self-acknowledging summary cannot — it only describes what it printed — so
+/// it needs the exact bounds both to render the right messages and to advance
+/// the cursor by exactly as much as it covered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OrchestratorWakeGroup {
+    pub(crate) observed_through: u64,
+    pub(crate) wake_through: u64,
 }
 
 #[cfg(test)]
@@ -1757,7 +1780,7 @@ impl AppState {
             message_id,
             message_timestamp,
             wake_allowed,
-            || attempt_wake().into(),
+            |_group| attempt_wake().into(),
         )
     }
 
@@ -1767,6 +1790,10 @@ impl AppState {
     /// submit one generic wake plus at most one retry after an uncertain write.
     /// Later mail joins the same bounded group until an inbox read acknowledges
     /// the covered logical cursor.
+    ///
+    /// `attempt_wake` receives the reserved [`OrchestratorWakeGroup`] and may
+    /// answer `SummarySubmitted` when it typed that whole window's payloads
+    /// itself; see the settle arm below for what that buys and what it costs.
     pub(crate) fn assign_orchestrator_delivery_with_wake_outcome<F>(
         &self,
         tuic_session: &str,
@@ -1776,9 +1803,9 @@ impl AppState {
         attempt_wake: F,
     ) -> OrchestratorDeliveryAssignment
     where
-        F: FnOnce() -> OrchestratorWakeAttemptOutcome,
+        F: FnOnce(OrchestratorWakeGroup) -> OrchestratorWakeAttemptOutcome,
     {
-        let attempt = {
+        let (attempt, group) = {
             let gate_entry = self
                 .active_agent_waiters
                 .entry(tuic_session.to_string())
@@ -1830,10 +1857,16 @@ impl AppState {
             // coalesces into this cursor while terminal I/O happens without holding
             // either the delivery mutex or its DashMap guard.
             gate.orchestrator_wake_pending_through = gate.orchestrator_wake_needed_through;
-            attempt
+            let group = OrchestratorWakeGroup {
+                observed_through: gate.orchestrator_observed_through,
+                wake_through: gate
+                    .orchestrator_wake_needed_through
+                    .unwrap_or(message_timestamp),
+            };
+            (attempt, group)
         };
 
-        let outcome = attempt_wake();
+        let outcome = attempt_wake(group);
         let Some(gate_entry) = self.active_agent_waiters.get(tuic_session) else {
             return OrchestratorDeliveryAssignment::InboxOnly;
         };
@@ -1845,6 +1878,29 @@ impl AppState {
             OrchestratorWakeAttemptOutcome::Submitted => {
                 gate.orchestrator_wake_needed_through = None;
                 OrchestratorDeliveryAssignment::WakeSubmitted
+            }
+            OrchestratorWakeAttemptOutcome::SummarySubmitted => {
+                // The payload is already on the recipient's screen, so this
+                // notice acknowledges itself: advance the observed cursor by
+                // exactly what an inbox read of the same window would have.
+                //
+                // Only `wake_through` is acknowledged, never `needed`. A generic
+                // wake may clear `needed` wholesale because "go read your inbox"
+                // covers messages that landed after the reservation; a summary
+                // describes only what it printed, so mail that coalesced during
+                // the write stays outstanding and must earn its own notice
+                // (chased by the caller — see `route_registered_orchestrator_mail`).
+                gate.orchestrator_observed_through =
+                    gate.orchestrator_observed_through.max(group.wake_through);
+                gate.orchestrator_wake_pending_through = None;
+                if gate
+                    .orchestrator_wake_needed_through
+                    .is_some_and(|needed_through| needed_through <= group.wake_through)
+                {
+                    gate.orchestrator_wake_needed_through = None;
+                }
+                gate.reset_orchestrator_wake_budget_if_observed();
+                OrchestratorDeliveryAssignment::WakeSummarySubmitted
             }
             OrchestratorWakeAttemptOutcome::NotStarted => {
                 gate.orchestrator_wake_pending_through = None;
@@ -3886,6 +3942,135 @@ mod tests {
         assert!(state.has_active_agent_waiter("peer"));
         state.finish_agent_wait("peer", second, 0, true);
         assert!(!state.has_active_agent_waiter("peer"));
+    }
+
+    #[test]
+    fn lifecycle_summary_notice_acknowledges_its_own_window() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_outcome(
+                recipient,
+                "first",
+                10,
+                true,
+                |group| {
+                    assert_eq!(
+                        group,
+                        OrchestratorWakeGroup {
+                            observed_through: 0,
+                            wake_through: 10
+                        }
+                    );
+                    OrchestratorWakeAttemptOutcome::SummarySubmitted
+                },
+            ),
+            OrchestratorDeliveryAssignment::WakeSummarySubmitted
+        );
+        assert_eq!(
+            state.orchestrator_wake_needed_through(recipient),
+            None,
+            "a summary that printed the whole window leaves nothing to chase"
+        );
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_outcome(
+                recipient,
+                "first-again",
+                10,
+                true,
+                |_| panic!("an acknowledged window must never wake again"),
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
+    }
+
+    #[test]
+    fn mail_coalesced_during_a_summary_write_stays_outstanding() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        let assignment = state.assign_orchestrator_delivery_with_wake_outcome(
+            recipient,
+            "first",
+            10,
+            true,
+            |group| {
+                assert_eq!(group.wake_through, 10);
+                // Lands while the summary is being typed: outside the reserved
+                // window, so that notice cannot possibly describe it.
+                assert_eq!(
+                    state.assign_orchestrator_delivery_with_wake_outcome(
+                        recipient,
+                        "second",
+                        20,
+                        true,
+                        |_| panic!("a pending notice must cover later mail"),
+                    ),
+                    OrchestratorDeliveryAssignment::WakeCoalesced
+                );
+                OrchestratorWakeAttemptOutcome::SummarySubmitted
+            },
+        );
+        assert_eq!(
+            assignment,
+            OrchestratorDeliveryAssignment::WakeSummarySubmitted
+        );
+        assert_eq!(
+            state.orchestrator_wake_needed_through(recipient),
+            Some(20),
+            "an uncovered message must not be acknowledged by someone else's summary"
+        );
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_outcome(
+                recipient,
+                "second-retry",
+                20,
+                true,
+                |group| {
+                    assert_eq!(
+                        group,
+                        OrchestratorWakeGroup {
+                            observed_through: 10,
+                            wake_through: 20
+                        }
+                    );
+                    OrchestratorWakeAttemptOutcome::Submitted
+                },
+            ),
+            OrchestratorDeliveryAssignment::WakeSubmitted
+        );
+    }
+
+    #[test]
+    fn uncertain_summary_write_never_advances_the_cursor() {
+        let state = tests_support::make_test_app_state();
+        let recipient = "orchestrator";
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_outcome(
+                recipient,
+                "first",
+                10,
+                true,
+                |_| OrchestratorWakeAttemptOutcome::Uncertain,
+            ),
+            OrchestratorDeliveryAssignment::InboxOnly
+        );
+        assert_eq!(state.orchestrator_wake_needed_through(recipient), Some(10));
+        assert_eq!(
+            state.assign_orchestrator_delivery_with_wake_outcome(
+                recipient,
+                "retry",
+                10,
+                true,
+                |group| {
+                    assert_eq!(
+                        group.observed_through, 0,
+                        "an ambiguous write proves nothing reached the screen"
+                    );
+                    OrchestratorWakeAttemptOutcome::SummarySubmitted
+                },
+            ),
+            OrchestratorDeliveryAssignment::WakeSummarySubmitted
+        );
     }
 
     #[test]

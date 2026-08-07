@@ -3889,6 +3889,12 @@ fn handle_messaging(
                     OrchestratorDeliveryAssignment::WakeSubmitted => {
                         (true, "wake_notification_and_inbox")
                     }
+                    // Unreachable for a peer `send`: its own payload is in the
+                    // covered window, which disqualifies the lifecycle summary.
+                    // Mapped anyway so the two never drift.
+                    OrchestratorDeliveryAssignment::WakeSummarySubmitted => {
+                        (true, "lifecycle_summary_and_inbox")
+                    }
                     OrchestratorDeliveryAssignment::WakeCoalesced => {
                         (true, "coalesced_wake_and_inbox")
                     }
@@ -9265,6 +9271,52 @@ mod tests {
         assert_eq!(
             state.agent_inbox.get(TEST_UUID_B).unwrap()[0].content,
             "secret peer payload"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn idle_orchestrator_reads_child_lifecycle_off_the_notice_itself() {
+        let state = test_state();
+        register_peer(&state, TEST_UUID_B, "orchestrator", "mcp-recipient");
+        state.orchestrator_peers.insert(TEST_UUID_B.to_string());
+        state
+            .session_parent
+            .insert(TEST_UUID_A.to_string(), TEST_UUID_B.to_string());
+        let submitted_output =
+            install_completed_agent_submission_probe(&state, TEST_UUID_B, "codex");
+
+        crate::pty::push_state_change_to_parent(
+            &state,
+            TEST_UUID_A,
+            serde_json::json!({
+                "type": "state_change",
+                "state": "exited",
+                "session_id": TEST_UUID_A,
+                "exit_code": 0,
+            }),
+        );
+
+        let output = submitted_output
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("a lifecycle notice should submit a new turn");
+        assert!(
+            output.contains(&format!("child agent {} exited (exit 0)", &TEST_UUID_A[..8])),
+            "{output:?}"
+        );
+        assert!(
+            !output.contains("message available"),
+            "a lifecycle-only window must not cost an inbox round-trip: {output:?}"
+        );
+        assert_eq!(
+            state.agent_inbox.get(TEST_UUID_B).unwrap().len(),
+            1,
+            "the inbox copy stays authoritative and auditable"
+        );
+        assert_eq!(
+            state.orchestrator_wake_needed_through(TEST_UUID_B),
+            None,
+            "the notice acknowledged itself"
         );
     }
 

@@ -5102,6 +5102,49 @@ type VtProcessResult = (
     usize,
 );
 
+/// Render one lifecycle payload as a single human-facing line, without the
+/// `[TUIC] ` marker so it also composes into a multi-event summary.
+///
+/// Shared by the direct framed delivery and the orchestrator summary notice:
+/// the two describe the same events from different sources (the payload being
+/// enqueued vs. the copy read back out of the inbox) and must never word them
+/// differently.
+///
+/// The result is injected into an agent's composer, so it MUST stay one short
+/// line — a multi-line paste submits itself halfway through.
+fn describe_lifecycle_payload(child_session: &str, payload: &serde_json::Value) -> String {
+    let child = short_session(child_session);
+    if payload.get("type").and_then(|t| t.as_str()) == Some("prompt_delivery_failed") {
+        return format!("child agent {child} initial prompt delivery timed out");
+    }
+    let state_desc = payload
+        .get("state")
+        .and_then(|s| s.as_str())
+        .unwrap_or("changed");
+    let prompt_excerpt = payload
+        .get("prompt")
+        .and_then(|p| p.as_str())
+        .map(|p| {
+            let flat = p.split_whitespace().collect::<Vec<_>>().join(" ");
+            if flat.chars().count() > 120 {
+                format!("{}…", flat.chars().take(120).collect::<String>())
+            } else {
+                flat
+            }
+        })
+        .filter(|p| !p.is_empty());
+    match (
+        payload.get("exit_code").and_then(|c| c.as_i64()),
+        prompt_excerpt,
+    ) {
+        (Some(code), _) => format!("child agent {child} {state_desc} (exit {code})"),
+        (None, Some(prompt)) => format!(
+            "child agent {child} is now {state_desc} — answer it with session action=input: {prompt}"
+        ),
+        (None, None) => format!("child agent {child} is now {state_desc}"),
+    }
+}
+
 /// Enqueue the authoritative parent lifecycle message without touching the
 /// parent's PTY lifecycle lock. BUSY→IDLE and completed paths call this while
 /// holding the child's SilenceState transaction lock.
@@ -5138,47 +5181,7 @@ fn enqueue_state_change_to_parent(
     // too. Left out of that story's scope deliberately — it needs its own repro,
     // since the parent id here comes from session_parent rather than a caller.
     let message_timestamp = state.push_agent_inbox(&parent_id, msg);
-    let state_desc = payload
-        .get("state")
-        .and_then(|s| s.as_str())
-        .unwrap_or("changed");
-    // The framed text is injected into the PARENT's PTY, so it must stay a single
-    // short line — a multi-line prompt pasted into an agent's composer submits
-    // itself halfway through.
-    let prompt_excerpt = payload
-        .get("prompt")
-        .and_then(|p| p.as_str())
-        .map(|p| {
-            let flat = p.split_whitespace().collect::<Vec<_>>().join(" ");
-            if flat.chars().count() > 120 {
-                format!("{}…", flat.chars().take(120).collect::<String>())
-            } else {
-                flat
-            }
-        })
-        .filter(|p| !p.is_empty());
-    let framed = match (
-        payload.get("exit_code").and_then(|c| c.as_i64()),
-        prompt_excerpt,
-    ) {
-        (Some(code), _) => format!(
-            "[TUIC] child agent {} {} (exit {})",
-            short_session(session_id),
-            state_desc,
-            code
-        ),
-        (None, Some(prompt)) => format!(
-            "[TUIC] child agent {} is now {} — answer it with session action=input: {}",
-            short_session(session_id),
-            state_desc,
-            prompt
-        ),
-        (None, None) => format!(
-            "[TUIC] child agent {} is now {}",
-            short_session(session_id),
-            state_desc
-        ),
-    };
+    let framed = format!("[TUIC] {}", describe_lifecycle_payload(session_id, &payload));
     let dispatch = ParentLifecycleDispatch {
         parent_id: parent_id.clone(),
         message_id: message_id.clone(),
@@ -5278,10 +5281,7 @@ pub(crate) fn notify_initial_prompt_timeout_if_pending(state: &AppState, session
     let outcome = deliver_message_to_managed_pty(
         state,
         &parent_id,
-        &format!(
-            "[TUIC] child agent {} initial prompt delivery timed out",
-            short_session(session_id)
-        ),
+        &format!("[TUIC] {}", describe_lifecycle_payload(session_id, &payload)),
     );
     settle_terminal_delivery(state, &parent_id, &message_id, outcome);
     true
@@ -5597,25 +5597,95 @@ fn commit_injection_claim(state: &AppState, session_id: &str, claim: InjectionCl
     }
 }
 
+/// What an ambiguous write is allowed to do next.
+///
+/// Retrying a peer message risks typing it twice; an orchestrator notice is
+/// either payload-free or a re-derivable state summary, so it is idempotent
+/// enough to retry. This used to be inferred by comparing the text against
+/// `ORCHESTRATOR_MAIL_WAKE` — which silently stopped covering the notice once
+/// it could also be a lifecycle summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClaimedInjectionKind {
+    Message,
+    OrchestratorNotice,
+}
+
 fn run_claimed_injection(
     state: &AppState,
     session_id: &str,
     text: &str,
     claim: InjectionClaim,
+    kind: ClaimedInjectionKind,
 ) -> InjectionOutcome {
     let outcome = write_claimed_agent_command(state, session_id, text);
-    apply_claimed_injection_outcome(state, session_id, text, claim, outcome)
+    apply_claimed_injection_outcome(state, session_id, text, claim, outcome, kind)
 }
 
 const ORCHESTRATOR_MAIL_WAKE: &str = "[TUIC] message available — read it with: agent action=inbox";
 
-/// Submit one payload-free notification only when the registered parent's
-/// canonical lifecycle still says idle/completed. Unlike ordinary managed-peer
-/// delivery, a lost idle race is never queued: working and unknown lifecycle
-/// states remain inbox-only and are not steered on a later transition.
+/// Longest self-acknowledging summary we are willing to type into a composer.
+/// Past this the notice stops being a cheap one-liner, so we fall back to the
+/// generic wake — which is always correct, just one `inbox` call more expensive.
+const ORCHESTRATOR_SUMMARY_MAX_CHARS: usize = 240;
+
+/// Render the reserved wake group as a self-contained notice, or `None` when
+/// the recipient must be sent to its inbox instead.
+///
+/// Why this exists: an orchestrator's inbox is dominated by server-authored
+/// lifecycle notifications (`idle`, `completed`, `exited`) whose entire payload
+/// is a state name. Making the orchestrator spend a tool call to discover
+/// "child 8c26 went idle, then exited(0)" is pure round-trip with no
+/// information gain, and it happens once per finished child.
+///
+/// Why it is conditional — the group must be lifecycle-only:
+///   1. Peer `send` payloads are agent-authored, arbitrary length and
+///      arbitrary content. They stay out of the composer, full stop (that is
+///      the invariant `assign_orchestrator_delivery_with_wake_outcome` exists
+///      to protect).
+///   2. A partial summary would be worse than none: the recipient, satisfied
+///      by what it read, would never call `inbox` and would silently lose the
+///      messages the summary omitted. So a single non-lifecycle message in the
+///      window disqualifies the whole group rather than being skipped.
+fn summarize_lifecycle_group(
+    state: &AppState,
+    recipient: &str,
+    group: crate::state::OrchestratorWakeGroup,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    {
+        let inbox = state.agent_inbox.get(recipient)?;
+        for message in inbox.iter().filter(|message| {
+            message.timestamp > group.observed_through && message.timestamp <= group.wake_through
+        }) {
+            if !message.id.starts_with(crate::state::LIFECYCLE_MSG_ID_PREFIX) {
+                return None;
+            }
+            let payload = serde_json::from_str::<serde_json::Value>(&message.content).ok()?;
+            parts.push(describe_lifecycle_payload(
+                &message.from_tuic_session,
+                &payload,
+            ));
+        }
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let summary = format!("[TUIC] {}", parts.join("; "));
+    (summary.chars().count() <= ORCHESTRATOR_SUMMARY_MAX_CHARS).then_some(summary)
+}
+
+/// Submit one notification only when the registered parent's canonical
+/// lifecycle still says idle/completed. Unlike ordinary managed-peer delivery,
+/// a lost idle race is never queued: working and unknown lifecycle states
+/// remain inbox-only and are not steered on a later transition.
+///
+/// The line is either a self-acknowledging lifecycle summary (see
+/// `summarize_lifecycle_group`) or the payload-free generic wake.
 fn submit_orchestrator_mail_wake(
     state: &AppState,
     session_id: &str,
+    recipient: &str,
+    group: crate::state::OrchestratorWakeGroup,
 ) -> crate::state::OrchestratorWakeAttemptOutcome {
     use crate::state::OrchestratorWakeAttemptOutcome;
 
@@ -5633,7 +5703,20 @@ fn submit_orchestrator_mail_wake(
     let Some(claim) = claim_idle_for_injection(state, session_id) else {
         return OrchestratorWakeAttemptOutcome::NotStarted;
     };
-    match run_claimed_injection(state, session_id, ORCHESTRATOR_MAIL_WAKE, claim) {
+    let summary = summarize_lifecycle_group(state, recipient, group);
+    let text = summary.as_deref().unwrap_or(ORCHESTRATOR_MAIL_WAKE);
+    match run_claimed_injection(
+        state,
+        session_id,
+        text,
+        claim,
+        ClaimedInjectionKind::OrchestratorNotice,
+    ) {
+        // An uncertain write must NOT acknowledge: the cursor may only advance
+        // behind a line we know reached the composer.
+        InjectionOutcome::Submitted if summary.is_some() => {
+            OrchestratorWakeAttemptOutcome::SummarySubmitted
+        }
         InjectionOutcome::Submitted => OrchestratorWakeAttemptOutcome::Submitted,
         InjectionOutcome::NotStarted(_) => OrchestratorWakeAttemptOutcome::NotStarted,
         InjectionOutcome::Uncertain(_) => OrchestratorWakeAttemptOutcome::Uncertain,
@@ -5658,16 +5741,29 @@ pub(crate) fn route_registered_orchestrator_mail(
         .and_then(|session_id| state.session_state_with_shell(session_id))
         .and_then(|session| session.agent_state)
         .is_some_and(|agent_state| matches!(agent_state.as_str(), "idle" | "completed"));
-    Some(state.assign_orchestrator_delivery_with_wake_outcome(
+    let assignment = state.assign_orchestrator_delivery_with_wake_outcome(
         recipient,
         message_id,
         message_timestamp,
         wake_allowed,
-        || match pty_session.as_deref() {
-            Some(session_id) => submit_orchestrator_mail_wake(state, session_id),
+        |group| match pty_session.as_deref() {
+            Some(session_id) => submit_orchestrator_mail_wake(state, session_id, recipient, group),
             None => crate::state::OrchestratorWakeAttemptOutcome::NotStarted,
         },
-    ))
+    );
+    // A self-acknowledging notice covers only the window it reserved. Mail that
+    // landed while it was being typed keeps `orchestrator_wake_needed_through`
+    // set, and nothing else would surface it: the idle/completed transition that
+    // normally drives `reevaluate_orchestrator_mail_wake` has already happened.
+    // Chase it here instead. Bounded: each pass spends one of
+    // ORCHESTRATOR_WAKE_ATTEMPT_LIMIT attempts, and the budget is not reset while
+    // a need is outstanding, so the recursion stops at the limit.
+    if assignment == crate::state::OrchestratorDeliveryAssignment::WakeSummarySubmitted
+        && let Some(pty_session) = pty_session.as_deref()
+    {
+        reevaluate_orchestrator_mail_wake(state, pty_session);
+    }
+    Some(assignment)
 }
 
 /// Retry buffered orchestrator mail when the managed PTY has reached a
@@ -5705,6 +5801,7 @@ fn apply_claimed_injection_outcome(
     text: &str,
     claim: InjectionClaim,
     outcome: InjectionOutcome,
+    kind: ClaimedInjectionKind,
 ) -> InjectionOutcome {
     match &outcome {
         InjectionOutcome::Submitted => {
@@ -5723,10 +5820,11 @@ fn apply_claimed_injection_outcome(
         }
         InjectionOutcome::Uncertain(error) => {
             tracing::warn!(session = %session_id, error, "agent command injection outcome uncertain; preserving busy state");
-            if text == ORCHESTRATOR_MAIL_WAKE {
-                mark_orchestrator_notice_uncertain(state, session_id, claim);
-            } else {
-                mark_injection_uncertain(state, session_id, claim);
+            match kind {
+                ClaimedInjectionKind::OrchestratorNotice => {
+                    mark_orchestrator_notice_uncertain(state, session_id, claim)
+                }
+                ClaimedInjectionKind::Message => mark_injection_uncertain(state, session_id, claim),
             }
         }
     }
@@ -5780,7 +5878,13 @@ pub(crate) fn deliver_message_to_pty(
     }
     if let Some(claim) = claim_idle_for_injection(state, session_id) {
         if matches!(
-            run_claimed_injection(state, session_id, framed, claim),
+            run_claimed_injection(
+                state,
+                session_id,
+                framed,
+                claim,
+                ClaimedInjectionKind::Message
+            ),
             InjectionOutcome::NotStarted(_)
         ) {
             requeue_injection_front(state, session_id, framed);
@@ -5893,7 +5997,13 @@ pub(crate) fn flush_pending_injections(state: &AppState, session_id: &str) {
     };
     if let Some(text) = pending
         && matches!(
-            run_claimed_injection(state, session_id, &text, claim),
+            run_claimed_injection(
+                state,
+                session_id,
+                &text,
+                claim,
+                ClaimedInjectionKind::Message
+            ),
             InjectionOutcome::NotStarted(_)
         )
     {
@@ -15538,6 +15648,191 @@ mod tests {
         assert_eq!(content["state"], "exited");
     }
 
+    // ---- Self-acknowledging orchestrator lifecycle summary ----
+
+    fn lifecycle_inbox_message(
+        id: &str,
+        child: &str,
+        timestamp: u64,
+        content: serde_json::Value,
+    ) -> crate::state::AgentMessage {
+        crate::state::AgentMessage {
+            id: id.to_string(),
+            from_tuic_session: child.to_string(),
+            from_name: "tuic".to_string(),
+            content: content.to_string(),
+            timestamp,
+            delivered_via_channel: false,
+        }
+    }
+
+    const SUMMARY_CHILD: &str = "8c261794-91e5-44a4-bf63-ec8afafd2adc";
+
+    fn idle_payload() -> serde_json::Value {
+        serde_json::json!({"type": "state_change", "state": "idle", "session_id": SUMMARY_CHILD})
+    }
+
+    fn exited_payload() -> serde_json::Value {
+        serde_json::json!({
+            "type": "state_change",
+            "state": "exited",
+            "session_id": SUMMARY_CHILD,
+            "exit_code": 0,
+        })
+    }
+
+    #[test]
+    fn lifecycle_summary_carries_every_event_in_the_window() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let parent = "parent-summary";
+        state.push_agent_inbox(
+            parent,
+            lifecycle_inbox_message("tuic-auto-idle", SUMMARY_CHILD, 10, idle_payload()),
+        );
+        state.push_agent_inbox(
+            parent,
+            lifecycle_inbox_message("tuic-auto-exit", SUMMARY_CHILD, 20, exited_payload()),
+        );
+
+        let summary = summarize_lifecycle_group(
+            &state,
+            parent,
+            crate::state::OrchestratorWakeGroup {
+                observed_through: 0,
+                wake_through: 20,
+            },
+        )
+        .expect("a lifecycle-only window must summarize");
+
+        assert!(summary.contains("child agent 8c261794 is now idle"), "{summary}");
+        assert!(summary.contains("child agent 8c261794 exited (exit 0)"), "{summary}");
+        assert!(
+            !summary.contains("action=inbox"),
+            "a self-acknowledging notice must not send the reader to the inbox: {summary}"
+        );
+        assert_eq!(summary.lines().count(), 1, "must stay one composer line");
+    }
+
+    #[test]
+    fn peer_payload_in_the_window_forces_the_generic_wake() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let parent = "parent-mixed";
+        state.push_agent_inbox(
+            parent,
+            lifecycle_inbox_message("tuic-auto-idle", SUMMARY_CHILD, 10, idle_payload()),
+        );
+        state.push_agent_inbox(
+            parent,
+            crate::state::AgentMessage {
+                id: "peer-1".to_string(),
+                from_tuic_session: "peer".to_string(),
+                from_name: "sender".to_string(),
+                content: "secret peer payload".to_string(),
+                timestamp: 20,
+                delivered_via_channel: false,
+            },
+        );
+
+        assert!(
+            summarize_lifecycle_group(
+                &state,
+                parent,
+                crate::state::OrchestratorWakeGroup {
+                    observed_through: 0,
+                    wake_through: 20,
+                },
+            )
+            .is_none(),
+            "one peer message must disqualify the whole group, not be skipped"
+        );
+    }
+
+    #[test]
+    fn lifecycle_summary_ignores_messages_outside_the_reserved_window() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let parent = "parent-window";
+        state.push_agent_inbox(
+            parent,
+            lifecycle_inbox_message("tuic-auto-old", SUMMARY_CHILD, 10, idle_payload()),
+        );
+        state.push_agent_inbox(
+            parent,
+            lifecycle_inbox_message("tuic-auto-covered", SUMMARY_CHILD, 20, exited_payload()),
+        );
+        // Arrived after the reservation: neither described nor disqualifying.
+        state.push_agent_inbox(
+            parent,
+            crate::state::AgentMessage {
+                id: "peer-late".to_string(),
+                from_tuic_session: "peer".to_string(),
+                from_name: "sender".to_string(),
+                content: "later peer payload".to_string(),
+                timestamp: 30,
+                delivered_via_channel: false,
+            },
+        );
+
+        let summary = summarize_lifecycle_group(
+            &state,
+            parent,
+            crate::state::OrchestratorWakeGroup {
+                observed_through: 10,
+                wake_through: 20,
+            },
+        )
+        .expect("the reserved window is lifecycle-only");
+
+        assert!(summary.contains("exited (exit 0)"), "{summary}");
+        assert!(
+            !summary.contains("is now idle"),
+            "an already-observed message must not be repeated: {summary}"
+        );
+        assert!(!summary.contains("later peer payload"), "{summary}");
+    }
+
+    #[test]
+    fn oversize_lifecycle_summary_falls_back_to_the_generic_wake() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let parent = "parent-oversize";
+        for index in 0..12u64 {
+            state.push_agent_inbox(
+                parent,
+                lifecycle_inbox_message(
+                    &format!("tuic-auto-{index}"),
+                    SUMMARY_CHILD,
+                    index + 1,
+                    idle_payload(),
+                ),
+            );
+        }
+
+        assert!(
+            summarize_lifecycle_group(
+                &state,
+                parent,
+                crate::state::OrchestratorWakeGroup {
+                    observed_through: 0,
+                    wake_through: 12,
+                },
+            )
+            .is_none(),
+            "a burst too long to type must fall back to the generic wake"
+        );
+    }
+
+    #[test]
+    fn prompt_delivery_failure_reads_the_same_in_both_paths() {
+        let payload = serde_json::json!({
+            "type": "prompt_delivery_failed",
+            "reason": "timeout",
+            "session_id": SUMMARY_CHILD,
+        });
+        assert_eq!(
+            describe_lifecycle_payload(SUMMARY_CHILD, &payload),
+            "child agent 8c261794 initial prompt delivery timed out"
+        );
+    }
+
     #[test]
     fn try_shell_transition_busy_to_idle_pushes_state_change_to_parent_inbox() {
         let state = crate::state::tests_support::make_test_app_state();
@@ -16352,7 +16647,14 @@ mod tests {
             .get_mut(sid)
             .and_then(|mut queue| queue.pop_front())
             .expect("pending message");
-        apply_claimed_injection_outcome(state, sid, &text, claim, InjectionOutcome::Submitted);
+        apply_claimed_injection_outcome(
+            state,
+            sid,
+            &text,
+            claim,
+            InjectionOutcome::Submitted,
+            ClaimedInjectionKind::Message,
+        );
     }
 
     fn completed_agent_session(state: &crate::state::AppState, sid: &str) {
