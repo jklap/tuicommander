@@ -618,10 +618,17 @@ fn retire_repaired_phantom_identity(
                 .collect(),
             None => Vec::new(),
         };
-        state.agent_inbox_evictions.remove(phantom);
-        state.active_agent_waiters.remove(phantom);
-        state.pending_injections.remove(phantom);
-        state.session_to_mcp.remove(phantom);
+        // The cursor indexes the mail we just moved, so it moves with it. `max`
+        // because the replacing identity may have read mail of its own already;
+        // a migrated message whose logical timestamp had to be bumped past the
+        // cursor is re-delivered once, which is the harmless direction to err in.
+        let phantom_cursor = state
+            .agent_read_cursor
+            .get(phantom)
+            .map(|cursor| *cursor.value())
+            .unwrap_or(0);
+        advance_agent_cursor(state, repaired, phantom_cursor);
+        drop_identity_buffers(state, phantom);
         carried
     };
     let migrated = carried.len();
@@ -1902,6 +1909,21 @@ fn resolve_agent_since(state: &AppState, tuic_session: &str, args: &serde_json::
             .map(|entry| *entry.value())
             .unwrap_or(0),
     }
+}
+
+/// Drop every per-identity buffer that must not outlive a retired or torn-down
+/// peer. `agent_inbox` stays out on purpose: retire drains it into the replacing
+/// identity while teardown deletes it, so each caller owns that decision.
+///
+/// One function so the two teardown paths cannot disagree about the set — the
+/// read cursor was added to `AppState` and wired into neither, which left it
+/// growing without bound and let a replacing identity resume from zero.
+fn drop_identity_buffers(state: &AppState, tuic_session: &str) {
+    state.agent_inbox_evictions.remove(tuic_session);
+    state.active_agent_waiters.remove(tuic_session);
+    state.pending_injections.remove(tuic_session);
+    state.session_to_mcp.remove(tuic_session);
+    state.agent_read_cursor.remove(tuic_session);
 }
 
 /// Advance the stored read position. Never moves backwards: a deliberate replay
@@ -5196,10 +5218,7 @@ pub(super) async fn mcp_delete(
             state.peer_agents.remove(tuic);
             state.orchestrator_peers.remove(tuic);
             state.agent_inbox.remove(tuic);
-            state.agent_inbox_evictions.remove(tuic);
-            state.active_agent_waiters.remove(tuic);
-            state.pending_injections.remove(tuic);
-            state.session_to_mcp.remove(tuic);
+            drop_identity_buffers(&state, tuic);
             let _ = state
                 .event_bus
                 .send(crate::state::AppEvent::PeerUnregistered {
@@ -7596,6 +7615,100 @@ mod tests {
         assert!(!state.agent_inbox.contains_key(&generated));
         assert!(!state.mcp_to_session.contains_key("mcp-external-delete"));
         assert!(!state.session_to_mcp.contains_key(&generated));
+    }
+
+    /// The read cursor is per-identity state like the inbox it indexes, so it has
+    /// to travel with the mail. Left behind, the replacing identity starts at 0
+    /// and its first `inbox` hands back every migrated message as if it were new.
+    #[test]
+    fn replaces_carries_the_read_cursor_so_migrated_mail_is_not_replayed() {
+        let state = test_state();
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register", "tuic_session": TEST_UUID_B, "name": "root"
+            }),
+            Some("mcp-old-connection"),
+        );
+        state.push_agent_inbox(
+            TEST_UUID_B,
+            crate::state::AgentMessage {
+                id: "msg-already-read".to_string(),
+                from_tuic_session: "worker".to_string(),
+                from_name: "worker".to_string(),
+                content: "results".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+        let first_read = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-old-connection"),
+        );
+        assert_eq!(first_read["count"], 1, "the old identity read its mail");
+
+        handle_messaging(
+            &state,
+            &serde_json::json!({
+                "action": "register",
+                "tuic_session": TEST_UUID_A,
+                "name": "root",
+                "replaces": TEST_UUID_B,
+            }),
+            Some("mcp-new-connection"),
+        );
+
+        let after_handoff = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-new-connection"),
+        );
+        assert_eq!(
+            after_handoff["count"], 0,
+            "mail the superseded identity had already read must not come back as new"
+        );
+        assert!(
+            !state.agent_read_cursor.contains_key(TEST_UUID_B),
+            "a retired identity must not leave its cursor behind"
+        );
+    }
+
+    #[tokio::test]
+    async fn ending_an_mcp_session_drops_the_read_cursor_with_the_inbox() {
+        let state = test_state();
+        let registered = handle_messaging(
+            &state,
+            &serde_json::json!({"action": "register"}),
+            Some("mcp-cursor-teardown"),
+        );
+        let generated = registered["tuic_session"].as_str().unwrap().to_string();
+        state.push_agent_inbox(
+            &generated,
+            crate::state::AgentMessage {
+                id: "msg-read".to_string(),
+                from_tuic_session: "worker".to_string(),
+                from_name: "worker".to_string(),
+                content: "results".to_string(),
+                timestamp: 1,
+                delivered_via_channel: false,
+            },
+        );
+        handle_messaging(
+            &state,
+            &serde_json::json!({"action": "inbox"}),
+            Some("mcp-cursor-teardown"),
+        );
+        assert!(state.agent_read_cursor.contains_key(&generated));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, "mcp-cursor-teardown".parse().unwrap());
+        let _ = mcp_delete(State(Arc::clone(&state)), headers).await;
+
+        assert!(
+            !state.agent_read_cursor.contains_key(&generated),
+            "the cursor indexes an inbox that teardown just deleted — it cannot outlive it"
+        );
     }
 
     fn join_two_bridges_to_one_pty(state: &Arc<AppState>) {
