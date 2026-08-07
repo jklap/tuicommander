@@ -1198,8 +1198,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 							onRef={(ref) => {
 								setCanvasTerminalRef(ref);
 								if (pendingCanvasFocus) {
+									// A focus requested before the canvas existed is replayed here, so
+									// it can land arbitrarily late — after the user opened the search
+									// bar and started typing. Same guard as the visibility effect:
+									// the request is dropped, not queued, since by now the user has
+									// told us where the caret belongs (#ce43).
 									pendingCanvasFocus = false;
-									ref.focus();
+									if (!focusIsInsideOwnInput(document.activeElement, props.id)) ref.focus();
 								}
 							}}
 							onBell={handleBell}
