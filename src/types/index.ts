@@ -96,6 +96,9 @@ export interface CheckDetail {
 
 /** Merge state: MERGEABLE, CONFLICTING, UNKNOWN */
 export type MergeableState = "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+/** Backend verdict on whether the branch conflicts. `checking` means GitHub is
+ *  still recomputing and `mergeable` is a stale value nobody may render. */
+export type ConflictState = "conflicting" | "checking" | "clear";
 
 /** Merge state status: BEHIND, BLOCKED, CLEAN, DIRTY, DRAFT, HAS_HOOKS, UNKNOWN, UNSTABLE */
 export type MergeStateStatus =
@@ -144,6 +147,8 @@ export interface BranchPrStatus {
 	head_ref_oid: string;
 	created_at: string;
 	updated_at: string;
+	/** Pre-computed by the backend so badge and popover cannot disagree. */
+	conflict_state: ConflictState;
 	merge_state_label: { label: string; css_class: string } | null;
 	review_state_label: { label: string; css_class: string } | null;
 	merge_commit_allowed: boolean;

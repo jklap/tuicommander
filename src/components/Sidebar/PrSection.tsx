@@ -194,6 +194,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 											state={pr.state}
 											isDraft={pr.is_draft}
 											mergeable={pr.mergeable}
+											conflictState={pr.conflict_state}
 											reviewDecision={pr.review_decision}
 											ciFailed={pr.checks?.failed}
 											ciPending={pr.checks?.pending}
@@ -279,7 +280,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 														extraFilter={(p: SavedPrompt) => {
 															const cs = githubStore.getCheckSummary(props.repoPath, pr.branch);
 															if (p.id === "smart-fix-ci") return (cs?.failed ?? 0) > 0;
-															if (p.id === "smart-resolve-conflicts") return pr.mergeable === "CONFLICTING";
+															if (p.id === "smart-resolve-conflicts") return pr.conflict_state === "conflicting";
 															if (p.id === "smart-review-comments") return pr.review_decision === "CHANGES_REQUESTED";
 															return true;
 														}}

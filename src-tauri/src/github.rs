@@ -757,17 +757,63 @@ pub(crate) struct StateLabel {
     pub(crate) css_class: String,
 }
 
+/// Whether a PR's branch conflicts with its base — as far as GitHub has
+/// actually worked out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ConflictState {
+    Conflicting,
+    /// GitHub is still recomputing. It keeps serving the LAST KNOWN `mergeable`
+    /// meanwhile, so that field says nothing about the current head.
+    Checking,
+    Clear,
+}
+
+/// The single rule for "does this PR conflict", shared by the sidebar badge and
+/// the PR popover.
+///
+/// It exists because the two used to decide separately: the badge tested
+/// `mergeable == CONFLICTING` on its own and kept painting a red Conflicts badge
+/// through the window where GitHub had already invalidated that value, and the
+/// popover's own CONFLICTING short-circuit did the same. A push therefore
+/// accused a PR of conflicting on stale data, with no second surface to
+/// contradict it (#8537).
+///
+/// `mergeStateStatus == UNKNOWN` is the recompute marker and wins over
+/// `mergeable`; `DIRTY` is GitHub's computed conflict verdict and is trusted on
+/// its own.
+pub(crate) fn classify_conflict_state(
+    mergeable: Option<&str>,
+    merge_state_status: Option<&str>,
+) -> ConflictState {
+    match merge_state_status {
+        Some("DIRTY") => ConflictState::Conflicting,
+        // Absent is treated as recomputing: an answer we never received is not
+        // evidence of a clean merge.
+        None | Some("UNKNOWN") => ConflictState::Checking,
+        _ if mergeable == Some("CONFLICTING") => ConflictState::Conflicting,
+        _ => ConflictState::Clear,
+    }
+}
+
 /// Classify merge readiness from mergeable + merge_state_status fields
 pub(crate) fn classify_merge_state(
     mergeable: Option<&str>,
     merge_state_status: Option<&str>,
 ) -> Option<StateLabel> {
-    // CONFLICTING takes priority (merge would fail)
-    if mergeable == Some("CONFLICTING") {
-        return Some(StateLabel {
-            label: "Conflicts".to_string(),
-            css_class: "conflicting".to_string(),
-        });
+    match classify_conflict_state(mergeable, merge_state_status) {
+        ConflictState::Conflicting => {
+            return Some(StateLabel {
+                label: "Conflicts".to_string(),
+                css_class: "conflicting".to_string(),
+            });
+        }
+        // No chip at all while GitHub recomputes — same as before, and still the
+        // honest answer: the popover has nothing to report yet. The sidebar
+        // badge, which must render *something* in that slot, shows its neutral
+        // checking state instead.
+        ConflictState::Checking => return None,
+        ConflictState::Clear => {}
     }
 
     match merge_state_status {
@@ -881,6 +927,10 @@ pub(crate) struct BranchPrStatus {
     pub(crate) created_at: String,
     pub(crate) updated_at: String,
     pub(crate) merge_state_label: Option<StateLabel>,
+    /// The conflict verdict both surfaces render. Sent pre-computed so the
+    /// sidebar badge cannot re-derive it from `mergeable` alone and disagree
+    /// with the popover (#8537).
+    pub(crate) conflict_state: ConflictState,
     pub(crate) review_state_label: Option<StateLabel>,
     /// Repo-level: merge commits allowed
     pub(crate) merge_commit_allowed: bool,
@@ -1048,6 +1098,8 @@ fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
 
     let merge_state_label =
         classify_merge_state(Some(mergeable.as_str()), Some(merge_state_status.as_str()));
+    let conflict_state =
+        classify_conflict_state(Some(mergeable.as_str()), Some(merge_state_status.as_str()));
     let review_state_label = classify_review_state(if review_decision.is_empty() {
         None
     } else {
@@ -1081,6 +1133,7 @@ fn parse_pr_node(v: &serde_json::Value) -> Option<BranchPrStatus> {
         created_at,
         updated_at,
         merge_state_label,
+        conflict_state,
         review_state_label,
         // Defaults — stamped with real values from repo-level response after parsing
         merge_commit_allowed: true,
@@ -3791,6 +3844,47 @@ mod tests {
     fn test_is_light_color_just_above_threshold() {
         // 818181: (129*299+129*587+129*114)/1000 = 129.0 > 128
         assert!(is_light_color("818181"));
+    }
+
+    // --- conflict state: the one rule both surfaces read (#8537) ---
+
+    /// After a push GitHub keeps serving the LAST KNOWN `mergeable` while
+    /// `mergeStateStatus` is UNKNOWN, i.e. while it recomputes. Trusting
+    /// `mergeable` alone in that window accuses a PR of conflicting on a value
+    /// GitHub has already invalidated.
+    #[test]
+    fn conflict_state_matrix() {
+        use ConflictState::*;
+        let cases = [
+            (Some("CONFLICTING"), Some("DIRTY"), Conflicting),
+            (Some("CONFLICTING"), Some("UNKNOWN"), Checking),
+            (Some("MERGEABLE"), Some("CLEAN"), Clear),
+            (Some("MERGEABLE"), Some("UNKNOWN"), Checking),
+            (Some("UNKNOWN"), Some("UNKNOWN"), Checking),
+            // A computed status with a stale-looking mergeable is still a real
+            // conflict — DIRTY is GitHub's own verdict.
+            (Some("MERGEABLE"), Some("DIRTY"), Conflicting),
+            (None, None, Checking),
+        ];
+        for (mergeable, status, expected) in cases {
+            assert_eq!(
+                classify_conflict_state(mergeable, status),
+                expected,
+                "mergeable={mergeable:?} status={status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn merge_state_label_never_claims_conflicts_while_recomputing() {
+        // The regression: a stale CONFLICTING used to short-circuit straight to
+        // the red chip, even with the status still being recomputed.
+        assert_eq!(classify_merge_state(Some("CONFLICTING"), Some("UNKNOWN")), None);
+        // Once GitHub has computed it, the chip is owed.
+        assert_eq!(
+            classify_merge_state(Some("CONFLICTING"), Some("DIRTY")).map(|label| label.css_class),
+            Some("conflicting".to_string())
+        );
     }
 
     // --- classify_merge_state tests ---

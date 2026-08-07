@@ -9,6 +9,7 @@ const PR_BADGE_CLASSES: Record<string, string> = {
 	closed: s.prClosed,
 	draft: s.prDraft,
 	conflict: s.prConflict,
+	checking: s.prCiPending,
 	"ci-failed": s.prCiFailed,
 	"changes-requested": s.prChangesRequested,
 	"review-required": s.prReviewRequired,
@@ -21,6 +22,11 @@ export const PrStateBadge: Component<{
 	state?: string;
 	isDraft?: boolean;
 	mergeable?: string;
+	/** Backend verdict — the ONE rule (`classify_conflict_state`). Never re-derive
+	 *  a conflict from `mergeable` here: GitHub keeps serving the last known value
+	 *  while it recomputes, which is how this badge used to accuse a PR of
+	 *  conflicting on data GitHub had already invalidated (#8537). */
+	conflictState?: string;
 	reviewDecision?: string;
 	ciPassed?: number;
 	ciFailed?: number;
@@ -31,7 +37,8 @@ export const PrStateBadge: Component<{
 		const state = props.state?.toLowerCase();
 		if (state === "merged") return { label: "Merged", cls: "merged" };
 		if (state === "closed") return { label: "Closed", cls: "closed" };
-		if (props.mergeable === "CONFLICTING") return { label: "Conflicts", cls: "conflict" };
+		if (props.conflictState === "conflicting") return { label: "Conflicts", cls: "conflict" };
+		if (props.conflictState === "checking") return { label: "Checking", cls: "checking" };
 		if ((props.ciFailed ?? 0) > 0) return { label: "CI Failed", cls: "ci-failed" };
 		if (props.reviewDecision === "CHANGES_REQUESTED") return { label: "Changes Req.", cls: "changes-requested" };
 		if (props.reviewDecision === "REVIEW_REQUIRED") return { label: "Review Req.", cls: "review-required" };
