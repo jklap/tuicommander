@@ -213,6 +213,24 @@ export function useConfirmDialog() {
 		});
 	}
 
+	/** Confirm merge & archive on a branch that carries no commits but whose
+	 *  worktree still has uncommitted changes. Merging is a no-op, so the only
+	 *  effect would be the row disappearing — taking that work out of sight. */
+	async function confirmEmptyBranchCleanup(branchName: string, action: string): Promise<boolean> {
+		const verb = action === "delete" ? "deleted" : "archived";
+		const fate =
+			action === "delete"
+				? "The worktree directory is removed — uncommitted changes are lost."
+				: "The worktree is moved to __archived/ — uncommitted changes go with it.";
+		return await confirm({
+			title: "Nothing to merge",
+			message: `"${branchName}" has no commits the target branch doesn't already have, so the merge would do nothing.\n\nIts worktree still has uncommitted changes, and it would be ${verb} anyway. ${fate}\n\nContinue?`,
+			okLabel: action === "delete" ? "Delete anyway" : "Archive anyway",
+			cancelLabel: "Keep it",
+			kind: "warning",
+		});
+	}
+
 	return {
 		confirm,
 		confirmSaveChanges,
@@ -222,6 +240,7 @@ export function useConfirmDialog() {
 		confirmRemoveRepo,
 		confirmStashAndSwitch,
 		confirmOrphanCleanup,
+		confirmEmptyBranchCleanup,
 		reportGitError,
 		/** Reactive state for rendering the dialog — null when hidden */
 		dialogState,

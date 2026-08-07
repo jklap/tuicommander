@@ -95,6 +95,8 @@ export interface GitOperationsDeps {
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (paths: string[]) => Promise<boolean>;
+		/** Merge & archive found nothing to merge but a dirty worktree — proceed anyway? */
+		confirmEmptyBranchCleanup?: (branchName: string, action: string) => Promise<boolean>;
 		/** Surface a git failure in a dialog with the full output; returns true if the user chose Retry. */
 		reportGitError?: (title: string, detail: string, offerRetry?: boolean) => Promise<boolean>;
 		/** Browser mode only: show an in-app text-input dialog to enter a repo path */
@@ -423,6 +425,10 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		repo: deps.repo,
 		closeTerminal: deps.closeTerminal,
 		setStatusInfo: deps.setStatusInfo,
+		// No dialog wired: refuse rather than silently destroy. The guard only fires
+		// when there is nothing to merge AND uncommitted work would be swept away.
+		confirmEmptyBranchCleanup: (branchName, action) =>
+			deps.dialogs.confirmEmptyBranchCleanup?.(branchName, action) ?? Promise.resolve(false),
 		creatingWorktreeRepos,
 		setCreatingWorktreeRepos,
 		setMergePendingCtx,

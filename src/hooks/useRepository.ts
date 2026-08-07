@@ -209,23 +209,32 @@ export function useRepository() {
 	/** Result of merge-and-archive operation */
 	interface MergeArchiveResult {
 		merged: boolean;
+		/** archived | deleted | pending | needs_confirmation */
 		action: string;
 		archive_path: string | null;
 		branch_delete_warning?: string | null;
+		/** Commits the branch had that the target did not, measured before the merge.
+		 *  0 means the merge was an "Already up to date" no-op. */
+		commits_ahead: number;
+		/** Whether the worktree had uncommitted changes at pre-flight time. */
+		worktree_dirty: boolean;
 	}
 
-	/** Merge a worktree branch into target, then archive or delete */
+	/** Merge a worktree branch into target, then archive or delete.
+	 *  `force` skips the empty-branch-with-dirty-worktree guard after the user confirms. */
 	async function mergeAndArchiveWorktree(
 		repoPath: string,
 		branchName: string,
 		targetBranch: string,
 		afterMerge: string,
+		force = false,
 	): Promise<MergeArchiveResult> {
 		return await invoke<MergeArchiveResult>("merge_and_archive_worktree", {
 			repoPath,
 			branchName,
 			targetBranch,
 			afterMerge,
+			force,
 		});
 	}
 

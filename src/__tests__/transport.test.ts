@@ -693,6 +693,24 @@ describe("transport", () => {
 				branchName: "feat",
 				targetBranch: "main",
 				afterMerge: "archive",
+				force: undefined,
+			});
+		});
+
+		it("forwards the merge_and_archive_worktree force flag over HTTP", () => {
+			const result = mapCommandToHttp("merge_and_archive_worktree", {
+				repoPath: "/r",
+				branchName: "feat",
+				targetBranch: "main",
+				afterMerge: "archive",
+				force: true,
+			});
+			expect(result.body).toEqual({
+				repoPath: "/r",
+				branchName: "feat",
+				targetBranch: "main",
+				afterMerge: "archive",
+				force: true,
 			});
 		});
 

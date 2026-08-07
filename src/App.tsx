@@ -304,6 +304,7 @@ const App: Component = () => {
 			promptRepoPath,
 			confirmOrphanCleanup: dialogs.confirmOrphanCleanup,
 			confirmRemoveLockedWorktree: dialogs.confirmRemoveLockedWorktree,
+			confirmEmptyBranchCleanup: dialogs.confirmEmptyBranchCleanup,
 		},
 		closeTerminal: terminalLifecycle.closeTerminal,
 		createNewTerminal: terminalLifecycle.createNewTerminal,

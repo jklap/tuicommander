@@ -1700,10 +1700,70 @@ pub(crate) fn checkout_remote_branch(
 pub(crate) struct MergeArchiveResult {
     /// Whether the merge succeeded
     pub(crate) merged: bool,
-    /// What happened to the worktree (archived / deleted / pending user choice)
+    /// What happened to the worktree (archived / deleted / pending user choice /
+    /// needs_confirmation — nothing was touched, the caller must confirm)
     pub(crate) action: String,
     /// Path to archived directory (if archived)
     pub(crate) archive_path: Option<String>,
+    /// Commits the branch had that the target did not, measured BEFORE the merge.
+    /// 0 means the merge was a no-op ("Already up to date") — the worktree is about
+    /// to disappear from the sidebar without contributing anything.
+    pub(crate) commits_ahead: usize,
+    /// Whether the worktree had uncommitted changes at pre-flight time.
+    pub(crate) worktree_dirty: bool,
+}
+
+/// What the pre-flight learned about a worktree branch before we merge it.
+pub(crate) struct MergePreflight {
+    pub(crate) commits_ahead: usize,
+    pub(crate) worktree_dirty: bool,
+}
+
+/// Count commits on `branch` that `target` does not have, and check whether the
+/// branch's worktree has uncommitted changes.
+///
+/// This is what tells a real merge apart from an "Already up to date" no-op. Both
+/// succeed as far as `git merge` is concerned, but only one of them justifies
+/// making the worktree row disappear.
+///
+/// Errors are NOT fatal: a repo where rev-list or status fails still deserves the
+/// merge it was asked for, so we fall back to "unknown" (0 ahead, not dirty) and
+/// let the caller proceed. The pre-flight is a guard rail, not a gate.
+pub(crate) fn merge_preflight(
+    repo_path: &str,
+    branch_name: &str,
+    target_branch: &str,
+) -> MergePreflight {
+    let base_repo = Path::new(repo_path);
+    let commits_ahead = git_cmd(base_repo)
+        .args([
+            "rev-list",
+            "--count",
+            &format!("{target_branch}..{branch_name}"),
+        ])
+        .run()
+        .ok()
+        .and_then(|out| out.stdout.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+
+    let worktree_dirty = git_cmd(base_repo)
+        .args(["worktree", "list", "--porcelain"])
+        .run()
+        .ok()
+        .and_then(|out| find_worktree_path_for_branch(&out.stdout, branch_name))
+        .and_then(|wt| {
+            git_cmd(&wt)
+                .args(["status", "--porcelain"])
+                .run()
+                .ok()
+                .map(|s| !s.stdout.trim().is_empty())
+        })
+        .unwrap_or(false);
+
+    MergePreflight {
+        commits_ahead,
+        worktree_dirty,
+    }
 }
 
 /// Complete a pending merge by archiving or deleting the worktree.
@@ -1730,6 +1790,10 @@ pub(crate) fn finalize_merged_worktree(
                 merged: true,
                 action: "archived".to_string(),
                 archive_path: Some(archive_path),
+                // The merge already happened in the "pending" call that preceded
+                // this one; its pre-flight numbers were reported there.
+                commits_ahead: 0,
+                worktree_dirty: false,
             })
         }
         "delete" => {
@@ -1739,6 +1803,8 @@ pub(crate) fn finalize_merged_worktree(
                 merged: true,
                 action: "deleted".to_string(),
                 archive_path: None,
+                commits_ahead: 0,
+                worktree_dirty: false,
             })
         }
         _ => Err(format!(
@@ -1761,9 +1827,26 @@ pub(crate) fn merge_and_archive_worktree_impl(
     branch_name: String,
     target_branch: String,
     after_merge: String,
+    force: bool,
 ) -> Result<MergeArchiveResult, String> {
     let script = resolve_archive_script(&repo_path);
     let base_repo = PathBuf::from(&repo_path);
+
+    // 0. Pre-flight: does this branch actually carry anything, and would the
+    //    cleanup take uncommitted work with it? A branch with 0 commits ahead
+    //    merges as a silent no-op, so without this the worktree row simply
+    //    vanishes and the user cannot tell whether it was empty.
+    let preflight = merge_preflight(&repo_path, &branch_name, &target_branch);
+    let cleans_up = after_merge == "archive" || after_merge == "delete";
+    if !force && cleans_up && preflight.commits_ahead == 0 && preflight.worktree_dirty {
+        return Ok(MergeArchiveResult {
+            merged: false,
+            action: "needs_confirmation".to_string(),
+            archive_path: None,
+            commits_ahead: preflight.commits_ahead,
+            worktree_dirty: preflight.worktree_dirty,
+        });
+    }
 
     // 1. Ensure we're on the target branch in the base repo
     git_cmd(&base_repo)
@@ -1785,6 +1868,10 @@ pub(crate) fn merge_and_archive_worktree_impl(
     }
 
     // 3. Handle the worktree based on after_merge setting
+    let MergePreflight {
+        commits_ahead,
+        worktree_dirty,
+    } = preflight;
     match after_merge.as_str() {
         "archive" => {
             let archive_path = archive_worktree(&base_repo, &branch_name, script.as_deref())?;
@@ -1795,6 +1882,8 @@ pub(crate) fn merge_and_archive_worktree_impl(
                 merged: true,
                 action: "archived".to_string(),
                 archive_path: Some(archive_path),
+                commits_ahead,
+                worktree_dirty,
             })
         }
         "delete" => {
@@ -1804,6 +1893,8 @@ pub(crate) fn merge_and_archive_worktree_impl(
                 merged: true,
                 action: "deleted".to_string(),
                 archive_path: None,
+                commits_ahead,
+                worktree_dirty,
             })
         }
         _ => {
@@ -1813,12 +1904,17 @@ pub(crate) fn merge_and_archive_worktree_impl(
                 merged: true,
                 action: "pending".to_string(),
                 archive_path: None,
+                commits_ahead,
+                worktree_dirty,
             })
         }
     }
 }
 
 /// Merge a worktree branch into a target branch, then archive/delete (Tauri command).
+///
+/// `force` skips the pre-flight guard that refuses to clean up a branch carrying no
+/// commits while its worktree is dirty. The frontend sets it after the user confirms.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn merge_and_archive_worktree(
@@ -1827,6 +1923,7 @@ pub(crate) fn merge_and_archive_worktree(
     branch_name: String,
     target_branch: String,
     after_merge: String,
+    force: Option<bool>,
 ) -> Result<MergeArchiveResult, String> {
     merge_and_archive_worktree_impl(
         state.inner(),
@@ -1834,6 +1931,7 @@ pub(crate) fn merge_and_archive_worktree(
         branch_name,
         target_branch,
         after_merge,
+        force.unwrap_or(false),
     )
 }
 
@@ -2697,6 +2795,114 @@ mod tests {
         // No duplicate names
         let unique: std::collections::HashSet<&str> = names.iter().copied().collect();
         assert_eq!(unique.len(), refs.len(), "Duplicate refs found: {names:?}");
+    }
+
+    // --- merge pre-flight ---
+    //
+    // The whole point: `git merge` succeeds identically for a branch carrying 7
+    // commits and for one carrying none ("Already up to date"), and in both cases
+    // the worktree row then disappears from the sidebar. Only the pre-flight can
+    // tell the user which of the two just happened.
+
+    /// Build a worktree on `branch` and return its path. Optionally commit a file
+    /// so the branch is genuinely ahead of the base branch.
+    fn worktree_with(repo: &Path, branch: &str, commit: bool) -> PathBuf {
+        let repo_path = repo.to_string_lossy().to_string();
+        let config = WorktreeConfig {
+            task_name: branch.to_string(),
+            base_repo: repo_path,
+            branch: Some(branch.to_string()),
+            create_branch: true,
+        };
+        let wt = create_worktree_internal(&repo.join("worktrees"), &config, None)
+            .expect("create worktree");
+        if commit {
+            fs::write(wt.path.join("work.txt"), "real work").expect("write");
+            git_cmd(&wt.path).args(["add", "."]).run().expect("add");
+            git_cmd(&wt.path)
+                .args(["commit", "-m", "feat: real work"])
+                .run()
+                .expect("commit");
+        }
+        wt.path
+    }
+
+    /// The base branch of `setup_test_repo` — git's default name varies by version.
+    fn base_branch_of(repo: &Path) -> String {
+        git_cmd(repo)
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .run()
+            .expect("rev-parse HEAD")
+            .stdout
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn merge_preflight_counts_commits_the_target_is_missing() {
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        worktree_with(repo.path(), "feat-ahead", true);
+
+        let pf = merge_preflight(&repo.path().to_string_lossy(), "feat-ahead", &base);
+        assert_eq!(pf.commits_ahead, 1, "one commit the base branch lacks");
+        assert!(!pf.worktree_dirty, "everything was committed");
+    }
+
+    #[test]
+    fn merge_preflight_reports_zero_for_a_branch_with_nothing_to_merge() {
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        worktree_with(repo.path(), "feat-empty", false);
+
+        let pf = merge_preflight(&repo.path().to_string_lossy(), "feat-empty", &base);
+        assert_eq!(
+            pf.commits_ahead, 0,
+            "branch was cut from base and never committed — merging it is a no-op"
+        );
+    }
+
+    #[test]
+    fn merge_preflight_sees_uncommitted_work_in_the_worktree() {
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        let wt = worktree_with(repo.path(), "feat-dirty", false);
+        fs::write(wt.join("scratch.txt"), "not committed yet").expect("write");
+
+        let pf = merge_preflight(&repo.path().to_string_lossy(), "feat-dirty", &base);
+        assert_eq!(pf.commits_ahead, 0);
+        assert!(
+            pf.worktree_dirty,
+            "an untracked file still counts as work that archiving would sweep away"
+        );
+    }
+
+    #[test]
+    fn merge_preflight_is_clean_for_an_already_merged_branch() {
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        worktree_with(repo.path(), "feat-merged", true);
+        git_cmd(repo.path())
+            .args(["merge", "feat-merged", "--no-edit"])
+            .run()
+            .expect("merge");
+
+        let pf = merge_preflight(&repo.path().to_string_lossy(), "feat-merged", &base);
+        assert_eq!(
+            pf.commits_ahead, 0,
+            "already merged — the target has everything"
+        );
+    }
+
+    #[test]
+    fn merge_preflight_falls_back_to_unknown_for_a_branch_that_does_not_exist() {
+        let repo = setup_test_repo();
+        let base = base_branch_of(repo.path());
+        // rev-list fails on an unknown ref; the pre-flight must not panic or block
+        // the merge — it is a guard rail, not a gate.
+        let pf = merge_preflight(&repo.path().to_string_lossy(), "no-such-branch", &base);
+        assert_eq!(pf.commits_ahead, 0);
+        assert!(!pf.worktree_dirty);
     }
 
     #[test]

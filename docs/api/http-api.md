@@ -669,7 +669,7 @@ POST /repo/delete-branch       { path, name, force }                        -> D
 POST /repo/delete-local-branch { repoPath, branchName, keepWorktree? }      -> { ok: true }
 POST /repo/update-from-base    { path, branchName, strategy? }              -> string
 POST /repo/switch-branch       { repoPath, branchName, force, stash }       -> SwitchBranchResult
-POST /repo/merge-archive-worktree { repoPath, branchName, targetBranch, afterMerge } -> MergeArchiveResult
+POST /repo/merge-archive-worktree { repoPath, branchName, targetBranch, afterMerge, force? } -> MergeArchiveResult
 ```
 
 Powers the Git panel's Branches tab, commit graph, and editor gutter in

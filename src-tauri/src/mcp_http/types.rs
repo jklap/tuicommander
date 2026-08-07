@@ -421,6 +421,9 @@ pub(super) struct MergeArchiveRequest {
     /// "archive", "delete", or "ask"
     #[serde(rename = "afterMerge")]
     pub after_merge: String,
+    /// Skip the pre-flight guard for an empty branch with a dirty worktree.
+    #[serde(default)]
+    pub force: Option<bool>,
 }
 
 #[derive(Deserialize)]
