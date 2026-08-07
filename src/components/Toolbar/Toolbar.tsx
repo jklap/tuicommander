@@ -35,6 +35,17 @@ function relativeAge(timestamp: number): string {
 	return `${Math.floor(hours / 24)}d ago`;
 }
 
+/** Narrowest sidebar that still fits the full "TUICommander" wordmark.
+ *
+ * Worst case is macOS: 78px of `padding-left` reserved for the traffic lights,
+ * 10px `padding-right`, two 26px toggles plus gaps (~56px) and the 110px svg —
+ * 254px total. The old threshold was 240, so between 240 and 254 the full name
+ * did not fit; because it was absolutely positioned it overlapped the toggles
+ * instead of pushing them. Below this the short "TUIC" mark (38px) is used, which
+ * fits comfortably at the 200px minimum sidebar width.
+ */
+const FULL_APP_NAME_MIN_SIDEBAR_PX = 254;
+
 const NOTIFICATION_LABELS: Record<PrNotificationType, { label: string; icon: string; cls: string }> = {
 	merged: { label: "Merged", icon: "\u2714", cls: s.notifMerged },
 	closed: { label: "Closed", icon: "\u2716", cls: s.notifClosed },
@@ -254,7 +265,11 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 
 	return (
 		<div id="toolbar" class={s.toolbar} data-tauri-drag-region>
-			<div class={cx(s.left, uiStore.state.sidebarWidth < 240 && s.narrowSidebar)} data-tauri-drag-region>
+			<div
+				class={cx(s.left, uiStore.state.sidebarWidth < FULL_APP_NAME_MIN_SIDEBAR_PX && s.narrowSidebar)}
+				data-tauri-drag-region
+			>
+				<span class={s.leftSpacer} data-tauri-drag-region />
 				{/* Embossed app name — full version for wide sidebar, short for narrow */}
 				<svg
 					class={`${s.appName} ${s.appNameFull}`}
@@ -362,6 +377,7 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 						TUIC
 					</text>
 				</svg>
+				<span class={s.leftSpacer} data-tauri-drag-region />
 				<Show when={uiStore.state.sidebarVisible}>
 					<button
 						class={s.filterToggle}

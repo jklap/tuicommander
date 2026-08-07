@@ -24,17 +24,24 @@
 .left {
   width: var(--sidebar-width);
   flex: none;
-  position: relative;
-  justify-content: flex-end;
   padding-right: 10px;
   gap: 2px;
+  overflow: hidden;
   -webkit-app-region: drag;
 }
 
+/* Flexible gap on either side of the app name. The name stays visually centred in
+   whatever space the buttons leave, but it is a real flex item — it can never be
+   painted on top of them. It used to be position:absolute at left:50%, which at a
+   narrow sidebar put the label straight over the right-aligned toggles. */
+.leftSpacer {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .appName {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
+  flex: 0 1 auto;
+  min-width: 0;
   pointer-events: none;
   user-select: none;
 }
@@ -84,6 +91,9 @@
 .filterToggle {
   width: 26px;
   height: 26px;
+  /* Never give up width to the app name — the toggles are the only interactive
+     controls in this region, so the label yields first. */
+  flex: none;
   display: flex;
   align-items: center;
   justify-content: center;
