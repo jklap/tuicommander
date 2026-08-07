@@ -67,7 +67,7 @@ export const TreeNode: Component<TreeNodeProps> = (props) => {
 					!props.entry.is_dir && props.entry.path === props.activePath && s.entryActive,
 					props.entry.is_ignored && s.entryIgnored,
 				)}
-				style={{ "padding-left": `${8 + props.depth * 16}px` }}
+				style={{ "padding-left": `calc(var(--row-pad-x) + ${props.depth} * var(--tree-indent))` }}
 				onClick={handleClick}
 				onContextMenu={(e) => props.onContextMenu(e, props.entry)}
 				onPointerDown={(e) => props.onPointerDragStart?.(absPath(), e)}
@@ -102,7 +102,10 @@ export const TreeNode: Component<TreeNodeProps> = (props) => {
 			{/* Recursive children */}
 			<Show when={props.entry.is_dir && isExpanded()}>
 				<Show when={loading()}>
-					<div class={s.treeLoading} style={{ "padding-left": `${8 + (props.depth + 1) * 16}px` }}>
+					<div
+						class={s.treeLoading}
+						style={{ "padding-left": `calc(var(--row-pad-x) + ${props.depth + 1} * var(--tree-indent))` }}
+					>
 						Loading...
 					</div>
 				</Show>
