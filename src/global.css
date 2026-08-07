@@ -250,6 +250,18 @@
   --font-2xl: 20px;
   --font-3xl: 24px;
 
+  /* List-row rhythm — shared by every tree/list panel (sidebar branches, file
+     browser, …). These panels sit side by side and previously each invented its
+     own numbers: text started at 50px in the branch list and 36px in the file
+     browser, with icon columns of 18px vs 16px and rows of 30px vs ~24px. One
+     scale means the columns line up whichever panel you are looking at.
+     Text always starts at: tree-indent*depth + row-pad-x + row-icon + row-gap. */
+  --row-pad-x: 8px;
+  --row-icon: 16px;
+  --row-gap: 6px;
+  --row-h: 26px;
+  --tree-indent: 12px;
+
   /* Elevation */
   --shadow-popup: 0 8px 32px rgba(0, 0, 0, 0.4);
   --shadow-dropdown: 0 4px 16px rgba(0, 0, 0, 0.3);

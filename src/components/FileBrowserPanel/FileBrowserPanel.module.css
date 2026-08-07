@@ -106,11 +106,14 @@
 }
 
 /* File entries */
+/* Shares the list-row rhythm with the sidebar branch list (see --row-* in
+   global.css) so the two panels' icon and text columns line up. */
 .entry {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 12px;
+  gap: var(--row-gap);
+  padding: 4px var(--row-pad-x);
+  min-height: var(--row-h);
   cursor: pointer;
   font-size: var(--font-md);
   font-family: var(--font-ui);
@@ -153,16 +156,16 @@
 
 .entryIcon {
   flex-shrink: 0;
-  width: 16px;
-  height: 16px;
+  width: var(--row-icon);
+  height: var(--row-icon);
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
 .entryIcon :global(svg) {
-  width: 16px;
-  height: 16px;
+  width: var(--row-icon);
+  height: var(--row-icon);
 }
 
 .entryName {
