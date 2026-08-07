@@ -657,6 +657,7 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 				branchName: args.branchName,
 				targetBranch: args.targetBranch,
 				afterMerge: args.afterMerge,
+				force: args.force,
 			},
 		}),
 	},

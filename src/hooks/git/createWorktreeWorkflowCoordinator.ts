@@ -25,7 +25,14 @@ interface WorktreeWorkflowCoordinatorDeps {
 			branchName: string,
 			targetBranch: string,
 			afterMerge: string,
-		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;
+			force?: boolean,
+		) => Promise<{
+			merged: boolean;
+			action: string;
+			archive_path: string | null;
+			commits_ahead?: number;
+			worktree_dirty?: boolean;
+		}>;
 		finalizeMergedWorktree: (
 			repoPath: string,
 			branchName: string,
@@ -34,6 +41,9 @@ interface WorktreeWorkflowCoordinatorDeps {
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
 	setStatusInfo: (message: string) => void;
+	/** Ask the user to confirm cleaning up a branch that carries no commits while
+	 *  its worktree still has uncommitted changes. Resolves false to abort. */
+	confirmEmptyBranchCleanup: (branchName: string, action: string) => Promise<boolean>;
 	creatingWorktreeRepos: Accessor<Set<string>>;
 	setCreatingWorktreeRepos: Setter<Set<string>>;
 	setMergePendingCtx: Setter<{
@@ -264,7 +274,19 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		targetBranch: string,
 		afterMerge: string,
 	) => {
-		const result = await deps.repo.mergeAndArchiveWorktree(repoPath, branchName, targetBranch, afterMerge);
+		let result = await deps.repo.mergeAndArchiveWorktree(repoPath, branchName, targetBranch, afterMerge);
+
+		// The backend refused: this branch has nothing to merge yet its worktree holds
+		// uncommitted work, so archiving/deleting would make the row vanish and take
+		// that work with it. Nothing has been touched — ask, then retry with force.
+		if (result.action === "needs_confirmation") {
+			const proceed = await deps.confirmEmptyBranchCleanup(branchName, afterMerge);
+			if (!proceed) {
+				deps.setStatusInfo(`Left ${branchName} alone — nothing to merge into ${targetBranch}`);
+				return;
+			}
+			result = await deps.repo.mergeAndArchiveWorktree(repoPath, branchName, targetBranch, afterMerge, true);
+		}
 
 		// Merge succeeded — close terminals now (not before, to avoid orphaning the branch on failure)
 		await closeTerminalsForBranch(repoPath, branchName);
@@ -287,7 +309,12 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 			return;
 		}
 
-		deps.setStatusInfo(`Merged ${branchName} into ${targetBranch} (${result.action})`);
+		// Say what the merge actually did. "Already up to date" and "brought 7 commits
+		// across" both end here with action=archived, and the row disappears either
+		// way — without the count the user cannot tell an empty branch from a real one.
+		const ahead = result.commits_ahead ?? 0;
+		const carried = ahead === 0 ? "nothing to merge" : `${ahead} commit${ahead === 1 ? "" : "s"}`;
+		deps.setStatusInfo(`${branchName} → ${targetBranch}: ${carried} (${result.action})`);
 
 		// Remove branch from sidebar
 		repositoriesStore.removeBranch(repoPath, branchName);

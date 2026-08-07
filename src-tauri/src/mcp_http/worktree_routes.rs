@@ -449,6 +449,7 @@ pub(super) async fn merge_and_archive_worktree_http(
         branch_name,
         target_branch,
         after_merge,
+        force,
     } = body;
     let res = tokio::task::spawn_blocking(move || {
         crate::worktree::merge_and_archive_worktree_impl(
@@ -457,6 +458,7 @@ pub(super) async fn merge_and_archive_worktree_http(
             branch_name,
             target_branch,
             after_merge,
+            force.unwrap_or(false),
         )
     })
     .await;

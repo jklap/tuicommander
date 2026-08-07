@@ -107,6 +107,7 @@ describe("useGitOperations", () => {
 		confirmRemoveWorktree: vi.fn().mockResolvedValue(true),
 		confirmRemoveLockedWorktree: vi.fn().mockResolvedValue(true),
 		confirmStashAndSwitch: vi.fn().mockResolvedValue(true),
+		confirmEmptyBranchCleanup: vi.fn().mockResolvedValue(true),
 		reportGitError: vi.fn().mockResolvedValue(false),
 	};
 
@@ -906,6 +907,96 @@ describe("useGitOperations", () => {
 
 			expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeUndefined();
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("archived"));
+		});
+
+		// A branch with nothing to merge still makes its worktree row disappear, so the
+		// user cannot tell an empty branch from a real one. The backend refuses when
+		// uncommitted work would be swept away with it.
+		describe("empty-branch guard", () => {
+			function seedBranch() {
+				repositoriesStore.add({ path: "/repo", displayName: "Repo" });
+				repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo", isMain: true });
+				repositoriesStore.setBranch("/repo", "feature/x", { worktreePath: "/repo/.wt/x" });
+			}
+
+			it("keeps the branch and does not force when the user declines", async () => {
+				seedBranch();
+				mockDialogs.confirmEmptyBranchCleanup.mockResolvedValueOnce(false);
+				mockRepo.mergeAndArchiveWorktree.mockResolvedValueOnce({
+					merged: false,
+					action: "needs_confirmation",
+					archive_path: null,
+					commits_ahead: 0,
+					worktree_dirty: true,
+				});
+
+				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
+
+				expect(mockDialogs.confirmEmptyBranchCleanup).toHaveBeenCalledWith("feature/x", "archive");
+				expect(mockRepo.mergeAndArchiveWorktree).toHaveBeenCalledTimes(1);
+				expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeDefined();
+			});
+
+			it("retries with force once the user confirms", async () => {
+				seedBranch();
+				mockDialogs.confirmEmptyBranchCleanup.mockResolvedValueOnce(true);
+				mockRepo.mergeAndArchiveWorktree
+					.mockResolvedValueOnce({
+						merged: false,
+						action: "needs_confirmation",
+						archive_path: null,
+						commits_ahead: 0,
+						worktree_dirty: true,
+					})
+					.mockResolvedValueOnce({
+						merged: true,
+						action: "archived",
+						archive_path: "/archived/feature-x",
+						commits_ahead: 0,
+						worktree_dirty: true,
+					});
+
+				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
+
+				expect(mockRepo.mergeAndArchiveWorktree).toHaveBeenLastCalledWith(
+					"/repo",
+					"feature/x",
+					"main",
+					"archive",
+					true,
+				);
+				expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeUndefined();
+			});
+
+			it("reports what the merge actually carried across", async () => {
+				seedBranch();
+				mockRepo.mergeAndArchiveWorktree.mockResolvedValueOnce({
+					merged: true,
+					action: "archived",
+					archive_path: "/archived/feature-x",
+					commits_ahead: 7,
+					worktree_dirty: false,
+				});
+
+				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
+
+				expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("7 commits"));
+			});
+
+			it("says so when the merge was a no-op", async () => {
+				seedBranch();
+				mockRepo.mergeAndArchiveWorktree.mockResolvedValueOnce({
+					merged: true,
+					action: "archived",
+					archive_path: "/archived/feature-x",
+					commits_ahead: 0,
+					worktree_dirty: false,
+				});
+
+				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
+
+				expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("nothing to merge"));
+			});
 		});
 
 		it("sets mergePendingCtx when action is pending (ask mode)", async () => {
