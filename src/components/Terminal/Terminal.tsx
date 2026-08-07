@@ -23,6 +23,7 @@ import { getAwaitingInputSound } from "./awaitingInputSound";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
 import { shouldPlayCompletionSound } from "./completionDecision";
+import { focusIsInsideOwnInput } from "./focusGuards";
 import { getSharedMetrics } from "./glyphCache";
 import { shouldApplyIntentTitle } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
@@ -858,19 +859,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		(terminalsStore.state.activeId === props.id && !terminalsStore.isDetached(props.id)) ||
 		isActiveInPaneGroup();
 
-	/** True when the caret sits in a text field that belongs to THIS terminal but is
-	 *  not the canvas key-input — the search bar or the compose panel. Both render
-	 *  inside the terminal wrapper, so auto-focus would otherwise pull the caret out
-	 *  from under the user mid-keystroke. */
-	const focusIsInsideOwnInput = (): boolean => {
-		const el = document.activeElement;
-		if (!(el instanceof HTMLElement)) return false;
-		if (!el.matches("input, textarea, [contenteditable='true']")) return false;
-		if (el.closest<HTMLElement>("[data-terminal-id]")?.dataset.terminalId !== props.id) return false;
-		// CanvasTerminal's hidden key-input IS the terminal, not a competing field.
-		return el.closest("[data-terminal-container]") === null;
-	};
-
 	// When this terminal becomes visible: init PTY session and auto-focus.
 	// CanvasTerminal handles its own rendering lifecycle.
 	//
@@ -901,7 +889,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 
 				// Never steal the caret from a field the user is typing in — the search
 				// bar and the compose panel live inside this same terminal wrapper.
-				if (terminalsStore.state.activeId === props.id && !focusIsInsideOwnInput()) {
+				if (terminalsStore.state.activeId === props.id && !focusIsInsideOwnInput(document.activeElement, props.id)) {
 					canvasTerminalRef()?.focus();
 				}
 			});
