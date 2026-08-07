@@ -168,7 +168,9 @@ export const GitHubPanel: Component<{
 		const prHideCiFailing = effective?.prHideCiFailing ?? settingsStore.state.prHideCiFailing;
 		return props.prs.filter((pr) => {
 			if (prHideDrafts && pr.is_draft) return false;
-			if (prHideConflicting && pr.mergeable === "CONFLICTING") return false;
+			// Backend verdict, not the raw field: a PR being recomputed must not vanish
+			// from the list on a stale CONFLICTING (#8537).
+			if (prHideConflicting && pr.conflict_state === "conflicting") return false;
 			if (prHideCiFailing && (pr.checks?.failed ?? 0) > 0) return false;
 			return true;
 		});

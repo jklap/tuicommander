@@ -129,7 +129,13 @@ pub(crate) fn detect_transitions(
     }
     // Actionable transitions (only for OPEN PRs)
     else if new_state == "OPEN" {
-        if old.mergeable != "CONFLICTING" && new.mergeable == "CONFLICTING" {
+        // Same rule as the badge and the popover (#8537): a notification is an
+        // accusation too, and GitHub's last known `mergeable` is not evidence
+        // while it recomputes.
+        use crate::github::ConflictState;
+        if old.conflict_state != ConflictState::Conflicting
+            && new.conflict_state == ConflictState::Conflicting
+        {
             primary_type = Some("blocked");
             out.push(PrTransition::Blocked {
                 repo_path: rp.clone(),
@@ -908,6 +914,7 @@ mod tests {
         failed: u32,
         pending: u32,
     ) -> BranchPrStatus {
+        let merge_state_status = if mergeable == "CONFLICTING" { "DIRTY" } else { "CLEAN" };
         BranchPrStatus {
             branch: "feat/test".to_string(),
             number: 42,
@@ -925,7 +932,14 @@ mod tests {
             author: String::new(),
             commits: 1,
             mergeable: mergeable.to_string(),
-            merge_state_status: String::new(),
+            // Realistic pairing: GitHub reports DIRTY alongside a computed
+            // CONFLICTING. An empty status would mean "still recomputing", which
+            // is a different case entirely.
+            merge_state_status: merge_state_status.to_string(),
+            conflict_state: crate::github::classify_conflict_state(
+                Some(mergeable),
+                Some(merge_state_status),
+            ),
             review_decision: review.to_string(),
             viewer_did_approve: false,
             labels: vec![],

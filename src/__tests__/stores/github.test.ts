@@ -75,6 +75,7 @@ describe("githubStore", () => {
 			author: "alice",
 			commits: 3,
 			mergeable: "MERGEABLE",
+			conflict_state: "clear" as const,
 			merge_state_status: "CLEAN",
 			review_decision: "",
 			viewer_did_approve: false,
