@@ -1,4 +1,4 @@
-import { type Component, createEffect, createSignal, lazy, onCleanup, onMount, Show, Suspense } from "solid-js";
+import { type Component, createEffect, createSignal, lazy, on, onCleanup, onMount, Show, Suspense } from "solid-js";
 import { detectAgentForTerminal } from "../../hooks/useAgentPolling";
 import { browserCreatedSessions } from "../../hooks/useAppInit";
 import { usePty } from "../../hooks/usePty";
@@ -858,10 +858,29 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		(terminalsStore.state.activeId === props.id && !terminalsStore.isDetached(props.id)) ||
 		isActiveInPaneGroup();
 
+	/** True when the caret sits in a text field that belongs to THIS terminal but is
+	 *  not the canvas key-input — the search bar or the compose panel. Both render
+	 *  inside the terminal wrapper, so auto-focus would otherwise pull the caret out
+	 *  from under the user mid-keystroke. */
+	const focusIsInsideOwnInput = (): boolean => {
+		const el = document.activeElement;
+		if (!(el instanceof HTMLElement)) return false;
+		if (!el.matches("input, textarea, [contenteditable='true']")) return false;
+		if (el.closest<HTMLElement>("[data-terminal-id]")?.dataset.terminalId !== props.id) return false;
+		// CanvasTerminal's hidden key-input IS the terminal, not a competing field.
+		return el.closest("[data-terminal-container]") === null;
+	};
+
 	// When this terminal becomes visible: init PTY session and auto-focus.
 	// CanvasTerminal handles its own rendering lifecycle.
-	createEffect(() => {
-		if (isVisible()) {
+	//
+	// `on(isVisible, …)` so the body runs ONLY on a visibility transition. A bare
+	// createEffect re-ran on every tracked-store write and each re-run scheduled
+	// another `canvasTerminalRef().focus()`, which yanked the caret out of the
+	// search bar (and the compose panel) while the user was still typing in it.
+	createEffect(
+		on(isVisible, (visible) => {
+			if (!visible) return;
 			rafHandle = requestAnimationFrame(() => {
 				rafHandle = 0;
 				if (!containerRef || containerRef.offsetWidth <= 0 || containerRef.offsetHeight <= 0) {
@@ -880,7 +899,9 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				}
 				initSession();
 
-				if (terminalsStore.state.activeId === props.id) {
+				// Never steal the caret from a field the user is typing in — the search
+				// bar and the compose panel live inside this same terminal wrapper.
+				if (terminalsStore.state.activeId === props.id && !focusIsInsideOwnInput()) {
 					canvasTerminalRef()?.focus();
 				}
 			});
@@ -888,8 +909,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			onCleanup(() => {
 				if (rafHandle) cancelAnimationFrame(rafHandle);
 			});
-		}
-	});
+		}),
+	);
 
 	// Alt-screen recovery: when an agent exits without leaving alt-screen,
 	// inject exit sequences directly into the terminal grid (display side only).
