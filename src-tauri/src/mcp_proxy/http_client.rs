@@ -106,11 +106,6 @@ pub(crate) struct HttpMcpClient {
     /// `resolve_bearer` skips the keychain entirely — avoids macOS permission
     /// popups for upstreams that don't need credentials.
     has_auth: bool,
-    /// Cached bearer token resolved from the keyring during `initialize()`.
-    /// Avoids hitting the OS keychain on every health check / tool call —
-    /// macOS prompts for keychain access each time otherwise.
-    /// Invalidated on 401 → `force_refresh()`.
-    cached_bearer: std::sync::Mutex<Option<String>>,
 }
 
 impl HttpMcpClient {
@@ -144,7 +139,6 @@ impl HttpMcpClient {
             session_id: None,
             token_manager: OnceCell::new(),
             has_auth,
-            cached_bearer: std::sync::Mutex::new(None),
         }
     }
 
@@ -176,26 +170,17 @@ impl HttpMcpClient {
     /// - `StoredCredential::Oauth2` → checks validity; if expired or near
     ///   expiry, calls [`TokenManager::refresh_if_needed`] and returns the
     ///   refreshed access token.
+    ///
+    /// Deliberately re-read on every request instead of memoised in the client:
+    /// the credential vault already holds the decrypted blob in a process-wide
+    /// cache (`credentials.rs`), so this costs a map lookup, not a keychain
+    /// round-trip. A second copy inside the client is what made a completed
+    /// OAuth flow appear to do nothing — the client kept serving the dead token
+    /// it had cached before the user re-authorized.
     async fn resolve_bearer(&self) -> Result<Option<String>, UpstreamError> {
         if !self.has_auth {
             return Ok(None);
         }
-        {
-            let guard = self.cached_bearer.lock().unwrap();
-            if let Some(ref cached) = *guard {
-                return Ok(Some(cached.clone()));
-            }
-        }
-        let token = self.resolve_bearer_from_keyring().await?;
-        if let Some(ref t) = token {
-            *self.cached_bearer.lock().unwrap() = Some(t.clone());
-        }
-        Ok(token)
-    }
-
-    /// Read the bearer token from the OS keyring (expensive on macOS — triggers
-    /// a security prompt unless the user has granted "Always Allow").
-    async fn resolve_bearer_from_keyring(&self) -> Result<Option<String>, UpstreamError> {
         let cred = read_stored_credential(&self.name)
             .map_err(|e| UpstreamError::Other(format!("keyring read failed: {e}")))?;
         let Some(cred) = cred else { return Ok(None) };
@@ -259,19 +244,13 @@ impl HttpMcpClient {
         if !self.has_auth {
             return Ok(None);
         }
-        // Invalidate cache so the next resolve_bearer re-reads from keyring.
-        *self.cached_bearer.lock().unwrap() = None;
         let cred = read_stored_credential(&self.name)
             .map_err(|e| UpstreamError::Other(format!("keyring read failed: {e}")))?;
         let Some(StoredCredential::Oauth2(mut set)) = cred else {
             return Ok(None);
         };
         set.expires_at = Some(0);
-        let refreshed = self.refresh_token_if_needed(&set).await?;
-        if let Some(ref new_set) = refreshed {
-            *self.cached_bearer.lock().unwrap() = Some(new_set.access_token.clone());
-        }
-        Ok(refreshed)
+        self.refresh_token_if_needed(&set).await
     }
 
     /// Perform the MCP initialize handshake.
@@ -280,7 +259,27 @@ impl HttpMcpClient {
     /// 2. Sends `initialize` request.
     /// 3. Sends `notifications/initialized` (fire-and-forget).
     /// 4. Calls `tools/list` and returns the tool definitions.
+    ///
+    /// A 401 costs the user a trip through the consent screen, so spend the
+    /// refresh token first — the same recovery `rpc_with_session` already does
+    /// for tool calls. Without it an access token that died since the last run
+    /// parks the upstream in `NeedsAuth` even though we hold the means to renew
+    /// it unattended.
     pub(crate) async fn initialize(&mut self) -> Result<Vec<UpstreamToolDef>, UpstreamError> {
+        match self.initialize_once().await {
+            Err(e @ (UpstreamError::NeedsOAuth { .. } | UpstreamError::AuthFailed)) => {
+                match self.force_refresh().await {
+                    Ok(Some(_)) => self.initialize_once().await,
+                    // No refresh token, or the AS rejected it — the user really
+                    // does have to re-authorize. Report the original challenge.
+                    _ => Err(e),
+                }
+            }
+            other => other,
+        }
+    }
+
+    async fn initialize_once(&mut self) -> Result<Vec<UpstreamToolDef>, UpstreamError> {
         let auth_token = self.resolve_bearer().await?;
 
         let init_body = serde_json::json!({
@@ -663,6 +662,28 @@ mod tests {
         /// If true, initial requests return 401 without challenge.
         return_401_no_challenge: Arc<std::sync::atomic::AtomicBool>,
         init_count: Arc<std::sync::atomic::AtomicU32>,
+        /// Bearer token seen on the most recent request, so a test can assert
+        /// *which* credential the client actually put on the wire.
+        seen_bearer: Arc<std::sync::Mutex<Option<String>>>,
+        /// When set, any bearer other than this one is answered with a 401 +
+        /// challenge — models a server that has expired the old access token.
+        only_accept_bearer: Arc<std::sync::Mutex<Option<String>>>,
+    }
+
+    fn oauth_challenge_response() -> axum::response::Response {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "WWW-Authenticate",
+            "Bearer realm=\"mcp\", resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\""
+                .parse()
+                .unwrap(),
+        );
+        (
+            StatusCode::UNAUTHORIZED,
+            headers,
+            Json(serde_json::json!({})),
+        )
+            .into_response()
     }
 
     async fn mock_mcp_handler(
@@ -673,23 +694,25 @@ mod tests {
         let method = body["method"].as_str().unwrap_or("");
         let id = body["id"].clone();
 
+        let bearer = headers
+            .get(axum::http::header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .map(str::to_string);
+        *state.seen_bearer.lock().unwrap() = bearer.clone();
+
+        let expected = state.only_accept_bearer.lock().unwrap().clone();
+        if let Some(expected) = expected
+            && bearer.as_deref() != Some(expected.as_str())
+        {
+            return oauth_challenge_response();
+        }
+
         if state
             .return_401_with_challenge
             .load(std::sync::atomic::Ordering::SeqCst)
         {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                "WWW-Authenticate",
-                "Bearer realm=\"mcp\", resource_metadata=\"https://api.example.com/.well-known/oauth-protected-resource\""
-                    .parse()
-                    .unwrap(),
-            );
-            return (
-                StatusCode::UNAUTHORIZED,
-                headers,
-                Json(serde_json::json!({})),
-            )
-                .into_response();
+            return oauth_challenge_response();
         }
         if state
             .return_401_no_challenge
@@ -775,9 +798,22 @@ mod tests {
         }
     }
 
+    /// Mock authorization server: hands out `refreshed-token` for any
+    /// `refresh_token` grant, so a test can watch the client recover on its own.
+    async fn mock_token_handler(AxumState(state): AxumState<MockState>) -> impl IntoResponse {
+        *state.only_accept_bearer.lock().unwrap() = Some("refreshed-token".to_string());
+        Json(serde_json::json!({
+            "access_token": "refreshed-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        }))
+    }
+
+    /// Returns the MCP URL; the token endpoint lives at `/token` on the same host.
     async fn spawn_mock_server(state: MockState) -> String {
         let app = Router::new()
             .route("/mcp", post(mock_mcp_handler))
+            .route("/token", post(mock_token_handler))
             .with_state(state);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -961,6 +997,127 @@ mod tests {
             .map(|s| s.to_string())
             .unwrap();
         assert!(value.to_ascii_lowercase().contains("bearer"));
+    }
+
+    // -- credential rotation: a re-authorization must reach the wire --
+
+    /// The bug Boss hit: re-authorizing an upstream showed a success screen and
+    /// changed nothing. The client had memoised the bearer it read on the first
+    /// connect, so every later request replayed the dead token and the server
+    /// kept answering "authorize me" — an unbreakable loop, since each new flow
+    /// wrote a token the client never looked at again.
+    #[tokio::test]
+    async fn initialize_sends_the_rotated_credential_not_the_first_one() {
+        let name = "test-rotate-initialize";
+        let state = MockState::default();
+        let url = spawn_mock_server(state.clone()).await;
+
+        crate::mcp_upstream_credentials::save_upstream_credential(name, "stale-token").unwrap();
+        let mut client = HttpMcpClient::new(name.to_string(), url, 5, true);
+        client.initialize().await.unwrap();
+        assert_eq!(
+            state.seen_bearer.lock().unwrap().as_deref(),
+            Some("stale-token")
+        );
+
+        // A completed OAuth flow persists a new token for the same upstream.
+        crate::mcp_upstream_credentials::save_upstream_credential(name, "fresh-token").unwrap();
+
+        client.initialize().await.unwrap();
+        assert_eq!(
+            state.seen_bearer.lock().unwrap().as_deref(),
+            Some("fresh-token"),
+            "re-connecting after re-authorization must use the newly stored token"
+        );
+    }
+
+    /// Same invariant on the steady-state paths — a rotation mid-session must
+    /// not leave health checks and tool calls pinned to the old credential.
+    #[tokio::test]
+    async fn tool_calls_and_health_checks_follow_credential_rotation() {
+        let name = "test-rotate-steady-state";
+        let state = MockState::default();
+        let url = spawn_mock_server(state.clone()).await;
+
+        crate::mcp_upstream_credentials::save_upstream_credential(name, "stale-token").unwrap();
+        let mut client = HttpMcpClient::new(name.to_string(), url, 5, true);
+        client.initialize().await.unwrap();
+
+        crate::mcp_upstream_credentials::save_upstream_credential(name, "fresh-token").unwrap();
+
+        client.health_check().await.unwrap();
+        assert_eq!(
+            state.seen_bearer.lock().unwrap().as_deref(),
+            Some("fresh-token"),
+            "health check must re-read the rotated credential"
+        );
+
+        client
+            .call_tool("search_code", serde_json::json!({}))
+            .await
+            .unwrap();
+        assert_eq!(
+            state.seen_bearer.lock().unwrap().as_deref(),
+            Some("fresh-token"),
+            "tool call must re-read the rotated credential"
+        );
+    }
+
+    /// An access token the server has expired is recoverable without the user:
+    /// we hold a refresh token, so the handshake spends it instead of parking
+    /// the upstream in NeedsAuth. Note `expires_at` is far in the future here —
+    /// some gateways report a nonsense lifetime, so the server's 401 is the only
+    /// trustworthy signal that the token is dead.
+    #[tokio::test]
+    async fn initialize_refreshes_a_server_rejected_token_instead_of_asking_the_user() {
+        let name = "test-init-refresh";
+        let state = MockState::default();
+        let url = spawn_mock_server(state.clone()).await;
+        let token_endpoint = url.replace("/mcp", "/token");
+
+        *state.only_accept_bearer.lock().unwrap() = Some("never-issued".to_string());
+        let set = OAuthTokenSet {
+            access_token: "expired-token".to_string(),
+            refresh_token: Some("refresh-me".to_string()),
+            expires_at: Some(i64::MAX / 2),
+            token_endpoint,
+            client_id: "client".to_string(),
+            client_secret: None,
+            scope: None,
+            resource: None,
+        };
+        crate::mcp_upstream_credentials::save_oauth_tokens(name, &set).unwrap();
+
+        let mut client = HttpMcpClient::new(name.to_string(), url, 5, true);
+        let tools = client.initialize().await.unwrap();
+
+        assert_eq!(tools.len(), 2);
+        assert_eq!(
+            state.seen_bearer.lock().unwrap().as_deref(),
+            Some("refreshed-token"),
+            "the handshake should have retried with the refreshed access token"
+        );
+    }
+
+    /// The recovery must not swallow the challenge when there is nothing to
+    /// refresh with — the user still has to be sent to the consent screen.
+    #[tokio::test]
+    async fn initialize_keeps_needs_oauth_when_no_refresh_token_is_held() {
+        let name = "test-init-no-refresh";
+        let state = MockState::default();
+        let url = spawn_mock_server(state.clone()).await;
+
+        crate::mcp_upstream_credentials::save_upstream_credential(name, "static-bearer").unwrap();
+        state
+            .return_401_with_challenge
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let mut client = HttpMcpClient::new(name.to_string(), url, 5, true);
+        let err = client.initialize().await.unwrap_err();
+        assert!(
+            matches!(err, UpstreamError::NeedsOAuth { .. }),
+            "expected NeedsOAuth, got: {err:?}"
+        );
     }
 
     // -- refresh-error classification --
