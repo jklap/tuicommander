@@ -723,6 +723,15 @@ pub(super) struct SetApiDebugRequest {
     pub enabled: bool,
 }
 
+/// Body of `POST /diagnostics/capture`. `session_id` narrows the tap to one
+/// session; omitted, every session is recorded.
+#[derive(Deserialize)]
+pub(super) struct SetCaptureRequest {
+    pub enabled: bool,
+    #[serde(default)]
+    pub session_id: Option<String>,
+}
+
 // --- Terminal grid command types ---
 
 #[derive(Deserialize)]

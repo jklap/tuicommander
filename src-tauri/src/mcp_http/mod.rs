@@ -692,6 +692,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             "/diagnostics/markers",
             get(log_routes::marker_compliance_get),
         )
+        .route(
+            "/diagnostics/capture",
+            get(log_routes::capture_get).post(log_routes::capture_set),
+        )
         // Worktrees
         .route(
             "/worktrees",
