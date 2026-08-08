@@ -147,6 +147,47 @@ When enabled, emits health snapshots every 30s and alerts on FD/thread growth tr
 - FD/thread leak (progressive growth without cleanup)
 - Sleep/wake false idle cascades (tokio timers firing stale)
 
+## The bottom zone is not agent output — never parse it
+
+Below an agent's input box sits a status line **the user configures**: a Claude
+Code `statusLine` command, a HUD plugin, a shell theme. Its height, glyphs and
+wording are arbitrary, differ per install, and it may be absent entirely.
+
+```
+  ✻ Simmering… (5m 48s · ↓ 20.7k tokens)      ← agent output. Parse this.
+  ─────────────────────────────────────────
+  ❯                                           ← input box (2 rows)
+  ─────────────────────────────────────────
+  [Opus 5 (1M) | Team] ██░░ 22% | 📚 8        ← user's status line, ANY height.
+  5h: 0% | 7d: 2% | $15.48 | 📅 $136.41         Ignore all of it.
+  ◐ Bash: cargo test | ✓ Bash ×14
+  ⏵⏵ bypass permissions on (shift+tab)        ← agent chrome. Also ignore.
+```
+
+**Rule: nothing at or below the input box may reach a parser.** Whatever is down
+there is coincidence — a path reads as a plan file, a `?` as a question, a
+numbered list as a choice prompt, `$15.48` as a token count. The agent's own
+spinner sits *above* the input box, so trimming costs no signal.
+
+Enforced by `chrome::find_chrome_cutoff`, applied to changed rows in `pty.rs`
+before `parse_clean_lines`. It anchors on the input box and extends upward past
+its padding.
+
+**When you touch that cutoff, the failure mode to fear is failing open:** no
+anchor found returns `None`, and `None` means no trim, so *every* status-line row
+reaches *every* parser. That is exactly what happened with a status line taller
+than `CHROME_SCAN_ROWS` — silent and total. Hence the unwindowed fallback to the
+lowest empty prompt row (`lowest_input_box_row`). Never widen the loose
+`is_prompt_line` search: unwindowed it matches a markdown blockquote.
+
+**Deliberate exceptions** — these read the full screen on purpose:
+
+| Site | Why |
+|---|---|
+| `parse_slash_menu` | Claude Code v2.1+ renders autocomplete items *below* the prompt chrome |
+| `parse_choice_prompt` | scans bottom-up for a strict dialog shape (title + ≥2 numbered options) |
+| question dedup screen-absence check (`pty.rs`) | asks "is this prompt still visible anywhere", not "is this content" |
+
 ## Agent state detection — capture before you theorise
 
 Working / idle / awaiting is decided from bytes an agent writes **once**. The

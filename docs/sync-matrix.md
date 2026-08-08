@@ -112,6 +112,7 @@ When changing an awaiting/idle/busy signal — a parser, the hook suppression, o
 | File | What to update |
 |------|----------------|
 | `src-tauri/src/output_parser.rs` | The parser itself (`parse_question`, `parse_osc777_notify`, …) |
+| `src-tauri/src/chrome.rs` | Bottom-zone cutoff — anything at or below the input box must stay unparsed |
 | `src-tauri/src/pty.rs` | `raw_stream_events` composition + `suppress_heuristic_question` gating |
 | `src-tauri/src/fixtures/agent_prompts/` | A `.raw` capture of the failure, recorded via `/diagnostics/capture` |
 | `src-tauri/src/pty.rs` tests | A case in the `Awaiting-signal fixtures` block replaying that capture |
