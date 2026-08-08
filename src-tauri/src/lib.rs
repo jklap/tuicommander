@@ -81,6 +81,7 @@ pub(crate) mod process_env;
 pub(crate) mod prompt;
 pub(crate) mod provider_registry;
 pub(crate) mod pty;
+pub(crate) mod pty_capture;
 pub(crate) mod push;
 pub(crate) mod registry;
 pub(crate) mod relay_client;

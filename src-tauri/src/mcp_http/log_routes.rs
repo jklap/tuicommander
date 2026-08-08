@@ -113,7 +113,10 @@ pub(crate) async fn marker_compliance_get(
             let agent_type = entry.value().agent_type.clone();
             let stats = state.marker_stats_for(&session_id);
             let (intent_enabled, suggest_enabled) =
-                crate::mcp_http::mcp_transport::marker_flags_for_agent(&state, agent_type.as_deref());
+                crate::mcp_http::mcp_transport::marker_flags_for_agent(
+                    &state,
+                    agent_type.as_deref(),
+                );
             serde_json::json!({
                 "session_id": session_id,
                 "agent_type": agent_type,
@@ -137,6 +140,29 @@ pub(crate) async fn diagnostics_set(
         "ok": true,
         "enabled": body.enabled,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Raw PTY capture tap
+// ---------------------------------------------------------------------------
+
+/// GET /diagnostics/capture — is the tap recording, and how much has it written.
+pub(crate) async fn capture_get() -> Json<serde_json::Value> {
+    Json(crate::pty_capture::status())
+}
+
+/// POST /diagnostics/capture — start/stop recording raw PTY bytes.
+/// Body: `{ "enabled": true, "session_id": "<optional filter>" }`.
+///
+/// Turn it on when a state-detection bug is reproducible but not yet understood:
+/// the capture it leaves behind becomes a `pty::tests` fixture, which is the only
+/// way a detector regression stops recurring. See `pty_capture` for the why.
+pub(crate) async fn capture_set(
+    Json(body): Json<super::types::SetCaptureRequest>,
+) -> Json<serde_json::Value> {
+    let dir = crate::config::config_dir().join("captures");
+    crate::pty_capture::set_enabled(body.enabled, body.session_id, dir);
+    Json(crate::pty_capture::status())
 }
 
 // ---------------------------------------------------------------------------

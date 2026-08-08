@@ -814,6 +814,53 @@ pub(crate) fn parse_osc94(text: &str) -> Option<ParsedEvent> {
     })
 }
 
+/// Parse OSC 777 desktop notifications: `\x1b]777;notify;TITLE;BODY\x07`.
+///
+/// This is the agent telling the terminal, in protocol rather than in pixels,
+/// that it wants the user. Claude Code emits it the instant it blocks — the two
+/// bodies observed on live sessions are `Claude needs your permission` and
+/// `Claude is waiting for your input`. Unlike the `Enter to select` footer regex
+/// it needs no screen scraping, and unlike the TUIC hook's `state=awaiting` it
+/// fires for EVERY blocking prompt, not just `PreToolUse(AskUserQuestion)` —
+/// which is exactly the hole that left a plan/skill picker showing a "working"
+/// dot while the agent sat blocked (the Ink pickers with `Type something` /
+/// `Chat about this` rows are not AskUserQuestion and emit no hook state).
+///
+/// The `prompt_text` is the body when present, else the title: the body is the
+/// human-readable reason and is what the awaiting badge shows.
+///
+/// DEFERRED (2026-08-08) — an agent that also notified on *completion* would
+/// park us at awaiting until the next user input, since hook `state=idle` does
+/// not clear a confident question. Both live Claude payloads are blocking ones,
+/// so no completion phrase is known to exist; adding a phrase allowlist now
+/// would be guessing at strings we have never observed. Revisit if a fixture
+/// ever captures a completion notify.
+pub(crate) fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
+    // Fast path: skip the regex unless the introducer is present.
+    if !text.contains("\x1b]777;notify;") {
+        return None;
+    }
+    lazy_static::lazy_static! {
+        // Terminated by BEL or ST. Field bodies stop at `;`, BEL or ESC so a
+        // truncated sequence at a chunk boundary cannot swallow later output.
+        static ref OSC777_RE: regex::Regex =
+            regex::Regex::new(r"\x1b\]777;notify;([^;\x07\x1b]*)(?:;([^\x07\x1b]*))?(?:\x07|\x1b\\)")
+                .unwrap();
+    }
+    // Last one wins: a chunk carrying several notifications ends at the newest.
+    let caps = OSC777_RE.captures_iter(text).last()?;
+    let title = caps.get(1).map(|m| m.as_str().trim()).unwrap_or_default();
+    let body = caps.get(2).map(|m| m.as_str().trim()).unwrap_or_default();
+    let prompt_text = if body.is_empty() { title } else { body };
+    if prompt_text.is_empty() {
+        return None;
+    }
+    Some(ParsedEvent::Question {
+        prompt_text: prompt_text.to_string(),
+        confident: true,
+    })
+}
+
 /// Parse GitHub/GitLab PR/MR URLs
 fn parse_pr_url(text: &str) -> Option<ParsedEvent> {
     // Fast path
@@ -1146,8 +1193,16 @@ fn parse_agent_session_conflict(clean: &str) -> Option<ParsedEvent> {
 /// killed all the other regex patterns.
 fn parse_question(clean: &str) -> Option<ParsedEvent> {
     lazy_static::lazy_static! {
+        // ANCHORED at the start of the trimmed line. An Ink footer is always its
+        // own line and always opens with these words; anything that merely
+        // *contains* them is quoting them. Unanchored, this matched a grep hit
+        // (`src/output_parser.rs:1150:  regex::Regex::new(r"Enter to select")`)
+        // and parked a busy agent's tab on the awaiting badge — the agent was
+        // working, the badge said it was blocked. `line_is_diff_or_code_context`
+        // could not catch it: that guard keys off diff markers and padded line
+        // numbers, and a `path.rs:1150:` grep prefix is neither.
         static ref INK_FOOTER_RE: regex::Regex =
-            regex::Regex::new(r"Enter to select").unwrap();
+            regex::Regex::new(r"^Enter to select").unwrap();
         // cliclack interactive prompt: "◆  Do you allow this tool call?"
         // ◆ (U+25C6) is Goose's cliclack active-prompt marker. It is NOT unique to
         // interactive prompts, though: grok reuses ◆ as a decorative timeline bullet
@@ -5416,6 +5471,85 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         );
     }
 
+    // --- OSC 777 notify: the agent asking for the user in protocol ---
+
+    /// Both payloads are verbatim from live Claude Code sessions, captured off
+    /// the PTY ring while a plan picker sat blocked and the tab still showed a
+    /// "working" dot. They are the regression this parser exists for.
+    #[test]
+    fn osc777_notify_is_a_confident_question() {
+        for (raw, expected) in [
+            (
+                "\x1b]777;notify;Claude Code;Claude needs your permission\x07",
+                "Claude needs your permission",
+            ),
+            (
+                "\x1b]777;notify;Claude Code;Claude is waiting for your input\x07",
+                "Claude is waiting for your input",
+            ),
+        ] {
+            match parse_osc777_notify(raw) {
+                Some(ParsedEvent::Question {
+                    prompt_text,
+                    confident,
+                }) => {
+                    assert_eq!(prompt_text, expected);
+                    assert!(confident, "an explicit notify is never a guess");
+                }
+                other => panic!("expected Question for {raw:?}, got {other:?}"),
+            }
+        }
+    }
+
+    /// ST-terminated form: some terminals/agents close OSC with ESC-backslash
+    /// instead of BEL. Both must parse or the signal is agent-specific again.
+    #[test]
+    fn osc777_notify_accepts_st_terminator() {
+        let evt = parse_osc777_notify("\x1b]777;notify;Codex;approval required\x1b\\");
+        assert!(matches!(
+            evt,
+            Some(ParsedEvent::Question { ref prompt_text, .. }) if prompt_text == "approval required"
+        ));
+    }
+
+    /// Title-only notify still names the sender rather than parking the badge on
+    /// an empty prompt — the badge text is what tells Boss which agent blocked.
+    #[test]
+    fn osc777_notify_falls_back_to_the_title() {
+        let evt = parse_osc777_notify("\x1b]777;notify;Claude Code\x07");
+        assert!(matches!(
+            evt,
+            Some(ParsedEvent::Question { ref prompt_text, .. }) if prompt_text == "Claude Code"
+        ));
+    }
+
+    /// A truncated sequence at a chunk boundary must not match: matching it
+    /// would let the field bodies run on into unrelated later output.
+    #[test]
+    fn osc777_notify_ignores_an_unterminated_sequence() {
+        assert!(parse_osc777_notify("\x1b]777;notify;Claude Code;Claude nee").is_none());
+    }
+
+    /// The literal text of a notify, quoted in prose or in a code listing, is
+    /// not a notify. Only the escape sequence is.
+    #[test]
+    fn osc777_notify_ignores_prose_and_other_osc_verbs() {
+        assert!(parse_osc777_notify("we emit 777;notify;Claude Code;permission here").is_none());
+        assert!(parse_osc777_notify("\x1b]777;precmd\x07").is_none());
+        assert!(parse_osc777_notify("\x1b]9;4;1;50\x07").is_none());
+    }
+
+    /// Several notifications in one chunk: the newest is the current state.
+    #[test]
+    fn osc777_notify_takes_the_last_notification_in_a_chunk() {
+        let raw =
+            "\x1b]777;notify;Claude Code;first\x07 output \x1b]777;notify;Claude Code;second\x07";
+        assert!(matches!(
+            parse_osc777_notify(raw),
+            Some(ParsedEvent::Question { ref prompt_text, .. }) if prompt_text == "second"
+        ));
+    }
+
     // --- Ink footer question detection ---
 
     #[test]
@@ -5431,6 +5565,23 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
                 assert!(confident, "Ink footer should be confident");
             }
             other => panic!("Expected Question, got: {:?}", other),
+        }
+    }
+
+    /// Regression: a grep hit that quotes the footer is not a footer. This exact
+    /// line came off a live session whose tab showed the awaiting badge while the
+    /// agent was mid-task — the agent was grepping its own detector's source.
+    #[test]
+    fn ink_footer_quoted_in_a_grep_hit_is_not_a_prompt() {
+        for input in [
+            r#"src-tauri/src/output_parser.rs:1150:            regex::Regex::new(r"Enter to select").unwrap();"#,
+            "docs/parser.md:12: the footer reads Enter to select · Esc to cancel",
+            "  see Enter to select below",
+        ] {
+            assert!(
+                parse_question(input).is_none(),
+                "quoted footer must not park the badge: {input:?}"
+            );
         }
     }
 

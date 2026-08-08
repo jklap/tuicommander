@@ -147,6 +147,46 @@ When enabled, emits health snapshots every 30s and alerts on FD/thread growth tr
 - FD/thread leak (progressive growth without cleanup)
 - Sleep/wake false idle cascades (tokio timers firing stale)
 
+## Agent state detection — capture before you theorise
+
+Working / idle / awaiting is decided from bytes an agent writes **once**. The
+per-session output ring holds only the last 8 KB, which one Ink repaint overruns
+in seconds, so by the time a wrong badge is reported the evidence is gone. Do not
+reason about the code first — record the stream, then replay it.
+
+```bash
+curl -X POST localhost:9876/diagnostics/capture -H 'content-type: application/json' \
+     -d '{"enabled":true}'                      # every session
+     -d '{"enabled":true,"session_id":"<id>"}'  # one session
+curl localhost:9876/diagnostics/capture         # state + bytes written per session
+```
+
+Captures land in `<config dir>/captures/<session-id>.raw`, capped at 512 KB each.
+Off by default (one relaxed atomic load per chunk when off) — code in
+`src-tauri/src/pty_capture.rs`.
+
+**A reproduced failure becomes a fixture, always.** Drop the `.raw` in
+`src-tauri/src/fixtures/agent_prompts/` and add a case to the
+`Awaiting-signal fixtures` block in `pty.rs` tests: it replays the capture
+through `raw_stream_events` + `parse_clean_lines` + `suppress_heuristic_question`
+— the same composition production runs, shared on purpose so a test can never
+assert against a pipeline that does not exist. Unit tests on the individual
+parsers were never the gap; the pipeline around them was.
+
+**Three signals report awaiting, and they are not interchangeable:**
+
+| Signal | Source | Applies to |
+|---|---|---|
+| OSC 7770 `state=awaiting` | TUIC hook | hook-instrumented agents, **only** on `PreToolUse(AskUserQuestion)` |
+| OSC 777 `notify` | agent's own desktop notification | any agent that emits it, any blocking prompt |
+| `Enter to select` footer regex | screen scrape | non-hook agents (dropped for hook-instrumented ones by `suppress_heuristic_question`) |
+
+A hook-instrumented agent showing a picker that is *not* AskUserQuestion (plan
+pickers, skill menus, anything with `Type something` / `Chat about this`) reports
+through OSC 777 and nothing else. Prefer protocol signals over screen scraping,
+and parse them off the **raw** stream — the VT parser consumes escape sequences,
+so they never reach the clean rows.
+
 ## Frontend performance instrumentation (`perfDebug`)
 
 The frontend counterpart to backend Diagnostics. **One master flag gates ALL frontend perf/debug instrumentation** — `isPerfDebug()` from `src/utils/perfDebug.ts`.

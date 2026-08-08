@@ -106,6 +106,17 @@ When modifying `cpu_watchdog.rs` or the `/diagnostics` HTTP endpoint:
 | `AGENTS.md` | Diagnostics section (usage, known failure patterns) |
 | `docs/FEATURES.md` | Section 20.11 (Runtime Diagnostics) |
 
+### Agent state detection (working / idle / awaiting)
+When changing an awaiting/idle/busy signal — a parser, the hook suppression, or the raw-stream composition:
+
+| File | What to update |
+|------|----------------|
+| `src-tauri/src/output_parser.rs` | The parser itself (`parse_question`, `parse_osc777_notify`, …) |
+| `src-tauri/src/pty.rs` | `raw_stream_events` composition + `suppress_heuristic_question` gating |
+| `src-tauri/src/fixtures/agent_prompts/` | A `.raw` capture of the failure, recorded via `/diagnostics/capture` |
+| `src-tauri/src/pty.rs` tests | A case in the `Awaiting-signal fixtures` block replaying that capture |
+| `AGENTS.md` | "Agent state detection" section (signal table, capture workflow) |
+
 ### MCP Tool Surface (native tools, upstream proxy, meta-tools)
 When changing the tool list, tool handlers, `disabled_native_tools`, upstream allow/deny filters, or the Speakeasy meta-tools:
 

@@ -3658,6 +3658,76 @@ pub(crate) fn hook_instrumented_for(
         .unwrap_or(false)
 }
 
+/// Events carried by the RAW byte stream, before any VT rendering — sequences
+/// the vt100/alacritty parsers consume and that are therefore invisible in the
+/// clean rows every other parser reads.
+///
+/// Deliberately separate from the clean-row parsers: everything appended here
+/// skips `suppress_heuristic_question`. That filter exists to stop regex
+/// *guesses* from double-firing against the hook's `state=awaiting`, and an
+/// escape sequence the agent emitted on purpose is not a guess. OSC 777 is also
+/// the only awaiting signal for a hook-instrumented agent whose prompt is not
+/// `PreToolUse(AskUserQuestion)` — a plan or skill Ink picker emits no hook
+/// state at all, which is why such a session sat blocked behind a "working" dot.
+///
+/// Shared with the fixture harness (`awaiting_signal_fixtures`) so a test can
+/// never assert against a composition that production does not run.
+fn raw_stream_events(carry: &mut String, data: &str, out: &mut Vec<ParsedEvent>) {
+    let combined = if carry.is_empty() {
+        std::borrow::Cow::Borrowed(data)
+    } else {
+        let mut joined = std::mem::take(carry);
+        joined.push_str(data);
+        std::borrow::Cow::Owned(joined)
+    };
+    if let Some(evt) = crate::output_parser::parse_osc94(&combined) {
+        out.push(evt);
+    }
+    if let Some(evt) = crate::output_parser::parse_osc777_notify(&combined) {
+        out.push(evt);
+    }
+    *carry = unterminated_osc_tail(&combined);
+}
+
+/// Longest suffix of a chunk that opens an OSC sequence but never closes it.
+///
+/// Only an *unterminated* tail is carried, so a sequence can be matched once and
+/// only once: a complete one leaves nothing behind. A tail longer than
+/// [`MAX_RAW_CARRY`] is dropped rather than grown without bound — at that length
+/// it is not a notification, it is a payload we do not parse (or a stream that
+/// never terminates it), and holding it would pin memory for the session.
+fn unterminated_osc_tail(data: &str) -> String {
+    // Anchored on the last ESC, not on the last `ESC]`: a read can end on the
+    // ESC itself, with the `]` arriving in the next chunk. Anchoring on the
+    // pair dropped that ESC and left the next chunk starting at `]777;…`,
+    // which is no longer an escape sequence at all.
+    let Some(start) = data.rfind('\x1b') else {
+        return String::new();
+    };
+    let tail = &data[start..];
+    // A lone trailing ESC may still become an OSC introducer.
+    if tail == "\x1b" {
+        return tail.to_string();
+    }
+    // Anything else that is not an OSC introducer (CSI, ST, charset select) is
+    // consumed by the VT parser, not by us.
+    if !tail.starts_with("\x1b]") {
+        return String::new();
+    }
+    // BEL, or ST (ESC backslash) — the ESC of an ST is not the introducer's own.
+    if tail.contains('\x07') || tail[1..].contains("\x1b\\") {
+        return String::new();
+    }
+    if tail.len() > MAX_RAW_CARRY {
+        return String::new();
+    }
+    tail.to_string()
+}
+
+/// Cap for [`unterminated_osc_tail`]. Comfortably above any OSC we parse: the
+/// longest observed notify body is under 60 bytes.
+const MAX_RAW_CARRY: usize = 512;
+
 /// Whether a heuristic `Question` event should be suppressed for this session.
 /// Hook-instrumented agents report awaiting via OSC 7770 (`state=awaiting`), so
 /// the silence/regex question heuristics would only double-fire. Only `Question`
@@ -3682,6 +3752,14 @@ struct ChunkProcessor {
     last_status_task: Option<(u64, String)>,
     /// Dedup: don't re-emit the same question prompt_text
     last_question_text: Option<String>,
+    /// Tail of the previous chunk holding an OSC sequence the read split in
+    /// half. A PTY read boundary falls wherever the kernel decides, so a chunk
+    /// can end mid-escape; the raw-stream parsers match on complete sequences
+    /// only (correctly — a truncated one must never match, or its fields would
+    /// run on into unrelated later output), so without this the signal is simply
+    /// lost. Observed: an Ink repaint split `ESC]777;notify;…BEL` and the
+    /// awaiting badge never lit. Bounded by [`MAX_RAW_CARRY`].
+    raw_carry: String,
     /// Dedup: last emitted ChoicePrompt signature (title + option keys).
     /// Prevents re-emit on repaint while the dialog stays on screen.
     last_choice_prompt_sig: Option<String>,
@@ -3748,6 +3826,7 @@ impl ChunkProcessor {
             parser: OutputParser::new(),
             last_status_task: None,
             last_question_text: None,
+            raw_carry: String::new(),
             last_choice_prompt_sig: None,
             session_cwd,
             pending_planfiles: Vec::new(),
@@ -4393,9 +4472,13 @@ impl ChunkProcessor {
             .map(|s| s.hook_instrumented)
             .unwrap_or(false)
             && silence.lock().hook_state_seen;
-        if let Some(evt) = crate::output_parser::parse_osc94(data) {
-            events.push(evt);
-        }
+        // Capture tap: off by default, one relaxed atomic load when it is.
+        // Recorded before any parsing so a fixture replays exactly the bytes
+        // the detectors saw, chunk boundaries included — those boundaries are
+        // themselves a failure mode (a split OSC matches nothing).
+        crate::pty_capture::record(session_id, data.as_bytes());
+
+        raw_stream_events(&mut self.raw_carry, data, &mut events);
         let agent_active_for_parse = state
             .session_states
             .get(session_id)
@@ -18402,6 +18485,165 @@ mod tests {
         assert!(!suppress_heuristic_question(true, &other));
         // Not instrumented: nothing is suppressed.
         assert!(!suppress_heuristic_question(false, &q_low));
+    }
+
+    // --- Raw-stream OSC reassembly ----------------------------------------
+
+    /// The failure the fixture caught: a PTY read ends mid-`ESC]777;…`. Each
+    /// half alone matches nothing, so without a carry the awaiting signal is
+    /// lost — silently, which is how it reached Boss's screen.
+    #[test]
+    fn raw_stream_reassembles_an_osc_split_across_reads() {
+        let whole = "\x1b]777;notify;Claude Code;Claude needs your permission\x07";
+        for split in [1, 8, 20, whole.len() - 1] {
+            let mut carry = String::new();
+            let mut events = Vec::new();
+            raw_stream_events(&mut carry, &whole[..split], &mut events);
+            raw_stream_events(&mut carry, &whole[split..], &mut events);
+            assert_eq!(
+                awaiting_prompts(&events),
+                vec!["Claude needs your permission".to_string()],
+                "split at {split} must yield exactly one awaiting signal"
+            );
+        }
+    }
+
+    /// A sequence that arrived whole leaves nothing behind, so the next chunk
+    /// cannot re-match it. One notification, one badge.
+    #[test]
+    fn raw_stream_does_not_refire_a_complete_sequence() {
+        let mut carry = String::new();
+        let mut events = Vec::new();
+        raw_stream_events(
+            &mut carry,
+            "\x1b]777;notify;Claude Code;waiting\x07",
+            &mut events,
+        );
+        assert!(carry.is_empty(), "complete sequence must not be carried");
+        raw_stream_events(&mut carry, "ordinary output\r\n", &mut events);
+        assert_eq!(awaiting_prompts(&events).len(), 1);
+    }
+
+    /// An OSC that never terminates (or one whose payload we do not parse, like
+    /// a long OSC 52 clipboard blob) must not pin memory for the session.
+    #[test]
+    fn raw_stream_carry_is_bounded() {
+        let mut carry = String::new();
+        let mut events = Vec::new();
+        let huge = format!("\x1b]52;c;{}", "A".repeat(MAX_RAW_CARRY * 4));
+        raw_stream_events(&mut carry, &huge, &mut events);
+        assert!(
+            carry.len() <= MAX_RAW_CARRY,
+            "carry grew to {} bytes",
+            carry.len()
+        );
+    }
+
+    /// ST-terminated sequences close the carry too — otherwise every agent that
+    /// ends OSC with ESC-backslash would carry its whole stream forward.
+    #[test]
+    fn raw_stream_carry_recognises_st_termination() {
+        assert!(unterminated_osc_tail("\x1b]777;notify;Codex;approval\x1b\\").is_empty());
+        assert!(!unterminated_osc_tail("\x1b]777;notify;Codex;approval").is_empty());
+    }
+
+    // --- Awaiting-signal fixtures -----------------------------------------
+    //
+    // Captures of real agent output, replayed through the SAME composition the
+    // PTY hot path runs. Unit tests cover each parser in isolation; what kept
+    // breaking was the pipeline around them — which signals survive the hook
+    // suppression, and which never reach a parser at all. That gap is what a
+    // fixture closes: one file per observed failure, byte-for-byte off a live
+    // session, no mocks.
+    //
+    // Capturing a new one:
+    //   curl -s localhost:9876/sessions/<id>/output   → `data` is the last 8 KB
+    //   of the raw PTY stream, JSON-escaped; decode it back to bytes and drop
+    //   the result in src/fixtures/agent_prompts/.
+
+    fn agent_prompt_fixture(name: &str) -> Vec<u8> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("src/fixtures/agent_prompts")
+            .join(name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("missing fixture {}: {e}", path.display()))
+    }
+
+    /// Replay a capture the way `spawn_reader_thread` does: raw-stream parsers on
+    /// the bytes, clean-row parsers on what the VT renderer produced, and the
+    /// heuristic filter applied to the latter only. Chunked to 512 bytes so a
+    /// signal that straddles a chunk boundary fails here rather than in Boss's
+    /// terminal.
+    fn replay_capture(bytes: &[u8], hook_instrumented: bool) -> Vec<ParsedEvent> {
+        use crate::state::VtLogBuffer;
+
+        let mut vt_log = VtLogBuffer::new(41, 128, 2000);
+        let mut parser = crate::output_parser::OutputParser::new();
+        let mut carry = String::new();
+        let mut events = Vec::new();
+        for chunk in bytes.chunks(512) {
+            let changed = vt_log.process(chunk);
+            let data = String::from_utf8_lossy(chunk);
+            raw_stream_events(&mut carry, &data, &mut events);
+            events.extend(
+                parser
+                    .parse_clean_lines(&changed, true)
+                    .into_iter()
+                    .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
+            );
+        }
+        events
+    }
+
+    fn awaiting_prompts(events: &[ParsedEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                ParsedEvent::Question {
+                    prompt_text,
+                    confident: true,
+                } => Some(prompt_text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Regression, captured 2026-08-08 from a live session parked on a plan
+    /// picker while its tab showed a "working" dot.
+    ///
+    /// The session is hook-instrumented Claude, so every regex Question is
+    /// dropped by design — and the picker is not `PreToolUse(AskUserQuestion)`,
+    /// so the hook emitted no `state=awaiting` either. Both channels silent, the
+    /// agent blocked. The one thing Claude did say is in these bytes:
+    /// `ESC]777;notify;Claude Code;Claude is waiting for your input BEL`.
+    /// Before that sequence was parsed this assertion found nothing.
+    #[test]
+    fn hook_instrumented_session_still_reports_awaiting_via_osc777() {
+        let events = replay_capture(&agent_prompt_fixture("claude-plan-picker.raw"), true);
+        let prompts = awaiting_prompts(&events);
+
+        assert!(
+            prompts
+                .iter()
+                .any(|p| p == "Claude is waiting for your input"),
+            "hook suppression must not swallow the agent's own notification; \
+             confident questions seen: {prompts:?}"
+        );
+    }
+
+    /// The same capture with hook instrumentation off: the notify is a property
+    /// of the agent's output, not of our suppression, so it must survive either
+    /// way. Guards against "fixed it by disabling the filter".
+    #[test]
+    fn osc777_awaiting_does_not_depend_on_hook_instrumentation() {
+        for hook in [true, false] {
+            let events = replay_capture(&agent_prompt_fixture("claude-plan-picker.raw"), hook);
+            assert!(
+                awaiting_prompts(&events)
+                    .iter()
+                    .any(|p| p == "Claude is waiting for your input"),
+                "notify lost with hook_instrumented={hook}"
+            );
+        }
     }
 
     #[test]
