@@ -273,9 +273,28 @@ pub fn find_chrome_cutoff(rows: &[&str]) -> Option<usize> {
         (Some(s), None) => Some(s),
         (None, Some(p)) => Some(p),
         (None, None) => None,
-    };
+    }
+    // Nothing in the scan window: the bottom zone is taller than
+    // [`CHROME_SCAN_ROWS`], which happens as soon as the user's status line is.
+    // Its height is not ours to predict — it is a `statusLine` command, a HUD
+    // plugin, a shell theme; it may be twenty rows or absent. Falling through
+    // here returns None, and None means NO trim, so every status-line row would
+    // then reach every parser. Failing open is the one outcome this guard must
+    // never have, so search the whole screen for the input box itself.
+    .or_else(|| lowest_input_box_row(rows, content_end));
 
     Some(extend_cutoff_upward(rows, anchor?))
+}
+
+/// Lowest row that can only be an agent's *empty* input box, searched without a
+/// window.
+///
+/// Anchors on [`is_agent_prompt_row`] rather than [`is_prompt_line`]: unwindowed,
+/// the loose form would match a markdown blockquote or an echoed user message
+/// somewhere up in the conversation and cut the screen in half. An empty prompt
+/// glyph carrying no text exists only in the input box.
+fn lowest_input_box_row(rows: &[&str], content_end: usize) -> Option<usize> {
+    (0..content_end).rev().find(|&i| is_agent_prompt_row(rows[i]))
 }
 
 /// Find the row index where agent chrome starts in a batch of lines that
@@ -335,6 +354,89 @@ fn extend_cutoff_upward(rows: &[&str], anchor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Bottom zone: the input area and everything under it ---
+    //
+    // Below the agent's input box sits a status line the USER configures — a
+    // Claude Code `statusLine` command, a wiz HUD, a shell prompt theme. Its
+    // height, glyphs and text are arbitrary and differ per install; it may not
+    // be there at all. It is never agent output, and nothing in it may be
+    // parsed: a path in it would read as a plan file, a `?` as a question, a
+    // number as a token count. The cutoff is what enforces that, so it has to
+    // hold for a status line of ANY height.
+
+    /// Boss's real screen: input box, then a four-line custom HUD.
+    fn screen_with_status_line(hud_lines: usize) -> Vec<String> {
+        let mut rows = vec![
+            "  Here is some real agent output.".to_string(),
+            "  A second line of it.".to_string(),
+            String::new(),
+            "✻ Simmering… (5m 48s · ↓ 20.7k tokens)".to_string(),
+            String::new(),
+            "─".repeat(120),
+            "❯ ".to_string(),
+            "─".repeat(120),
+        ];
+        for i in 0..hud_lines {
+            rows.push(format!(
+                "  [Opus 5 (1M) | Team] ██░░ 22% | 📚 8 | line {i} | plans/notes.md | ready?"
+            ));
+        }
+        rows.push("  ⏵⏵ bypass permissions on (shift+tab to cycle)".to_string());
+        rows
+    }
+
+    fn cutoff_of(rows: &[String]) -> Option<usize> {
+        let refs: Vec<&str> = rows.iter().map(|s| s.as_str()).collect();
+        find_chrome_cutoff(&refs)
+    }
+
+    /// A status line taller than the scan window used to leave the cutoff
+    /// unfound, and an unfound cutoff means NO trimming at all — every HUD row
+    /// then reaches every parser. The failure is silent and total, which is the
+    /// worst shape a guard can fail in.
+    #[test]
+    fn cutoff_survives_a_status_line_of_any_height() {
+        for hud_lines in [0, 3, 4, 12, 30] {
+            let rows = screen_with_status_line(hud_lines);
+            let cutoff = cutoff_of(&rows)
+                .unwrap_or_else(|| panic!("no cutoff found with {hud_lines} HUD lines"));
+
+            // 4, not 5: the blank row above the separator is padding of the
+            // input box, eaten by `extend_cutoff_upward`.
+            assert_eq!(
+                cutoff, 4,
+                "cutoff must land on the input box with {hud_lines} HUD lines"
+            );
+            assert!(
+                rows[..cutoff].iter().any(|r| r.contains("real agent output")),
+                "content above the input box must survive the trim"
+            );
+            assert!(
+                rows[..cutoff].iter().any(|r| r.contains("Simmering")),
+                "the agent's own spinner sits ABOVE the input box and must survive — \
+                 it is the busy signal"
+            );
+            assert!(
+                !rows[..cutoff].iter().any(|r| r.contains("plans/notes.md")),
+                "no HUD row may reach a parser"
+            );
+        }
+    }
+
+    /// The extended search anchors on an EMPTY prompt row only. A markdown
+    /// blockquote or an echoed prompt carrying text is conversation, and
+    /// anchoring on it would cut real output out of the screen.
+    #[test]
+    fn extended_search_does_not_anchor_on_quoted_prose() {
+        let mut rows: Vec<String> = vec!["> a quoted line from the user".to_string()];
+        rows.extend((0..40).map(|i| format!("  output line {i}")));
+        assert_eq!(
+            cutoff_of(&rows),
+            None,
+            "prose alone must not produce a cutoff"
+        );
+    }
 
     // --- is_working_status_row (presence-driven busy keepalive) ---
 
