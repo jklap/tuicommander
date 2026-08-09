@@ -914,7 +914,11 @@ mod tests {
         failed: u32,
         pending: u32,
     ) -> BranchPrStatus {
-        let merge_state_status = if mergeable == "CONFLICTING" { "DIRTY" } else { "CLEAN" };
+        let merge_state_status = if mergeable == "CONFLICTING" {
+            "DIRTY"
+        } else {
+            "CLEAN"
+        };
         BranchPrStatus {
             branch: "feat/test".to_string(),
             number: 42,

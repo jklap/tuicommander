@@ -238,19 +238,27 @@ impl HttpMcpClient {
             .clone()
     }
 
-    /// Force a refresh regardless of current validity (used after a 401 on
-    /// an OAuth credential to recover from server-side token revocation).
-    async fn force_refresh(&self) -> Result<Option<OAuthTokenSet>, UpstreamError> {
+    /// Recover after a 401 by refreshing the OAuth credential that was
+    /// rejected, unless a different valid generation has since been stored.
+    async fn force_refresh(
+        &self,
+        rejected_bearer: Option<&str>,
+    ) -> Result<Option<OAuthTokenSet>, UpstreamError> {
         if !self.has_auth {
             return Ok(None);
         }
-        let cred = read_stored_credential(&self.name)
-            .map_err(|e| UpstreamError::Other(format!("keyring read failed: {e}")))?;
-        let Some(StoredCredential::Oauth2(mut set)) = cred else {
+        let Some(rejected_bearer) = rejected_bearer else {
             return Ok(None);
         };
-        set.expires_at = Some(0);
-        self.refresh_token_if_needed(&set).await
+        let cred = read_stored_credential(&self.name)
+            .map_err(|e| UpstreamError::Other(format!("keyring read failed: {e}")))?;
+        let Some(StoredCredential::Oauth2(set)) = cred else {
+            return Ok(None);
+        };
+        let tm = self.token_manager_for(&set).await;
+        tm.refresh_after_rejection(&set, rejected_bearer)
+            .await
+            .map_err(|e| classify_refresh_error(&e.to_string()))
     }
 
     /// Perform the MCP initialize handshake.
@@ -266,10 +274,13 @@ impl HttpMcpClient {
     /// parks the upstream in `NeedsAuth` even though we hold the means to renew
     /// it unattended.
     pub(crate) async fn initialize(&mut self) -> Result<Vec<UpstreamToolDef>, UpstreamError> {
-        match self.initialize_once().await {
+        let auth_token = self.resolve_bearer().await?;
+        match self.initialize_once(auth_token.as_deref()).await {
             Err(e @ (UpstreamError::NeedsOAuth { .. } | UpstreamError::AuthFailed)) => {
-                match self.force_refresh().await {
-                    Ok(Some(_)) => self.initialize_once().await,
+                match self.force_refresh(auth_token.as_deref()).await {
+                    Ok(Some(refreshed)) => {
+                        self.initialize_once(Some(&refreshed.access_token)).await
+                    }
                     // No refresh token, or the AS rejected it — the user really
                     // does have to re-authorize. Report the original challenge.
                     _ => Err(e),
@@ -279,9 +290,10 @@ impl HttpMcpClient {
         }
     }
 
-    async fn initialize_once(&mut self) -> Result<Vec<UpstreamToolDef>, UpstreamError> {
-        let auth_token = self.resolve_bearer().await?;
-
+    async fn initialize_once(
+        &mut self,
+        auth_token: Option<&str>,
+    ) -> Result<Vec<UpstreamToolDef>, UpstreamError> {
         let init_body = serde_json::json!({
             "jsonrpc": "2.0",
             "id": 1,
@@ -296,9 +308,7 @@ impl HttpMcpClient {
             }
         });
 
-        let resp = self
-            .send_post(&init_body, auth_token.as_deref(), None)
-            .await?;
+        let resp = self.send_post(&init_body, auth_token, None).await?;
 
         // Extract session ID from response header (preserved across auth retries
         // by re-reading after the final response).
@@ -322,12 +332,12 @@ impl HttpMcpClient {
             .rpc_raw(
                 "notifications/initialized",
                 serde_json::json!({}),
-                auth_token.as_deref(),
+                auth_token,
             )
             .await;
 
         // Fetch tool list
-        self.fetch_tools(auth_token.as_deref()).await
+        self.fetch_tools(auth_token).await
     }
 
     /// Fetch the tool list from the upstream server.
@@ -437,7 +447,7 @@ impl HttpMcpClient {
 
         if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
             // Single retry: if OAuth credential, force-refresh once and retry.
-            if let Ok(Some(refreshed)) = self.force_refresh().await {
+            if let Ok(Some(refreshed)) = self.force_refresh(auth_token).await {
                 let retry_resp = self
                     .send_post(
                         body,
@@ -668,6 +678,11 @@ mod tests {
         /// When set, any bearer other than this one is answered with a 401 +
         /// challenge — models a server that has expired the old access token.
         only_accept_bearer: Arc<std::sync::Mutex<Option<String>>>,
+        /// One-shot OAuth exchange result persisted after observing a rejected
+        /// bearer but before returning its 401 response.
+        credential_replacement: Arc<std::sync::Mutex<Option<(String, OAuthTokenSet)>>>,
+        /// Number of refresh grants sent to the mock authorization server.
+        token_request_count: Arc<std::sync::atomic::AtomicU32>,
     }
 
     fn oauth_challenge_response() -> axum::response::Response {
@@ -705,6 +720,10 @@ mod tests {
         if let Some(expected) = expected
             && bearer.as_deref() != Some(expected.as_str())
         {
+            let replacement = state.credential_replacement.lock().unwrap().take();
+            if let Some((name, set)) = replacement {
+                crate::mcp_upstream_credentials::save_oauth_tokens(&name, &set).unwrap();
+            }
             return oauth_challenge_response();
         }
 
@@ -801,6 +820,9 @@ mod tests {
     /// Mock authorization server: hands out `refreshed-token` for any
     /// `refresh_token` grant, so a test can watch the client recover on its own.
     async fn mock_token_handler(AxumState(state): AxumState<MockState>) -> impl IntoResponse {
+        state
+            .token_request_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         *state.only_accept_bearer.lock().unwrap() = Some("refreshed-token".to_string());
         Json(serde_json::json!({
             "access_token": "refreshed-token",
@@ -1096,6 +1118,66 @@ mod tests {
             state.seen_bearer.lock().unwrap().as_deref(),
             Some("refreshed-token"),
             "the handshake should have retried with the refreshed access token"
+        );
+    }
+
+    /// Re-authorization can complete after a request has put its bearer on the
+    /// wire but before 401 recovery re-reads storage. The rejected generation
+    /// must remain the comparison key: the newly exchanged credential is
+    /// retried as-is, even when it has no refresh token, and the token endpoint
+    /// must not be called.
+    #[tokio::test]
+    async fn tool_call_reuses_credential_written_between_401_and_forced_refresh() {
+        let name = "test-reauthorize-during-401";
+        let state = MockState::default();
+        let url = spawn_mock_server(state.clone()).await;
+        let token_endpoint = url.replace("/mcp", "/token");
+
+        let rejected = OAuthTokenSet {
+            access_token: "rejected-token".to_string(),
+            refresh_token: Some("old-refresh-token".to_string()),
+            expires_at: Some(i64::MAX / 2),
+            token_endpoint: token_endpoint.clone(),
+            client_id: "client".to_string(),
+            client_secret: None,
+            scope: None,
+            resource: None,
+        };
+        crate::mcp_upstream_credentials::save_oauth_tokens(name, &rejected).unwrap();
+        *state.only_accept_bearer.lock().unwrap() = Some("rejected-token".to_string());
+
+        let mut client = HttpMcpClient::new(name.to_string(), url, 5, true);
+        client.initialize().await.unwrap();
+
+        let replacement = OAuthTokenSet {
+            access_token: "reauthorized-token".to_string(),
+            refresh_token: None,
+            expires_at: Some(i64::MAX / 2),
+            token_endpoint,
+            client_id: "client".to_string(),
+            client_secret: None,
+            scope: None,
+            resource: None,
+        };
+        *state.only_accept_bearer.lock().unwrap() = Some("reauthorized-token".to_string());
+        *state.credential_replacement.lock().unwrap() = Some((name.to_string(), replacement));
+
+        client
+            .call_tool("search_code", serde_json::json!({}))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            state.seen_bearer.lock().unwrap().as_deref(),
+            Some("reauthorized-token"),
+            "the retry must use the credential exchanged during the 401 interleaving"
+        );
+        assert_eq!(
+            state
+                .token_request_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the replacement credential must not be refreshed or rotated"
         );
     }
 

@@ -707,7 +707,7 @@ mod tests {
     #[test]
     fn test_empty_submit() {
         let mut buf = InputLineBuffer::new();
-        assert_eq!(feed_and_get_line(&mut buf, "\r"), Some("".into()));
+        assert_eq!(feed_and_get_line(&mut buf, "\r"), Some(String::new()));
     }
 
     #[test]

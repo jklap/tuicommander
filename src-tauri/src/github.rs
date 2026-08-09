@@ -3879,7 +3879,10 @@ mod tests {
     fn merge_state_label_never_claims_conflicts_while_recomputing() {
         // The regression: a stale CONFLICTING used to short-circuit straight to
         // the red chip, even with the status still being recomputed.
-        assert_eq!(classify_merge_state(Some("CONFLICTING"), Some("UNKNOWN")), None);
+        assert_eq!(
+            classify_merge_state(Some("CONFLICTING"), Some("UNKNOWN")),
+            None
+        );
         // Once GitHub has computed it, the chip is owed.
         assert_eq!(
             classify_merge_state(Some("CONFLICTING"), Some("DIRTY")).map(|label| label.css_class),

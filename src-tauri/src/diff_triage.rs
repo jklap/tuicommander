@@ -2235,7 +2235,7 @@ mod tests {
         unsafe {
             std::env::set_var("TUIC_REVIEW_CONFIDENCE_THRESHOLD", "0.4");
         }
-        assert_eq!(finding_confidence_threshold(), 0.4);
+        assert!((finding_confidence_threshold() - 0.4).abs() < f32::EPSILON);
         unsafe {
             std::env::remove_var("TUIC_REVIEW_CONFIDENCE_THRESHOLD");
         }
@@ -2247,17 +2247,17 @@ mod tests {
         unsafe {
             std::env::set_var("TUIC_REVIEW_CONFIDENCE_THRESHOLD", "1.5");
         }
-        assert_eq!(
-            finding_confidence_threshold(),
-            DEFAULT_FINDING_CONFIDENCE_THRESHOLD
+        assert!(
+            (finding_confidence_threshold() - DEFAULT_FINDING_CONFIDENCE_THRESHOLD).abs()
+                < f32::EPSILON
         );
 
         unsafe {
             std::env::set_var("TUIC_REVIEW_CONFIDENCE_THRESHOLD", "-0.1");
         }
-        assert_eq!(
-            finding_confidence_threshold(),
-            DEFAULT_FINDING_CONFIDENCE_THRESHOLD
+        assert!(
+            (finding_confidence_threshold() - DEFAULT_FINDING_CONFIDENCE_THRESHOLD).abs()
+                < f32::EPSILON
         );
 
         unsafe {
@@ -2271,9 +2271,9 @@ mod tests {
         unsafe {
             std::env::set_var("TUIC_REVIEW_CONFIDENCE_THRESHOLD", "not-a-number");
         }
-        assert_eq!(
-            finding_confidence_threshold(),
-            DEFAULT_FINDING_CONFIDENCE_THRESHOLD
+        assert!(
+            (finding_confidence_threshold() - DEFAULT_FINDING_CONFIDENCE_THRESHOLD).abs()
+                < f32::EPSILON
         );
         unsafe {
             std::env::remove_var("TUIC_REVIEW_CONFIDENCE_THRESHOLD");

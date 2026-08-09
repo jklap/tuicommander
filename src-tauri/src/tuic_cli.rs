@@ -311,32 +311,6 @@ pub(crate) fn copy_with_elevation(src: &str, dst: &str) -> Result<(), String> {
     Err("Unsupported platform".to_string())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Regression for issue #52: the bundled sidecar must be looked up by its
-    /// plain name (no `-{target-triple}` suffix), since Tauri strips the triple
-    /// when bundling `externalBin`. A reintroduced triple would make the lookup
-    /// miss the packaged binary and fall through to the dev-only path.
-    #[test]
-    fn sidecar_name_has_no_target_triple() {
-        let name = sidecar_name();
-        assert!(
-            !name.contains("aarch64")
-                && !name.contains("x86_64")
-                && !name.contains("apple")
-                && !name.contains("pc-windows")
-                && !name.contains("unknown-linux"),
-            "sidecar name must not embed a target triple, got {name:?}"
-        );
-        #[cfg(target_os = "windows")]
-        assert_eq!(name, "tuic.exe");
-        #[cfg(not(target_os = "windows"))]
-        assert_eq!(name, "tuic");
-    }
-}
-
 pub(crate) fn remove_with_elevation(path: &str) -> Result<(), String> {
     if std::fs::remove_file(path).is_ok() {
         return Ok(());
@@ -381,4 +355,30 @@ pub(crate) fn remove_with_elevation(path: &str) -> Result<(), String> {
 
     #[allow(unreachable_code)]
     Err("Unsupported platform".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Regression for issue #52: the bundled sidecar must be looked up by its
+    /// plain name (no `-{target-triple}` suffix), since Tauri strips the triple
+    /// when bundling `externalBin`. A reintroduced triple would make the lookup
+    /// miss the packaged binary and fall through to the dev-only path.
+    #[test]
+    fn sidecar_name_has_no_target_triple() {
+        let name = sidecar_name();
+        assert!(
+            !name.contains("aarch64")
+                && !name.contains("x86_64")
+                && !name.contains("apple")
+                && !name.contains("pc-windows")
+                && !name.contains("unknown-linux"),
+            "sidecar name must not embed a target triple, got {name:?}"
+        );
+        #[cfg(target_os = "windows")]
+        assert_eq!(name, "tuic.exe");
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(name, "tuic");
+    }
 }

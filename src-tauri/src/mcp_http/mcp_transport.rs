@@ -1051,7 +1051,7 @@ fn native_tool_definitions() -> serde_json::Value {
         },
         {
             "name": "ui",
-            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound.\n- confirm: blocking dialog. Returns {confirmed}. Requires title.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
+            "description": "Control TUIC UI. Actions:\n- tab: open/update panel tab. Requires id, title, + html OR url.\n- toast: non-blocking notification. Requires title. Optional: message, level (info/warn/error), sound.\n- confirm: blocking dialog. Returns {confirmed}. Requires title.\n- screenshot: capture a panel as WebP. Requires id. Returns {path}. Read the path to view.\n\nURL schemes for tab:\n- http(s): loaded in sandboxed iframe.\n- file:///path: read via IPC and rendered as inline HTML (sandbox blocks direct file:// access).\n- tuic://edit/<path>?line=N: native code editor (no iframe). Prefix absolute paths with `//` (tuic://edit//Users/x/a.rs). Relative = active repo.\n- tuic://open/<path>: native markdown/preview tab.\n\nCustom schemes (vscode://) do NOT work in iframes.\n\nUse:\n- toast for done/error/long-job end; error=failure, warn=recoverable. Skip for micro-steps.\n- toast with sound=attention when you are working unattended and are BLOCKED on the user (question, approval, ambiguous requirement). It is the only sound that carries across a room; do not spend it on progress updates.\n- confirm BEFORE destructive ops (rm -rf, git reset --hard, force-push, DROP). Only proceed if confirmed.\n- tab http(s) for dashboards, reports, >20-line structured output.\n- tab tuic://edit to point user at source file+line (review, bug discussion) — beats pasting snippets.\n- screenshot to visually verify rendered HTML content in a panel you created.",
             "inputSchema": { "type": "object", "properties": {
                 "action": { "type": "string", "description": "One of: tab, toast, confirm, screenshot" },
                 "id": { "type": "string", "description": "Stable identifier for dedup — same id reuses existing tab (action=tab, required)" },
@@ -1062,7 +1062,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "focus": { "type": "boolean", "description": "Switch to this tab after open/update (action=tab, default true). Pass false to update silently without stealing focus." },
                 "message": { "type": "string", "description": "Optional body text (action=toast/confirm)" },
                 "level": { "type": "string", "description": "Toast level: info, warn, error (default: info)" },
-                "sound": { "type": "boolean", "description": "Play a notification sound (action=toast, default: false). Each level has a distinct tone." }
+                "sound": { "description": "Audible signal for action=toast (default: none). true = the tone matching `level`. Or name one: question, completion, error, warning, info, attention. `attention` is a triangular G4→G4→E5 callback, unlike any other sound in the app — use it when you are running unattended and need the user back (a blocking question, a decision only they can make). Plays through the user's notification settings, so volume, output device and mutes are respected.", "anyOf": [{ "type": "boolean" }, { "type": "string", "enum": ["question", "completion", "error", "warning", "info", "attention"] }] }
             }, "required": ["action"] }
         },
         {
@@ -3228,6 +3228,8 @@ fn handle_agent_with_parent_cwd(
                     worktree: None,
                     cwd: effective_cwd.clone(),
                     display_name: requested_name.clone(),
+                    display_name_is_custom: false,
+                    is_remote: true,
                     shell: binary_path.clone(),
                 }),
             );
@@ -3273,7 +3275,7 @@ fn handle_agent_with_parent_cwd(
                     .pending_injections
                     .entry(session_id.clone())
                     .or_default()
-                    .push_back(initial_prompt);
+                    .push_back(crate::state::PendingInjection::peer_message(initial_prompt));
             }
             // Register grid_watch so format=grid WebSocket streams work for
             // MCP-spawned agent sessions (mirrors session.rs spawn_pty_session).
@@ -4691,6 +4693,53 @@ fn handle_ui(
     }
 }
 
+/// Sounds an MCP caller may request by name. `attention` is the callback added for
+/// autonomous agents that need the user back at the keyboard; the rest are the
+/// tones already wired into the app's own notifications, exposed so a caller can
+/// borrow the meaning the user has already learned.
+const TOAST_SOUNDS: [&str; 6] = [
+    "question",
+    "completion",
+    "error",
+    "warning",
+    "info",
+    "attention",
+];
+
+/// Resolve the `sound` argument of `ui action=toast` into a notification sound
+/// name, or `None` for a silent toast.
+///
+/// `true` keeps meaning "the sound that matches this level" — but it now
+/// resolves to a real `NotificationSound` rather than a toast-local tone, so a
+/// muted sound or a chosen output device is honoured either way. A name lets the
+/// caller override that, which is the whole point of `attention`: the level says
+/// how bad it is, the sound says how hard to pull on the user's sleeve.
+fn resolve_toast_sound(
+    sound: &serde_json::Value,
+    level: &str,
+) -> Result<Option<String>, serde_json::Value> {
+    match sound {
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Bool(false) => Ok(None),
+        serde_json::Value::Bool(true) => Ok(Some(
+            match level {
+                "warn" => "warning",
+                "error" => "error",
+                _ => "info",
+            }
+            .to_string(),
+        )),
+        serde_json::Value::String(name) if TOAST_SOUNDS.contains(&name.as_str()) => {
+            Ok(Some(name.clone()))
+        }
+        other => Err(serde_json::json!({"error": format!(
+            "Invalid sound {}. Use true/false or one of: {}",
+            other,
+            TOAST_SOUNDS.join(", ")
+        )})),
+    }
+}
+
 fn handle_notify(
     state: &Arc<AppState>,
     addr: SocketAddr,
@@ -4716,7 +4765,27 @@ fn handle_notify(
                     )});
                 }
             };
-            let sound = args["sound"].as_bool().unwrap_or(false);
+            let sound = match resolve_toast_sound(&args["sound"], &level) {
+                Ok(sound) => sound,
+                Err(e) => return e,
+            };
+            // Dual-emit. The bus only reaches SSE clients (browser/PWA); the
+            // desktop WebView listens on the Tauri bridge and there is no
+            // bus→window forwarder, so a bus-only send made this tool a no-op on
+            // the very client the user is usually sitting in front of.
+            #[cfg(feature = "desktop")]
+            if let Some(ref app) = *state.app_handle.read() {
+                use tauri::Emitter;
+                let _ = app.emit(
+                    "mcp-toast",
+                    serde_json::json!({
+                        "title": title,
+                        "message": message,
+                        "level": level,
+                        "sound": sound,
+                    }),
+                );
+            }
             let _ = state.event_bus.send(crate::state::AppEvent::McpToast {
                 title,
                 message,
@@ -6598,6 +6667,8 @@ mod tests {
                 worktree: None,
                 cwd: Some(cwd.to_string()),
                 display_name: None,
+                display_name_is_custom: false,
+                is_remote: false,
                 shell: "true".to_string(),
             }),
         );
@@ -7056,10 +7127,12 @@ mod tests {
             .as_str()
             .expect("task_id must be a string");
         assert_eq!(spawned["poll_interval_ms"], TASK_POLL_INTERVAL_MS);
-        assert!(
-            TASK_POLL_INTERVAL_MS >= 1000,
-            "a lower floor lets a stuck orchestrator hot-loop the server"
-        );
+        const {
+            assert!(
+                TASK_POLL_INTERVAL_MS >= 1000,
+                "a lower floor lets a stuck orchestrator hot-loop the server"
+            )
+        };
 
         // The handle must actually resolve, be owned by this caller, and track the
         // session that was spawned.
@@ -8359,14 +8432,18 @@ mod tests {
             WAIT_EFFECTIVE_MAX_MS,
             "asking for the documented maximum must not run to the client's ceiling"
         );
-        assert!(
-            WAIT_EFFECTIVE_MAX_MS < WAIT_MAX_MS,
-            "the effective cap has to leave the client room to receive the reply"
-        );
-        assert!(
-            WAIT_MAX_MS - WAIT_EFFECTIVE_MAX_MS >= 5_000,
-            "margin must at least match the bridge's own response margin"
-        );
+        const {
+            assert!(
+                WAIT_EFFECTIVE_MAX_MS < WAIT_MAX_MS,
+                "the effective cap has to leave the client room to receive the reply"
+            )
+        };
+        const {
+            assert!(
+                WAIT_MAX_MS - WAIT_EFFECTIVE_MAX_MS >= 5_000,
+                "margin must at least match the bridge's own response margin"
+            )
+        };
         assert_eq!(
             clamp_wait_timeout(Some(WAIT_EFFECTIVE_MAX_MS - 1)),
             WAIT_EFFECTIVE_MAX_MS - 1,
@@ -9144,6 +9221,8 @@ mod tests {
                 worktree: None,
                 cwd: None,
                 display_name: Some("submission-probe".to_string()),
+                display_name_is_custom: false,
+                is_remote: true,
                 shell: "/bin/sh".to_string(),
             }),
         );
@@ -10624,6 +10703,71 @@ mod tests {
         );
     }
 
+    /// `sound` is what an unattended agent uses to reach a user who is not
+    /// watching, so every accepted form must resolve to a real notification
+    /// sound: silence is silence, `true` still means "match the level", and a
+    /// name (notably `attention`) overrides it.
+    #[test]
+    fn toast_sound_resolves_to_a_notification_sound_or_silence() {
+        use serde_json::json;
+        for (value, level, expected) in [
+            (json!(null), "info", None),
+            (json!(false), "error", None),
+            (json!(true), "info", Some("info")),
+            (json!(true), "warn", Some("warning")),
+            (json!(true), "error", Some("error")),
+            (json!("attention"), "info", Some("attention")),
+            (json!("question"), "error", Some("question")),
+        ] {
+            assert_eq!(
+                resolve_toast_sound(&value, level).expect("valid sound"),
+                expected.map(str::to_string),
+                "sound={value} level={level}"
+            );
+        }
+    }
+
+    /// A typo must not silently produce a silent toast — the agent would believe
+    /// it had rung a bell that never rang.
+    #[test]
+    fn toast_sound_rejects_unknown_names() {
+        let err = resolve_toast_sound(&serde_json::json!("buzzer"), "info")
+            .expect_err("unknown sound must be rejected");
+        let message = err["error"].as_str().expect("error message");
+        assert!(
+            message.contains("attention"),
+            "lists the valid names: {message}"
+        );
+        assert!(resolve_toast_sound(&serde_json::json!(3), "info").is_err());
+    }
+
+    #[tokio::test]
+    async fn ui_toast_puts_the_resolved_sound_on_the_bus() {
+        let state = test_state();
+        let mut rx = state.event_bus.subscribe();
+        let r = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "ui",
+            &serde_json::json!({
+                "action": "toast",
+                "title": "need you",
+                "level": "warn",
+                "sound": "attention",
+            }),
+            None,
+        )
+        .await;
+        assert!(!r["error"].is_string(), "toast should succeed, got: {r}");
+        match rx.try_recv().expect("McpToast on the bus") {
+            crate::state::AppEvent::McpToast { sound, level, .. } => {
+                assert_eq!(sound.as_deref(), Some("attention"));
+                assert_eq!(level, "warn", "the callback does not change the severity");
+            }
+            other => panic!("expected McpToast, got {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn handle_mcp_tool_call_routes_debug_sessions() {
         let state = test_state();
@@ -11048,6 +11192,8 @@ mod tests {
                 worktree: None,
                 cwd: Some("/Gits/personal/beta".to_string()),
                 display_name: None,
+                display_name_is_custom: false,
+                is_remote: false,
                 shell: "true".to_string(),
             }),
         );
@@ -11843,7 +11989,7 @@ mod tests {
         if result
             .get("error")
             .and_then(|e| e.as_str())
-            .map_or(false, |e| e.contains("Failed to open PTY"))
+            .is_some_and(|e| e.contains("Failed to open PTY"))
         {
             eprintln!("Skipping: PTY not available in this environment");
             return;
@@ -12042,7 +12188,7 @@ mod tests {
         if result
             .get("error")
             .and_then(|e| e.as_str())
-            .map_or(false, |e| e.contains("Failed to open PTY"))
+            .is_some_and(|e| e.contains("Failed to open PTY"))
         {
             eprintln!("Skipping: PTY not available in this environment");
             return;
@@ -12082,7 +12228,7 @@ mod tests {
         if result
             .get("error")
             .and_then(|e| e.as_str())
-            .map_or(false, |e| e.contains("Failed to open PTY"))
+            .is_some_and(|e| e.contains("Failed to open PTY"))
         {
             eprintln!("Skipping: PTY not available in this environment");
             return;
@@ -12637,9 +12783,7 @@ mod tests {
             Some("mcp-reg-test"),
         );
         assert!(
-            result["error"]
-                .as_str()
-                .map_or(false, |e| e.contains("UUID")),
+            result["error"].as_str().is_some_and(|e| e.contains("UUID")),
             "register with non-UUID tuic_session must fail: {result}"
         );
     }
@@ -12933,7 +13077,7 @@ mod tests {
         assert!(
             result["error"]
                 .as_str()
-                .map_or(false, |e| e.contains("not registered")),
+                .is_some_and(|e| e.contains("not registered")),
             "send from unregistered MCP session must error: {result}"
         );
     }
@@ -13626,7 +13770,7 @@ mod tests {
         assert!(
             result["error"]
                 .as_str()
-                .map_or(false, |e| e.contains("not registered")),
+                .is_some_and(|e| e.contains("not registered")),
             "inbox call from unregistered MCP session must error: {result}"
         );
     }
@@ -13991,7 +14135,7 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 if let Some((_, sender)) = state2.screenshot_responses.remove("") {
                     // Won't match — we need the actual request_id.
-                    state2.screenshot_responses.insert("".to_string(), sender);
+                    state2.screenshot_responses.insert(String::new(), sender);
                 }
                 // Check all entries
                 let keys: Vec<_> = state2

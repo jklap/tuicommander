@@ -616,7 +616,7 @@ pub fn get_dictation_config() -> DictationConfig {
 
 #[tauri::command]
 pub fn set_dictation_config(config: DictationConfig) -> Result<(), String> {
-    crate::config::save_json_config(DICTATION_CONFIG_FILE, &config)
+    crate::config::ConfigFile::<DictationConfig>::new(DICTATION_CONFIG_FILE).save(&config)
 }
 
 /// Check microphone permission status (macOS TCC).

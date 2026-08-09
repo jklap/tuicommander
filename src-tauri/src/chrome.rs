@@ -294,7 +294,9 @@ pub fn find_chrome_cutoff(rows: &[&str]) -> Option<usize> {
 /// somewhere up in the conversation and cut the screen in half. An empty prompt
 /// glyph carrying no text exists only in the input box.
 fn lowest_input_box_row(rows: &[&str], content_end: usize) -> Option<usize> {
-    (0..content_end).rev().find(|&i| is_agent_prompt_row(rows[i]))
+    (0..content_end)
+        .rev()
+        .find(|&i| is_agent_prompt_row(rows[i]))
 }
 
 /// Find the row index where agent chrome starts in a batch of lines that
@@ -409,7 +411,9 @@ mod tests {
                 "cutoff must land on the input box with {hud_lines} HUD lines"
             );
             assert!(
-                rows[..cutoff].iter().any(|r| r.contains("real agent output")),
+                rows[..cutoff]
+                    .iter()
+                    .any(|r| r.contains("real agent output")),
                 "content above the input box must survive the trim"
             );
             assert!(

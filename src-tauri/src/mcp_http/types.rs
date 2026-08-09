@@ -26,6 +26,8 @@ pub(super) struct SessionInfo {
     pub worktree_branch: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
+    pub display_name_is_custom: bool,
+    pub is_remote: bool,
     // Session state (from accumulator) — present when broadcast channel is active
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::SessionState>,
@@ -53,6 +55,14 @@ pub(super) struct WriteRequest {
 #[derive(Deserialize)]
 pub(super) struct SetNameRequest {
     pub name: Option<String>,
+    #[serde(default, rename = "isCustom")]
+    pub is_custom: Option<bool>,
+}
+
+/// Compose-panel enqueue: text delivered on the session's next idle window.
+#[derive(Deserialize)]
+pub(super) struct EnqueueCommandRequest {
+    pub text: String,
 }
 
 #[derive(Deserialize)]
@@ -382,6 +392,9 @@ pub(super) struct FinalizeMergeRequest {
     pub branch_name: String,
     /// "archive" or "delete"
     pub action: String,
+    /// Skip the pre-flight guard that refuses to destroy a dirty worktree.
+    #[serde(default)]
+    pub force: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -421,7 +434,7 @@ pub(super) struct MergeArchiveRequest {
     /// "archive", "delete", or "ask"
     #[serde(rename = "afterMerge")]
     pub after_merge: String,
-    /// Skip the pre-flight guard for an empty branch with a dirty worktree.
+    /// Skip the pre-flight guard that refuses to destroy a dirty worktree.
     #[serde(default)]
     pub force: Option<bool>,
 }
