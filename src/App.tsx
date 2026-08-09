@@ -199,11 +199,14 @@ const App: Component = () => {
 	}
 	const [settingsPanelVisible, setSettingsPanelVisible] = createSignal(false);
 	const [settingsInitialTab, setSettingsInitialTab] = createSignal<string | undefined>(undefined);
+	const [settingsInitialSection, setSettingsInitialSection] = createSignal<string | undefined>(undefined);
 	const [settingsContext, setSettingsContext] = createSignal<SettingsContext>({ kind: "global" });
 
-	const openSettings = (tab?: string) => {
+	/** `section` is the DOM id of a block to scroll to — see SettingsPanel/sections.ts */
+	const openSettings = (tab?: string, section?: string) => {
 		setSettingsContext({ kind: "global" });
 		setSettingsInitialTab(tab);
+		setSettingsInitialSection(section);
 		setSettingsPanelVisible(true);
 	};
 	const [taskQueueVisible, setTaskQueueVisible] = createSignal(false);
@@ -1035,6 +1038,7 @@ const App: Component = () => {
 					settingsVisible: settingsPanelVisible,
 					closeSettings: () => setSettingsPanelVisible(false),
 					settingsInitialTab,
+					settingsInitialSection,
 					settingsContext,
 					taskQueueVisible,
 					closeTaskQueue: () => setTaskQueueVisible(false),

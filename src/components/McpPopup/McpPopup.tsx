@@ -3,6 +3,7 @@ import type { UpstreamStatusEntry } from "../../stores/mcpPopup";
 import { mcpPopupStore } from "../../stores/mcpPopup";
 import { registerModal } from "../../stores/modalStack";
 import { onClickKeyDown } from "../../utils/a11y";
+import { SETTINGS_SECTION_UPSTREAM_MCP } from "../SettingsPanel/sections";
 import s from "./McpPopup.module.css";
 
 const STATUS_COLORS: Record<string, string> = {
@@ -15,7 +16,7 @@ const STATUS_COLORS: Record<string, string> = {
 	needs_auth: "#e5c07b",
 };
 
-export const McpPopup: Component<{ onOpenSettings: (tab: string) => void }> = (props) => {
+export const McpPopup: Component<{ onOpenSettings: (tab: string, section?: string) => void }> = (props) => {
 	let overlayRef: HTMLDivElement | undefined;
 
 	// Event-driven status refresh + fallback poll while open
@@ -69,7 +70,8 @@ export const McpPopup: Component<{ onOpenSettings: (tab: string) => void }> = (p
 
 	const openServicesTab = () => {
 		mcpPopupStore.close();
-		props.onOpenSettings("services");
+		// The upstream MCP block is far below the fold of the Services tab.
+		props.onOpenSettings("services", SETTINGS_SECTION_UPSTREAM_MCP);
 	};
 
 	// Merge config servers with status for display — config is source of truth for the list

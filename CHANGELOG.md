@@ -12,6 +12,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Raw PTY capture provides reproducible agent-state fixtures** — The off-by-default `/diagnostics/capture` endpoint records a bounded raw stream per session. Captures, rather than the rendered and lossy session-output ring, are replayed through the same raw-marker, rendered-row, and hook-suppression composition as production.
 - **Agents can request a distinct Attention callback** — MCP toasts accept an `attention` sound that travels through both the desktop event and browser SSE paths. Native and browser playback share the triangular G4→G4→E5 double-knock motif while respecting notification volume and per-sound settings.
 
+### Changed
+
+- **“Manage in Settings” lands on the MCP block, and the tab that holds it says so** — The MCP popup opened the Services tab at the top, where the upstream server list sits below the fold, so the click looked like it had done nothing. The deep link now names the block it promises and the panel scrolls to it once the tab is in the document. The nav entry is called **Services & MCP**, because “Services” gave no reason to look there for MCP.
+
 ### Fixed
 
 - **Intent titles now replace spawn-assigned tab names without overwriting manual renames** — A named MCP agent was restored with `nameIsCustom=true`, conflating its launch label with an explicit user rename and silently blocking every valid `intent: text (Title)` update. Session metadata now preserves the name origin across reconnects; only user-renamed tabs remain protected.

@@ -15,7 +15,7 @@ The `mcp_server_enabled` config flag controls whether the `/mcp` protocol route 
 
 The local IPC listener is independent from the **Remote Access** TCP toggle. Turning remote access on or off only starts or stops the authenticated TCP listener; it does not disable `mcp.sock` or the local MCP route. Lifecycle logs state whether a transition affects TCP or the always-on IPC listener.
 
-Configuration via Settings > Services, or `config.json`:
+Configuration via Settings > Services & MCP, or `config.json`:
 
 ```json
 {
@@ -204,7 +204,7 @@ does not add another blanket wrapper.
 
 ### Lazy Tool Discovery (`collapse_tools`)
 
-When `collapse_tools: true` in `config.json` (or via Settings > Services > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with exactly three meta-tools (the Speakeasy pattern):
+When `collapse_tools: true` in `config.json` (or via Settings > Services & MCP > TUIC Tools > "Collapse tools"), the server replaces the full tool list in `tools/list` with exactly three meta-tools (the Speakeasy pattern):
 
 | Meta-tool | Purpose |
 |-----------|---------|
@@ -347,7 +347,7 @@ rejected while an internal agent loop is active on the target session.
 
 **Session aliases** — Every tool that accepts a `session_id` also accepts a human-friendly alias (e.g. `tc-1`). Aliases are auto-assigned from the repo directory name: first letter of each segment joined + per-repo counter. `list_sessions` includes the `alias` field. Aliases reset on app restart.
 
-**Gated by `ai_terminal_mcp_enabled` config flag (default `false`).** When the flag is off, these tools are hidden from `tools/list` (via `filtered_native_tools`) and calls are rejected at dispatch time. Enable in `config.json` or Settings > Services. Note: no live-reload — a connected client may see a stale tools snapshot until it reconnects or `notifications/tools/list_changed` fires.
+**Gated by `ai_terminal_mcp_enabled` config flag (default `false`).** When the flag is off, these tools are hidden from `tools/list` (via `filtered_native_tools`) and calls are rejected at dispatch time. Enable in `config.json` or Settings > Services & MCP. Note: no live-reload — a connected client may see a stale tools snapshot until it reconnects or `notifications/tools/list_changed` fires.
 
 | Tool | Params | Description |
 |------|--------|-------------|
