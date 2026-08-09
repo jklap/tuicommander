@@ -49,9 +49,7 @@ export function useWorktreeConsolidation(): void {
 	// closing a workspace the user promoted by hand.
 	createEffect(() => {
 		const repoPath = repositoriesStore.state.activeRepoPath;
-		const enabled = repoPath
-			? (repoSettingsStore.state.settings[repoPath]?.autoConsolidateWorktrees ?? false)
-			: false;
+		const enabled = repoPath ? (repoSettingsStore.state.settings[repoPath]?.autoConsolidateWorktrees ?? false) : false;
 
 		if (enabled && repoPath) {
 			globalWorkspaceStore.setScope(repoPath);

@@ -3,7 +3,21 @@ import { appLogger } from "./stores/appLogger";
 import { isTauri } from "./transport";
 
 /** Notification sound types */
-export type NotificationSound = "question" | "error" | "completion" | "warning" | "info";
+export type NotificationSound = "question" | "error" | "completion" | "warning" | "info" | "attention";
+
+/** Every sound name, for runtime validation of values coming off the wire. */
+export const NOTIFICATION_SOUNDS: readonly NotificationSound[] = [
+	"question",
+	"error",
+	"completion",
+	"warning",
+	"info",
+	"attention",
+] as const;
+
+export function isNotificationSound(value: unknown): value is NotificationSound {
+	return typeof value === "string" && (NOTIFICATION_SOUNDS as readonly string[]).includes(value);
+}
 
 /** Notification configuration */
 export interface NotificationConfig {
@@ -27,6 +41,7 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
 		completion: true,
 		warning: true,
 		info: true,
+		attention: true,
 	},
 	audio_device: null,
 	silence_remote_completions: true,
@@ -138,7 +153,21 @@ const TONE_FREQS: Record<NotificationSound, number[]> = {
 	completion: [660, 880], // ascending two-tone
 	warning: [550, 440], // descending two-tone
 	info: [660], // single tone
+	attention: [392, 392, 659], // two quick G4 knocks, then a longer E5 call
 };
+
+/** Timbre per sound. The attention call uses a softer triangle wave while its
+ *  double-knock motif keeps it distinct from the chimes. Mirrors Rust. */
+const TONE_WAVEFORMS: Partial<Record<NotificationSound, OscillatorType>> = {
+	attention: "triangle",
+};
+
+/** Extra attenuation per sound, mirroring the Rust engine. */
+const TONE_GAINS: Partial<Record<NotificationSound, number>> = {
+	attention: 0.8,
+};
+
+const ATTENTION_DURATIONS = [0.075, 0.075, 0.14];
 
 let webAudioCtx: AudioContext | null = null;
 
@@ -151,16 +180,18 @@ function playWebAudioTone(sound: NotificationSound, volume: number): void {
 
 	const freqs = TONE_FREQS[sound] ?? [660];
 	const gain = ctx.createGain();
-	gain.gain.value = volume * 0.3; // Gentle volume
+	gain.gain.value = volume * 0.3 * (TONE_GAINS[sound] ?? 1); // Gentle volume
 	gain.connect(ctx.destination);
+	const interval = sound === "attention" ? 0.125 : 0.15;
 
 	freqs.forEach((freq, i) => {
+		const duration = sound === "attention" ? ATTENTION_DURATIONS[i] : 0.12;
 		const osc = ctx.createOscillator();
-		osc.type = "sine";
+		osc.type = TONE_WAVEFORMS[sound] ?? "sine";
 		osc.frequency.value = freq;
 		osc.connect(gain);
-		osc.start(ctx.currentTime + i * 0.15);
-		osc.stop(ctx.currentTime + i * 0.15 + 0.12);
+		osc.start(ctx.currentTime + i * interval);
+		osc.stop(ctx.currentTime + i * interval + duration);
 		osc.onended = () => osc.disconnect();
 	});
 }

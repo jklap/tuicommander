@@ -221,7 +221,7 @@ export function useRepository() {
 	}
 
 	/** Merge a worktree branch into target, then archive or delete.
-	 *  `force` skips the empty-branch-with-dirty-worktree guard after the user confirms. */
+	 *  `force` skips the dirty-worktree guard after the user confirms the loss. */
 	async function mergeAndArchiveWorktree(
 		repoPath: string,
 		branchName: string,
@@ -238,16 +238,21 @@ export function useRepository() {
 		});
 	}
 
-	/** Finalize a pending merge by archiving or deleting the worktree */
+	/** Finalize a pending merge by archiving or deleting the worktree.
+	 *  Cleanup is destructive, so it passes the same dirty-worktree guard as
+	 *  `mergeAndArchiveWorktree`: without `force` a worktree that is not known to
+	 *  be clean comes back as `action: "needs_confirmation"` instead of being wiped. */
 	async function finalizeMergedWorktree(
 		repoPath: string,
 		branchName: string,
 		action: "archive" | "delete",
+		force = false,
 	): Promise<MergeArchiveResult> {
 		return await invoke<MergeArchiveResult>("finalize_merged_worktree", {
 			repoPath,
 			branchName,
 			action,
+			force,
 		});
 	}
 

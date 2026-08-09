@@ -14,9 +14,9 @@ let nextId = 1;
 /** Auto-dismiss delay per level (ms). `info` is transient; `warn` lingers so
  *  actionable messages can be read; `error` is sticky (0 = never auto-dismiss)
  *  and stays until the user clicks it away. Callers can override per toast. */
-const DEFAULT_DURATION_MS: Record<Toast["level"], number> = {
-	info: 4000,
-	warn: 15000,
+export const DEFAULT_DURATION_MS: Record<Toast["level"], number> = {
+	info: 8000,
+	warn: 30000,
 	error: 0,
 };
 

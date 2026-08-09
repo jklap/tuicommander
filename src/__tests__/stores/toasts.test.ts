@@ -3,12 +3,17 @@ import { testInScope } from "../helpers/store";
 
 describe("toastsStore", () => {
 	let toastsStore: typeof import("../../stores/toasts").toastsStore;
+	// Read from the store instead of restating the numbers: these are tuning
+	// values, and a test that pins them fails on every retune while proving
+	// nothing about the dismissal mechanism it means to cover.
+	let durations: typeof import("../../stores/toasts").DEFAULT_DURATION_MS;
 
 	beforeEach(async () => {
 		vi.useFakeTimers();
 		vi.resetModules();
 		const mod = await import("../../stores/toasts");
 		toastsStore = mod.toastsStore;
+		durations = mod.DEFAULT_DURATION_MS;
 	});
 
 	afterEach(() => {
@@ -41,11 +46,13 @@ describe("toastsStore", () => {
 		});
 	});
 
-	it("auto-dismisses after 4 seconds", () => {
+	it("auto-dismisses an info toast at its default duration", () => {
 		testInScope(() => {
 			toastsStore.add("Ephemeral");
 			expect(toastsStore.toasts).toHaveLength(1);
-			vi.advanceTimersByTime(4000);
+			vi.advanceTimersByTime(durations.info - 1);
+			expect(toastsStore.toasts).toHaveLength(1); // not a millisecond early
+			vi.advanceTimersByTime(1);
 			expect(toastsStore.toasts).toHaveLength(0);
 		});
 	});
@@ -56,8 +63,8 @@ describe("toastsStore", () => {
 			toastsStore.remove(id);
 			expect(toastsStore.toasts).toHaveLength(0);
 
-			// Advance past the 4s auto-dismiss — must not error or double-remove
-			expect(() => vi.advanceTimersByTime(5000)).not.toThrow();
+			// Advance past the auto-dismiss — must not error or double-remove
+			expect(() => vi.advanceTimersByTime(durations.info + 1000)).not.toThrow();
 			expect(toastsStore.toasts).toHaveLength(0);
 		});
 	});
@@ -69,18 +76,19 @@ describe("toastsStore", () => {
 			toastsStore.add("Keeper");
 			toastsStore.remove(id);
 			expect(toastsStore.toasts).toHaveLength(1);
-			vi.advanceTimersByTime(4000);
+			vi.advanceTimersByTime(durations.info);
 			// Both timers fired — Tmp was already removed, Keeper auto-dismissed
 			expect(toastsStore.toasts).toHaveLength(0);
 		});
 	});
 
-	it("warn toasts linger past 4s and auto-dismiss at 15s", () => {
+	it("warn toasts outlive the info window and auto-dismiss at their own", () => {
 		testInScope(() => {
+			expect(durations.warn).toBeGreaterThan(durations.info); // the point of the level
 			toastsStore.add("Careful", "heads up", "warn");
-			vi.advanceTimersByTime(4000);
+			vi.advanceTimersByTime(durations.info);
 			expect(toastsStore.toasts).toHaveLength(1); // still visible past the info window
-			vi.advanceTimersByTime(11000); // total 15s
+			vi.advanceTimersByTime(durations.warn - durations.info);
 			expect(toastsStore.toasts).toHaveLength(0);
 		});
 	});

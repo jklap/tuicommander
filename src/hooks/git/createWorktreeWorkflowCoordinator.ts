@@ -37,13 +37,14 @@ interface WorktreeWorkflowCoordinatorDeps {
 			repoPath: string,
 			branchName: string,
 			action: "archive" | "delete",
+			force?: boolean,
 		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;
 	};
 	closeTerminal: (id: string, skipConfirm?: boolean) => Promise<void>;
 	setStatusInfo: (message: string) => void;
-	/** Ask the user to confirm cleaning up a branch that carries no commits while
-	 *  its worktree still has uncommitted changes. Resolves false to abort. */
-	confirmEmptyBranchCleanup: (branchName: string, action: string) => Promise<boolean>;
+	/** Ask the user to confirm a cleanup that would destroy the worktree's
+	 *  uncommitted work. Resolves false to abort. */
+	confirmDirtyWorktreeCleanup: (branchName: string, action: string, commitsAhead: number) => Promise<boolean>;
 	creatingWorktreeRepos: Accessor<Set<string>>;
 	setCreatingWorktreeRepos: Setter<Set<string>>;
 	setMergePendingCtx: Setter<{
@@ -51,6 +52,7 @@ interface WorktreeWorkflowCoordinatorDeps {
 		branchName: string;
 		baseBranch: string;
 		hasDirtyFiles: boolean;
+		worktreeDirty: boolean;
 	} | null>;
 	pendingCreations: Map<string, PendingCreation>;
 	pendingKey: (repoPath: string, branchName: string) => string;
@@ -235,21 +237,15 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 				await closeTerminalsForBranch(repoPath, branchName);
 				if (afterMerge === "ask") {
 					deps.setStatusInfo(`Merged ${branchName} via GitHub — choose what to do with the worktree`);
-					let hasDirtyFiles = false;
-					try {
-						const status = await invoke<{ stdout: string }>("run_git_command", {
-							path: repoPath,
-							args: ["status", "--porcelain"],
-						});
-						hasDirtyFiles = status.stdout.trim().length > 0;
-					} catch (err) {
-						appLogger.warn("git", `Could not check dirty status for ${repoPath}, assuming clean`, err);
-					}
-					setMergePendingCtx({ repoPath, branchName, baseBranch: targetBranch, hasDirtyFiles });
+					await openCleanupDialog(repoPath, branchName, targetBranch);
 					return;
 				}
 				const action = afterMerge as "archive" | "delete";
-				await deps.repo.finalizeMergedWorktree(repoPath, branchName, action);
+				if (!(await finalizeWithConfirmation(repoPath, branchName, action))) {
+					deps.setStatusInfo(`Merged ${branchName} via GitHub — worktree kept`);
+					await refreshAllBranchStats();
+					return;
+				}
 				deps.setStatusInfo(`Merged ${branchName} via GitHub (${action === "archive" ? "archived" : "deleted"})`);
 				repositoriesStore.removeBranch(repoPath, branchName);
 				await refreshAllBranchStats();
@@ -267,6 +263,50 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		}
 	};
 
+	/** Collect everything the post-merge cleanup dialog needs to warn honestly.
+	 *
+	 *  Two different directories, two different warnings:
+	 *  - `hasDirtyFiles` is the BASE repo — the "Switch to <base>" step stashes it.
+	 *  - `worktreeDirty` is the BRANCH's worktree — the "Archive/Delete worktree"
+	 *    step ends in `git worktree remove --force` and would take it for good.
+	 *  Either check failing is reported as dirty: an unanswered question must not
+	 *  read as "nothing to lose" when it gates a destructive step. */
+	const openCleanupDialog = async (repoPath: string, branchName: string, baseBranch: string) => {
+		let hasDirtyFiles = false;
+		try {
+			const status = await invoke<{ stdout: string }>("run_git_command", {
+				path: repoPath,
+				args: ["status", "--porcelain"],
+			});
+			hasDirtyFiles = status.stdout.trim().length > 0;
+		} catch (err) {
+			appLogger.warn("git", `Could not check dirty status for ${repoPath}, assuming dirty`, err);
+			hasDirtyFiles = true;
+		}
+
+		let worktreeDirty = false;
+		try {
+			worktreeDirty = await invoke<boolean>("check_worktree_dirty", { repoPath, branchName });
+		} catch (err) {
+			appLogger.warn("git", `Could not check the ${branchName} worktree, assuming dirty`, err);
+			worktreeDirty = true;
+		}
+
+		setMergePendingCtx({ repoPath, branchName, baseBranch, hasDirtyFiles, worktreeDirty });
+	};
+
+	/** Archive/delete a merged worktree, asking first when the backend refuses.
+	 *  Returns false when the user declined and the worktree is still on disk. */
+	const finalizeWithConfirmation = async (repoPath: string, branchName: string, action: "archive" | "delete") => {
+		const result = await deps.repo.finalizeMergedWorktree(repoPath, branchName, action);
+		if (result.action !== "needs_confirmation") return true;
+
+		// The merge already landed; only the cleanup stopped. Nothing is lost yet.
+		if (!(await deps.confirmDirtyWorktreeCleanup(branchName, action, 0))) return false;
+		await deps.repo.finalizeMergedWorktree(repoPath, branchName, action, true);
+		return true;
+	};
+
 	/** Local git merge path: checkout target, merge, then archive/delete/ask. */
 	const mergeLocalAndFinalize = async (
 		repoPath: string,
@@ -276,13 +316,13 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 	) => {
 		let result = await deps.repo.mergeAndArchiveWorktree(repoPath, branchName, targetBranch, afterMerge);
 
-		// The backend refused: this branch has nothing to merge yet its worktree holds
-		// uncommitted work, so archiving/deleting would make the row vanish and take
-		// that work with it. Nothing has been touched — ask, then retry with force.
+		// The backend refused: the worktree is not known to be clean, so archiving or
+		// deleting it would make the row vanish and take that uncommitted work with
+		// it. Neither the merge nor the cleanup has run — ask, then retry with force.
 		if (result.action === "needs_confirmation") {
-			const proceed = await deps.confirmEmptyBranchCleanup(branchName, afterMerge);
+			const proceed = await deps.confirmDirtyWorktreeCleanup(branchName, afterMerge, result.commits_ahead ?? 0);
 			if (!proceed) {
-				deps.setStatusInfo(`Left ${branchName} alone — nothing to merge into ${targetBranch}`);
+				deps.setStatusInfo(`Left ${branchName} alone — its worktree still has uncommitted work`);
 				return;
 			}
 			result = await deps.repo.mergeAndArchiveWorktree(repoPath, branchName, targetBranch, afterMerge, true);
@@ -294,17 +334,7 @@ export function createWorktreeWorkflowCoordinator(deps: WorktreeWorkflowCoordina
 		if (result.action === "pending") {
 			// "ask" mode — merge succeeded, user must choose what to do with the worktree
 			deps.setStatusInfo(`Merged ${branchName} into ${targetBranch} — choose what to do with the worktree`);
-			let hasDirtyFiles = false;
-			try {
-				const status = await invoke<{ stdout: string }>("run_git_command", {
-					path: repoPath,
-					args: ["status", "--porcelain"],
-				});
-				hasDirtyFiles = status.stdout.trim().length > 0;
-			} catch (err) {
-				appLogger.warn("git", `Could not check dirty status for ${repoPath}, assuming clean`, err);
-			}
-			setMergePendingCtx({ repoPath, branchName, baseBranch: targetBranch, hasDirtyFiles });
+			await openCleanupDialog(repoPath, branchName, targetBranch);
 			// Branch stays in sidebar until the user decides via cleanup dialog
 			return;
 		}

@@ -543,22 +543,29 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 		if (mergedLinkedBranches.length === 0) return;
 
 		let archived = 0;
+		let kept = 0;
 		const results = await Promise.allSettled(
 			mergedLinkedBranches.map((branch) => deps.repo.finalizeMergedWorktree(repoPath, branch.name, "archive")),
 		);
 		results.forEach((result, i) => {
-			if (result.status === "fulfilled") {
-				archived++;
-			} else {
-				appLogger.warn(
-					"git",
-					`Failed to auto-archive merged worktree for "${mergedLinkedBranches[i].name}"`,
-					result.reason,
-				);
+			const name = mergedLinkedBranches[i].name;
+			if (result.status === "rejected") {
+				appLogger.warn("git", `Failed to auto-archive merged worktree for "${name}"`, result.reason);
+				return;
 			}
+			// This sweep runs on a refresh tick with nobody watching, so it never
+			// passes `force`. A worktree that is not known to be clean comes back
+			// untouched and stays in the sidebar for the user to handle by hand.
+			if (result.value.action === "needs_confirmation") {
+				kept++;
+				appLogger.info("git", `Kept the merged worktree for "${name}" — it has uncommitted work`);
+				return;
+			}
+			archived++;
 		});
-		if (archived > 0) {
-			deps.setStatusInfo(`Auto-archived ${archived} merged worktree(s)`);
+		if (archived > 0 || kept > 0) {
+			const keptNote = kept > 0 ? `, kept ${kept} with uncommitted work` : "";
+			deps.setStatusInfo(`Auto-archived ${archived} merged worktree(s)${keptNote}`);
 		}
 	};
 

@@ -37,6 +37,53 @@
   user-select: none;
 }
 
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.queueBadge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--font-xs);
+  font-family: var(--font-ui);
+  cursor: pointer;
+}
+
+.queueBadge:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-muted);
+}
+
+.queueButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.queueButton:hover {
+  color: var(--fg-primary);
+  border-color: var(--fg-muted);
+}
+
 .sendButton {
   display: flex;
   align-items: center;

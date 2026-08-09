@@ -417,18 +417,22 @@ function createPaneLayoutStore() {
 			scheduleSave();
 		},
 
-		/** Add a tab to a group */
-		addTab(groupId: string, tab: PaneTab): void {
+		/** Add a tab to a group. `activate=false` docks the tab in the group's tab
+		 *  strip without switching the pane to it — used by background spawns that
+		 *  must not take over what the user is looking at. */
+		addTab(groupId: string, tab: PaneTab, activate = true): void {
 			const group = state.groups[groupId];
 			if (!group) return;
 			if (group.tabs.some((t) => t.id === tab.id && t.type === tab.type)) {
-				setState("groups", groupId, "activeTabId", tab.id);
+				if (activate) setState("groups", groupId, "activeTabId", tab.id);
 				return;
 			}
 			setState(
 				produce((s) => {
 					s.groups[groupId].tabs.push(tab);
-					s.groups[groupId].activeTabId = tab.id;
+					if (activate || s.groups[groupId].activeTabId === null) {
+						s.groups[groupId].activeTabId = tab.id;
+					}
 				}),
 			);
 			scheduleSave();

@@ -39,6 +39,12 @@ function SoundPatternSvg(props: { sound: NotificationSound }) {
 			{ x: 30, y: 12 },
 		],
 		info: [{ x: 22, y: 4 }],
+		// Two quick low knocks followed by a higher callback.
+		attention: [
+			{ x: 8, y: 16 },
+			{ x: 22, y: 16 },
+			{ x: 36, y: 4 },
+		],
 	};
 
 	const colors: Record<NotificationSound, string> = {
@@ -47,11 +53,12 @@ function SoundPatternSvg(props: { sound: NotificationSound }) {
 		error: "var(--error)",
 		warning: "var(--accent)",
 		info: "var(--fg-muted)",
+		attention: "var(--error)",
 	};
 
 	const notes = patterns[props.sound];
 	const color = colors[props.sound];
-	const w = props.sound === "completion" ? 36 : props.sound === "info" ? 24 : 32;
+	const w = props.sound === "completion" || props.sound === "attention" ? 36 : props.sound === "info" ? 24 : 32;
 
 	return (
 		<svg viewBox={`0 0 ${w} 18`} width={w} height="14" style={{ "vertical-align": "middle", "flex-shrink": "0" }}>
@@ -85,6 +92,7 @@ export const NotificationsTab: Component = () => {
 		{ key: "completion", label: t("notifications.sound.completion", "Completion") },
 		{ key: "warning", label: t("notifications.sound.warning", "Warning") },
 		{ key: "info", label: t("notifications.sound.info", "Info") },
+		{ key: "attention", label: t("notifications.sound.attention", "Attention (agent needs you)") },
 	];
 
 	// Device enumeration is LAZY: on macOS, cpal's CoreAudio output-device scan

@@ -50,7 +50,6 @@ import { useDictationHotkey } from "./hooks/useDictationHotkey";
 import { useFileOpenBridge } from "./hooks/useFileOpenBridge";
 import { useFocusRestore } from "./hooks/useFocusRestore";
 import { useFocusTracker } from "./hooks/useFocusTracker";
-import { useWorktreeConsolidation } from "./hooks/useWorktreeConsolidation";
 import { useGitOperations } from "./hooks/useGitOperations";
 import { useIdleTriage } from "./hooks/useIdleTriage";
 import { useKeyboardRedirect } from "./hooks/useKeyboardRedirect";
@@ -70,6 +69,7 @@ import { useTerminalContextMenus } from "./hooks/useTerminalContextMenus";
 import { useTerminalLifecycle } from "./hooks/useTerminalLifecycle";
 import { useTerminalReattachBridge } from "./hooks/useTerminalReattachBridge";
 import { useTerminalShellExit } from "./hooks/useTerminalShellExit";
+import { useWorktreeConsolidation } from "./hooks/useWorktreeConsolidation";
 import { useWorktreeSwitchPrompt } from "./hooks/useWorktreeSwitchPrompt";
 import { invoke, listen } from "./invoke";
 import { activityPanelAdapter } from "./panelAdapters/activity";
@@ -309,7 +309,7 @@ const App: Component = () => {
 			promptRepoPath,
 			confirmOrphanCleanup: dialogs.confirmOrphanCleanup,
 			confirmRemoveLockedWorktree: dialogs.confirmRemoveLockedWorktree,
-			confirmEmptyBranchCleanup: dialogs.confirmEmptyBranchCleanup,
+			confirmDirtyWorktreeCleanup: dialogs.confirmDirtyWorktreeCleanup,
 		},
 		closeTerminal: terminalLifecycle.closeTerminal,
 		createNewTerminal: terminalLifecycle.createNewTerminal,

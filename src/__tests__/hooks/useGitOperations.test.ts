@@ -107,7 +107,7 @@ describe("useGitOperations", () => {
 		confirmRemoveWorktree: vi.fn().mockResolvedValue(true),
 		confirmRemoveLockedWorktree: vi.fn().mockResolvedValue(true),
 		confirmStashAndSwitch: vi.fn().mockResolvedValue(true),
-		confirmEmptyBranchCleanup: vi.fn().mockResolvedValue(true),
+		confirmDirtyWorktreeCleanup: vi.fn().mockResolvedValue(true),
 		reportGitError: vi.fn().mockResolvedValue(false),
 	};
 
@@ -129,6 +129,14 @@ describe("useGitOperations", () => {
 		mockDialogs.confirmRemoveLockedWorktree.mockResolvedValue(true);
 		mockDialogs.confirmStashAndSwitch.mockResolvedValue(true);
 		mockDialogs.reportGitError.mockResolvedValue(false);
+		// The post-merge cleanup dialog asks two dirtiness questions before it opens.
+		// Both fail SAFE (an unanswered question reads as dirty), so a bare
+		// `resolves undefined` mock would make every ask-mode test look dirty.
+		mockInvoke.mockImplementation((cmd: string) => {
+			if (cmd === "run_git_command") return Promise.resolve({ stdout: "", stderr: "" });
+			if (cmd === "check_worktree_dirty") return Promise.resolve(false);
+			return Promise.resolve(undefined);
+		});
 		mockRepo.switchBranch.mockResolvedValue({
 			success: true,
 			stashed: false,
@@ -909,10 +917,10 @@ describe("useGitOperations", () => {
 			expect(mockSetStatusInfo).toHaveBeenCalledWith(expect.stringContaining("archived"));
 		});
 
-		// A branch with nothing to merge still makes its worktree row disappear, so the
-		// user cannot tell an empty branch from a real one. The backend refuses when
-		// uncommitted work would be swept away with it.
-		describe("empty-branch guard", () => {
+		// Archiving or deleting a worktree ends in `git worktree remove --force`, which
+		// destroys uncommitted work. The backend refuses whenever it cannot confirm the
+		// worktree is clean — with or without commits to merge — and asks first.
+		describe("dirty-worktree guard", () => {
 			function seedBranch() {
 				repositoriesStore.add({ path: "/repo", displayName: "Repo" });
 				repositoriesStore.setBranch("/repo", "main", { worktreePath: "/repo", isMain: true });
@@ -921,7 +929,7 @@ describe("useGitOperations", () => {
 
 			it("keeps the branch and does not force when the user declines", async () => {
 				seedBranch();
-				mockDialogs.confirmEmptyBranchCleanup.mockResolvedValueOnce(false);
+				mockDialogs.confirmDirtyWorktreeCleanup.mockResolvedValueOnce(false);
 				mockRepo.mergeAndArchiveWorktree.mockResolvedValueOnce({
 					merged: false,
 					action: "needs_confirmation",
@@ -932,14 +940,34 @@ describe("useGitOperations", () => {
 
 				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "archive");
 
-				expect(mockDialogs.confirmEmptyBranchCleanup).toHaveBeenCalledWith("feature/x", "archive");
+				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith("feature/x", "archive", 0);
 				expect(mockRepo.mergeAndArchiveWorktree).toHaveBeenCalledTimes(1);
+				expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeDefined();
+			});
+
+			// The old guard only fired on an empty branch, so a worktree full of
+			// uncommitted work was force-removed without a word the moment the branch
+			// carried a single commit. `commits_ahead` must not enter the decision.
+			it("asks even when the branch has commits to merge", async () => {
+				seedBranch();
+				mockDialogs.confirmDirtyWorktreeCleanup.mockResolvedValueOnce(false);
+				mockRepo.mergeAndArchiveWorktree.mockResolvedValueOnce({
+					merged: false,
+					action: "needs_confirmation",
+					archive_path: null,
+					commits_ahead: 7,
+					worktree_dirty: true,
+				});
+
+				await gitOps.handleMergeAndArchive("/repo", "feature/x", "main", "delete");
+
+				expect(mockDialogs.confirmDirtyWorktreeCleanup).toHaveBeenCalledWith("feature/x", "delete", 7);
 				expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeDefined();
 			});
 
 			it("retries with force once the user confirms", async () => {
 				seedBranch();
-				mockDialogs.confirmEmptyBranchCleanup.mockResolvedValueOnce(true);
+				mockDialogs.confirmDirtyWorktreeCleanup.mockResolvedValueOnce(true);
 				mockRepo.mergeAndArchiveWorktree
 					.mockResolvedValueOnce({
 						merged: false,
@@ -1015,6 +1043,7 @@ describe("useGitOperations", () => {
 				branchName: "feature/x",
 				baseBranch: "main",
 				hasDirtyFiles: false,
+				worktreeDirty: false,
 			});
 		});
 
@@ -1123,6 +1152,7 @@ describe("useGitOperations", () => {
 				branchName: "feature/x",
 				baseBranch: "main",
 				hasDirtyFiles: false,
+				worktreeDirty: false,
 			});
 			expect(repositoriesStore.get("/repo")?.branches["feature/x"]).toBeDefined();
 		});

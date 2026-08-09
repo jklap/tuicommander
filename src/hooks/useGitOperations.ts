@@ -65,11 +65,19 @@ export interface GitOperationsDeps {
 			branchName: string,
 			targetBranch: string,
 			afterMerge: string,
-		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;
+			force?: boolean,
+		) => Promise<{
+			merged: boolean;
+			action: string;
+			archive_path: string | null;
+			commits_ahead?: number;
+			worktree_dirty?: boolean;
+		}>;
 		finalizeMergedWorktree: (
 			repoPath: string,
 			branchName: string,
 			action: "archive" | "delete",
+			force?: boolean,
 		) => Promise<{ merged: boolean; action: string; archive_path: string | null }>;
 		listLocalBranches: (repoPath: string) => Promise<string[]>;
 		getMergedBranches: (repoPath: string) => Promise<string[]>;
@@ -95,8 +103,8 @@ export interface GitOperationsDeps {
 		confirmRemoveLockedWorktree?: (branchName: string, deleteBranch?: boolean) => Promise<boolean>;
 		confirmStashAndSwitch?: (branchName: string) => Promise<boolean>;
 		confirmOrphanCleanup?: (paths: string[]) => Promise<boolean>;
-		/** Merge & archive found nothing to merge but a dirty worktree — proceed anyway? */
-		confirmEmptyBranchCleanup?: (branchName: string, action: string) => Promise<boolean>;
+		/** Archiving or deleting this worktree would destroy uncommitted work — proceed anyway? */
+		confirmDirtyWorktreeCleanup?: (branchName: string, action: string, commitsAhead: number) => Promise<boolean>;
 		/** Surface a git failure in a dialog with the full output; returns true if the user chose Retry. */
 		reportGitError?: (title: string, detail: string, offerRetry?: boolean) => Promise<boolean>;
 		/** Browser mode only: show an in-app text-input dialog to enter a repo path */
@@ -150,7 +158,10 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		repoPath: string;
 		branchName: string;
 		baseBranch: string;
+		/** Base repo has uncommitted changes — the "Switch to base" step stashes them. */
 		hasDirtyFiles: boolean;
+		/** The branch's own worktree has uncommitted changes — archive/delete destroys them. */
+		worktreeDirty: boolean;
 	} | null>(null);
 
 	const { markRecentlyCreated, refreshAllBranchStats } = createRepositoryRefreshCoordinator({
@@ -426,9 +437,9 @@ export function useGitOperations(deps: GitOperationsDeps) {
 		closeTerminal: deps.closeTerminal,
 		setStatusInfo: deps.setStatusInfo,
 		// No dialog wired: refuse rather than silently destroy. The guard only fires
-		// when there is nothing to merge AND uncommitted work would be swept away.
-		confirmEmptyBranchCleanup: (branchName, action) =>
-			deps.dialogs.confirmEmptyBranchCleanup?.(branchName, action) ?? Promise.resolve(false),
+		// when uncommitted work would be swept away by the cleanup.
+		confirmDirtyWorktreeCleanup: (branchName, action, commitsAhead) =>
+			deps.dialogs.confirmDirtyWorktreeCleanup?.(branchName, action, commitsAhead) ?? Promise.resolve(false),
 		creatingWorktreeRepos,
 		setCreatingWorktreeRepos,
 		setMergePendingCtx,
