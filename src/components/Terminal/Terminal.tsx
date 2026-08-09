@@ -19,13 +19,13 @@ import { keyFor } from "../../utils/hotkey";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { safeUnlisten } from "../../utils/safeUnlisten";
 import { createSearchVisibility } from "../shared/SearchBar";
+import { handleAgentExitCompletion } from "./agentExitCompletion";
 import { getAwaitingInputSound } from "./awaitingInputSound";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
-import { shouldPlayCompletionSound } from "./completionDecision";
 import { focusIsInsideOwnInput } from "./focusGuards";
 import { getSharedMetrics } from "./glyphCache";
-import { shouldApplyIntentTitle } from "./intentTitle";
+import { handleIntentEvent } from "./intentTitle";
 import { LastPromptBar } from "./LastPromptBar";
 import s from "./Terminal.module.css";
 import { TerminalSearch } from "./TerminalSearch";
@@ -455,20 +455,16 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				}
 				case "intent": {
 					retryCount = 0;
-					terminalsStore.setAgentIntent(props.id, parsed.text);
 					const term = terminalsStore.get(props.id);
 					const agentType = term?.agentType;
 					const perAgentEnabled = agentType ? (agentConfigsStore.getIntentTabTitle(agentType) ?? true) : true;
-					if (
-						shouldApplyIntentTitle({
-							title: parsed.title,
-							globalEnabled: settingsStore.state.intentTabTitle,
-							perAgentEnabled,
-							nameIsCustom: term?.nameIsCustom ?? false,
-						})
-					) {
-						terminalsStore.update(props.id, { name: parsed.title });
-					}
+					handleIntentEvent({
+						terminalId: props.id,
+						text: parsed.text,
+						title: parsed.title,
+						globalEnabled: settingsStore.state.intentTabTitle,
+						perAgentEnabled,
+					});
 					// Intent/suggest row overlays handled by installRenderObserver
 					break;
 				}
@@ -564,6 +560,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				// (e.g. pane closed). Updating a removed entry would recreate it as a ghost.
 				const stillExists = terminalsStore.get(props.id);
 				const hadAgent = stillExists?.agentType != null;
+				const notifyOnExit = handleAgentExitCompletion(props.id);
 				if (stillExists) {
 					// Restore original tab name if it was overwritten by OSC title
 					if (originalName && !stillExists.nameIsCustom) {
@@ -576,6 +573,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						terminalsStore.update(props.id, {
 							shellState: "exited",
 							sessionId: null,
+							...(notifyOnExit ? { completionNotified: true } : {}),
 							currentTask: null,
 							agentType: null,
 							agentSessionId: null,
@@ -599,16 +597,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				props.onSessionExit?.(props.id);
 				// Completion chime only for an agent finishing in a background tab.
 				// A plain shell exit closes its tab, so it stays silent.
-				if (hadAgent && terminalsStore.state.activeId !== props.id) {
-					appLogger.info("terminal", `[Notify] ${props.id} completion — session exited (background tab)`);
-					if (
-						shouldPlayCompletionSound({
-							isRemoteSession: terminalsStore.get(props.id)?.isRemote ?? false,
-							silenceRemoteCompletions: notificationsStore.state.config.silence_remote_completions,
-						})
-					) {
-						notificationsStore.playCompletion();
-					}
+				if (!notifyOnExit && hadAgent && terminalsStore.state.activeId !== props.id) {
+					appLogger.debug("terminal", `[Notify] ${props.id} completion SUPPRESSED — cycle already notified`);
 				}
 				// Plain shell exit: close the tab via the app-level onShellExit handler.
 				// This is the single owner of local session-exit handling; the global
@@ -1236,6 +1226,32 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						isOpen={composeOpen}
 						initialText={pendingComposeText}
 						onTextChange={setPendingComposeText}
+						canEnqueue={() => !!terminalsStore.get(props.id)?.agentType}
+						queuedCount={() => terminalsStore.get(props.id)?.queuedCommands ?? 0}
+						onClearQueue={async () => {
+							if (!sessionId) return;
+							try {
+								await pty.clearQueuedCommands(sessionId);
+								terminalsStore.update(props.id, { queuedCommands: 0 });
+							} catch (err) {
+								appLogger.error("terminal", "ComposePanel clear queue failed", { sessionId, error: err });
+							}
+						}}
+						onEnqueue={async (text) => {
+							if (!sessionId) return;
+							try {
+								const outcome = await pty.enqueueCommand(sessionId, text);
+								// Trust the call's own count instead of waiting for the next 1s
+								// lifecycle poll — the badge must react to the click.
+								terminalsStore.update(props.id, { queuedCommands: outcome.queued });
+								setPendingComposeText("");
+								setComposeOpen(false);
+								canvasTerminalRef()?.focus();
+							} catch (err) {
+								appLogger.error("terminal", "ComposePanel enqueue failed", { sessionId, error: err });
+								toastsStore.add("Could not queue the command", String(err), "error");
+							}
+						}}
 						onClose={() => {
 							setComposeOpen(false);
 							canvasTerminalRef()?.focus();

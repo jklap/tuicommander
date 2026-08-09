@@ -71,3 +71,12 @@ export function shouldPlayCompletionSound(ctx: {
 }): boolean {
 	return !(ctx.silenceRemoteCompletions && ctx.isRemoteSession);
 }
+
+/** Session exit is a fallback completion signal, not a second notification. */
+export function shouldNotifyAgentExit(ctx: {
+	hadAgent: boolean;
+	isBackground: boolean;
+	completionNotified: boolean;
+}): boolean {
+	return ctx.hadAgent && ctx.isBackground && !ctx.completionNotified;
+}

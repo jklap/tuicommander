@@ -1,9 +1,13 @@
+import { AGENT_TYPES, type AgentType } from "../agents";
+import { handleAgentExitCompletion } from "../components/Terminal/agentExitCompletion";
 import { invoke, listen } from "../invoke";
+import { isNotificationSound } from "../notifications";
 import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
 import { mdTabsStore } from "../stores/mdTabs";
+import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { repoSettingsStore } from "../stores/repoSettings";
 import { repositoriesStore } from "../stores/repositories";
@@ -30,6 +34,10 @@ const REMOTE_TAB_AUTOCLOSE_MS = 30_000;
 /** Shorter delay for agent-spawned sessions — they finish their task and can be cleaned up faster. */
 const AGENT_TAB_AUTOCLOSE_MS = 10_000;
 
+function parseAgentType(value: string | null | undefined): AgentType | null {
+	return value && (AGENT_TYPES as readonly string[]).includes(value) ? (value as AgentType) : null;
+}
+
 /** Dependencies injected into initApp */
 export interface AppInitDeps {
 	pty: {
@@ -38,6 +46,8 @@ export interface AppInitDeps {
 				session_id: string;
 				cwd: string | null;
 				display_name?: string | null;
+				display_name_is_custom?: boolean;
+				is_remote?: boolean;
 				state?: {
 					shell_state?: "busy" | "idle";
 					agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
@@ -366,10 +376,16 @@ export async function initApp(deps: AppInitDeps) {
 	}).catch((err) => appLogger.error("app", "Failed to register worktree-create-failed listener", err));
 
 	// Listen for MCP toast notifications from the Rust backend
-	listen<{ title: string; message: string | null; level: string; sound: boolean | null }>("mcp-toast", (event) => {
+	listen<{ title: string; message: string | null; level: string; sound: string | null }>("mcp-toast", (event) => {
 		const { title, message, level, sound } = event.payload;
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
-		toastsStore.add(title, message ?? "", safeLevel, sound === true);
+		// The toast store's own tones are level-keyed and bypass the user's
+		// notification settings; the backend already resolved a NotificationSound
+		// name, so play it through the notifications store instead — that is what
+		// honours volume, output device and per-sound mutes, and what lets an
+		// agent raise the distinct `attention` callback the chimes cannot express.
+		toastsStore.add(title, message ?? "", safeLevel, false);
+		if (isNotificationSound(sound)) void notificationsStore.play(sound);
 	}).catch((err) => appLogger.error("app", "Failed to register mcp-toast listener", err));
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
@@ -377,6 +393,7 @@ export async function initApp(deps: AppInitDeps) {
 		"session-created",
 		(event) => {
 			const { session_id, cwd, agent_type, display_name } = event.payload;
+			const parsedAgentType = parseAgentType(agent_type);
 			// Skip if this session was created by the local browser client or is already tracked
 			if (browserCreatedSessions.has(session_id)) return;
 			const existing = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === session_id);
@@ -387,18 +404,22 @@ export async function initApp(deps: AppInitDeps) {
 				sessionId: session_id,
 				fontSize: deps.getDefaultFontSize(),
 				name: display_name || `PTY: Session ${terminalsStore.getCount() + 1}`,
-				nameIsCustom: Boolean(display_name),
+				// A spawn-assigned display name is the base title, not a manual rename.
+				// Intent/OSC titles may replace it until the user explicitly renames the tab.
+				nameIsCustom: false,
 				cwd: cwd ?? null,
 				awaitingInput: null,
 				isRemote: true,
+				agentType: parsedAgentType,
 			});
 			remoteSessionTabs.set(session_id, id);
 
 			assignSessionToRepoBranch(session_id, id, cwd);
 
-			// Auto-focus agent-spawned tabs so swarm workers are immediately visible.
-			// Only activate when agent_type is present (MCP agent spawn), not for
-			// manually created sessions which should stay in the background.
+			// Dock agent-spawned tabs so swarm workers show up in the tab strip.
+			// Only for agent_type (MCP agent spawn), not for manually created
+			// sessions. The tab is docked but never selected: an MCP spawn must
+			// not take over the pane the user is working in.
 			if (agent_type) {
 				// In split mode, ensure there is an active group so assignTabToActiveGroup
 				// doesn't silently no-op and leave the tab invisible.
@@ -408,7 +429,7 @@ export async function initApp(deps: AppInitDeps) {
 						paneLayoutStore.setActiveGroup(leafIds[0]);
 					}
 				}
-				assignTabToActiveGroup(id, "terminal");
+				assignTabToActiveGroup(id, "terminal", false);
 				// Only steal focus when there is no existing active terminal.
 				if (!terminalsStore.state.activeId) {
 					terminalsStore.setActive(id);
@@ -522,6 +543,8 @@ export async function initApp(deps: AppInitDeps) {
 		const t0 = terminalsStore.get(termId);
 		if (!t0?.isRemote) return;
 
+		const parsedAgentType = parseAgentType(agent_type);
+		handleAgentExitCompletion(termId, parsedAgentType != null);
 		terminalsStore.update(termId, { shellState: "exited", sessionId: null });
 
 		// Agent-spawned sessions get a shorter grace period — they finish their task
@@ -615,7 +638,8 @@ export async function initApp(deps: AppInitDeps) {
 					sessionId: session.session_id,
 					fontSize: deps.getDefaultFontSize(),
 					name: session.display_name || terminalsStore.nextDefaultName(),
-					nameIsCustom: Boolean(session.display_name),
+					nameIsCustom: session.display_name_is_custom ?? false,
+					isRemote: session.is_remote ?? false,
 					cwd: session.cwd,
 					awaitingInput: null,
 				});
@@ -631,9 +655,14 @@ export async function initApp(deps: AppInitDeps) {
 					: currentRevision === 0);
 			terminalsStore.update(id, {
 				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
+				...(session.is_remote !== undefined ? { isRemote: session.is_remote } : {}),
+				...(session.display_name_is_custom !== undefined
+					? { nameIsCustom: session.display_name_is_custom }
+					: {}),
 				agentState: session.state?.agent_state ?? null,
 				backgroundWork: session.state?.background_work ?? false,
 			});
+			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);
 
 			assignSessionToRepoBranch(session.session_id, id, session.cwd);
 		}

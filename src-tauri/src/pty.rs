@@ -3664,9 +3664,10 @@ pub(crate) fn hook_instrumented_for(
 ///
 /// Deliberately separate from the clean-row parsers: everything appended here
 /// skips `suppress_heuristic_question`. That filter exists to stop regex
-/// *guesses* from double-firing against the hook's `state=awaiting`, and an
-/// escape sequence the agent emitted on purpose is not a guess. OSC 777 is also
-/// the only awaiting signal for a hook-instrumented agent whose prompt is not
+/// *guesses* from double-firing against the hook's `state=awaiting`; the OSC 777
+/// parser first classifies whether the protocol notification actually requires
+/// a response. A qualifying OSC 777 notification is the only awaiting signal
+/// for a hook-instrumented agent whose prompt is not
 /// `PreToolUse(AskUserQuestion)` — a plan or skill Ink picker emits no hook
 /// state at all, which is why such a session sat blocked behind a "working" dot.
 ///
@@ -5429,13 +5430,19 @@ fn idle_is_confirmed(state: &AppState, session_id: &str) -> bool {
     !has_ready_screen_adapter(agent_type.as_deref())
 }
 
-pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
-    let is_agent = state
+/// Whether an agent owns this session's composer. Injection is agent-only: in a
+/// plain shell the idle atom says nothing about what holds stdin, so typed text
+/// would reach whatever program is running rather than the shell.
+fn session_is_agent(state: &AppState, session_id: &str) -> bool {
+    state
         .session_states
         .get(session_id)
         .map(|s| s.agent_type.is_some())
-        .unwrap_or(false);
-    if !is_agent {
+        .unwrap_or(false)
+}
+
+pub(crate) fn should_inject_now(state: &AppState, session_id: &str) -> bool {
+    if !session_is_agent(state, session_id) {
         return false;
     }
     let idle = state
@@ -5940,12 +5947,16 @@ fn apply_claimed_injection_outcome(
     outcome
 }
 
-fn requeue_injection_front(state: &AppState, session_id: &str, text: &str) {
+fn requeue_injection_front(
+    state: &AppState,
+    session_id: &str,
+    injection: crate::state::PendingInjection,
+) {
     state
         .pending_injections
         .entry(session_id.to_string())
         .or_default()
-        .push_front(text.to_string());
+        .push_front(injection);
 }
 
 /// What actually became of a peer message handed to the terminal path.
@@ -5977,12 +5988,7 @@ pub(crate) fn deliver_message_to_pty(
     framed: &str,
 ) -> PtyDelivery {
     // Never queue for a non-agent — shells and dead sessions have no wake path.
-    let is_agent = state
-        .session_states
-        .get(session_id)
-        .map(|s| s.agent_type.is_some())
-        .unwrap_or(false);
-    if !is_agent {
+    if !session_is_agent(state, session_id) {
         return PtyDelivery::Unavailable;
     }
     if let Some(claim) = claim_idle_for_injection(state, session_id) {
@@ -5996,7 +6002,11 @@ pub(crate) fn deliver_message_to_pty(
             ),
             InjectionOutcome::NotStarted(_)
         ) {
-            requeue_injection_front(state, session_id, framed);
+            requeue_injection_front(
+                state,
+                session_id,
+                crate::state::PendingInjection::peer_message(framed),
+            );
             return PtyDelivery::Queued;
         }
         // Submitted, or Uncertain — an ambiguous write must not be retried, so the
@@ -6007,7 +6017,7 @@ pub(crate) fn deliver_message_to_pty(
             .pending_injections
             .entry(session_id.to_string())
             .or_default()
-            .push_back(framed.to_string());
+            .push_back(crate::state::PendingInjection::peer_message(framed));
         // CONC-A (story 101-20e3): the should_inject_now read above and this push are
         // not atomic vs a concurrent BUSY→IDLE flush. If the silence timer transitions
         // the session to idle and drains the (still-empty) queue in the window between
@@ -6104,20 +6114,94 @@ pub(crate) fn flush_pending_injections(state: &AppState, session_id: &str) {
         Some(mut q) => q.pop_front(),
         None => return,
     };
-    if let Some(text) = pending
+    if let Some(injection) = pending
         && matches!(
             run_claimed_injection(
                 state,
                 session_id,
-                &text,
+                injection.text(),
                 claim,
                 ClaimedInjectionKind::Message
             ),
             InjectionOutcome::NotStarted(_)
         )
     {
-        requeue_injection_front(state, session_id, &text);
+        requeue_injection_front(state, session_id, injection);
     }
+}
+
+/// User-composed commands still parked for a session. Peer wake entries share
+/// the FIFO but are deliberately excluded from this Compose-facing count.
+pub(crate) fn queued_command_count(state: &AppState, session_id: &str) -> usize {
+    state
+        .pending_injections
+        .get(session_id)
+        .map(|queue| queue.iter().filter(|entry| entry.is_user_command()).count())
+        .unwrap_or(0)
+}
+
+/// What the idle gate did with a user-composed command.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(crate) struct EnqueuedCommand {
+    /// The agent was already idle, so the text was typed and submitted at once.
+    pub typed: bool,
+    /// Commands still waiting, this one included when `typed` is false.
+    pub queued: usize,
+}
+
+/// Route a user-composed command through the same idle gate peer messages use:
+/// typed immediately when the agent is idle, otherwise parked until the next
+/// BUSY→IDLE transition. This is the whole point of the Compose panel's enqueue
+/// action — the user wants the text delivered *without* steering a running turn.
+///
+/// The command is always appended before the flush, never handed straight to
+/// `deliver_message_to_pty`: injecting ahead of any accepted peer message or
+/// Compose command would reorder delivery. `flush_pending_injections` pops one
+/// typed entry and leaves the session BUSY, so the shared queue drains one item
+/// per idle transition and stays FIFO across both producers.
+///
+/// Agent sessions only (see `session_is_agent`).
+pub(crate) fn enqueue_user_command(
+    state: &AppState,
+    session_id: &str,
+    text: &str,
+) -> Result<EnqueuedCommand, String> {
+    if text.trim().is_empty() {
+        return Err("Command text is empty".to_string());
+    }
+    if !state.sessions.contains_key(session_id) {
+        return Err("Session not found".to_string());
+    }
+    if !session_is_agent(state, session_id) {
+        return Err("Session is not running an agent".to_string());
+    }
+    state
+        .pending_injections
+        .entry(session_id.to_string())
+        .or_default()
+        .push_back(crate::state::PendingInjection::user_command(text));
+    flush_pending_injections(state, session_id);
+    let queued = queued_command_count(state, session_id);
+    // An empty queue after the flush means our command was the only one waiting
+    // and reached the composer; any remaining entry means it is still parked.
+    Ok(EnqueuedCommand {
+        typed: queued == 0,
+        queued,
+    })
+}
+
+/// Drop only user-composed commands still waiting for this session. Peer wake
+/// entries remain in the same relative order. Returns the user-command count removed.
+pub(crate) fn clear_queued_commands(state: &AppState, session_id: &str) -> usize {
+    state
+        .pending_injections
+        .get_mut(session_id)
+        .map(|mut queue| {
+            let before = queue.len();
+            queue.retain(|entry| !entry.is_user_command());
+            before - queue.len()
+        })
+        .unwrap_or(0)
 }
 
 /// Keeps `output_buffers`, `vt_log_buffers`, `last_output_ms`, and `exit_codes`
@@ -7014,6 +7098,8 @@ pub(crate) async fn create_pty(
             worktree: None,
             cwd: config.cwd,
             display_name: None,
+            display_name_is_custom: false,
+            is_remote: false,
             shell: shell.clone(),
         }),
     );
@@ -7129,6 +7215,8 @@ pub(crate) async fn spawn_session_for_agent(
             worktree: None,
             cwd,
             display_name: display_name.clone(),
+            display_name_is_custom: false,
+            is_remote: true,
             shell: shell.clone(),
         }),
     );
@@ -7297,6 +7385,8 @@ pub(crate) async fn create_pty_with_worktree(
             worktree: Some(worktree),
             cwd: worktree_cwd,
             display_name: None,
+            display_name_is_custom: false,
+            is_remote: false,
             shell,
         }),
     );
@@ -8723,6 +8813,8 @@ pub(crate) struct ActiveSessionInfo {
     worktree_path: Option<String>,
     worktree_branch: Option<String>,
     display_name: Option<String>,
+    display_name_is_custom: bool,
+    is_remote: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<crate::state::SessionState>,
 }
@@ -8761,13 +8853,39 @@ pub(crate) fn set_session_name(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     name: Option<String>,
+    is_custom: Option<bool>,
 ) -> Result<(), String> {
     let entry = state
         .sessions
         .get(&session_id)
         .ok_or_else(|| format!("Session not found: {session_id}"))?;
-    entry.lock().display_name = name;
+    let mut session = entry.lock();
+    session.display_name = name;
+    session.display_name_is_custom = is_custom.unwrap_or(true);
     Ok(())
+}
+
+/// Queue a user-composed command for an agent session (Compose panel enqueue).
+/// Typed at once when the agent is idle, otherwise delivered on its next
+/// BUSY→IDLE transition so a running turn is never steered.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn enqueue_agent_command(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    text: String,
+) -> Result<EnqueuedCommand, String> {
+    enqueue_user_command(&state, &session_id, &text)
+}
+
+/// Discard every command still queued for a session. Returns how many were dropped.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn clear_queued_agent_commands(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> usize {
+    clear_queued_commands(&state, &session_id)
 }
 
 /// List all active PTY sessions for reconnection after frontend reload
@@ -8789,6 +8907,8 @@ pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<Activ
                     .map(|w| w.path.to_string_lossy().to_string()),
                 worktree_branch: session.worktree.as_ref().and_then(|w| w.branch.clone()),
                 display_name: session.display_name.clone(),
+                display_name_is_custom: session.display_name_is_custom,
+                is_remote: session.is_remote,
                 state: state.session_state_with_shell(entry.key()),
             }
         })
@@ -10739,7 +10859,7 @@ mod tests {
                 .any(|r| crate::chrome::is_spinner_row(&r.text));
         assert!(chrome_only, "empty post-cutoff set is chrome_only");
         assert!(
-            !(!chrome_only || has_spinner),
+            chrome_only && !has_spinner,
             "statusbar repaint must NOT pass the busy transition gate (no flap)"
         );
     }
@@ -10921,11 +11041,11 @@ mod tests {
     fn test_codex_background_terminal_wait_holds_busy() {
         let screen: Vec<String> = vec![
             "• Il secondo pre-push ha già superato nuovamente check, Clippy e audit root/plugin.".into(),
-            "".into(),
+            String::new(),
             "• Waiting for background terminal (41s • esc to interrupt) · 1 background terminal running · /ps to view · …".into(),
             "  └ rtk git fetch origin POC-00002-BLADES-REFINEMENT && rtk git rev-parse origin/POC-00002…".into(),
-            "".into(),
-            "".into(),
+            String::new(),
+            String::new(),
             "› Use /skills to list available skills".into(),
             "  gpt-5.6-sol medium · ~/Gits/CC_Playground/itview · master · Context 67% left".into(),
         ];
@@ -11006,13 +11126,13 @@ mod tests {
     fn claude_screen_with(mid_line: &str) -> Vec<String> {
         vec![
             "⏺ Fixed the bug and ran the tests — all green.".into(),
-            "".into(),
+            String::new(),
             "  Searched for 1 pattern, read 1 file (ctrl+o to expand)".into(),
-            "".into(),
+            String::new(),
             mid_line.into(),
-            "".into(),
+            String::new(),
             "❯ ".into(),
-            "".into(),
+            String::new(),
         ]
     }
 
@@ -11057,9 +11177,9 @@ mod tests {
     fn claude_active_phase_without_prompt_holds_busy() {
         let screen: Vec<String> = vec![
             "⏺ Editing src/main.rs…".into(),
-            "".into(),
+            String::new(),
             "✻ Sautéing… (12s · esc to interrupt)".into(),
-            "".into(),
+            String::new(),
         ];
         assert_eq!(
             detect_claude_screen_activity(&screen),
@@ -11129,9 +11249,9 @@ mod tests {
             "│                  ▝▜█████▛▘                  │ Forked subagents".into(),
             "│      Opus 4.8 (1M context) · Claude Team    │           ".into(),
             "╰───────────────────────────────────────────────────────╯".into(),
-            "".into(),
+            String::new(),
             " ⚠ 2 MCP servers need authentication · run /mcp".into(),
-            "".into(),
+            String::new(),
             "───────────────────────────────────────────────────────────".into(),
             "❯ ".into(),
             "───────────────────────────────────────────────────────────".into(),
@@ -11906,7 +12026,7 @@ mod tests {
                 vec![
                     "› historical submitted prompt".to_string(),
                     "• Waiting for background terminal (41s • esc to interrupt) · 1 background terminal running".to_string(),
-                    "".to_string(),
+                    String::new(),
                     "» Use /skills to list available skills".to_string(),
                 ],
             ),
@@ -11915,7 +12035,7 @@ mod tests {
                 "claude",
                 vec![
                     "✽ Nucleating… (3m 50s · ↓ 7.8k tokens)".to_string(),
-                    "".to_string(),
+                    String::new(),
                     "────────────────────────────────────────".to_string(),
                     "❯".to_string(),
                     "────────────────────────────────────────".to_string(),
@@ -11926,7 +12046,7 @@ mod tests {
                 "claude",
                 vec![
                     "✻ Sautéing… (12s · esc to interrupt)".to_string(),
-                    "".to_string(),
+                    String::new(),
                     "❯".to_string(),
                 ],
             ),
@@ -13087,11 +13207,11 @@ mod tests {
     #[test]
     fn test_verify_question_on_screen_found() {
         let screen = vec![
-            "".to_string(),
+            String::new(),
             "Some output".to_string(),
             "Do you want to proceed?".to_string(),
             "⏵⏵ task_name".to_string(),
-            "".to_string(),
+            String::new(),
         ];
         assert!(verify_question_on_screen(
             &screen,
@@ -13108,9 +13228,9 @@ mod tests {
         let screen = vec![
             "⏺ Boss, this is a plan file".to_string(),
             "  Is that right?".to_string(),
-            "".to_string(),
+            String::new(),
             "  Want me to do that?".to_string(),
-            "".to_string(),
+            String::new(),
         ];
         // Question stored with leading whitespace from extract_question_line
         assert!(verify_question_on_screen(
@@ -13143,7 +13263,7 @@ mod tests {
     fn test_verify_question_on_screen_partial_match() {
         let screen = vec![
             "This is not a question? but has more text".to_string(),
-            "".to_string(),
+            String::new(),
         ];
         // The stored question is just "question?" — substring should not match
         assert!(!verify_question_on_screen(&screen, "question?", 5));
@@ -13864,7 +13984,7 @@ mod tests {
             "question must be found even when mode line is on a later row; changed_rows: {:?}",
             changed
                 .iter()
-                .map(|r| format!("[{}] {:?}", r.row_index, &r.text))
+                .map(|r| format!("[{}] {:?}", r.row_index, r.text))
                 .collect::<Vec<_>>()
         );
     }
@@ -13884,7 +14004,7 @@ mod tests {
             "question must be found in alternate screen; changed_rows: {:?}",
             changed
                 .iter()
-                .map(|r| format!("[{}] {:?}", r.row_index, &r.text))
+                .map(|r| format!("[{}] {:?}", r.row_index, r.text))
                 .collect::<Vec<_>>()
         );
     }
@@ -15959,8 +16079,10 @@ mod tests {
             .insert(child_id.to_string(), parent_id.to_string());
         state.agent_inbox.entry(parent_id.to_string()).or_default();
         // Must have a session_state with agent_type to qualify for idle notification
-        let mut ss = crate::state::SessionState::default();
-        ss.agent_type = Some("claude".to_string());
+        let ss = crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            ..Default::default()
+        };
         state.session_states.insert(child_id.to_string(), ss);
         state.shell_states.insert(
             child_id.to_string(),
@@ -16661,8 +16783,10 @@ mod tests {
             .session_parent
             .insert(child_id.to_string(), parent_id.to_string());
         state.agent_inbox.entry(parent_id.to_string()).or_default();
-        let mut ss = crate::state::SessionState::default();
-        ss.agent_type = Some("claude".to_string());
+        let ss = crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            ..Default::default()
+        };
         state.session_states.insert(child_id.to_string(), ss);
         state.shell_states.insert(
             child_id.to_string(),
@@ -16757,7 +16881,7 @@ mod tests {
 
     fn flush_one_pending_as_submitted(state: &crate::state::AppState, sid: &str) {
         let claim = claim_idle_for_injection(state, sid).expect("idle claim");
-        let text = state
+        let injection = state
             .pending_injections
             .get_mut(sid)
             .and_then(|mut queue| queue.pop_front())
@@ -16765,7 +16889,7 @@ mod tests {
         apply_claimed_injection_outcome(
             state,
             sid,
-            &text,
+            injection.text(),
             claim,
             InjectionOutcome::Submitted,
             ClaimedInjectionKind::Message,
@@ -16804,7 +16928,9 @@ mod tests {
         completed_agent_session(&state, "completed");
         state.pending_injections.insert(
             "completed".to_string(),
-            std::collections::VecDeque::from(["follow up".to_string()]),
+            std::collections::VecDeque::from([crate::state::PendingInjection::peer_message(
+                "follow up",
+            )]),
         );
 
         flush_one_pending_as_submitted(&state, "completed");
@@ -17143,7 +17269,9 @@ mod tests {
         completed_agent_session(&state, "quick-turn");
         state.pending_injections.insert(
             "quick-turn".to_string(),
-            std::collections::VecDeque::from(["quick follow up".to_string()]),
+            std::collections::VecDeque::from([crate::state::PendingInjection::peer_message(
+                "quick follow up",
+            )]),
         );
         flush_one_pending_as_submitted(&state, "quick-turn");
 
@@ -17360,7 +17488,183 @@ mod tests {
         );
         let q = state.pending_injections.get("busy").expect("queued");
         assert_eq!(q.len(), 1);
-        assert_eq!(q.front().unwrap(), "[TUIC message from lead] go");
+        assert_eq!(
+            q.front().map(crate::state::PendingInjection::text),
+            Some("[TUIC message from lead] go")
+        );
+    }
+
+    /// A live PTY whose every byte is recorded, so a test can assert both what
+    /// reached the composer and what deliberately did not.
+    #[cfg(unix)]
+    fn insert_recording_session(
+        state: &AppState,
+        session_id: &str,
+    ) -> Arc<std::sync::Mutex<Vec<u8>>> {
+        let bytes = Arc::new(std::sync::Mutex::new(Vec::new()));
+        insert_session_with_writer(
+            state,
+            session_id,
+            Box::new(RecordingWriter {
+                bytes: Arc::clone(&bytes),
+            }),
+        );
+        bytes
+    }
+
+    /// Compose enqueue on a busy agent: nothing may reach the composer, or the
+    /// user's queued note would steer the turn they deliberately did not interrupt.
+    #[cfg(unix)]
+    #[test]
+    fn enqueue_parks_command_while_agent_is_busy() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "busy", SHELL_BUSY);
+        let bytes = insert_recording_session(&state, "busy");
+
+        let first = enqueue_user_command(&state, "busy", "run the tests").expect("enqueued");
+        assert_eq!((first.typed, first.queued), (false, 1));
+        let second = enqueue_user_command(&state, "busy", "then push").expect("enqueued");
+        assert_eq!((second.typed, second.queued), (false, 2));
+
+        let queue = state.pending_injections.get("busy").expect("queue");
+        assert_eq!(
+            queue.iter().map(|entry| entry.text()).collect::<Vec<_>>(),
+            vec!["run the tests", "then push"],
+            "queued in the order the user composed them"
+        );
+        assert!(queue.iter().all(|entry| entry.is_user_command()));
+        assert_eq!(
+            state
+                .session_state_with_shell("busy")
+                .expect("snapshot")
+                .queued_commands,
+            2,
+            "queue depth is visible to the polling UI"
+        );
+        assert!(
+            bytes.lock().unwrap().is_empty(),
+            "a busy composer receives nothing"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn enqueue_refuses_shells_and_dead_sessions() {
+        use std::sync::atomic::AtomicU8;
+        let state = crate::state::tests_support::make_test_app_state();
+        state
+            .shell_states
+            .insert("shell".to_string(), AtomicU8::new(SHELL_IDLE));
+        state
+            .session_states
+            .insert("shell".to_string(), crate::state::SessionState::default());
+        insert_recording_session(&state, "shell");
+        assert_eq!(
+            enqueue_user_command(&state, "shell", "ls").unwrap_err(),
+            "Session is not running an agent"
+        );
+
+        agent_session(&state, "gone", SHELL_IDLE);
+        assert_eq!(
+            enqueue_user_command(&state, "gone", "hi").unwrap_err(),
+            "Session not found",
+            "a tombstoned agent still has session_states — the PTY is what decides"
+        );
+
+        agent_session(&state, "blank", SHELL_IDLE);
+        insert_recording_session(&state, "blank");
+        assert_eq!(
+            enqueue_user_command(&state, "blank", "   \n ").unwrap_err(),
+            "Command text is empty"
+        );
+        assert_eq!(queued_command_count(&state, "blank"), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clear_queued_commands_preserves_peer_deliveries() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "busy", SHELL_BUSY);
+        insert_recording_session(&state, "busy");
+        enqueue_user_command(&state, "busy", "one").expect("enqueued");
+        state.pending_injections.get_mut("busy").unwrap().push_back(
+            crate::state::PendingInjection::peer_message("[TUIC message from lead] first peer"),
+        );
+        enqueue_user_command(&state, "busy", "two").expect("enqueued");
+        state.pending_injections.get_mut("busy").unwrap().push_back(
+            crate::state::PendingInjection::peer_message("[TUIC message from worker] second peer"),
+        );
+
+        assert_eq!(queued_command_count(&state, "busy"), 2);
+        assert_eq!(clear_queued_commands(&state, "busy"), 2);
+        assert_eq!(queued_command_count(&state, "busy"), 0);
+        assert_eq!(
+            state.pending_injections.get("busy").map(|queue| queue
+                .iter()
+                .map(|entry| entry.text().to_string())
+                .collect::<Vec<_>>()),
+            Some(vec![
+                "[TUIC message from lead] first peer".to_string(),
+                "[TUIC message from worker] second peer".to_string(),
+            ]),
+            "Compose clear must retain peer delivery ownership and order"
+        );
+        assert_eq!(
+            clear_queued_commands(&state, "busy"),
+            0,
+            "clearing an empty queue is a no-op, not an error"
+        );
+    }
+
+    /// The idle path, end to end against a real PTY: an idle agent gets the text
+    /// typed and submitted at once (Ctrl-U prefix, CR in a separate write), so
+    /// enqueueing costs nothing when there is no turn to protect.
+    #[cfg(unix)]
+    #[test]
+    fn enqueue_types_immediately_when_agent_is_idle() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "idle-now", SHELL_IDLE);
+        let bytes = insert_recording_session(&state, "idle-now");
+
+        let outcome = enqueue_user_command(&state, "idle-now", "ship it").expect("enqueued");
+        assert_eq!((outcome.typed, outcome.queued), (true, 0));
+        assert_eq!(
+            String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
+            "\u{15}ship it\r"
+        );
+    }
+
+    /// FIFO under the idle path: a user command enqueued behind a peer delivery
+    /// must not jump ahead of it. The flush types the shared head and leaves the
+    /// session busy, so the user command stays parked for the next idle window.
+    #[cfg(unix)]
+    #[test]
+    fn enqueue_never_overtakes_a_command_already_waiting() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "fifo", SHELL_IDLE);
+        let bytes = insert_recording_session(&state, "fifo");
+        state
+            .pending_injections
+            .entry("fifo".to_string())
+            .or_default()
+            .push_back(crate::state::PendingInjection::peer_message("first"));
+
+        let outcome = enqueue_user_command(&state, "fifo", "second").expect("enqueued");
+        assert_eq!((outcome.typed, outcome.queued), (false, 1));
+        assert_eq!(
+            String::from_utf8(bytes.lock().unwrap().clone()).unwrap(),
+            "\u{15}first\r",
+            "the older command is the one that reached the composer"
+        );
+        assert_eq!(
+            state
+                .pending_injections
+                .get("fifo")
+                .expect("queue")
+                .front()
+                .map(crate::state::PendingInjection::text),
+            Some("second")
+        );
     }
 
     /// The defect this pair pins: `deliver_message_to_managed_pty` used to return
@@ -17451,16 +17755,19 @@ mod tests {
         agent_session(&state, "idle", SHELL_IDLE);
         state.pending_injections.insert(
             "idle".to_string(),
-            std::collections::VecDeque::from(["first".to_string(), "second".to_string()]),
+            std::collections::VecDeque::from([
+                crate::state::PendingInjection::peer_message("first"),
+                crate::state::PendingInjection::peer_message("second"),
+            ]),
         );
 
         flush_one_pending_as_submitted(&state, "idle");
 
         assert_eq!(
-            state
-                .pending_injections
-                .get("idle")
-                .map(|queue| queue.iter().cloned().collect::<Vec<_>>()),
+            state.pending_injections.get("idle").map(|queue| queue
+                .iter()
+                .map(|entry| entry.text().to_string())
+                .collect::<Vec<_>>()),
             Some(vec!["second".to_string()]),
             "submitting the first message makes the agent busy; later messages must wait for its next idle transition"
         );
@@ -17483,7 +17790,10 @@ mod tests {
         deliver_message_to_pty(&state, "typing", "[TUIC message from child] done");
         let pending = state.pending_injections.get("typing").unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending.front().unwrap(), "[TUIC message from child] done");
+        assert_eq!(
+            pending.front().map(crate::state::PendingInjection::text),
+            Some("[TUIC message from child] done")
+        );
     }
 
     #[test]
@@ -17557,7 +17867,7 @@ mod tests {
             state
                 .pending_injections
                 .get("idle")
-                .and_then(|queue| queue.front().cloned()),
+                .and_then(|queue| queue.front().map(|entry| entry.text().to_string())),
             Some("now".to_string()),
             "a not-started delivery must remain retryable"
         );
@@ -17669,6 +17979,8 @@ mod tests {
                 worktree: None,
                 cwd: None,
                 display_name: None,
+                display_name_is_custom: false,
+                is_remote: false,
                 shell: "/bin/sh".to_string(),
             }),
         );
@@ -17913,6 +18225,8 @@ mod tests {
                 worktree: None,
                 cwd: None,
                 display_name: None,
+                display_name_is_custom: false,
+                is_remote: false,
                 shell: "/bin/sh".to_string(),
             }),
         );
@@ -17988,8 +18302,8 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         agent_session(&state, "sess", SHELL_BUSY);
         let mut q = VecDeque::new();
-        q.push_back("msg-1".to_string());
-        q.push_back("msg-2".to_string());
+        q.push_back(crate::state::PendingInjection::peer_message("msg-1"));
+        q.push_back(crate::state::PendingInjection::peer_message("msg-2"));
         state.pending_injections.insert("sess".to_string(), q);
 
         // The transition is driven by verified ready-screen/Stop evidence in
@@ -18047,7 +18361,7 @@ mod tests {
             },
         );
         let mut q = VecDeque::new();
-        q.push_back("later".to_string());
+        q.push_back(crate::state::PendingInjection::peer_message("later"));
         state.pending_injections.insert("sess".to_string(), q);
 
         state.silence_states.insert(
@@ -18111,7 +18425,7 @@ mod tests {
         let state = crate::state::tests_support::make_test_app_state();
         agent_session(&state, "busy", SHELL_BUSY);
         let mut q = VecDeque::new();
-        q.push_back("later".to_string());
+        q.push_back(crate::state::PendingInjection::peer_message("later"));
         state.pending_injections.insert("busy".to_string(), q);
 
         flush_pending_injections(&state, "busy");
@@ -18150,7 +18464,7 @@ mod tests {
             state
                 .pending_injections
                 .get("codex")
-                .and_then(|queue| queue.front().cloned()),
+                .and_then(|queue| queue.front().map(|entry| entry.text().to_string())),
             Some("[TUIC message from lead] go".to_string()),
             "ready-prompt delivery must stay retryable when PTY lookup fails"
         );
@@ -18207,8 +18521,10 @@ mod tests {
             .session_parent
             .insert(child_id.to_string(), parent_id.to_string());
         state.agent_inbox.entry(parent_id.to_string()).or_default();
-        let mut ss = crate::state::SessionState::default();
-        ss.agent_type = Some("claude".to_string());
+        let ss = crate::state::SessionState {
+            agent_type: Some("claude".to_string()),
+            ..Default::default()
+        };
         state.session_states.insert(child_id.to_string(), ss);
         state.shell_states.insert(
             child_id.to_string(),
@@ -18516,7 +18832,7 @@ mod tests {
         let mut events = Vec::new();
         raw_stream_events(
             &mut carry,
-            "\x1b]777;notify;Claude Code;waiting\x07",
+            "\x1b]777;notify;Claude Code;Claude is waiting for your input\x07",
             &mut events,
         );
         assert!(carry.is_empty(), "complete sequence must not be carried");
@@ -18557,9 +18873,11 @@ mod tests {
     // session, no mocks.
     //
     // Capturing a new one:
-    //   curl -s localhost:9876/sessions/<id>/output   → `data` is the last 8 KB
-    //   of the raw PTY stream, JSON-escaped; decode it back to bytes and drop
-    //   the result in src/fixtures/agent_prompts/.
+    //   POST /diagnostics/capture with {"enabled":true,"session_id":"<id>"}
+    //   BEFORE reproducing, then POST {"enabled":false}. Copy the exact `.raw`
+    //   file reported by GET /diagnostics/capture from the config-dir captures/
+    //   directory into src/fixtures/agent_prompts/. `/sessions/:id/output` is a
+    //   rendered/ring-buffer snapshot and is not valid raw-stream evidence.
 
     fn agent_prompt_fixture(name: &str) -> Vec<u8> {
         let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -18646,15 +18964,35 @@ mod tests {
         }
     }
 
+    /// Regression for the other observed Claude notification payload. OSC 777
+    /// is a desktop-notification transport, so the generic "needs your
+    /// attention" body is not proof that the composer awaits a response. Treating
+    /// it as a confident question latched awaiting after completion indefinitely.
+    #[test]
+    fn generic_osc777_attention_does_not_report_awaiting() {
+        for hook in [true, false] {
+            let events =
+                replay_capture(&agent_prompt_fixture("claude-generic-attention.raw"), hook);
+            assert!(
+                awaiting_prompts(&events).is_empty(),
+                "generic notification became awaiting with hook_instrumented={hook}: {events:?}"
+            );
+        }
+    }
+
     #[test]
     fn question_suppress_resolves_from_agent_config() {
         use crate::config::{AgentSettings, AgentsConfig};
         let mut agents = AgentsConfig::default();
-        let mut enabled = AgentSettings::default();
-        enabled.hook_instrumentation = Some(true);
+        let enabled = AgentSettings {
+            hook_instrumentation: Some(true),
+            ..Default::default()
+        };
         agents.agents.insert("claude".into(), enabled);
-        let mut disabled = AgentSettings::default();
-        disabled.hook_instrumentation = Some(false);
+        let disabled = AgentSettings {
+            hook_instrumentation: Some(false),
+            ..Default::default()
+        };
         agents.agents.insert("codex".into(), disabled);
 
         assert!(hook_instrumented_for(&agents, Some("claude")));
@@ -18967,6 +19305,8 @@ mod tests {
                 worktree: None,
                 cwd: None,
                 display_name: None,
+                display_name_is_custom: false,
+                is_remote: false,
                 shell: "/bin/sh".to_string(),
             }),
         );
@@ -19147,6 +19487,8 @@ mod tests {
                 worktree: None,
                 cwd: None,
                 display_name: None,
+                display_name_is_custom: false,
+                is_remote: false,
                 shell: "/bin/sh".to_string(),
             }),
         );

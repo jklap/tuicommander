@@ -1,11 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
+
+const { mockRpc } = vi.hoisted(() => ({ mockRpc: vi.fn().mockResolvedValue(undefined) }));
+
+vi.mock("../../transport", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../../transport")>()),
+	rpc: mockRpc,
+}));
+
 import { listen } from "@tauri-apps/api/event";
+import { handleIntentEvent, shouldApplyIntentTitle } from "../../components/Terminal/intentTitle";
 import { type AppInitDeps, browserCreatedSessions, initApp } from "../../hooks/useAppInit";
 import { mdTabsStore } from "../../stores/mdTabs";
+import { notificationsStore } from "../../stores/notifications";
 import { paneLayoutStore, resetGroupCounter } from "../../stores/paneLayout";
 import { repositoriesStore } from "../../stores/repositories";
 import { terminalsStore } from "../../stores/terminals";
+import { toastsStore } from "../../stores/toasts";
 import { makeTerminal } from "../helpers/store";
 import { mockInvoke } from "../mocks/tauri";
 
@@ -141,12 +152,19 @@ describe("initApp", () => {
 		expect(terminalsStore.get(ids[0])?.nameIsCustom).toBe(false);
 	});
 
-	it("preserves a surviving session display name as custom", async () => {
+	it("preserves an explicitly customized surviving session name", async () => {
 		const deps = createMockDeps({
 			pty: {
 				listActiveSessions: vi
 					.fn()
-					.mockResolvedValue([{ session_id: "sess-named", cwd: "/repo", display_name: "linux-primary" }]),
+					.mockResolvedValue([
+						{
+							session_id: "sess-named",
+							cwd: "/repo",
+							display_name: "linux-primary",
+							display_name_is_custom: true,
+						},
+					]),
 				close: vi.fn().mockResolvedValue(undefined),
 			},
 		});
@@ -156,6 +174,66 @@ describe("initApp", () => {
 		const terminal = terminalsStore.getIds().map((id) => terminalsStore.get(id))[0];
 		expect(terminal?.name).toBe("linux-primary");
 		expect(terminal?.nameIsCustom).toBe(true);
+	});
+
+	it("re-adopts a remote spawn name as an intent-replaceable base title", async () => {
+		let activeSessions = [
+			{
+				session_id: "remote-agent",
+				cwd: "/repo",
+				display_name: "repo-audit",
+				display_name_is_custom: false,
+				is_remote: true,
+			},
+		];
+		const deps = createMockDeps({
+			pty: {
+				listActiveSessions: vi.fn().mockImplementation(async () => activeSessions),
+				close: vi.fn().mockResolvedValue(undefined),
+			},
+		});
+
+		await initApp(deps);
+
+		const terminal = terminalsStore.getIds().map((id) => terminalsStore.get(id))[0];
+		expect(terminal).toMatchObject({ name: "repo-audit", nameIsCustom: false, isRemote: true });
+
+		const intentTitle = "Fresh audit";
+		expect(
+			shouldApplyIntentTitle({
+				title: intentTitle,
+				globalEnabled: true,
+				perAgentEnabled: true,
+				nameIsCustom: terminal!.nameIsCustom,
+			}),
+		).toBe(true);
+		mockRpc.mockClear();
+		handleIntentEvent({
+			terminalId: terminal!.id,
+			text: "Reviewing reconnect behavior",
+			title: intentTitle,
+			globalEnabled: true,
+			perAgentEnabled: true,
+		});
+		expect(mockRpc).toHaveBeenCalledWith("set_session_name", {
+				sessionId: "remote-agent",
+				name: intentTitle,
+				isCustom: false,
+			});
+
+		activeSessions = [{ ...activeSessions[0], display_name: intentTitle }];
+		terminalsStore.remove(terminal!.id);
+		await initApp(deps);
+		const reconnected = terminalsStore.getIds().map((id) => terminalsStore.get(id))[0];
+		expect(reconnected).toMatchObject({ name: intentTitle, nameIsCustom: false, isRemote: true });
+		expect(
+			shouldApplyIntentTitle({
+				title: "Next audit",
+				globalEnabled: true,
+				perAgentEnabled: true,
+				nameIsCustom: reconnected!.nameIsCustom,
+			}),
+		).toBe(true);
 	});
 
 	it("matches surviving sessions to repos by cwd", async () => {
@@ -1069,6 +1147,8 @@ describe("initApp", () => {
 			const { getCallback } = captureSessionClosed();
 			const deps = createMockDeps();
 			await initApp(deps);
+			const playCompletion = vi.spyOn(notificationsStore, "playCompletion").mockResolvedValue(undefined);
+			notificationsStore.setSilenceRemoteCompletions(true);
 
 			const termId = terminalsStore.add({
 				sessionId: "remote-sess",
@@ -1086,6 +1166,11 @@ describe("initApp", () => {
 			expect(terminalsStore.get(termId)?.sessionId).toBeNull();
 			expect(terminalsStore.get(termId)?.agentState).toBeNull();
 			expect(terminalsStore.get(termId)?.backgroundWork).toBe(false);
+			expect(terminalsStore.get(termId)?.completionNotified).toBe(true);
+			expect(playCompletion).not.toHaveBeenCalled();
+
+			notificationsStore.setSilenceRemoteCompletions(false);
+			playCompletion.mockRestore();
 		});
 
 		it("does not set shellState when session_id has no matching terminal", async () => {
@@ -1214,6 +1299,54 @@ describe("initApp", () => {
 		});
 	});
 
+	describe("mcp-toast event (agent-raised attention)", () => {
+		type ToastPayload = { title: string; message: string | null; level: string; sound: string | null };
+
+		function captureMcpToast() {
+			const listenMock = vi.mocked(listen);
+			let callback: ((event: { payload: ToastPayload }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "mcp-toast") {
+					callback = handler as typeof callback;
+				}
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return { getCallback: () => callback };
+		}
+
+		it("plays the named sound through the notification scheme, not the toast's own tone", async () => {
+			const { getCallback } = captureMcpToast();
+			const deps = createMockDeps();
+			await initApp(deps);
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+			const addToast = vi.spyOn(toastsStore, "add");
+
+			getCallback()!({
+				payload: { title: "need you", message: "which branch?", level: "warn", sound: "attention" },
+			});
+
+			expect(play).toHaveBeenCalledWith("attention");
+			// The toast store's own level-keyed tone would play a second, different
+			// sound over the buzzer and would ignore the user's volume/device/mutes.
+			expect(addToast).toHaveBeenCalledWith("need you", "which branch?", "warn", false);
+			play.mockRestore();
+			addToast.mockRestore();
+		});
+
+		it("stays silent when no sound was requested or the name is unknown", async () => {
+			const { getCallback } = captureMcpToast();
+			const deps = createMockDeps();
+			await initApp(deps);
+			const play = vi.spyOn(notificationsStore, "play").mockResolvedValue(undefined);
+
+			getCallback()!({ payload: { title: "done", message: null, level: "info", sound: null } });
+			getCallback()!({ payload: { title: "done", message: null, level: "info", sound: "buzzer" } });
+
+			expect(play).not.toHaveBeenCalled();
+			play.mockRestore();
+		});
+	});
+
 	describe("session-created event (agent tab activation)", () => {
 		type SessionCreatedPayload = {
 			session_id: string;
@@ -1276,7 +1409,7 @@ describe("initApp", () => {
 			expect(terminalsStore.get(newId!)?.nameIsCustom).toBe(false);
 		});
 
-		it("preserves a spawned agent display name as custom", async () => {
+		it("uses a spawned agent display name as an intent-replaceable base title", async () => {
 			const { getCallback } = captureSessionCreated();
 			const deps = createMockDeps();
 			await initApp(deps);
@@ -1292,7 +1425,7 @@ describe("initApp", () => {
 
 			const terminalId = terminalsStore.getIds().find((id) => terminalsStore.get(id)?.sessionId === "named-sess");
 			expect(terminalsStore.get(terminalId!)?.name).toBe("windows-primary");
-			expect(terminalsStore.get(terminalId!)?.nameIsCustom).toBe(true);
+			expect(terminalsStore.get(terminalId!)?.nameIsCustom).toBe(false);
 		});
 
 		it("setActiveGroup called with first leaf when split but no active group", async () => {

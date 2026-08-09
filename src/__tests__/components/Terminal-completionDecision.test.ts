@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	type CompletionContext,
 	getCompletionSuppression,
+	shouldNotifyAgentExit,
 	shouldPlayCompletionSound,
 } from "../../components/Terminal/completionDecision";
 
@@ -146,6 +147,21 @@ describe("getCompletionSuppression", () => {
 
 		it("keeps the chime when neither applies", () => {
 			expect(shouldPlayCompletionSound({ isRemoteSession: false, silenceRemoteCompletions: false })).toBe(true);
+		});
+	});
+
+	describe("shouldNotifyAgentExit", () => {
+		it("uses exit as a fallback when the busy cycle was not notified", () => {
+			expect(shouldNotifyAgentExit({ hadAgent: true, isBackground: true, completionNotified: false })).toBe(true);
+		});
+
+		it("does not notify twice after BUSY to IDLE already completed the cycle", () => {
+			expect(shouldNotifyAgentExit({ hadAgent: true, isBackground: true, completionNotified: true })).toBe(false);
+		});
+
+		it("keeps active and plain-shell exits silent", () => {
+			expect(shouldNotifyAgentExit({ hadAgent: true, isBackground: false, completionNotified: false })).toBe(false);
+			expect(shouldNotifyAgentExit({ hadAgent: false, isBackground: true, completionNotified: false })).toBe(false);
 		});
 	});
 });

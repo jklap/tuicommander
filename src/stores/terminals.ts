@@ -58,6 +58,8 @@ export interface TerminalData {
 	shellStateRevision: number;
 	agentState: AgentLifecycleState;
 	backgroundWork: boolean;
+	queuedCommands: number; // Compose-panel commands waiting for the agent's next idle window
+	completionNotified: boolean; // Current busy cycle already produced its completion notification
 	agentType: AgentType | null; // Detected foreground agent process (e.g. "claude")
 	agentLaunchCommand: string | null; // Run-config command used to launch (e.g. "c"), for accurate resume
 	pendingResumeCommand: string | null; // Set at restore time, consumed on first shell idle
@@ -94,6 +96,8 @@ type TerminalCreateData = Omit<
 	| "shellStateRevision"
 	| "agentState"
 	| "backgroundWork"
+	| "queuedCommands"
+	| "completionNotified"
 	| "nameIsCustom"
 	| "agentType"
 	| "agentLaunchCommand"
@@ -378,6 +382,8 @@ function createTerminalsStore() {
 				shellStateRevision: 0,
 				agentState: null,
 				backgroundWork: false,
+				queuedCommands: 0,
+				completionNotified: false,
 				nameIsCustom: false,
 				agentType: null,
 				agentLaunchCommand: null,
@@ -420,6 +426,8 @@ function createTerminalsStore() {
 				shellStateRevision: 0,
 				agentState: null,
 				backgroundWork: false,
+				queuedCommands: 0,
+				completionNotified: false,
 				nameIsCustom: false,
 				agentType: null,
 				agentLaunchCommand: null,
@@ -560,15 +568,23 @@ function createTerminalsStore() {
 						// after it can no longer appear in the next session-list snapshot.
 						setState("terminals", id, "agentState", null);
 						setState("terminals", id, "backgroundWork", false);
+						// The backend drops the queue with the session; a lingering count
+						// would offer to clear commands that no longer exist.
+						setState("terminals", id, "queuedCommands", 0);
 					}
 				}
 				setState("terminals", id, data);
 			});
-			// Sync display name to backend so PWA session list can show it
+			// Sync display name and its origin so reconnect can distinguish a
+			// user-protected rename from a transient OSC/intent title.
 			if ("name" in data) {
 				const sessionId = state.terminals[id]?.sessionId;
 				if (sessionId) {
-					rpc("set_session_name", { sessionId, name: data.name ?? null }).catch(() => {});
+					rpc("set_session_name", {
+						sessionId,
+						name: data.name ?? null,
+						isCustom: state.terminals[id]?.nameIsCustom ?? false,
+					}).catch(() => {});
 				}
 			}
 		},
