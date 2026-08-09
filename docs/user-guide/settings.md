@@ -183,5 +183,15 @@ User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`) are intent
   - Error occurred
   - Task completed
   - Warning
+  - Info
+  - Attention (agent needs you)
 - **Test buttons** — Test each sound individually. The Test button bypasses the anti-spam rate limit, so rapid A/B volume comparisons always play.
+- **Silence orchestration completions** — Remote HTTP/MCP workers still appear in Activity and update their tab state, but do not play a completion chime. The remote classification survives frontend reloads, and each busy cycle can notify at most once even when idle and process exit arrive separately.
 - **Reset to Defaults** — Restore default notification settings
+
+**Attention** is the distinct call-back-to-keyboard sound available to agent
+toasts. Native playback and the browser fallback share a triangular G4→G4→E5
+motif with two short knocks and a longer rise; each engine applies its own
+envelope. It remains subject
+to the master toggle, configured volume, and its own per-event toggle; native
+playback also uses the selected output device.

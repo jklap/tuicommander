@@ -68,10 +68,20 @@ Agent is waiting for user input (question, confirmation, menu choice):
 ```rust
 ParsedEvent::Question {
     prompt_text: String,  // The detected prompt line
+    confident: bool,      // Protocol-backed signals are high-confidence
 }
 ```
 
-Detected exclusively via **screen-verified silence detection** (all instant regex patterns were removed due to false positives from Ink agent streaming):
+Question events have two sources:
+
+- **Response-required OSC 777 notifications** are parsed from the raw PTY byte
+  stream before VT rendering consumes the escape sequence. Only explicit
+  permission, approval, or waiting-for-input wording is accepted and emitted as
+  high-confidence. A generic desktop notification such as `Claude Code needs
+  your attention` does not prove that the composer awaits a response and is
+  ignored for awaiting-state detection.
+- **Screen-verified silence detection** handles rendered questions (all instant
+  regex patterns were removed due to false positives from Ink agent streaming):
 
 1. `extract_question_line()` scans changed terminal rows for `?`-ending lines, applying content filters to reject code comments (`//`), markdown headers (`#`), diff context (`+/-`), and code syntax (`->`, `=>`, `::`, `)?`)
 2. `SilenceState` stores the candidate and starts a 10s silence timer
@@ -84,6 +94,22 @@ Guards against false positives:
 - **Screen verification**: Candidate must still be among the last 5 visible lines at fire time
 - **User echo suppression**: 500ms window after user input ignores PTY echo of typed text
 - **Resize grace**: 1s suppression after terminal resize to avoid re-detection of redrawn content
+
+Hook-instrumented agents normally report awaiting through OSC 7770
+`state=awaiting`, but that hook covers only the agent's explicit question-tool
+event. Plan and skill pickers can instead be represented only by a qualifying
+OSC 777 notification, so raw-stream events bypass the heuristic-question
+suppression used for hook-instrumented sessions.
+
+### Raw Capture Regression Fixtures
+
+Agent-state failures must be captured from the raw PTY stream before analysis.
+Enable `POST /diagnostics/capture` before reproducing, stop it afterward, then
+copy the reported `<config dir>/captures/<session-id>.raw` file into
+`src-tauri/src/fixtures/agent_prompts/`. `/sessions/:id/output` is not a fixture
+source: it is a rendered, bounded ring snapshot and can lose one-shot escape
+sequences. Fixtures replay the raw parser, rendered-row parser, and hook
+suppression in the same composition used by the production reader thread.
 
 ### ApiError
 

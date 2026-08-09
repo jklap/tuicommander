@@ -8,19 +8,59 @@ Manages all application configuration as JSON files in the platform config direc
 
 | Platform | Path |
 |----------|------|
-| macOS | `~/Library/Application Support/tuicommander/` |
-| Linux | `~/.config/tuicommander/` |
-| Windows | `%APPDATA%/tuicommander/` |
+| macOS | `~/Library/Application Support/com.tuic.commander/` |
+| Linux | `~/.config/com.tuic.commander/` |
+| Windows | `%APPDATA%/com.tuic.commander/` |
 
-Legacy path `~/.tuicommander/` is auto-migrated on first launch.
+Legacy paths `{platform_config}/tuicommander/`, `{platform_config}/tui-commander/`
+and `~/.tuicommander/` are auto-migrated on first launch.
+
+**Debug and release builds share this one directory** — `config_dir()` never
+branches on `cfg!(debug_assertions)`. The single-instance lock is release-only
+(`lib.rs`, `#[cfg(not(debug_assertions))]`), so a `make dev` build runs happily
+alongside the installed app, and both read and write the exact same
+`config.json`, `repositories.json`, and every other file below. What makes that
+safe is the locking model in `ConfigFile<T>` (see Core Functions): a
+cross-process advisory file lock. Ordinary `AppConfig` writes and upstream MCP
+writes additionally apply caller deltas to the latest value while that lock is
+held, so independent edits from two processes compose instead of becoming
+ordered whole-document overwrites. `repositories.json` used to be the one
+exception, seeded into a separate `~/.tuicommander-dev/` directory on first
+debug run; that seeding path is gone and it now lives here like everything
+else (see below).
 
 ## Core Functions
 
 ```rust
 pub fn config_dir() -> PathBuf
 pub fn load_json_config<T: DeserializeOwned + Default>(filename: &str) -> T
-pub fn save_json_config<T: Serialize>(filename: &str, config: &T) -> Result<(), String>
 ```
+
+Config domains write through `ConfigFile<T>`:
+
+```rust
+impl<T: Serialize + DeserializeOwned + Default> ConfigFile<T> {
+    pub fn load(&self) -> (T, Stamp)
+    pub fn update<F: FnOnce(&mut T) -> bool>(&self, mutate: F) -> Result<(), String>
+    pub fn update_with<R, F>(&self, mutate: F) -> Result<R, String>
+    pub fn update_with_strict<R, F>(&self, mutate: F) -> Result<R, String>
+    pub fn save_checked(&self, value: &T, stamp: Stamp) -> Result<(), ConfigWriteError>
+    pub fn save(&self, value: &T) -> Result<(), String>
+}
+```
+
+Two locks protect every write: an in-process `CONFIG_WRITE_LOCK` mutex, and a
+cross-process advisory file lock (`std::fs::File::lock()` on a sibling
+`<file>.lock`) that serializes writers across the debug/release instances that
+now share one config dir. `save_checked` additionally compares a `Stamp`
+(mtime+len, captured at `load()`) against the file's current on-disk state and
+returns `ConfigWriteError::Conflict` instead of overwriting a change it never
+saw — used by most per-domain files (`notifications.json`, `ui-prefs.json`,
+`repo-settings.json`, `repositories.json`, etc.). Those callers capture the
+stamp immediately before saving, so this narrows only the backend write race;
+it is not a user-session conflict protocol. `config.json` (`AppConfig`) and
+`mcp-upstreams.json` use delta-under-lock instead. See
+[`2026-08-08-config-deltas-under-lock.md`](../decisions/2026-08-08-config-deltas-under-lock.md).
 
 ## Config Files and Commands
 
@@ -33,11 +73,15 @@ Frontend surfaces that update this full-document configuration use the shared
 → save sequence so simultaneous General, Services, and plugin changes cannot
 overwrite one another with stale snapshots.
 
-**Partial saves merge, they do not replace.** The IPC `save_config`, `PUT /config`
-and the MCP `config` tool (`action: "save"`) all accept a body that mentions only
-the fields being changed; `merge_partial_app_config` deep-merges it onto the live
-config before persisting. Objects merge key by key, arrays and scalars replace
-wholesale (so an empty array still clears a list, and `""` still blanks a string).
+**Ordinary saves merge under the cross-process lock; they do not replace the
+document.** `PUT /config` and the MCP `config` tool (`action: "save"`) accept a
+body that mentions only the fields being changed. IPC `save_config` retains its
+typed full-config shape, but the backend derives the cache-to-request delta.
+`commit_config_change` locks `config.json`, reloads and hydrates the latest disk
+value, applies only the requested delta, persists it, and refreshes
+`state.config` from the result. Objects merge key by key; arrays and scalars
+replace wholesale (so an empty array still clears a list, `null` clears an
+optional field, and `""` still blanks a string).
 This is not cosmetic: every field carries `#[serde(default)]`, so deserializing a
 partial body on its own reset the omitted ones — `services.server.enabled` defaults
 to `false`, which is how a partial save used to switch remote access off on disk
@@ -104,9 +148,13 @@ Every writer of `config.json` — IPC `save_config`, `PUT /config`, MCP
 `disabled_mcp_agents` toggle and the push auto-enable on first subscription —
 goes through
 `config::commit_config_change`, which holds one process-wide mutex across the
-whole read → merge → preserve-secrets → write → update-`state.config`
-sequence. Without it two overlapping saves both merged onto the same snapshot
-and the second silently erased the first one's fields. Rotation
+whole cache-delta → file-lock → latest-disk-read → delta-merge →
+preserve-secrets → write → update-`state.config` sequence. The cross-process
+file lock spans the authoritative disk read and write. This distinction matters:
+locking whole-document saves merely orders lost updates, while applying the
+delta after the locked read preserves unrelated fields written by another
+debug or release process.
+Rotation
 (`config::rotate_session_token`, shared by the desktop command and
 `POST /auth/rotate-session-token`) goes through the same path so the vault, the
 file and `state.config` cannot disagree — previously the in-memory config kept
@@ -126,6 +174,24 @@ Routing every writer through it also guarantees the file is produced by
 `disabled_mcp_agents` toggle called `save_json_config("config.json", ..)`)
 skipped the stripping step and wrote the session token, relay token and VAPID
 private key to disk in cleartext.
+
+### Upstream MCP Config (`mcp-upstreams.json`)
+
+**Type:** `UpstreamMcpConfig`
+
+Interactive saves carry both the configuration the caller loaded (`base`) and
+its desired `config`. The backend derives additions, intentional removals,
+order changes, and per-server field deltas keyed by stable server ID, then
+applies them to the latest document inside `ConfigFile::update_with`. A popup
+toggle therefore changes only `enabled`; an OAuth/DCR auth record written after
+the popup loaded is preserved. Removing a server or clearing an optional auth
+field remains explicit and is not mistaken for an omitted/unchanged field.
+
+Validation and the runtime registry diff use the exact merged pre/post values
+from the locked transaction. The lock is released before asynchronous reconnect
+work starts.
+
+**Commands:** `load_mcp_upstreams()`, `save_mcp_upstreams(base, config)`
 
 ### Notification Config (`notifications.json`)
 
@@ -231,12 +297,20 @@ Default values applied to new repositories when no per-repo override exists.
 
 **Type:** `serde_json::Value` (flexible JSON, shape defined by frontend)
 
-Release builds store this file in the normal platform config directory. Debug
-builds use `~/.tuicommander-dev/repositories.json` so a concurrently running
-development frontend cannot overwrite the installed app's repository list. On
-the first debug run only, the production file is copied atomically as a seed;
-an existing development file always wins. This repository-specific isolation
-does not change any other config path.
+Stored in the shared config directory like every other file (see Config
+Directory) — debug and release builds read and write the same
+`repositories.json`. Writes go through `ConfigFile::save_checked` (see Core
+Functions). Its stamp is captured inside the save command, so it protects the
+backend read-to-write interval only; unlike the delta-backed `config.json` and
+`mcp-upstreams.json` paths, it is not a cross-process UI-session merge protocol.
+
+`repositories.json` used to be the one file exempt from the (then-real)
+debug/release split: it was seeded into a separate `~/.tuicommander-dev/`
+directory on first debug run so a dev instance wouldn't start with an empty
+repo list. That seeding path is gone now that both builds share one
+directory for `repositories.json` and all other config domains covered by
+this document. (`~/.tuicommander-dev/` itself still exists for an unrelated
+purpose — see `credentials.rs`'s debug-only credential store.)
 
 **Commands:** `load_repositories()`, `save_repositories(config)`
 

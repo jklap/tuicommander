@@ -32,6 +32,10 @@ The browser client provides the same UI as the desktop app:
 - Sidebar with repositories and branches
 - Diff, Markdown, and File Browser panels
 - Keyboard shortcuts
+- Compose commands queued through the same agent idle gate as the desktop app;
+  clearing the Compose queue leaves pending peer messages intact
+- Notification sounds, including the distinct G4→G4→E5 Attention callback,
+  through the browser audio fallback
 
 ## Security
 

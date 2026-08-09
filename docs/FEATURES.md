@@ -193,7 +193,17 @@ Terminal output is segmented into command blocks — one per prompt+output cycle
 - **Block cap** — Sessions are capped at 500 command blocks; oldest blocks are evicted when the cap is reached
 - **Settings** — Configure block features at Settings > Terminal > Blocks: show/hide timestamps, enable/disable folding
 
-### 1.20 Auto-Standby (Unix)
+### 1.20 Compose Panel (`Cmd+I`)
+
+A multi-line editor docked under the terminal for writing a prompt without fighting the agent's own input box.
+
+- **Send now** — `Ctrl+Enter` (or the ▶ button) types the text into the composer and submits it immediately, steering whatever the agent is doing
+- **Queue for the next idle window** — `Shift+Ctrl+Enter` (or the ☰ button) hands the text to the backend's idle gate instead: it is submitted at once if the agent is already idle, otherwise parked until the agent's next busy→idle transition. This is the way to leave follow-up work for an agent mid-turn without interrupting it
+- **Queue badge** — the status bar shows `N queued` while commands are waiting; clicking it discards the whole queue. The count comes from the backend (`state.queued_commands`), so it is accurate across reloads and remote clients
+- **Order** — queued commands are typed one per idle window, in the order they were composed; a new one never overtakes one already waiting
+- **Agents only** — queueing is hidden for a plain shell: its idle state says nothing about which program currently owns stdin
+
+### 1.21 Auto-Standby (Unix)
 
 Idle, unfocused terminals are suspended to stop them consuming CPU and battery. A background checker (every 30s) sends `SIGSTOP` to the entire process group of a session — `kill(-pgid, …)`, so children (dev servers, agent processes) are paused too, not just the shell.
 
@@ -681,10 +691,12 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 ### 6.7 Intent Event Tracking
 - Agents declare work phases via `intent: text (Title)` tokens at column 0, colorized dim yellow in terminal output
+- Intent titles may replace spawn-assigned tab labels; only an explicit user rename locks the tab title, including after reconnect
 - Colorization is agent-gated (only applied in sessions with a detected agent) to prevent false positives
 - Structural tokens stripped from log lines served to PWA/REST consumers via `LogLine::strip_structural_tokens()`
 - Structured `Intent` events emitted for LLM-declared work phase tracking
 - Centralized debounced busy signal with completion notifications for accurate idle/active status
+- HTTP/MCP session origin survives frontend reconnects, keeping orchestration completion chimes muted when configured; BUSY→IDLE and exit share one notification per busy cycle
 
 ### 6.8 API Error Detection
 - Detects API errors (server errors, auth failures) from agent output and provider-level JSON error responses
@@ -1236,8 +1248,8 @@ All data persisted to platform config directory via Rust:
 - `notification_config.json` — sound settings
 - `ui_prefs.json` — sidebar visibility/width
 - `repo_settings.json` — per-repo worktree/script settings
-- `repositories.json` — repository list, groups, branches (debug builds use an
-  independently seeded `~/.tuicommander-dev/repositories.json`)
+- `repositories.json` — repository list, groups, branches (shared by debug and
+  release builds, like every other file here)
 - `agents.json` — per-agent run configurations
 - `prompt_library.json` — saved prompts
 - `notes.json` — ideas panel data
@@ -1697,6 +1709,9 @@ Phone-optimized progressive web app for monitoring AI agents remotely. Separate 
 - Eliminates AudioContext suspend issues on WebKit and works in headless/remote modes
 - State transition detection: question, rate-limit, error, completion
 - Completion notifications deferred 10s and suppressed when active sub-tasks are running (detected via `⏵⏵`/`››` mode-line prefix)
+- **Sounds:** `question` (C5→E5 chime), `completion` (C5→E5→G5 arpeggio), `error` (E4→C4), `warning` (A4 double-tap), `info` (single G5 pluck), and `attention` — a triangular G4→G4→E5 callback with two short knocks and a longer rise. Native and browser/PWA playback share the motif and 0.8 gain; each engine applies its own envelope. The repeated opening is immediately recognizable while the softer timbre avoids the old square buzzer's harshness. Meant for an agent that is working unattended and is blocked on the user
+- Each sound has its own on/off toggle and Test button in Settings > Notifications, and all of them honour the global volume and chosen output device
+- **Agents can raise them over MCP**: `ui action=toast sound="attention"` (see 19.x `ui` tool). `sound: true` still means "the tone matching `level`"; a name overrides it. The sound plays through this scheme, so a muted sound stays muted no matter who asked for it
 
 ### 18.10 Visual Polish
 - Frosted glass bottom tabs: `backdrop-filter: blur(20px) saturate(1.8)` with semi-transparent background

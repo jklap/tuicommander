@@ -187,7 +187,7 @@ Primary and alternate grids can reuse identical numeric row coordinates while re
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| OSC 0/2 title change | OK | Handled in Terminal.tsx wrapper |
+| OSC 0/2 and structured intent title change | OK | Handled in Terminal.tsx wrapper; spawn labels remain replaceable, explicit user renames are protected |
 | OSC 7 cwd tracking | OK | `pty-cwd-{sessionId}` event |
 | OSC 133 command blocks | OK | `pty-osc133-{sessionId}` event |
 | OSC 133 gutter decoration | OK | `paintGutterMarkers` on overlay canvas |

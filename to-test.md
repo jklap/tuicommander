@@ -1707,3 +1707,21 @@ PRs lifted) so the navigable row list and the rendered rows cannot drift apart.
 - [x] Collapse writes to `uiStore.githubSectionCollapsed` and hydrates back. _(verified: `stores/ui.test.ts`, 4 tests + Rust `ui_prefs_round_trip`)_
 - [ ] **After a `make dev` restart**: collapse a section, quit, relaunch — the section is still collapsed. Without the restart the Rust `UIPrefsConfig` field is absent and serde silently drops it, so it only persists in-session.
 - [ ] Visual: the `.ghItemRowActive` highlight (inset accent bar) reads clearly in light and dark themes, and the active row scrolls into view on long lists.
+
+## Compose enqueue + MCP attention callback (2026-08-08, **Rust change — needs `make dev` restart**)
+
+Compose panel gained a second submit that queues instead of steering, and the `ui` MCP tool
+can now raise a named notification sound (new `attention` callback). Both are Rust-backed, so
+nothing below works against the currently running binary.
+
+- [x] `Ctrl+Enter` sends now, `Shift+Ctrl+Enter` queues. _(verified: `ComposePanel.test.tsx` drives the real CodeMirror keymap)_
+- [x] Queueing is hidden/refused for a plain shell. _(verified: same suite + Rust `enqueue_refuses_shells_and_dead_sessions`)_
+- [x] An idle agent gets the text typed immediately; a busy one gets it parked. _(verified: Rust `enqueue_types_immediately_when_agent_is_idle`, `enqueue_parks_command_while_agent_is_busy` — real PTY + recorded bytes)_
+- [ ] Luna: prove a user command never overtakes an earlier peer message and that one idle window submits only the shared FIFO head (`enqueue_never_overtakes_a_command_already_waiting`).
+- [ ] Luna: prove Compose count/clear select only user commands and preserve every peer entry (`clear_queued_commands_preserves_peer_deliveries`).
+- [x] The badge count survives a reload / reaches remote clients. _(verified: `state.queued_commands` in the session snapshot + `useAgentPolling.test.ts`)_
+- [ ] **After a `make dev` restart**: with an agent mid-turn, `Shift+Ctrl+Enter` a prompt, watch the badge show `1 queued`, and confirm the prompt is typed the moment the agent finishes — not before.
+- [ ] **After a `make dev` restart**: queue two prompts, confirm they arrive in order across two idle windows, and that clicking the badge discards them.
+- [ ] **After a `make dev` restart**: confirm a generic OSC 777 `Claude Code needs your attention` completion notice does not leave the tab awaiting, while plan/skill pickers still do.
+- [ ] **[HUMAN] Listen to the selected `attention` sound in the rebuilt app** — Settings > Notifications > Attention > Test. Boss selected sample C on 2026-08-09: triangular G4→G4→E5, 75/75/140 ms, 50 ms gaps, gain 0.8. Confirm the native engine matches the approved direct-synthesis sample and remains identifiable from another room without being irritating.
+- [ ] **After a `make dev` restart**: `ui action=toast sound="attention"` from an MCP client shows the toast **on the desktop app** (it never did before — the event was bus-only) and plays the callback; muting Attention in Settings silences it while the toast still appears.

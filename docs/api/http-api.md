@@ -20,8 +20,11 @@ REST API served by the Axum HTTP server when MCP server is enabled. All Tauri co
 GET /sessions
 ```
 
-Returns array of active session info (ID, cwd, worktree path, branch, and
-nested state). For detected agents, `state.agent_state` distinguishes PTY
+Returns array of active session info (ID, cwd, worktree path, branch,
+`display_name`, `display_name_is_custom`, `is_remote`, and nested state). The
+origin fields let browser and desktop clients preserve manual-title protection
+and remote-completion muting across reconnects. For detected agents,
+`state.agent_state` distinguishes PTY
 silence (`idle`) from explicit protocol completion (`completed`); the latter
 requires a parsed `suggest: [ ... ]` marker. Other values are `starting`,
 `working`, and `awaiting_input`. `state.background_work` is true when meaningful
@@ -74,6 +77,29 @@ Content-Type: application/json
 
 { "data": "ls -la\n" }
 ```
+
+### Queue a Command for the Next Idle Window
+
+```
+POST /sessions/:id/queue
+Content-Type: application/json
+
+{ "text": "run the tests" }        -> { "typed": false, "queued": 2 }
+
+DELETE /sessions/:id/queue         -> 2   (commands dropped)
+```
+
+Hands the text to the same idle gate peer messages use instead of typing it now:
+submitted immediately when the agent is idle (`typed: true`, `queued: 0`),
+otherwise parked until the agent's next busy→idle transition, so a running turn
+is never steered. User commands and peer messages share one typed FIFO and are
+submitted one per idle window in backend acceptance order. `queued`,
+`state.queued_commands`, and `DELETE` count or remove only user commands;
+clearing Compose commands never deletes pending peer/orchestrator delivery.
+
+Agent sessions only — `400` for a plain shell (`"Session is not running an
+agent"`) or empty text, `404` when the PTY is gone. The current depth is also on
+every session snapshot as `state.queued_commands` (omitted when zero).
 
 ### Resize Session
 
@@ -163,10 +189,12 @@ POST /sessions/:id/resume
 PUT /sessions/:id/name
 Content-Type: application/json
 
-{ "name": "my-session" }
+{ "name": "my-session", "isCustom": true }
 ```
 
-Sets a custom display name for a session.
+Sets a display name and its origin. `isCustom: true` protects an explicit user
+rename from subsequent OSC/intent titles; spawn-assigned and dynamic titles use
+`false`. Omitting the field preserves the legacy custom-rename behavior.
 
 ### Close Session
 
@@ -748,6 +776,37 @@ POST /logs
 DELETE /logs
 ```
 
+### Capture Raw PTY Streams
+
+Start capture before reproducing an agent-state detection failure:
+
+```text
+POST /diagnostics/capture
+Content-Type: application/json
+
+{ "enabled": true, "session_id": "<session-id>" }
+```
+
+Omit `session_id` to capture every session. Starting capture creates a fresh set
+of files rather than appending to an earlier run. `GET /diagnostics/capture`
+returns `enabled`, the optional `session_filter`, the capture `dir`, and each
+recorded session's byte count. Stop with:
+
+```text
+POST /diagnostics/capture
+Content-Type: application/json
+
+{ "enabled": false }
+```
+
+Files are written as exact raw PTY bytes to
+`<app config dir>/captures/<session-id>.raw`, capped at 512 KiB per session.
+Copy the relevant file into `src-tauri/src/fixtures/agent_prompts/` and replay it
+through the production parser composition. Do not acquire state-detection
+fixtures from `GET /sessions/:id/output`: its ring is bounded, may already have
+overwritten the one-shot signal, and its string response is lossy UTF-8 rather
+than a byte-preserving fixture.
+
 ### Execute JS in WebView (debug)
 
 ```
@@ -931,6 +990,26 @@ GET /mcp/status
 Returns MCP server status (enabled, port, connected clients).
 
 ### MCP Upstream Status
+
+```
+PUT /mcp/upstreams
+Content-Type: application/json
+
+{
+  "base": { "servers": [...] },
+  "config": { "servers": [...] }
+}
+```
+
+`base` is the configuration previously loaded by the caller and `config` is its
+desired result. The backend derives an ID-keyed three-way delta, then applies it
+to the latest `mcp-upstreams.json` under the cross-process file lock. Removing a
+server from `config` explicitly deletes that ID; removing an optional `auth`
+field explicitly clears it. Fields and servers unchanged from `base` preserve
+concurrent updates, including OAuth/DCR auth written by another process. After
+the atomic write, the live registry hot-reloads the exact locked pre/post
+configurations. Returns `200` with an empty body, `400` for invalid config or
+duplicate IDs, and `500` for persistence or conflicting-add failures.
 
 ```
 GET /mcp/upstream-status
@@ -1324,11 +1403,13 @@ Returns a unique worktree name.
 POST /worktrees/finalize
 Content-Type: application/json
 
-{ "repoPath": "/path/to/repo", "branchName": "feature-x", "action": "archive" }
+{ "repoPath": "/path/to/repo", "branchName": "feature-x", "action": "archive", "force": false }
 ```
 
 Finalizes a merged worktree branch. `action` must be `"archive"` (moves to archive directory) or `"delete"` (removes worktree and branch).
 For `action: "delete"`, the response includes `branch_delete_warning` when the worktree was removed but safe branch deletion failed, for example because the branch has unmerged commits.
+
+`force` (optional, default `false`) skips the dirty-worktree gate. Both actions end in `git worktree remove --force`, so a worktree that is **not known to be clean** comes back as `{ "action": "needs_confirmation", "merged": true }` without touching anything — ask the user, then re-send with `"force": true`. A dirty check that fails to run blocks the same way (`worktree_dirty` stays `false`, because git never reported "dirty"). This route shares `finalize_merged_worktree_impl` with the Tauri command, so both transports pass the identical gate.
 
 ### Remove Worktree
 
