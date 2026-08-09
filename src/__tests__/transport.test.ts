@@ -113,6 +113,32 @@ describe("transport", () => {
 			expect(result.body).toEqual({ data: "hello" });
 		});
 
+		it("maps enqueue_agent_command to POST /sessions/{id}/queue", () => {
+			const result = mapCommandToHttp("enqueue_agent_command", { sessionId: "abc", text: "run tests" });
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/sessions/abc/queue");
+			expect(result.body).toEqual({ text: "run tests" });
+		});
+
+		it("maps clear_queued_agent_commands to DELETE /sessions/{id}/queue", () => {
+			const result = mapCommandToHttp("clear_queued_agent_commands", { sessionId: "abc" });
+			expect(result.method).toBe("DELETE");
+			expect(result.path).toBe("/sessions/abc/queue");
+		});
+
+		it("maps session names with their custom-name origin", () => {
+			const result = mapCommandToHttp("set_session_name", {
+				sessionId: "abc",
+				name: "Ollama audit",
+				isCustom: false,
+			});
+			expect(result).toEqual({
+				method: "PUT",
+				path: "/sessions/abc/name",
+				body: { name: "Ollama audit", isCustom: false },
+			});
+		});
+
 		it("maps resize_pty to POST /sessions/{id}/resize", () => {
 			const result = mapCommandToHttp("resize_pty", { sessionId: "abc", rows: 40, cols: 120 });
 			expect(result.method).toBe("POST");
@@ -183,6 +209,15 @@ describe("transport", () => {
 			expect(result.method).toBe("PUT");
 			expect(result.path).toBe("/config");
 			expect(result.body).toEqual(cfg);
+		});
+
+		it("maps upstream saves with both the loaded base and desired config", () => {
+			const base = { servers: [{ id: "a", enabled: true }] };
+			const config = { servers: [{ id: "a", enabled: false }] };
+			const result = mapCommandToHttp("save_mcp_upstreams", { base, config });
+			expect(result.method).toBe("PUT");
+			expect(result.path).toBe("/mcp/upstreams");
+			expect(result.body).toEqual({ base, config });
 		});
 
 		it("throws for unknown commands", () => {
@@ -710,6 +745,37 @@ describe("transport", () => {
 				branchName: "feat",
 				targetBranch: "main",
 				afterMerge: "archive",
+				force: true,
+			});
+		});
+
+		it("forwards the finalize_merged_worktree force flag over HTTP", () => {
+			// Finalize ends in `git worktree remove --force` just like merge-and-archive,
+			// so the confirmation override has to reach the backend on both transports.
+			const guarded = mapCommandToHttp("finalize_merged_worktree", {
+				repoPath: "/r",
+				branchName: "feat",
+				action: "archive",
+			});
+			expect(guarded.method).toBe("POST");
+			expect(guarded.path).toBe("/worktrees/finalize");
+			expect(guarded.body).toEqual({
+				repoPath: "/r",
+				branchName: "feat",
+				action: "archive",
+				force: undefined,
+			});
+
+			const forced = mapCommandToHttp("finalize_merged_worktree", {
+				repoPath: "/r",
+				branchName: "feat",
+				action: "archive",
+				force: true,
+			});
+			expect(forced.body).toEqual({
+				repoPath: "/r",
+				branchName: "feat",
+				action: "archive",
 				force: true,
 			});
 		});

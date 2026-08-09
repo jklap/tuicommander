@@ -41,6 +41,14 @@ interface WorktreeResult {
 	branch: string | null;
 }
 
+/** What the backend's idle gate did with an enqueued command. */
+export interface EnqueuedCommand {
+	/** The agent was idle: the text was typed and submitted right away. */
+	typed: boolean;
+	/** Commands still waiting, this one included when `typed` is false. */
+	queued: number;
+}
+
 /** Active session info returned by list_active_sessions */
 export interface ActiveSessionInfo {
 	session_id: string;
@@ -48,10 +56,13 @@ export interface ActiveSessionInfo {
 	worktree_path: string | null;
 	worktree_branch: string | null;
 	display_name?: string | null;
+	display_name_is_custom: boolean;
+	is_remote: boolean;
 	state?: {
 		shell_state?: "busy" | "idle";
 		agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
 		background_work?: boolean;
+		queued_commands?: number;
 	} | null;
 }
 
@@ -100,6 +111,19 @@ export function usePty() {
 	async function sendCommand(sessionId: string, text: string, agentType?: string | null): Promise<void> {
 		const shellFamily = await getShellFamily(sessionId);
 		await sendCommandUtil((data) => write(sessionId, data), text, agentType, shellFamily);
+	}
+
+	/** Hand a command to the backend's idle gate instead of typing it now: it is
+	 *  submitted immediately when the agent is idle, otherwise on the agent's next
+	 *  busy→idle transition, so a running turn is never steered.
+	 *  Rejects for non-agent sessions — a plain shell has no composer to wait for. */
+	async function enqueueCommand(sessionId: string, text: string): Promise<EnqueuedCommand> {
+		return await rpc<EnqueuedCommand>("enqueue_agent_command", { sessionId, text });
+	}
+
+	/** Drop every command still queued for a session. Returns how many were dropped. */
+	async function clearQueuedCommands(sessionId: string): Promise<number> {
+		return await rpc<number>("clear_queued_agent_commands", { sessionId });
 	}
 
 	/** Resize a PTY session */
@@ -159,6 +183,8 @@ export function usePty() {
 		createSessionWithWorktree,
 		write,
 		sendCommand,
+		enqueueCommand,
+		clearQueuedCommands,
 		resize,
 		pause,
 		resume,

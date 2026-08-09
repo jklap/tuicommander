@@ -72,6 +72,8 @@ pub(super) async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Ve
                     .map(|w| w.path.to_string_lossy().to_string()),
                 worktree_branch: session.worktree.as_ref().and_then(|w| w.branch.clone()),
                 display_name: session.display_name.clone(),
+                display_name_is_custom: session.display_name_is_custom,
+                is_remote: session.is_remote,
                 state: session_state,
             }
         })
@@ -95,6 +97,34 @@ pub(super) async fn write_to_session(
     }
 
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
+/// Browser/PWA counterpart of the `enqueue_agent_command` Tauri command.
+pub(super) async fn enqueue_command(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<EnqueueCommandRequest>,
+) -> impl IntoResponse {
+    match crate::pty::enqueue_user_command(&state, &session_id, &body.text) {
+        Ok(outcome) => (
+            StatusCode::OK,
+            Json(serde_json::json!({"typed": outcome.typed, "queued": outcome.queued})),
+        ),
+        Err(e) if e == "Session not found" => session_not_found(),
+        Err(e) => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": e})),
+        ),
+    }
+}
+
+/// Browser/PWA counterpart of the `clear_queued_agent_commands` Tauri command.
+pub(super) async fn clear_queued_commands(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let cleared = crate::pty::clear_queued_commands(&state, &session_id);
+    (StatusCode::OK, Json(serde_json::json!(cleared)))
 }
 
 pub(crate) fn write_pty_input(
@@ -223,7 +253,9 @@ pub(super) async fn set_session_name(
         Some(e) => e,
         None => return session_not_found(),
     };
-    entry.lock().display_name = body.name;
+    let mut session = entry.lock();
+    session.display_name = body.name;
+    session.display_name_is_custom = body.is_custom.unwrap_or(true);
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
@@ -476,6 +508,8 @@ pub(super) fn spawn_pty_session(
             worktree,
             cwd: cwd.clone(),
             display_name: None,
+            display_name_is_custom: false,
+            is_remote: true,
             shell: shell.clone(),
         }),
     );
@@ -1715,7 +1749,9 @@ mod tests {
             .pending_injections
             .entry(session_id.to_string())
             .or_default()
-            .push_back("queued message".to_string());
+            .push_back(crate::state::PendingInjection::peer_message(
+                "queued message",
+            ));
 
         let (done_tx, done_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -2018,12 +2054,12 @@ mod tests {
             None,
             Some("client-provided-id".to_string()),
         );
-        match result {
-            Ok(id) => assert_eq!(
+        // PTY unavailable in CI — skip gracefully
+        if let Ok(id) = result {
+            assert_eq!(
                 id, "client-provided-id",
                 "must honor the client-provided id"
-            ),
-            Err(_) => {} // PTY unavailable in CI — skip gracefully
+            );
         }
     }
 

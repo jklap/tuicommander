@@ -48,6 +48,10 @@ export function useTerminalCompletionNotifications(options: TerminalCompletionNo
 			deferredCompletionTimers.delete(id);
 			const terminal = terminalsStore.get(id);
 			if (!terminal) return;
+			if (terminal.completionNotified) {
+				appLogger.debug("terminal", `[Notify] ${id} completion SUPPRESSED — cycle already notified`);
+				return;
+			}
 
 			const startExec = busyStartExecAt.get(id);
 			const reason = getCompletionSuppression({
@@ -66,7 +70,7 @@ export function useTerminalCompletionNotifications(options: TerminalCompletionNo
 			}
 
 			appLogger.info("terminal", `[Notify] ${id} completion — busy for ${Math.round(durationMs / 1000)}s then idle`);
-			terminalsStore.update(id, { activity: true, unseen: true });
+			terminalsStore.update(id, { activity: true, unseen: true, completionNotified: true });
 			if (
 				shouldPlayCompletionSound({
 					isRemoteSession: terminal.isRemote,
@@ -110,6 +114,7 @@ export function useTerminalCompletionNotifications(options: TerminalCompletionNo
 	});
 
 	const unsubscribeIdleToBusy = terminalsStore.onIdleToBusy((id) => {
+		terminalsStore.update(id, { completionNotified: false });
 		busyStartExecAt.set(id, terminalsStore.get(id)?.lastCommandExecAt ?? null);
 		const timer = deferredCompletionTimers.get(id);
 		if (!timer) return;

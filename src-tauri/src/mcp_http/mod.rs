@@ -260,29 +260,23 @@ async fn load_mcp_upstreams_http() -> impl IntoResponse {
     Json(crate::mcp_upstream_config::load_mcp_upstreams())
 }
 
-/// PUT /mcp/upstreams — save upstream MCP server config (validates, hot-reloads).
+/// PUT /mcp/upstreams — apply a base-to-desired upstream delta (validates, hot-reloads).
 async fn save_mcp_upstreams_http(
     State(state): State<Arc<AppState>>,
-    Json(config): Json<crate::mcp_upstream_config::UpstreamMcpConfig>,
+    Json(request): Json<crate::mcp_upstream_config::UpstreamMcpSaveRequest>,
 ) -> Response {
-    let self_port = state.config.read().services.server.port;
-    let errors = crate::mcp_upstream_config::validate_upstream_config(&config, self_port);
-    if !errors.is_empty() {
-        let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
-        return (StatusCode::BAD_REQUEST, msgs.join("; ")).into_response();
-    }
-    let old_config: crate::mcp_upstream_config::UpstreamMcpConfig =
-        crate::config::load_json_config(crate::mcp_upstream_config::UPSTREAMS_FILE);
-    if let Err(e) =
-        crate::config::save_json_config(crate::mcp_upstream_config::UPSTREAMS_FILE, &config)
+    match crate::mcp_upstream_config::save_mcp_upstreams_inner(request.base, request.config, &state)
+        .await
     {
-        return err_500(&e);
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(e)
+            if e.starts_with("Invalid upstream config")
+                || e.starts_with("Duplicate upstream id") =>
+        {
+            (StatusCode::BAD_REQUEST, e).into_response()
+        }
+        Err(e) => err_500(&e),
     }
-    state
-        .mcp_upstream_registry
-        .apply_config_diff(&old_config, &config, self_port)
-        .await;
-    StatusCode::OK.into_response()
 }
 
 /// POST /mcp/upstreams/reconnect — reconnect a single upstream by name.
@@ -547,6 +541,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::list_sessions).post(session::create_session),
         )
         .route("/sessions/{id}/write", post(session::write_to_session))
+        .route(
+            "/sessions/{id}/queue",
+            post(session::enqueue_command).delete(session::clear_queued_commands),
+        )
         .route("/sessions/{id}/name", put(session::set_session_name))
         .route("/sessions/{id}/resize", post(session::resize_session))
         .route("/sessions/{id}/output", get(session::get_output))
@@ -2331,6 +2329,68 @@ mod tests {
         let config: serde_json::Value = serde_json::from_slice(&body).unwrap();
         // Should have default font_family
         assert!(config["font_family"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn upstream_save_reports_same_id_concurrent_add_without_mutating_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = crate::config::set_config_dir_override(tmp.path().to_path_buf());
+        let current = crate::mcp_upstream_config::UpstreamMcpConfig {
+            servers: vec![crate::mcp_upstream_config::UpstreamMcpServer {
+                id: "shared-id".to_string(),
+                name: "existing".to_string(),
+                transport: crate::mcp_upstream_config::UpstreamTransport::Http {
+                    url: "https://existing.example.com/mcp".to_string(),
+                },
+                enabled: false,
+                timeout_secs: 30,
+                tool_filter: None,
+                auth: None,
+            }],
+        };
+        crate::config::ConfigFile::<crate::mcp_upstream_config::UpstreamMcpConfig>::new(
+            crate::mcp_upstream_config::UPSTREAMS_FILE,
+        )
+        .save(&current)
+        .unwrap();
+
+        let body = serde_json::json!({
+            "base": { "servers": [] },
+            "config": {
+                "servers": [{
+                    "id": "shared-id",
+                    "name": "requested",
+                    "transport": {
+                        "type": "http",
+                        "url": "https://requested.example.com/mcp"
+                    },
+                    "enabled": false,
+                    "timeout_secs": 30
+                }]
+            }
+        });
+        let app = build_router(test_state(), false, true);
+        let response = app
+            .oneshot(put_from(
+                "/mcp/upstreams",
+                &body,
+                std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
+            ))
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let error: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(
+            error["error"]
+                .as_str()
+                .is_some_and(|message| message.contains("was added concurrently"))
+        );
+        assert_eq!(crate::mcp_upstream_config::load_mcp_upstreams(), current);
     }
 
     #[tokio::test]
@@ -4954,14 +5014,13 @@ mod tests {
             let Some(name_str) = name.to_str() else {
                 continue;
             };
-            if let Some(rest) = name_str.strip_prefix("mcp-") {
-                if let Some(pid_str) = rest.strip_suffix(".sock") {
-                    if let Ok(pid) = pid_str.parse::<u32>() {
-                        let alive_check = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
-                        if !alive_check {
-                            let _ = std::fs::remove_file(entry.path());
-                        }
-                    }
+            if let Some(rest) = name_str.strip_prefix("mcp-")
+                && let Some(pid_str) = rest.strip_suffix(".sock")
+                && let Ok(pid) = pid_str.parse::<u32>()
+            {
+                let alive_check = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+                if !alive_check {
+                    let _ = std::fs::remove_file(entry.path());
                 }
             }
         }

@@ -48,6 +48,11 @@ export interface UpstreamMcpConfig {
 	servers: UpstreamMcpServer[];
 }
 
+export interface UpstreamMcpSaveRequest {
+	base: UpstreamMcpConfig;
+	config: UpstreamMcpConfig;
+}
+
 // ---------------------------------------------------------------------------
 
 /** Detect whether we're running inside a Tauri webview */
@@ -144,7 +149,11 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	load_mcp_upstreams: { map: () => ({ method: "GET", path: "/mcp/upstreams" }) },
 	get_mcp_upstream_status: { map: () => ({ method: "GET", path: "/mcp/upstream-status" }) },
 	save_mcp_upstreams: {
-		map: (args) => ({ method: "PUT", path: "/mcp/upstreams", body: args.config }),
+		map: (args) => ({
+			method: "PUT",
+			path: "/mcp/upstreams",
+			body: { base: args.base, config: args.config },
+		}),
 	},
 	reconnect_mcp_upstream: {
 		map: (args) => ({ method: "POST", path: "/mcp/upstreams/reconnect", body: { name: args.name } }),
@@ -192,11 +201,21 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { data: args.data },
 		}),
 	},
+	enqueue_agent_command: {
+		map: (args) => ({
+			method: "POST",
+			path: `/sessions/${args.sessionId}/queue`,
+			body: { text: args.text },
+		}),
+	},
+	clear_queued_agent_commands: {
+		map: (args) => ({ method: "DELETE", path: `/sessions/${args.sessionId}/queue` }),
+	},
 	set_session_name: {
 		map: (args) => ({
 			method: "PUT",
 			path: `/sessions/${args.sessionId}/name`,
-			body: { name: args.name },
+			body: { name: args.name, isCustom: args.isCustom },
 		}),
 	},
 	resize_pty: {
@@ -1310,7 +1329,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 		map: (args) => ({
 			method: "POST",
 			path: "/worktrees/finalize",
-			body: { repoPath: args.repoPath, branchName: args.branchName, action: args.action },
+			body: {
+				repoPath: args.repoPath,
+				branchName: args.branchName,
+				action: args.action,
+				force: args.force,
+			},
 		}),
 	},
 	checkout_remote_branch: {
