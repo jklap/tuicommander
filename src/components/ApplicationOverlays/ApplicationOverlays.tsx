@@ -234,6 +234,7 @@ function CleanupOverlay(props: { contract: CleanupOverlayContract }) {
 						isDefaultBranch={branch?.isMain ?? false}
 						hasTerminals={(branch?.terminals.length ?? 0) > 0}
 						hasDirtyFiles={context.hasDirtyFiles}
+						worktreeDirty={context.worktreeDirty}
 						worktreeAction={props.contract.action()}
 						onWorktreeActionChange={props.contract.setAction}
 						executing={props.contract.executing()}

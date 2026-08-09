@@ -301,10 +301,14 @@ describe("executeCleanup", () => {
 		});
 		await executeCleanup(config);
 
+		// `force: true` — this dialog IS the confirmation. It renders the
+		// uncommitted-work warning under the worktree step, so the backend guard
+		// must not ask a second time and fail the step.
 		expect(mockInvoke).toHaveBeenCalledWith("finalize_merged_worktree", {
 			repoPath: "/repo",
 			branchName: "feature/login",
 			action: "archive",
+			force: true,
 		});
 	});
 
@@ -325,6 +329,7 @@ describe("executeCleanup", () => {
 			repoPath: "/repo",
 			branchName: "feature/login",
 			action: "delete",
+			force: true,
 		});
 	});
 

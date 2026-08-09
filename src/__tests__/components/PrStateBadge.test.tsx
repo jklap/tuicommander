@@ -22,9 +22,7 @@ describe("PrStateBadge conflict rendering", () => {
 
 	it("ignores a stale CONFLICTING mergeable while recomputing", () => {
 		// The exact regression: mergeable is the pre-push value, already invalidated.
-		expect(
-			label({ prNumber: 3, state: "open", mergeable: "CONFLICTING", conflictState: "checking" }),
-		).toBe("Checking");
+		expect(label({ prNumber: 3, state: "open", mergeable: "CONFLICTING", conflictState: "checking" })).toBe("Checking");
 	});
 
 	it("does not invent a conflict from mergeable alone", () => {

@@ -19,6 +19,7 @@ const OS_NOTIFICATION_TITLES: Record<NotificationSound, string> = {
 	completion: "Task completed",
 	warning: "Warning",
 	info: "Info",
+	attention: "Agent needs you",
 };
 
 let osNotificationPermission: NotificationPermission | null = null;

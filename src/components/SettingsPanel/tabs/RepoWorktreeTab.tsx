@@ -195,10 +195,7 @@ export const RepoWorktreeTab: Component<RepoTabProps> = (props) => {
 						onChange={(e) => props.onUpdate("autoConsolidateWorktrees", e.currentTarget.checked)}
 					/>
 					<span>
-						{t(
-							"repoWorktree.toggle.autoConsolidate",
-							"Show all worktrees of this repo in one consolidated screen",
-						)}
+						{t("repoWorktree.toggle.autoConsolidate", "Show all worktrees of this repo in one consolidated screen")}
 					</span>
 				</div>
 			</div>

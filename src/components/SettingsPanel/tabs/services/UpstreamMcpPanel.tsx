@@ -174,12 +174,13 @@ export const UpstreamMcpPanel: Component = () => {
 	async function saveUpstreams(servers: UpstreamMcpServer[]): Promise<boolean> {
 		setSaving(true);
 		setError("");
+		const base = { servers: [...upstreams()] };
 		try {
 			appLogger.info("mcp", "saveUpstreams: calling RPC", {
 				serverCount: servers.length,
 				names: servers.map((s) => s.name),
 			});
-			await rpc("save_mcp_upstreams", { config: { servers } });
+			await rpc("save_mcp_upstreams", { base, config: { servers } });
 			appLogger.info("mcp", "saveUpstreams: RPC succeeded");
 			setUpstreams(servers);
 			return true;

@@ -575,6 +575,37 @@ describe("paneLayoutStore", () => {
 			});
 		});
 
+		it("activate=false docks a tab without switching the pane to it", () => {
+			testInScope(() => {
+				const g1 = store.createGroup();
+				store.addTab(g1, { id: "term-1", type: "terminal" });
+				store.addTab(g1, { id: "term-2", type: "terminal" }, false);
+
+				expect(store.state.groups[g1].tabs).toHaveLength(2);
+				expect(store.state.groups[g1].activeTabId).toBe("term-1");
+			});
+		});
+
+		it("activate=false still fills an empty group so the tab is not invisible", () => {
+			testInScope(() => {
+				const g1 = store.createGroup();
+				store.addTab(g1, { id: "term-1", type: "terminal" }, false);
+
+				expect(store.state.groups[g1].activeTabId).toBe("term-1");
+			});
+		});
+
+		it("activate=false does not re-select an already docked tab", () => {
+			testInScope(() => {
+				const g1 = store.createGroup();
+				store.addTab(g1, { id: "term-1", type: "terminal" });
+				store.addTab(g1, { id: "term-2", type: "terminal" });
+				store.addTab(g1, { id: "term-1", type: "terminal" }, false);
+
+				expect(store.state.groups[g1].activeTabId).toBe("term-2");
+			});
+		});
+
 		it("does not duplicate existing tab", () => {
 			testInScope(() => {
 				const g1 = store.createGroup();

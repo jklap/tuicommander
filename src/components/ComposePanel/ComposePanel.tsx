@@ -1,7 +1,7 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { drawSelection, EditorView, keymap } from "@codemirror/view";
 import { createCodeMirror } from "solid-codemirror";
-import { type Accessor, type Component, createEffect, on, onCleanup } from "solid-js";
+import { type Accessor, type Component, createEffect, on, onCleanup, Show } from "solid-js";
 import { cx } from "../../utils";
 import s from "./ComposePanel.module.css";
 
@@ -42,6 +42,13 @@ export interface ComposePanelProps {
 	initialText: Accessor<string>;
 	onClose: () => void;
 	onSend: (text: string) => void | Promise<void>;
+	/** Hand the text to the backend's idle gate instead of typing it now. */
+	onEnqueue: (text: string) => void | Promise<void>;
+	/** False for a plain shell: only an agent has a composer worth waiting for. */
+	canEnqueue: Accessor<boolean>;
+	/** Commands already waiting for this session's next idle window. */
+	queuedCount: Accessor<number>;
+	onClearQueue: () => void | Promise<void>;
 	onTextChange?: (text: string) => void;
 }
 
@@ -56,6 +63,16 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	createExtension(EditorView.lineWrapping);
 	createExtension(
 		keymap.of([
+			// Shift first: CodeMirror matches the more specific binding, so plain
+			// Ctrl-Enter keeps sending immediately.
+			{
+				key: "Shift-Ctrl-Enter",
+				run: (view) => {
+					const text = view.state.doc.toString().trim();
+					if (text && props.canEnqueue()) props.onEnqueue(text);
+					return true;
+				},
+			},
 			{
 				key: "Ctrl-Enter",
 				run: (view) => {
@@ -86,8 +103,9 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 			// Read initialText outside reactive tracking — we only want the value
 			// at open time, not to subscribe to further changes while typing.
 			const initial = props.initialText();
-			requestAnimationFrame(() =>
-				requestAnimationFrame(() => {
+			let inner = 0;
+			const outer = requestAnimationFrame(() => {
+				inner = requestAnimationFrame(() => {
 					const view = editorView();
 					if (!view) return;
 					const current = view.state.doc.toString();
@@ -98,8 +116,14 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 						});
 					}
 					view.focus();
-				}),
-			);
+				});
+			});
+			// Closing (or unmounting) before the second frame lands would otherwise
+			// dispatch into a destroyed view.
+			onCleanup(() => {
+				cancelAnimationFrame(outer);
+				if (inner) cancelAnimationFrame(inner);
+			});
 		}),
 	);
 
@@ -118,23 +142,53 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 		onCleanup(() => cmDom?.removeEventListener("focusout", handleFocusOut));
 	});
 
+	const currentText = (): string => editorView()?.state.doc.toString().trim() ?? "";
+
 	const handleSend = () => {
-		const view = editorView();
-		if (!view) return;
-		const text = view.state.doc.toString().trim();
+		const text = currentText();
 		if (text) props.onSend(text);
+	};
+
+	const handleEnqueue = () => {
+		const text = currentText();
+		if (text && props.canEnqueue()) props.onEnqueue(text);
 	};
 
 	return (
 		<div class={cx(s.panel, props.isOpen() && s.panelOpen)} onMouseDown={(e) => e.stopPropagation()}>
 			<div class={s.editor} ref={ref} />
 			<div class={s.statusBar}>
-				<span>Ctrl+Enter to send &middot; Esc to close</span>
-				<button class={s.sendButton} onClick={handleSend} title="Send (Ctrl+Enter)">
-					<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-						<path d="M4 2l10 6-10 6V2z" />
-					</svg>
-				</button>
+				<span>Ctrl+Enter to send &middot; {props.canEnqueue() ? "Shift+Ctrl+Enter to queue · " : ""}Esc to close</span>
+				<div class={s.actions}>
+					<Show when={props.queuedCount() > 0}>
+						<button
+							class={s.queueBadge}
+							onClick={() => props.onClearQueue()}
+							title="Waiting for the agent to go idle — click to discard"
+						>
+							{props.queuedCount()} queued
+							<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+								<path d="M4.3 3.3l8.4 8.4-1 1-8.4-8.4zM12.7 4.3l-8.4 8.4-1-1 8.4-8.4z" />
+							</svg>
+						</button>
+					</Show>
+					<Show when={props.canEnqueue()}>
+						<button
+							class={s.queueButton}
+							onClick={handleEnqueue}
+							title="Queue for the next idle moment (Shift+Ctrl+Enter)"
+						>
+							<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+								<path d="M2 3h12v2H2zM2 7h12v2H2zM2 11h8v2H2z" />
+							</svg>
+						</button>
+					</Show>
+					<button class={s.sendButton} onClick={handleSend} title="Send (Ctrl+Enter)">
+						<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+							<path d="M4 2l10 6-10 6V2z" />
+						</svg>
+					</button>
+				</div>
 			</div>
 		</div>
 	);

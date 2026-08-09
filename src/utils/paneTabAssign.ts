@@ -2,12 +2,13 @@ import { type PaneTabType, paneLayoutStore } from "../stores/paneLayout";
 import { setOnTabAdded } from "../stores/tabManager";
 
 /** Assign a tab to the active pane group when split mode is on.
- *  No-op when not in split mode. Safe to call unconditionally after tab creation. */
-export function assignTabToActiveGroup(tabId: string, type: PaneTabType): void {
+ *  No-op when not in split mode. Safe to call unconditionally after tab creation.
+ *  `activate=false` docks the tab without switching the pane to it. */
+export function assignTabToActiveGroup(tabId: string, type: PaneTabType, activate = true): void {
 	if (!paneLayoutStore.isSplit()) return;
 	const activeGroupId = paneLayoutStore.state.activeGroupId;
 	if (!activeGroupId) return;
-	paneLayoutStore.addTab(activeGroupId, { id: tabId, type });
+	paneLayoutStore.addTab(activeGroupId, { id: tabId, type }, activate);
 }
 
 /** Register the global hook so terminal tabs auto-assign to active pane group.

@@ -15,7 +15,12 @@ const NATIVE_LIFECYCLE_TIMEOUT_MS = 5_000;
 
 type SessionLifecycleResponse = {
 	session_id: string;
-	state?: { shell_state?: string; agent_state?: string; background_work?: boolean } | null;
+	state?: {
+		shell_state?: string;
+		agent_state?: string;
+		background_work?: boolean;
+		queued_commands?: number;
+	} | null;
 };
 
 let nextLifecycleRequest = 0;
@@ -113,6 +118,9 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 		terminalsStore.update(termId, {
 			agentState: toAgentLifecycleState(session.state?.agent_state),
 			backgroundWork: session.state?.background_work === true,
+			// Omitted by the backend when zero (serde skips it), so absence is an
+			// empty queue — not "unknown".
+			queuedCommands: session.state?.queued_commands ?? 0,
 			...(shellState !== undefined ? { shellState } : {}),
 		});
 	}
