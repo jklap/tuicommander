@@ -5,6 +5,7 @@ import { rpc, type UpstreamMcpConfig, type UpstreamMcpServer, type UpstreamTrans
 import { handleOpenUrl } from "../../../../utils/openUrl";
 import { ConfirmDialog } from "../../../ConfirmDialog";
 import s from "../../Settings.module.css";
+import { SETTINGS_SECTION_UPSTREAM_MCP } from "../../sections";
 
 /** Pure helper: should the Authorize button be shown for this server+status? */
 export function shouldShowAuthorize(
@@ -386,7 +387,10 @@ export const UpstreamMcpPanel: Component = () => {
 	}
 
 	return (
-		<div style={{ "margin-top": "24px", "border-top": "1px solid var(--border)", "padding-top": "16px" }}>
+		<div
+			id={SETTINGS_SECTION_UPSTREAM_MCP}
+			style={{ "margin-top": "24px", "border-top": "1px solid var(--border)", "padding-top": "16px" }}
+		>
 			<div class={s.group}>
 				<label style={{ display: "flex", "align-items": "center", gap: "8px", "justify-content": "space-between" }}>
 					<span>Upstream MCP Servers</span>

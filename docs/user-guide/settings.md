@@ -70,7 +70,7 @@ GitHub authentication and token management:
 
 Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring → `gh` CLI config → `gh auth token` subprocess.
 
-## Services Tab
+## Services & MCP Tab
 
 ### HTTP API Server
 
@@ -99,6 +99,8 @@ Tools:
 
 ### Upstream MCP Servers
 
+**Manage in Settings** in the MCP popup (**Cmd+Shift+I**) opens this tab scrolled to this block — the block sits below the fold, so a plain tab switch would look like nothing happened.
+
 OAuth upstreams show **Authorize** when consent is required. TUIC prepares the OAuth request, then displays a blocking in-app confirmation naming the authorization-server origin before opening the system browser. Cancelling that confirmation discards the pending request.
 
 Proxy external MCP servers through TUICommander. Their tools appear prefixed as `{name}__{tool}`:
@@ -106,7 +108,7 @@ Proxy external MCP servers through TUICommander. Their tools appear prefixed as 
 - API keys for HTTP upstreams are stored in the OS keychain
 - Live status (connecting, ready, circuit open, failed) with tool count and call metrics
 - Reconnect and remove controls per upstream
-- Per-repo scoping: each repo can define an allowlist of active upstream servers via **Cmd+Shift+M** popup (or repo settings). Empty/null allowlist = all servers active
+- Per-repo scoping: each repo can define an allowlist of active upstream servers via **Cmd+Shift+I** popup (or repo settings). Empty/null allowlist = all servers active
 
 ### Remote Access
 

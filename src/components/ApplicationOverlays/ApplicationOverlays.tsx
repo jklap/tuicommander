@@ -38,6 +38,7 @@ interface PanelOverlaysContract {
 	settingsVisible: Accessor<boolean>;
 	closeSettings: () => void;
 	settingsInitialTab: Accessor<string | undefined>;
+	settingsInitialSection: Accessor<string | undefined>;
 	settingsContext: Accessor<SettingsContext>;
 	taskQueueVisible: Accessor<boolean>;
 	closeTaskQueue: () => void;
@@ -271,6 +272,7 @@ export function ApplicationOverlays(props: ApplicationOverlaysProps) {
 					visible={props.panels.settingsVisible()}
 					onClose={props.panels.closeSettings}
 					initialTab={props.panels.settingsInitialTab()}
+					initialSection={props.panels.settingsInitialSection()}
 					context={props.panels.settingsContext()}
 				/>
 			</Suspense>
