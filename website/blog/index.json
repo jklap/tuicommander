@@ -1,6 +1,15 @@
 {
   "posts": [
     {
+      "slug": "keyboard-shortcuts",
+      "title": "The shortcuts that matter when twelve agents are working",
+      "date": "2026-08-09",
+      "status": "published",
+      "feature": "Keyboard shortcuts — navigation-first bindings and keybindings.json customization",
+      "summary": "A shortcut list is usually a feature dump. These are the handful that changed how we work once the terminal stopped being where you type and became where you supervise: Cmd+U to reach the agent that is blocked, Cmd+Ctrl+Backspace to get back, Cmd+I to queue the next instruction without derailing the current one — plus the block, split and branch keys, and how to rebind all of it.",
+      "screenshots": []
+    },
+    {
       "slug": "delivery-receipts",
       "title": "\"ok\" was a lie",
       "date": "2026-08-05",
