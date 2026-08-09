@@ -1397,7 +1397,7 @@ mod tests {
     fn validate_rejects_empty_binary_name() {
         let mut m = valid_manifest("test");
         m.capabilities = vec!["exec:cli".into()];
-        m.binaries = vec!["".into()];
+        m.binaries = vec![String::new()];
         assert!(validate_manifest(&m, "test").is_err());
     }
 

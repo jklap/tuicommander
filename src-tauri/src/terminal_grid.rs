@@ -2458,12 +2458,20 @@ mod tests {
             ROW_WRAPPED_FLAG,
             "row 0 continues onto row 1"
         );
-        assert_eq!(first & !ROW_WRAPPED_FLAG, 10, "column count survives the flag");
+        assert_eq!(
+            first & !ROW_WRAPPED_FLAG,
+            10,
+            "column count survives the flag"
+        );
 
         // Row 1 holds the tail: nothing continues after it.
         let second = h + 4 + 10 * 11;
         let tail = u16::from_le_bytes([buf[second + 2], buf[second + 3]]);
-        assert_eq!(tail & ROW_WRAPPED_FLAG, 0, "the last row of a line is not wrapped");
+        assert_eq!(
+            tail & ROW_WRAPPED_FLAG,
+            0,
+            "the last row of a line is not wrapped"
+        );
         assert_eq!(tail & !ROW_WRAPPED_FLAG, 10);
     }
 
@@ -3749,7 +3757,7 @@ mod tests {
 
         // The prompt must be on the cursor's line, not displaced.
         assert_eq!(
-            rows_after[line_after as usize].trim_end(),
+            rows_after[line_after].trim_end(),
             "ABCDEFGHIJKLMNOPQRST",
             "prompt must be on cursor row after shrink-grow roundtrip"
         );

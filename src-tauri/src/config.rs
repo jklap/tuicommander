@@ -204,6 +204,10 @@ fn load_json_config_strict_from_path<T: DeserializeOwned + Default>(
 }
 
 /// Atomically write `data` to `target` via temp+rename with 0600 perms.
+/// Fsyncs the temp file before renaming: rename is atomic w.r.t. the directory
+/// entry, but without fsync a crash right after it can still leave the target
+/// containing stale or zero-length content on filesystems that reorder data
+/// writes past metadata writes (e.g. ext4 `data=writeback`).
 pub(crate) fn persist_atomic(target: &std::path::Path, data: &[u8]) -> Result<(), String> {
     if let Some(dir) = target.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {e}"))?;
@@ -211,37 +215,34 @@ pub(crate) fn persist_atomic(target: &std::path::Path, data: &[u8]) -> Result<()
     // Unique per-call temp name (uuid) — a per-process name lets two concurrent
     // writers to the same target collide on the temp file and corrupt it (#117-a503).
     let temp = target.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-    std::fs::write(&temp, data).map_err(|e| format!("Failed to write temp file: {e}"))?;
+    let mut file =
+        std::fs::File::create(&temp).map_err(|e| format!("Failed to write temp file: {e}"))?;
+    file.write_all(data).map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        format!("Failed to write temp file: {e}")
+    })?;
 
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let perms = std::fs::Permissions::from_mode(0o600);
-        std::fs::set_permissions(&temp, perms)
-            .map_err(|e| format!("Failed to set permissions: {e}"))?;
+        std::fs::set_permissions(&temp, perms).map_err(|e| {
+            let _ = std::fs::remove_file(&temp);
+            format!("Failed to set permissions: {e}")
+        })?;
     }
+
+    file.sync_all().map_err(|e| {
+        let _ = std::fs::remove_file(&temp);
+        format!("Failed to fsync temp file: {e}")
+    })?;
+    drop(file);
 
     std::fs::rename(&temp, target).map_err(|e| {
         let _ = std::fs::remove_file(&temp);
         format!("Failed to commit file: {e}")
     })?;
     Ok(())
-}
-
-/// Save a JSON config file atomically (temp file + rename).
-/// Sets 0600 permissions on Unix to protect sensitive data.
-pub(crate) fn save_json_config<T: Serialize>(filename: &str, config: &T) -> Result<(), String> {
-    let target = config_dir().join(filename);
-    save_json_config_to_path(&target, config)
-}
-
-fn save_json_config_to_path<T: Serialize>(
-    target: &std::path::Path,
-    config: &T,
-) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(config)
-        .map_err(|e| format!("Failed to serialize config: {e}"))?;
-    persist_atomic(target, json.as_bytes())
 }
 
 // ---------------------------------------------------------------------------
@@ -813,6 +814,9 @@ pub(crate) struct NotificationSounds {
     pub(crate) warning: bool,
     #[serde(default = "default_true")]
     pub(crate) info: bool,
+    /// Buzzer an agent can raise over MCP when it needs the user back.
+    #[serde(default = "default_true")]
+    pub(crate) attention: bool,
 }
 
 impl Default for NotificationSounds {
@@ -823,6 +827,7 @@ impl Default for NotificationSounds {
             completion: true,
             warning: true,
             info: true,
+            attention: true,
         }
     }
 }
@@ -1621,7 +1626,7 @@ pub(crate) fn merge_partial_app_config(
     serde_json::from_value(merged).map_err(|e| format!("Invalid config: {e}"))
 }
 
-fn merge_json_value(base: &mut serde_json::Value, incoming: serde_json::Value) {
+pub(crate) fn merge_json_value(base: &mut serde_json::Value, incoming: serde_json::Value) {
     match (base, incoming) {
         (serde_json::Value::Object(base_map), serde_json::Value::Object(incoming_map)) => {
             for (key, value) in incoming_map {
@@ -1633,6 +1638,52 @@ fn merge_json_value(base: &mut serde_json::Value, incoming: serde_json::Value) {
         }
         (base, incoming) => *base = incoming,
     }
+}
+
+/// Return the JSON merge delta that turns `base` into `desired`.
+///
+/// An omitted object key means "unchanged". A `null` value is an intentional
+/// clear, including when a `skip_serializing_if = "Option::is_none"` field was
+/// present in `base` and absent from `desired`. Arrays are values rather than
+/// maps here, so a changed array replaces the previous array wholesale.
+pub(crate) fn json_merge_delta(
+    base: &serde_json::Value,
+    desired: &serde_json::Value,
+) -> Option<serde_json::Value> {
+    match (base, desired) {
+        (serde_json::Value::Object(base_map), serde_json::Value::Object(desired_map)) => {
+            let mut delta = serde_json::Map::new();
+            for (key, desired_value) in desired_map {
+                match base_map.get(key) {
+                    Some(base_value) => {
+                        if let Some(value_delta) = json_merge_delta(base_value, desired_value) {
+                            delta.insert(key.clone(), value_delta);
+                        }
+                    }
+                    None => {
+                        delta.insert(key.clone(), desired_value.clone());
+                    }
+                }
+            }
+            for key in base_map.keys() {
+                if !desired_map.contains_key(key) {
+                    delta.insert(key.clone(), serde_json::Value::Null);
+                }
+            }
+            (!delta.is_empty()).then_some(serde_json::Value::Object(delta))
+        }
+        _ if base == desired => None,
+        _ => Some(desired.clone()),
+    }
+}
+
+fn app_config_delta(base: &AppConfig, desired: &AppConfig) -> Result<serde_json::Value, String> {
+    let base =
+        serde_json::to_value(base).map_err(|e| format!("Could not serialize base config: {e}"))?;
+    let desired = serde_json::to_value(desired)
+        .map_err(|e| format!("Could not serialize requested config: {e}"))?;
+    Ok(json_merge_delta(&base, &desired)
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new())))
 }
 
 /// The remote-access settings whose change requires an HTTP server restart.
@@ -1656,6 +1707,233 @@ pub(crate) fn server_settings_changed(old: &AppConfig, new: &AppConfig) -> bool 
 /// mutex and wedge every later config write.
 static CONFIG_WRITE_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
+/// Proof of holding `CONFIG_WRITE_LOCK`, required by `write_holding_lock` so its "caller
+/// MUST already hold the lock" precondition is a compile error to violate, not just a
+/// doc comment a future caller can miss.
+struct ConfigWriteGuard(#[allow(dead_code)] parking_lot::MutexGuard<'static, ()>);
+
+fn config_write_lock() -> ConfigWriteGuard {
+    ConfigWriteGuard(CONFIG_WRITE_LOCK.lock())
+}
+
+/// Test-only: widens `load_app_config`'s read-to-write window so a concurrent writer
+/// reliably lands inside it. Read from an env var rather than a `#[cfg(test)]` static
+/// (the credentials.rs fault-injection pattern) because the two sides of the
+/// `two_process_*` race tests below run in SEPARATE OS PROCESSES, which do not share
+/// statics — only the environment carries across `std::process::Command::spawn`.
+#[cfg(test)]
+fn test_load_app_config_delay() {
+    if let Ok(ms) = std::env::var("TUIC_TEST_LOAD_APP_CONFIG_DELAY_MS")
+        && let Ok(ms) = ms.parse::<u64>()
+    {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+}
+
+/// A cheap fingerprint of a config file's on-disk state, used to detect whether it
+/// changed between a `load()` and a later `save_checked()`. `(mtime, len)` rather than
+/// a content hash: one `stat(2)`, no read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Stamp {
+    Missing,
+    Present {
+        mtime: std::time::SystemTime,
+        len: u64,
+    },
+}
+
+impl Stamp {
+    fn of(path: &std::path::Path) -> Self {
+        match std::fs::metadata(path) {
+            Ok(meta) => Stamp::Present {
+                mtime: meta.modified().unwrap_or(std::time::UNIX_EPOCH),
+                len: meta.len(),
+            },
+            Err(_) => Stamp::Missing,
+        }
+    }
+}
+
+/// Error from a stamp-checked config write.
+#[derive(Debug)]
+pub(crate) enum ConfigWriteError {
+    /// The on-disk file changed since the caller's `Stamp` was captured — the write was
+    /// refused instead of silently clobbering whatever produced that change.
+    Conflict,
+    Io(String),
+}
+
+impl std::fmt::Display for ConfigWriteError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ConfigWriteError::Conflict => {
+                write!(f, "config file changed on disk since it was last read")
+            }
+            ConfigWriteError::Io(e) => write!(f, "{e}"),
+        }
+    }
+}
+
+/// A cross-process-safe on-disk config file.
+///
+/// Two independent locks protect every write:
+/// - `CONFIG_WRITE_LOCK` (in-process, `parking_lot::Mutex`) serializes writers within
+///   this process, same as before this type existed.
+/// - An advisory OS file lock (`std::fs::File::lock()`, stable since Rust 1.89; backed by
+///   `flock(2)`/`LockFileEx`) serializes writers ACROSS
+///   processes — the actual bug this type exists to fix: a debug and a release build
+///   sharing one config directory each load a file, one saves, the other saves its now
+///   stale whole-file copy on top, silently discarding the first write. A mutex alone
+///   cannot fix this: it only serializes two writes that still clobber each other.
+///
+/// Lock order is always in-process THEN file lock, and the file lock is acquired at
+/// most once per call — re-entering it from the same process would block against its
+/// own earlier lock (advisory locks are tied to the open file description, not the
+/// process/thread), not no-op like a reentrant mutex would. `write_holding_lock` exists
+/// for explicit whole-document writes that already hold `CONFIG_WRITE_LOCK`.
+pub(crate) struct ConfigFile<T> {
+    path: PathBuf,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl<T> ConfigFile<T>
+where
+    T: Serialize + DeserializeOwned + Default,
+{
+    pub(crate) fn new(filename: &str) -> Self {
+        Self::at_path(config_dir().join(filename))
+    }
+
+    /// Construct for a file at an arbitrary path outside `config_dir()`.
+    pub(crate) fn at_path(path: PathBuf) -> Self {
+        Self {
+            path,
+            _marker: std::marker::PhantomData,
+        }
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        let mut name = self.path.clone().into_os_string();
+        name.push(".lock");
+        PathBuf::from(name)
+    }
+
+    /// Open (creating if needed) and blockingly acquire the cross-process advisory
+    /// lock. The returned handle releases the lock on drop.
+    fn acquire_file_lock(&self) -> Result<std::fs::File, String> {
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {e}"))?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(self.lock_path())
+            .map_err(|e| format!("Failed to open config lock file: {e}"))?;
+        file.lock()
+            .map_err(|e| format!("Failed to acquire config file lock: {e}"))?;
+        Ok(file)
+    }
+
+    /// No locking of its own — callers must already hold whichever locks apply.
+    fn write_atomic(&self, value: &T) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+        persist_atomic(&self.path, json.as_bytes())
+    }
+
+    /// Read the current value and a `Stamp` of the file it came from, captured from the
+    /// same `stat` call used to decide existence — so the stamp can never drift from
+    /// the content it describes.
+    pub(crate) fn load(&self) -> (T, Stamp) {
+        let stamp = Stamp::of(&self.path);
+        (load_json_config_from_path(&self.path), stamp)
+    }
+
+    /// Read-modify-write under both locks. `mutate` receives a value freshly re-read
+    /// from disk *inside* the file lock — any value the caller loaded earlier is
+    /// discarded — so the closure always mutates the latest on-disk state, never a
+    /// stale snapshot. Return `false` from `mutate` to skip the write entirely (for
+    /// callers with an existing no-op path, e.g. removing a label that isn't set,
+    /// which must not touch the file or its mtime).
+    pub(crate) fn update<F>(&self, mutate: F) -> Result<(), String>
+    where
+        F: FnOnce(&mut T) -> bool,
+    {
+        self.update_with(|value| Ok(((), mutate(value))))
+    }
+
+    /// Read-modify-write under both locks and return a value derived from the exact
+    /// pre/post state. A fallible mutation aborts before persistence; `changed = false`
+    /// returns the result without touching the file.
+    pub(crate) fn update_with<R, F>(&self, mutate: F) -> Result<R, String>
+    where
+        F: FnOnce(&mut T) -> Result<(R, bool), String>,
+    {
+        let _guard = CONFIG_WRITE_LOCK.lock();
+        let _file_lock = self.acquire_file_lock()?;
+        let mut value = load_json_config_from_path(&self.path);
+        let (result, changed) = mutate(&mut value)?;
+        if changed {
+            self.write_atomic(&value)?;
+        }
+        Ok(result)
+    }
+
+    /// Strict variant for domains where treating corrupt input as `Default` would turn
+    /// a recovery condition into data loss. Missing files still start from `Default`;
+    /// unreadable or invalid files abort before the mutation runs.
+    pub(crate) fn update_with_strict<R, F>(&self, mutate: F) -> Result<R, String>
+    where
+        F: FnOnce(&mut T) -> Result<(R, bool), String>,
+    {
+        let _guard = CONFIG_WRITE_LOCK.lock();
+        let _file_lock = self.acquire_file_lock()?;
+        let mut value = load_json_config_strict_from_path(&self.path)?;
+        let (result, changed) = mutate(&mut value)?;
+        if changed {
+            self.write_atomic(&value)?;
+        }
+        Ok(result)
+    }
+
+    /// Write `value` only if the on-disk file still matches `stamp` — otherwise return
+    /// `Conflict` instead of overwriting whatever produced the change in between. This
+    /// only protects against a race window as wide as the caller's own `load()`-to-
+    /// `save_checked()` span, not a UI session that loaded the value long before.
+    //
+    // This is deliberately limited to whole-document domains whose command captures a
+    // stamp immediately before saving. It narrows the backend race but is not a
+    // UI-session conflict protocol and must not be extended into one. Ordinary
+    // AppConfig and upstream MCP writes instead apply semantic deltas under the file
+    // lock; see docs/decisions/2026-08-08-config-deltas-under-lock.md.
+    pub(crate) fn save_checked(&self, value: &T, stamp: Stamp) -> Result<(), ConfigWriteError> {
+        let _guard = CONFIG_WRITE_LOCK.lock();
+        let _file_lock = self.acquire_file_lock().map_err(ConfigWriteError::Io)?;
+        if Stamp::of(&self.path) != stamp {
+            return Err(ConfigWriteError::Conflict);
+        }
+        self.write_atomic(value).map_err(ConfigWriteError::Io)
+    }
+
+    /// Write `value` unconditionally, taking only the cross-process file lock — no
+    /// stamp check. Takes only the file lock itself, not `CONFIG_WRITE_LOCK`: the
+    /// `&ConfigWriteGuard` parameter proves the caller already holds it, which is what
+    /// makes skipping it here safe. Re-acquiring it from inside this call would deadlock
+    /// (`parking_lot::Mutex` is not reentrant). Callers use this only when complete
+    /// document replacement is the intended operation.
+    fn write_holding_lock(&self, _guard: &ConfigWriteGuard, value: &T) -> Result<(), String> {
+        let _file_lock = self.acquire_file_lock()?;
+        self.write_atomic(value)
+    }
+
+    /// Write `value` unconditionally under both locks — the "plain locked write" for
+    /// callers replacing a whole document, as opposed to `update()`'s read-modify-write.
+    pub(crate) fn save(&self, value: &T) -> Result<(), String> {
+        let guard = config_write_lock();
+        self.write_holding_lock(&guard, value)
+    }
+}
+
 /// Side effects the caller must action after a successful config write.
 #[derive(Debug)]
 pub(crate) struct ConfigSaveEffects {
@@ -1667,10 +1945,13 @@ pub(crate) struct ConfigSaveEffects {
 
 /// Atomically apply a change to the app config.
 ///
-/// `mutate` is handed the CURRENT config *while the lock is held* and returns the desired
-/// one, so a merge of a partial payload can never be computed against a snapshot that
-/// another writer has already superseded. Redacted secrets are preserved, the file is
-/// written, and `state.config` is updated — all inside the same critical section.
+/// `mutate` is handed this process's current cached config and returns the desired
+/// value. Only the cached-to-desired delta is then applied to a fresh on-disk config
+/// while the cross-process file lock is held. A second process may therefore have
+/// changed unrelated fields since this process loaded its cache without those changes
+/// being overwritten by a stale whole-document save. Redacted secrets are preserved,
+/// the file is written, and `state.config` is refreshed from the merged value — all
+/// inside the same critical section.
 ///
 /// Synchronous on purpose: the body does blocking disk I/O, so async callers must reach
 /// it through `spawn_blocking` rather than holding an async task across the write.
@@ -1681,19 +1962,32 @@ pub(crate) fn commit_config_change<F>(
 where
     F: FnOnce(&AppConfig) -> Result<AppConfig, String>,
 {
-    let _guard = CONFIG_WRITE_LOCK.lock();
+    let _guard = config_write_lock();
 
-    let old = state.config.read().clone();
-    let mut next = mutate(&old)?;
-    preserve_redacted_app_config_secrets(&mut next, &old);
+    let cached = state.config.read().clone();
+    let mut requested = mutate(&cached)?;
+    preserve_redacted_app_config_secrets(&mut requested, &cached);
+    let delta = app_config_delta(&cached, &requested)?;
+
+    let file = ConfigFile::<AppConfig>::new(APP_CONFIG_FILE);
+    let _file_lock = file.acquire_file_lock()?;
+    let file_exists = file.path.exists();
+    let (latest, _) = read_app_config_unlocked(&file.path)?;
+    // A process may hold generated first-run values before config.json exists.
+    // There is no competing persisted document in that case, so use the cache as
+    // the base rather than dropping those values back to AppConfig::default().
+    let latest = if file_exists { latest } else { cached.clone() };
+    let next = merge_partial_app_config(&latest, delta)?;
 
     let effects = ConfigSaveEffects {
-        tools_changed: old.disabled_native_tools != next.disabled_native_tools
-            || old.collapse_tools != next.collapse_tools,
-        server_changed: server_settings_changed(&old, &next),
+        tools_changed: cached.disabled_native_tools != next.disabled_native_tools
+            || cached.collapse_tools != next.collapse_tools,
+        server_changed: server_settings_changed(&cached, &next),
     };
 
-    save_app_config(next.clone())?;
+    // The file lock is already held from the authoritative read above. Acquiring it
+    // again through save_app_config_locked would self-deadlock.
+    save_app_config_with(next.clone(), |disk_config| file.write_atomic(disk_config))?;
     *state.config.write() = next;
     Ok(effects)
 }
@@ -1723,53 +2017,115 @@ pub(crate) fn rotate_session_token(state: &crate::AppState) -> Result<String, St
     Ok(new_token)
 }
 
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn load_app_config() -> AppConfig {
-    let path = config_dir().join(APP_CONFIG_FILE);
+/// Read and hydrate `config.json` without taking either config lock.
+///
+/// The caller decides the locking span because both `load_app_config` and the
+/// delta commit path must keep the cross-process lock from this read through a
+/// possible rewrite. The boolean reports that plaintext credentials were moved
+/// to the vault and the redacted document must be persisted before releasing
+/// that lock.
+fn read_app_config_unlocked(path: &std::path::Path) -> Result<(AppConfig, bool), String> {
     if !path.exists() {
-        return AppConfig::default();
+        return Ok((AppConfig::default(), false));
     }
-    let content = match std::fs::read_to_string(&path) {
+    let content = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(path = %path.display(), "Could not read config: {e}");
-            return AppConfig::default();
+            return Err(format!("Could not read {}: {e}", path.display()));
         }
     };
+    #[cfg(test)]
+    test_load_app_config_delay();
     let mut val: serde_json::Value = match serde_json::from_str(&content) {
         Ok(v) => v,
         Err(e) => {
             tracing::error!(path = %path.display(), "Corrupt config: {e}. Using defaults.");
-            return AppConfig::default();
+            return Err(format!("Corrupt {}: {e}", path.display()));
         }
     };
     migrate_flat_services(&mut val);
     match serde_json::from_value(val) {
-        Ok(mut cfg) => {
-            if hydrate_app_config_secrets(&mut cfg) {
-                // A plaintext secret was just moved into the vault. Rewrite immediately —
-                // config_for_disk strips the cleartext — otherwise it stays readable in
-                // config.json until some unrelated setting happens to be saved.
-                if let Err(e) = save_app_config(cfg.clone()) {
-                    tracing::warn!(
-                        source = "config",
-                        "Migrated a secret to the vault but could not rewrite config.json: {e}"
-                    );
-                }
-            }
-            cfg
+        Ok(mut config) => {
+            let migrated_secret = hydrate_app_config_secrets(&mut config);
+            Ok((config, migrated_secret))
         }
         Err(e) => {
             tracing::error!(path = %path.display(), "Config deserialization failed after migration: {e}. Using defaults.");
-            AppConfig::default()
+            Err(format!(
+                "Config deserialization failed for {}: {e}",
+                path.display()
+            ))
         }
     }
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) fn load_app_config() -> AppConfig {
+    // CONFIG_WRITE_LOCK is held across the read AND the conditional migration write
+    // below, so a concurrent writer *in this process* can never land between the two.
+    // That alone is not enough: a second TUICommander process (e.g. a `make dev` debug
+    // build sharing the config dir with the installed release build) is invisible to
+    // this mutex. The cross-process file lock must be held for the exact same span —
+    // acquired here, before the read, not just at write time — otherwise process A can
+    // read, process B can write a newer config, and A's later migration write clobbers
+    // B's update with a stale copy.
+    let _guard = config_write_lock();
+    let file = ConfigFile::<AppConfig>::new(APP_CONFIG_FILE);
+    let _file_lock = match file.acquire_file_lock() {
+        Ok(lock) => Some(lock),
+        Err(e) => {
+            // Degrade to the old (in-process-only) protection rather than returning
+            // AppConfig::default() and discarding the user's real config over a
+            // transient lock failure.
+            tracing::warn!(
+                "Could not acquire config file lock for load_app_config, proceeding \
+                 without cross-process protection: {e}"
+            );
+            None
+        }
+    };
+
+    let path = config_dir().join(APP_CONFIG_FILE);
+    let (config, migrated_secret) =
+        read_app_config_unlocked(&path).unwrap_or_else(|_| (AppConfig::default(), false));
+    if migrated_secret {
+        // A plaintext secret was just moved into the vault. Rewrite immediately —
+        // config_for_disk strips the cleartext — otherwise it stays readable in
+        // config.json until some unrelated setting happens to be saved.
+        //
+        // save_app_config_with, not save_app_config_locked: we already hold both
+        // the in-process AND the file lock in this scope. save_app_config_locked
+        // persists via write_holding_lock, which would call acquire_file_lock a
+        // second time from this same process and deadlock.
+        if let Err(e) =
+            save_app_config_with(config.clone(), |disk_config| file.write_atomic(disk_config))
+        {
+            tracing::warn!(
+                source = "config",
+                "Migrated a secret to the vault but could not rewrite config.json: {e}"
+            );
+        }
+    }
+    config
+}
+
+/// Acquire both locks and replace the complete AppConfig document.
+///
+/// This is reserved for bootstrap and explicit replacement paths. Interactive config
+/// mutation goes through `commit_config_change`, which applies a delta to the latest
+/// locked disk value instead of replacing it with a stale snapshot.
+#[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_app_config(config: AppConfig) -> Result<(), String> {
+    let _guard = config_write_lock();
+    save_app_config_locked(config, &_guard)
+}
+
+/// Persist `config`. Precondition: the caller MUST already hold `CONFIG_WRITE_LOCK`
+/// — enforced by the `&ConfigWriteGuard` parameter.
+fn save_app_config_locked(config: AppConfig, guard: &ConfigWriteGuard) -> Result<(), String> {
     save_app_config_with(config, |disk_config| {
-        save_json_config(APP_CONFIG_FILE, disk_config)
+        ConfigFile::<AppConfig>::new(APP_CONFIG_FILE).write_holding_lock(guard, disk_config)
     })
 }
 
@@ -1798,7 +2154,9 @@ pub(crate) fn load_notification_config() -> NotificationConfig {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_notification_config(config: NotificationConfig) -> Result<(), String> {
-    save_json_config(NOTIFICATION_CONFIG_FILE, &config)
+    let file: ConfigFile<NotificationConfig> = ConfigFile::new(NOTIFICATION_CONFIG_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&config, stamp).map_err(|e| e.to_string())
 }
 
 // UI prefs
@@ -1809,7 +2167,9 @@ pub(crate) fn load_ui_prefs() -> UIPrefsConfig {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_ui_prefs(config: UIPrefsConfig) -> Result<(), String> {
-    save_json_config(UI_PREFS_FILE, &config)
+    let file: ConfigFile<UIPrefsConfig> = ConfigFile::new(UI_PREFS_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&config, stamp).map_err(|e| e.to_string())
 }
 
 // Repo settings
@@ -1820,7 +2180,9 @@ pub(crate) fn load_repo_settings() -> RepoSettingsMap {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_repo_settings(config: RepoSettingsMap) -> Result<(), String> {
-    save_json_config(REPO_SETTINGS_FILE, &config)
+    let file: ConfigFile<RepoSettingsMap> = ConfigFile::new(REPO_SETTINGS_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&config, stamp).map_err(|e| e.to_string())
 }
 
 /// Set or clear a human-readable label for a branch/worktree within a repo.
@@ -1831,31 +2193,35 @@ pub(crate) fn set_branch_label(
     branch_name: String,
     label: Option<String>,
 ) -> Result<(), String> {
-    let mut settings: RepoSettingsMap = load_json_config(REPO_SETTINGS_FILE);
-    if let Some(entry) = settings.repos.get_mut(&repo_path) {
-        match label {
+    let file: ConfigFile<RepoSettingsMap> = ConfigFile::new(REPO_SETTINGS_FILE);
+    file.update(|settings| {
+        let Some(entry) = settings.repos.get_mut(&repo_path) else {
+            return false;
+        };
+        match &label {
             Some(l) if !l.trim().is_empty() => {
                 entry
                     .branch_labels
-                    .insert(branch_name, l.trim().to_string());
+                    .insert(branch_name.clone(), l.trim().to_string());
             }
             _ => {
                 entry.branch_labels.remove(&branch_name);
             }
         }
-        save_json_config(REPO_SETTINGS_FILE, &settings)
-    } else {
-        Ok(())
-    }
+        true
+    })
 }
 
 /// Remove a branch label — called by worktree deletion to keep config tidy.
 pub(crate) fn remove_branch_label(repo_path: &str, branch_name: &str) {
-    let mut settings: RepoSettingsMap = load_json_config(REPO_SETTINGS_FILE);
-    if let Some(entry) = settings.repos.get_mut(repo_path)
-        && entry.branch_labels.remove(branch_name).is_some()
-        && let Err(e) = save_json_config(REPO_SETTINGS_FILE, &settings)
-    {
+    let file: ConfigFile<RepoSettingsMap> = ConfigFile::new(REPO_SETTINGS_FILE);
+    let result = file.update(|settings| {
+        settings
+            .repos
+            .get_mut(repo_path)
+            .is_some_and(|entry| entry.branch_labels.remove(branch_name).is_some())
+    });
+    if let Err(e) = result {
         tracing::warn!("Failed to save config after removing branch label: {e}");
     }
 }
@@ -1998,7 +2364,9 @@ pub(crate) fn load_repo_defaults() -> RepoDefaultsConfig {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_repo_defaults(config: RepoDefaultsConfig) -> Result<(), String> {
-    save_json_config(REPO_DEFAULTS_FILE, &config)
+    let file: ConfigFile<RepoDefaultsConfig> = ConfigFile::new(REPO_DEFAULTS_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&config, stamp).map_err(|e| e.to_string())
 }
 
 /// Resolve the effective setup script for a repo using the three-tier hierarchy:
@@ -2029,126 +2397,8 @@ fn resolve_setup_script_from(
 
 // Repositories (opaque JSON — schema owned by frontend)
 
-#[derive(Debug, PartialEq, Eq)]
-enum SeedPublishOutcome {
-    Published,
-    AlreadyExists,
-    NoSource,
-}
-
-fn seed_repository_file_with_before_publish(
-    production_file: &std::path::Path,
-    dev_file: &std::path::Path,
-    before_publish: impl FnOnce(),
-) -> Result<SeedPublishOutcome, String> {
-    if dev_file.exists() {
-        return Ok(SeedPublishOutcome::AlreadyExists);
-    }
-    if !production_file.exists() {
-        return Ok(SeedPublishOutcome::NoSource);
-    }
-
-    let data = std::fs::read(production_file).map_err(|e| {
-        format!(
-            "Failed to read repository seed {}: {e}",
-            production_file.display()
-        )
-    })?;
-    let parent = dev_file
-        .parent()
-        .ok_or_else(|| format!("Repository path has no parent: {}", dev_file.display()))?;
-    std::fs::create_dir_all(parent)
-        .map_err(|e| format!("Failed to create directory {}: {e}", parent.display()))?;
-
-    // Publish through a same-directory hard link. The link operation is atomic
-    // and fails if another process created the dev file first, so migration can
-    // never replace an existing dev repository list.
-    let temp = dev_file.with_extension(format!("tmp.{}", uuid::Uuid::new_v4()));
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)
-        .map_err(|e| format!("Failed to create repository seed temp file: {e}"))?;
-    if let Err(e) = file.write_all(&data) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(format!("Failed to write repository seed temp file: {e}"));
-    }
-    drop(file);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Err(e) = std::fs::set_permissions(&temp, std::fs::Permissions::from_mode(0o600)) {
-            let _ = std::fs::remove_file(&temp);
-            return Err(format!("Failed to set repository seed permissions: {e}"));
-        }
-    }
-
-    before_publish();
-    let result = match std::fs::hard_link(&temp, dev_file) {
-        Ok(()) => Ok(SeedPublishOutcome::Published),
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            Ok(SeedPublishOutcome::AlreadyExists)
-        }
-        Err(e) => Err(format!(
-            "Failed to publish repository seed {}: {e}",
-            dev_file.display()
-        )),
-    };
-    let _ = std::fs::remove_file(&temp);
-    result
-}
-
-fn seed_repository_file(
-    production_file: &std::path::Path,
-    dev_file: &std::path::Path,
-) -> Result<(), String> {
-    seed_repository_file_with_before_publish(production_file, dev_file, || {}).map(|_| ())
-}
-
-fn repository_file_for_build(
-    debug: bool,
-    production_config_dir: &std::path::Path,
-    dev_config_dir: &std::path::Path,
-) -> PathBuf {
-    let production_file = production_config_dir.join(REPOSITORIES_FILE);
-    if !debug {
-        return production_file;
-    }
-
-    let dev_file = dev_config_dir.join(REPOSITORIES_FILE);
-    if let Err(e) = seed_repository_file(&production_file, &dev_file) {
-        tracing::warn!(error = %e, "Failed to seed development repositories");
-    }
-    dev_file
-}
-
-fn repository_file_from_home(
-    debug: bool,
-    production_config_dir: &std::path::Path,
-    home_dir: &std::path::Path,
-) -> PathBuf {
-    repository_file_for_build(
-        debug,
-        production_config_dir,
-        &home_dir.join(".tuicommander-dev"),
-    )
-}
-
 fn repository_file() -> PathBuf {
-    #[cfg(test)]
-    {
-        // Preserve the config-dir override contract for tests in other modules;
-        // isolation behavior is covered through the explicit-path resolver.
-        config_dir().join(REPOSITORIES_FILE)
-    }
-
-    #[cfg(not(test))]
-    {
-        let production_config_dir = config_dir();
-        let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        repository_file_from_home(cfg!(debug_assertions), &production_config_dir, &home_dir)
-    }
+    config_dir().join(REPOSITORIES_FILE)
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
@@ -2158,7 +2408,9 @@ pub(crate) fn load_repositories() -> serde_json::Value {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_repositories(config: serde_json::Value) -> Result<(), String> {
-    save_json_config_to_path(&repository_file(), &config)
+    let file: ConfigFile<serde_json::Value> = ConfigFile::at_path(repository_file());
+    let (_, stamp) = file.load();
+    file.save_checked(&config, stamp).map_err(|e| e.to_string())
 }
 
 // Pane layout (schema owned by frontend)
@@ -2169,7 +2421,9 @@ pub(crate) fn load_pane_layout() -> serde_json::Value {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_pane_layout(layout: serde_json::Value) -> Result<(), String> {
-    save_json_config(PANE_LAYOUT_FILE, &layout)
+    let file: ConfigFile<serde_json::Value> = ConfigFile::new(PANE_LAYOUT_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&layout, stamp).map_err(|e| e.to_string())
 }
 
 // Prompt library
@@ -2180,7 +2434,9 @@ pub(crate) fn load_prompt_library() -> PromptLibraryConfig {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_prompt_library(config: PromptLibraryConfig) -> Result<(), String> {
-    save_json_config(PROMPT_LIBRARY_FILE, &config)
+    let file: ConfigFile<PromptLibraryConfig> = ConfigFile::new(PROMPT_LIBRARY_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&config, stamp).map_err(|e| e.to_string())
 }
 
 // Notes (opaque JSON — schema owned by frontend)
@@ -2195,7 +2451,9 @@ pub(crate) fn load_notes() -> Result<serde_json::Value, String> {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_notes(config: serde_json::Value) -> Result<(), String> {
-    save_json_config(NOTES_FILE, &config)
+    let file: ConfigFile<serde_json::Value> = ConfigFile::new(NOTES_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&config, stamp).map_err(|e| e.to_string())
 }
 
 // Activity center (opaque JSON — schema owned by frontend)
@@ -2206,7 +2464,9 @@ pub(crate) fn load_activity() -> serde_json::Value {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_activity(items: serde_json::Value) -> Result<(), String> {
-    save_json_config(ACTIVITY_FILE, &items)
+    let file: ConfigFile<serde_json::Value> = ConfigFile::new(ACTIVITY_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&items, stamp).map_err(|e| e.to_string())
 }
 
 // Keybindings (opaque JSON — schema owned by frontend)
@@ -2217,7 +2477,9 @@ pub(crate) fn load_keybindings() -> serde_json::Value {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_keybindings(config: serde_json::Value) -> Result<(), String> {
-    save_json_config(KEYBINDINGS_FILE, &config)
+    let file: ConfigFile<serde_json::Value> = ConfigFile::new(KEYBINDINGS_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&config, stamp).map_err(|e| e.to_string())
 }
 
 // Agents config
@@ -2228,7 +2490,9 @@ pub(crate) fn load_agents_config() -> AgentsConfig {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_agents_config(config: AgentsConfig) -> Result<(), String> {
-    save_json_config(AGENTS_CONFIG_FILE, &config)
+    let file: ConfigFile<AgentsConfig> = ConfigFile::new(AGENTS_CONFIG_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&config, stamp).map_err(|e| e.to_string())
 }
 
 // AI prompts
@@ -2239,7 +2503,9 @@ pub(crate) fn load_ai_prompts() -> AiPromptsConfig {
 
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub(crate) fn save_ai_prompts(config: AiPromptsConfig) -> Result<(), String> {
-    save_json_config(AI_PROMPTS_FILE, &config)
+    let file: ConfigFile<AiPromptsConfig> = ConfigFile::new(AI_PROMPTS_FILE);
+    let (_, stamp) = file.load();
+    file.save_checked(&config, stamp).map_err(|e| e.to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -2315,7 +2581,7 @@ pub(crate) fn save_note_image(
     );
     let path = dir.join(&filename);
 
-    std::fs::write(&path, &bytes).map_err(|e| format!("Failed to write image: {e}"))?;
+    persist_atomic(&path, &bytes)?;
 
     Ok(path.to_string_lossy().to_string())
 }
@@ -2381,10 +2647,6 @@ mod tests {
         read_back
     }
 
-    fn read_json(path: &std::path::Path) -> serde_json::Value {
-        serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
-    }
-
     // GH #107 — notes must never fall back to Default on a broken file, or the frontend
     // hydrates empty and the next mutation atomically overwrites the real notes.
     #[test]
@@ -2427,197 +2689,6 @@ mod tests {
             .expect("valid file loads");
         assert_eq!(loaded["notes"][0]["id"], "n1");
         assert!(path.exists(), "a valid file is left where it is");
-    }
-
-    #[test]
-    fn debug_repositories_seed_only_once() {
-        let dir = TempDir::new().unwrap();
-        let production_dir = dir.path().join("production");
-        let dev_dir = dir.path().join("dev");
-        fs::create_dir_all(&production_dir).unwrap();
-        let production_file = production_dir.join(REPOSITORIES_FILE);
-        fs::write(&production_file, br#"{"repos":{"/production":{}}}"#).unwrap();
-
-        let first = repository_file_for_build(true, &production_dir, &dev_dir);
-        assert_eq!(
-            read_json(&first)["repos"]["/production"],
-            serde_json::json!({})
-        );
-
-        fs::write(&production_file, br#"{"repos":{"/changed":{}}}"#).unwrap();
-        let second = repository_file_for_build(true, &production_dir, &dev_dir);
-        assert_eq!(first, second);
-        assert_eq!(
-            read_json(&second)["repos"]["/production"],
-            serde_json::json!({})
-        );
-        assert!(read_json(&second)["repos"].get("/changed").is_none());
-    }
-
-    #[test]
-    fn concurrent_first_run_seed_keeps_the_published_winner() {
-        let dir = TempDir::new().unwrap();
-        let first_production = dir.path().join("production-first.json");
-        let second_production = dir.path().join("production-second.json");
-        let dev_file = dir.path().join("dev").join(REPOSITORIES_FILE);
-        let first_data = br#"{"repos":{"/first":{}}}"#;
-        let second_data = br#"{"repos":{"/second":{}}}"#;
-        fs::write(&first_production, first_data).unwrap();
-        fs::write(&second_production, second_data).unwrap();
-
-        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-        let first_barrier = std::sync::Arc::clone(&barrier);
-        let second_barrier = std::sync::Arc::clone(&barrier);
-        let first_dev_file = dev_file.clone();
-        let second_dev_file = dev_file.clone();
-
-        let first = std::thread::spawn(move || {
-            let outcome = seed_repository_file_with_before_publish(
-                &first_production,
-                &first_dev_file,
-                || {
-                    first_barrier.wait();
-                },
-            )
-            .unwrap();
-            (outcome, first_data.as_slice())
-        });
-        let second = std::thread::spawn(move || {
-            let outcome = seed_repository_file_with_before_publish(
-                &second_production,
-                &second_dev_file,
-                || {
-                    second_barrier.wait();
-                },
-            )
-            .unwrap();
-            (outcome, second_data.as_slice())
-        });
-
-        let results = [first.join().unwrap(), second.join().unwrap()];
-        assert_eq!(
-            results
-                .iter()
-                .filter(|(outcome, _)| *outcome == SeedPublishOutcome::Published)
-                .count(),
-            1
-        );
-        assert_eq!(
-            results
-                .iter()
-                .filter(|(outcome, _)| *outcome == SeedPublishOutcome::AlreadyExists)
-                .count(),
-            1
-        );
-
-        let winner_data = results
-            .iter()
-            .find_map(|(outcome, data)| {
-                (*outcome == SeedPublishOutcome::Published).then_some(*data)
-            })
-            .unwrap();
-        assert_eq!(fs::read(dev_file).unwrap(), winner_data);
-    }
-
-    #[test]
-    fn debug_repositories_persist_across_restart() {
-        let dir = TempDir::new().unwrap();
-        let production_dir = dir.path().join("production");
-        let dev_dir = dir.path().join("dev");
-        fs::create_dir_all(&production_dir).unwrap();
-        fs::write(
-            production_dir.join(REPOSITORIES_FILE),
-            br#"{"repos":{"/seed":{}}}"#,
-        )
-        .unwrap();
-
-        let first = repository_file_for_build(true, &production_dir, &dev_dir);
-        save_json_config_to_path(&first, &serde_json::json!({"repos": {"/dev-only": {}}})).unwrap();
-
-        let after_restart = repository_file_for_build(true, &production_dir, &dev_dir);
-        assert_eq!(
-            load_json_config_from_path::<serde_json::Value>(&after_restart)["repos"]["/dev-only"],
-            serde_json::json!({})
-        );
-    }
-
-    #[test]
-    fn existing_dev_repositories_take_precedence() {
-        let dir = TempDir::new().unwrap();
-        let production_dir = dir.path().join("production");
-        let dev_dir = dir.path().join("dev");
-        fs::create_dir_all(&production_dir).unwrap();
-        fs::create_dir_all(&dev_dir).unwrap();
-        fs::write(
-            production_dir.join(REPOSITORIES_FILE),
-            br#"{"repos":{"/production":{}}}"#,
-        )
-        .unwrap();
-        let dev_file = dev_dir.join(REPOSITORIES_FILE);
-        fs::write(&dev_file, br#"{"repos":{"/existing-dev":{}}}"#).unwrap();
-
-        let selected = repository_file_for_build(true, &production_dir, &dev_dir);
-        assert_eq!(selected, dev_file);
-        assert_eq!(
-            read_json(&selected)["repos"]["/existing-dev"],
-            serde_json::json!({})
-        );
-        assert!(read_json(&selected)["repos"].get("/production").is_none());
-    }
-
-    #[test]
-    fn release_repositories_stay_shared_and_seed_source_is_not_mutated() {
-        let dir = TempDir::new().unwrap();
-        let production_dir = dir.path().join("production");
-        let dev_dir = dir.path().join("dev");
-        fs::create_dir_all(&production_dir).unwrap();
-        let production_file = production_dir.join(REPOSITORIES_FILE);
-        let production_data = br#"{"repos":{"/shared":{}}}"#;
-        fs::write(&production_file, production_data).unwrap();
-
-        let release_file = repository_file_for_build(false, &production_dir, &dev_dir);
-        assert_eq!(release_file, production_file);
-        assert!(!dev_dir.exists());
-
-        let dev_file = repository_file_for_build(true, &production_dir, &dev_dir);
-        save_json_config_to_path(&dev_file, &serde_json::json!({"repos": {"/dev-only": {}}}))
-            .unwrap();
-        assert_eq!(fs::read(&production_file).unwrap(), production_data);
-    }
-
-    #[test]
-    fn repository_selector_routes_debug_and_release_persistence() {
-        let dir = TempDir::new().unwrap();
-        let production_dir = dir.path().join("production");
-        let home_dir = dir.path().join("home");
-        fs::create_dir_all(&production_dir).unwrap();
-        let production_file = production_dir.join(REPOSITORIES_FILE);
-        let production_data = serde_json::json!({"repos": {"/production": {}}});
-        save_json_config_to_path(&production_file, &production_data).unwrap();
-
-        let debug_file = repository_file_from_home(true, &production_dir, &home_dir);
-        assert_eq!(
-            debug_file,
-            home_dir.join(".tuicommander-dev").join(REPOSITORIES_FILE)
-        );
-        assert_eq!(
-            load_json_config_from_path::<serde_json::Value>(&debug_file),
-            production_data
-        );
-
-        let debug_data = serde_json::json!({"repos": {"/debug": {}}});
-        save_json_config_to_path(&debug_file, &debug_data).unwrap();
-        assert_eq!(
-            load_json_config_from_path::<serde_json::Value>(&debug_file),
-            debug_data
-        );
-
-        let release_file = repository_file_from_home(false, &production_dir, &home_dir);
-        assert_eq!(release_file, production_file);
-        assert_eq!(
-            load_json_config_from_path::<serde_json::Value>(&release_file),
-            production_data
-        );
     }
 
     #[test]
@@ -3077,6 +3148,7 @@ mod tests {
                 completion: true,
                 warning: false,
                 info: true,
+                attention: false,
             },
             audio_device: Some("Test Speaker".to_string()),
             silence_remote_completions: true,
@@ -3086,6 +3158,7 @@ mod tests {
         assert!((loaded.volume - 0.8).abs() < f64::EPSILON);
         assert!(loaded.sounds.question);
         assert!(!loaded.sounds.error);
+        assert!(!loaded.sounds.attention);
         assert_eq!(loaded.audio_device.as_deref(), Some("Test Speaker"));
         assert!(loaded.silence_remote_completions);
     }
@@ -4460,6 +4533,362 @@ mod tests {
         assert!(on_disk.services.server.enabled);
     }
 
+    /// `load_app_config`'s secret-migration branch calls `save_app_config` directly,
+    /// with no lock of its own. Before the lock-ownership split this raced against
+    /// `commit_config_change`'s critical section; now `save_app_config` acquires
+    /// `CONFIG_WRITE_LOCK` itself, so a concurrent call blocks until the in-progress
+    /// commit releases it.
+    #[test]
+    fn secret_migration_save_serializes_with_concurrent_commit() {
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+        use std::time::Duration;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let log: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let commit = {
+            let state = state.clone();
+            let log = log.clone();
+            thread::spawn(move || {
+                commit_config_change(&state, |c| {
+                    log.lock().unwrap().push("a_holding_lock");
+                    thread::sleep(Duration::from_millis(200));
+                    let mut n = c.clone();
+                    n.font_size = 18;
+                    Ok(n)
+                })
+                .expect("commit");
+                log.lock().unwrap().push("a_done");
+            })
+        };
+
+        // Give the commit thread time to acquire CONFIG_WRITE_LOCK and enter its
+        // sleep before starting the "unprotected" migration-style save.
+        thread::sleep(Duration::from_millis(50));
+
+        let migration_save = {
+            let state = state.clone();
+            let log = log.clone();
+            thread::spawn(move || {
+                let cfg = state.config.read().clone();
+                log.lock().unwrap().push("b_start");
+                save_app_config(cfg).expect("save b");
+                log.lock().unwrap().push("b_done");
+            })
+        };
+
+        commit.join().expect("commit thread");
+        migration_save.join().expect("migration_save thread");
+
+        let log = log.lock().unwrap();
+        let pos = |needle: &str| log.iter().position(|e| *e == needle).expect(needle);
+        assert!(
+            pos("b_start") < pos("a_done"),
+            "test setup invalid — b did not attempt while a held the lock: {log:?}"
+        );
+        assert!(
+            pos("b_done") > pos("a_done"),
+            "save_app_config completed while commit_config_change still held \
+             CONFIG_WRITE_LOCK — the two writers raced instead of serializing: {log:?}"
+        );
+    }
+
+    /// The test above proves the migration branch's *write* serializes against a
+    /// concurrent writer. This proves the branch's *read* does too: `load_app_config`
+    /// reads config.json before any lock is acquired, so a concurrent writer's newer
+    /// value can land on disk between that read and the migration write — which then
+    /// republishes the stale value it already had in hand, silently reverting the
+    /// concurrent writer's update. The concurrent writer here is `ConfigFile::update`
+    /// (not `commit_config_change`, which derives its payload from `state.config` and
+    /// would overwrite our disk-seeded plaintext secret with the default, empty one and
+    /// defeat the migration trigger).
+    #[test]
+    #[serial_test::serial]
+    fn secret_migration_read_is_atomic_with_a_concurrent_writer() {
+        use std::sync::{Arc, Mutex};
+        use std::thread;
+        use std::time::Duration;
+
+        crate::credentials::reset_test_faults();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let mut seed = AppConfig::default();
+        seed.services.auth.session_token = "plaintext-secret".to_string();
+        seed.font_size = 1;
+        std::fs::write(
+            dir.path().join(APP_CONFIG_FILE),
+            serde_json::to_string_pretty(&seed).unwrap(),
+        )
+        .unwrap();
+
+        let log: Arc<Mutex<Vec<&'static str>>> = Arc::new(Mutex::new(Vec::new()));
+
+        let writer = {
+            let log = log.clone();
+            thread::spawn(move || {
+                ConfigFile::<AppConfig>::new(APP_CONFIG_FILE)
+                    .update(|cfg| {
+                        log.lock().unwrap().push("a_holding_lock");
+                        thread::sleep(Duration::from_millis(200));
+                        cfg.font_size = 99;
+                        true
+                    })
+                    .expect("writer update");
+                log.lock().unwrap().push("a_done");
+            })
+        };
+
+        // Give the writer time to acquire CONFIG_WRITE_LOCK and enter its sleep
+        // before starting the unprotected migration read.
+        thread::sleep(Duration::from_millis(50));
+
+        let reader = {
+            let log = log.clone();
+            thread::spawn(move || {
+                log.lock().unwrap().push("b_start");
+                let cfg = load_app_config();
+                log.lock().unwrap().push("b_done");
+                cfg
+            })
+        };
+
+        writer.join().expect("writer thread");
+        let seen = reader.join().expect("reader thread");
+
+        {
+            let log = log.lock().unwrap();
+            let pos = |needle: &str| log.iter().position(|e| *e == needle).expect(needle);
+            assert!(
+                pos("b_start") < pos("a_done"),
+                "test setup invalid — the reader did not attempt while the writer held \
+                 the lock: {log:?}"
+            );
+        }
+
+        assert_eq!(
+            seen.font_size, 99,
+            "load_app_config's own return value still carries the value it read before \
+             the concurrent writer finished — the read and the migration write must be \
+             one atomic critical section"
+        );
+        let on_disk: AppConfig = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(APP_CONFIG_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            on_disk.font_size, 99,
+            "the migration branch's write clobbered the concurrent writer's newer \
+             value on disk with the stale value load_app_config read earlier"
+        );
+    }
+
+    /// Two-process harness entry point for
+    /// `load_app_config_migration_survives_concurrent_cross_process_write` below. Under
+    /// a normal test run (`TUIC_CONFIG_TEST_ROLE` unset) this is a no-op — its job is to
+    /// be re-invoked as a genuine CHILD OS PROCESS via `std::env::current_exe()`, so the
+    /// file lock under test contends across two processes instead of two threads
+    /// sharing one in-process `CONFIG_WRITE_LOCK`.
+    #[test]
+    fn two_process_child() {
+        let Ok(role) = std::env::var("TUIC_CONFIG_TEST_ROLE") else {
+            return;
+        };
+        let dir =
+            PathBuf::from(std::env::var("TUIC_CONFIG_TEST_DIR").expect("TUIC_CONFIG_TEST_DIR"));
+        let _guard = set_config_dir_override(dir);
+
+        match role.as_str() {
+            // TUIC_TEST_LOAD_APP_CONFIG_DELAY_MS (consumed inside load_app_config via
+            // test_load_app_config_delay) widens the read-to-write window so the
+            // parent process's concurrent write reliably lands inside it.
+            "reader" => {
+                load_app_config();
+            }
+            "delta-font" | "delta-collapse" => {
+                // Each child captures the same stale process cache before either is
+                // released to save. The production commit path must apply only its
+                // cached-to-requested delta to the latest locked disk document.
+                let cached = load_app_config();
+                let state = crate::state::tests_support::make_test_app_state();
+                *state.config.write() = cached;
+
+                std::fs::write(config_dir().join(format!("{role}.ready")), b"ready")
+                    .expect("write child ready marker");
+                let release = config_dir().join("delta.release");
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+                while !release.exists() {
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "timed out waiting for delta test release"
+                    );
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+
+                commit_config_change(&state, |current| {
+                    let mut next = current.clone();
+                    if role == "delta-font" {
+                        next.font_size = 18;
+                    } else {
+                        next.collapse_tools = true;
+                    }
+                    Ok(next)
+                })
+                .expect("commit child config delta");
+            }
+            other => panic!("unknown TUIC_CONFIG_TEST_ROLE: {other}"),
+        }
+    }
+
+    /// The two tests above prove `load_app_config`'s migration read-to-write window is
+    /// atomic against a concurrent writer — but only within ONE process, because both
+    /// sides share the same in-process `CONFIG_WRITE_LOCK`. A prior fix attempt tested
+    /// exactly that: two THREADS in one process. Since the second thread's
+    /// `load_app_config()` call always blocks on that shared mutex until the first
+    /// thread's write finishes, the read can never actually land inside a concurrent
+    /// writer's window — the thread test passed against the buggy code AND the fixed
+    /// code, proving nothing about the case this file lock exists for: a debug build and
+    /// a release build, i.e. two separate OS processes, sharing one config directory.
+    ///
+    /// This test spawns the reader as a genuine second process (`std::process::Command`
+    /// re-invoking the test binary itself, selected into "child" behavior via
+    /// `TUIC_CONFIG_TEST_ROLE`). Advisory file locks (`std::fs::File::lock`) are tied to
+    /// the open file description, not the process or thread, so only a second process —
+    /// with its own independent open of the lock file — can actually contend for it.
+    #[test]
+    #[serial_test::serial]
+    fn load_app_config_migration_survives_concurrent_cross_process_write() {
+        crate::credentials::reset_test_faults();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        // Seed a config with a plaintext secret (forces the migration-write branch) and
+        // a recognizable starting value.
+        let mut seed = AppConfig::default();
+        seed.services.auth.session_token = "plaintext-secret".to_string();
+        seed.font_size = 1;
+        std::fs::write(
+            dir.path().join(APP_CONFIG_FILE),
+            serde_json::to_string_pretty(&seed).unwrap(),
+        )
+        .unwrap();
+
+        let exe = std::env::current_exe().expect("current_exe");
+        let mut child = std::process::Command::new(&exe)
+            .arg("two_process_child")
+            .env("TUIC_CONFIG_TEST_ROLE", "reader")
+            .env("TUIC_CONFIG_TEST_DIR", dir.path())
+            .env("TUIC_TEST_LOAD_APP_CONFIG_DELAY_MS", "1000")
+            .spawn()
+            .expect("spawn child reader process");
+
+        // Give the child comfortably long enough to open and read config.json and enter
+        // its artificial 1s delay before this process — a second, independent OS
+        // process — writes a newer value through the same lock file.
+        std::thread::sleep(std::time::Duration::from_millis(300));
+
+        ConfigFile::<AppConfig>::new(APP_CONFIG_FILE)
+            .update(|cfg| {
+                cfg.font_size = 42;
+                true
+            })
+            .expect("concurrent cross-process writer update");
+
+        let status = child.wait().expect("wait for child reader process");
+        assert!(status.success(), "child reader process failed: {status:?}");
+
+        let on_disk: AppConfig = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(APP_CONFIG_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            on_disk.font_size, 42,
+            "the migration branch's write, in a SEPARATE process, clobbered this \
+             process's newer concurrent write with the stale value it read before that \
+             write landed on disk"
+        );
+    }
+
+    /// Ordinary interactive saves, not just the secret-migration branch above, must
+    /// compose across real process boundaries. Both child processes load the same stale
+    /// AppConfig before either writes; each changes one independent field through
+    /// `commit_config_change`. A whole-document implementation deterministically loses
+    /// one field, while delta-under-lock retains both.
+    #[test]
+    #[serial_test::serial]
+    fn ordinary_app_config_deltas_compose_across_two_processes() {
+        crate::credentials::reset_test_faults();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let seed = AppConfig::default();
+        std::fs::write(
+            dir.path().join(APP_CONFIG_FILE),
+            serde_json::to_string_pretty(&seed).unwrap(),
+        )
+        .unwrap();
+
+        let exe = std::env::current_exe().expect("current_exe");
+        let mut children = ["delta-font", "delta-collapse"].map(|role| {
+            std::process::Command::new(&exe)
+                .arg("two_process_child")
+                .env("TUIC_CONFIG_TEST_ROLE", role)
+                .env("TUIC_CONFIG_TEST_DIR", dir.path())
+                .spawn()
+                .unwrap_or_else(|e| panic!("spawn {role} child: {e}"))
+        });
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        for role in ["delta-font", "delta-collapse"] {
+            let ready = dir.path().join(format!("{role}.ready"));
+            while !ready.exists() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out waiting for {role} child"
+                );
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        std::fs::write(dir.path().join("delta.release"), b"release").unwrap();
+
+        for child in &mut children {
+            let status = child.wait().expect("wait for delta child");
+            assert!(status.success(), "delta child failed: {status:?}");
+        }
+
+        let on_disk: AppConfig = serde_json::from_str(
+            &std::fs::read_to_string(dir.path().join(APP_CONFIG_FILE)).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(on_disk.font_size, 18, "font delta was lost");
+        assert!(on_disk.collapse_tools, "collapse-tools delta was lost");
+    }
+
+    #[test]
+    fn app_config_delta_distinguishes_unchanged_fields_from_an_intentional_clear() {
+        let base = AppConfig {
+            global_hotkey: Some("CommandOrControl+Shift+T".to_string()),
+            ..AppConfig::default()
+        };
+        let mut desired = base.clone();
+        desired.global_hotkey = None;
+
+        let delta = app_config_delta(&base, &desired).expect("derive delta");
+        assert_eq!(delta.get("global_hotkey"), Some(&serde_json::Value::Null));
+        assert!(
+            delta.get("font_size").is_none(),
+            "unchanged fields must be omitted, not mistaken for replacements"
+        );
+
+        let mut concurrently_changed = base;
+        concurrently_changed.font_size = 22;
+        let merged = merge_partial_app_config(&concurrently_changed, delta).expect("apply delta");
+        assert_eq!(merged.font_size, 22, "unrelated concurrent change was lost");
+        assert_eq!(merged.global_hotkey, None, "intentional clear was ignored");
+    }
+
     /// Criteria 2 and 3 of #484-1a07 say "on disk", and that is the assertion that
     /// matters: the unit tests above prove `merge_partial_app_config` returns the
     /// right value, but the defect was what got PERSISTED. This drives the exact
@@ -4689,5 +5118,190 @@ mod tests {
         assert!(error.contains("forced disk failure"), "{error}");
         assert!(error.contains("credential rollback also failed"), "{error}");
         assert!(error.contains("session token"), "{error}");
+    }
+
+    // -----------------------------------------------------------------
+    // ConfigFile<T> — cross-process-safe load/update/save_checked
+    // -----------------------------------------------------------------
+
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+    struct CounterDoc {
+        counters: HashMap<String, i64>,
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn update_applies_concurrently_from_two_threads_without_losing_either_mutation() {
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+
+        let file_a: ConfigFile<CounterDoc> = ConfigFile::new("counters.json");
+        let file_b: ConfigFile<CounterDoc> = ConfigFile::new("counters.json");
+
+        let t1 = std::thread::spawn(move || {
+            file_a
+                .update(|doc| {
+                    doc.counters.insert("a".to_string(), 1);
+                    true
+                })
+                .unwrap();
+        });
+        let t2 = std::thread::spawn(move || {
+            file_b
+                .update(|doc| {
+                    doc.counters.insert("b".to_string(), 2);
+                    true
+                })
+                .unwrap();
+        });
+        t1.join().unwrap();
+        t2.join().unwrap();
+
+        let file: ConfigFile<CounterDoc> = ConfigFile::new("counters.json");
+        let (doc, _stamp) = file.load();
+        assert_eq!(
+            doc.counters.get("a"),
+            Some(&1),
+            "thread A's mutation must survive"
+        );
+        assert_eq!(
+            doc.counters.get("b"),
+            Some(&2),
+            "thread B's mutation must survive"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn update_skips_the_write_when_the_mutate_closure_declines() {
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let file: ConfigFile<CounterDoc> = ConfigFile::new("doc.json");
+
+        file.update(|_doc| false).unwrap();
+
+        assert!(
+            !dir.path().join("doc.json").exists(),
+            "update must not create/touch the file when mutate reports no change"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn save_checked_rejects_a_write_when_the_file_changed_underneath() {
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let file: ConfigFile<CounterDoc> = ConfigFile::new("doc.json");
+
+        let mut initial = CounterDoc::default();
+        initial.counters.insert("x".to_string(), 1);
+        file.save(&initial).unwrap();
+
+        let (loaded, stamp) = file.load();
+        assert_eq!(loaded, initial);
+
+        // Someone else writes to the file in between the caller's load and save.
+        let mut interloper = CounterDoc::default();
+        interloper.counters.insert("x".to_string(), 999);
+        file.save(&interloper).unwrap();
+
+        let mut attempted = loaded;
+        attempted.counters.insert("y".to_string(), 2);
+        let result = file.save_checked(&attempted, stamp);
+        assert!(
+            matches!(result, Err(ConfigWriteError::Conflict)),
+            "expected Conflict, got {result:?}"
+        );
+
+        let (on_disk, _) = file.load();
+        assert_eq!(
+            on_disk, interloper,
+            "a rejected save_checked must not overwrite the interloper's write"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn save_checked_succeeds_when_the_stamp_still_matches() {
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let file: ConfigFile<CounterDoc> = ConfigFile::new("doc.json");
+
+        let initial = CounterDoc::default();
+        file.save(&initial).unwrap();
+        let (loaded, stamp) = file.load();
+
+        let mut updated = loaded;
+        updated.counters.insert("z".to_string(), 5);
+        file.save_checked(&updated, stamp)
+            .expect("stamp still matches, save must succeed");
+
+        let (on_disk, _) = file.load();
+        assert_eq!(on_disk, updated);
+    }
+
+    #[test]
+    fn stamp_differs_before_and_after_an_external_write() {
+        let dir = TempDir::new().expect("temp dir");
+        let path = dir.path().join("doc.json");
+        fs::write(&path, "{}").unwrap();
+        let before = Stamp::of(&path);
+
+        fs::write(&path, "{\"a\":1}").unwrap();
+        let after = Stamp::of(&path);
+
+        assert_ne!(before, after);
+    }
+
+    #[test]
+    fn persist_atomic_leaves_no_temp_file_when_rename_fails() {
+        let dir = TempDir::new().expect("temp dir");
+        let target = dir.path().join("target.json");
+        // Occupy the target path with a directory so temp->target rename fails
+        // (a file can never atomically replace a directory on any platform).
+        fs::create_dir(&target).unwrap();
+
+        let result = persist_atomic(&target, b"{}");
+        assert!(result.is_err(), "rename onto a directory must fail");
+
+        let leftover: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "temp file must be cleaned up on a failed rename, found: {leftover:?}"
+        );
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn file_lock_blocks_a_second_independent_acquisition_on_the_same_path() {
+        let dir = TempDir::new().expect("temp dir");
+        let _guard = set_config_dir_override(dir.path().to_path_buf());
+        let file: ConfigFile<CounterDoc> = ConfigFile::new("doc.json");
+
+        let held = file
+            .acquire_file_lock()
+            .expect("first acquisition succeeds");
+
+        let other: ConfigFile<CounterDoc> = ConfigFile::new("doc.json");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            let _second = other.acquire_file_lock().expect("eventually acquires");
+            tx.send(()).unwrap();
+        });
+
+        let got_it_fast = rx
+            .recv_timeout(std::time::Duration::from_millis(200))
+            .is_ok();
+        assert!(
+            !got_it_fast,
+            "a second lock acquisition must block while the first is held"
+        );
+
+        drop(held);
+        handle.join().unwrap();
     }
 }

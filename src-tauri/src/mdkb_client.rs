@@ -400,8 +400,8 @@ mod tests {
         let result = MdkbClient::connect().await;
         // Will fail unless mdkb daemon is actually running — that's expected in test env
         // The important thing is it doesn't panic
-        if result.is_err() {
-            assert!(result.unwrap_err().to_string().contains("mdkb: connect"));
+        if let Err(err) = result {
+            assert!(err.to_string().contains("mdkb: connect"));
         }
     }
 }

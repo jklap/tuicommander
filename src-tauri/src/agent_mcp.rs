@@ -1015,7 +1015,7 @@ mod tests {
 
         // Remove the file and verify ensure_mcp_configs logic
         // (we test the skip logic directly since ensure_mcp_configs uses home paths)
-        let disabled = vec!["claude".to_string(), "cursor".to_string()];
+        let disabled = ["claude".to_string(), "cursor".to_string()];
         assert!(disabled.iter().any(|d| d == "claude"));
         assert!(!disabled.iter().any(|d| d == "vscode"));
     }

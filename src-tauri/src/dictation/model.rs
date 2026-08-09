@@ -173,7 +173,7 @@ mod tests {
     fn test_all_models_have_unique_names() {
         let names: Vec<&str> = WhisperModel::ALL.iter().map(|m| m.name()).collect();
         let mut dedup = names.clone();
-        dedup.sort();
+        dedup.sort_unstable();
         dedup.dedup();
         assert_eq!(names.len(), dedup.len());
     }
@@ -182,7 +182,7 @@ mod tests {
     fn test_all_models_have_unique_filenames() {
         let filenames: Vec<&str> = WhisperModel::ALL.iter().map(|m| m.filename()).collect();
         let mut dedup = filenames.clone();
-        dedup.sort();
+        dedup.sort_unstable();
         dedup.dedup();
         assert_eq!(filenames.len(), dedup.len());
     }

@@ -1507,6 +1507,8 @@ pub fn run() {
             pty::get_session_metrics,
             pty::can_spawn_session,
             pty::list_active_sessions,
+            pty::enqueue_agent_command,
+            pty::clear_queued_agent_commands,
             pty::get_process_stats,
             pty::read_vt_log,
             pty::subscribe_terminal_grid,
@@ -2316,7 +2318,7 @@ mod tests {
     fn editor_large_cap_exceeds_generic_cap() {
         // The editor reader must allow strictly larger files than the generic one,
         // otherwise the dedicated command is pointless.
-        assert!(MAX_EDITOR_LARGE_FILE_SIZE > MAX_EDITOR_FILE_SIZE);
+        const { assert!(MAX_EDITOR_LARGE_FILE_SIZE > MAX_EDITOR_FILE_SIZE) };
     }
 
     #[test]

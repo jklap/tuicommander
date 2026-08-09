@@ -4302,7 +4302,7 @@ mod tests {
         let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
         let git_dir = resolve_git_dir(&repo).expect("should resolve git dir");
         let main_ref = detect_default_branch(&git_dir).expect("should detect a default branch");
-        let result = get_last_commit_timestamps(&repo, &[main_ref.clone()]);
+        let result = get_last_commit_timestamps(&repo, std::slice::from_ref(&main_ref));
         assert!(
             result.contains_key(&main_ref),
             "should contain the main ref key"
@@ -5371,7 +5371,7 @@ filename test.txt
     async fn apply_reverse_patch_rejects_empty_patch() {
         let (_dir, path) = setup_test_repo_with_commit();
         let result =
-            git_apply_reverse_patch(path.to_string_lossy().to_string(), "".to_string(), None).await;
+            git_apply_reverse_patch(path.to_string_lossy().to_string(), String::new(), None).await;
         assert!(result.is_err(), "empty patch should be rejected");
     }
 

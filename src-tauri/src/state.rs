@@ -12,6 +12,37 @@ use std::time::{Duration, Instant};
 #[cfg(feature = "desktop")]
 use tauri::{AppHandle, Emitter};
 
+/// A submission waiting for the agent's next safe idle window.
+///
+/// Peer messages and user-composed commands share one FIFO so acceptance order
+/// is preserved across producers. The variant is an ownership boundary: Compose
+/// count/clear operations must never consume the peer wake path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PendingInjection {
+    PeerMessage(String),
+    UserCommand(String),
+}
+
+impl PendingInjection {
+    pub(crate) fn peer_message(text: impl Into<String>) -> Self {
+        Self::PeerMessage(text.into())
+    }
+
+    pub(crate) fn user_command(text: impl Into<String>) -> Self {
+        Self::UserCommand(text.into())
+    }
+
+    pub(crate) fn text(&self) -> &str {
+        match self {
+            Self::PeerMessage(text) | Self::UserCommand(text) => text,
+        }
+    }
+
+    pub(crate) fn is_user_command(&self) -> bool {
+        matches!(self, Self::UserCommand(_))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AppEvent — unified event bus for all backend events
 // ---------------------------------------------------------------------------
@@ -55,13 +86,17 @@ pub enum AppEvent {
         name: String,
         authorization_url: String,
     },
-    /// Toast notification from MCP tool
+    /// Toast notification from MCP tool. `sound` carries a resolved
+    /// `NotificationSound` name (never a bare boolean): the caller's `true` is
+    /// mapped from the level before the event is sent, so every consumer plays
+    /// through the notification scheme — volume, device and per-sound mutes
+    /// included — instead of inventing its own tone.
     #[serde(rename = "mcp-toast")]
     McpToast {
         title: String,
         message: Option<String>,
         level: String,
-        sound: bool,
+        sound: Option<String>,
     },
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
@@ -274,6 +309,11 @@ pub(crate) struct SessionState {
     /// Number of active sub-tasks (local agents, bash, background tasks) from ›› mode line
     #[serde(skip_serializing_if = "is_zero")]
     pub active_sub_tasks: u32,
+    /// Commands waiting in `pending_injections` for this session's next
+    /// BUSY→IDLE transition. Derived at snapshot time like `shell_state`, not
+    /// accumulated from events.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub queued_commands: u32,
     /// Suggested follow-up actions from the agent (from `suggest: ...` tokens)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_actions: Option<Vec<String>>,
@@ -341,6 +381,7 @@ impl PartialEq for SessionState {
             && self.agent_intent == other.agent_intent
             && self.current_task == other.current_task
             && self.active_sub_tasks == other.active_sub_tasks
+            && self.queued_commands == other.queued_commands
             && self.last_prompt == other.last_prompt
             && self.progress == other.progress
             && self.suggested_actions == other.suggested_actions
@@ -859,8 +900,12 @@ pub struct PtySession {
     pub(crate) paused: Arc<AtomicBool>,
     pub worktree: Option<WorktreeInfo>,
     pub cwd: Option<String>,
-    /// Display name set by the desktop UI (tab rename, agent launch, intent title).
+    /// Display name set by the desktop UI, agent launch, or intent title.
     pub display_name: Option<String>,
+    /// Only explicit user renames are protected from OSC/intent title updates.
+    pub display_name_is_custom: bool,
+    /// Created through HTTP/MCP rather than the local desktop UI.
+    pub is_remote: bool,
     /// Resolved shell command used to spawn the PTY (e.g. "/bin/zsh",
     /// "C:\\Program Files\\Git\\bin\\bash.exe", "wsl.exe -d Ubuntu").
     /// Kept so `get_session_shell_family` can classify without re-resolving.
@@ -1355,11 +1400,11 @@ pub struct AppState {
     /// answered with a number instead of by grepping scrollback — which counts any
     /// mention of the word and is capped by buffer size (#4421).
     pub(crate) marker_stats: DashMap<String, MarkerStats>,
-    /// Peer messages queued to be typed into a recipient's PTY on its next
-    /// BUSY→IDLE transition (tuic_session → framed lines). Populated when a message
-    /// arrives for a busy/awaiting agent; drained by `flush_pending_injections`.
-    /// The inbox always holds the authoritative copy — this is only the wake-up path.
-    pub(crate) pending_injections: DashMap<String, VecDeque<String>>,
+    /// Peer messages and Compose commands waiting for a recipient's next safe
+    /// idle window. Entries share one typed FIFO so delivery order is global,
+    /// while Compose count/clear operations can select only `UserCommand`.
+    /// The inbox remains the authoritative copy of every peer message.
+    pub(crate) pending_injections: DashMap<String, VecDeque<PendingInjection>>,
     /// Initial prompts awaiting successful PTY submission. Used only by the
     /// one-shot delivery watchdog; successful delivery removes the marker and
     /// emits nothing, while timeout emits one parent notification.
@@ -2782,6 +2827,7 @@ impl AppState {
         // is held across that mutex. Completion emission uses the inverse order
         // to serialize against a newly submitted input epoch.
         let mut state = self.session_states.get(session_id).map(|s| s.clone())?;
+        state.queued_commands = crate::pty::queued_command_count(self, session_id) as u32;
         state.shell_state = self.shell_states.get(session_id).map(|atom| {
             crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed)).to_string()
         });
@@ -3851,6 +3897,8 @@ pub(crate) mod tests_support {
                 worktree: None,
                 cwd: None,
                 display_name: None,
+                display_name_is_custom: false,
+                is_remote: false,
                 shell: "/bin/sh".to_string(),
             }),
         );
@@ -3936,7 +3984,7 @@ mod tests {
         let rcpt = "orchestrator";
 
         // Inbox entirely lifecycle: fallback evicts the oldest to keep the bound.
-        for i in 0..(AGENT_INBOX_CAPACITY + 1) {
+        for i in 0..=AGENT_INBOX_CAPACITY {
             state.push_agent_inbox(rcpt, make_msg(&format!("tuic-auto-{i}")));
         }
 
@@ -5517,8 +5565,7 @@ mod tests {
             event_counter: Arc::new(AtomicU64::new(0)),
             session_states: DashMap::new(),
             mcp_upstream_registry: {
-                let r = Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new());
-                r
+                Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new())
             },
             oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new(Arc::new(
                 tokio::sync::Semaphore::new(1),
@@ -6372,7 +6419,9 @@ mod tests {
         );
         apply(&state, &q);
         let mut pending = VecDeque::new();
-        pending.push_back("[TUIC message from peer] wake".to_string());
+        pending.push_back(PendingInjection::peer_message(
+            "[TUIC message from peer] wake",
+        ));
         state.pending_injections.insert("s1".to_string(), pending);
 
         let ui = make_parsed("user-input", serde_json::json!({ "content": "yes" }));
@@ -7045,7 +7094,11 @@ mod tests {
     fn test_vt_log_incremental_chunked_feed() {
         let mut buf = VtLogBuffer::new(24, 80, 1000);
         // Build 30 lines of output
-        let full_output: String = (0..30).map(|i| format!("chunk-{i}\r\n")).collect();
+        use std::fmt::Write as _;
+        let full_output: String = (0..30).fold(String::new(), |mut acc, i| {
+            let _ = write!(acc, "chunk-{i}\r\n");
+            acc
+        });
         let bytes = full_output.as_bytes();
         // Feed in small chunks of 7 bytes (deliberately misaligned with lines)
         for chunk in bytes.chunks(7) {

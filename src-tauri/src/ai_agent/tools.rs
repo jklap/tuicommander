@@ -3705,7 +3705,11 @@ mod tests {
     #[tokio::test]
     async fn read_file_respects_offset_and_limit() {
         let (dir, state) = fs_test_state("s1");
-        let body: String = (1..=10).map(|i| format!("line{i}\n")).collect();
+        use std::fmt::Write as _;
+        let body: String = (1..=10).fold(String::new(), |mut acc, i| {
+            let _ = writeln!(acc, "line{i}");
+            acc
+        });
         std::fs::write(dir.path().join("a.txt"), body).unwrap();
         let r = dispatch(
             &state,

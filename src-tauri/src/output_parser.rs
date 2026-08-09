@@ -313,11 +313,11 @@ impl OutputParser {
             events.push(evt);
         }
 
-        if !self.session_conflict_fired {
-            if let Some(evt) = parse_agent_session_conflict(&clean) {
-                self.session_conflict_fired = true;
-                events.push(evt);
-            }
+        if !self.session_conflict_fired
+            && let Some(evt) = parse_agent_session_conflict(&clean)
+        {
+            self.session_conflict_fired = true;
+            events.push(evt);
         }
 
         events
@@ -814,27 +814,17 @@ pub(crate) fn parse_osc94(text: &str) -> Option<ParsedEvent> {
     })
 }
 
-/// Parse OSC 777 desktop notifications: `\x1b]777;notify;TITLE;BODY\x07`.
+/// Parse response-required OSC 777 desktop notifications:
+/// `\x1b]777;notify;TITLE;BODY\x07`.
 ///
-/// This is the agent telling the terminal, in protocol rather than in pixels,
-/// that it wants the user. Claude Code emits it the instant it blocks — the two
-/// bodies observed on live sessions are `Claude needs your permission` and
-/// `Claude is waiting for your input`. Unlike the `Enter to select` footer regex
-/// it needs no screen scraping, and unlike the TUIC hook's `state=awaiting` it
-/// fires for EVERY blocking prompt, not just `PreToolUse(AskUserQuestion)` —
-/// which is exactly the hole that left a plan/skill picker showing a "working"
-/// dot while the agent sat blocked (the Ink pickers with `Type something` /
-/// `Chat about this` rows are not AskUserQuestion and emit no hook state).
+/// OSC 777 describes a desktop notification, not an awaiting-state transition.
+/// Claude also emits the generic observed body `Claude Code needs your
+/// attention`, which may announce completion and must not latch a confident
+/// question. Only response-required wording becomes `Question`: permission,
+/// approval, or waiting-for-input. This retains the plan/skill picker signal
+/// (`Claude is waiting for your input`) that native hooks do not cover.
 ///
-/// The `prompt_text` is the body when present, else the title: the body is the
-/// human-readable reason and is what the awaiting badge shows.
-///
-/// DEFERRED (2026-08-08) — an agent that also notified on *completion* would
-/// park us at awaiting until the next user input, since hook `state=idle` does
-/// not clear a confident question. Both live Claude payloads are blocking ones,
-/// so no completion phrase is known to exist; adding a phrase allowlist now
-/// would be guessing at strings we have never observed. Revisit if a fixture
-/// ever captures a completion notify.
+/// The `prompt_text` is the body when present, else the title.
 pub(crate) fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
     // Fast path: skip the regex unless the introducer is present.
     if !text.contains("\x1b]777;notify;") {
@@ -853,6 +843,13 @@ pub(crate) fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
     let body = caps.get(2).map(|m| m.as_str().trim()).unwrap_or_default();
     let prompt_text = if body.is_empty() { title } else { body };
     if prompt_text.is_empty() {
+        return None;
+    }
+    let normalized = prompt_text.to_ascii_lowercase();
+    let requires_response = normalized.contains("needs your permission")
+        || normalized.contains("is waiting for your input")
+        || normalized.contains("approval required");
+    if !requires_response {
         return None;
     }
     Some(ParsedEvent::Question {
@@ -5473,9 +5470,9 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
 
     // --- OSC 777 notify: the agent asking for the user in protocol ---
 
-    /// Both payloads are verbatim from live Claude Code sessions, captured off
-    /// the PTY ring while a plan picker sat blocked and the tab still showed a
-    /// "working" dot. They are the regression this parser exists for.
+    /// Both payloads are verbatim from live Claude Code sessions observed while
+    /// a plan picker sat blocked and the tab still showed a "working" dot. They
+    /// are the regression this parser exists for.
     #[test]
     fn osc777_notify_is_a_confident_question() {
         for (raw, expected) in [
@@ -5512,15 +5509,15 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         ));
     }
 
-    /// Title-only notify still names the sender rather than parking the badge on
-    /// an empty prompt — the badge text is what tells Boss which agent blocked.
+    /// A title-only or generic notification carries no response-required
+    /// semantics and must not park the session in confident awaiting.
     #[test]
-    fn osc777_notify_falls_back_to_the_title() {
-        let evt = parse_osc777_notify("\x1b]777;notify;Claude Code\x07");
-        assert!(matches!(
-            evt,
-            Some(ParsedEvent::Question { ref prompt_text, .. }) if prompt_text == "Claude Code"
-        ));
+    fn osc777_notify_ignores_generic_attention() {
+        assert!(parse_osc777_notify("\x1b]777;notify;Claude Code\x07").is_none());
+        assert!(
+            parse_osc777_notify("\x1b]777;notify;Claude Code;Claude Code needs your attention\x07")
+                .is_none()
+        );
     }
 
     /// A truncated sequence at a chunk boundary must not match: matching it
@@ -5542,11 +5539,11 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     /// Several notifications in one chunk: the newest is the current state.
     #[test]
     fn osc777_notify_takes_the_last_notification_in_a_chunk() {
-        let raw =
-            "\x1b]777;notify;Claude Code;first\x07 output \x1b]777;notify;Claude Code;second\x07";
+        let raw = "\x1b]777;notify;Claude Code;Claude needs your permission\x07 output \
+                   \x1b]777;notify;Claude Code;Claude is waiting for your input\x07";
         assert!(matches!(
             parse_osc777_notify(raw),
-            Some(ParsedEvent::Question { ref prompt_text, .. }) if prompt_text == "second"
+            Some(ParsedEvent::Question { ref prompt_text, .. }) if prompt_text == "Claude is waiting for your input"
         ));
     }
 

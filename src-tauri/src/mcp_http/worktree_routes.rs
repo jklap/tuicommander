@@ -369,48 +369,27 @@ pub(super) async fn finalize_merged_worktree_http(
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
-    let repo_path = body.repo_path.clone();
-    let branch_name = body.branch_name.clone();
-    let action = body.action.clone();
-    let result = match tokio::task::spawn_blocking(move || {
-        let base_repo = std::path::PathBuf::from(&repo_path);
-        match action.as_str() {
-            "archive" => crate::worktree::archive_worktree(&base_repo, &branch_name, None).map(
-                |ap| serde_json::json!({"merged": true, "action": "archived", "archive_path": ap}),
-            ),
-            "delete" => crate::worktree::remove_worktree_by_branch(
-                &repo_path,
-                &branch_name,
-                true,
-                None,
-                false,
-            )
-            .map(|outcome| {
-                serde_json::json!({
-                    "merged": true,
-                    "action": "deleted",
-                    "archive_path": null,
-                    "branch_delete_warning": outcome.branch_delete_warning,
-                })
-            }),
-            other => Err(format!(
-                "Unknown action '{other}': expected 'archive' or 'delete'"
-            )),
-        }
+    let FinalizeMergeRequest {
+        repo_path,
+        branch_name,
+        action,
+        force,
+    } = body;
+    // Shares `finalize_merged_worktree_impl` with the Tauri command: the dirty-worktree
+    // gate and the "worktree removed" notification live there, once, for both transports.
+    let res = tokio::task::spawn_blocking(move || {
+        crate::worktree::finalize_merged_worktree_impl(
+            &state,
+            repo_path,
+            branch_name,
+            action,
+            force.unwrap_or(false),
+        )
     })
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => Err(format!("task panic: {e}")),
-    };
-    let repo_path = body.repo_path.clone();
-    match result {
-        Ok(json) => {
-            // Both actions ("archive" and "delete") remove the worktree.
-            state.notify_worktree_removed(&repo_path, &body.branch_name);
-            (StatusCode::OK, Json(json)).into_response()
-        }
-        Err(e) => err_500(&e),
+    .await;
+    match res {
+        Ok(r) => json_result(r),
+        Err(e) => err_500(&format!("task panic: {e}")),
     }
 }
 

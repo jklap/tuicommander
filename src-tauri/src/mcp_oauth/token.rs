@@ -151,11 +151,6 @@ impl TokenManager {
             return Ok(None);
         }
 
-        let refresh_token = current
-            .refresh_token
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Token expired and no refresh_token available"))?;
-
         // Acquire refresh lock — serializes concurrent refresh attempts
         let _guard = self.refresh_lock.lock().await;
 
@@ -168,6 +163,11 @@ impl TokenManager {
         {
             return Ok(Some(fresh.clone()));
         }
+
+        let refresh_token = current
+            .refresh_token
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Token expired and no refresh_token available"))?;
 
         // Still expired — perform refresh
         let http_client = reqwest::Client::new();
@@ -213,6 +213,24 @@ impl TokenManager {
 
         save_oauth_tokens(&self.upstream_name, &token_set).map_err(|e| anyhow::anyhow!("{e}"))?;
         Ok(Some(token_set))
+    }
+
+    /// Recover after the server rejected a specific access token.
+    ///
+    /// `stored` is the latest credential available when recovery begins, while
+    /// `rejected_access_token` is the bearer that was actually sent. Keeping
+    /// those generations distinct lets the double-check under `refresh_lock`
+    /// reuse a valid credential written between the request and its 401
+    /// response instead of immediately refreshing that replacement.
+    pub(crate) async fn refresh_after_rejection(
+        &self,
+        stored: &OAuthTokenSet,
+        rejected_access_token: &str,
+    ) -> Result<Option<OAuthTokenSet>> {
+        let mut rejected = stored.clone();
+        rejected.access_token = rejected_access_token.to_string();
+        rejected.expires_at = Some(0);
+        self.refresh_if_needed(&rejected).await
     }
 
     /// Convert a raw token endpoint response into our internal type.
@@ -670,15 +688,9 @@ mod tests {
         };
         crate::mcp_upstream_credentials::save_oauth_tokens(name, &stored).unwrap();
 
-        // What a 401-recovery caller passes in: the same token, forced expired.
-        let forced = OAuthTokenSet {
-            expires_at: Some(0),
-            ..stored.clone()
-        };
-
         let mgr = TokenManager::new(name.into(), "client".into(), None, endpoint, None);
         let refreshed = mgr
-            .refresh_if_needed(&forced)
+            .refresh_after_rejection(&stored, "revoked-but-unexpired")
             .await
             .expect("refresh must reach the AS")
             .expect("a revoked token must yield a new one");
@@ -714,15 +726,9 @@ mod tests {
         };
         crate::mcp_upstream_credentials::save_oauth_tokens(name, &rotated).unwrap();
 
-        let stale = OAuthTokenSet {
-            access_token: "the-one-we-got-401-on".into(),
-            expires_at: Some(0),
-            ..rotated.clone()
-        };
-
         let mgr = TokenManager::new(name.into(), "client".into(), None, endpoint, None);
         let result = mgr
-            .refresh_if_needed(&stale)
+            .refresh_after_rejection(&rotated, "the-one-we-got-401-on")
             .await
             .expect("peer rotation must satisfy the caller")
             .expect("the peer's token must be returned");
