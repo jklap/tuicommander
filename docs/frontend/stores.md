@@ -348,7 +348,9 @@ Per-repository settings (base branch, scripts, worktree options).
 Panel visibility (sidebar, diff, markdown, notes, file browser), sidebar width, dropdown state, loading state.
 
 ### notificationsStore (`notifications.ts`)
-Notification sound preferences and playback.
+Notification sound preferences and playback. Remote orchestration muting uses
+the terminal's backend-preserved `isRemote` origin; completion lifecycle code
+sets a per-busy-cycle latch before playback so idle and exit cannot both chime.
 
 ### dictationStore (`dictation.ts`)
 Whisper dictation config, model management, recording state.

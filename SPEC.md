@@ -254,10 +254,15 @@ Features:
 
 ## Persistence
 
-Repository state is persisted by the Rust backend in `repositories.json`.
-Release builds use the platform config directory; debug builds use a one-time
-production-seeded `~/.tuicommander-dev/repositories.json` to avoid collisions
-with an installed app. No other backend config path is changed by this rule.
+Repository state is persisted by the Rust backend in `repositories.json`, in
+the single platform config directory shared by debug and release builds,
+written through the locked/atomic `ConfigFile` path.
+
+Ordinary `config.json` and `mcp-upstreams.json` mutations use delta-under-lock
+semantics: after taking the cross-process file lock, the backend reloads the
+latest document and applies only the caller's changed fields or server-ID
+operations. Independent saves from concurrent debug and release instances do
+not overwrite one another's unrelated changes.
 
 Some frontend-only stores persist to localStorage:
 
@@ -355,6 +360,8 @@ Some frontend-only stores persist to localStorage:
 - [x] Alternate-screen scrollback — isolated bounded history for fullscreen apps, primary-only durable logs, and atomic renderer-generation transitions
 - [x] Task completion detection
 - [x] Audio notification when agent awaits input
+- [x] Intent tab titles override spawn labels while explicit user renames remain protected across reconnects
+- [x] Remote completion muting survives reconnects and deduplicates idle/exit signals per busy cycle
 - [x] IDE launcher with app icons
 
 ### Pending (P2)

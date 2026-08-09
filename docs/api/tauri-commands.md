@@ -9,6 +9,8 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `create_pty` | `config: PtyConfig` | `String` (session ID) | Create PTY session |
 | `create_pty_with_worktree` | `pty_config, worktree_config` | `WorktreeResult` | Create worktree + PTY |
 | `write_pty` | `session_id, data` | `()` | Write to PTY |
+| `enqueue_agent_command` | `session_id, text` | `{ typed, queued }` | Queue a command for the agent's next idle window (typed at once when already idle); errors for non-agent sessions |
+| `clear_queued_agent_commands` | `session_id` | `usize` | Drop every queued command; returns how many |
 | `resize_pty` | `session_id, rows, cols` | `()` | Resize PTY; alternate-screen resizes preserve primary-log continuity |
 | `pause_pty` | `session_id` | `()` | Pause reader thread |
 | `resume_pty` | `session_id` | `()` | Resume reader thread |
@@ -16,7 +18,7 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `can_spawn_session` | -- | `bool` | Check session limit |
 | `get_orchestrator_stats` | -- | `OrchestratorStats` | Active/max/available |
 | `get_session_metrics` | -- | `JSON` | Spawn/fail/byte counts |
-| `list_active_sessions` | -- | `Vec<ActiveSessionInfo>` | List all sessions with the same optional lifecycle `state` (`shell_state`, `agent_state`, `background_work`) returned by `GET /sessions` |
+| `list_active_sessions` | -- | `Vec<ActiveSessionInfo>` | List all sessions with `display_name_is_custom`, `is_remote`, and the same optional lifecycle `state` (`shell_state`, `agent_state`, `background_work`, `queued_commands`) returned by `GET /sessions` |
 | `list_worktrees` | -- | `Vec<JSON>` | List managed worktrees |
 | `update_session_cwd` | `session_id, cwd` | `()` | Update session working directory (from OSC 7) |
 | `get_session_foreground_process` | `session_id` | `JSON` | Get foreground process info |
@@ -25,7 +27,7 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `get_shell_state` | `session_id` | `Option<String>` | Get current shell state ("busy", "idle", or null); agent-specific semantic Working markers can repair a transient false-idle state |
 | `has_foreground_process` | `session_id: String` | `bool` | Checks if a non-shell foreground process is running |
 | `debug_agent_detection` | `session_id: String` | `AgentDiagnostics` | Returns diagnostic breakdown of agent detection pipeline |
-| `set_session_name` | `session_id, name` | `()` | Set custom display name for a session |
+| `set_session_name` | `session_id, name, is_custom?` | `()` | Set a session display name and whether it represents an explicit user rename |
 | `get_input_buffer_content` | `session_id` | `String` | Get the current content of the input line buffer (what the user is typing). Used by plugins with `pty:read` capability. |
 | `get_process_stats` | -- | `Vec<ProcessStat>` | CPU% and RSS memory for TUIC and all child process trees |
 
@@ -120,7 +122,7 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `create_worktree` | `base_repo, branch_name` | `JSON` | Create git worktree |
 | `remove_worktree` | `repo_path, branch_name, delete_branch?, force?` | `{ branch_delete_warning?: string }` | Remove worktree; `delete_branch` (default true) controls whether the local branch is also deleted. If safe branch deletion fails after the worktree is removed, returns `branch_delete_warning` so the UI can report that the branch was kept. Archive script resolved from config (not IPC). |
 | `delete_local_branch` | `repo_path, branch_name` | `()` | Delete a local branch (and its worktree if linked). Refuses to delete the default branch. Uses safe `git branch -d` |
-| `check_worktree_dirty` | `repo_path, branch_name` | `bool` | Check if a branch's worktree has uncommitted changes. Returns false if no worktree exists |
+| `check_worktree_dirty` | `repo_path, branch_name` | `bool` | Check if a branch's worktree has uncommitted changes. Returns false if no worktree exists. When git cannot answer (the `worktree list` or `status` call fails) it returns an **error**, never `false` — callers that gate a destructive action must see the failure |
 | `get_worktree_paths` | `repo_path` | `HashMap<String,String>` | Worktree paths for repo |
 | `get_worktrees_dir` | -- | `String` | Worktrees base directory |
 | `generate_worktree_name_cmd` | `existing_names` | `String` | Generate unique name |
@@ -129,8 +131,8 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `detect_orphan_worktrees` | `repo_path` | `Vec<String>` | Detect worktrees in detached HEAD state (branch deleted) |
 | `remove_orphan_worktree` | `repo_path, worktree_path` | `()` | Remove an orphan worktree by filesystem path (validated against repo) |
 | `switch_branch` | `repo_path, branch_name` | `()` | Switch main worktree to a different branch (with dirty-state and process checks) |
-| `merge_and_archive_worktree` | `repo_path, branch_name, target_branch, after_merge, force?` | `MergeArchiveResult` | Merge worktree branch into base and archive. A pre-flight counts the commits the target is missing and checks whether the worktree is dirty; both are returned so the caller can say what the merge actually carried. When the branch is 0 commits ahead **and** the worktree is dirty, it returns `action: "needs_confirmation"` without touching anything — re-call with `force: true` to proceed. If conflict cleanup abort fails, the error reports the repo may still be conflicted and includes the manual abort command. |
-| `finalize_merged_worktree` | `repo_path, branch_name, action` | `MergeResult` | Clean up worktree after merge. Delete action may include `branch_delete_warning` if the worktree was removed but safe branch deletion kept the branch. |
+| `merge_and_archive_worktree` | `repo_path, branch_name, target_branch, after_merge, force?` | `MergeArchiveResult` | Merge worktree branch into base and archive. A pre-flight counts the commits the target is missing and checks whether the worktree is dirty; both are returned so the caller can say what the merge actually carried. When `after_merge` is `archive` or `delete` and the worktree is **not known to be clean**, it returns `action: "needs_confirmation"` without touching anything — re-call with `force: true` to proceed. The commit count does not enter that decision: both cleanups end in `git worktree remove --force`, which destroys uncommitted work whether or not the branch carries commits. A dirty check that fails also blocks (`worktree_dirty` stays `false` because git never said "dirty"). If conflict cleanup abort fails, the error reports the repo may still be conflicted and includes the manual abort command. |
+| `finalize_merged_worktree` | `repo_path, branch_name, action, force?` | `MergeArchiveResult` | Clean up a merged worktree. Passes the **same** dirty-worktree gate as `merge_and_archive_worktree`: without `force` a worktree that is not known to be clean comes back as `action: "needs_confirmation"` instead of being wiped (`merged: true` — only the cleanup stopped, the merge already landed). Delete action may include `branch_delete_warning` if the worktree was removed but safe branch deletion kept the branch. |
 | `list_base_ref_options` | `repo_path` | `Vec<String>` | List valid base refs for worktree creation |
 | `run_setup_script` | `repo_path, worktree_path` | `()` | Run post-creation setup script in new worktree |
 | `generate_clone_branch_name_cmd` | `base_name, existing_names` | `String` | Generate hybrid branch name for clone worktree |
@@ -303,7 +305,7 @@ Commands for managing upstream MCP servers proxied through TUICommander's `/mcp`
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
 | `load_mcp_upstreams` | -- | `UpstreamMcpConfig` | Load upstream config from `mcp-upstreams.json` |
-| `save_mcp_upstreams` | `config: UpstreamMcpConfig` | `()` | Validate, persist, and hot-reload upstream config. Errors if validation fails |
+| `save_mcp_upstreams` | `base: UpstreamMcpConfig, config: UpstreamMcpConfig` | `()` | Apply the caller's ID-keyed base-to-config delta to the latest locked `mcp-upstreams.json`, validate it, and hot-reload the exact persisted change. Removing a server or its optional `auth` field is an explicit deletion; unrelated concurrent changes are preserved |
 | `reconnect_mcp_upstream` | `name: String` | `()` | Disconnect and reconnect a single upstream by name. Useful after credential changes or transient failures |
 | `get_mcp_upstream_status` | -- | `Vec<UpstreamStatus>` | Get live status of all upstream MCP servers. Status values: `connecting`, `ready`, `circuit_open`, `disabled`, `failed`, `authenticating`, `needs_auth` |
 | `save_mcp_upstream_credential` | `name: String, token: String` | `()` | Store a Bearer token for an upstream in the OS keyring |
@@ -540,7 +542,7 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `play_notification_sound` | `sound_type` | `()` | Play notification sound via Rust rodio (types: completion, question, error, info) |
+| `play_notification_sound` | `sound` | `()` | Play a Rust rodio notification sound (`question`, `completion`, `error`, `warning`, `info`, or `attention`) |
 | `block_sleep` | -- | `()` | Prevent system sleep |
 | `unblock_sleep` | -- | `()` | Allow system sleep |
 

@@ -146,7 +146,7 @@ Client ──WebSocket──> /sessions/{session_id}/stream
 
 When sessions are created or closed (via HTTP, MCP, or PTY exit), the server broadcasts events through the SSE event bus:
 
-- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, and the optional stable `display_name`. Frontend uses this to auto-add terminal tabs for remotely spawned agents and treats a supplied display name as custom so transient OSC/intent titles cannot replace it.
+- **`session-created`** — Emitted when a new PTY session is created (both local and MCP-spawned). Carries `session_id`, `cwd`, `agent_type`, and the optional stable `display_name`. Frontend uses this to auto-add remote tabs; a spawn-assigned name remains replaceable by OSC/intent titles, while session-list snapshots carry independent `display_name_is_custom` and `is_remote` flags for reconnect.
 - **`term-alias-assigned`** — Emitted when a session receives its human-friendly alias. Carries `session_id` and `alias`. Frontend uses this to update tab tooltips.
 - **`session-closed`** — Emitted when a session exits. Carries `session_id`. Frontend uses this for cleanup.
 
@@ -239,12 +239,25 @@ Eight native tools, organized by domain. Two (`config`, `debug`) are hidden by d
 | `agent` | spawn, wait, detect, stats, metrics, register, list_peers, send, inbox | Enabled |
 | `task` | get, cancel | Enabled |
 | `repo` | list, active, prs, status, worktree_list, worktree_create, worktree_remove | Enabled |
-| `ui` | tab, toast, confirm | Enabled |
+| `ui` | tab, toast, confirm, screenshot | Enabled |
 | `plugin_dev_guide` | *(no actions — returns guide text)* | Enabled |
 | `config` | get, save | Disabled |
 | `debug` | agent_detection, logs, sessions, invoke_js | Disabled |
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
+
+**`ui action=toast` sound.** `sound` accepts `true`/`false` or a notification-sound
+name: `question`, `completion`, `error`, `warning`, `info`, `attention`. `true`
+resolves from `level` (info→info, warn→warning, error→error); a name overrides it.
+`attention` is a triangular G4→G4→E5 callback meant for an agent working
+unattended that is blocked on the user: two quick knocks followed by a longer
+rise. An unknown name is an error, never a silently silent toast. The backend
+resolves the name *before* emitting, so the toast event carries a concrete sound
+and every client plays it through the user's notification settings (volume,
+output device, per-sound mutes) rather than inventing a tone. The event is
+dual-emitted — Tauri `emit` for the desktop WebView **and** the event bus for
+SSE clients; a bus-only send never reaches the desktop, which has no bus→window
+forwarder.
 
 Native responses omit optional values when they are unavailable. In particular,
 `session action=output` includes `exit_code` only after an exit status is known, and
@@ -441,7 +454,30 @@ MCP `repo action=worktree_remove` returns `{ "ok": true }` on full success. When
 
 ## Upstream MCP Proxy
 
-TUICommander can proxy upstream MCP servers (stdio or HTTP) and aggregate their tools into its own `tools/list` response. Configuration lives in `mcp-servers.json`.
+TUICommander can proxy upstream MCP servers (stdio or HTTP) and aggregate their tools into its own `tools/list` response. Configuration lives in `mcp-upstreams.json`.
+
+### Upstream configuration save contract
+
+IPC `save_mcp_upstreams` and HTTP `PUT /mcp/upstreams` both accept
+`{ base, config }`: the snapshot the caller loaded and its desired result. The
+backend indexes servers by stable `id`, derives the semantic base-to-desired
+delta, and applies that delta to the latest on-disk configuration inside the
+cross-process `ConfigFile` lock. It validates and atomically persists the merged
+result while still holding that lock instead of replacing the file with a stale
+UI snapshot.
+
+Absence has explicit semantics relative to `base`: omitting a former server from
+`config` removes that ID, and omitting its former optional `auth` field clears
+the auth value. Unchanged fields are not part of the delta, so concurrent edits
+survive; in particular, a stale UI save cannot erase OAuth/DCR auth written
+concurrently for an otherwise unchanged upstream. Concurrently added servers
+also survive unless the caller independently adds the same ID, which is rejected
+as a conflict.
+
+Persistence returns the exact configuration immediately before and after the
+locked mutation. Once the lock is released, `apply_config_diff` uses that exact
+pair to disconnect removed or changed upstreams and connect added or changed
+ones, so the live registry hot-reloads precisely what the atomic write changed.
 
 The desktop boot thread owns the always-on Unix-socket/named-pipe listener and
 its one-time background tasks for the lifetime of the process. A configuration
@@ -460,7 +496,13 @@ after that shutdown so dropping it cannot silently kill local bridge IPC.
 
 `HttpMcpClient` communicates via Streamable HTTP (POST to the server URL, `mcp-session-id` header for session affinity).
 
-**Bearer token caching.** The resolved bearer token (from OS keyring) is cached in memory after the first `resolve_bearer()` call. Subsequent calls (health checks every 60s, tool calls) use the cache. The cache is invalidated on 401 → `force_refresh()` and re-populated after a successful token refresh. This eliminates repeated macOS keychain permission prompts.
+**Bearer credential generations.** `resolve_bearer()` re-reads the credential on
+every request attempt so a completed re-authorization takes effect immediately;
+the credential vault already caches the decrypted value process-wide, so this
+does not repeat the OS keychain prompt. A 401 recovery passes the exact bearer
+rejected by the server into the serialized refresh check. If storage now holds a
+different valid generation, that credential is retried as-is; only the rejected
+or invalid generation is refreshed at the authorization server.
 
 ### Health checker
 
@@ -514,7 +556,7 @@ A `NeedsOAuth` on any request transitions the upstream registry to `needs_auth`.
 2. **Consent UI** — The frontend opens the URL via `tauri-plugin-opener` after user approval. The status bar and Services tab show "Awaiting authorization…".
 3. **Callback** — The AS redirects to `tuic://oauth-callback?code=…&state=…`. The OS routes the deep link to the desktop app (`src-tauri/src/mcp_oauth/mod.rs` — `DEEP_LINK_SCHEME = "tuic://oauth-callback"`). The deep-link handler calls `mcp_oauth_callback(code, oauth_state)`.
 4. **Exchange** — `TokenManager` posts code + PKCE verifier to the token endpoint, receives `{ access_token, refresh_token?, expires_in? }`, serializes into `OAuthTokenSet`, persists to the OS keyring (`mcp_upstream_credentials.rs` — structured JSON format with `"type": "oauth2"`), and transitions upstream to `connecting`.
-5. **Refresh** — `TokenManager` is shared across every `HttpMcpClient` refresh path (unified per upstream); a semaphore serializes concurrent refresh attempts to defeat thundering-herd. `expires_at` uses a 60 s margin; `None` means "no known expiry — do not treat as expired".
+5. **Refresh** — `TokenManager` is shared across every `HttpMcpClient` refresh path (unified per upstream); a semaphore serializes concurrent refresh attempts to defeat thundering-herd. `expires_at` uses a 60 s margin; `None` means "no known expiry — do not treat as expired". A 401 recovery carries the exact bearer rejected by the server into the serialized refresh check. If an authorization exchange wrote a different valid credential between the request and recovery, that generation is retried as-is instead of being immediately refreshed or rotated; only the still-rejected or an invalid generation reaches the token endpoint.
 
 ### Cancel
 
@@ -625,6 +667,26 @@ between observing a ready screen and writing to the PTY. Idle is published befor
 the queued-message flush, and each idle transition submits at most one queued
 message; remaining messages wait for later turns. This keeps backend state and UI
 events ordered and prevents lifecycle reports from overwriting an active composer.
+Peer messages and Compose commands occupy one typed FIFO, so neither producer can
+overtake an earlier accepted entry. The Compose queue count and clear operations
+select only user-command entries; clearing them retains peer messages and their
+relative order.
+
+### Raw PTY Capture Diagnostics
+
+`POST /diagnostics/capture` controls the off-by-default raw-stream tap used for
+agent-state regression evidence. `{ "enabled": true, "session_id": "<id>" }`
+records one session; omitting `session_id` records all sessions, and
+`{ "enabled": false }` stops it. `GET /diagnostics/capture` returns the active
+filter, output directory, and byte count per opened session. A new enable starts
+fresh files, and each `<config dir>/captures/<session-id>.raw` file is capped at
+512 KiB.
+
+Capture must be enabled before reproduction. `/sessions/:id/output` is not a
+fixture-acquisition fallback: its bounded ring can lose a one-shot marker and its
+JSON string is lossy UTF-8. Negative and positive captures belong in
+`src-tauri/src/fixtures/agent_prompts/` and are replayed through the same raw plus
+rendered-row composition as the reader thread.
 
 The stdio bridge reads each IPC HTTP response through its declared
 `Content-Length` rather than waiting for connection EOF. A single transport error

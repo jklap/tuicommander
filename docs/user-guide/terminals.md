@@ -41,7 +41,8 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 - Default naming: "Terminal 1", "Terminal 2", etc.
 - **Double-click** a tab to rename it (inline editing)
 - Press **Enter** to confirm, **Escape** to cancel
-- Custom names persist through the session
+- Explicit custom names persist through reconnects and are never replaced by agent output
+- Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase
 
 ### Tab Reordering
 
@@ -236,6 +237,28 @@ TUICommander detects rate limits, prompts, and status messages from AI agents:
 - **Progress indicators** — Shows progress bars for long-running operations
 
 When an agent asks a question, the tab indicator changes and a notification sound plays (if enabled).
+Remote HTTP/MCP workers respect **Silence orchestration completions** even after
+a frontend reload, and a single busy cycle produces at most one completion
+notification when idle and process exit arrive separately.
+Generic desktop notifications such as “needs your attention” do not by
+themselves mark the tab as awaiting input; TUICommander requires explicit
+permission, approval, or waiting-for-input wording, an agent hook, or a verified
+question on screen.
+
+### Queueing Follow-up Commands
+
+The Compose panel can leave work for an agent without steering its current turn:
+
+- **Ctrl+Enter** sends immediately.
+- **Shift+Ctrl+Enter** or the queue button submits immediately when the agent is
+  already idle; otherwise it waits for the next idle window.
+- Queued user commands and peer messages share one FIFO and are delivered one
+  item per idle window in acceptance order.
+- The `N queued` badge counts only Compose commands. Clicking it discards those
+  commands but never clears peer or orchestrator messages waiting in the same
+  delivery queue.
+
+Queueing is available only for detected agent sessions, not plain shells.
 
 ### Session Restore
 

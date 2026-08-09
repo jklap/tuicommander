@@ -6,6 +6,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Compose can queue follow-up work without steering the current agent turn** — Shift+Ctrl+Enter or the queue button hands a command to the backend idle gate. User commands and peer messages share one FIFO and drain one item per idle window in acceptance order; the visible count and clear action select only Compose commands, so clearing them cannot delete a peer result waiting behind or between them.
+- **Raw PTY capture provides reproducible agent-state fixtures** — The off-by-default `/diagnostics/capture` endpoint records a bounded raw stream per session. Captures, rather than the rendered and lossy session-output ring, are replayed through the same raw-marker, rendered-row, and hook-suppression composition as production.
+- **Agents can request a distinct Attention callback** — MCP toasts accept an `attention` sound that travels through both the desktop event and browser SSE paths. Native and browser playback share the triangular G4→G4→E5 double-knock motif while respecting notification volume and per-sound settings.
+
+### Fixed
+
+- **Intent titles now replace spawn-assigned tab names without overwriting manual renames** — A named MCP agent was restored with `nameIsCustom=true`, conflating its launch label with an explicit user rename and silently blocking every valid `intent: text (Title)` update. Session metadata now preserves the name origin across reconnects; only user-renamed tabs remain protected.
+- **Silent orchestration completions survive frontend reconnects and completion fires once** — Re-adopting a surviving HTTP/MCP session used to discard its remote origin, so the “silence remote completions” setting stopped applying after HMR or reload. Remote origin now round-trips through both session-list transports, and the BUSY→IDLE and process-exit paths share a per-cycle completion latch instead of chiming twice.
+- **Generic OSC 777 notifications no longer leave a tab falsely awaiting input** — OSC 777 is a desktop-notification transport, so “needs your attention” can also announce completion and is not evidence that the composer expects a response. Only explicit permission, approval, or waiting-for-input wording becomes a confident question; the latter preserves plan and skill picker detection when native hooks emit no awaiting event.
+- **Cleaning up a merged worktree asks before it destroys uncommitted work** — Archive and delete both end in `git worktree remove --force`, but the confirmation only appeared when the branch was zero commits ahead, so one commit was enough to have hours of unstaged work removed without a word. The commit count no longer enters the decision: every cleanup path — the merge action, the post-merge dialog, and the automatic sweep — passes one gate that stops whenever the worktree is not *known* to be clean, and a dirty check that fails to run counts as not clean rather than as a silent yes. The sweep, which runs unattended, keeps such a worktree and says so. Archiving also became what its name promises: the directory is moved to `__archived/` before git's entry is dropped, so the files it carries survive instead of being deleted first and moved never.
+
+- **Re-authorizing an HTTP MCP upstream takes effect on the next attempt** — The client no longer keeps a second memoized bearer after the credential vault changes. Every attempt reads the current generation, and 401 recovery compares it with the exact rejected bearer under the refresh lock, retrying a newly exchanged valid credential without rotating it or calling the token endpoint.
+
 ## [1.7.2] - 2026-08-06
 
 ### Changed

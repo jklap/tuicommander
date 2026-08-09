@@ -39,9 +39,9 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.1",
     "ansi-to-html": "^0.7.2",
-    "dompurify": "3.4.12",
+    "dompurify": "3.4.13",
     "marked": "^18.0.6",
-    "mermaid": "^11.16.0",
+    "mermaid": "^11.16.1",
     "qrcode": "^1.5.4",
     "solid-codemirror": "^2.3.3",
     "solid-js": "^1.9.14"

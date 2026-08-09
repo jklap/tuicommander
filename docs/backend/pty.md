@@ -126,9 +126,11 @@ Without this enforcement a single BSU whose ESU is delayed or lost freezes the t
 `spawn_headless_reader_thread()` — used for HTTP-created sessions (no Tauri app handle). Same pipeline but skips Tauri event emission; only writes to ring buffer and WebSocket. Includes `extract_question_line()` for silence-based question detection, session lifecycle events (`session-created`, `session-closed`), and full output parser integration.
 
 Named agent sessions propagate their stable `display_name` through the
-`session-created` event. Desktop and browser clients mark that initial tab name
-as custom, preserving it across OSC title and structured intent updates as well
-as frontend reconnection. Unnamed tabs retain the normal dynamic-title behavior.
+`session-created` event. That launch label is a replaceable base title: OSC and
+structured intent titles may update it. An independent
+`display_name_is_custom` flag protects only an explicit user rename and survives
+frontend reconnection. Session snapshots also carry `is_remote`, so reconnecting
+an HTTP/MCP-created PTY does not lose orchestration-only notification muting.
 
 ## Shell Resolution
 
@@ -353,6 +355,10 @@ single source of truth — the frontend does not derive activity from raw PTY da
 
 **Signal precedence and confirmation:** Explicit hook busy > current Claude/Codex/Grok semantic Working marker > movement (real output / animated spinner) > silence. A ready prompt visible from the previous turn cannot cancel a newly submitted prompt until real activity has been observed; after activity, a stable ready composer can repair a missed hook idle. A current-turn completion marker prevents a stale static Codex Working row from relatching BUSY; movement of that exact semantic row can reopen a Codex internal continuation that starts without PTY input. Claude's current live phase marker can supersede a premature completion from a blocking Stop hook. A pending process probe or confirmed meaningful descendant still owns the task lifecycle. Hook-based question suppression activates only after an OSC 7770 state marker is actually received.
 
+**OSC 777 notification classification:** OSC 777 `notify` is a desktop-notification transport, not an awaiting-state protocol. Raw-stream parsing promotes only response-required wording (`needs your permission`, `approval required`, or `is waiting for your input`) to a confident question. This preserves plan/skill picker detection for hook-instrumented Claude sessions while ignoring the observed generic `Claude Code needs your attention` notification, which can announce completion and otherwise latches awaiting indefinitely.
+
+**State-regression capture:** Enable `POST /diagnostics/capture` before reproducing (`{"enabled":true,"session_id":"<id>"}`), stop it afterward, and copy the exact `<config dir>/captures/<id>.raw` file into `src-tauri/src/fixtures/agent_prompts/`. `GET /diagnostics/capture` reports the directory and bytes written. Do not build fixtures from `/sessions/:id/output`: the bounded ring can overwrite the signal and its JSON string is lossy UTF-8. Fixture tests replay raw OSC parsing, VT-rendered changed rows, and hook suppression in the same composition as production.
+
 **Safety consumers:** For agents with a verified screen adapter, peer-message injection and Unix auto-standby require confirmed idle (explicit Stop/OSC or stable ready screen). A silence-only idle can update the cosmetic state but cannot type into or `SIGSTOP` a potentially working agent. Agents without an adapter retain the legacy heuristic behavior until their UI is characterized.
 
 **Task lifecycle is separate from shell activity:** `shell_state=idle` means the
@@ -399,6 +405,17 @@ waited for the lock and is discarded if a new submitted turn won first.
 Without a fresh marker the new task epoch returns to `idle`, not `completed`.
 
 **Transactional peer injection:** Reserving an idle composer creates an ownership token before the PTY write. A failure proven to occur before any byte was written rolls the synthetic BUSY state back to the prior confirmed IDLE state and keeps the message queued. Once any byte may have escaped, failure is `delivery_uncertain`: the session remains conservatively BUSY, the authoritative inbox remains readable, and TUIC does not automatically retry into the terminal. Real output, a Working screen, or an explicit state marker invalidates rollback ownership so a late error cannot erase genuine activity. `session status` exposes the additive `delivery_uncertain` flag.
+
+**User-composed commands share that gate:** the Compose panel's enqueue action
+(`enqueue_agent_command` / `POST /sessions/:id/queue`) appends to the same
+typed `pending_injections` FIFO as peer delivery rather than writing to the PTY,
+so a command typed by the user cannot steer a turn in progress. It is appended
+and then flushed, never handed straight to `deliver_message_to_pty`: injecting
+ahead of any accepted peer message or user command would reorder delivery. Each
+flush pops one entry and leaves the session BUSY, so the queue drains one item per
+idle window in global acceptance order. `state.queued_commands` and
+`clear_queued_agent_commands` select only user-command entries; clear retains all
+peer/orchestrator entries in their original relative order.
 
 **Status line ticks:** Animated spinner repaint evidence refreshes both shell activity and `SilenceState`, preventing low-confidence question/tool-error events from contradicting a busy tab. Static mode/footer rows remain chrome only and do not prove activity.
 
