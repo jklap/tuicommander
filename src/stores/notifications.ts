@@ -146,6 +146,14 @@ function createNotificationsStore() {
 			saveConfig(state.config);
 		},
 
+		/** Mirror toasts into the toolbar bell, or leave them transient.
+		 *  Not forwarded to notificationManager: this is about the visual list,
+		 *  not about audio. */
+		setToastsInBell(mirror: boolean): void {
+			setState("config", "toasts_in_bell", mirror);
+			saveConfig(state.config);
+		},
+
 		/** Enable/disable a specific sound */
 		setSoundEnabled(sound: NotificationSound, enabled: boolean): void {
 			setState("config", "sounds", sound, enabled);

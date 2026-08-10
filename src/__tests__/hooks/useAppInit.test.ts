@@ -155,16 +155,14 @@ describe("initApp", () => {
 	it("preserves an explicitly customized surviving session name", async () => {
 		const deps = createMockDeps({
 			pty: {
-				listActiveSessions: vi
-					.fn()
-					.mockResolvedValue([
-						{
-							session_id: "sess-named",
-							cwd: "/repo",
-							display_name: "linux-primary",
-							display_name_is_custom: true,
-						},
-					]),
+				listActiveSessions: vi.fn().mockResolvedValue([
+					{
+						session_id: "sess-named",
+						cwd: "/repo",
+						display_name: "linux-primary",
+						display_name_is_custom: true,
+					},
+				]),
 				close: vi.fn().mockResolvedValue(undefined),
 			},
 		});
@@ -216,10 +214,10 @@ describe("initApp", () => {
 			perAgentEnabled: true,
 		});
 		expect(mockRpc).toHaveBeenCalledWith("set_session_name", {
-				sessionId: "remote-agent",
-				name: intentTitle,
-				isCustom: false,
-			});
+			sessionId: "remote-agent",
+			name: intentTitle,
+			isCustom: false,
+		});
 
 		activeSessions = [{ ...activeSessions[0], display_name: intentTitle }];
 		terminalsStore.remove(terminal!.id);

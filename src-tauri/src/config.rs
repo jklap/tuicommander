@@ -848,6 +848,11 @@ pub(crate) struct NotificationConfig {
     /// OS notification) are unaffected.
     #[serde(default = "default_true")]
     pub(crate) silence_remote_completions: bool,
+    /// Mirror every toast into the toolbar bell, so a message that auto-dismissed
+    /// while the user looked elsewhere is still readable afterwards. Off means
+    /// toasts stay transient — they appear, they fade, they leave no trace.
+    #[serde(default = "default_true")]
+    pub(crate) toasts_in_bell: bool,
 }
 
 fn default_true() -> bool {
@@ -866,6 +871,7 @@ impl Default for NotificationConfig {
             sounds: NotificationSounds::default(),
             audio_device: None,
             silence_remote_completions: true,
+            toasts_in_bell: true,
         }
     }
 }
@@ -3152,6 +3158,7 @@ mod tests {
             },
             audio_device: Some("Test Speaker".to_string()),
             silence_remote_completions: true,
+            toasts_in_bell: false,
         };
         let loaded: NotificationConfig = round_trip_in_dir(dir.path(), "notifications.json", &cfg);
         assert!(!loaded.enabled);
@@ -3161,6 +3168,20 @@ mod tests {
         assert!(!loaded.sounds.attention);
         assert_eq!(loaded.audio_device.as_deref(), Some("Test Speaker"));
         assert!(loaded.silence_remote_completions);
+        assert!(!loaded.toasts_in_bell);
+    }
+
+    /// A user who never saw the setting keeps the mirroring, so nothing a toast
+    /// said is lost. An explicit opt-out survives the round trip.
+    #[test]
+    fn toasts_in_bell_defaults_on() {
+        assert!(NotificationConfig::default().toasts_in_bell);
+        let legacy: NotificationConfig =
+            serde_json::from_str(r#"{"enabled":true,"volume":0.5}"#).unwrap();
+        assert!(legacy.toasts_in_bell);
+        let opted_out: NotificationConfig =
+            serde_json::from_str(r#"{"toasts_in_bell":false}"#).unwrap();
+        assert!(!opted_out.toasts_in_bell);
     }
 
     /// Orchestrations spawn many workers; a chime per finished worker is noise, so

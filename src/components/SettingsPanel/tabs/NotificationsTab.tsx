@@ -257,6 +257,26 @@ export const NotificationsTab: Component = () => {
 					</button>
 				</div>
 			</Show>
+
+			{/* Outside the audio Show on purpose — the bell is visual, so the setting
+			    must stay reachable on a machine with no audio output. */}
+			<div class={s.group}>
+				<label>{t("notifications.label.toolbarBell", "Toolbar Bell")}</label>
+				<div class={s.toggle}>
+					<input
+						type="checkbox"
+						checked={notificationsStore.state.config.toasts_in_bell}
+						onChange={(e) => notificationsStore.setToastsInBell(e.currentTarget.checked)}
+					/>
+					<span>{t("notifications.toggle.toastsInBell", "Keep toasts in the bell")}</span>
+				</div>
+				<p class={s.hint} style={{ "margin-top": "6px" }}>
+					{t(
+						"notifications.hint.toastsInBell",
+						"Toasts fade on their own, often while you look at another window. Mirroring them into the bell keeps them readable afterwards. Turn this off to leave toasts transient.",
+					)}
+				</p>
+			</div>
 		</div>
 	);
 };

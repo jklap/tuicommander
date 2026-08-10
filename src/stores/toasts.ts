@@ -1,4 +1,6 @@
 import { createStore } from "solid-js/store";
+import { activityStore } from "./activityStore";
+import { notificationsStore } from "./notifications";
 
 export interface Toast {
 	id: number;
@@ -81,6 +83,37 @@ function playSound(level: "info" | "warn" | "error"): void {
 	}
 }
 
+/** Activity section that collects the mirrored toasts in the toolbar bell.
+ *  Registered in App.tsx next to the other built-in sections. */
+export const TOAST_ACTIVITY_SECTION_ID = "messages";
+
+/** Bell icon per level. Compile-time constants — ActivityItem.icon is rendered
+ *  via innerHTML and must never carry a runtime-built string. */
+const LEVEL_ICONS: Record<Toast["level"], string> = {
+	info: '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm0 3.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2zM6.75 7h1.5a.75.75 0 0 1 .75.75v3.5h.75a.75.75 0 0 1 0 1.5h-3a.75.75 0 0 1 0-1.5h.75V8.5h-.75a.75.75 0 0 1 0-1.5z"/></svg>',
+	warn: '<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8.87 1.5a1 1 0 0 0-1.74 0L.36 13.25A1 1 0 0 0 1.23 14.75h13.54a1 1 0 0 0 .87-1.5zM8 5.25a.75.75 0 0 1 .75.75v3a.75.75 0 0 1-1.5 0V6a.75.75 0 0 1 .75-.75zm0 5.5a1 1 0 1 1 0 2 1 1 0 0 1 0-2z"/></svg>',
+	error:
+		'<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor"><path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.36 10.3a.75.75 0 0 1-1.06 1.06L8 9.06l-2.3 2.3a.75.75 0 0 1-1.06-1.06L6.94 8 4.64 5.7a.75.75 0 0 1 1.06-1.06L8 6.94l2.3-2.3a.75.75 0 0 1 1.06 1.06L9.06 8l2.3 2.3z"/></svg>',
+};
+
+/** A toast auto-dismisses, often while the user is looking at another window, so
+ *  the message is gone before it is read. Mirroring it into the bell keeps it
+ *  readable afterwards. Opt out with the "Keep toasts in the bell" setting. */
+function mirrorToBell(toast: Toast): void {
+	if (!notificationsStore.state.config.toasts_in_bell) return;
+	activityStore.addItem({
+		id: `toast-${toast.id}`,
+		pluginId: "core",
+		sectionId: TOAST_ACTIVITY_SECTION_ID,
+		title: toast.title,
+		subtitle: toast.message || undefined,
+		icon: LEVEL_ICONS[toast.level],
+		severity: toast.level,
+		dismissible: true,
+		onClick: toast.action?.onClick,
+	});
+}
+
 function createToastsStore() {
 	const [state, setState] = createStore<{ toasts: Toast[] }>({ toasts: [] });
 	const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>();
@@ -101,6 +134,7 @@ function createToastsStore() {
 			const id = nextId++;
 			const toast: Toast = { id, title, message, level, createdAt: Date.now(), action };
 			setState("toasts", (prev) => [...prev, toast]);
+			mirrorToBell(toast);
 			if (sound) playSound(level);
 			// A non-positive duration means "sticky" — no auto-dismiss timer, so the
 			// toast stays until the user clicks it away.

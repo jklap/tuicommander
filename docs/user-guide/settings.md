@@ -190,6 +190,7 @@ User-specific settings (`promptOnCreate`, `autoFetchIntervalMinutes`) are intent
 - **Test buttons** — Test each sound individually. The Test button bypasses the anti-spam rate limit, so rapid A/B volume comparisons always play.
 - **Silence orchestration completions** — Remote HTTP/MCP workers still appear in Activity and update their tab state, but do not play a completion chime. The remote classification survives frontend reloads, and each busy cycle can notify at most once even when idle and process exit arrive separately.
 - **Reset to Defaults** — Restore default notification settings
+- **Keep toasts in the bell** — Each toast is also written to a **MESSAGES** section in the toolbar bell, so a message that faded while you looked at another window stays readable afterwards. The bell entry keeps the toast level (info / warning / error) and its action, if it had one. Turn this off to leave toasts transient. This setting is outside the audio block: the bell is visual, so it stays reachable on a machine with no audio output.
 
 **Attention** is the distinct call-back-to-keyboard sound available to agent
 toasts. Native playback and the browser fallback share a triangular G4→G4→E5

@@ -29,6 +29,9 @@ export interface NotificationConfig {
 	 *  `agent spawn`) — an orchestration of many agents otherwise beeps per worker.
 	 *  Visual signals (activity item, badge, OS notification) are unaffected. */
 	silence_remote_completions: boolean;
+	/** Mirror every toast into the toolbar bell, so a message that auto-dismissed
+	 *  while the user looked elsewhere is still readable afterwards. */
+	toasts_in_bell: boolean;
 }
 
 /** Default notification configuration */
@@ -45,6 +48,7 @@ export const DEFAULT_NOTIFICATION_CONFIG: NotificationConfig = {
 	},
 	audio_device: null,
 	silence_remote_completions: true,
+	toasts_in_bell: true,
 };
 
 /** Notification manager — delegates audio playback to Rust via Tauri IPC.
