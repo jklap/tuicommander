@@ -52,7 +52,6 @@
     "@tauri-apps/cli": "^2.11.4",
     "@testing-library/jest-dom": "^6.9.1",
     "@types/qrcode": "^1.5.6",
-    "@typescript/typescript6": "^6.0.2",
     "@vitest/coverage-v8": "^4.1.10",
     "happy-dom": "20.11.0",
     "jsdom": "^30.0.1",
@@ -61,7 +60,7 @@
     "rollup-plugin-visualizer": "^7.0.1",
     "typescript": "~7.0.2",
     "vite": "^8.1.5",
-    "vite-plugin-checker": "^0.14.4",
+    "vite-plugin-checker": "^0.14.5",
     "vite-plugin-purgecss": "^0.2.13",
     "vite-plugin-solid": "^2.11.13",
     "vitest": "^4.1.10"
