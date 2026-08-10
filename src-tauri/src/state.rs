@@ -2990,6 +2990,16 @@ impl AppState {
                                     }
                                 }
                             }
+                            "question-cleared" => {
+                                // The silence timer saw the question leave the
+                                // screen. It only fires for the heuristic state,
+                                // but re-check here: a confident question may
+                                // have landed between the check and this event.
+                                if !s.question_confident {
+                                    s.awaiting_input = false;
+                                    s.question_text = None;
+                                }
+                            }
                             "user-input" => {
                                 // User responded — agent will start working
                                 s.awaiting_input = false;
@@ -6493,6 +6503,56 @@ mod tests {
             !s2.awaiting_input,
             "user-input clears the confident question"
         );
+    }
+
+    /// The bug this arm exists for: a heuristic question answered with a bare
+    /// Enter. No `user-input` (that needs a non-empty typed line), no
+    /// `status-line` (the agent went busy through a screen-movement signal), no
+    /// `choice-prompt` to resolve. Nothing cleared awaiting_input, so the tab
+    /// stayed badged "question" for the rest of the session.
+    #[test]
+    fn question_cleared_retracts_a_heuristic_question() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "Would you like to make the following edits?" }),
+            ),
+        );
+        let s = apply(
+            &state,
+            &make_parsed("question-cleared", serde_json::json!({})),
+        );
+        assert!(
+            !s.awaiting_input,
+            "question-cleared must retract the heuristic awaiting state"
+        );
+        assert!(s.question_text.is_none(), "and drop the stale prompt text");
+    }
+
+    /// grok repaints while it waits, so "not on screen right now" is not proof
+    /// that a confident prompt was answered. Retracting it here would drop a
+    /// real approval request — the same flicker the status-line arm guards.
+    #[test]
+    fn question_cleared_leaves_a_confident_question_alone() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "Run echo x", "confident": true }),
+            ),
+        );
+        let s = apply(
+            &state,
+            &make_parsed("question-cleared", serde_json::json!({})),
+        );
+        assert!(
+            s.awaiting_input,
+            "a confident question must survive question-cleared"
+        );
+        assert_eq!(s.question_text.as_deref(), Some("Run echo x"));
     }
 
     #[test]

@@ -21,6 +21,7 @@ import { safeUnlisten } from "../../utils/safeUnlisten";
 import { createSearchVisibility } from "../shared/SearchBar";
 import { handleAgentExitCompletion } from "./agentExitCompletion";
 import { getAwaitingInputSound } from "./awaitingInputSound";
+import { handleQuestionCleared } from "./awaitingRetraction";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
 import { focusIsInsideOwnInput } from "./focusGuards";
@@ -48,6 +49,7 @@ type ParsedEvent =
 	| { type: "status-line"; task_name: string; full_line: string; time_info: string | null; token_info: string | null }
 	| { type: "progress"; state: number; value: number }
 	| { type: "question"; prompt_text: string; confident: boolean }
+	| { type: "question-cleared" }
 	| { type: "usage-limit"; percentage: number; limit_type: string }
 	| { type: "usage-exhausted"; reset_time: string | null }
 	| { type: "plan-file"; path: string }
@@ -344,6 +346,11 @@ export const Terminal: Component<TerminalProps> = (props) => {
 						break;
 					}
 					terminalsStore.setAwaitingInput(props.id, "question", !!parsed.confident);
+					break;
+				}
+				case "question-cleared": {
+					// The question left the screen without an answer we could see.
+					handleQuestionCleared(props.id);
 					break;
 				}
 				case "usage-limit": {

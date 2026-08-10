@@ -37,6 +37,17 @@ pub enum ParsedEvent {
         /// Desktop uses this to skip the "busy = false positive" guard on confident questions.
         confident: bool,
     },
+    /// A low-confidence question left the screen without being answered through
+    /// a channel that clears it (typed line, choice-prompt key, status line).
+    /// Emitted by the silence timer in pty.rs, not by the parser.
+    ///
+    /// Without it `awaiting_input` survives the rest of the turn: an agent that
+    /// answers its own prompt, or a user who picks an option with a bare Enter,
+    /// produces no `UserInput`, and an agent whose spinner is not parsed as a
+    /// status line produces no clear either. The session then reports "question"
+    /// with the prompt long gone from the screen.
+    #[serde(rename = "question-cleared")]
+    QuestionCleared,
     /// Claude Code usage limit: "You've used X% of your weekly/session limit"
     #[serde(rename = "usage-limit")]
     UsageLimit {

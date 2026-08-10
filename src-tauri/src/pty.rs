@@ -3491,6 +3491,7 @@ fn spawn_silence_timer(
                         );
                         if !on_screen {
                             silence.lock().clear_stale_question();
+                            emit_question_cleared_if_stale(&state, &session_id);
                             continue;
                         }
                         text.clone()
@@ -3500,6 +3501,7 @@ fn spawn_silence_timer(
                             session_id = %session_id,
                             "silence_timer: silent but no question candidate"
                         );
+                        emit_question_cleared_if_stale(&state, &session_id);
                         continue;
                     }
                 }
@@ -3536,6 +3538,45 @@ fn spawn_silence_timer(
             }
         }
     });
+}
+
+/// Retract a low-confidence `awaiting_input` once the screen is quiet and no
+/// question is visible any more.
+///
+/// The three existing clears all need an event that may never arrive: a typed
+/// non-empty line (`UserInput`), a choice-prompt key (`resolve_choice_prompt_input`),
+/// or a parsed `status-line`. A user who answers an approval dialog with a bare
+/// Enter, or an agent whose spinner never parses as a status line, produces
+/// none of them — the badge then reads "question" for the rest of the session
+/// with the prompt long gone from the screen.
+///
+/// Only the heuristic (`confident == false`) state is retracted. A confident
+/// question stays sticky on purpose: grok keeps repainting while it waits, so
+/// "not on screen right now" is not proof that it was answered. A live
+/// `choice_prompt` owns its own resolution and is left alone.
+fn emit_question_cleared_if_stale(state: &Arc<AppState>, session_id: &str) {
+    let stale = state
+        .session_states
+        .get(session_id)
+        .is_some_and(|s| s.awaiting_input && !s.question_confident && s.choice_prompt.is_none());
+    if !stale {
+        return;
+    }
+    tracing::debug!(
+        session_id = %session_id,
+        "silence_timer: retracting stale awaiting_input (no question on screen)"
+    );
+    let parsed = ParsedEvent::QuestionCleared;
+    if let Ok(json) = serde_json::to_value(&parsed) {
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
+        }
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: json,
+        });
+    }
 }
 
 /// Publish the explicit end-of-task marker only after the shell has settled.
@@ -18978,6 +19019,194 @@ mod tests {
                 "generic notification became awaiting with hook_instrumented={hook}: {events:?}"
             );
         }
+    }
+
+    // --- Awaiting RETRACTION -----------------------------------------------
+    //
+    // Why the fixtures above could not catch the stuck "question" badge: they
+    // replay bytes through the PARSERS and assert which events come out. The
+    // badge is not an event, it is `SessionState.awaiting_input` — and this
+    // failure was the ABSENCE of any event, so no capture can express it. The
+    // tests below close that gap by driving the real accumulator instead of
+    // the parser output: they assert the state a tab actually renders.
+
+    /// Wait for the event-bus accumulator to apply what we emitted. Polls
+    /// rather than sleeping a fixed amount so it neither flakes nor stalls.
+    async fn await_session<F: Fn(&crate::state::SessionState) -> bool>(
+        state: &Arc<AppState>,
+        session_id: &str,
+        pred: F,
+    ) -> bool {
+        for _ in 0..200 {
+            if state
+                .session_states
+                .get(session_id)
+                .is_some_and(|s| pred(&s))
+            {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        false
+    }
+
+    fn accumulating_state(session_id: &str) -> Arc<AppState> {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.session_states.insert(
+            session_id.to_string(),
+            crate::state::SessionState::default(),
+        );
+        crate::state::AppState::spawn_session_state_accumulator(state.clone());
+        state
+    }
+
+    fn heuristic_question(session_id: &str, prompt: &str) -> crate::state::AppEvent {
+        crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: serde_json::json!({
+                "type": "question",
+                "prompt_text": prompt,
+                "confident": false,
+            }),
+        }
+    }
+
+    /// Regression, observed 2026-08-10 on a live codex tab: the turn had
+    /// finished, the approval dialog was long gone, and the tab still read
+    /// "question".
+    ///
+    /// The sequence, end to end: codex prints "Would you like to make the
+    /// following edits?", the silence heuristic verifies it on screen and emits
+    /// a low-confidence Question, Boss answers with a bare Enter. That Enter
+    /// produces no `user-input` (that arm needs a non-empty typed line), codex
+    /// goes busy through screen movement rather than a parsed `status-line`,
+    /// and no `choice-prompt` was ever set to resolve. Every existing clear
+    /// needs an event that never arrives — so the badge latched.
+    #[tokio::test(flavor = "current_thread", start_paused = false)]
+    async fn stale_heuristic_awaiting_is_retracted_when_the_prompt_leaves_the_screen() {
+        use crate::state::VtLogBuffer;
+
+        let question = "Would you like to make the following edits?";
+        let mut vt = VtLogBuffer::new(41, 128, 2000);
+        vt.process(format!("\x1b[2J\x1b[H{question}\r\n").as_bytes());
+        assert!(
+            verify_question_on_screen(&vt.screen_rows(), question, SCREEN_VERIFY_ROWS),
+            "precondition: the prompt is on screen, so the heuristic fires"
+        );
+
+        let state = accumulating_state("s1");
+        state.emit_pty_event(heuristic_question("s1", question));
+        assert!(
+            await_session(&state, "s1", |s| s.awaiting_input).await,
+            "the low-confidence question must badge the tab"
+        );
+
+        // Bare Enter: codex repaints the finished turn, prompt gone.
+        vt.process(b"\x1b[2J\x1b[HDone. 2 files changed.\r\n");
+        assert!(
+            !verify_question_on_screen(&vt.screen_rows(), question, SCREEN_VERIFY_ROWS),
+            "the prompt must be gone — this is the branch that retracts"
+        );
+
+        emit_question_cleared_if_stale(&state, "s1");
+        assert!(
+            await_session(&state, "s1", |s| !s.awaiting_input
+                && s.question_text.is_none())
+            .await,
+            "the badge must drop once the question left the screen"
+        );
+    }
+
+    /// grok repaints while it waits, so "not on screen this tick" is not proof
+    /// that a confident prompt was answered. Retracting it would drop a real
+    /// approval request — the same reason the status-line arm keeps it sticky.
+    #[tokio::test(flavor = "current_thread")]
+    async fn confident_awaiting_is_never_retracted() {
+        let state = accumulating_state("s1");
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: "s1".to_string(),
+            parsed: serde_json::json!({
+                "type": "question",
+                "prompt_text": "Run echo x",
+                "confident": true,
+            }),
+        });
+        assert!(await_session(&state, "s1", |s| s.awaiting_input).await);
+
+        emit_question_cleared_if_stale(&state, "s1");
+        assert!(
+            !await_session(&state, "s1", |s| !s.awaiting_input).await,
+            "a confident question must survive the retraction"
+        );
+    }
+
+    /// A live choice prompt owns its own resolution (`resolve_choice_prompt_input`
+    /// fires on the option keypress). Retracting under it would clear the badge
+    /// while the dialog is still on screen waiting for a key.
+    #[test]
+    fn retraction_skips_a_session_with_a_live_choice_prompt() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let mut session = crate::state::SessionState {
+            awaiting_input: true,
+            question_confident: false,
+            ..Default::default()
+        };
+        session.choice_prompt = Some(crate::output_parser::ChoicePromptPayload {
+            title: "Which approach should I use?".to_string(),
+            options: vec![],
+            dismiss_key: None,
+            amend_key: None,
+        });
+        state.session_states.insert("s1".to_string(), session);
+
+        let mut rx = state.event_bus.subscribe();
+        emit_question_cleared_if_stale(&state, "s1");
+        assert!(
+            rx.try_recv().is_err(),
+            "no retraction may be emitted while a choice prompt is live"
+        );
+    }
+
+    /// The producer (here) and the consumer (state.rs) agree on one wire name.
+    /// A rename on either side would silently disable the retraction, which is
+    /// exactly the failure mode this whole path exists to prevent.
+    #[test]
+    fn retraction_is_emitted_as_question_cleared() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.session_states.insert(
+            "s1".to_string(),
+            crate::state::SessionState {
+                awaiting_input: true,
+                question_confident: false,
+                ..Default::default()
+            },
+        );
+
+        let mut rx = state.event_bus.subscribe();
+        emit_question_cleared_if_stale(&state, "s1");
+        match rx.try_recv() {
+            Ok(crate::state::AppEvent::PtyParsed { parsed, .. }) => {
+                assert_eq!(
+                    parsed.get("type").and_then(|t| t.as_str()),
+                    Some("question-cleared")
+                );
+            }
+            other => panic!("expected a PtyParsed retraction, got {other:?}"),
+        }
+    }
+
+    /// Nothing to retract must stay silent — an idle session emitting a clear
+    /// on every silence tick would flood the bus and every WS client with it.
+    #[test]
+    fn retraction_is_silent_when_the_session_is_not_awaiting() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state
+            .session_states
+            .insert("s1".to_string(), crate::state::SessionState::default());
+
+        let mut rx = state.event_bus.subscribe();
+        emit_question_cleared_if_stale(&state, "s1");
+        assert!(rx.try_recv().is_err(), "idle session must emit nothing");
     }
 
     #[test]

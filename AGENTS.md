@@ -228,6 +228,28 @@ through OSC 777 and nothing else. Prefer protocol signals over screen scraping,
 and parse them off the **raw** stream — the VT parser consumes escape sequences,
 so they never reach the clean rows.
 
+**Every signal that sets awaiting needs a path that clears it.** The badge is
+`SessionState.awaiting_input`, not an event, and it is sticky by construction —
+whatever sets it owns nothing until something retracts it. Four paths clear it,
+and three of them wait for an event that may never arrive:
+
+| Clear | Fires on | Misses when |
+|---|---|---|
+| `user-input` | a non-empty typed line | the answer is a bare Enter |
+| `status-line` | a parsed busy tick (low-confidence only) | busy is inferred from screen movement |
+| `resolve_choice_prompt_input` | an option keypress | no `choice_prompt` was ever set |
+| `question-cleared` | silence timer sees the question gone from the screen | — (the backstop; low-confidence only) |
+
+`question-cleared` is the backstop that catches the rest. It never touches a
+confident question: grok repaints while it waits, so "not on screen this tick"
+is not proof of an answer.
+
+**A latched badge cannot be reproduced by a `.raw` fixture.** Captures replay
+bytes through the parsers and assert which events come out; a state that never
+clears is the *absence* of an event. Regressions of that shape belong in the
+`Awaiting RETRACTION` block in `pty.rs` tests, which drives the real event-bus
+accumulator and asserts `SessionState` — the thing a tab actually renders.
+
 ## Frontend performance instrumentation (`perfDebug`)
 
 The frontend counterpart to backend Diagnostics. **One master flag gates ALL frontend perf/debug instrumentation** — `isPerfDebug()` from `src/utils/perfDebug.ts`.
