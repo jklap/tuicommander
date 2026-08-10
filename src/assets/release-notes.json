@@ -167,5 +167,18 @@
       "Managed Codex peers now inherit TUIC_SESSION through the MCP entry, so their first agent send works without manual registration"
     ],
     "date": "2026-08-06"
+  },
+  "1.7.3": {
+    "highlights": [
+      "Queue follow-up commands with Shift+Ctrl+Enter — they run at the next idle window instead of interrupting the agent.",
+      "Toasts are now mirrored into a Messages section in the toolbar bell, so you can read them after they fade.",
+      "Agents can request a distinct Attention sound on MCP toasts, on both desktop and browser clients.",
+      "Cleaning up a merged worktree now confirms before discarding uncommitted work, and archiving really keeps the files.",
+      "A tab no longer stays badged \"question\" after you answer with a bare Enter or after a generic notification.",
+      "MCP bridge config is written only for agents you actually have installed, and unparsable configs are never overwritten.",
+      "agent detect now reports every agent TUIC can launch, and only the ones present on your machine.",
+      "Re-authorizing an HTTP MCP upstream takes effect on the next attempt, and Manage in Settings lands on the MCP block."
+    ],
+    "date": "2026-08-10"
   }
 }
