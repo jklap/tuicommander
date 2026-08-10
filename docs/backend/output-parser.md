@@ -101,6 +101,27 @@ event. Plan and skill pickers can instead be represented only by a qualifying
 OSC 777 notification, so raw-stream events bypass the heuristic-question
 suppression used for hook-instrumented sessions.
 
+### QuestionCleared
+
+The retraction of a low-confidence `Question`. It carries no payload:
+
+```rust
+ParsedEvent::QuestionCleared  // wire type: "question-cleared"
+```
+
+Emitted by the silence timer in `pty.rs`, never by a parser: it means "the
+screen is quiet and the tracked question is no longer on it". Without it, a
+heuristic question answered with a bare Enter stays badged forever — that reply
+produces no `user-input` (which needs a non-empty typed line), an agent that
+goes busy through screen movement produces no `status-line`, and a prompt that
+never parsed as a `ChoicePrompt` has nothing to resolve.
+
+`emit_question_cleared_if_stale()` fires only when `awaiting_input &&
+!question_confident && choice_prompt.is_none()`, and the `state.rs` arm
+re-checks `question_confident` before clearing. Confident questions stay sticky
+on purpose: grok repaints while it waits, so absence from the current screen is
+not proof that it was answered.
+
 ### Raw Capture Regression Fixtures
 
 Agent-state failures must be captured from the raw PTY stream before analysis.
@@ -110,6 +131,11 @@ copy the reported `<config dir>/captures/<session-id>.raw` file into
 source: it is a rendered, bounded ring snapshot and can lose one-shot escape
 sequences. Fixtures replay the raw parser, rendered-row parser, and hook
 suppression in the same composition used by the production reader thread.
+
+Fixtures assert which events a byte stream produces, so they cannot express a
+failure whose symptom is a **missing** event — a badge that never clears. Those
+regressions go in the `Awaiting RETRACTION` test block in `pty.rs`, which drives
+the event-bus accumulator and asserts `SessionState` directly.
 
 ### ApiError
 
