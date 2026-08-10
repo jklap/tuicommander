@@ -424,7 +424,9 @@
 
 .activityItem {
   display: flex;
-  align-items: center;
+  /* flex-start, not center: with a wrapping subtitle the row grows, and a
+     centred icon and dismiss button would drift to the middle of the block. */
+  align-items: flex-start;
   gap: 8px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
@@ -473,12 +475,14 @@
   white-space: nowrap;
 }
 
+/* Wraps instead of truncating: a mirrored toast carries the whole message here,
+   and a message cut at one line is the thing the bell exists to prevent. Short
+   subtitles are unaffected — they already fit on one line. `anywhere` keeps a
+   long unbroken token (a path, a URL) inside the popover. */
 .activityItemSubtitle {
   font-size: var(--font-xs);
   color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .activityItemDismiss {

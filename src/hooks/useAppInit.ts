@@ -656,9 +656,7 @@ export async function initApp(deps: AppInitDeps) {
 			terminalsStore.update(id, {
 				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
 				...(session.is_remote !== undefined ? { isRemote: session.is_remote } : {}),
-				...(session.display_name_is_custom !== undefined
-					? { nameIsCustom: session.display_name_is_custom }
-					: {}),
+				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
 				agentState: session.state?.agent_state ?? null,
 				backgroundWork: session.state?.background_work ?? false,
 			});

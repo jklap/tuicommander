@@ -137,3 +137,92 @@ describe("toastsStore", () => {
 		});
 	});
 });
+
+/** A toast fades on its own, usually while the user looks somewhere else. The
+ *  mirror is what makes the message readable afterwards, so what matters here is
+ *  that the bell item outlives the toast — and that the opt-out really opts out. */
+describe("toastsStore — mirroring into the bell", () => {
+	let toastsStore: typeof import("../../stores/toasts").toastsStore;
+	let sectionId: string;
+	let durations: typeof import("../../stores/toasts").DEFAULT_DURATION_MS;
+	let activityStore: typeof import("../../stores/activityStore").activityStore;
+	let notificationsStore: typeof import("../../stores/notifications").notificationsStore;
+
+	beforeEach(async () => {
+		vi.useFakeTimers();
+		vi.resetModules();
+		const mod = await import("../../stores/toasts");
+		toastsStore = mod.toastsStore;
+		sectionId = mod.TOAST_ACTIVITY_SECTION_ID;
+		durations = mod.DEFAULT_DURATION_MS;
+		activityStore = (await import("../../stores/activityStore")).activityStore;
+		notificationsStore = (await import("../../stores/notifications")).notificationsStore;
+		activityStore.clearAll();
+		notificationsStore.setToastsInBell(true);
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("mirrors a toast into the messages section", () => {
+		testInScope(() => {
+			toastsStore.add("Branch deleted", 'Removed "feature/x"');
+			const items = activityStore.getForSection(sectionId);
+			expect(items).toHaveLength(1);
+			expect(items[0]).toMatchObject({
+				title: "Branch deleted",
+				subtitle: 'Removed "feature/x"',
+				severity: "info",
+				dismissible: true,
+			});
+		});
+	});
+
+	it("keeps the bell item after the toast auto-dismisses", () => {
+		testInScope(() => {
+			toastsStore.add("Gone in a flash");
+			vi.advanceTimersByTime(durations.info + 1);
+			expect(toastsStore.toasts).toHaveLength(0);
+			expect(activityStore.getForSection(sectionId)).toHaveLength(1);
+		});
+	});
+
+	it("carries the toast level through as the item severity", () => {
+		testInScope(() => {
+			toastsStore.add("Careful", "", "warn");
+			toastsStore.add("Broke", "", "error");
+			const severities = activityStore.getForSection(sectionId).map((i) => i.severity);
+			expect(severities).toEqual(["warn", "error"]);
+		});
+	});
+
+	it("mirrors the toast action as the item click handler", () => {
+		testInScope(() => {
+			const onClick = vi.fn();
+			toastsStore.add("Update ready", "", "info", false, { label: "Install", onClick });
+			activityStore.getForSection(sectionId)[0].onClick?.();
+			expect(onClick).toHaveBeenCalledOnce();
+		});
+	});
+
+	it("leaves toasts transient when the setting is off", () => {
+		testInScope(() => {
+			notificationsStore.setToastsInBell(false);
+			toastsStore.add("Unmirrored", "nothing to see later");
+			expect(toastsStore.toasts).toHaveLength(1);
+			expect(activityStore.getForSection(sectionId)).toHaveLength(0);
+		});
+	});
+
+	it("resumes mirroring when the setting is turned back on", () => {
+		testInScope(() => {
+			notificationsStore.setToastsInBell(false);
+			toastsStore.add("Skipped");
+			notificationsStore.setToastsInBell(true);
+			toastsStore.add("Kept");
+			const titles = activityStore.getForSection(sectionId).map((i) => i.title);
+			expect(titles).toEqual(["Kept"]);
+		});
+	});
+});

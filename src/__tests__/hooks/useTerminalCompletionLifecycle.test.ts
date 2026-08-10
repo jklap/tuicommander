@@ -15,9 +15,9 @@ vi.mock("../../stores/appLogger", () => ({
 	appLogger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
 }));
 
+import { handleAgentExitCompletion } from "../../components/Terminal/agentExitCompletion";
 import { useIdleTriage } from "../../hooks/useIdleTriage";
 import { useTerminalCompletionNotifications } from "../../hooks/useTerminalCompletionNotifications";
-import { handleAgentExitCompletion } from "../../components/Terminal/agentExitCompletion";
 import { activityStore } from "../../stores/activityStore";
 import { aiTriageStore } from "../../stores/aiTriageStore";
 import { notificationsStore } from "../../stores/notifications";

@@ -104,6 +104,7 @@ import { repositoriesStore } from "./stores/repositories";
 import { settingsStore } from "./stores/settings";
 import { tasksStore } from "./stores/tasks";
 import { terminalsStore } from "./stores/terminals";
+import { TOAST_ACTIVITY_SECTION_ID } from "./stores/toasts";
 import { uiStore } from "./stores/ui";
 import { updaterStore } from "./stores/updater";
 import { userActivityStore } from "./stores/userActivity";
@@ -416,6 +417,12 @@ const App: Component = () => {
 
 	// Register built-in activity sections for git and worktree notifications
 	activityStore.registerSection({ id: "terminals", label: "TERMINALS", priority: 10, canDismissAll: true });
+	activityStore.registerSection({
+		id: TOAST_ACTIVITY_SECTION_ID,
+		label: "MESSAGES",
+		priority: 20,
+		canDismissAll: true,
+	});
 	activityStore.registerSection({ id: "git-ops", label: "GIT", priority: 30, canDismissAll: true });
 	activityStore.registerSection({ id: "worktrees", label: "WORKTREES", priority: 40, canDismissAll: true });
 
