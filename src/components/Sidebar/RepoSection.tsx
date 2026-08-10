@@ -808,7 +808,14 @@ export const RepoSection: Component<{
 						>
 							⋯
 						</button>
-						<Show when={props.repo.isGitRepo !== false}>
+						{/* Non-git repos have no worktrees, so the add button is absent. The
+						    fallback keeps its slot occupied — without it the whole trailing
+						    cluster (⋯ + chevron) would shift right and stop lining up with
+						    the git-repo headers above and below it. */}
+						<Show
+							when={props.repo.isGitRepo !== false}
+							fallback={<span class={cx(s.repoActionBtn, s.addBtn, s.repoActionSlot)} aria-hidden="true" />}
+						>
 							<button
 								class={cx(s.repoActionBtn, s.addBtn)}
 								disabled={props.isCreatingWorktree}
