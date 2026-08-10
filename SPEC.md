@@ -1,6 +1,6 @@
 # TUICommander Specification
 
-**Version:** 1.7.2
+**Version:** 1.7.3
 **Last Updated:** 2026-07-11
 
 ## Overview
