@@ -2934,12 +2934,16 @@ fn handle_agent_with_parent_cwd(
     };
     match action {
         "detect" => {
-            let known = ["claude", "codex", "aider", "goose"];
-            let results: Vec<serde_json::Value> = known
+            // Every agent TUIC can launch, not a hand-written subset — a new
+            // agent must not be invisible to an orchestrator. Undetected ones
+            // are dropped: `detect` answers "what can I spawn here", and a row
+            // of nulls is noise an orchestrator cannot act on.
+            let results: Vec<serde_json::Value> = crate::agent::KNOWN_AGENT_BINARIES
                 .iter()
-                .map(|name| {
+                .filter_map(|name| {
                     let det = crate::agent::detect_agent_binary(name.to_string());
-                    serde_json::json!({"name": name, "path": det.path, "version": det.version})
+                    det.path
+                        .map(|path| serde_json::json!({"name": name, "path": path, "version": det.version}))
                 })
                 .collect();
             serde_json::json!(results)
