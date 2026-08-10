@@ -389,16 +389,18 @@ export interface AgentsConfig {
 export const MCP_SUPPORT: Record<AgentType, boolean> = {
 	claude: true,
 	gemini: true,
-	opencode: false,
+	opencode: true,
 	aider: false,
 	codex: true,
 	amp: true,
 	cursor: true,
 	goose: true,
-	grok: false,
-	droid: false,
-	// pi deliberately ships no built-in MCP — it is an extension/package concern there.
-	pi: false,
+	grok: true,
+	droid: true,
+	// pi speaks MCP only through the pi-mcp-adapter extension. Launch-time
+	// auto-install waits for the adapter's ~/.pi/agent/mcp.json; Install here is
+	// explicit, so it writes the file.
+	pi: true,
 	git: false,
 	api: false,
 };
