@@ -175,6 +175,58 @@ Routing every writer through it also guarantees the file is produced by
 skipped the stripping step and wrote the session token, relay token and VAPID
 private key to disk in cleartext.
 
+### MCP Bridge Auto-Install
+
+On every launch `agent_mcp::ensure_mcp_configs` writes the `tuicommander` bridge
+entry into each supported agent's own MCP config, and repairs the path when the
+sidecar moves. Each target is written in the format its tool reads:
+
+| Agent | Config file | Shape |
+|---|---|---|
+| Claude Code | `~/.claude.json` | JSON `mcpServers` |
+| Cursor | `~/.cursor/mcp.json` | JSON `mcpServers` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` | JSON `mcpServers` |
+| VS Code | `<user dir>/mcp.json` | JSON `servers` |
+| Zed | `~/.config/zed/settings.json` | JSON `context_servers` |
+| Amp | `~/.config/amp/settings.json` | JSON `amp.mcpServers` |
+| Gemini CLI | `~/.gemini/settings.json` | JSON `mcpServers` |
+| Droid | `~/.factory/mcp.json` | JSON `mcpServers` |
+| opencode | `~/.config/opencode/opencode.json[c]` | JSON `mcp`, `{type:"local", command:[…]}` |
+| Codex | `~/.codex/config.toml` | TOML `[mcp_servers]` + `env_vars` allowlist |
+| Grok | `~/.grok/config.toml` | TOML `[mcp_servers]` |
+| goose | `~/.config/goose/config.yaml` | YAML `extensions` (`ExtensionEntry`) |
+| pi | `~/.pi/agent/mcp.json` | JSON `mcpServers` (pi-mcp-adapter extension) |
+
+Aider is absent because it has no MCP client.
+
+**A target is written only when it is installed.** The writer creates every
+missing parent directory, so an unconditional pass used to create `~/.cursor/`,
+`~/.gemini/`, `~/.config/amp/` and friends for tools the user never had —
+which makes *other* software report Cursor or Windsurf as installed. Presence is
+proven two ways, cheapest first:
+
+1. the config directory holds a file that is not the one we write (`.DS_Store`
+   and stale `*.tmp` staging files do not count), or
+2. one of the target's CLI binaries resolves via `cli::has_cli`.
+
+Claude's config sits in `$HOME`, so it uses `~/.claude` as its presence
+directory instead of the config file's parent. pi is stricter still: its MCP
+support comes from the optional pi-mcp-adapter extension, which owns
+`~/.pi/agent/mcp.json` — with no such file there is no adapter, so an
+auto-written entry would configure nothing.
+
+A target that already holds a `tuicommander` entry keeps getting path repairs
+even when presence no longer resolves, so a stale bridge path is never left
+behind. Both gates live in `auto_install_allowed`, which only the launch pass
+consults: Settings → Agents installs on demand through `ensure_spec_entry`
+directly, because pressing Install states that the target is there — that is an
+explicit request, not a guess.
+
+Configs that exist but do not parse are **never** overwritten (JSON, TOML and
+YAML alike): VS Code's `mcp.json` and opencode's config both allow comments,
+which `serde_json` rejects, and treating a parse failure as an empty document
+would replace the user's whole config with our single entry.
+
 ### Upstream MCP Config (`mcp-upstreams.json`)
 
 **Type:** `UpstreamMcpConfig`
@@ -205,6 +257,8 @@ work starts.
 | `sounds.error` | `bool` | `true` | Play on error |
 | `sounds.completion` | `bool` | `true` | Play on completion |
 | `sounds.warning` | `bool` | `true` | Play on warning |
+| `silence_remote_completions` | `bool` | `true` | Suppress the completion chime for HTTP/MCP-created sessions |
+| `toasts_in_bell` | `bool` | `true` | Mirror every toast into the toolbar bell, under a MESSAGES section |
 
 **Commands:** `load_notification_config()`, `save_notification_config(config)`
 

@@ -77,7 +77,7 @@ Token priority: `GH_TOKEN` env → `GITHUB_TOKEN` env → OAuth keyring → `gh`
 Enable the HTTP API server for external tool integration:
 - Serves the REST API and MCP protocol for AI agents and automation tools
 - Local MCP connections use a Unix domain socket at `<config_dir>/mcp.sock` — no port configuration needed
-- AI agents connect via the `tuic-bridge` sidecar (auto-installed on first launch for Claude Code, Cursor, Windsurf, VS Code, Zed, Amp, Gemini)
+- AI agents connect via the `tuic-bridge` sidecar (auto-installed on first launch for every supported agent that is installed on the machine — see [MCP bridge auto-install](../backend/config.md#mcp-bridge-auto-install))
 - Shows server status (running/stopped) and active session count
 
 ### TUIC Tools
