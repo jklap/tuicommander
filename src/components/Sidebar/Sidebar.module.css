@@ -266,6 +266,13 @@
   color: var(--text-on-accent);
 }
 
+/* Empty stand-in for an action button that does not apply to this repo.
+   Keeps the box (and its margins) in the flex row so the trailing icons
+   align across all repo headers. */
+.repoActionSlot {
+  visibility: hidden;
+}
+
 /* Collapsed repository state */
 .collapsed {
   transition: width 0.2s ease-in-out, padding 0.2s ease-in-out, opacity 0.2s ease-in-out;
