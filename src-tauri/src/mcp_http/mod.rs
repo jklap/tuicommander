@@ -3663,9 +3663,38 @@ mod tests {
         let state = test_state();
         let result = call_mcp_tool(&state, "agent", serde_json::json!({"action": "detect"})).await;
         let agents = result.as_array().unwrap();
-        assert_eq!(agents.len(), 4, "Should detect 4 known agents");
-        let names: Vec<&str> = agents.iter().map(|a| a["name"].as_str().unwrap()).collect();
-        assert!(names.contains(&"claude"));
+
+        // The set is KNOWN_AGENT_BINARIES, never a hand-written subset: this
+        // test used to assert a hardcoded 4, which is exactly what let the
+        // handler drift and hide gemini, grok, opencode, amp, cursor and pi
+        // from every orchestrator.
+        for agent in agents {
+            let name = agent["name"].as_str().unwrap();
+            assert!(
+                crate::agent::KNOWN_AGENT_BINARIES.contains(&name),
+                "{name} is not a known agent binary"
+            );
+            // Only installed agents — a null path is a row an orchestrator
+            // cannot act on.
+            assert!(
+                agent["path"].as_str().is_some_and(|p| !p.is_empty()),
+                "{name} reported without a path"
+            );
+        }
+
+        // Whatever is installed on this machine must be reported; the reverse
+        // (asserting a fixed list) would fail on a machine without them.
+        for binary in crate::agent::KNOWN_AGENT_BINARIES {
+            if crate::agent::detect_agent_binary(binary.to_string())
+                .path
+                .is_some()
+            {
+                assert!(
+                    agents.iter().any(|a| a["name"].as_str() == Some(binary)),
+                    "{binary} is installed but detect did not report it"
+                );
+            }
+        }
     }
 
     #[tokio::test]
