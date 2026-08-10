@@ -9,8 +9,6 @@ import { Features } from "lightningcss";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
-const typescriptWatchApi = import.meta.resolve("@typescript/typescript6");
-
 // Read app version from tauri.conf.json
 const tauriConf = JSON.parse(readFileSync("./src-tauri/tauri.conf.json", "utf-8"));
 
@@ -51,10 +49,9 @@ export default defineConfig(async ({ command }) => ({
       ? [
           devServerIdentity(),
           checker({
-            // TypeScript 7 intentionally ships without the JavaScript compiler
-            // API. Keep the native TS7 CLI for builds and use Microsoft's TS6
-            // compatibility package for the checker's watch API.
-            typescript: { typescriptPath: typescriptWatchApi },
+            // vite-plugin-checker 0.14.5+ detects TypeScript 7 and runs its
+            // native CLI because TS7 no longer exposes the JavaScript compiler API.
+            typescript: true,
           }),
         ]
       : []),
