@@ -97,3 +97,4 @@ PR.md
 # Python bytecode from the terminal-stress harness
 __pycache__/
 *.pyc
+.wiz/
