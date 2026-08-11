@@ -8,6 +8,7 @@
 //! and translates tmux commands to TUIC equivalents.
 
 mod ipc;
+mod mcp;
 
 use clap::{Parser, Subcommand};
 
@@ -154,11 +155,24 @@ enum AgentAction {
     },
     /// List running agents
     Ls,
-    /// Send a message to an agent
+    /// Send a message to a registered peer's inbox (peer registry, not the PTY).
+    ///
+    /// To type a prompt into an agent's terminal instead, use `tuic agent type`.
     Send {
-        /// Agent session ID
+        /// Recipient peer's tuic_session UUID
         target: String,
         /// Message text
+        message: String,
+    },
+    /// Type a prompt into an agent's PTY and submit it (no peer routing).
+    ///
+    /// Unlike `tuic send`, this uses the agent-safe framing: the text and the
+    /// Enter go in separate PTY writes, because a raw-mode Ink TUI treats a
+    /// combined `text\r` as a prefill and leaves it unsent.
+    Type {
+        /// Agent session ID or name
+        target: String,
+        /// Prompt text
         message: String,
     },
 }
@@ -589,6 +603,15 @@ fn cmd_agent(action: AgentAction) -> Result<(), String> {
             }
         }
         AgentAction::Send { target, message } => {
+            // Peer routing only — deliberately NOT resolve_session_id. That
+            // resolves PTYs, and a registered external orchestrator has no PTY,
+            // so routing through it answered "Session not found" while the MCP
+            // tool delivered the same UUID fine. PTY text injection stays
+            // available, and explicit, as `tuic send` / `tuic send-keys`.
+            let report = mcp::agent_send(&target, &message)?;
+            println!("{}", mcp::delivery_line(&target, &report));
+        }
+        AgentAction::Type { target, message } => {
             let id = resolve_session_id(&target)?;
             let (payload, enter) = agent_send_parts(&message);
             let body = serde_json::json!({ "data": payload });

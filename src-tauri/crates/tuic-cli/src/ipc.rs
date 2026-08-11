@@ -54,6 +54,10 @@ fn connect() -> io::Result<std::fs::File> {
 pub struct Response {
     pub status: u16,
     pub body: String,
+    /// Response headers, names lowercased. Needed for `Mcp-Session-Id`, which
+    /// carries the MCP session across the separate `Connection: close`
+    /// connections this client opens per request.
+    pub headers: Vec<(String, String)>,
 }
 
 impl Response {
@@ -64,10 +68,29 @@ impl Response {
     pub fn is_success(&self) -> bool {
         (200..300).contains(&self.status)
     }
+
+    /// Case-insensitive header lookup.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        let needle = name.to_ascii_lowercase();
+        self.headers
+            .iter()
+            .find(|(k, _)| *k == needle)
+            .map(|(_, v)| v.as_str())
+    }
 }
 
 /// Send an HTTP request over the IPC socket and return the response.
 pub fn request(method: &str, path: &str, body: Option<&str>) -> io::Result<Response> {
+    request_with_headers(method, path, body, &[])
+}
+
+/// Same as [`request`], with caller-supplied extra request headers.
+pub fn request_with_headers(
+    method: &str,
+    path: &str,
+    body: Option<&str>,
+    extra_headers: &[(&str, &str)],
+) -> io::Result<Response> {
     let mut stream = connect()?;
     #[cfg(unix)]
     {
@@ -77,10 +100,15 @@ pub fn request(method: &str, path: &str, body: Option<&str>) -> io::Result<Respo
     }
 
     let content = body.unwrap_or("");
+    let mut extra = String::new();
+    for (name, value) in extra_headers {
+        extra.push_str(&format!("{name}: {value}\r\n"));
+    }
     let req = if content.is_empty() {
         format!(
             "{method} {path} HTTP/1.1\r\n\
              Host: localhost\r\n\
+             {extra}\
              Connection: close\r\n\
              \r\n"
         )
@@ -90,6 +118,7 @@ pub fn request(method: &str, path: &str, body: Option<&str>) -> io::Result<Respo
              Host: localhost\r\n\
              Content-Type: application/json\r\n\
              Content-Length: {}\r\n\
+             {extra}\
              Connection: close\r\n\
              \r\n\
              {content}",
@@ -114,6 +143,7 @@ pub fn request(method: &str, path: &str, body: Option<&str>) -> io::Result<Respo
     // Parse headers
     let mut content_length: Option<usize> = None;
     let mut chunked = false;
+    let mut headers: Vec<(String, String)> = Vec::new();
     loop {
         let mut line = String::new();
         reader.read_line(&mut line)?;
@@ -126,6 +156,10 @@ pub fn request(method: &str, path: &str, body: Option<&str>) -> io::Result<Respo
         }
         if lower.contains("transfer-encoding") && lower.contains("chunked") {
             chunked = true;
+        }
+        // Keep the raw value: only the name is case-insensitive.
+        if let Some((name, value)) = line.split_once(':') {
+            headers.push((name.trim().to_ascii_lowercase(), value.trim().to_string()));
         }
     }
 
@@ -142,7 +176,11 @@ pub fn request(method: &str, path: &str, body: Option<&str>) -> io::Result<Respo
         buf
     };
 
-    Ok(Response { status, body })
+    Ok(Response {
+        status,
+        body,
+        headers,
+    })
 }
 
 fn read_chunked(reader: &mut impl BufRead) -> io::Result<String> {

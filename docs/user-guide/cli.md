@@ -103,9 +103,57 @@ tuic agent spawn codex "add a changelog entry" --repo /path/to/repo
 # List running agents
 tuic agent ls
 
-# Send a message to an agent
-tuic agent send <id> "fix the tests"
+# Deliver a message to a registered peer's INBOX (peer registry)
+tuic agent send <peer-uuid> "fix the tests"
+
+# Type a prompt into an agent's TERMINAL and submit it (no peer routing)
+tuic agent type <id-or-name> "fix the tests"
 ```
+
+### Two delivery channels, chosen explicitly
+
+`tuic agent send` and `tuic agent type` are not interchangeable, and neither
+guesses which one you meant.
+
+| Command | Route | Target | Use when |
+|---|---|---|---|
+| `tuic agent send` | peer registry → recipient inbox | a **registered peer's** `tuic_session` UUID | the recipient is an orchestrator or any peer, including one with no terminal of its own |
+| `tuic agent type` | PTY write | a session **ID or name** | you want the text to appear in a terminal and be submitted |
+| `tuic send` | PTY write | a session ID or name | raw keys, no agent framing (see *Sending keys*) |
+
+`tuic agent send` is the CLI counterpart of the MCP `agent action=send` tool and
+uses the same delivery path, so both report the same `delivery_path` and both
+land the payload exactly once. It exits non-zero — with the registry's own
+message — when the recipient is not registered or the message is empty.
+
+Acceptance is not delivery, and the output says which one you got:
+
+```
+Delivered to <peer> (sse_channel_and_inbox)
+```
+
+means something surfaced the message — a waiter, the SSE channel, or the
+recipient's terminal. Whereas:
+
+```
+Buffered for <peer> (inbox_only) — unread until the recipient polls its inbox
+warning: Recipient has NO terminal and no active wait: nothing will wake it. …
+```
+
+means the registry took the message but nothing will wake the recipient: it sits
+unread until that peer calls `agent action=wait`/`inbox`. Both exit 0, because
+the registry accepted the message in both cases — do not block on an answer
+after a `Buffered` line.
+
+`tuic agent type` keeps the agent-safe framing: the text and the Enter are sent
+as **separate** PTY writes, because a raw-mode Ink TUI treats a combined
+`text\r` as a prefill and leaves it unsent. `tuic send` does not do this.
+
+`tuic agent send` must run inside a TUICommander session (it reads
+`$TUIC_SESSION` to identify the sender). It binds that identity when it is free;
+when the agent in that pane is itself connected over MCP it already owns the
+identity, so the CLI registers an anonymous sender named `<session> (cli)`
+rather than stealing a live binding.
 
 ## tmux Compatibility
 
