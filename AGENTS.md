@@ -219,7 +219,7 @@ parsers were never the gap; the pipeline around them was.
 | Signal | Source | Applies to |
 |---|---|---|
 | OSC 7770 `state=awaiting` | TUIC hook | hook-instrumented agents, **only** on `PreToolUse(AskUserQuestion)` |
-| OSC 777 `notify` | agent's own desktop notification | any agent that emits it, any blocking prompt |
+| OSC 777 `notify` | agent's own desktop notification | any agent that emits it, any blocking prompt — but the body decides the confidence: `needs your permission` / `approval required` latch, `is waiting for your input` is low-confidence because Claude also sends it on its 60s idle timer |
 | `Enter to select` footer regex | screen scrape | non-hook agents (dropped for hook-instrumented ones by `suppress_heuristic_question`) |
 
 A hook-instrumented agent showing a picker that is *not* AskUserQuestion (plan

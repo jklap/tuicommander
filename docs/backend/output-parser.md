@@ -76,10 +76,19 @@ Question events have two sources:
 
 - **Response-required OSC 777 notifications** are parsed from the raw PTY byte
   stream before VT rendering consumes the escape sequence. Only explicit
-  permission, approval, or waiting-for-input wording is accepted and emitted as
-  high-confidence. A generic desktop notification such as `Claude Code needs
-  your attention` does not prove that the composer awaits a response and is
-  ignored for awaiting-state detection.
+  permission, approval, or waiting-for-input wording is accepted. A generic
+  desktop notification such as `Claude Code needs your attention` does not prove
+  that the composer awaits a response and is ignored for awaiting-state
+  detection. The accepted bodies do not carry the same weight:
+
+  | Body | Confidence | Why |
+  |------|-----------|-----|
+  | `needs your permission`, `approval required` | high | A request with one reading. Cleared by the answer. |
+  | `is waiting for your input` | **low** | Claude sends it for a blocked picker *and* on its 60s idle timer after a finished turn. Retractable, so `question-cleared` drops it when the screen shows no prompt. |
+
+  A high-confidence question is retracted by nothing but real user input, so a
+  body that also means "idle" must never be high-confidence — it latched the
+  badge on a session that had finished 17h earlier (observed 2026-08-11).
 - **Screen-verified silence detection** handles rendered questions (all instant
   regex patterns were removed due to false positives from Ink agent streaming):
 

@@ -68,7 +68,7 @@ agent is considered fully supported.
 | **Permission prompt** | Multiselect (`❯ 1. Yes`) | Not observed (sandbox) | None (model-level refusal) | File add: `Y/N/A/S/D` | `△ Permission required` inline |
 | **Selection char** | `❯` (blue) | Not observed | N/A | N/A | `⇆ select` |
 | **Footer pattern** | `Esc to cancel/close` | `esc to interrupt` | `esc to cancel` (in spinner) | None | `enter confirm` |
-| **OSC 777 notify** | Yes | No | No | No | No |
+| **OSC 777 notify** | Yes — `needs your permission` (blocked, high-confidence); `is waiting for your input` (blocked picker OR 60s idle timer, low-confidence); `needs your attention` (ignored) | No | No | No | No |
 | **OSC 0 window title** | Yes (task + spinner) | Yes | Yes (`◇ Ready (workspace)`) | No | No |
 | **Slash commands** | `/mcp`, `/stats`, `/status` | `/model`, `/mcp`, `/fast` | `/help`, `/settings`, `/model`, `/stats` | `/help` | None observed |
 

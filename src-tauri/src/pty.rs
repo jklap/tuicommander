@@ -18977,7 +18977,7 @@ mod tests {
         let mut events = Vec::new();
         raw_stream_events(
             &mut carry,
-            "\x1b]777;notify;Claude Code;Claude is waiting for your input\x07",
+            "\x1b]777;notify;Claude Code;Claude needs your permission\x07",
             &mut events,
         );
         assert!(carry.is_empty(), "complete sequence must not be carried");
@@ -19070,6 +19070,20 @@ mod tests {
             .collect()
     }
 
+    /// Every prompt the pipeline reported, whatever its confidence. A signal
+    /// that badges the tab but stays retractable — Claude's `is waiting for
+    /// your input` notify — is invisible to `awaiting_prompts`, so asserting
+    /// "the notify survived the pipeline" needs this view instead.
+    fn awaiting_prompts_any_confidence(events: &[ParsedEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                ParsedEvent::Question { prompt_text, .. } => Some(prompt_text.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// Regression, captured 2026-08-08 from a live session parked on a plan
     /// picker while its tab showed a "working" dot.
     ///
@@ -19082,14 +19096,17 @@ mod tests {
     #[test]
     fn hook_instrumented_session_still_reports_awaiting_via_osc777() {
         let events = replay_capture(&agent_prompt_fixture("claude-plan-picker.raw"), true);
-        let prompts = awaiting_prompts(&events);
+        // Retractable on purpose: the same body arrives on Claude's 60s idle
+        // timer after a finished turn. The picker keeps the badge because the
+        // prompt stays on screen, not because the notify is trusted forever.
+        let prompts = awaiting_prompts_any_confidence(&events);
 
         assert!(
             prompts
                 .iter()
                 .any(|p| p == "Claude is waiting for your input"),
             "hook suppression must not swallow the agent's own notification; \
-             confident questions seen: {prompts:?}"
+             questions seen: {prompts:?}"
         );
     }
 
@@ -19101,7 +19118,7 @@ mod tests {
         for hook in [true, false] {
             let events = replay_capture(&agent_prompt_fixture("claude-plan-picker.raw"), hook);
             assert!(
-                awaiting_prompts(&events)
+                awaiting_prompts_any_confidence(&events)
                     .iter()
                     .any(|p| p == "Claude is waiting for your input"),
                 "notify lost with hook_instrumented={hook}"
@@ -19119,7 +19136,7 @@ mod tests {
             let events =
                 replay_capture(&agent_prompt_fixture("claude-generic-attention.raw"), hook);
             assert!(
-                awaiting_prompts(&events).is_empty(),
+                awaiting_prompts_any_confidence(&events).is_empty(),
                 "generic notification became awaiting with hook_instrumented={hook}: {events:?}"
             );
         }
@@ -19219,6 +19236,46 @@ mod tests {
             .await,
             "the badge must drop once the question left the screen"
         );
+    }
+
+    /// Regression, observed 2026-08-11 on a live Claude tab: the turn had ended
+    /// 17h earlier, its recap was the last thing on screen, no prompt anywhere —
+    /// and the tab still read "question". The session carried
+    /// `question_text = "Claude is waiting for your input"`, which is what Claude
+    /// notifies on its 60s idle timer as well as on a blocked picker. Parsed as
+    /// confident, it was retractable by nothing but a typed line, and there was
+    /// nothing to type.
+    ///
+    /// Both bodies go through the real parser here: hard-coding the JSON would
+    /// let the test keep passing after the parser stopped agreeing with it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn osc777_notify_retraction_follows_the_wording() {
+        for (body, survives) in [
+            ("Claude is waiting for your input", false),
+            ("Claude needs your permission", true),
+        ] {
+            let raw = format!("\x1b]777;notify;Claude Code;{body}\x07");
+            let notify = crate::output_parser::parse_osc777_notify(&raw)
+                .unwrap_or_else(|| panic!("{body:?} must still report awaiting"));
+
+            let state = accumulating_state("s1");
+            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+                session_id: "s1".to_string(),
+                parsed: serde_json::to_value(&notify).expect("serialisable"),
+            });
+            assert!(
+                await_session(&state, "s1", |s| s.awaiting_input).await,
+                "{body:?} must badge the tab"
+            );
+
+            // The screen is quiet and carries no prompt — the recap case.
+            emit_question_cleared_if_stale(&state, "s1");
+            let cleared = await_session(&state, "s1", |s| !s.awaiting_input).await;
+            assert_eq!(
+                cleared, !survives,
+                "{body:?}: expected survives={survives}, badge cleared={cleared}"
+            );
+        }
     }
 
     /// grok repaints while it waits, so "not on screen this tick" is not proof

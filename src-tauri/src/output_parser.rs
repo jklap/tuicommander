@@ -835,6 +835,16 @@ pub(crate) fn parse_osc94(text: &str) -> Option<ParsedEvent> {
 /// approval, or waiting-for-input. This retains the plan/skill picker signal
 /// (`Claude is waiting for your input`) that native hooks do not cover.
 ///
+/// That last body carries two meanings Claude does not distinguish: a blocked
+/// picker, and the 60s idle timer of a turn that simply finished. Observed
+/// 2026-08-11 — a session that printed its recap 17h earlier still read
+/// "question", because a confident question is retracted by nothing but real
+/// user input. So it is emitted with `confident: false`: the badge still
+/// appears, and `emit_question_cleared_if_stale` drops it on the next quiet
+/// tick when no prompt is on screen. A picker keeps it — the screen, not the
+/// notification body, is what tells the two apart. Permission and approval
+/// wording is unambiguous and stays confident.
+///
 /// The `prompt_text` is the body when present, else the title.
 pub(crate) fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
     // Fast path: skip the regex unless the introducer is present.
@@ -857,15 +867,15 @@ pub(crate) fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
         return None;
     }
     let normalized = prompt_text.to_ascii_lowercase();
-    let requires_response = normalized.contains("needs your permission")
-        || normalized.contains("is waiting for your input")
-        || normalized.contains("approval required");
+    let confident =
+        normalized.contains("needs your permission") || normalized.contains("approval required");
+    let requires_response = confident || normalized.contains("is waiting for your input");
     if !requires_response {
         return None;
     }
     Some(ParsedEvent::Question {
         prompt_text: prompt_text.to_string(),
-        confident: true,
+        confident,
     })
 }
 
@@ -5484,16 +5494,23 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
     /// Both payloads are verbatim from live Claude Code sessions observed while
     /// a plan picker sat blocked and the tab still showed a "working" dot. They
     /// are the regression this parser exists for.
+    ///
+    /// The confidence differs because the wording does. Permission is a request
+    /// with no other reading; `is waiting for your input` is also what Claude
+    /// says on its 60s idle timer after a finished turn, so it must stay
+    /// retractable.
     #[test]
-    fn osc777_notify_is_a_confident_question() {
-        for (raw, expected) in [
+    fn osc777_notify_reports_awaiting_with_wording_dependent_confidence() {
+        for (raw, expected, expect_confident) in [
             (
                 "\x1b]777;notify;Claude Code;Claude needs your permission\x07",
                 "Claude needs your permission",
+                true,
             ),
             (
                 "\x1b]777;notify;Claude Code;Claude is waiting for your input\x07",
                 "Claude is waiting for your input",
+                false,
             ),
         ] {
             match parse_osc777_notify(raw) {
@@ -5502,7 +5519,10 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
                     confident,
                 }) => {
                     assert_eq!(prompt_text, expected);
-                    assert!(confident, "an explicit notify is never a guess");
+                    assert_eq!(
+                        confident, expect_confident,
+                        "wrong confidence for {raw:?} — a retractable body must not latch"
+                    );
                 }
                 other => panic!("expected Question for {raw:?}, got {other:?}"),
             }
