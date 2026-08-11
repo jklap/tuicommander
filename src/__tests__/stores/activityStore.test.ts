@@ -164,7 +164,19 @@ describe("activityStore", () => {
 			activityStore.addItem(makeItem({ id: "rp2", sectionId: "plan", repoPath: "/repo/b" }));
 			activityStore.addItem(makeItem({ id: "rp3", sectionId: "plan" })); // no repoPath — always included
 			const filtered = activityStore.getForSection("plan", "/repo/a");
-			expect(filtered.map((i) => i.id)).toEqual(["rp1", "rp3"]);
+			// Membership, not order — items added inside one millisecond tie on
+			// createdAt, so the newest-first sort leaves their relative order open.
+			expect(filtered.map((i) => i.id).sort()).toEqual(["rp1", "rp3"]);
+		});
+
+		it("returns the newest item first — the bell reads top-down", () => {
+			const now = vi.spyOn(Date, "now");
+			now.mockReturnValueOnce(1000).mockReturnValueOnce(2000).mockReturnValueOnce(3000);
+			activityStore.addItem(makeItem({ id: "old", sectionId: "plan" }));
+			activityStore.addItem(makeItem({ id: "mid", sectionId: "plan" }));
+			activityStore.addItem(makeItem({ id: "new", sectionId: "plan" }));
+			now.mockRestore();
+			expect(activityStore.getForSection("plan").map((i) => i.id)).toEqual(["new", "mid", "old"]);
 		});
 
 		it("returns all section items when repoPath filter is omitted", () => {

@@ -167,13 +167,16 @@ function createActivityStore() {
 		return state.items.filter((i) => !i.dismissed);
 	}
 
+	/** Newest first — the bell reads top-down, so the latest message must lead. */
 	function getForSection(sectionId: string, repoPath?: string): ActivityItem[] {
-		return state.items.filter((i) => {
-			if (i.sectionId !== sectionId || i.dismissed) return false;
-			// When filtering by repo: include items that match OR have no repoPath set
-			if (repoPath !== undefined && i.repoPath) return i.repoPath === repoPath;
-			return true;
-		});
+		return state.items
+			.filter((i) => {
+				if (i.sectionId !== sectionId || i.dismissed) return false;
+				// When filtering by repo: include items that match OR have no repoPath set
+				if (repoPath !== undefined && i.repoPath) return i.repoPath === repoPath;
+				return true;
+			})
+			.sort((a, b) => b.createdAt - a.createdAt);
 	}
 
 	function getLastItem(repoPath?: string): ActivityItem | null {
