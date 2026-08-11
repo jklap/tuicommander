@@ -6181,6 +6181,49 @@ pub(crate) fn queued_command_count(state: &AppState, session_id: &str) -> usize 
         .unwrap_or(0)
 }
 
+/// One user-composed command still parked, as the Compose panel lists it.
+/// Peer wake entries are excluded for the same reason they are excluded from
+/// the count: they are not the user's to read or delete.
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct QueuedCommand {
+    pub id: u64,
+    pub text: String,
+}
+
+/// User-composed commands still parked, in delivery order.
+pub(crate) fn list_queued_commands(state: &AppState, session_id: &str) -> Vec<QueuedCommand> {
+    state
+        .pending_injections
+        .get(session_id)
+        .map(|queue| {
+            queue
+                .iter()
+                .filter_map(|entry| match entry {
+                    crate::state::PendingInjection::UserCommand { id, text } => Some(QueuedCommand {
+                        id: *id,
+                        text: text.clone(),
+                    }),
+                    crate::state::PendingInjection::PeerMessage(_) => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Drop a single queued user command. Returns false when the id is unknown —
+/// the entry may have been typed already, which is not an error for the caller.
+pub(crate) fn remove_queued_command(state: &AppState, session_id: &str, id: u64) -> bool {
+    state
+        .pending_injections
+        .get_mut(session_id)
+        .map(|mut queue| {
+            let before = queue.len();
+            queue.retain(|entry| !matches!(entry, crate::state::PendingInjection::UserCommand { id: entry_id, .. } if *entry_id == id));
+            before != queue.len()
+        })
+        .unwrap_or(false)
+}
+
 /// What the idle gate did with a user-composed command.
 #[derive(Clone, Copy, Debug, Serialize)]
 pub(crate) struct EnqueuedCommand {
@@ -8927,6 +8970,27 @@ pub(crate) fn clear_queued_agent_commands(
     session_id: String,
 ) -> usize {
     clear_queued_commands(&state, &session_id)
+}
+
+/// The queued commands themselves, so the Compose panel can show what waits.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn list_queued_agent_commands(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+) -> Vec<QueuedCommand> {
+    list_queued_commands(&state, &session_id)
+}
+
+/// Drop one queued command by id. Returns false when it is already gone.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) fn remove_queued_agent_command(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    command_id: u64,
+) -> bool {
+    remove_queued_command(&state, &session_id, command_id)
 }
 
 /// List all active PTY sessions for reconnection after frontend reload
@@ -17654,6 +17718,46 @@ mod tests {
             clear_queued_commands(&state, "busy"),
             0,
             "clearing an empty queue is a no-op, not an error"
+        );
+    }
+
+    /// The Compose panel lists what waits and deletes one entry: peer wake
+    /// messages stay invisible and untouchable, exactly as for count and clear.
+    #[cfg(unix)]
+    #[test]
+    fn list_and_remove_expose_only_user_commands() {
+        let state = crate::state::tests_support::make_test_app_state();
+        agent_session(&state, "busy", SHELL_BUSY);
+        insert_recording_session(&state, "busy");
+        enqueue_user_command(&state, "busy", "one").expect("enqueued");
+        state.pending_injections.get_mut("busy").unwrap().push_back(
+            crate::state::PendingInjection::peer_message("[TUIC message from lead] peer"),
+        );
+        enqueue_user_command(&state, "busy", "two").expect("enqueued");
+
+        let listed = list_queued_commands(&state, "busy");
+        assert_eq!(
+            listed.iter().map(|c| c.text.as_str()).collect::<Vec<_>>(),
+            vec!["one", "two"],
+            "listed in delivery order, peer message excluded"
+        );
+
+        assert!(remove_queued_command(&state, "busy", listed[0].id));
+        assert_eq!(
+            list_queued_commands(&state, "busy")
+                .iter()
+                .map(|c| c.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["two"],
+        );
+        assert_eq!(
+            state.pending_injections.get("busy").map(|queue| queue.len()),
+            Some(2),
+            "the peer message survives a Compose delete"
+        );
+        assert!(
+            !remove_queued_command(&state, "busy", listed[0].id),
+            "removing an id that already drained is a no-op, not an error"
         );
     }
 

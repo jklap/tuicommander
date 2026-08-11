@@ -127,6 +127,24 @@ pub(super) async fn clear_queued_commands(
     (StatusCode::OK, Json(serde_json::json!(cleared)))
 }
 
+/// Browser/PWA counterpart of the `list_queued_agent_commands` Tauri command.
+pub(super) async fn list_queued_commands(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+) -> impl IntoResponse {
+    let queued = crate::pty::list_queued_commands(&state, &session_id);
+    (StatusCode::OK, Json(serde_json::json!(queued)))
+}
+
+/// Browser/PWA counterpart of the `remove_queued_agent_command` Tauri command.
+pub(super) async fn remove_queued_command(
+    State(state): State<Arc<AppState>>,
+    Path((session_id, command_id)): Path<(String, u64)>,
+) -> impl IntoResponse {
+    let removed = crate::pty::remove_queued_command(&state, &session_id, command_id);
+    (StatusCode::OK, Json(serde_json::json!(removed)))
+}
+
 pub(crate) fn write_pty_input(
     state: &Arc<AppState>,
     session_id: &str,

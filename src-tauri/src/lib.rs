@@ -1509,6 +1509,8 @@ pub fn run() {
             pty::list_active_sessions,
             pty::enqueue_agent_command,
             pty::clear_queued_agent_commands,
+            pty::list_queued_agent_commands,
+            pty::remove_queued_agent_command,
             pty::get_process_stats,
             pty::read_vt_log,
             pty::subscribe_terminal_grid,

@@ -1244,6 +1244,27 @@ export const Terminal: Component<TerminalProps> = (props) => {
 								appLogger.error("terminal", "ComposePanel clear queue failed", { sessionId, error: err });
 							}
 						}}
+						onLoadQueue={async () => {
+							if (!sessionId) return [];
+							try {
+								return await pty.listQueuedCommands(sessionId);
+							} catch (err) {
+								appLogger.error("terminal", "ComposePanel list queue failed", { sessionId, error: err });
+								return [];
+							}
+						}}
+						onRemoveQueued={async (commandId) => {
+							if (!sessionId) return;
+							try {
+								await pty.removeQueuedCommand(sessionId, commandId);
+								// Same reason the enqueue path trusts its own count: the badge
+								// and the list must react to the click, not to the 1s poll.
+								const remaining = await pty.listQueuedCommands(sessionId);
+								terminalsStore.update(props.id, { queuedCommands: remaining.length });
+							} catch (err) {
+								appLogger.error("terminal", "ComposePanel remove queued failed", { sessionId, error: err });
+							}
+						}}
 						onEnqueue={async (text) => {
 							if (!sessionId) return;
 							try {
