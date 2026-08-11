@@ -1,7 +1,7 @@
 {
   "name": "tuicommander",
   "private": true,
-  "version": "1.7.3",
+  "version": "1.7.4",
   "description": "Multi-agent terminal orchestrator with native terminal and Tauri",
   "type": "module",
   "packageManager": "pnpm@11.15.1",
@@ -16,6 +16,7 @@
     "tauri": "tauri",
     "build:sidecar": "node src-tauri/build-sidecar.mjs",
     "test": "vitest",
+    "test:plugins": "node --test \"plugins/**/*.test.js\"",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {

@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.7.4] - 2026-08-11
+
+### Fixed
+
+- **`tuic agent send` reaches a peer that has no terminal** — The command resolved its target as a PTY and wrote into it, so a registered peer without a terminal of its own — any external orchestrator — answered `Session not found`, while the MCP `agent action=send` tool delivered to the very same UUID. The CLI now speaks MCP to the one authoritative delivery path rather than carrying a second copy of the routing rules, so both surfaces agree on the route and land the payload exactly once. When the agent in the pane already holds the session identity, the CLI registers as `<session> (cli)` instead of taking the identity away and stranding that agent's inbox. Terminal injection keeps its agent-safe framing under the explicit `tuic agent type`, which sends the text and the Enter as separate writes — a raw-mode TUI treats a combined `text\r` as an unsent prefill, and top-level `tuic send` does not split it. Acceptance is also no longer announced as delivery: a message that nothing will surface now reports `Buffered for <peer> (inbox_only)` with the registry's warning, because reporting that as success is how a reply to a terminal-less agent vanished in silence.
+
 ## [1.7.3] - 2026-08-10
 
 ### Added

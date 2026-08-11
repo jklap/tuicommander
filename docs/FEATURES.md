@@ -1907,7 +1907,8 @@ TUICommander aggregates upstream MCP servers and exposes them through its own `/
 ### 21.4 Agent Orchestration
 - `tuic agent spawn <type> <prompt> [--repo <path>]` — spawn AI agent on an initial prompt
 - `tuic agent ls` — list running agents
-- `tuic agent send <id> <message>` — message an agent
+- `tuic agent send <peer-uuid> <message>` — deliver to a registered peer's inbox through the registry, the same path as the MCP `agent action=send` tool. Reports `Delivered` only when something surfaced the message; an `inbox_only` route reads `Buffered`
+- `tuic agent type <id> <message>` — type into an agent's terminal and submit, with the text and the Enter as separate writes (raw-mode TUIs treat a combined `text\r` as an unsent prefill)
 
 ### 21.5 tmux Compatibility Mode
 - `tuic alias` creates `tmux → tuic` symlink; `argv[0]` detection switches to compat mode
