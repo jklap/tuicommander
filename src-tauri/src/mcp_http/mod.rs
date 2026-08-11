@@ -543,7 +543,13 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/sessions/{id}/write", post(session::write_to_session))
         .route(
             "/sessions/{id}/queue",
-            post(session::enqueue_command).delete(session::clear_queued_commands),
+            get(session::list_queued_commands)
+                .post(session::enqueue_command)
+                .delete(session::clear_queued_commands),
+        )
+        .route(
+            "/sessions/{id}/queue/{command_id}",
+            delete(session::remove_queued_command),
         )
         .route("/sessions/{id}/name", put(session::set_session_name))
         .route("/sessions/{id}/resize", post(session::resize_session))

@@ -11,6 +11,8 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `write_pty` | `session_id, data` | `()` | Write to PTY |
 | `enqueue_agent_command` | `session_id, text` | `{ typed, queued }` | Queue a command for the agent's next idle window (typed at once when already idle); errors for non-agent sessions |
 | `clear_queued_agent_commands` | `session_id` | `usize` | Drop every queued command; returns how many |
+| `list_queued_agent_commands` | `session_id` | `[{ id, text }]` | The queued user commands in delivery order; peer messages excluded |
+| `remove_queued_agent_command` | `session_id, command_id` | `bool` | Drop one queued command by id; false when it already drained |
 | `resize_pty` | `session_id, rows, cols` | `()` | Resize PTY; alternate-screen resizes preserve primary-log continuity |
 | `pause_pty` | `session_id` | `()` | Pause reader thread |
 | `resume_pty` | `session_id` | `()` | Resume reader thread |

@@ -211,6 +211,12 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 	clear_queued_agent_commands: {
 		map: (args) => ({ method: "DELETE", path: `/sessions/${args.sessionId}/queue` }),
 	},
+	list_queued_agent_commands: {
+		map: (args) => ({ method: "GET", path: `/sessions/${args.sessionId}/queue` }),
+	},
+	remove_queued_agent_command: {
+		map: (args) => ({ method: "DELETE", path: `/sessions/${args.sessionId}/queue/${args.commandId}` }),
+	},
 	set_session_name: {
 		map: (args) => ({
 			method: "PUT",

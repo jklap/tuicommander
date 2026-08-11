@@ -126,6 +126,18 @@ describe("transport", () => {
 			expect(result.path).toBe("/sessions/abc/queue");
 		});
 
+		it("maps list_queued_agent_commands to GET /sessions/{id}/queue", () => {
+			const result = mapCommandToHttp("list_queued_agent_commands", { sessionId: "abc" });
+			expect(result.method).toBe("GET");
+			expect(result.path).toBe("/sessions/abc/queue");
+		});
+
+		it("maps remove_queued_agent_command to DELETE /sessions/{id}/queue/{commandId}", () => {
+			const result = mapCommandToHttp("remove_queued_agent_command", { sessionId: "abc", commandId: 7 });
+			expect(result.method).toBe("DELETE");
+			expect(result.path).toBe("/sessions/abc/queue/7");
+		});
+
 		it("maps session names with their custom-name origin", () => {
 			const result = mapCommandToHttp("set_session_name", {
 				sessionId: "abc",

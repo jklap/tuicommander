@@ -1,7 +1,17 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { drawSelection, EditorView, keymap } from "@codemirror/view";
 import { createCodeMirror } from "solid-codemirror";
-import { type Accessor, type Component, createEffect, on, onCleanup, Show } from "solid-js";
+import {
+	type Accessor,
+	type Component,
+	createEffect,
+	createSignal,
+	For,
+	on,
+	onCleanup,
+	Show,
+} from "solid-js";
+import type { QueuedCommand } from "../../hooks/usePty";
 import { cx } from "../../utils";
 import s from "./ComposePanel.module.css";
 
@@ -49,6 +59,10 @@ export interface ComposePanelProps {
 	/** Commands already waiting for this session's next idle window. */
 	queuedCount: Accessor<number>;
 	onClearQueue: () => void | Promise<void>;
+	/** Read the queued commands themselves — only called while the list is open. */
+	onLoadQueue: () => Promise<QueuedCommand[]>;
+	/** Drop a single queued command by id. */
+	onRemoveQueued: (id: number) => void | Promise<void>;
 	onTextChange?: (text: string) => void;
 }
 
@@ -142,6 +156,27 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 		onCleanup(() => cmDom?.removeEventListener("focusout", handleFocusOut));
 	});
 
+	// The badge count comes from the cheap lifecycle poll; the texts cost an IPC
+	// round-trip, so they are fetched only while the list is expanded — and
+	// re-fetched whenever the count moves under it (the queue drains on idle).
+	const [queueOpen, setQueueOpen] = createSignal(false);
+	const [queueItems, setQueueItems] = createSignal<QueuedCommand[]>([]);
+
+	createEffect(() => {
+		if (!queueOpen()) return;
+		const count = props.queuedCount();
+		if (count === 0) {
+			setQueueOpen(false);
+			setQueueItems([]);
+			return;
+		}
+		void props.onLoadQueue().then(setQueueItems);
+	});
+
+	createEffect(() => {
+		if (!props.isOpen()) setQueueOpen(false);
+	});
+
 	const currentText = (): string => editorView()?.state.doc.toString().trim() ?? "";
 
 	const handleSend = () => {
@@ -157,18 +192,55 @@ export const ComposePanel: Component<ComposePanelProps> = (props) => {
 	return (
 		<div class={cx(s.panel, props.isOpen() && s.panelOpen)} onMouseDown={(e) => e.stopPropagation()}>
 			<div class={s.editor} ref={ref} />
+			<Show when={queueOpen() && props.queuedCount() > 0}>
+				<div class={s.queueList}>
+					<div class={s.queueListHeader}>
+						<span>Waiting for the agent to go idle</span>
+						<button class={s.queueClearAll} onClick={() => props.onClearQueue()}>
+							Clear all
+						</button>
+					</div>
+					<For each={queueItems()}>
+						{(item) => (
+							<div class={s.queueItem}>
+								<span class={s.queueItemText} title={item.text}>
+									{item.text}
+								</span>
+								<button
+									class={s.queueItemRemove}
+									onClick={() => props.onRemoveQueued(item.id)}
+									title="Remove from queue"
+									aria-label="Remove from queue"
+								>
+									<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+										<path d="M4.3 3.3l8.4 8.4-1 1-8.4-8.4zM12.7 4.3l-8.4 8.4-1-1 8.4-8.4z" />
+									</svg>
+								</button>
+							</div>
+						)}
+					</For>
+				</div>
+			</Show>
 			<div class={s.statusBar}>
 				<span>Ctrl+Enter to send &middot; {props.canEnqueue() ? "Shift+Ctrl+Enter to queue · " : ""}Esc to close</span>
 				<div class={s.actions}>
 					<Show when={props.queuedCount() > 0}>
 						<button
-							class={s.queueBadge}
-							onClick={() => props.onClearQueue()}
-							title="Waiting for the agent to go idle — click to discard"
+							class={cx(s.queueBadge, queueOpen() && s.queueBadgeOpen)}
+							onClick={() => setQueueOpen(!queueOpen())}
+							title="Waiting for the agent to go idle — click to review"
+							aria-expanded={queueOpen()}
 						>
 							{props.queuedCount()} queued
-							<svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-								<path d="M4.3 3.3l8.4 8.4-1 1-8.4-8.4zM12.7 4.3l-8.4 8.4-1-1 8.4-8.4z" />
+							<svg
+								width="10"
+								height="10"
+								viewBox="0 0 16 16"
+								fill="currentColor"
+								aria-hidden="true"
+								class={cx(s.queueChevron, queueOpen() && s.queueChevronOpen)}
+							>
+								<path d="M8 11L3 5h10z" />
 							</svg>
 						</button>
 					</Show>

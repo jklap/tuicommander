@@ -86,7 +86,11 @@ Content-Type: application/json
 
 { "text": "run the tests" }        -> { "typed": false, "queued": 2 }
 
+GET /sessions/:id/queue            -> [ { "id": 7, "text": "run the tests" } ]
+
 DELETE /sessions/:id/queue         -> 2   (commands dropped)
+
+DELETE /sessions/:id/queue/:cmdId  -> true  (false when it already drained)
 ```
 
 Hands the text to the same idle gate peer messages use instead of typing it now:

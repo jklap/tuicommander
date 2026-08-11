@@ -34,6 +34,11 @@ function renderPanel(overrides: Partial<Parameters<typeof ComposePanel>[0]> = {}
 		canEnqueue: () => true,
 		queuedCount: queued,
 		onClearQueue: vi.fn(),
+		onLoadQueue: vi.fn(async () => [
+			{ id: 1, text: "run the tests" },
+			{ id: 2, text: "then push" },
+		]),
+		onRemoveQueued: vi.fn(),
 		...overrides,
 	};
 	const rendered = render(() => <ComposePanel {...props} />);
@@ -69,14 +74,61 @@ describe("ComposePanel", () => {
 		expect(container.querySelector('[title^="Queue for the next idle moment"]')).toBeNull();
 	});
 
-	it("shows the pending count only when something is queued, and clears it on click", async () => {
-		const { container, props, setQueued, getByText } = renderPanel();
+	it("shows the pending count only when something is queued", async () => {
+		const { container, setQueued, getByText } = renderPanel();
 		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
 		expect(container.textContent).not.toContain("queued");
 
 		setQueued(2);
 		await waitFor(() => expect(getByText(/2 queued/)).toBeTruthy());
+	});
+
+	it("expands the badge into the queued texts — a count alone cannot be reviewed", async () => {
+		const { container, props, setQueued, getByText } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		setQueued(2);
+		await waitFor(() => expect(getByText(/2 queued/)).toBeTruthy());
+		// Collapsed: no IPC round-trip for texts nobody is looking at.
+		expect(props.onLoadQueue).not.toHaveBeenCalled();
+
 		fireEvent.click(getByText(/2 queued/));
+		await waitFor(() => expect(getByText("run the tests")).toBeTruthy());
+		expect(getByText("then push")).toBeTruthy();
+	});
+
+	it("removes a single queued command by id", async () => {
+		const { container, props, setQueued, getByText, getAllByTitle } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		setQueued(2);
+		await waitFor(() => expect(getByText(/2 queued/)).toBeTruthy());
+		fireEvent.click(getByText(/2 queued/));
+		await waitFor(() => expect(getByText("then push")).toBeTruthy());
+
+		fireEvent.click(getAllByTitle("Remove from queue")[1]);
+		expect(props.onRemoveQueued).toHaveBeenCalledWith(2);
+	});
+
+	it("clears the whole queue from the expanded list", async () => {
+		const { container, props, setQueued, getByText } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		setQueued(2);
+		await waitFor(() => expect(getByText(/2 queued/)).toBeTruthy());
+		fireEvent.click(getByText(/2 queued/));
+		await waitFor(() => expect(getByText("Clear all")).toBeTruthy());
+
+		fireEvent.click(getByText("Clear all"));
 		expect(props.onClearQueue).toHaveBeenCalledTimes(1);
+	});
+
+	it("collapses the list when the queue drains", async () => {
+		const { container, setQueued, getByText, queryByText } = renderPanel();
+		await waitFor(() => expect(container.querySelector(".cm-content")).not.toBeNull());
+		setQueued(2);
+		await waitFor(() => expect(getByText(/2 queued/)).toBeTruthy());
+		fireEvent.click(getByText(/2 queued/));
+		await waitFor(() => expect(getByText("run the tests")).toBeTruthy());
+
+		setQueued(0);
+		await waitFor(() => expect(queryByText("run the tests")).toBeNull());
 	});
 });

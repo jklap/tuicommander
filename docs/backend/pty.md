@@ -413,9 +413,12 @@ so a command typed by the user cannot steer a turn in progress. It is appended
 and then flushed, never handed straight to `deliver_message_to_pty`: injecting
 ahead of any accepted peer message or user command would reorder delivery. Each
 flush pops one entry and leaves the session BUSY, so the queue drains one item per
-idle window in global acceptance order. `state.queued_commands` and
+idle window in global acceptance order. `state.queued_commands`,
+`list_queued_agent_commands`, `remove_queued_agent_command` and
 `clear_queued_agent_commands` select only user-command entries; clear retains all
-peer/orchestrator entries in their original relative order.
+peer/orchestrator entries in their original relative order. Each user command
+carries a process-unique id so the Compose panel can delete a single entry —
+a queue position would shift under the caller as the FIFO drains.
 
 **Status line ticks:** Animated spinner repaint evidence refreshes both shell activity and `SilenceState`, preventing low-confidence question/tool-error events from contradicting a busy tab. Static mode/footer rows remain chrome only and do not prove activity.
 

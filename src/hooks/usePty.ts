@@ -49,6 +49,13 @@ export interface EnqueuedCommand {
 	queued: number;
 }
 
+/** One command still parked in a session's idle gate. */
+export interface QueuedCommand {
+	/** Stable across drains — deleting by list position would race the FIFO. */
+	id: number;
+	text: string;
+}
+
 /** Active session info returned by list_active_sessions */
 export interface ActiveSessionInfo {
 	session_id: string;
@@ -126,6 +133,16 @@ export function usePty() {
 		return await rpc<number>("clear_queued_agent_commands", { sessionId });
 	}
 
+	/** The commands still queued for a session, in delivery order. */
+	async function listQueuedCommands(sessionId: string): Promise<QueuedCommand[]> {
+		return await rpc<QueuedCommand[]>("list_queued_agent_commands", { sessionId });
+	}
+
+	/** Drop one queued command. False when it was already typed. */
+	async function removeQueuedCommand(sessionId: string, commandId: number): Promise<boolean> {
+		return await rpc<boolean>("remove_queued_agent_command", { sessionId, commandId });
+	}
+
 	/** Resize a PTY session */
 	async function resize(sessionId: string, rows: number, cols: number): Promise<void> {
 		await rpc("resize_pty", { sessionId, rows, cols });
@@ -185,6 +202,8 @@ export function usePty() {
 		sendCommand,
 		enqueueCommand,
 		clearQueuedCommands,
+		listQueuedCommands,
+		removeQueuedCommand,
 		resize,
 		pause,
 		resume,
