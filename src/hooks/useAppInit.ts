@@ -34,6 +34,41 @@ const REMOTE_TAB_AUTOCLOSE_MS = 30_000;
 /** Shorter delay for agent-spawned sessions — they finish their task and can be cleaned up faster. */
 const AGENT_TAB_AUTOCLOSE_MS = 10_000;
 
+interface McpToastListenerState {
+	generation: number;
+	unlisten?: () => void;
+}
+
+interface McpToastPayload {
+	title: string;
+	message: string | null;
+	level: string;
+	sound: string | null;
+	origin_repo_path?: string;
+}
+
+const MCP_TOAST_LISTENER_KEY = "__tuic_mcp_toast_listener__";
+
+function replaceMcpToastListener(handler: (event: { payload: McpToastPayload }) => void): void {
+	const globalState = globalThis as typeof globalThis & {
+		[MCP_TOAST_LISTENER_KEY]?: McpToastListenerState;
+	};
+	const state = globalState[MCP_TOAST_LISTENER_KEY] ?? (globalState[MCP_TOAST_LISTENER_KEY] = { generation: 0 });
+	const generation = ++state.generation;
+	state.unlisten?.();
+	state.unlisten = undefined;
+
+	listen<McpToastPayload>("mcp-toast", handler)
+		.then((unlisten) => {
+			if (state.generation !== generation) {
+				unlisten();
+				return;
+			}
+			state.unlisten = unlisten;
+		})
+		.catch((err) => appLogger.error("app", "Failed to register mcp-toast listener", err));
+}
+
 function parseAgentType(value: string | null | undefined): AgentType | null {
 	return value && (AGENT_TYPES as readonly string[]).includes(value) ? (value as AgentType) : null;
 }
@@ -378,27 +413,21 @@ export async function initApp(deps: AppInitDeps) {
 	}).catch((err) => appLogger.error("app", "Failed to register worktree-create-failed listener", err));
 
 	// Listen for MCP toast notifications from the Rust backend
-	listen<{ title: string; message: string | null; level: string; sound: string | null; origin_repo_path?: string }>(
-		"mcp-toast",
-		(event) => {
-			const { title, message, level, sound, origin_repo_path } = event.payload;
-			const safeLevel = level === "warn" || level === "error" ? level : "info";
-			const repoPath = resolveRepoForCwd(origin_repo_path) ?? undefined;
-			const repoName = origin_repo_path ? pathBasename(repoPath ?? origin_repo_path) : null;
-			const contextualMessage = [repoName, message].filter(Boolean).join(" · ");
-			// The toast store's own tones are level-keyed and bypass the user's
-			// notification settings; the backend already resolved a NotificationSound
-			// name, so play it through the notifications store instead — that is what
-			// honours volume, output device and per-sound mutes, and what lets an
-			// agent raise the distinct `attention` callback the chimes cannot express.
-			if (origin_repo_path) {
-				toastsStore.add(title, contextualMessage, safeLevel, false, undefined, undefined, repoPath);
-			} else {
-				toastsStore.add(title, message ?? "", safeLevel, false);
-			}
-			if (isNotificationSound(sound)) void notificationsStore.play(sound);
-		},
-	).catch((err) => appLogger.error("app", "Failed to register mcp-toast listener", err));
+	replaceMcpToastListener((event) => {
+		const { title, message, level, sound, origin_repo_path } = event.payload;
+		const safeLevel = level === "warn" || level === "error" ? level : "info";
+		const repoPath = resolveRepoForCwd(origin_repo_path) ?? undefined;
+		const repoName = origin_repo_path ? pathBasename(repoPath ?? origin_repo_path) : null;
+		const contextualMessage = [repoName, message].filter(Boolean).join(" · ");
+		const visibleMessage = origin_repo_path ? contextualMessage : (message ?? "");
+		const duplicate = toastsStore.hasVisible(title, visibleMessage, safeLevel, repoPath);
+		if (origin_repo_path) {
+			toastsStore.add(title, visibleMessage, safeLevel, false, undefined, undefined, repoPath);
+		} else {
+			toastsStore.add(title, visibleMessage, safeLevel, false);
+		}
+		if (!duplicate && isNotificationSound(sound)) void notificationsStore.play(sound);
+	});
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
 	listen<{ session_id: string; cwd: string | null; agent_type?: string | null; display_name?: string | null }>(
