@@ -259,6 +259,11 @@ dual-emitted — Tauri `emit` for the desktop WebView **and** the event bus for
 SSE clients; a bus-only send never reaches the desktop, which has no bus→window
 forwarder.
 
+The toast also resolves the calling MCP session to its peer project, PTY cwd, or
+session repository metadata (in that order). The resulting `origin_repo_path` is
+dual-emitted with the toast so clients can show its source and scope retained
+bell history to the repository that raised it. Callers do not provide this field.
+
 Native responses omit optional values when they are unavailable. In particular,
 `session action=output` includes `exit_code` only after an exit status is known, and
 blocking wait timeouts return only the condition state without a repeated follow-up hint.

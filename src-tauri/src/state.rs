@@ -108,6 +108,8 @@ pub enum AppEvent {
         message: Option<String>,
         level: String,
         sound: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin_repo_path: Option<String>,
     },
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]

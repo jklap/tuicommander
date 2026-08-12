@@ -179,6 +179,17 @@ describe("toastsStore — mirroring into the bell", () => {
 		});
 	});
 
+	it("preserves repository scope in the mirrored bell item", () => {
+		testInScope(() => {
+			toastsStore.add("Release published", "tuicommander · v1.7.4", "info", false, undefined, undefined, "/repo");
+			expect(activityStore.getForSection(sectionId, "/repo")[0]).toMatchObject({
+				title: "Release published",
+				repoPath: "/repo",
+			});
+			expect(activityStore.getForSection(sectionId, "/other")).toHaveLength(0);
+		});
+	});
+
 	it("keeps the bell item after the toast auto-dismisses", () => {
 		testInScope(() => {
 			toastsStore.add("Gone in a flash");

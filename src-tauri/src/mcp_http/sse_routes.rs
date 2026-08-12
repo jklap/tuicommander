@@ -162,8 +162,15 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             message,
             level,
             sound,
+            origin_repo_path,
         } => {
-            serde_json::json!({ "title": title, "message": message, "level": level, "sound": sound })
+            serde_json::json!({
+                "title": title,
+                "message": message,
+                "level": level,
+                "sound": sound,
+                "origin_repo_path": origin_repo_path,
+            })
         }
         AppEvent::DirChanged { dir_path } => {
             serde_json::json!({ "dir_path": dir_path })
