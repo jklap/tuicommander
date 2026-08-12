@@ -364,23 +364,29 @@ impl SessionState {
 }
 
 pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, data: &str) -> bool {
-    let Some(mut session) = state.session_states.get_mut(session_id) else {
-        return false;
-    };
-    let Some(prompt) = session.choice_prompt.as_ref() else {
-        return false;
-    };
-    let resolves = prompt.options.iter().any(|option| option.key == data)
-        || matches!(data, "\r" | "\n")
-        || (data == "\x1b" && prompt.dismiss_key.is_some())
-        || (data == "\t" && prompt.amend_key.is_some());
-    if !resolves {
-        return false;
+    {
+        let Some(mut session) = state.session_states.get_mut(session_id) else {
+            return false;
+        };
+        let Some(prompt) = session.choice_prompt.as_ref() else {
+            return false;
+        };
+        let resolves = prompt.options.iter().any(|option| option.key == data)
+            || matches!(data, "\r" | "\n")
+            || (data == "\x1b" && prompt.dismiss_key.is_some())
+            || (data == "\t" && prompt.amend_key.is_some());
+        if !resolves {
+            return false;
+        }
+        session.choice_prompt = None;
+        session.awaiting_input = false;
+        session.question_text = None;
+        session.question_confident = false;
     }
-    session.choice_prompt = None;
-    session.awaiting_input = false;
-    session.question_text = None;
-    session.question_confident = false;
+    state.emit_pty_event(AppEvent::PtyParsed {
+        session_id: session_id.to_string(),
+        parsed: serde_json::json!({ "type": "choice-cleared" }),
+    });
     true
 }
 
@@ -2998,9 +3004,9 @@ impl AppState {
 
                 // Collect push notification data outside the DashMap lock
                 let mut push_data: Option<(String, String)> = None;
-                // Prompt text of a confident question that just parked this session,
-                // routed to the spawning orchestrator's inbox outside the lock below.
-                let mut parked_prompt: Option<String> = None;
+                // Wait metadata for a session that just parked, routed to the
+                // spawning orchestrator's inbox outside the lock below.
+                let mut parked_wait: Option<(String, bool, &'static str)> = None;
 
                 state
                     .session_states
@@ -3008,7 +3014,9 @@ impl AppState {
                     .and_modify(|s| {
                         s.last_activity_ms = now_ms;
                         match event_type {
-                            "question" => {
+                            "question"
+                                if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) =>
+                            {
                                 let new_confident = parsed
                                     .get("confident")
                                     .and_then(|v| v.as_bool())
@@ -3030,16 +3038,16 @@ impl AppState {
                                         .map(|t| t.to_string());
                                     s.question_confident = new_confident;
 
-                                    // A spawned peer has nobody at the keyboard: an
-                                    // interactive prompt parks it forever unless whoever
-                                    // spawned it is told. Only the transition into
-                                    // awaiting_input notifies, and only for CONFIDENT
-                                    // prompts — the silence heuristic ("last line ends
-                                    // with ?") is exactly the false-positive-prone one and
-                                    // must not spam an orchestrator's inbox.
-                                    if new_confident && !was_awaiting {
-                                        parked_prompt =
-                                            Some(s.question_text.clone().unwrap_or_default());
+                                    // Confidence is metadata, not a routing gate. A
+                                    // managed child has nobody at its keyboard, so every
+                                    // transition into a wait must reach its orchestrator;
+                                    // otherwise plan/skill pickers park invisibly.
+                                    if !was_awaiting {
+                                        parked_wait = Some((
+                                            s.question_text.clone().unwrap_or_default(),
+                                            new_confident,
+                                            "question",
+                                        ));
                                     }
 
                                     // Rate limit: skip if last push for this session was < 30s ago
@@ -3053,7 +3061,9 @@ impl AppState {
                                     }
                                 }
                             }
-                            "question-cleared" => {
+                            "question-cleared"
+                                if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) =>
+                            {
                                 // The silence timer saw the question leave the
                                 // screen. It only fires for the heuristic state,
                                 // but re-check here: a confident question may
@@ -3157,10 +3167,29 @@ impl AppState {
                                 // Deserialise directly from the parsed JSON — the payload fields
                                 // (title/options/dismiss_key/amend_key) are flat at the top level
                                 // alongside "type", and serde ignores the unknown "type" field.
+                                let was_awaiting = s.awaiting_input;
                                 s.choice_prompt = serde_json::from_value::<
                                     crate::output_parser::ChoicePromptPayload,
                                 >(parsed.clone())
                                 .ok();
+                                s.awaiting_input = true;
+                                if !was_awaiting {
+                                    parked_wait = Some((
+                                        parsed
+                                            .get("title")
+                                            .and_then(|value| value.as_str())
+                                            .unwrap_or_default()
+                                            .to_string(),
+                                        true,
+                                        "choice",
+                                    ));
+                                }
+                            }
+                            "choice-cleared" => {
+                                s.choice_prompt = None;
+                                s.awaiting_input = false;
+                                s.question_text = None;
+                                s.question_confident = false;
                             }
                             "active-subtasks" => {
                                 s.active_sub_tasks =
@@ -3201,7 +3230,7 @@ impl AppState {
                 // Route the parked prompt to the spawning orchestrator, outside the
                 // session_states entry lock: delivery reaches into the PARENT's
                 // SilenceState and re-entering this shard would deadlock.
-                if let Some(prompt) = parked_prompt {
+                if let Some((prompt, confident, source)) = parked_wait {
                     crate::pty::push_state_change_to_parent(
                         state,
                         session_id,
@@ -3210,6 +3239,8 @@ impl AppState {
                             "state": "awaiting_input",
                             "session_id": session_id,
                             "prompt": prompt,
+                            "confident": confident,
+                            "source": source,
                         }),
                     );
                 }
@@ -3242,6 +3273,7 @@ impl AppState {
                     entry.retry_after_ms = None;
                     entry.rate_limit_set_ms = 0;
                     entry.active_sub_tasks = 0;
+                    entry.choice_prompt = None;
                     entry.last_activity_ms = now_ms;
                 }
                 // Push "session completed" to mobile (unseen)
@@ -6431,10 +6463,10 @@ mod tests {
         );
     }
 
-    /// The silence heuristic ("last line ends with ?") is the false-positive-prone
-    /// path — it must never wake an orchestrator.
+    /// Confidence controls how callers present/debounce a wait; it cannot hide a
+    /// genuinely blocked managed child from its parent.
     #[test]
-    fn low_confidence_question_does_not_notify_the_parent() {
+    fn low_confidence_question_notifies_parent_with_confidence_metadata() {
         let state = fresh_state();
         state
             .session_parent
@@ -6449,7 +6481,11 @@ mod tests {
             ),
         );
 
-        assert!(parent_state_changes(&state, "parent-1").is_empty());
+        let posted = parent_state_changes(&state, "parent-1");
+        assert_eq!(posted.len(), 1);
+        assert_eq!(posted[0]["state"], "awaiting_input");
+        assert_eq!(posted[0]["confident"], false);
+        assert_eq!(posted[0]["source"], "question");
     }
 
     /// Only the transition into awaiting_input notifies: an Ink menu that re-emits
@@ -6608,6 +6644,23 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stale_turn_question_cannot_rearm_awaiting_after_input() {
+        let state = fresh_state();
+        state.session_states.get_mut("s1").unwrap().turn_epoch = 2;
+        let stale = make_parsed(
+            "question",
+            serde_json::json!({
+                "prompt_text": "Confermi questa rimozione?",
+                "confident": false,
+                "_turn_epoch": 1,
+            }),
+        );
+        let session = apply(&state, &stale);
+        assert!(!session.awaiting_input);
+        assert!(session.question_text.is_none());
+    }
+
     /// The bug this arm exists for: a heuristic question answered with a bare
     /// Enter. No `user-input` (that needs a non-empty typed line), no
     /// `status-line` (the agent went busy through a screen-movement signal), no
@@ -6632,6 +6685,34 @@ mod tests {
             "question-cleared must retract the heuristic awaiting state"
         );
         assert!(s.question_text.is_none(), "and drop the stale prompt text");
+    }
+
+    #[test]
+    fn choice_cleared_retracts_choice_and_awaiting_state() {
+        let state = fresh_state();
+        apply(
+            &state,
+            &make_parsed(
+                "choice-prompt",
+                serde_json::json!({
+                    "title": "Apply edits?",
+                    "options": [
+                        { "key": "1", "label": "Yes", "highlighted": true, "destructive": false },
+                        { "key": "2", "label": "No", "highlighted": false, "destructive": true }
+                    ]
+                }),
+            ),
+        );
+        let waiting = state.session_states.get("s1").unwrap().clone();
+        assert!(waiting.awaiting_input);
+        assert!(waiting.choice_prompt.is_some());
+
+        let cleared = apply(
+            &state,
+            &make_parsed("choice-cleared", serde_json::json!({})),
+        );
+        assert!(!cleared.awaiting_input);
+        assert!(cleared.choice_prompt.is_none());
     }
 
     /// grok repaints while it waits, so "not on screen right now" is not proof

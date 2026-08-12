@@ -113,6 +113,9 @@ pub enum ParsedEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         amend_key: Option<String>,
     },
+    /// A previously detected numbered choice dialog is no longer active.
+    #[serde(rename = "choice-cleared")]
+    ChoiceCleared,
     /// Claude Code sub-task indicator: `›› task · N local agents` or `›› task · 1 bash`.
     /// Count > 0 means the agent has background work in progress; 0 means all sub-tasks finished.
     #[serde(rename = "active-subtasks")]

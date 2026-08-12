@@ -5514,8 +5514,15 @@ async fn handle_ui_unified(
     };
     match action {
         "tab" => handle_ui(state, args, mcp_session_id),
-        "toast" | "confirm" => {
-            handle_notify(state, addr, &remap_action(args, action), mcp_session_id)
+        "toast" => handle_notify(state, addr, &remap_action(args, action), mcp_session_id),
+        // The native dialog deliberately waits for the human, but it must not
+        // occupy an async MCP worker shared by every connected agent. Isolate
+        // only the requesting call on Tokio's blocking pool.
+        "confirm" => {
+            let state = state.clone();
+            let args = remap_action(args, action);
+            let sid = mcp_session_id.map(str::to_owned);
+            run_blocking_handler(move || handle_notify(&state, addr, &args, sid.as_deref())).await
         }
         "screenshot" => handle_screenshot(state, addr, args).await,
         other => serde_json::json!({"error": format!(

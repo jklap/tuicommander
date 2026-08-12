@@ -18,6 +18,8 @@ type SessionLifecycleResponse = {
 	state?: {
 		shell_state?: string;
 		agent_state?: string;
+		awaiting_input?: boolean;
+		question_confident?: boolean;
 		background_work?: boolean;
 		queued_commands?: number;
 	} | null;
@@ -117,6 +119,8 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 		if (!snapshotIsFresh) continue;
 		terminalsStore.update(termId, {
 			agentState: toAgentLifecycleState(session.state?.agent_state),
+			awaitingInput: session.state?.awaiting_input === true ? "question" : null,
+			awaitingInputConfident: session.state?.question_confident === true,
 			backgroundWork: session.state?.background_work === true,
 			// Omitted by the backend when zero (serde skips it), so absence is an
 			// empty queue — not "unknown".

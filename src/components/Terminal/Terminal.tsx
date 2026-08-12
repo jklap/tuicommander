@@ -50,6 +50,7 @@ type ParsedEvent =
 	| { type: "progress"; state: number; value: number }
 	| { type: "question"; prompt_text: string; confident: boolean }
 	| { type: "question-cleared" }
+	| { type: "choice-cleared" }
 	| { type: "usage-limit"; percentage: number; limit_type: string }
 	| { type: "usage-exhausted"; reset_time: string | null }
 	| { type: "plan-file"; path: string }
@@ -544,6 +545,10 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					}
 					break;
 				}
+				case "choice-cleared":
+					// Durable choice state comes from the backend snapshot; plugins
+					// still receive this one-shot lifecycle event below.
+					break;
 				case "agent-block": {
 					if (parsed.action === "start") {
 						terminalsStore.handleOsc133(props.id, "A", parsed.line);

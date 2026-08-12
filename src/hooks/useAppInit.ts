@@ -87,6 +87,8 @@ export interface AppInitDeps {
 				state?: {
 					shell_state?: "busy" | "idle";
 					agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
+					awaiting_input?: boolean;
+					question_confident?: boolean;
 					agent_type?: string | null;
 					background_work?: boolean;
 				} | null;
@@ -713,6 +715,8 @@ export async function initApp(deps: AppInitDeps) {
 				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
 				ptyDescription: session.pty_description ?? null,
 				agentState: session.state?.agent_state ?? null,
+				awaitingInput: session.state?.awaiting_input === true ? "question" : null,
+				awaitingInputConfident: session.state?.question_confident === true,
 				backgroundWork: session.state?.background_work ?? false,
 			});
 			if (session.is_remote) remoteSessionTabs.set(session.session_id, id);

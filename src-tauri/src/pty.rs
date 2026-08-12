@@ -830,6 +830,26 @@ pub(crate) fn find_last_chat_question(screen_rows: &[String]) -> Option<String> 
     None
 }
 
+/// Whether the screen has a current input box and, if so, whether the last chat
+/// content above it is a question. This distinction matters to the silence
+/// fallback: `None` from `find_last_chat_question` can mean either "no prompt
+/// anchor" or "the current turn ends in non-question content". Only the former
+/// may use a changed-row fallback; the latter must not scavenge an older question
+/// from scrollback.
+fn current_chat_question(screen_rows: &[String]) -> CurrentChatQuestion {
+    if screen_rows.iter().any(|row| is_prompt_line(row)) {
+        CurrentChatQuestion::PromptAnchored(find_last_chat_question(screen_rows))
+    } else {
+        CurrentChatQuestion::NoPromptAnchor
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum CurrentChatQuestion {
+    NoPromptAnchor,
+    PromptAnchored(Option<String>),
+}
+
 /// Shared state between the PTY reader thread and the silence-detection timer thread.
 #[derive(Clone)]
 pub(crate) struct SilenceState {
@@ -1324,7 +1344,6 @@ impl SilenceState {
     pub(crate) fn suppress_user_input(&mut self) {
         self.pending_question_line = None;
         self.question_already_emitted = true;
-        self.last_emitted_text = None;
         self.suppress_echo_until = Some(std::time::Instant::now() + ECHO_SUPPRESS_WINDOW);
     }
 
@@ -1517,6 +1536,13 @@ impl SilenceState {
         !self.question_already_emitted
             && !self.is_spinner_active()
             && self.last_output_at.elapsed() >= SILENCE_QUESTION_THRESHOLD
+    }
+
+    /// Retraction is independent from question emission. Once a low-confidence
+    /// wait is active, the timer must keep reconciling it even though
+    /// `question_already_emitted` deliberately blocks another SET.
+    fn is_quiet_for_question_retraction(&self) -> bool {
+        !self.is_spinner_active() && self.last_output_at.elapsed() >= SILENCE_QUESTION_THRESHOLD
     }
 
     /// Mark that a question has been emitted (prevents re-emission).
@@ -3443,8 +3469,47 @@ fn spawn_silence_timer(
             // the event physically cannot reach the UI before idle.
             emit_pending_suggest_if_idle(&state, &silence, &session_id);
 
+            // Retraction is a reconciliation loop, not part of the one-shot
+            // question-emission gate. Once a low-confidence wait has fired,
+            // `question_already_emitted` is true by design; gating this check on
+            // `is_silent()` made the documented backstop unreachable forever.
+            let quiet_for_retraction = silence.lock().is_quiet_for_question_retraction();
+            if quiet_for_retraction {
+                let active_question = state.session_states.get(&session_id).and_then(|s| {
+                    (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
+                        .then(|| s.question_text.clone())
+                        .flatten()
+                });
+                if let Some(active_question) = active_question {
+                    let still_current = state.vt_log_buffers.get(&session_id).is_some_and(|vt| {
+                        match current_chat_question(&vt.lock().screen_rows()) {
+                            CurrentChatQuestion::PromptAnchored(Some(current)) => {
+                                current.trim() == active_question.trim()
+                            }
+                            CurrentChatQuestion::PromptAnchored(None) => false,
+                            CurrentChatQuestion::NoPromptAnchor => false,
+                        }
+                    });
+                    if !still_current {
+                        emit_question_cleared_if_stale(&state, &session_id);
+                    }
+                }
+            }
+
             // Check temporal conditions first (shared by both strategies).
-            let is_silent = silence.lock().is_silent();
+            // Snapshot the epoch while holding the lifecycle mutex shared with
+            // `note_submitted_input`. If input begins after this point, the
+            // accumulator rejects the old-epoch Question; if it began before,
+            // `suppress_user_input` makes `is_silent` false.
+            let (is_silent, question_turn_epoch) = {
+                let sl = silence.lock();
+                let epoch = state
+                    .session_states
+                    .get(&session_id)
+                    .map(|session| session.turn_epoch)
+                    .unwrap_or(0);
+                (sl.is_silent(), epoch)
+            };
             if !is_silent {
                 continue;
             }
@@ -3453,56 +3518,64 @@ fn spawn_silence_timer(
             // for the most recent plausible question within a bounded window.
             // This is robust to trailing non-question text between the question
             // and the prompt box (e.g. "(stopping here — waiting for your answer)").
-            let screen_question = state.vt_log_buffers.get(&session_id).and_then(|vt| {
+            let current_question = state.vt_log_buffers.get(&session_id).map(|vt| {
                 let rows = vt.lock().screen_rows();
-                let line = find_last_chat_question(&rows);
+                let question = current_chat_question(&rows);
                 tracing::trace!(
                     session_id = %session_id,
-                    found = line.is_some(),
-                    line = line.as_deref().unwrap_or(""),
+                    found = matches!(&question, CurrentChatQuestion::PromptAnchored(Some(_))),
                     "DIAG silence_timer: screen strategy"
                 );
-                line
+                question
             });
 
             // Strategy 2: chunk-based fallback — pending_question_line + screen verify.
-            let prompt_text = if let Some(line) = screen_question {
-                line
-            } else {
-                let question = silence.lock().check_silence();
-                match question {
-                    Some(ref text) => {
-                        let on_screen = state
-                            .vt_log_buffers
-                            .get(&session_id)
-                            .map(|vt| {
-                                verify_question_on_screen(
-                                    &vt.lock().screen_rows(),
-                                    text,
-                                    SCREEN_VERIFY_ROWS,
-                                )
-                            })
-                            .unwrap_or(false);
-                        tracing::debug!(
-                            session_id = %session_id,
-                            question = %text,
-                            on_screen = on_screen,
-                            "silence_timer: chunk fallback"
-                        );
-                        if !on_screen {
-                            silence.lock().clear_stale_question();
+            let prompt_text = match current_question {
+                Some(CurrentChatQuestion::PromptAnchored(Some(line))) => line,
+                // A current prompt exists and later non-question content is above
+                // the historical candidate. That is decisive turn-order evidence:
+                // never let the fallback dig through it to resurrect an old `?`.
+                Some(CurrentChatQuestion::PromptAnchored(None)) => {
+                    silence.lock().clear_stale_question();
+                    emit_question_cleared_if_stale(&state, &session_id);
+                    continue;
+                }
+                Some(CurrentChatQuestion::NoPromptAnchor) | None => {
+                    let question = silence.lock().check_silence();
+                    match question {
+                        Some(ref text) => {
+                            let on_screen = state
+                                .vt_log_buffers
+                                .get(&session_id)
+                                .map(|vt| {
+                                    verify_question_on_screen(
+                                        &vt.lock().screen_rows(),
+                                        text,
+                                        SCREEN_VERIFY_ROWS,
+                                    )
+                                })
+                                .unwrap_or(false);
+                            tracing::debug!(
+                                session_id = %session_id,
+                                question = %text,
+                                on_screen = on_screen,
+                                "silence_timer: chunk fallback"
+                            );
+                            if !on_screen {
+                                silence.lock().clear_stale_question();
+                                emit_question_cleared_if_stale(&state, &session_id);
+                                continue;
+                            }
+                            text.clone()
+                        }
+                        None => {
+                            tracing::trace!(
+                                session_id = %session_id,
+                                "silence_timer: silent but no question candidate"
+                            );
                             emit_question_cleared_if_stale(&state, &session_id);
                             continue;
                         }
-                        text.clone()
-                    }
-                    None => {
-                        tracing::trace!(
-                            session_id = %session_id,
-                            "silence_timer: silent but no question candidate"
-                        );
-                        emit_question_cleared_if_stale(&state, &session_id);
-                        continue;
                     }
                 }
             };
@@ -3526,7 +3599,10 @@ fn spawn_silence_timer(
                 prompt_text: prompt_text.clone(),
                 confident: false,
             };
-            if let Ok(json) = serde_json::to_value(&parsed) {
+            if let Ok(mut json) = serde_json::to_value(&parsed) {
+                if let Some(object) = json.as_object_mut() {
+                    object.insert("_turn_epoch".to_string(), question_turn_epoch.into());
+                }
                 #[cfg(feature = "desktop")]
                 if let Some(app) = state.app_handle.read().as_ref() {
                     let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
@@ -3555,19 +3631,22 @@ fn spawn_silence_timer(
 /// "not on screen right now" is not proof that it was answered. A live
 /// `choice_prompt` owns its own resolution and is left alone.
 fn emit_question_cleared_if_stale(state: &Arc<AppState>, session_id: &str) {
-    let stale = state
-        .session_states
-        .get(session_id)
-        .is_some_and(|s| s.awaiting_input && !s.question_confident && s.choice_prompt.is_none());
-    if !stale {
+    let turn_epoch = state.session_states.get(session_id).and_then(|s| {
+        (s.awaiting_input && !s.question_confident && s.choice_prompt.is_none())
+            .then_some(s.turn_epoch)
+    });
+    let Some(turn_epoch) = turn_epoch else {
         return;
-    }
+    };
     tracing::debug!(
         session_id = %session_id,
         "silence_timer: retracting stale awaiting_input (no question on screen)"
     );
     let parsed = ParsedEvent::QuestionCleared;
-    if let Ok(json) = serde_json::to_value(&parsed) {
+    if let Ok(mut json) = serde_json::to_value(&parsed) {
+        if let Some(object) = json.as_object_mut() {
+            object.insert("_turn_epoch".to_string(), turn_epoch.into());
+        }
         #[cfg(feature = "desktop")]
         if let Some(app) = state.app_handle.read().as_ref() {
             let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
@@ -4657,7 +4736,11 @@ impl ChunkProcessor {
                 // Dialog is no longer on screen — retire its dedup signature so the
                 // same dialog is detected again the next time it appears, instead of
                 // being swallowed for the rest of the session.
-                None => self.last_choice_prompt_sig = None,
+                None => {
+                    if self.last_choice_prompt_sig.take().is_some() {
+                        events.push(ParsedEvent::ChoiceCleared);
+                    }
+                }
             }
         }
 
@@ -4834,7 +4917,10 @@ impl ChunkProcessor {
             let emit_event = resolved.as_ref().unwrap_or(event);
 
             // Serialize once, reuse for both broadcast and Tauri IPC
-            if let Ok(json) = serde_json::to_value(emit_event) {
+            if let Ok(mut json) = serde_json::to_value(emit_event) {
+                if let Some(object) = json.as_object_mut() {
+                    object.insert("_turn_epoch".to_string(), turn_epoch.into());
+                }
                 #[cfg(feature = "desktop")]
                 if let Some(app) = state.app_handle.read().as_ref() {
                     let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
@@ -6680,6 +6766,38 @@ pub(crate) fn stamp_input_ms(state: &AppState, session_id: &str) {
         .store(now_ms, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Apply the semantic effects of a submitted terminal line for every transport.
+/// Empty content is still a submission: bare Enter resolves highlighted choices
+/// and confirmation prompts, so it must clear an active wait and advance the
+/// turn just like a non-empty reply.
+pub(crate) fn record_submitted_line(
+    state: &Arc<AppState>,
+    session_id: &str,
+    content: String,
+    line: i64,
+) {
+    note_submitted_input(state, session_id);
+    if content.split_whitespace().count() >= 10 {
+        state
+            .last_prompts
+            .insert(session_id.to_string(), content.clone());
+    }
+    let parsed = ParsedEvent::UserInput { content, line };
+    if let Ok(json) = serde_json::to_value(&parsed) {
+        state.emit_pty_event(crate::state::AppEvent::PtyParsed {
+            session_id: session_id.to_string(),
+            parsed: json.clone(),
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
+        }
+    }
+    if let Some(ss) = state.silence_states.get(session_id) {
+        ss.lock().suppress_user_input();
+    }
+}
+
 pub(crate) fn spawn_reader_thread(
     mut reader: Box<dyn Read + Send>,
     paused: Arc<AtomicBool>,
@@ -7557,13 +7675,12 @@ pub(crate) fn list_worktrees(state: State<'_, Arc<AppState>>) -> Vec<serde_json:
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn write_pty(
-    app: AppHandle,
+    _app: AppHandle,
     state: State<'_, Arc<AppState>>,
     session_id: String,
     data: String,
 ) -> Result<(), String> {
     let state = Arc::clone(&state);
-    let app = app.clone();
     tokio::task::spawn_blocking(move || {
     // Keystroke delivery to the PTY: run on the high QoS band so the write (and
     // thus the echo round-trip) isn't starved by a saturating build. Idempotent
@@ -7633,37 +7750,10 @@ pub(crate) async fn write_pty(
             match action {
                 InputAction::Line(content) => {
                     line_submitted = true;
-                    if !content.is_empty() {
-                        note_submitted_input(&state, &session_id);
-                        // Store as last relevant prompt if >= 10 words
-                        let word_count = content.split_whitespace().count();
-                        if word_count >= 10 {
-                            state.last_prompts.insert(session_id.clone(), content.clone());
-                        }
-                        // Keystroke-reconstructed: no grid context, so no prompt
-                        // row (line = -1). The scrollbar marker uses the OSC 7770
-                        // state=busy path's absolute line instead.
-                        let parsed = ParsedEvent::UserInput { content, line: -1 };
-                        // Broadcast to SSE/WebSocket consumers
-                        if let Ok(json) = serde_json::to_value(&parsed) {
-                            state.emit_pty_event(crate::state::AppEvent::PtyParsed {
-                                session_id: session_id.clone(),
-                                parsed: json,
-                            });
-                        }
-                        // Tauri IPC for desktop backward compat
-                        let _ = app.emit(
-                            &format!("pty-parsed-{session_id}"),
-                            &parsed,
-                        );
-
-                        // Suppress silence-based question detection for user-typed lines.
-                        // The PTY will echo this input back — without suppression, a line
-                        // ending with `?` would be mistaken for an agent question prompt.
-                        if let Some(ss) = state.silence_states.get(&session_id) {
-                            ss.lock().suppress_user_input();
-                        }
-                    }
+                    // Keystroke-reconstructed: no grid context, so no prompt row
+                    // (line = -1). The OSC 7770 busy path supplies an absolute
+                    // scrollbar marker when available.
+                    record_submitted_line(&state, &session_id, content, -1);
                 }
                 InputAction::Interrupt => {
                     line_submitted = true;
@@ -13476,7 +13566,7 @@ mod tests {
     }
 
     #[test]
-    fn test_silence_state_stale_same_question_refires_after_user_input() {
+    fn test_silence_state_stale_same_question_does_not_refire_after_user_input() {
         let mut s = SilenceState::new();
         let past = std::time::Instant::now()
             - SILENCE_QUESTION_THRESHOLD
@@ -13497,13 +13587,35 @@ mod tests {
         s.suppress_echo_until =
             Some(std::time::Instant::now() - std::time::Duration::from_millis(1));
 
-        // Same question arrives again — now it IS a new question (user answered)
+        // The same historical row is moved by a repaint after the answer. Text
+        // alone cannot prove that the agent asked it again, so it must remain
+        // suppressed; current-turn screen position/protocol evidence owns a
+        // genuinely repeated prompt.
         s.on_chunk(false, Some("Continue?".to_string()), false, false, false);
         s.last_output_at = past;
+        assert!(
+            s.check_silence().is_none(),
+            "historical question repaint after user input must not re-arm awaiting"
+        );
+    }
+
+    #[test]
+    fn current_chat_question_distinguishes_history_from_missing_prompt_anchor() {
+        let rows = vec![
+            "Confermi questa rimozione?".to_string(),
+            "› si".to_string(),
+            "Removed the worktree successfully.".to_string(),
+            "› ".to_string(),
+        ];
         assert_eq!(
-            s.check_silence(),
-            Some("Continue?".to_string()),
-            "same question text after user input must fire as new question"
+            current_chat_question(&rows),
+            CurrentChatQuestion::PromptAnchored(None),
+            "later answer and completion must make the old question historical"
+        );
+        assert_eq!(
+            current_chat_question(&["Confermi questa rimozione?".to_string()]),
+            CurrentChatQuestion::NoPromptAnchor,
+            "headless/incomplete rendering may still use the bounded fallback"
         );
     }
 

@@ -336,9 +336,9 @@ enum TerminalMode {
 
 The reader thread tracks output silence to detect unanswered agent prompts. When the terminal stops producing output for 10 seconds after a line ending with `?` is detected, the session is treated as waiting for input. This complements the instant pattern-based detection in the output parser and catches generic questions that would cause too many false positives if detected immediately (e.g., streaming fragments like "ad?", "swap?").
 
-**Question extraction:** `extract_question_line()` scans all `ChangedRow` entries (not just the last) for question text. It skips rows that are mode-line status indicators (e.g., `⏵⏵ Reading files`), so a question on row 5 is still found even when a status line updates on row 23 in the same chunk.
+**Question extraction:** `extract_question_line()` scans changed rows for a candidate, but a visible input-box anchor makes chat order authoritative: only the latest chat content above the current prompt may become a question. The changed-row fallback is used only when no prompt anchor is available. This prevents scroll/repaint from resurrecting a question retained above a later answer or completion. Question events carry the input `turn_epoch`, and the state accumulator rejects an event produced by an older turn.
 
-**Echo suppression:** When the user types a line into the PTY, the reader activates a 500ms suppression window (`suppress_user_input`). During this window, any matching text echoed by the shell is ignored for question detection. This prevents false positives when the user types a line ending with `?` — the PTY echoes it back, and without suppression, the silence detector would treat the echo as an agent question.
+**Echo suppression:** When the user submits a line — including bare Enter — the shared desktop/HTTP bookkeeping advances the turn, clears the current wait, and activates a 500ms suppression window (`suppress_user_input`). During this window, matching PTY echo is ignored for question detection.
 
 **Single threshold:** All silence-based questions use a uniform 10-second timeout regardless of whether new output has arrived since the question was detected.
 
