@@ -1343,7 +1343,11 @@ impl SilenceState {
     /// Also opens a time window to ignore the PTY echo of the typed text.
     pub(crate) fn suppress_user_input(&mut self) {
         self.pending_question_line = None;
-        self.question_already_emitted = true;
+        // A new turn may legitimately ask the same text again. Re-open the
+        // screen-anchored strategy while retaining `last_emitted_text`; the
+        // unanchored changed-row fallback uses that memory to reject historical
+        // repaints of the prior turn.
+        self.question_already_emitted = false;
         self.suppress_echo_until = Some(std::time::Instant::now() + ECHO_SUPPRESS_WINDOW);
     }
 
@@ -1388,6 +1392,9 @@ impl SilenceState {
         if let Some(ref line) = self.pending_question_line
             && self.last_output_at.elapsed() >= SILENCE_QUESTION_THRESHOLD
         {
+            if self.last_emitted_text.as_deref() == Some(line.as_str()) {
+                return None;
+            }
             self.question_already_emitted = true;
             self.last_emitted_text = Some(line.clone());
             return Some(line.clone());
@@ -7723,6 +7730,7 @@ pub(crate) async fn write_pty(
                     data_len = %data.len(), "write_pty SLOW — lock or write blocked");
             }
         }
+        crate::pty_capture::record_input(&session_id, data.as_bytes());
 
         // Stamp last-input time so the grid ticker can throttle frame sends while
         // the user types under CPU saturation (keeps the WebView thread free for
@@ -19144,7 +19152,7 @@ mod tests {
     //
     // Capturing a new one:
     //   POST /diagnostics/capture with {"enabled":true,"session_id":"<id>"}
-    //   BEFORE reproducing, then POST {"enabled":false}. Copy the exact `.raw`
+    //   BEFORE reproducing, then POST {"enabled":false}. Copy the exact `.tcap`
     //   file reported by GET /diagnostics/capture from the config-dir captures/
     //   directory into src/fixtures/agent_prompts/. `/sessions/:id/output` is a
     //   rendered/ring-buffer snapshot and is not valid raw-stream evidence.
@@ -19156,28 +19164,92 @@ mod tests {
         std::fs::read(&path).unwrap_or_else(|e| panic!("missing fixture {}: {e}", path.display()))
     }
 
-    /// Replay a capture the way `spawn_reader_thread` does: raw-stream parsers on
-    /// the bytes, clean-row parsers on what the VT renderer produced, and the
-    /// heuristic filter applied to the latter only. Chunked to 512 bytes so a
-    /// signal that straddles a chunk boundary fails here rather than in Boss's
-    /// terminal.
+    #[test]
+    fn historical_scenario_matrix_is_well_formed_and_fixture_backed() {
+        let bytes = agent_prompt_fixture("scenario-matrix.json");
+        let matrix: serde_json::Value = serde_json::from_slice(&bytes).expect("valid matrix JSON");
+        let scenarios = matrix["scenarios"].as_array().expect("scenario array");
+        assert!(
+            scenarios
+                .iter()
+                .any(|scenario| scenario["agent"] == "claude")
+        );
+        assert!(
+            scenarios
+                .iter()
+                .any(|scenario| scenario["agent"] == "codex")
+        );
+
+        let mut ids = std::collections::HashSet::new();
+        for scenario in scenarios {
+            let id = scenario["id"].as_str().expect("scenario id");
+            assert!(ids.insert(id), "duplicate scenario id: {id}");
+            let set = scenario["set"].as_str().expect("SET expectation");
+            let clears = scenario["clear"].as_array().expect("CLEAR expectations");
+            assert!(
+                set == "none" || !clears.is_empty(),
+                "every state SET needs at least one CLEAR path: {id}"
+            );
+            if scenario["source"] == "raw-fixture" {
+                let fixture = scenario["fixture"].as_str().expect("raw fixture name");
+                assert!(
+                    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("src/fixtures/agent_prompts")
+                        .join(fixture)
+                        .is_file(),
+                    "matrix references missing fixture: {fixture}"
+                );
+            }
+        }
+    }
+
+    /// Replay framed captures using their original PTY read/write boundaries.
+    /// Legacy `.raw` files decode as one output record; they retain parser value
+    /// but cannot prove boundary-sensitive or input-state behavior.
     fn replay_capture(bytes: &[u8], hook_instrumented: bool) -> Vec<ParsedEvent> {
         use crate::state::VtLogBuffer;
 
         let mut vt_log = VtLogBuffer::new(41, 128, 2000);
         let mut parser = crate::output_parser::OutputParser::new();
+        let mut input = crate::input_line_buffer::InputLineBuffer::new();
         let mut carry = String::new();
         let mut events = Vec::new();
-        for chunk in bytes.chunks(512) {
-            let changed = vt_log.process(chunk);
-            let data = String::from_utf8_lossy(chunk);
-            raw_stream_events(&mut carry, &data, &mut events);
-            events.extend(
-                parser
-                    .parse_clean_lines(&changed, true)
-                    .into_iter()
-                    .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
-            );
+        for record in crate::pty_capture::decode(bytes).expect("valid capture") {
+            match record.direction {
+                crate::pty_capture::CaptureDirection::Output => {
+                    let mut changed = vt_log.process(&record.data);
+                    let screen = vt_log.screen_rows();
+                    let refs: Vec<&str> = screen.iter().map(String::as_str).collect();
+                    if let Some(cutoff) = crate::chrome::find_chrome_cutoff(&refs) {
+                        changed.retain(|row| row.row_index < cutoff);
+                    }
+                    let data = String::from_utf8_lossy(&record.data);
+                    raw_stream_events(&mut carry, &data, &mut events);
+                    events.extend(
+                        parser
+                            .parse_clean_lines(&changed, true)
+                            .into_iter()
+                            .filter(|e| !suppress_heuristic_question(hook_instrumented, e)),
+                    );
+                }
+                crate::pty_capture::CaptureDirection::Input => {
+                    if let Ok(text) = std::str::from_utf8(&record.data) {
+                        for action in input.feed(text) {
+                            match action {
+                                crate::input_line_buffer::InputAction::Line(content) => {
+                                    events.push(ParsedEvent::UserInput { content, line: -1 });
+                                }
+                                crate::input_line_buffer::InputAction::Interrupt => {
+                                    events.push(ParsedEvent::UserInput {
+                                        content: String::new(),
+                                        line: -1,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
         events
     }

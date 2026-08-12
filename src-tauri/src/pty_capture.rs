@@ -19,7 +19,7 @@
 //! curl localhost:9876/diagnostics/capture        # state + files written
 //! ```
 //!
-//! Captures land in `<app config dir>/captures/<session-id>.raw` and stop
+//! Captures land in `<app config dir>/captures/<session-id>.tcap` and stop
 //! growing at [`MAX_CAPTURE_BYTES`] each: a fixture is a moment, not a session
 //! transcript, and an unattended tap must not fill Boss's disk.
 
@@ -28,6 +28,23 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+const CAPTURE_MAGIC: &[u8] = b"TUICCAP1\n";
+const RECORD_HEADER_BYTES: usize = 13; // direction:u8 + elapsed_us:u64 + len:u32
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CaptureDirection {
+    Output = 0,
+    Input = 1,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CaptureRecord {
+    pub(crate) direction: CaptureDirection,
+    pub(crate) elapsed_us: u64,
+    pub(crate) data: Vec<u8>,
+}
 
 /// Per-session cap. Comfortably covers a full screen repaint plus the prompt
 /// that follows it, which is all a state-detection fixture needs.
@@ -41,6 +58,7 @@ struct CaptureState {
     /// Open capture files and how many bytes each has taken.
     files: HashMap<String, (std::fs::File, u64)>,
     dir: Option<PathBuf>,
+    started_at: std::time::Instant,
 }
 
 static STATE: Mutex<Option<CaptureState>> = Mutex::new(None);
@@ -60,6 +78,7 @@ pub(crate) fn set_enabled(enabled: bool, session_filter: Option<String>, dir: Pa
             session_filter,
             files: HashMap::new(),
             dir: Some(dir),
+            started_at: std::time::Instant::now(),
         });
     } else {
         *guard = None;
@@ -71,6 +90,17 @@ pub(crate) fn set_enabled(enabled: bool, session_filter: Option<String>, dir: Pa
 /// and never block on anything but its own short-lived lock: a capture that can
 /// take a session down is worse than no capture.
 pub(crate) fn record(session_id: &str, data: &[u8]) {
+    record_direction(session_id, CaptureDirection::Output, data);
+}
+
+/// Record bytes written by the user/remote transport to the PTY. Keeping input
+/// in the same timeline is what makes bare-Enter and timer/input races
+/// reproducible; raw agent output alone cannot encode the missing CLEAR event.
+pub(crate) fn record_input(session_id: &str, data: &[u8]) {
+    record_direction(session_id, CaptureDirection::Input, data);
+}
+
+fn record_direction(session_id: &str, direction: CaptureDirection, data: &[u8]) {
     if !is_enabled() {
         return;
     }
@@ -86,31 +116,82 @@ pub(crate) fn record(session_id: &str, data: &[u8]) {
     let Some(dir) = state.dir.clone() else {
         return;
     };
+    let elapsed_us = state.started_at.elapsed().as_micros().min(u64::MAX as u128) as u64;
     let entry = match state.files.get_mut(session_id) {
         Some(entry) => entry,
         None => {
             if std::fs::create_dir_all(&dir).is_err() {
                 return;
             }
-            let path = dir.join(format!("{session_id}.raw"));
-            let Ok(file) = std::fs::File::create(&path) else {
+            let path = dir.join(format!("{session_id}.tcap"));
+            let Ok(mut file) = std::fs::File::create(&path) else {
                 return;
             };
+            if file.write_all(CAPTURE_MAGIC).is_err() {
+                return;
+            }
             tracing::info!("[capture] recording {session_id} to {}", path.display());
             state
                 .files
                 .entry(session_id.to_string())
-                .or_insert((file, 0))
+                .or_insert((file, CAPTURE_MAGIC.len() as u64))
         }
     };
     if entry.1 >= MAX_CAPTURE_BYTES {
         return;
     }
     let room = (MAX_CAPTURE_BYTES - entry.1) as usize;
-    let slice = &data[..data.len().min(room)];
-    if entry.0.write_all(slice).is_ok() {
-        entry.1 += slice.len() as u64;
+    if room <= RECORD_HEADER_BYTES {
+        return;
     }
+    let payload_len = data.len().min(room - RECORD_HEADER_BYTES);
+    let mut header = [0u8; RECORD_HEADER_BYTES];
+    header[0] = direction as u8;
+    header[1..9].copy_from_slice(&elapsed_us.to_le_bytes());
+    header[9..13].copy_from_slice(&(payload_len as u32).to_le_bytes());
+    if entry.0.write_all(&header).is_ok() && entry.0.write_all(&data[..payload_len]).is_ok() {
+        entry.1 += (RECORD_HEADER_BYTES + payload_len) as u64;
+    }
+}
+
+/// Decode a framed capture. Legacy `.raw` fixtures are returned as one output
+/// record so the existing corpus remains usable while new captures preserve the
+/// real read/write boundaries.
+#[cfg(test)]
+pub(crate) fn decode(bytes: &[u8]) -> Result<Vec<CaptureRecord>, String> {
+    if !bytes.starts_with(CAPTURE_MAGIC) {
+        return Ok(vec![CaptureRecord {
+            direction: CaptureDirection::Output,
+            elapsed_us: 0,
+            data: bytes.to_vec(),
+        }]);
+    }
+    let mut cursor = CAPTURE_MAGIC.len();
+    let mut records = Vec::new();
+    while cursor < bytes.len() {
+        if bytes.len() - cursor < RECORD_HEADER_BYTES {
+            return Err("truncated capture record header".to_string());
+        }
+        let direction = match bytes[cursor] {
+            0 => CaptureDirection::Output,
+            1 => CaptureDirection::Input,
+            value => return Err(format!("invalid capture direction {value}")),
+        };
+        let elapsed_us = u64::from_le_bytes(bytes[cursor + 1..cursor + 9].try_into().unwrap());
+        let len = u32::from_le_bytes(bytes[cursor + 9..cursor + 13].try_into().unwrap()) as usize;
+        cursor += RECORD_HEADER_BYTES;
+        let end = cursor
+            .checked_add(len)
+            .filter(|end| *end <= bytes.len())
+            .ok_or_else(|| "truncated capture record payload".to_string())?;
+        records.push(CaptureRecord {
+            direction,
+            elapsed_us,
+            data: bytes[cursor..end].to_vec(),
+        });
+        cursor = end;
+    }
+    Ok(records)
 }
 
 /// Current tap state, for `GET /diagnostics/capture`.
@@ -162,15 +243,15 @@ mod tests {
         record("wanted", &vec![b'x'; (MAX_CAPTURE_BYTES + 1024) as usize]);
         set_enabled(false, None, dir.clone());
 
-        let wanted = std::fs::read(dir.join("wanted.raw")).expect("filtered session recorded");
-        assert!(wanted.starts_with(b"\x1b]777;notify"));
+        let wanted = std::fs::read(dir.join("wanted.tcap")).expect("filtered session recorded");
+        assert!(wanted.starts_with(CAPTURE_MAGIC));
         assert_eq!(
             wanted.len() as u64,
             MAX_CAPTURE_BYTES,
             "capture must stop exactly at the cap"
         );
         assert!(
-            !dir.join("other.raw").exists(),
+            !dir.join("other.tcap").exists(),
             "a filtered-out session must not be touched"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -192,7 +273,37 @@ mod tests {
         record("s", b"second");
         set_enabled(false, None, dir.clone());
 
-        assert_eq!(std::fs::read(dir.join("s.raw")).unwrap(), b"second");
+        let bytes = std::fs::read(dir.join("s.tcap")).unwrap();
+        let records = decode(&bytes).expect("framed capture decodes");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].data, b"second");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn framed_capture_preserves_output_input_order_and_boundaries() {
+        let _guard = TEST_LOCK.lock();
+        let dir = std::env::temp_dir().join("tuic-capture-test-framed");
+        let _ = std::fs::remove_dir_all(&dir);
+        set_enabled(true, Some("s".into()), dir.clone());
+        record("s", b"question?");
+        record_input("s", b"\r");
+        record("s", b"working");
+        set_enabled(false, None, dir.clone());
+
+        let records = decode(&std::fs::read(dir.join("s.tcap")).unwrap()).unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[0].direction, CaptureDirection::Output);
+        assert_eq!(records[0].data, b"question?");
+        assert_eq!(records[1].direction, CaptureDirection::Input);
+        assert_eq!(records[1].data, b"\r");
+        assert_eq!(records[2].direction, CaptureDirection::Output);
+        assert_eq!(records[2].data, b"working");
+        assert!(
+            records
+                .windows(2)
+                .all(|pair| pair[0].elapsed_us <= pair[1].elapsed_us)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

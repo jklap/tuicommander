@@ -202,11 +202,11 @@ curl -X POST localhost:9876/diagnostics/capture -H 'content-type: application/js
 curl localhost:9876/diagnostics/capture         # state + bytes written per session
 ```
 
-Captures land in `<config dir>/captures/<session-id>.raw`, capped at 512 KB each.
+Captures land in `<config dir>/captures/<session-id>.tcap`, capped at 512 KB each. The framed format preserves output/input direction, original chunk boundaries, ordering, and monotonic timestamps. Legacy `.raw` fixtures remain readable as output-only captures.
 Off by default (one relaxed atomic load per chunk when off) — code in
 `src-tauri/src/pty_capture.rs`.
 
-**A reproduced failure becomes a fixture, always.** Drop the `.raw` in
+**A reproduced failure becomes a fixture, always.** Drop the `.tcap` in
 `src-tauri/src/fixtures/agent_prompts/` and add a case to the
 `Awaiting-signal fixtures` block in `pty.rs` tests: it replays the capture
 through `raw_stream_events` + `parse_clean_lines` + `suppress_heuristic_question`
@@ -244,11 +244,10 @@ and three of them wait for an event that may never arrive:
 confident question: grok repaints while it waits, so "not on screen this tick"
 is not proof of an answer.
 
-**A latched badge cannot be reproduced by a `.raw` fixture.** Captures replay
-bytes through the parsers and assert which events come out; a state that never
-clears is the *absence* of an event. Regressions of that shape belong in the
-`Awaiting RETRACTION` block in `pty.rs` tests, which drives the real event-bus
-accumulator and asserts `SessionState` — the thing a tab actually renders.
+**Legacy output-only `.raw` fixtures cannot reproduce a latched badge.** New
+`.tcap` captures include user input and can replay SET/CLEAR ordering, but the
+`Awaiting RETRACTION` block must still drive the real event-bus accumulator and
+assert `SessionState` — the thing a tab actually renders.
 
 ## Frontend performance instrumentation (`perfDebug`)
 

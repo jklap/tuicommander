@@ -805,8 +805,10 @@ Content-Type: application/json
 { "enabled": false }
 ```
 
-Files are written as exact raw PTY bytes to
-`<app config dir>/captures/<session-id>.raw`, capped at 512 KiB per session.
+Files are written as framed PTY timelines to
+`<app config dir>/captures/<session-id>.tcap`, capped at 512 KiB per session.
+Each record preserves input/output direction, original chunk boundaries and a
+monotonic timestamp. Legacy `.raw` fixtures remain readable as one output record.
 Copy the relevant file into `src-tauri/src/fixtures/agent_prompts/` and replay it
 through the production parser composition. Do not acquire state-detection
 fixtures from `GET /sessions/:id/output`: its ring is bounded, may already have
