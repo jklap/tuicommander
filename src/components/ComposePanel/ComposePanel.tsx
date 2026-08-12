@@ -1,16 +1,7 @@
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { drawSelection, EditorView, keymap } from "@codemirror/view";
 import { createCodeMirror } from "solid-codemirror";
-import {
-	type Accessor,
-	type Component,
-	createEffect,
-	createSignal,
-	For,
-	on,
-	onCleanup,
-	Show,
-} from "solid-js";
+import { type Accessor, type Component, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import type { QueuedCommand } from "../../hooks/usePty";
 import { cx } from "../../utils";
 import s from "./ComposePanel.module.css";
