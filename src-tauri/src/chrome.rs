@@ -281,7 +281,8 @@ pub fn find_chrome_cutoff(rows: &[&str]) -> Option<usize> {
     // here returns None, and None means NO trim, so every status-line row would
     // then reach every parser. Failing open is the one outcome this guard must
     // never have, so search the whole screen for the input box itself.
-    .or_else(|| lowest_input_box_row(rows, content_end));
+    .or_else(|| lowest_input_box_row(rows, content_end))
+    .or_else(|| lowest_structured_input_box(rows, content_end).map(|(separator, _)| separator));
 
     Some(extend_cutoff_upward(rows, anchor?))
 }
@@ -297,6 +298,48 @@ fn lowest_input_box_row(rows: &[&str], content_end: usize) -> Option<usize> {
     (0..content_end)
         .rev()
         .find(|&i| is_agent_prompt_row(rows[i]))
+}
+
+/// Lowest separator that is followed immediately by an agent prompt.
+///
+/// This is the unwindowed fallback for a non-empty input box hidden above a
+/// tall user-configured HUD. A separator alone is too common in transcript
+/// content, and an unwindowed loose prompt would match markdown quotes; their
+/// bounded structural pairing is the input-box invariant.
+fn lowest_structured_input_box(rows: &[&str], content_end: usize) -> Option<(usize, usize)> {
+    (0..content_end).rev().find_map(|separator| {
+        if !is_separator_line(rows[separator].trim()) {
+            return None;
+        }
+        rows.iter()
+            .take(content_end)
+            .enumerate()
+            .skip(separator + 1)
+            .take(4)
+            .find(|(_, row)| is_prompt_line(row))
+            .map(|(prompt, _)| (separator, prompt))
+    })
+}
+
+/// Locate the live prompt using only unwindowed input-box invariants.
+///
+/// Unlike [`find_chrome_cutoff`], this never accepts a loose prompt merely
+/// because it is near the viewport bottom: that shape can be transcript prose.
+/// It is safe for readiness classifiers that must not treat historical input as
+/// the current composer.
+pub fn find_input_box_prompt_row(rows: &[&str]) -> Option<usize> {
+    let content_end = rows
+        .iter()
+        .rposition(|row| !row.trim().is_empty())
+        .map_or(0, |index| index + 1);
+    let empty_prompt = lowest_input_box_row(rows, content_end);
+    let structured_prompt =
+        lowest_structured_input_box(rows, content_end).map(|(_, prompt)| prompt);
+    match (empty_prompt, structured_prompt) {
+        (Some(empty), Some(structured)) => Some(empty.max(structured)),
+        (Some(prompt), None) | (None, Some(prompt)) => Some(prompt),
+        (None, None) => None,
+    }
 }
 
 /// Find the row index where agent chrome starts in a batch of lines that
@@ -428,6 +471,20 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cutoff_survives_tall_hud_while_prompt_contains_draft_text() {
+        let mut rows = vec![
+            "  Agent output that must remain visible.".to_string(),
+            String::new(),
+            "─".repeat(100),
+            "› Run /review on my current changes".to_string(),
+            "─".repeat(100),
+        ];
+        rows.extend((0..30).map(|i| format!("custom HUD row {i}: ready?")));
+
+        assert_eq!(cutoff_of(&rows), Some(1));
+    }
+
     /// The extended search anchors on an EMPTY prompt row only. A markdown
     /// blockquote or an echoed prompt carrying text is conversation, and
     /// anchoring on it would cut real output out of the screen.
@@ -440,6 +497,22 @@ mod tests {
             None,
             "prose alone must not produce a cutoff"
         );
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+        assert_eq!(find_input_box_prompt_row(&refs), None);
+    }
+
+    #[test]
+    fn structured_input_box_returns_its_prompt_row_above_tall_hud() {
+        let mut rows = vec![
+            "agent output".to_string(),
+            "─".repeat(80),
+            "› draft request".to_string(),
+            "─".repeat(80),
+        ];
+        rows.extend((0..30).map(|i| format!("HUD row {i}")));
+        let refs: Vec<&str> = rows.iter().map(String::as_str).collect();
+
+        assert_eq!(find_input_box_prompt_row(&refs), Some(2));
     }
 
     // --- is_working_status_row (presence-driven busy keepalive) ---

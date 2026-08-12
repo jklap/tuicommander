@@ -903,10 +903,11 @@ fn exec_get_context(state: &AppState, args: &Value) -> ToolResult {
     let shell_state = state
         .shell_states
         .get(session_id)
-        .map(|atom| {
-            crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed)).to_string()
+        .and_then(|atom| {
+            crate::pty::shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed))
+                .map(str::to_string)
         })
-        .unwrap_or_else(|| "unknown".to_string());
+        .unwrap_or_else(|| "starting".to_string());
 
     let ss = state.session_states.get(session_id);
     let agent_type = ss
@@ -1100,14 +1101,9 @@ async fn exec_drive_agent(state: &Arc<AppState>, args: &Value, skip_safety: bool
         }
 
         // Check shell_state for idle (most reliable signal)
-        let is_idle = state
-            .shell_states
-            .get(&session_id)
-            .map(|atom| {
-                let s = atom.load(std::sync::atomic::Ordering::Relaxed);
-                crate::pty::shell_state_str(s) == "idle"
-            })
-            .unwrap_or(false);
+        let is_idle = state.shell_states.get(&session_id).is_some_and(|atom| {
+            atom.load(std::sync::atomic::Ordering::Relaxed) == crate::pty::SHELL_IDLE
+        });
 
         let current = {
             let vt_log = match state.vt_log_buffers.get(&session_id) {
@@ -1169,10 +1165,11 @@ async fn exec_drive_agent(state: &Arc<AppState>, args: &Value, skip_safety: bool
     let shell_state = state
         .shell_states
         .get(&session_id)
-        .map(|atom| {
-            crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed)).to_string()
+        .and_then(|atom| {
+            crate::pty::shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed))
+                .map(str::to_string)
         })
-        .unwrap_or_else(|| "unknown".to_string());
+        .unwrap_or_else(|| "starting".to_string());
 
     let result = json!({
         "screen": redact_secrets(&screen_text),

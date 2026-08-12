@@ -108,6 +108,10 @@ question retained above a later response or completion must never re-arm
 Desktop IPC, HTTP/PWA, WebSocket, MCP, and orchestrator injection use the same
 post-input bookkeeping. Frontends render the backend snapshot; parsed terminal
 events may trigger one-shot effects but are not a second state authority.
+PTY lifecycle mutations reach that snapshot through a lossless ordered lane;
+the broadcast event bus is reserved for reconnectable live consumers and cannot
+be the sole carrier of sticky SET/CLEAR state. Before any lifecycle evidence,
+the shell state is absent and a detected agent remains `starting`.
 
 #### repositoriesStore
 Manages the list of git repositories.

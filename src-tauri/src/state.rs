@@ -231,7 +231,8 @@ impl AppEvent {
     /// variants the session-scoped WS handlers care about.
     pub(crate) fn pty_session_id(&self) -> Option<&str> {
         match self {
-            AppEvent::PtyParsed { session_id, .. }
+            AppEvent::SessionCreated { session_id, .. }
+            | AppEvent::PtyParsed { session_id, .. }
             | AppEvent::PtyExit { session_id }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
@@ -360,6 +361,25 @@ pub(crate) struct SessionState {
 impl SessionState {
     pub(crate) fn has_pending_background_probe(&self) -> bool {
         self.background_probe_turn_epoch == Some(self.turn_epoch)
+    }
+}
+
+/// Lossless lane for events that mutate the authoritative per-session state.
+/// The public broadcast bus may drop messages for a lagging receiver; state
+/// transitions cannot, because losing either SET or CLEAR strands clients in a
+/// state that never existed or never ended.
+pub(crate) struct SessionStateEventQueue {
+    tx: tokio::sync::mpsc::UnboundedSender<AppEvent>,
+    rx: Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<AppEvent>>>,
+}
+
+impl SessionStateEventQueue {
+    pub(crate) fn new() -> Self {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        Self {
+            tx,
+            rx: Mutex::new(Some(rx)),
+        }
     }
 }
 
@@ -1322,13 +1342,15 @@ pub struct AppState {
     /// Frontend pushes via push_log, reads via get_logs.
     /// Wrapped in Arc so the tracing subscriber layer can share the same buffer.
     pub(crate) log_buffer: Arc<Mutex<crate::app_logger::LogRingBuffer>>,
-    /// Broadcast channel for all backend events (SSE, WebSocket, state accumulator).
+    /// Broadcast channel for all backend events (SSE, WebSocket, live consumers).
     /// Capacity 256 — lagged receivers get `RecvError::Lagged` and should reconnect.
     pub(crate) event_bus: tokio::sync::broadcast::Sender<AppEvent>,
     /// Monotonic counter for SSE event IDs.
     pub(crate) event_counter: Arc<AtomicU64>,
     /// Per-session state accumulated from broadcast events (for REST polling).
     pub(crate) session_states: DashMap<String, SessionState>,
+    /// Lossless single-consumer lane for PTY events that mutate `session_states`.
+    pub(crate) session_state_events: SessionStateEventQueue,
     /// Upstream MCP proxy registry — aggregates tools from all connected upstreams.
     pub(crate) mcp_upstream_registry: Arc<crate::mcp_proxy::registry::UpstreamRegistry>,
     /// Orchestrator for in-flight OAuth 2.1 authorization flows. Shares the
@@ -1589,11 +1611,11 @@ impl AppState {
             .map_err(|error| format!("Flush failed: {error}"))
     }
 
-    /// Emit a PTY-scoped `AppEvent` (`PtyParsed`/`PtyExit`/`SessionClosed`) to
-    /// BOTH transports: the per-session channel (so the session-scoped WS
+    /// Emit a PTY-scoped lifecycle event to
+    /// all three routes: the lossless state lane, per-session channel (so the session-scoped WS
     /// handlers receive it directly, without every other session's receiver
-    /// cloning+filtering it) AND the global `event_bus` (which still feeds
-    /// `/events` SSE, the session-state accumulator, relay, watcher, etc.).
+    /// cloning+filtering it), and the global `event_bus` (which still feeds
+    /// `/events` SSE, relay, watcher, etc.).
     ///
     /// The per-session send is best-effort: it only fires when a WS handler has
     /// created the channel (via `subscribe`) — we never create it on the emit
@@ -1605,6 +1627,9 @@ impl AppState {
     /// directly; `pty_session_id()` returns `None` for them so they'd never reach
     /// a per-session channel anyway.
     pub(crate) fn emit_pty_event(&self, event: AppEvent) {
+        // State is authoritative and sticky, so it gets a lossless lane. The
+        // broadcast copies remain best-effort transports for live consumers.
+        let _ = self.session_state_events.tx.send(event.clone());
         if let Some(sid) = event.pty_session_id()
             && let Some(tx) = self.pty_event_channels.get(sid)
         {
@@ -2394,6 +2419,7 @@ impl AppState {
             event_bus: tokio::sync::broadcast::channel(256).0,
             event_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_states: DashMap::new(),
+            session_state_events: SessionStateEventQueue::new(),
             oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new(
                 mcp_upstream_registry.auth_semaphore.clone(),
             )),
@@ -2896,8 +2922,9 @@ impl AppState {
         // to serialize against a newly submitted input epoch.
         let mut state = self.session_states.get(session_id).map(|s| s.clone())?;
         state.queued_commands = crate::pty::queued_command_count(self, session_id) as u32;
-        state.shell_state = self.shell_states.get(session_id).map(|atom| {
-            crate::pty::shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed)).to_string()
+        state.shell_state = self.shell_states.get(session_id).and_then(|atom| {
+            crate::pty::shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed))
+                .map(str::to_string)
         });
         let completion_declared = state.suggested_actions.is_some()
             || self.silence_states.get(session_id).is_some_and(|silence| {
@@ -2934,15 +2961,31 @@ impl AppState {
     /// Spawn a background task that subscribes to the event bus and updates
     /// `session_states`. Call once at startup after constructing AppState.
     pub(crate) fn spawn_session_state_accumulator(state: Arc<AppState>) {
-        let mut rx = state.event_bus.subscribe();
+        let mut broadcast_rx = state.event_bus.subscribe();
+        let mut state_rx = state
+            .session_state_events
+            .rx
+            .lock()
+            .take()
+            .expect("session state accumulator must be spawned exactly once");
         tokio::spawn(async move {
             loop {
-                match rx.recv().await {
-                    Ok(event) => Self::apply_event_to_session_state(&state, &event),
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(source = "session_state", lagged = n, "Event bus lagged");
+                tokio::select! {
+                    event = state_rx.recv() => match event {
+                        Some(event) => Self::apply_event_to_session_state(&state, &event),
+                        None => break,
+                    },
+                    event = broadcast_rx.recv() => match event {
+                        // PTY-scoped events arrive on the lossless lane above.
+                        Ok(event) if event.pty_session_id().is_none() => {
+                            Self::apply_event_to_session_state(&state, &event);
+                        }
+                        Ok(_) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            tracing::warn!(source = "session_state", lagged = n, "Event bus lagged");
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
@@ -2985,14 +3028,18 @@ impl AppState {
                 agent_type,
                 ..
             } => {
-                state.session_states.insert(
-                    session_id.clone(),
-                    SessionState {
+                state
+                    .session_states
+                    .entry(session_id.clone())
+                    .and_modify(|session| {
+                        session.last_activity_ms = now_ms;
+                        session.agent_type = agent_type.clone();
+                    })
+                    .or_insert_with(|| SessionState {
                         last_activity_ms: now_ms,
                         agent_type: agent_type.clone(),
                         ..Default::default()
-                    },
-                );
+                    });
             }
             AppEvent::PtyDescriptionChanged { .. } => {}
             AppEvent::SessionClosed { session_id, .. } => {
@@ -3008,214 +3055,205 @@ impl AppState {
                 // spawning orchestrator's inbox outside the lock below.
                 let mut parked_wait: Option<(String, bool, &'static str)> = None;
 
-                state
+                let mut s = state
                     .session_states
                     .entry(session_id.clone())
-                    .and_modify(|s| {
-                        s.last_activity_ms = now_ms;
-                        match event_type {
-                            "question"
-                                if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) =>
-                            {
-                                let new_confident = parsed
-                                    .get("confident")
-                                    .and_then(|v| v.as_bool())
-                                    .unwrap_or(false);
-                                // Don't let a low-confidence (silence-heuristic) question
-                                // overwrite an already-active high-confidence one — e.g. grok
-                                // signals an approval prompt via its "Action Required" title
-                                // (confident) while its on-screen status line is also parsed as
-                                // a low-confidence question. Downgrading question_confident here
-                                // would let the next busy status-line clear awaiting_input,
-                                // making the approval state flicker. The confident question
-                                // clears on user-input instead.
-                                if !(s.awaiting_input && s.question_confident && !new_confident) {
-                                    let was_awaiting = s.awaiting_input;
-                                    s.awaiting_input = true;
-                                    s.question_text = parsed
-                                        .get("prompt_text")
-                                        .and_then(|t| t.as_str())
-                                        .map(|t| t.to_string());
-                                    s.question_confident = new_confident;
-
-                                    // Confidence is metadata, not a routing gate. A
-                                    // managed child has nobody at its keyboard, so every
-                                    // transition into a wait must reach its orchestrator;
-                                    // otherwise plan/skill pickers park invisibly.
-                                    if !was_awaiting {
-                                        parked_wait = Some((
-                                            s.question_text.clone().unwrap_or_default(),
-                                            new_confident,
-                                            "question",
-                                        ));
-                                    }
-
-                                    // Rate limit: skip if last push for this session was < 30s ago
-                                    let should_push = !state.push_store.is_empty()
-                                        && s.last_push_ms
-                                            .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000);
-                                    if should_push {
-                                        s.last_push_ms = Some(now_ms);
-                                        let prompt = s.question_text.clone().unwrap_or_default();
-                                        push_data = Some((session_id.clone(), prompt));
-                                    }
-                                }
-                            }
-                            "question-cleared"
-                                if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) =>
-                            {
-                                // The silence timer saw the question leave the
-                                // screen. It only fires for the heuristic state,
-                                // but re-check here: a confident question may
-                                // have landed between the check and this event.
-                                if !s.question_confident {
-                                    s.awaiting_input = false;
-                                    s.question_text = None;
-                                }
-                            }
-                            "user-input" => {
-                                // User responded — agent will start working
-                                s.awaiting_input = false;
-                                s.question_text = None;
-                                s.question_confident = false;
-                                s.slash_menu_items = None;
-                                s.choice_prompt = None;
-                                // Capture as last_prompt if >= 10 words
-                                if let Some(content) =
-                                    parsed.get("content").and_then(|v| v.as_str())
-                                    && content.split_whitespace().count() >= 10
-                                {
-                                    s.last_prompt = Some(content.to_string());
-                                }
-                            }
-                            "rate-limit" if s.current_task.is_some() => {
-                                s.rate_limited = true;
-                                s.retry_after_ms =
-                                    parsed.get("retry_after_ms").and_then(|v| v.as_u64());
-                                s.rate_limit_set_ms = now_ms;
-                            }
-                            "usage-limit" => {
-                                s.usage_limit_pct = parsed
-                                    .get("percentage")
-                                    .and_then(|v| v.as_u64())
-                                    .map(|v| v as u8);
-                            }
-                            "api-error" => {
-                                s.last_error = parsed
-                                    .get("matched_text")
-                                    .and_then(|t| t.as_str())
-                                    .map(|t| t.to_string());
-                            }
-                            "status-line" => {
-                                // Agent is working — clear error/rate-limit/suggest/question.
-                                // Keep slash_menu_items — the agent's status line can tick
-                                // while the user is still interacting with the slash menu, and
-                                // wiping it here causes the PWA overlay to flash off.
-                                //
-                                // A *confident* question stays sticky across status-line ticks.
-                                // grok keeps its spinner animating (emitting status-line) WHILE
-                                // awaiting approval ("⚠ Action Required" title → confident
-                                // question), so a busy tick must not clobber it — otherwise
-                                // awaiting_input flickers. It clears on user-input (the user
-                                // answered, state.rs user-input arm). Low-confidence
-                                // silence-heuristic questions still yield to the busy signal.
-                                if !s.question_confident {
-                                    s.awaiting_input = false;
-                                    s.question_text = None;
-                                }
-                                s.rate_limited = false;
-                                s.retry_after_ms = None;
-                                s.rate_limit_set_ms = 0;
-                                s.last_error = None;
-                                s.suggested_actions = None;
-                                // Only update current_task + activity timestamp when task changes.
-                                // Spinner rotations (same task name) are suppressed to avoid
-                                // churning the state and flooding WS clients.
-                                let new_task = parsed
-                                    .get("task_name")
-                                    .and_then(|v| v.as_str())
-                                    .map(|t| t.to_string());
-                                if s.current_task != new_task {
-                                    s.current_task = new_task;
-                                }
-                            }
-                            "intent" => {
-                                s.agent_intent = parsed
-                                    .get("text")
-                                    .and_then(|v| v.as_str())
-                                    .map(|t| t.to_string());
-                            }
-                            "suggest"
-                                if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) =>
-                            {
-                                s.suggested_actions =
-                                    parsed.get("items").and_then(|v| v.as_array()).map(|arr| {
-                                        arr.iter()
-                                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                            .collect()
-                                    });
-                            }
-                            "slash-menu" => {
-                                s.slash_menu_items = parsed.get("items").and_then(|v| {
-                                    serde_json::from_value::<
-                                            Vec<crate::output_parser::SlashMenuItem>,
-                                        >(v.clone())
-                                        .ok()
-                                });
-                            }
-                            "choice-prompt" => {
-                                // Deserialise directly from the parsed JSON — the payload fields
-                                // (title/options/dismiss_key/amend_key) are flat at the top level
-                                // alongside "type", and serde ignores the unknown "type" field.
-                                let was_awaiting = s.awaiting_input;
-                                s.choice_prompt = serde_json::from_value::<
-                                    crate::output_parser::ChoicePromptPayload,
-                                >(parsed.clone())
-                                .ok();
-                                s.awaiting_input = true;
-                                if !was_awaiting {
-                                    parked_wait = Some((
-                                        parsed
-                                            .get("title")
-                                            .and_then(|value| value.as_str())
-                                            .unwrap_or_default()
-                                            .to_string(),
-                                        true,
-                                        "choice",
-                                    ));
-                                }
-                            }
-                            "choice-cleared" => {
-                                s.choice_prompt = None;
-                                s.awaiting_input = false;
-                                s.question_text = None;
-                                s.question_confident = false;
-                            }
-                            "active-subtasks" => {
-                                s.active_sub_tasks =
-                                    parsed.get("count").and_then(|v| v.as_u64()).unwrap_or(0)
-                                        as u32;
-                            }
-                            "progress" => {
-                                let state_val =
-                                    parsed.get("state").and_then(|v| v.as_u64()).unwrap_or(0);
-                                if state_val == 0 {
-                                    // state=0 means remove the progress bar
-                                    s.progress = None;
-                                } else {
-                                    s.progress = parsed
-                                        .get("value")
-                                        .and_then(|v| v.as_u64())
-                                        .map(|v| v as u8);
-                                }
-                            }
-                            _ => {}
-                        }
-                    })
                     .or_insert_with(|| SessionState {
                         last_activity_ms: now_ms,
                         ..Default::default()
                     });
+                s.last_activity_ms = now_ms;
+                match event_type {
+                    "question" if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) => {
+                        let new_confident = parsed
+                            .get("confident")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        // Don't let a low-confidence (silence-heuristic) question
+                        // overwrite an already-active high-confidence one — e.g. grok
+                        // signals an approval prompt via its "Action Required" title
+                        // (confident) while its on-screen status line is also parsed as
+                        // a low-confidence question. Downgrading question_confident here
+                        // would let the next busy status-line clear awaiting_input,
+                        // making the approval state flicker. The confident question
+                        // clears on user-input instead.
+                        if !(s.awaiting_input && s.question_confident && !new_confident) {
+                            let was_awaiting = s.awaiting_input;
+                            s.awaiting_input = true;
+                            s.question_text = parsed
+                                .get("prompt_text")
+                                .and_then(|t| t.as_str())
+                                .map(|t| t.to_string());
+                            s.question_confident = new_confident;
+
+                            // Confidence is metadata, not a routing gate. A
+                            // managed child has nobody at its keyboard, so every
+                            // transition into a wait must reach its orchestrator;
+                            // otherwise plan/skill pickers park invisibly.
+                            if !was_awaiting {
+                                parked_wait = Some((
+                                    s.question_text.clone().unwrap_or_default(),
+                                    new_confident,
+                                    "question",
+                                ));
+                            }
+
+                            // Rate limit: skip if last push for this session was < 30s ago
+                            let should_push = !state.push_store.is_empty()
+                                && s.last_push_ms
+                                    .is_none_or(|t| now_ms.saturating_sub(t) >= 30_000);
+                            if should_push {
+                                s.last_push_ms = Some(now_ms);
+                                let prompt = s.question_text.clone().unwrap_or_default();
+                                push_data = Some((session_id.clone(), prompt));
+                            }
+                        }
+                    }
+                    "question-cleared"
+                        if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) =>
+                    {
+                        // The silence timer saw the question leave the
+                        // screen. It only fires for the heuristic state,
+                        // but re-check here: a confident question may
+                        // have landed between the check and this event.
+                        if !s.question_confident {
+                            s.awaiting_input = false;
+                            s.question_text = None;
+                        }
+                    }
+                    "user-input" => {
+                        // User responded — agent will start working
+                        s.awaiting_input = false;
+                        s.question_text = None;
+                        s.question_confident = false;
+                        s.slash_menu_items = None;
+                        s.choice_prompt = None;
+                        // Capture as last_prompt if >= 10 words
+                        if let Some(content) = parsed.get("content").and_then(|v| v.as_str())
+                            && content.split_whitespace().count() >= 10
+                        {
+                            s.last_prompt = Some(content.to_string());
+                        }
+                    }
+                    "rate-limit" if s.current_task.is_some() => {
+                        s.rate_limited = true;
+                        s.retry_after_ms = parsed.get("retry_after_ms").and_then(|v| v.as_u64());
+                        s.rate_limit_set_ms = now_ms;
+                    }
+                    "usage-limit" => {
+                        s.usage_limit_pct = parsed
+                            .get("percentage")
+                            .and_then(|v| v.as_u64())
+                            .map(|v| v as u8);
+                    }
+                    "api-error" => {
+                        s.last_error = parsed
+                            .get("matched_text")
+                            .and_then(|t| t.as_str())
+                            .map(|t| t.to_string());
+                    }
+                    "status-line" => {
+                        // Agent is working — clear error/rate-limit/suggest/question.
+                        // Keep slash_menu_items — the agent's status line can tick
+                        // while the user is still interacting with the slash menu, and
+                        // wiping it here causes the PWA overlay to flash off.
+                        //
+                        // A *confident* question stays sticky across status-line ticks.
+                        // grok keeps its spinner animating (emitting status-line) WHILE
+                        // awaiting approval ("⚠ Action Required" title → confident
+                        // question), so a busy tick must not clobber it — otherwise
+                        // awaiting_input flickers. It clears on user-input (the user
+                        // answered, state.rs user-input arm). Low-confidence
+                        // silence-heuristic questions still yield to the busy signal.
+                        if !s.question_confident {
+                            s.awaiting_input = false;
+                            s.question_text = None;
+                        }
+                        s.rate_limited = false;
+                        s.retry_after_ms = None;
+                        s.rate_limit_set_ms = 0;
+                        s.last_error = None;
+                        s.suggested_actions = None;
+                        // Only update current_task + activity timestamp when task changes.
+                        // Spinner rotations (same task name) are suppressed to avoid
+                        // churning the state and flooding WS clients.
+                        let new_task = parsed
+                            .get("task_name")
+                            .and_then(|v| v.as_str())
+                            .map(|t| t.to_string());
+                        if s.current_task != new_task {
+                            s.current_task = new_task;
+                        }
+                    }
+                    "intent" => {
+                        s.agent_intent = parsed
+                            .get("text")
+                            .and_then(|v| v.as_str())
+                            .map(|t| t.to_string());
+                    }
+                    "suggest" if event_turn_epoch.is_none_or(|epoch| epoch == s.turn_epoch) => {
+                        s.suggested_actions =
+                            parsed.get("items").and_then(|v| v.as_array()).map(|arr| {
+                                arr.iter()
+                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                    .collect()
+                            });
+                    }
+                    "slash-menu" => {
+                        s.slash_menu_items = parsed.get("items").and_then(|v| {
+                            serde_json::from_value::<Vec<crate::output_parser::SlashMenuItem>>(
+                                v.clone(),
+                            )
+                            .ok()
+                        });
+                    }
+                    "choice-prompt" => {
+                        // Deserialise directly from the parsed JSON — the payload fields
+                        // (title/options/dismiss_key/amend_key) are flat at the top level
+                        // alongside "type", and serde ignores the unknown "type" field.
+                        let was_awaiting = s.awaiting_input;
+                        s.choice_prompt = serde_json::from_value::<
+                            crate::output_parser::ChoicePromptPayload,
+                        >(parsed.clone())
+                        .ok();
+                        s.awaiting_input = true;
+                        if !was_awaiting {
+                            parked_wait = Some((
+                                parsed
+                                    .get("title")
+                                    .and_then(|value| value.as_str())
+                                    .unwrap_or_default()
+                                    .to_string(),
+                                true,
+                                "choice",
+                            ));
+                        }
+                    }
+                    "choice-cleared" => {
+                        s.choice_prompt = None;
+                        s.awaiting_input = false;
+                        s.question_text = None;
+                        s.question_confident = false;
+                    }
+                    "active-subtasks" => {
+                        s.active_sub_tasks =
+                            parsed.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                    }
+                    "progress" => {
+                        let state_val = parsed.get("state").and_then(|v| v.as_u64()).unwrap_or(0);
+                        if state_val == 0 {
+                            // state=0 means remove the progress bar
+                            s.progress = None;
+                        } else {
+                            s.progress = parsed
+                                .get("value")
+                                .and_then(|v| v.as_u64())
+                                .map(|v| v as u8);
+                        }
+                    }
+                    _ => {}
+                }
+                drop(s);
 
                 // Unblock-triggered flush (story 091): user-input just cleared
                 // question_confident. If the agent answered a confident question but
@@ -5670,6 +5708,7 @@ mod tests {
             event_bus: tokio::sync::broadcast::channel(256).0,
             event_counter: Arc::new(AtomicU64::new(0)),
             session_states: DashMap::new(),
+            session_state_events: SessionStateEventQueue::new(),
             mcp_upstream_registry: {
                 Arc::new(crate::mcp_proxy::registry::UpstreamRegistry::new())
             },
@@ -6187,7 +6226,6 @@ mod tests {
 
     fn fresh_state() -> Arc<AppState> {
         let s = Arc::new(make_test_app_state());
-        // Insert initial entry so and_modify fires
         s.session_states
             .insert("s1".to_string(), SessionState::default());
         // Initialize last_output_ms for shell_state derivation
@@ -6368,6 +6406,59 @@ mod tests {
         assert_eq!(snapshot.turn_epoch, 1);
         assert!(snapshot.suggested_actions.is_none());
         assert_eq!(snapshot.agent_state.as_deref(), Some("idle"));
+    }
+
+    #[tokio::test]
+    async fn sticky_state_transitions_survive_global_broadcast_lag() {
+        let state = fresh_state();
+        AppState::spawn_session_state_accumulator(state.clone());
+
+        for index in 0..600 {
+            state.emit_pty_event(make_parsed(
+                "question",
+                serde_json::json!({
+                    "prompt_text": format!("transient {index}"),
+                    "confident": false,
+                }),
+            ));
+            state.emit_pty_event(make_parsed("question-cleared", serde_json::json!({})));
+        }
+        state.emit_pty_event(make_parsed(
+            "question",
+            serde_json::json!({
+                "prompt_text": "final prompt",
+                "confident": false,
+            }),
+        ));
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if state.session_states.get("s1").is_some_and(|session| {
+                    session.awaiting_input
+                        && session.question_text.as_deref() == Some("final prompt")
+                }) {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("lossless state lane must preserve the final sticky transition");
+    }
+
+    #[test]
+    fn first_pty_event_creates_and_updates_session_state() {
+        let state = Arc::new(make_test_app_state());
+        let snapshot = apply(
+            &state,
+            &make_parsed(
+                "question",
+                serde_json::json!({ "prompt_text": "first prompt", "confident": false }),
+            ),
+        );
+
+        assert!(snapshot.awaiting_input);
+        assert_eq!(snapshot.question_text.as_deref(), Some("first prompt"));
     }
 
     #[test]
@@ -6867,6 +6958,16 @@ mod tests {
             ss.shell_state.is_none(),
             "no shell_states entry should produce None, not derive from timing"
         );
+
+        // The explicit null sentinel also means unobserved, not idle.
+        state.shell_states.insert(
+            "s1".to_string(),
+            std::sync::atomic::AtomicU8::new(crate::pty::SHELL_NULL),
+        );
+        state.session_states.get_mut("s1").unwrap().agent_type = Some("codex".to_string());
+        let ss = state.session_state_with_shell("s1").unwrap();
+        assert!(ss.shell_state.is_none());
+        assert_eq!(ss.agent_state.as_deref(), Some("starting"));
     }
 
     #[test]

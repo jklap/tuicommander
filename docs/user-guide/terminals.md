@@ -73,6 +73,10 @@ message delivery. Pressing Ctrl-C or Escape requests interruption but does not
 turn the dot green until the agent confirms the interruption, returns to its
 prompt, or exits.
 
+A newly launched detected agent remains in its starting state until terminal
+activity is actually observed. Question and answer transitions are retained by
+the backend even if a browser or event-stream client temporarily falls behind.
+
 Current Claude and Codex status lines are also recognized when their interface
 keeps an empty composer visible or freezes during a long tool. Completed timing
 summaries are not treated as work, so the indicator can still return to idle.

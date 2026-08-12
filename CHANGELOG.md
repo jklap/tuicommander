@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **Awaiting-input state is turn-scoped and transport-consistent** — Historical questions no longer re-arm after a later response or completion, bare Enter clears waits through desktop and HTTP input alike, and an open MCP UI confirmation no longer blocks other agents' requests.
+- **Agent state transitions cannot be dropped by a busy event consumer** — Sticky per-session state now uses a lossless reducer lane instead of depending on the best-effort broadcast bus, preserves every response-required OSC notification in a PTY chunk, keeps an unobserved shell in `starting`, and recognizes a non-empty input box above arbitrarily tall custom HUDs.
 - **Agent-state captures preserve causality** — New `.tcap` diagnostics retain PTY input/output boundaries, ordering, and timing, replay the chrome cutoff and input-line state, and are tracked against a Claude/Codex scenario matrix.
 - **Agent-raised notifications identify their repository** — `ui action=toast` now derives the caller's repository from its MCP session and working directory, shows the repository name in the toast and bell entry, and scopes the retained bell item to that repository.
 - **Codex-orchestrated subagents no longer lose their task description** — Spawn integrations whose schema has a task prompt but no `pty_description` now derive compact display metadata from that prompt. Explicit descriptions and clears retain precedence, and agent-specific launch and prompt-delivery paths are unchanged.

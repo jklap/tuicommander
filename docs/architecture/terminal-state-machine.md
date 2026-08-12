@@ -30,7 +30,7 @@ Rust-side per-session state:
 | `SilenceState.question_already_emitted` | `pty.rs` | Prevents re-emission of the same question |
 | `SilenceState.suppress_echo_until` | `pty.rs` | Deadline to ignore PTY echo of user-typed `?` lines |
 | `active_sub_tasks` | `AppState.session_states` | Sub-agent count per session |
-| `shell_states` | `AppState.shell_states` | `DashMap<String, AtomicU8>`: 0=null, 1=busy, 2=idle. Transitions use `compare_exchange` to prevent duplicate events when reader thread and silence timer race. |
+| `shell_states` | `AppState.shell_states` | `DashMap<String, AtomicU8>`: 0=null/unobserved, 1=busy, 2=idle. Null is omitted on the wire and produces agent lifecycle `starting`; transitions use `compare_exchange` to prevent duplicate events when reader thread and silence timer race. |
 | `last_output_ms` | `AppState.last_output_ms` | Epoch ms of last **real** output (not chrome-only). Stamped only when `!chrome_only`. |
 | `SessionState.background_work` | `AppState.session_states` | Meaningful live agent descendant; persistent integration-helper subtrees are excluded. Keeps task lifecycle working without changing terminal readiness. |
 
