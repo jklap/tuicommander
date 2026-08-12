@@ -6199,10 +6199,12 @@ pub(crate) fn list_queued_commands(state: &AppState, session_id: &str) -> Vec<Qu
             queue
                 .iter()
                 .filter_map(|entry| match entry {
-                    crate::state::PendingInjection::UserCommand { id, text } => Some(QueuedCommand {
-                        id: *id,
-                        text: text.clone(),
-                    }),
+                    crate::state::PendingInjection::UserCommand { id, text } => {
+                        Some(QueuedCommand {
+                            id: *id,
+                            text: text.clone(),
+                        })
+                    }
                     crate::state::PendingInjection::PeerMessage(_) => None,
                 })
                 .collect()
@@ -17751,7 +17753,10 @@ mod tests {
             vec!["two"],
         );
         assert_eq!(
-            state.pending_injections.get("busy").map(|queue| queue.len()),
+            state
+                .pending_injections
+                .get("busy")
+                .map(|queue| queue.len()),
             Some(2),
             "the peer message survives a Compose delete"
         );
