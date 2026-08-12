@@ -9,6 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **Agent-raised notifications identify their repository** — `ui action=toast` now derives the caller's repository from its MCP session and working directory, shows the repository name in the toast and bell entry, and scopes the retained bell item to that repository.
+- **Codex-orchestrated subagents no longer lose their task description** — Spawn integrations whose schema has a task prompt but no `pty_description` now derive compact display metadata from that prompt. Explicit descriptions and clears retain precedence, and agent-specific launch and prompt-delivery paths are unchanged.
 
 ### Added
 

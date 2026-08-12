@@ -287,6 +287,7 @@ Some frontend-only stores persist to localStorage:
 - [x] IDE launcher dropdown
 - [x] GitHub integration
 - [x] Parallel agent orchestration
+- [x] Orchestrated PTY task descriptions with prompt-derived fallback metadata
 - [x] Font selection setting
 - [x] Tab bar with keyboard navigation
 - [x] Density modes for readability
