@@ -1298,7 +1298,13 @@ describe("initApp", () => {
 	});
 
 	describe("mcp-toast event (agent-raised attention)", () => {
-		type ToastPayload = { title: string; message: string | null; level: string; sound: string | null };
+		type ToastPayload = {
+			title: string;
+			message: string | null;
+			level: string;
+			sound: string | null;
+			origin_repo_path?: string;
+		};
 
 		function captureMcpToast() {
 			const listenMock = vi.mocked(listen);
@@ -1342,6 +1348,35 @@ describe("initApp", () => {
 
 			expect(play).not.toHaveBeenCalled();
 			play.mockRestore();
+		});
+
+		it("shows and scopes the repository resolved from the caller cwd", async () => {
+			repositoriesStore.add({ path: "/Gits/personal/tuicommander", displayName: "TUICommander" });
+			const { getCallback } = captureMcpToast();
+			const deps = createMockDeps();
+			await initApp(deps);
+			const addToast = vi.spyOn(toastsStore, "add");
+
+			getCallback()!({
+				payload: {
+					title: "Release published",
+					message: "v1.7.4",
+					level: "info",
+					sound: null,
+					origin_repo_path: "/Gits/personal/tuicommander/src-tauri",
+				},
+			});
+
+			expect(addToast).toHaveBeenCalledWith(
+				"Release published",
+				"tuicommander · v1.7.4",
+				"info",
+				false,
+				undefined,
+				undefined,
+				"/Gits/personal/tuicommander",
+			);
+			addToast.mockRestore();
 		});
 	});
 

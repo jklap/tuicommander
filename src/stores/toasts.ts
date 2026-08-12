@@ -8,6 +8,7 @@ export interface Toast {
 	message: string;
 	level: "info" | "warn" | "error";
 	createdAt: number;
+	repoPath?: string;
 	action?: { label: string; onClick: () => void };
 }
 
@@ -111,6 +112,7 @@ function mirrorToBell(toast: Toast): void {
 		severity: toast.level,
 		dismissible: true,
 		onClick: toast.action?.onClick,
+		repoPath: toast.repoPath,
 	});
 }
 
@@ -130,9 +132,10 @@ function createToastsStore() {
 			sound = false,
 			action?: { label: string; onClick: () => void },
 			durationMs?: number,
+			repoPath?: string,
 		) {
 			const id = nextId++;
-			const toast: Toast = { id, title, message, level, createdAt: Date.now(), action };
+			const toast: Toast = { id, title, message, level, createdAt: Date.now(), action, repoPath };
 			setState("toasts", (prev) => [...prev, toast]);
 			mirrorToBell(toast);
 			if (sound) playSound(level);

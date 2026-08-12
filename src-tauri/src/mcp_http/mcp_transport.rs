@@ -4587,6 +4587,31 @@ fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_js
     }
 }
 
+fn resolve_mcp_origin_repo_path(
+    state: &Arc<AppState>,
+    mcp_session_id: Option<&str>,
+) -> Option<String> {
+    let caller_tuic = mcp_session_id
+        .and_then(|mcp_sid| state.mcp_to_session.get(mcp_sid).map(|s| s.value().clone()));
+    caller_tuic
+        .as_ref()
+        .and_then(|tuic| {
+            state
+                .peer_agents
+                .get(tuic)
+                .and_then(|p| p.project.clone())
+                .or_else(|| state.sessions.get(tuic).and_then(|s| s.lock().cwd.clone()))
+        })
+        .or_else(|| {
+            mcp_session_id.and_then(|sid| {
+                state
+                    .mcp_sessions
+                    .get(sid)
+                    .and_then(|m| m.repo_path.clone())
+            })
+        })
+}
+
 fn handle_ui(
     state: &Arc<AppState>,
     args: &serde_json::Value,
@@ -4635,23 +4660,7 @@ fn handle_ui(
             // repo happens to have focus in the frontend.
             let caller_tuic = mcp_session_id
                 .and_then(|mcp_sid| state.mcp_to_session.get(mcp_sid).map(|s| s.value().clone()));
-            let origin_repo_path: Option<String> = caller_tuic
-                .as_ref()
-                .and_then(|tuic| {
-                    state
-                        .peer_agents
-                        .get(tuic)
-                        .and_then(|p| p.project.clone())
-                        .or_else(|| state.sessions.get(tuic).and_then(|s| s.lock().cwd.clone()))
-                })
-                .or_else(|| {
-                    mcp_session_id.and_then(|sid| {
-                        state
-                            .mcp_sessions
-                            .get(sid)
-                            .and_then(|m| m.repo_path.clone())
-                    })
-                });
+            let origin_repo_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
             let mut payload = serde_json::json!({
                 "id": id,
                 "title": title,
@@ -4748,6 +4757,7 @@ fn handle_notify(
     state: &Arc<AppState>,
     addr: SocketAddr,
     args: &serde_json::Value,
+    mcp_session_id: Option<&str>,
 ) -> serde_json::Value {
     let action = match require_action(args, "notify", LEGACY_NOTIFY_ACTIONS) {
         Ok(a) => a,
@@ -4773,6 +4783,7 @@ fn handle_notify(
                 Ok(sound) => sound,
                 Err(e) => return e,
             };
+            let origin_repo_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
             // Dual-emit. The bus only reaches SSE clients (browser/PWA); the
             // desktop WebView listens on the Tauri bridge and there is no
             // bus→window forwarder, so a bus-only send made this tool a no-op on
@@ -4787,6 +4798,7 @@ fn handle_notify(
                         "message": message,
                         "level": level,
                         "sound": sound,
+                        "origin_repo_path": origin_repo_path,
                     }),
                 );
             }
@@ -4795,6 +4807,7 @@ fn handle_notify(
                 message,
                 level,
                 sound,
+                origin_repo_path,
             });
             serde_json::json!({"ok": true})
         }
@@ -5402,7 +5415,9 @@ async fn handle_ui_unified(
     };
     match action {
         "tab" => handle_ui(state, args, mcp_session_id),
-        "toast" | "confirm" => handle_notify(state, addr, &remap_action(args, action)),
+        "toast" | "confirm" => {
+            handle_notify(state, addr, &remap_action(args, action), mcp_session_id)
+        }
         "screenshot" => handle_screenshot(state, addr, args).await,
         other => serde_json::json!({"error": format!(
             "Unknown action '{}' for tool 'ui'. Available: {}", other, UI_ACTIONS
@@ -10768,6 +10783,49 @@ mod tests {
                 assert_eq!(sound.as_deref(), Some("attention"));
                 assert_eq!(level, "warn", "the callback does not change the severity");
             }
+            other => panic!("expected McpToast, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn ui_toast_includes_origin_repo_path_from_peer_agent() {
+        use crate::state::PeerAgent;
+        let state = test_state();
+        let mcp_sid = "mcp-toast-origin".to_string();
+        let tuic = "00000000-0000-0000-0000-000000000003".to_string();
+        state.mcp_to_session.insert(mcp_sid.clone(), tuic.clone());
+        state.peer_agents.insert(
+            tuic.clone(),
+            PeerAgent {
+                tuic_session: tuic,
+                mcp_session_id: mcp_sid.clone(),
+                name: "codex".to_string(),
+                project: Some("/Gits/personal/tuicommander".to_string()),
+                registered_at: 0,
+            },
+        );
+
+        let mut rx = state.event_bus.subscribe();
+        let result = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "ui",
+            &serde_json::json!({
+                "action": "toast",
+                "title": "done",
+            }),
+            Some(&mcp_sid),
+        )
+        .await;
+        assert_eq!(result["ok"], true);
+
+        match rx.try_recv().expect("McpToast on the bus") {
+            crate::state::AppEvent::McpToast {
+                origin_repo_path, ..
+            } => assert_eq!(
+                origin_repo_path.as_deref(),
+                Some("/Gits/personal/tuicommander")
+            ),
             other => panic!("expected McpToast, got {other:?}"),
         }
     }

@@ -547,7 +547,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - **PR Updates section** — types: Merged, Closed, Conflicts, CI Failed, CI Passed, Changes Requested, Ready
 - **Git section** — background git operation results (push, pull, fetch) with success/failure status
 - **Worktrees section** — worktree creation events (from MCP/agent)
-- **Messages section** — every toast, mirrored as it is raised, so a message that faded while the user looked elsewhere stays readable. Level and action carry over. Controlled by "Keep toasts in the bell" (Settings > Notifications), on by default
+- **Messages section** — every toast, mirrored as it is raised, so a message that faded while the user looked elsewhere stays readable. Level and action carry over. Agent-raised MCP toasts derive their repository from the caller's session/cwd, display its name, and retain repository scope in the bell. Controlled by "Keep toasts in the bell" (Settings > Notifications), on by default
 - **Plugin activity sections** — registered by plugins via activityStore
 - Click PR notification: opens full PR detail popover for that branch
 - Individual dismiss (×) per notification, section "Dismiss All", auto-dismiss after 5min focused time

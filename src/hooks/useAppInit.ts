@@ -6,7 +6,7 @@ import { activityStore } from "../stores/activityStore";
 import { appLogger } from "../stores/appLogger";
 import { editorTabsStore } from "../stores/editorTabs";
 import { githubStore } from "../stores/github";
-import { mdTabsStore } from "../stores/mdTabs";
+import { mdTabsStore, resolveRepoForCwd } from "../stores/mdTabs";
 import { notificationsStore } from "../stores/notifications";
 import { paneLayoutStore } from "../stores/paneLayout";
 import { repoSettingsStore } from "../stores/repoSettings";
@@ -18,7 +18,7 @@ import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri } from "../transport";
 import type { SavedTerminal } from "../types";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
-import { isAbsolutePath, normalizeSep, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
+import { isAbsolutePath, normalizeSep, pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 import { createRevisionCoalescer } from "./revisionCoalescer";
 
 /** Track PTY sessions created by the browser client so we only close our own on unload */
@@ -376,17 +376,27 @@ export async function initApp(deps: AppInitDeps) {
 	}).catch((err) => appLogger.error("app", "Failed to register worktree-create-failed listener", err));
 
 	// Listen for MCP toast notifications from the Rust backend
-	listen<{ title: string; message: string | null; level: string; sound: string | null }>("mcp-toast", (event) => {
-		const { title, message, level, sound } = event.payload;
-		const safeLevel = level === "warn" || level === "error" ? level : "info";
-		// The toast store's own tones are level-keyed and bypass the user's
-		// notification settings; the backend already resolved a NotificationSound
-		// name, so play it through the notifications store instead — that is what
-		// honours volume, output device and per-sound mutes, and what lets an
-		// agent raise the distinct `attention` callback the chimes cannot express.
-		toastsStore.add(title, message ?? "", safeLevel, false);
-		if (isNotificationSound(sound)) void notificationsStore.play(sound);
-	}).catch((err) => appLogger.error("app", "Failed to register mcp-toast listener", err));
+	listen<{ title: string; message: string | null; level: string; sound: string | null; origin_repo_path?: string }>(
+		"mcp-toast",
+		(event) => {
+			const { title, message, level, sound, origin_repo_path } = event.payload;
+			const safeLevel = level === "warn" || level === "error" ? level : "info";
+			const repoPath = resolveRepoForCwd(origin_repo_path) ?? undefined;
+			const repoName = origin_repo_path ? pathBasename(repoPath ?? origin_repo_path) : null;
+			const contextualMessage = [repoName, message].filter(Boolean).join(" · ");
+			// The toast store's own tones are level-keyed and bypass the user's
+			// notification settings; the backend already resolved a NotificationSound
+			// name, so play it through the notifications store instead — that is what
+			// honours volume, output device and per-sound mutes, and what lets an
+			// agent raise the distinct `attention` callback the chimes cannot express.
+			if (origin_repo_path) {
+				toastsStore.add(title, contextualMessage, safeLevel, false, undefined, undefined, repoPath);
+			} else {
+				toastsStore.add(title, message ?? "", safeLevel, false);
+			}
+			if (isNotificationSound(sound)) void notificationsStore.play(sound);
+		},
+	).catch((err) => appLogger.error("app", "Failed to register mcp-toast listener", err));
 
 	// Listen for sessions created/closed by remote clients (browser UI or other Tauri windows)
 	listen<{ session_id: string; cwd: string | null; agent_type?: string | null; display_name?: string | null }>(
