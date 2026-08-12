@@ -18,8 +18,8 @@ let nextId = 1;
  *  actionable messages can be read; `error` is sticky (0 = never auto-dismiss)
  *  and stays until the user clicks it away. Callers can override per toast. */
 export const DEFAULT_DURATION_MS: Record<Toast["level"], number> = {
-	info: 8000,
-	warn: 30000,
+	info: 20000,
+	warn: 60000,
 	error: 0,
 };
 
@@ -125,6 +125,15 @@ function createToastsStore() {
 			return state.toasts;
 		},
 
+		/** Whether an identical toast is already visible. Duplicate backend events
+		 * must not create a stack of copies, while distinct errors still stack. */
+		hasVisible(title: string, message: string, level: Toast["level"], repoPath?: string): boolean {
+			return state.toasts.some(
+				(toast) =>
+					toast.title === title && toast.message === message && toast.level === level && toast.repoPath === repoPath,
+			);
+		},
+
 		add(
 			title: string,
 			message = "",
@@ -134,6 +143,9 @@ function createToastsStore() {
 			durationMs?: number,
 			repoPath?: string,
 		) {
+			if (this.hasVisible(title, message, level, repoPath)) {
+				return -1;
+			}
 			const id = nextId++;
 			const toast: Toast = { id, title, message, level, createdAt: Date.now(), action, repoPath };
 			setState("toasts", (prev) => [...prev, toast]);
