@@ -94,6 +94,21 @@ interface TerminalData {
 type AwaitingInputType = "question" | "error" | null;
 ```
 
+### Authoritative agent wait state
+
+Agent lifecycle state is owned by one per-session backend state machine. Every
+input turn has a monotonically increasing `turn_epoch`; asynchronous parser and
+timer events are applied only to the epoch that produced them. A wait carries
+its source and confidence, and every SET has an explicit CLEAR path (submitted
+input, choice resolution/disappearance, protocol busy/idle, interruption, or
+PTY exit). Terminal scrollback is evidence only for the current chat turn: a
+question retained above a later response or completion must never re-arm
+`awaiting_input`.
+
+Desktop IPC, HTTP/PWA, WebSocket, MCP, and orchestrator injection use the same
+post-input bookkeeping. Frontends render the backend snapshot; parsed terminal
+events may trigger one-shot effects but are not a second state authority.
+
 #### repositoriesStore
 Manages the list of git repositories.
 

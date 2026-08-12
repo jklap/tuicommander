@@ -220,15 +220,16 @@ pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, d
                 | crate::input_line_buffer::InputAction::Interrupt
         )
     });
-    let nonempty_line_submitted = actions.iter().any(|a| {
-        matches!(a, crate::input_line_buffer::InputAction::Line(content) if !content.is_empty())
-    });
     if interrupted || data == "\x1b" {
         if let Some(sl) = state.silence_states.get(session_id) {
             sl.lock().note_interrupt_requested();
         }
-    } else if nonempty_line_submitted {
-        crate::pty::note_submitted_input(state, session_id);
+    } else {
+        for action in &actions {
+            if let crate::input_line_buffer::InputAction::Line(content) = action {
+                crate::pty::record_submitted_line(state, session_id, content.clone(), -1);
+            }
+        }
     }
     // Determine slash mode. The InputLineBuffer may accumulate junk from
     // terminal responses (e.g. DA reply "1;2c"), so buf.content() alone is
@@ -1790,6 +1791,33 @@ mod tests {
         done_rx
             .recv_timeout(std::time::Duration::from_secs(1))
             .expect("input bookkeeping must not self-deadlock while checking pending delivery");
+    }
+
+    #[test]
+    fn bare_enter_uses_the_same_submission_bookkeeping_as_desktop_input() {
+        let state = super::super::tests::test_state();
+        let session_id = "http-bare-enter";
+        state.session_states.insert(
+            session_id.to_string(),
+            crate::state::SessionState {
+                agent_type: Some("codex".to_string()),
+                awaiting_input: true,
+                question_text: Some("Apply these edits?".to_string()),
+                question_confident: true,
+                ..Default::default()
+            },
+        );
+        let mut events = state.event_bus.subscribe();
+
+        apply_input_bookkeeping(&state, session_id, "\r");
+
+        assert_eq!(state.session_states.get(session_id).unwrap().turn_epoch, 1);
+        let event = events.try_recv().expect("bare Enter emits UserInput");
+        let crate::state::AppEvent::PtyParsed { parsed, .. } = event else {
+            panic!("expected parsed input event");
+        };
+        assert_eq!(parsed["type"], "user-input");
+        assert_eq!(parsed["content"], "");
     }
 
     // is_separator_line tests live in chrome.rs (canonical location)

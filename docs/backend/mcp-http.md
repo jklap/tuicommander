@@ -246,6 +246,10 @@ Eight native tools, organized by domain. Two (`config`, `debug`) are hidden by d
 
 The `disabled_native_tools` config key accepts an array of tool names to hide from `tools/list`. Default: `["config", "debug"]`.
 
+`ui action=confirm` blocks only its requesting tool call while the native dialog
+is open. The dialog runs on the blocking pool, so an unanswered confirmation
+cannot occupy the async MCP workers serving other agents and sessions.
+
 **`ui action=toast` sound.** `sound` accepts `true`/`false` or a notification-sound
 name: `question`, `completion`, `error`, `warning`, `info`, `attention`. `true`
 resolves from `level` (info→info, warn→warning, error→error); a name overrides it.

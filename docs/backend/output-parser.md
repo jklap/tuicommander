@@ -72,6 +72,9 @@ ParsedEvent::Question {
 }
 ```
 
+The emitted JSON also carries the internal `_turn_epoch`. The authoritative
+session reducer ignores question and retraction events from an older input turn.
+
 Question events have two sources:
 
 - **Response-required OSC 777 notifications** are parsed from the raw PTY byte
@@ -94,7 +97,7 @@ Question events have two sources:
 
 1. `extract_question_line()` scans changed terminal rows for `?`-ending lines, applying content filters to reject code comments (`//`), markdown headers (`#`), diff context (`+/-`), and code syntax (`->`, `=>`, `::`, `)?`)
 2. `SilenceState` stores the candidate and starts a 10s silence timer
-3. When the timer fires, it verifies the candidate is still visible in the bottom 5 rows of the terminal screen (via `VtLogBuffer.screen_rows()`)
+3. When the timer fires, a visible input box restricts detection to the latest chat content above that prompt; only an unanchored screen may use the bounded changed-row fallback
 4. If verified, emits `ParsedEvent::Question { confident: false }`
 
 Guards against false positives:
@@ -119,11 +122,10 @@ ParsedEvent::QuestionCleared  // wire type: "question-cleared"
 ```
 
 Emitted by the silence timer in `pty.rs`, never by a parser: it means "the
-screen is quiet and the tracked question is no longer on it". Without it, a
-heuristic question answered with a bare Enter stays badged forever — that reply
-produces no `user-input` (which needs a non-empty typed line), an agent that
-goes busy through screen movement produces no `status-line`, and a prompt that
-never parsed as a `ChoicePrompt` has nothing to resolve.
+screen is quiet and the tracked question is no longer the current chat prompt".
+Retraction runs independently from the one-shot emission gate. Bare Enter now
+produces the same `user-input` clear and turn transition as every other input
+transport; retraction remains the backstop when output changes without input.
 
 `emit_question_cleared_if_stale()` fires only when `awaiting_input &&
 !question_confident && choice_prompt.is_none()`, and the `state.rs` arm
@@ -308,7 +310,7 @@ ParsedEvent::ChoicePrompt {
 
 **Destructive flag:** labels matching `"no"`, `"cancel"`, `"reject"`, `"abort"`, `"deny"`, or the prefixes `"don't"` / `"do not"` are flagged so the PWA overlay and plugins can style them as destructive.
 
-**Flow:** the payload is stored on `SessionState.choice_prompt` and dispatched via `pluginRegistry.dispatchStructuredEvent("choice-prompt", …)`. Animated status-line updates preserve the prompt and its `awaiting_input` lifecycle; user input, scroll, or PTY exit clears it. Single-key replies should go through `sendPtyKey()` in `src/utils/sendCommand.ts`, never raw `text + \r`.
+**Flow:** the payload is stored on `SessionState.choice_prompt` and dispatched via `pluginRegistry.dispatchStructuredEvent("choice-prompt", …)`. Animated status-line updates preserve the prompt and its `awaiting_input` lifecycle; resolution, disappearance, replacement, and PTY exit clear it. A disappearing or resolved dialog emits `choice-cleared` so frontend and plugin consumers do not retain stale state. Single-key replies should go through `sendPtyKey()` in `src/utils/sendCommand.ts`, never raw `text + \r`.
 
 ### SlashMenu
 

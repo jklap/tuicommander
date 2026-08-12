@@ -61,6 +61,28 @@ describe("useAgentPolling", () => {
 		expect(store.get(id)?.queuedCommands).toBe(0);
 	});
 
+	it("reconciles awaiting state from the authoritative backend snapshot", async () => {
+		const id = store.add(makeTerminal({ name: "T1", sessionId: "sess-1" }));
+		mockInvoke.mockResolvedValueOnce([
+			{
+				session_id: "sess-1",
+				state: { agent_state: "awaiting_input", awaiting_input: true, question_confident: true },
+			},
+		]);
+		const { syncAgentLifecycleStates } = await import("../../hooks/useAgentPolling");
+
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.awaitingInput).toBe("question");
+		expect(store.get(id)?.awaitingInputConfident).toBe(true);
+
+		mockInvoke.mockResolvedValueOnce([
+			{ session_id: "sess-1", state: { agent_state: "working", awaiting_input: false } },
+		]);
+		await syncAgentLifecycleStates();
+		expect(store.get(id)?.awaitingInput).toBeNull();
+		expect(store.get(id)?.awaitingInputConfident).toBe(false);
+	});
+
 	it("clears lifecycle state for a terminal omitted from a successful snapshot", async () => {
 		const id = store.add(makeTerminal({ name: "T1", sessionId: "lost-session" }));
 		store.update(id, { agentState: "working", backgroundWork: true });
