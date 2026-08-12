@@ -180,5 +180,16 @@
       "Re-authorizing an HTTP MCP upstream takes effect on the next attempt, and Manage in Settings lands on the MCP block."
     ],
     "date": "2026-08-10"
+  },
+  "1.7.4": {
+    "highlights": [
+      "Queued Compose commands are now listed in delivery order, and you can delete a single one without clearing the rest.",
+      "The toolbar bell now shows the newest notification first instead of burying it under older history.",
+      "`tuic agent send` now reaches registered peers that have no terminal of their own, matching the MCP send tool.",
+      "A message that nothing will surface now reports \"Buffered for <peer> (inbox_only)\" instead of falsely claiming delivery.",
+      "`tuic agent type` splits text and Enter as separate writes, so raw-mode TUIs receive the input instead of leaving it as prefill.",
+      "Vague OSC 777 notifications no longer latch a permanent awaiting-input badge; only explicit permission prompts stay confident."
+    ],
+    "date": "2026-08-12"
   }
 }
