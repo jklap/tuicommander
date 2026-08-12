@@ -291,8 +291,8 @@ export const GeneralTab: Component = () => {
 			<SettingToggle
 				checked={settingsStore.state.showLastPrompt}
 				onChange={(v) => settingsStore.setShowLastPrompt(v)}
-				label="Show last prompt bar"
-				hint="Display a collapsible overlay at the top of the terminal showing the last prompt sent to an agent"
+				label="Show PTY prompt bar"
+				hint="Display a collapsible overlay at the top of the terminal showing the orchestrator task description and last prompt sent to an agent"
 			/>
 
 			<h3>{t("general.heading.powerManagement", "Power Management")}</h3>

@@ -65,9 +65,11 @@ export interface ActiveSessionInfo {
 	display_name?: string | null;
 	display_name_is_custom: boolean;
 	is_remote: boolean;
+	pty_description?: string | null;
 	state?: {
 		shell_state?: "busy" | "idle";
 		agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
+		agent_type?: string | null;
 		background_work?: boolean;
 		queued_commands?: number;
 	} | null;

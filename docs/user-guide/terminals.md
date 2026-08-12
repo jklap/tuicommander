@@ -43,6 +43,7 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 - Press **Enter** to confirm, **Escape** to cancel
 - Explicit custom names persist through reconnects and are never replaced by agent output
 - Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase
+- Orchestrated PTYs show the orchestrator's short task description above the terminal; the expandable Prompt bar also retains the last substantial user prompt separately
 
 ### Tab Reordering
 

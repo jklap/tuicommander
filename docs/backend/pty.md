@@ -27,6 +27,11 @@ close_pty(cleanup_worktree)
     └── Optionally remove associated git worktree
 ```
 
+Each session may also carry an orchestrator-owned `pty_description`, separate
+from the last user prompt captured by input-line bookkeeping. MCP spawn and
+input actions update it through `pty-description-changed`; desktop and browser
+clients render it together with the last prompt above the terminal.
+
 ## Tauri Commands
 
 ### Session Creation

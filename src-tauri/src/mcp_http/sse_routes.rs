@@ -90,6 +90,7 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::SessionClosed { .. } => "session-closed",
         AppEvent::PtyParsed { .. } => "pty-parsed",
         AppEvent::PtyExit { .. } => "pty-exit",
+        AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
         AppEvent::PluginChanged { .. } => "plugin-changed",
         AppEvent::UpstreamStatusChanged { .. } => "upstream-status-changed",
         AppEvent::McpOAuthStart { .. } => "mcp-oauth-start",
@@ -144,6 +145,12 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::PtyExit { session_id } => {
             serde_json::json!({ "session_id": session_id })
+        }
+        AppEvent::PtyDescriptionChanged {
+            session_id,
+            description,
+        } => {
+            serde_json::json!({ "session_id": session_id, "description": description })
         }
         AppEvent::PluginChanged { plugin_ids } => {
             serde_json::json!({ "plugin_ids": plugin_ids })
@@ -287,6 +294,20 @@ mod tests {
         assert_eq!(body["cwd"], "/repo");
         assert_eq!(body["agent_type"], "codex");
         assert_eq!(body["display_name"], "linux-primary");
+    }
+
+    #[test]
+    fn pty_description_changed_has_matching_sse_name_and_payload() {
+        let event = AppEvent::PtyDescriptionChanged {
+            session_id: "session-1".into(),
+            description: None,
+        };
+
+        assert_eq!(event_type_name(&event), "pty-description-changed");
+        assert_eq!(
+            event_payload(&event),
+            serde_json::json!({"session_id": "session-1", "description": null})
+        );
     }
 
     /// The three GitHub Ops lifecycle events share a `{repo_path, payload}` shape.

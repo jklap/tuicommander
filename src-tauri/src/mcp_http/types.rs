@@ -28,6 +28,8 @@ pub(super) struct SessionInfo {
     pub display_name: Option<String>,
     pub display_name_is_custom: bool,
     pub is_remote: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pty_description: Option<String>,
     // Session state (from accumulator) — present when broadcast channel is active
     #[serde(skip_serializing_if = "Option::is_none")]
     pub state: Option<crate::state::SessionState>,

@@ -1141,10 +1141,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				when={
 					settingsStore.state.showLastPrompt &&
 					terminalsStore.get(props.id)?.agentType &&
-					terminalsStore.get(props.id)?.lastPrompt
+					(terminalsStore.get(props.id)?.lastPrompt || terminalsStore.get(props.id)?.ptyDescription)
 				}
 			>
-				<LastPromptBar prompt={() => terminalsStore.get(props.id)?.lastPrompt ?? null} />
+				<LastPromptBar
+					ptyDescription={() => terminalsStore.get(props.id)?.ptyDescription ?? null}
+					prompt={() => terminalsStore.get(props.id)?.lastPrompt ?? null}
+				/>
 			</Show>
 			<Show when={reconnecting()}>
 				{(info) => (

@@ -167,6 +167,11 @@
   color: var(--fg-primary);
 }
 
+.ptyPrefix {
+  color: var(--fg-muted);
+  font-size: 0.9em;
+}
+
 .tabNameInput {
   background: var(--bg-secondary);
   border: 1px solid var(--accent);

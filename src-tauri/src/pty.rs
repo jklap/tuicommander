@@ -5149,6 +5149,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     state.shell_states.remove(session_id);
     state.last_output_ms.remove(session_id);
     state.last_prompts.remove(session_id);
+    state.pty_descriptions.remove(session_id);
     state.terminal_rows.remove(session_id);
     state.resize_locks.remove(session_id);
     state.exit_codes.remove(session_id);
@@ -5183,6 +5184,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     state.silence_states.remove(session_id);
     state.shell_states.remove(session_id);
     state.last_prompts.remove(session_id);
+    state.pty_descriptions.remove(session_id);
     state.terminal_rows.remove(session_id);
     state.resize_locks.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
@@ -8902,6 +8904,8 @@ pub(crate) struct ActiveSessionInfo {
     display_name_is_custom: bool,
     is_remote: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pty_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<crate::state::SessionState>,
 }
 
@@ -9016,6 +9020,10 @@ pub(crate) fn list_active_sessions(state: State<'_, Arc<AppState>>) -> Vec<Activ
                 display_name: session.display_name.clone(),
                 display_name_is_custom: session.display_name_is_custom,
                 is_remote: session.is_remote,
+                pty_description: state
+                    .pty_descriptions
+                    .get(entry.key())
+                    .map(|value| value.value().clone()),
                 state: state.session_state_with_shell(entry.key()),
             }
         })

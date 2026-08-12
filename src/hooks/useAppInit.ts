@@ -46,6 +46,7 @@ export interface AppInitDeps {
 				session_id: string;
 				cwd: string | null;
 				display_name?: string | null;
+				pty_description?: string | null;
 				display_name_is_custom?: boolean;
 				is_remote?: boolean;
 				state?: {
@@ -413,7 +414,11 @@ export async function initApp(deps: AppInitDeps) {
 			const id = terminalsStore.add({
 				sessionId: session_id,
 				fontSize: deps.getDefaultFontSize(),
-				name: display_name || `PTY: Session ${terminalsStore.getCount() + 1}`,
+				name:
+					display_name ||
+					(parsedAgentType
+						? `Session ${terminalsStore.getCount() + 1}`
+						: `PTY: Session ${terminalsStore.getCount() + 1}`),
 				// A spawn-assigned display name is the base title, not a manual rename.
 				// Intent/OSC titles may replace it until the user explicitly renames the tab.
 				nameIsCustom: false,
@@ -421,6 +426,7 @@ export async function initApp(deps: AppInitDeps) {
 				awaitingInput: null,
 				isRemote: true,
 				agentType: parsedAgentType,
+				ptyDescription: null,
 			});
 			remoteSessionTabs.set(session_id, id);
 
@@ -447,6 +453,11 @@ export async function initApp(deps: AppInitDeps) {
 			}
 		},
 	).catch((err) => appLogger.error("app", "Failed to register session-created listener", err));
+
+	listen<{ session_id: string; description?: string | null }>("pty-description-changed", (event) => {
+		const termId = terminalsStore.getTerminalForSession(event.payload.session_id);
+		if (termId) terminalsStore.setPtyDescription(termId, event.payload.description ?? null);
+	}).catch((err) => appLogger.error("app", "Failed to register pty-description listener", err));
 
 	listen<{ session_id: string; alias: string }>("term-alias-assigned", (event) => {
 		const { session_id, alias } = event.payload;
@@ -649,7 +660,9 @@ export async function initApp(deps: AppInitDeps) {
 					fontSize: deps.getDefaultFontSize(),
 					name: session.display_name || terminalsStore.nextDefaultName(),
 					nameIsCustom: session.display_name_is_custom ?? false,
+					ptyDescription: session.pty_description ?? null,
 					isRemote: session.is_remote ?? false,
+					agentType: parseAgentType(session.state?.agent_type),
 					cwd: session.cwd,
 					awaitingInput: null,
 				});
@@ -667,6 +680,10 @@ export async function initApp(deps: AppInitDeps) {
 				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
 				...(session.is_remote !== undefined ? { isRemote: session.is_remote } : {}),
 				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
+				...(session.state?.agent_type !== undefined
+					? { agentType: parseAgentType(session.state.agent_type) }
+					: {}),
+				ptyDescription: session.pty_description ?? null,
 				agentState: session.state?.agent_state ?? null,
 				backgroundWork: session.state?.background_work ?? false,
 			});
