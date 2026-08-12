@@ -1344,6 +1344,8 @@ enum PtyDescriptionUpdate {
     Set(Option<String>),
 }
 
+const INFERRED_PTY_DESCRIPTION_MAX_CHARS: usize = 160;
+
 /// Parse the optional PTY description field. Omitted means unchanged; null or
 /// an empty/whitespace-only string clears the current description.
 fn parse_pty_description(
@@ -1363,6 +1365,38 @@ fn parse_pty_description(
         _ => Err(serde_json::json!({
             "error": "'pty_description' must be a string or null"
         })),
+    }
+}
+
+/// Resolve the description for a newly orchestrated PTY. Callers with a rich
+/// orchestration surface can set or clear it explicitly; callers whose spawn
+/// schema only carries a task prompt still get a compact, display-only summary.
+/// This never changes the prompt delivered to the child.
+fn resolve_spawn_pty_description(update: PtyDescriptionUpdate, prompt: &str) -> Option<String> {
+    match update {
+        PtyDescriptionUpdate::Set(description) => description,
+        PtyDescriptionUpdate::Unchanged => {
+            let collapsed = prompt.split_whitespace().collect::<Vec<_>>().join(" ");
+            if collapsed.is_empty() {
+                return None;
+            }
+
+            let mut chars = collapsed.chars();
+            let prefix: String = chars
+                .by_ref()
+                .take(INFERRED_PTY_DESCRIPTION_MAX_CHARS)
+                .collect();
+            if chars.next().is_none() {
+                Some(prefix)
+            } else {
+                let mut truncated: String = prefix
+                    .chars()
+                    .take(INFERRED_PTY_DESCRIPTION_MAX_CHARS - 1)
+                    .collect();
+                truncated.push('…');
+                Some(truncated)
+            }
+        }
     }
 }
 
@@ -3018,8 +3052,7 @@ fn handle_agent_with_parent_cwd(
                 None => return serde_json::json!({"error": "Action 'spawn' requires 'prompt'"}),
             };
             let pty_description = match parse_pty_description(args) {
-                Ok(PtyDescriptionUpdate::Set(description)) => description,
-                Ok(PtyDescriptionUpdate::Unchanged) => None,
+                Ok(update) => resolve_spawn_pty_description(update, &prompt),
                 Err(error) => return error,
             };
             if state.sessions.len() >= MAX_CONCURRENT_SESSIONS {
@@ -5997,6 +6030,45 @@ mod tests {
             Ok(PtyDescriptionUpdate::Set(None))
         );
         assert!(parse_pty_description(&serde_json::json!({"pty_description": 7})).is_err());
+    }
+
+    #[test]
+    fn spawn_description_preserves_explicit_value_or_clear() {
+        assert_eq!(
+            resolve_spawn_pty_description(
+                PtyDescriptionUpdate::Set(Some("Focused task".to_string())),
+                "Longer prompt that must not replace the explicit description",
+            ),
+            Some("Focused task".to_string())
+        );
+        assert_eq!(
+            resolve_spawn_pty_description(
+                PtyDescriptionUpdate::Set(None),
+                "Prompt must not override an explicit clear",
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn spawn_description_falls_back_to_compact_prompt_metadata() {
+        assert_eq!(
+            resolve_spawn_pty_description(
+                PtyDescriptionUpdate::Unchanged,
+                "  Audit all Cargo manifests\n\twithout changing files.  ",
+            ),
+            Some("Audit all Cargo manifests without changing files.".to_string())
+        );
+
+        let long_prompt = "è".repeat(INFERRED_PTY_DESCRIPTION_MAX_CHARS + 20);
+        let inferred = resolve_spawn_pty_description(PtyDescriptionUpdate::Unchanged, &long_prompt)
+            .expect("non-empty prompt produces a description");
+        assert_eq!(inferred.chars().count(), INFERRED_PTY_DESCRIPTION_MAX_CHARS);
+        assert!(inferred.ends_with('…'));
+        assert_eq!(
+            resolve_spawn_pty_description(PtyDescriptionUpdate::Unchanged, " \n\t "),
+            None
+        );
     }
 
     async fn post_test_tool_call(

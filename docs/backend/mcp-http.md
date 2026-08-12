@@ -613,9 +613,13 @@ The session list's `alias` remains a separate repo-derived short address and is
 not replaced by the display name.
 
 The optional `pty_description` field on `agent action=spawn` populates the
-orchestrator-owned task description shown above the PTY. Later `session
-action=input` calls may update the same field without adding another command to
-the MCP surface.
+orchestrator-owned task description shown above the PTY. When the caller's
+orchestration schema cannot supply that field, spawn derives display-only
+metadata from the normalized task prompt (capped at 160 characters); an
+explicit string still wins, while `null` or an empty string explicitly keeps
+the new PTY descriptionless. The inference never changes prompt delivery or
+agent-specific launch semantics. Later `session action=input` calls may update
+the same field without adding another command to the MCP surface.
 
 Every managed child is registered server-side and receives an inbox immediately,
 even when the caller has no bound peer identity. A registered parent additionally
