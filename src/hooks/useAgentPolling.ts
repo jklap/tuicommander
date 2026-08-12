@@ -112,6 +112,8 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 		const termId = terminalsStore.getTerminalForSession(session.session_id);
 		if (!termId) continue;
 		const shellState = toShellState(session.state?.shell_state);
+		const wasAwaiting = terminalsStore.get(termId)?.awaitingInput === "question";
+		const isAwaiting = session.state?.awaiting_input === true;
 		const requested = requestedSessions.get(termId);
 		const snapshotIsFresh =
 			requested?.sessionId === session.session_id &&
@@ -127,6 +129,13 @@ async function syncAgentLifecycleStatesOnce(): Promise<void> {
 			queuedCommands: session.state?.queued_commands ?? 0,
 			...(shellState !== undefined ? { shellState } : {}),
 		});
+		if (wasAwaiting !== isAwaiting) {
+			pluginRegistry.dispatchStructuredEvent(
+				"awaiting",
+				{ awaiting: isAwaiting, confident: session.state?.question_confident === true },
+				session.session_id,
+			);
+		}
 	}
 }
 

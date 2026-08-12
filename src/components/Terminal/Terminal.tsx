@@ -21,7 +21,6 @@ import { safeUnlisten } from "../../utils/safeUnlisten";
 import { createSearchVisibility } from "../shared/SearchBar";
 import { handleAgentExitCompletion } from "./agentExitCompletion";
 import { getAwaitingInputSound } from "./awaitingInputSound";
-import { handleQuestionCleared } from "./awaitingRetraction";
 import CanvasTerminal, { type CanvasTerminalRef } from "./CanvasTerminal";
 import { gridDimsForBox, snapLineHeight } from "./canvasTerminalUtils";
 import { focusIsInsideOwnInput } from "./focusGuards";
@@ -71,6 +70,15 @@ type ParsedEvent =
 	| { type: "shell-state"; state: "busy" | "idle" }
 	| { type: "agent-session-conflict"; matched_text: string; kind: "in-use" | "not-found" }
 	| { type: "agent-block"; action: "start" | "end"; line: number; exit_code?: number };
+
+type BackendSessionState = {
+	shell_state?: "busy" | "idle";
+	agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
+	awaiting_input?: boolean;
+	question_confident?: boolean;
+	background_work?: boolean;
+	queued_commands?: number;
+};
 
 export interface TerminalProps {
 	id: string;
@@ -275,10 +283,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			if (disposed) return;
 			switch (parsed.type) {
 				case "progress": {
-					const awProg = terminalsStore.get(props.id)?.awaitingInput;
-					if (awProg && awProg !== "error" && awProg !== "question") {
-						terminalsStore.clearAwaitingInput(props.id);
-					}
 					if (parsed.state === 0) {
 						terminalsStore.update(props.id, { progress: null });
 					} else if (parsed.state === 1 || parsed.state === 2 || parsed.state === 3) {
@@ -288,14 +292,8 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				}
 				case "status-line": {
 					retryCount = 0;
-					const awState = terminalsStore.get(props.id)?.awaitingInput;
-					const clearAw = awState && awState !== "question" && awState !== "error";
-					if (clearAw) {
-						appLogger.debug("terminal", `clearAwaitingInput(${props.id}) was "${awState}" → null`);
-					}
 					terminalsStore.update(props.id, {
 						currentTask: parsed.task_name,
-						...(clearAw ? { awaitingInput: null, awaitingInputConfident: false } : {}),
 					});
 					break;
 				}
@@ -338,20 +336,12 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					break;
 				}
 				case "question": {
-					const qTerminal = terminalsStore.get(props.id);
-					if (!parsed.confident && (qTerminal?.shellState === "busy" || (qTerminal?.activeSubTasks ?? 0) > 0)) {
-						appLogger.debug(
-							"terminal",
-							`[ParsedEvent] ${props.id} question IGNORED (busy=${qTerminal?.shellState === "busy"} subTasks=${qTerminal?.activeSubTasks} low-confidence) prompt="${parsed.prompt_text}"`,
-						);
-						break;
-					}
-					terminalsStore.setAwaitingInput(props.id, "question", !!parsed.confident);
+					// One-shot effects/plugins consume parsed events; the backend
+					// SessionState snapshot is the only durable awaiting authority.
 					break;
 				}
 				case "question-cleared": {
-					// The question left the screen without an answer we could see.
-					handleQuestionCleared(props.id);
+					// Snapshot reconciliation clears the durable badge.
 					break;
 				}
 				case "usage-limit": {
@@ -626,6 +616,26 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				onParsed: (frame) => {
 					if (frame.type === "parsed" && frame.event) {
 						handleParsedEvent(frame.event as ParsedEvent);
+					}
+				},
+				onStateChange: (snapshot) => {
+					const state = snapshot as BackendSessionState;
+					const wasAwaiting = terminalsStore.get(props.id)?.awaitingInput === "question";
+					const isAwaiting = state.awaiting_input === true;
+					terminalsStore.update(props.id, {
+						agentState: state.agent_state ?? null,
+						backgroundWork: state.background_work === true,
+						queuedCommands: state.queued_commands ?? 0,
+						awaitingInput: state.awaiting_input === true ? "question" : null,
+						awaitingInputConfident: state.question_confident === true,
+						...(state.shell_state ? { shellState: state.shell_state } : {}),
+					});
+					if (wasAwaiting !== isAwaiting) {
+						pluginRegistry.dispatchStructuredEvent(
+							"awaiting",
+							{ awaiting: isAwaiting, confident: state.question_confident === true },
+							targetSessionId,
+						);
 					}
 				},
 			},

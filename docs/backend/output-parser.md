@@ -137,16 +137,26 @@ not proof that it was answered.
 
 Agent-state failures must be captured from the raw PTY stream before analysis.
 Enable `POST /diagnostics/capture` before reproducing, stop it afterward, then
-copy the reported `<config dir>/captures/<session-id>.raw` file into
+copy the reported `<config dir>/captures/<session-id>.tcap` file into
 `src-tauri/src/fixtures/agent_prompts/`. `/sessions/:id/output` is not a fixture
 source: it is a rendered, bounded ring snapshot and can lose one-shot escape
-sequences. Fixtures replay the raw parser, rendered-row parser, and hook
-suppression in the same composition used by the production reader thread.
+sequences. Framed fixtures preserve input/output direction, original chunk
+boundaries, ordering, and monotonic timestamps; legacy `.raw` fixtures remain
+supported as output-only input. Replay also applies the production chrome
+cutoff before the rendered-row parser and hook suppression.
 
-Fixtures assert which events a byte stream produces, so they cannot express a
-failure whose symptom is a **missing** event — a badge that never clears. Those
-regressions go in the `Awaiting RETRACTION` test block in `pty.rs`, which drives
-the event-bus accumulator and asserts `SessionState` directly.
+Output-only fixtures cannot express a missing input-side CLEAR. Framed `.tcap`
+fixtures can reconstruct submitted lines, while the `Awaiting RETRACTION` block
+still drives the real event-bus accumulator and asserts `SessionState` directly.
+
+`src-tauri/src/fixtures/agent_prompts/scenario-matrix.json` is the coverage
+contract derived from the local Claude and Codex transcript corpora. Histories
+contribute semantic shapes (question tools, lifecycle start/complete/abort), not
+terminal bytes. Each scenario therefore identifies whether its evidence is a
+real raw fixture, a controlled capture template, a runtime regression, or a
+synthetic concurrency/state case. A test enforces unique IDs, Claude and Codex
+coverage, fixture existence, and the invariant that every state SET declares at
+least one CLEAR path.
 
 ### ApiError
 

@@ -706,8 +706,9 @@ agent-state regression evidence. `{ "enabled": true, "session_id": "<id>" }`
 records one session; omitting `session_id` records all sessions, and
 `{ "enabled": false }` stops it. `GET /diagnostics/capture` returns the active
 filter, output directory, and byte count per opened session. A new enable starts
-fresh files, and each `<config dir>/captures/<session-id>.raw` file is capped at
-512 KiB.
+fresh files, and each `<config dir>/captures/<session-id>.tcap` file is capped at
+512 KiB. Records preserve direction, original read/write boundaries and monotonic
+timestamps; legacy `.raw` fixtures remain readable as output-only captures.
 
 Capture must be enabled before reproduction. `/sessions/:id/output` is not a
 fixture-acquisition fallback: its bounded ring can lose a one-shot marker and its

@@ -155,6 +155,7 @@ pub(crate) fn write_pty_input(
     data: &str,
 ) -> Result<(), String> {
     state.write_pty_parts(session_id, &[data.as_bytes()])?;
+    crate::pty_capture::record_input(session_id, data.as_bytes());
 
     apply_input_bookkeeping(state, session_id, data);
 
@@ -175,10 +176,25 @@ pub(crate) fn write_pty_input_pair(
     key: &str,
 ) -> Result<(), String> {
     state.write_pty_parts(session_id, &[text.as_bytes(), key.as_bytes()])?;
+    crate::pty_capture::record_input(session_id, text.as_bytes());
+    crate::pty_capture::record_input(session_id, key.as_bytes());
 
     apply_input_bookkeeping(state, session_id, text);
     apply_input_bookkeeping(state, session_id, key);
 
+    Ok(())
+}
+
+fn write_pty_input_bytes(
+    state: &Arc<AppState>,
+    session_id: &str,
+    data: &[u8],
+) -> Result<(), String> {
+    state.write_pty_parts(session_id, &[data])?;
+    crate::pty_capture::record_input(session_id, data);
+    if let Ok(text) = std::str::from_utf8(data) {
+        apply_input_bookkeeping(state, session_id, text);
+    }
     Ok(())
 }
 
@@ -428,7 +444,7 @@ pub(super) async fn close_session(
 ) -> impl IntoResponse {
     if state.sessions.contains_key(&session_id) {
         // Send Ctrl+C then cleanup
-        let _ = state.write_pty_parts(&session_id, &[&[0x03]]);
+        let _ = write_pty_input_bytes(&state, &session_id, &[0x03]);
         // Broadcast to SSE/WebSocket consumers BEFORE cleanup: cleanup_session reaps
         // this session's per-session PTY channel, so the closed frame must be emitted
         // while the channel still exists. broadcast keeps the buffered frame available
@@ -1139,13 +1155,13 @@ async fn handle_ws_session(
     while let Some(Ok(msg)) = ws_receiver.next().await {
         match msg {
             Message::Text(text) => {
-                if let Err(error) = state_clone.write_pty_parts(&sid, &[text.as_bytes()]) {
+                if let Err(error) = write_pty_input(&state_clone, &sid, &text) {
                     tracing::error!(session_id = %sid, %error, "PTY write failed");
                     break;
                 }
             }
             Message::Binary(data) => {
-                if let Err(error) = state_clone.write_pty_parts(&sid, &[&data]) {
+                if let Err(error) = write_pty_input_bytes(&state_clone, &sid, &data) {
                     tracing::error!(session_id = %sid, %error, "PTY write failed");
                     break;
                 }
@@ -1350,13 +1366,13 @@ async fn handle_ws_log_session(
     while let Some(Ok(msg)) = ws_receiver.next().await {
         match msg {
             Message::Text(text) => {
-                if let Err(error) = state.write_pty_parts(&session_id, &[text.as_bytes()]) {
+                if let Err(error) = write_pty_input(&state, &session_id, &text) {
                     tracing::error!(session_id = %session_id, %error, "PTY write failed");
                     break;
                 }
             }
             Message::Binary(data) => {
-                if let Err(error) = state.write_pty_parts(&session_id, &[&data]) {
+                if let Err(error) = write_pty_input_bytes(&state, &session_id, &data) {
                     tracing::error!(session_id = %session_id, %error, "PTY write failed");
                     break;
                 }
@@ -1473,7 +1489,7 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
                 // No ACK needed — watch channel handles backpressure naturally.
             }
             Message::Binary(data) => {
-                if let Err(error) = state_clone.write_pty_parts(&sid, &[&data]) {
+                if let Err(error) = write_pty_input_bytes(&state_clone, &sid, &data) {
                     tracing::error!(session_id = %sid, %error, "PTY write failed");
                     break;
                 }
