@@ -407,7 +407,9 @@ The `session` tool's `action=output` strips ANSI escape codes by default, return
 
 `Global overview: session action=list` — one call; no per-session `status` fan-out.
 
-`shell_state` is PTY activity (`busy` or `idle`); it is not task completion.
+`shell_state` is observed PTY activity (`busy` or `idle`); it is omitted before
+the first lifecycle observation rather than treating a newly spawned agent as
+idle. It is not task completion.
 For detected agents, `agent_state` is `starting`, `working`, `awaiting_input`,
 `idle`, or `completed`. `background_work=true` keeps `agent_state=working` while
 a meaningful agent descendant is alive even when `shell_state=idle` and the

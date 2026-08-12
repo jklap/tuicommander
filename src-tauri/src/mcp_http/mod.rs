@@ -2038,6 +2038,7 @@ mod tests {
             event_bus: tokio::sync::broadcast::channel(256).0,
             event_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_states: dashmap::DashMap::new(),
+            session_state_events: crate::state::SessionStateEventQueue::new(),
             mcp_upstream_registry: std::sync::Arc::new(
                 crate::mcp_proxy::registry::UpstreamRegistry::new(),
             ),

@@ -649,14 +649,14 @@ pub(crate) const SHELL_NULL: u8 = 0;
 pub(crate) const SHELL_BUSY: u8 = 1;
 pub(crate) const SHELL_IDLE: u8 = 2;
 
-/// Converts a shell_states AtomicU8 value into its wire string ("busy"/"idle").
-/// Unknown values (including SHELL_NULL) map to "idle" — the frontend treats
-/// a just-created session with no output yet as idle, not busy.
-pub(crate) fn shell_state_str(state: u8) -> &'static str {
+/// Wire representation of an observed shell state. `SHELL_NULL` means no
+/// lifecycle evidence has arrived yet and must remain absent/starting rather
+/// than being serialized as idle.
+pub(crate) fn shell_state_wire(state: u8) -> Option<&'static str> {
     match state {
-        SHELL_BUSY => "busy",
-        SHELL_IDLE => "idle",
-        _ => "idle",
+        SHELL_BUSY => Some("busy"),
+        SHELL_IDLE => Some("idle"),
+        _ => None,
     }
 }
 
@@ -2477,7 +2477,7 @@ pub(crate) fn spawn_process_snapshot_refresher(state: Arc<AppState>) {
 fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
     const PROMPT_NEIGHBORHOOD: usize = 6;
 
-    let Some(prompt_idx) = rows.iter().rposition(|row| {
+    let Some(prompt_idx) = find_live_prompt_row(rows, |row| {
         let t = row.trim_start();
         matches!(t.chars().next(), Some('\u{203A}' | '\u{00BB}'))
             && !t.starts_with("\u{203A}\u{203A}")
@@ -2500,6 +2500,34 @@ fn detect_codex_screen_activity(rows: &[String]) -> AgentScreenActivity {
         return AgentScreenActivity::Interrupted;
     }
     AgentScreenActivity::Ready
+}
+
+/// Find a prompt only in the current bottom chrome zone.
+///
+/// The rendered viewport includes transcript history, so a whole-screen search
+/// can mistake an old submitted prompt or markdown quote for the live composer.
+/// Prefer the structurally detected input box (including tall custom HUDs); if
+/// no box can be identified, accept only the final three non-padding rows.
+fn find_live_prompt_row<F>(rows: &[String], is_prompt: F) -> Option<usize>
+where
+    F: Fn(&str) -> bool,
+{
+    let content_end = rows
+        .iter()
+        .rposition(|row| !row.trim().is_empty())
+        .map_or(0, |index| index + 1);
+    if content_end == 0 {
+        return None;
+    }
+    let refs: Vec<&str> = rows[..content_end].iter().map(String::as_str).collect();
+    if let Some(prompt) = crate::chrome::find_input_box_prompt_row(&refs)
+        && is_prompt(&rows[prompt])
+    {
+        return Some(prompt);
+    }
+    (content_end.saturating_sub(3)..content_end)
+        .rev()
+        .find(|&index| is_prompt(&rows[index]))
 }
 
 /// Claude's active status is presence-based because current Claude versions can
@@ -2537,10 +2565,11 @@ fn detect_claude_screen_activity(rows: &[String]) -> AgentScreenActivity {
 }
 
 fn gemini_prompt_present(rows: &[String]) -> bool {
-    rows.iter().any(|row| {
+    find_live_prompt_row(rows, |row| {
         let t = row.trim_start();
         t == ">" || t.starts_with("> ")
     })
+    .is_some()
 }
 
 /// Prompt-based only — see `detect_claude_screen_activity` for the rationale.
@@ -3811,9 +3840,7 @@ fn raw_stream_events(carry: &mut String, data: &str, out: &mut Vec<ParsedEvent>)
     if let Some(evt) = crate::output_parser::parse_osc94(&combined) {
         out.push(evt);
     }
-    if let Some(evt) = crate::output_parser::parse_osc777_notify(&combined) {
-        out.push(evt);
-    }
+    out.extend(crate::output_parser::parse_osc777_notifies(&combined));
     *carry = unterminated_osc_tail(&combined);
 }
 
@@ -7463,17 +7490,15 @@ pub(crate) async fn spawn_session_for_agent(
         .session_states
         .insert(session_id.clone(), crate::state::SessionState::default());
 
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::SessionCreated {
-            session_id: session_id.clone(),
-            cwd: state
-                .sessions
-                .get(&session_id)
-                .and_then(|s| s.lock().cwd.clone()),
-            agent_type: None,
-            display_name: display_name.clone(),
-        });
+    state.emit_pty_event(crate::state::AppEvent::SessionCreated {
+        session_id: session_id.clone(),
+        cwd: state
+            .sessions
+            .get(&session_id)
+            .and_then(|s| s.lock().cwd.clone()),
+        agent_type: None,
+        display_name: display_name.clone(),
+    });
     #[cfg(feature = "desktop")]
     if let Some(ref a) = *state.app_handle.read() {
         let _ = a.emit(
@@ -7854,10 +7879,9 @@ pub(crate) fn get_shell_state(
     state: State<'_, Arc<AppState>>,
     session_id: String,
 ) -> Option<String> {
-    state
-        .shell_states
-        .get(&session_id)
-        .map(|atom| shell_state_str(atom.load(std::sync::atomic::Ordering::Relaxed)).to_string())
+    state.shell_states.get(&session_id).and_then(|atom| {
+        shell_state_wire(atom.load(std::sync::atomic::Ordering::Relaxed)).map(str::to_string)
+    })
 }
 
 /// Return the classified shell family for a PTY session.
@@ -11308,6 +11332,60 @@ mod tests {
         screen.push("  gpt-5.5 high · ~/repo".into());
         assert_eq!(
             detect_codex_screen_activity(&screen),
+            AgentScreenActivity::Ready
+        );
+    }
+
+    #[test]
+    fn historical_codex_prompt_outside_current_chrome_is_not_ready() {
+        let mut screen = vec!["› an old submitted request".to_string()];
+        screen.extend((0..8).map(|n| format!("current output row {n}")));
+
+        assert_eq!(
+            detect_codex_screen_activity(&screen),
+            AgentScreenActivity::Unknown
+        );
+    }
+
+    #[test]
+    fn codex_draft_prompt_above_tall_hud_is_current_chrome() {
+        let mut screen = vec![
+            "current output".to_string(),
+            "─".repeat(80),
+            "› Run /review on my current changes".to_string(),
+            "─".repeat(80),
+        ];
+        screen.extend((0..30).map(|n| format!("custom HUD row {n}")));
+
+        assert_eq!(
+            detect_codex_screen_activity(&screen),
+            AgentScreenActivity::Ready
+        );
+    }
+
+    #[test]
+    fn gemini_markdown_quote_in_history_is_not_a_ready_prompt() {
+        let mut screen = vec!["> quoted user prose".to_string()];
+        screen.extend((0..8).map(|n| format!("current output row {n}")));
+
+        assert_eq!(
+            detect_gemini_screen_activity(&screen),
+            AgentScreenActivity::Unknown
+        );
+    }
+
+    #[test]
+    fn gemini_prompt_above_tall_hud_is_current_chrome() {
+        let mut screen = vec![
+            "current output".to_string(),
+            "─".repeat(80),
+            "> Type your message".to_string(),
+            "─".repeat(80),
+        ];
+        screen.extend((0..30).map(|n| format!("custom HUD row {n}")));
+
+        assert_eq!(
+            detect_gemini_screen_activity(&screen),
             AgentScreenActivity::Ready
         );
     }

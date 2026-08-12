@@ -578,14 +578,12 @@ pub(super) fn spawn_pty_session(
     state.grid_watch.insert(session_id.clone(), grid_watch_tx);
 
     // Broadcast to SSE/WebSocket consumers (before state is moved to reader thread)
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::SessionCreated {
-            session_id: session_id.clone(),
-            cwd: cwd.clone(),
-            agent_type: None,
-            display_name: None,
-        });
+    state.emit_pty_event(crate::state::AppEvent::SessionCreated {
+        session_id: session_id.clone(),
+        cwd: cwd.clone(),
+        agent_type: None,
+        display_name: None,
+    });
 
     #[cfg(feature = "desktop")]
     let state_ref = state.clone();
@@ -722,10 +720,9 @@ pub(super) async fn get_shell_state(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let value = state
-        .shell_states
-        .get(&session_id)
-        .map(|atom| crate::pty::shell_state_str(atom.load(Ordering::Relaxed)).to_string());
+    let value = state.shell_states.get(&session_id).and_then(|atom| {
+        crate::pty::shell_state_wire(atom.load(Ordering::Relaxed)).map(str::to_string)
+    });
     Json(serde_json::json!({ "state": value }))
 }
 

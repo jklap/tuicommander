@@ -849,10 +849,10 @@ pub(crate) fn parse_osc94(text: &str) -> Option<ParsedEvent> {
 /// wording is unambiguous and stays confident.
 ///
 /// The `prompt_text` is the body when present, else the title.
-pub(crate) fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
+pub(crate) fn parse_osc777_notifies(text: &str) -> Vec<ParsedEvent> {
     // Fast path: skip the regex unless the introducer is present.
     if !text.contains("\x1b]777;notify;") {
-        return None;
+        return Vec::new();
     }
     lazy_static::lazy_static! {
         // Terminated by BEL or ST. Field bodies stop at `;`, BEL or ESC so a
@@ -861,25 +861,32 @@ pub(crate) fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
             regex::Regex::new(r"\x1b\]777;notify;([^;\x07\x1b]*)(?:;([^\x07\x1b]*))?(?:\x07|\x1b\\)")
                 .unwrap();
     }
-    // Last one wins: a chunk carrying several notifications ends at the newest.
-    let caps = OSC777_RE.captures_iter(text).last()?;
-    let title = caps.get(1).map(|m| m.as_str().trim()).unwrap_or_default();
-    let body = caps.get(2).map(|m| m.as_str().trim()).unwrap_or_default();
-    let prompt_text = if body.is_empty() { title } else { body };
-    if prompt_text.is_empty() {
-        return None;
-    }
-    let normalized = prompt_text.to_ascii_lowercase();
-    let confident =
-        normalized.contains("needs your permission") || normalized.contains("approval required");
-    let requires_response = confident || normalized.contains("is waiting for your input");
-    if !requires_response {
-        return None;
-    }
-    Some(ParsedEvent::Question {
-        prompt_text: prompt_text.to_string(),
-        confident,
-    })
+    OSC777_RE
+        .captures_iter(text)
+        .filter_map(|caps| {
+            let title = caps.get(1).map(|m| m.as_str().trim()).unwrap_or_default();
+            let body = caps.get(2).map(|m| m.as_str().trim()).unwrap_or_default();
+            let prompt_text = if body.is_empty() { title } else { body };
+            if prompt_text.is_empty() {
+                return None;
+            }
+            let normalized = prompt_text.to_ascii_lowercase();
+            let confident = normalized.contains("needs your permission")
+                || normalized.contains("approval required");
+            let requires_response = confident || normalized.contains("is waiting for your input");
+            requires_response.then(|| ParsedEvent::Question {
+                prompt_text: prompt_text.to_string(),
+                confident,
+            })
+        })
+        .collect()
+}
+
+/// Compatibility helper for callers that classify one notification. When a
+/// buffer contains several, the newest qualifying event retains the historical
+/// single-result behavior; production uses `parse_osc777_notifies` and keeps all.
+pub(crate) fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
+    parse_osc777_notifies(text).pop()
 }
 
 /// Parse GitHub/GitLab PR/MR URLs
@@ -5540,6 +5547,29 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
         assert!(matches!(
             evt,
             Some(ParsedEvent::Question { ref prompt_text, .. }) if prompt_text == "approval required"
+        ));
+    }
+
+    #[test]
+    fn osc777_notify_keeps_every_response_required_event_in_one_chunk() {
+        let raw = concat!(
+            "\x1b]777;notify;Claude Code;Claude needs your permission\x07",
+            "\x1b]777;notify;Claude Code;Claude Code needs your attention\x07",
+            "\x1b]777;notify;Codex;approval required\x07"
+        );
+        let events = parse_osc777_notifies(raw);
+        assert_eq!(
+            events.len(),
+            2,
+            "generic attention is filtered, both waits survive"
+        );
+        assert!(matches!(
+            &events[0],
+            ParsedEvent::Question { prompt_text, .. } if prompt_text == "Claude needs your permission"
+        ));
+        assert!(matches!(
+            &events[1],
+            ParsedEvent::Question { prompt_text, .. } if prompt_text == "approval required"
         ));
     }
 

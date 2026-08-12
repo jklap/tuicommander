@@ -1797,10 +1797,9 @@ fn session_wait_response(
             "until": until,
         });
     }
-    let shell_state = state
-        .shell_states
-        .get(session_id)
-        .map(|value| crate::pty::shell_state_str(value.load(std::sync::atomic::Ordering::Relaxed)));
+    let shell_state = state.shell_states.get(session_id).and_then(|value| {
+        crate::pty::shell_state_wire(value.load(std::sync::atomic::Ordering::Relaxed))
+    });
     let mut response = serde_json::json!({
         "met": true,
         "timed_out": false,
@@ -3387,14 +3386,12 @@ fn handle_agent_with_parent_cwd(
             // Broadcast session-created to SSE/WebSocket consumers
             let cwd_str = effective_cwd.clone();
             let agent_type_str = effective_agent_type.clone();
-            let _ = state
-                .event_bus
-                .send(crate::state::AppEvent::SessionCreated {
-                    session_id: session_id.clone(),
-                    cwd: cwd_str.clone(),
-                    agent_type: agent_type_str,
-                    display_name: requested_name.clone(),
-                });
+            state.emit_pty_event(crate::state::AppEvent::SessionCreated {
+                session_id: session_id.clone(),
+                cwd: cwd_str.clone(),
+                agent_type: agent_type_str,
+                display_name: requested_name.clone(),
+            });
 
             #[cfg(feature = "desktop")]
             {
@@ -6561,6 +6558,7 @@ mod tests {
             event_bus: tokio::sync::broadcast::channel(256).0,
             event_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_states: dashmap::DashMap::new(),
+            session_state_events: crate::state::SessionStateEventQueue::new(),
             mcp_upstream_registry: std::sync::Arc::new(
                 crate::mcp_proxy::registry::UpstreamRegistry::new(),
             ),

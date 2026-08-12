@@ -84,6 +84,10 @@ Question events have two sources:
   that the composer awaits a response and is ignored for awaiting-state
   detection. The accepted bodies do not carry the same weight:
 
+  Every qualifying notification in a raw chunk is retained in stream order;
+  a later OSC sequence cannot overwrite an earlier approval request merely
+  because both arrived in one OS read.
+
   | Body | Confidence | Why |
   |------|-----------|-----|
   | `needs your permission`, `approval required` | high | A request with one reading. Cleared by the answer. |

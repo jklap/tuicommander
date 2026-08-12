@@ -171,7 +171,10 @@ spinner sits *above* the input box, so trimming costs no signal.
 
 Enforced by `chrome::find_chrome_cutoff`, applied to changed rows in `pty.rs`
 before `parse_clean_lines`. It anchors on the input box and extends upward past
-its padding.
+its padding. The unwindowed fallback accepts either a strict empty prompt or a
+separator followed within four rows by a prompt; the latter preserves a draft
+in a non-empty input box above an arbitrarily tall HUD without treating a lone
+separator or markdown quote as chrome.
 
 **When you touch that cutoff, the failure mode to fear is failing open:** no
 anchor found returns `None`, and `None` means no trim, so *every* status-line row

@@ -449,14 +449,12 @@ pub(super) async fn spawn_agent_session(
     state.grid_watch.insert(session_id.clone(), grid_watch_tx);
 
     // Broadcast to SSE/WebSocket consumers (before state is moved to reader thread)
-    let _ = state
-        .event_bus
-        .send(crate::state::AppEvent::SessionCreated {
-            session_id: session_id.clone(),
-            cwd: body.cwd.clone(),
-            agent_type: body.agent_type.clone(),
-            display_name: None,
-        });
+    state.emit_pty_event(crate::state::AppEvent::SessionCreated {
+        session_id: session_id.clone(),
+        cwd: body.cwd.clone(),
+        agent_type: body.agent_type.clone(),
+        display_name: None,
+    });
 
     #[cfg(feature = "desktop")]
     let state_ref = state.clone();
