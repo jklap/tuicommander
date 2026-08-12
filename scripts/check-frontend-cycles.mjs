@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
-import ts from "@typescript/typescript6";
+import ts from "typescript";
 
 const selfTest = process.argv.includes("--self-test");
 const sourceRootIndex = process.argv.indexOf("--source-root");
