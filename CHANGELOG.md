@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Agent-raised notifications identify their repository** — `ui action=toast` now derives the caller's repository from its MCP session and working directory, shows the repository name in the toast and bell entry, and scopes the retained bell item to that repository.
 
+### Added
+
+- **Orchestrated PTYs show task descriptions** — MCP `agent action=spawn` and `session action=input` accept an optional `pty_description`, shown above the terminal alongside the last submitted user prompt and updated through the existing event transports.
+
 ## [1.7.4] - 2026-08-12
 
 ### Added

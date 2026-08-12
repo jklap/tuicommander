@@ -21,7 +21,8 @@ GET /sessions
 ```
 
 Returns array of active session info (ID, cwd, worktree path, branch,
-`display_name`, `display_name_is_custom`, `is_remote`, and nested state). The
+`display_name`, `display_name_is_custom`, `is_remote`, optional
+`pty_description`, and nested state). The
 origin fields let browser and desktop clients preserve manual-title protection
 and remote-completion muting across reconnects. For detected agents,
 `state.agent_state` distinguishes PTY
@@ -256,6 +257,7 @@ Broadcasts server-side events to all browser/mobile clients. Supports optional `
 | Event | Payload | Description |
 |-------|---------|-------------|
 | `session-created` | `{session_id, cwd, agent_type, display_name}` | New session started; `display_name` is the optional stable assigned name |
+| `pty-description-changed` | `{session_id, description}` | Orchestrator updates the short task description shown above a PTY |
 | `session-closed` | `{session_id}` | Session ended |
 | `repo-changed` | `{repo_path}` | Git repository state changed |
 | `head-changed` | `{repo_path, branch}` | Git HEAD changed (branch switch) |

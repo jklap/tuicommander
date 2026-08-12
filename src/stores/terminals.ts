@@ -68,6 +68,7 @@ export interface TerminalData {
 	lastDataAt: number | null; // Timestamp of last PTY output
 	idleSince: number | null; // Timestamp when shellState transitioned to idle
 	lastPrompt: string | null; // Last relevant user prompt (>= 10 words), set by Rust
+	ptyDescription: string | null; // Orchestrator-supplied description of assigned PTY work
 	agentIntent: string | null; // LLM-declared intent via intent: token
 	currentTask: string | null; // Current agent task from status-line parsing (e.g. "Reading files")
 	activeSubTasks: number; // Count of running sub-agents/background tasks from ›› status line
@@ -107,6 +108,7 @@ type TerminalCreateData = Omit<
 	| "lastDataAt"
 	| "idleSince"
 	| "lastPrompt"
+	| "ptyDescription"
 	| "agentIntent"
 	| "currentTask"
 	| "activeSubTasks"
@@ -130,6 +132,7 @@ type TerminalCreateData = Omit<
 	agentType?: AgentType | null;
 	agentSessionId?: string | null;
 	agentLaunchCommand?: string | null;
+	ptyDescription?: string | null;
 };
 
 /** Terminal component ref interface */
@@ -393,6 +396,7 @@ function createTerminalsStore() {
 				lastDataAt: null,
 				idleSince: null,
 				lastPrompt: null,
+				ptyDescription: null,
 				agentIntent: null,
 				currentTask: null,
 				activeSubTasks: 0,
@@ -437,6 +441,7 @@ function createTerminalsStore() {
 				lastDataAt: null,
 				idleSince: null,
 				lastPrompt: null,
+				ptyDescription: null,
 				agentIntent: null,
 				currentTask: null,
 				activeSubTasks: 0,
@@ -602,6 +607,12 @@ function createTerminalsStore() {
 		setLastPrompt(id: string, prompt: string | null): void {
 			if (!has(id)) return;
 			setState("terminals", id, "lastPrompt", prompt);
+		},
+
+		/** Update the orchestrator-supplied PTY task description. */
+		setPtyDescription(id: string, description: string | null): void {
+			if (!has(id)) return;
+			setState("terminals", id, "ptyDescription", description);
 		},
 
 		/** Set suggested follow-up actions (timer-free — overlay handles visibility timeout) */

@@ -26,6 +26,12 @@ export const TIPS: Tip[] = [
 		shortcut: `${mod}+K`,
 	},
 	{
+		feature: "PTY Task Descriptions",
+		description:
+			"Orchestrated agents can show their assigned task above the terminal, alongside the last submitted prompt.",
+		shortcut: null,
+	},
+	{
 		feature: "Split Panes",
 		description: "Split the current terminal into two side-by-side panes.",
 		shortcut: `${mod}+\\`,

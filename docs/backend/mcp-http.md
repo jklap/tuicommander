@@ -427,6 +427,15 @@ OpenCode, MCP uses the canonical agent-submit sequence (Ctrl-U, bracketed paste
 for multiline text, a flushed scheduling gap, then CR). Other text/key pairs,
 including Claude's established input path, retain raw pair semantics.
 
+Orchestrated PTYs accept an optional `pty_description` field on
+`session action=input`. It is independent from `last_prompt`: the former is a
+short description of the assigned work written by the orchestrator, while the
+latter is the last substantial user prompt submitted to the agent. Omit the
+field to keep the current description; pass a string to replace it, or `null`
+/ an empty string to clear it. `agent action=spawn` accepts the same field for
+the initial task. Updates are emitted as `pty-description-changed` over both
+Tauri events and `/events` SSE.
+
 **Delta reads:** The non-raw output path returns a `cursor` field (monotonic scrollback position). Pass `since_cursor` on subsequent calls to receive only new lines since that position, avoiding full re-reads. The `total_written` field is kept alongside `cursor` for backwards compatibility. When `since_cursor` is provided, screen rows are excluded — only scrollback log lines are returned.
 
 ### MCP Tool: `repo` — Worktree Create (Claude Code Agent Hint)
@@ -602,6 +611,11 @@ connection. This avoids making identity depend on the child successfully
 executing a registration instruction in its initial prompt.
 The session list's `alias` remains a separate repo-derived short address and is
 not replaced by the display name.
+
+The optional `pty_description` field on `agent action=spawn` populates the
+orchestrator-owned task description shown above the PTY. Later `session
+action=input` calls may update the same field without adding another command to
+the MCP surface.
 
 Every managed child is registered server-side and receives an inbox immediately,
 even when the caller has no bound peer identity. A registered parent additionally

@@ -85,6 +85,13 @@ pub enum AppEvent {
     },
     #[serde(rename = "pty-exit")]
     PtyExit { session_id: String },
+    /// Orchestrator-supplied description of the work currently assigned to a PTY.
+    #[serde(rename = "pty-description-changed")]
+    PtyDescriptionChanged {
+        session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
     #[serde(rename = "plugin-changed")]
     #[allow(dead_code)] // reserved for future plugin hot-reload notifications
     PluginChanged { plugin_ids: Vec<String> },
@@ -226,6 +233,7 @@ impl AppEvent {
         match self {
             AppEvent::PtyParsed { session_id, .. }
             | AppEvent::PtyExit { session_id }
+            | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
         }
@@ -1294,6 +1302,10 @@ pub struct AppState {
     /// Last relevant user prompt per session (>= 10 words).
     /// Updated on each qualifying user input line, read by the Activity Dashboard.
     pub(crate) last_prompts: DashMap<String, String>,
+    /// Orchestrator-supplied description of the current PTY task.
+    /// Separate from `last_prompts`: one describes assigned work, the other records
+    /// the latest user instruction actually submitted to the agent.
+    pub(crate) pty_descriptions: DashMap<String, String>,
     /// Per-session silence state for fallback question detection.
     /// Shared between the reader thread and write_pty so user-typed lines can be suppressed.
     pub(crate) silence_states: DashMap<String, Arc<Mutex<crate::pty::SilenceState>>>,
@@ -1593,6 +1605,42 @@ impl AppState {
             let _ = tx.send(event.clone());
         }
         let _ = self.event_bus.send(event);
+    }
+
+    /// Set or clear the orchestrator-owned description shown above a PTY.
+    /// The event is dual-emitted for desktop Tauri listeners and browser/SSE
+    /// clients, and is suppressed when the value did not change.
+    pub(crate) fn set_pty_description(&self, session_id: &str, description: Option<String>) {
+        let changed = match description.as_deref() {
+            Some(value) if !value.is_empty() => {
+                self.pty_descriptions
+                    .insert(session_id.to_string(), value.to_string())
+                    .as_deref()
+                    != Some(value)
+            }
+            _ => self.pty_descriptions.remove(session_id).is_some(),
+        };
+        if !changed {
+            return;
+        }
+        let description = self
+            .pty_descriptions
+            .get(session_id)
+            .map(|value| value.value().clone());
+        self.emit_pty_event(AppEvent::PtyDescriptionChanged {
+            session_id: session_id.to_string(),
+            description: description.clone(),
+        });
+        #[cfg(feature = "desktop")]
+        if let Some(app) = self.app_handle.read().as_ref() {
+            let _ = app.emit(
+                "pty-description-changed",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "description": description,
+                }),
+            );
+        }
     }
 
     /// Subscribe to lifecycle events for one PTY session. Subscription happens
@@ -2333,6 +2381,7 @@ impl AppState {
             kitty_states: DashMap::new(),
             input_buffers: DashMap::new(),
             last_prompts: DashMap::new(),
+            pty_descriptions: DashMap::new(),
             silence_states: DashMap::new(),
             claude_usage_cache: parking_lot::Mutex::new(crate::claude_usage::load_cache_from_disk()),
             log_buffer,
@@ -2939,6 +2988,7 @@ impl AppState {
                     },
                 );
             }
+            AppEvent::PtyDescriptionChanged { .. } => {}
             AppEvent::SessionClosed { session_id, .. } => {
                 state.session_states.remove(session_id);
             }
@@ -5579,6 +5629,7 @@ mod tests {
             kitty_states: dashmap::DashMap::new(),
             input_buffers: dashmap::DashMap::new(),
             last_prompts: dashmap::DashMap::new(),
+            pty_descriptions: dashmap::DashMap::new(),
             silence_states: dashmap::DashMap::new(),
             claude_usage_cache: parking_lot::Mutex::new(std::collections::HashMap::new()),
             log_buffer: Arc::new(parking_lot::Mutex::new(
@@ -6165,6 +6216,45 @@ mod tests {
         let event = make_parsed("user-input", serde_json::json!({ "content": ten_words }));
         let s = apply(&state, &event);
         assert_eq!(s.last_prompt.as_deref(), Some(ten_words));
+    }
+
+    #[test]
+    fn pty_description_is_independent_and_emits_only_on_change() {
+        let state = make_test_app_state();
+        let session_id = "session-1";
+        state
+            .last_prompts
+            .insert(session_id.to_string(), "the last user prompt".to_string());
+        let mut events = state.event_bus.subscribe();
+
+        state.set_pty_description(session_id, Some("Run validation".to_string()));
+        assert_eq!(
+            state
+                .pty_descriptions
+                .get(session_id)
+                .map(|value| value.value().clone()),
+            Some("Run validation".to_string())
+        );
+        assert_eq!(
+            state.last_prompts.get(session_id).unwrap().value(),
+            "the last user prompt"
+        );
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            AppEvent::PtyDescriptionChanged { session_id: id, description: Some(value) }
+                if id == session_id && value == "Run validation"
+        ));
+
+        state.set_pty_description(session_id, Some("Run validation".to_string()));
+        assert!(events.try_recv().is_err());
+
+        state.set_pty_description(session_id, None);
+        assert!(!state.pty_descriptions.contains_key(session_id));
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            AppEvent::PtyDescriptionChanged { session_id: id, description: None }
+                if id == session_id
+        ));
     }
 
     #[test]

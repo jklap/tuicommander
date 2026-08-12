@@ -64,7 +64,7 @@ pub(super) async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Ve
             let session = entry.value().lock();
             let session_state = state.session_state_with_shell(&session_id);
             SessionInfo {
-                session_id,
+                session_id: session_id.clone(),
                 cwd: session.cwd.clone(),
                 worktree_path: session
                     .worktree
@@ -74,6 +74,10 @@ pub(super) async fn list_sessions(State(state): State<Arc<AppState>>) -> Json<Ve
                 display_name: session.display_name.clone(),
                 display_name_is_custom: session.display_name_is_custom,
                 is_remote: session.is_remote,
+                pty_description: state
+                    .pty_descriptions
+                    .get(&session_id)
+                    .map(|value| value.value().clone()),
                 state: session_state,
             }
         })
@@ -1106,6 +1110,9 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::SessionClosed { session_id: sid, reason } => {
                                     serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})
                                 }
+                                crate::state::AppEvent::PtyDescriptionChanged { session_id: sid, description } => {
+                                    serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
+                                }
                                 _ => continue,
                             };
                             if futures_util::SinkExt::send(
@@ -1432,6 +1439,9 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
                                 }
                                 crate::state::AppEvent::SessionClosed { session_id: sid, reason } => {
                                     serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})
+                                }
+                                crate::state::AppEvent::PtyDescriptionChanged { session_id: sid, description } => {
+                                    serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
                                 }
                                 _ => continue,
                             };

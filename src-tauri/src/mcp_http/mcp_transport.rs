@@ -993,6 +993,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "until": { "type": "string", "description": "Wait target: 'idle' or 'exited' (action=wait, default idle)" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
                 "input": { "type": "string", "description": "Raw text to write (action=input)" },
+                "pty_description": { "type": ["string", "null"], "description": "Short orchestrator-supplied description shown above the PTY (action=input)" },
                 "special_key": { "type": "string", "description": "Special key: enter, tab, ctrl+c, ctrl+d, ctrl+z, ctrl+l, ctrl+a, ctrl+e, ctrl+k, ctrl+u, ctrl+w, ctrl+r, up, down, left, right, home, end, backspace, delete, escape (action=input)" },
                 "rows": { "type": "integer", "description": "Terminal rows (action=create or resize)" },
                 "cols": { "type": "integer", "description": "Terminal cols (action=create or resize)" },
@@ -1011,6 +1012,7 @@ fn native_tool_definitions() -> serde_json::Value {
                 "action": { "type": "string", "description": "One of: spawn, wait, detect, stats, metrics, register, list_peers, send, inbox" },
                 "timeout_ms": { "type": "integer", "minimum": 1, "maximum": 300000, "description": "Max wait in ms (action=wait; default 60000). Values at or above 300000 run as 295000 so the reply beats a 300s client-side tool-call deadline. On timeout returns {timed_out:true}." },
                 "prompt": { "type": "string", "description": "Task prompt for the agent (action=spawn)" },
+                "pty_description": { "type": ["string", "null"], "description": "Short description of the PTY task shown above the terminal (action=spawn)" },
                 "cwd": { "type": "string", "description": "Working directory (action=spawn)" },
                 "model": { "type": "string", "description": "Structured model flag; preserved when args is also set (action=spawn)" },
                 "print_mode": { "type": "boolean", "description": "false (default): visible TUI tab, observable via agent(inbox). true: headless, no tab. (action=spawn)" },
@@ -1334,6 +1336,40 @@ fn require_string<'a>(
     args[field].as_str().ok_or_else(
         || serde_json::json!({"error": format!("Missing required parameter '{field}'")}),
     )
+}
+
+#[derive(Debug, PartialEq)]
+enum PtyDescriptionUpdate {
+    Unchanged,
+    Set(Option<String>),
+}
+
+/// Parse the optional PTY description field. Omitted means unchanged; null or
+/// an empty/whitespace-only string clears the current description.
+fn parse_pty_description(
+    args: &serde_json::Value,
+) -> Result<PtyDescriptionUpdate, serde_json::Value> {
+    let Some(value) = args.get("pty_description") else {
+        return Ok(PtyDescriptionUpdate::Unchanged);
+    };
+    match value {
+        serde_json::Value::Null => Ok(PtyDescriptionUpdate::Set(None)),
+        serde_json::Value::String(text) => {
+            let text = text.trim();
+            Ok(PtyDescriptionUpdate::Set(
+                (!text.is_empty()).then(|| text.to_string()),
+            ))
+        }
+        _ => Err(serde_json::json!({
+            "error": "'pty_description' must be a string or null"
+        })),
+    }
+}
+
+fn apply_pty_description(state: &AppState, session_id: &str, description: PtyDescriptionUpdate) {
+    if let PtyDescriptionUpdate::Set(description) = description {
+        state.set_pty_description(session_id, description);
+    }
 }
 
 /// Extract path from args with guidance error
@@ -2082,6 +2118,14 @@ fn handle_session(
                     );
                     insert_optional_value(
                         object,
+                        "pty_description",
+                        state
+                            .pty_descriptions
+                            .get(&id)
+                            .map(|value| serde_json::Value::String(value.value().clone())),
+                    );
+                    insert_optional_value(
+                        object,
                         "cwd",
                         s.cwd.clone().map(serde_json::Value::String),
                     );
@@ -2168,8 +2212,22 @@ fn handle_session(
             } else {
                 None
             };
+            let pty_description = match parse_pty_description(args) {
+                Ok(description) => description,
+                Err(error) => return error,
+            };
+            if text.is_empty()
+                && key_seq.is_none()
+                && matches!(&pty_description, PtyDescriptionUpdate::Unchanged)
+            {
+                return serde_json::json!({"error": "Action 'input' requires 'input' (text), 'special_key', or 'pty_description'"});
+            }
             if text.is_empty() && key_seq.is_none() {
-                return serde_json::json!({"error": "Action 'input' requires 'input' (text) and/or 'special_key'"});
+                if !state.sessions.contains_key(session_id) {
+                    return serde_json::json!({"error": "Session not found"});
+                }
+                apply_pty_description(state, session_id, pty_description);
+                return serde_json::json!({"ok": true});
             }
             let agent_type = state
                 .session_states
@@ -2186,6 +2244,7 @@ fn handle_session(
                 }
                 super::session::apply_input_bookkeeping(state, session_id, text);
                 super::session::apply_input_bookkeeping(state, session_id, "\r");
+                apply_pty_description(state, session_id, pty_description);
                 return serde_json::json!({"ok": true});
             }
 
@@ -2211,6 +2270,7 @@ fn handle_session(
                 }
                 (true, None) => unreachable!("checked above: text.is_empty() && key_seq.is_none()"),
             }
+            apply_pty_description(state, session_id, pty_description);
             serde_json::json!({"ok": true})
         }
         "output" => {
@@ -2957,6 +3017,11 @@ fn handle_agent_with_parent_cwd(
                 Some(p) => p.to_string(),
                 None => return serde_json::json!({"error": "Action 'spawn' requires 'prompt'"}),
             };
+            let pty_description = match parse_pty_description(args) {
+                Ok(PtyDescriptionUpdate::Set(description)) => description,
+                Ok(PtyDescriptionUpdate::Unchanged) => None,
+                Err(error) => return error,
+            };
             if state.sessions.len() >= MAX_CONCURRENT_SESSIONS {
                 return serde_json::json!({"error": "Max concurrent sessions reached"});
             }
@@ -3315,6 +3380,7 @@ fn handle_agent_with_parent_cwd(
                     );
                 }
             }
+            state.set_pty_description(&session_id, pty_description);
             spawn_reader_thread(reader, paused, session_id.clone(), state.clone(), None);
 
             // Every managed child is a peer immediately, independent of whether
@@ -5912,6 +5978,27 @@ mod tests {
         format!("http://127.0.0.1:{port}/mcp")
     }
 
+    #[test]
+    fn pty_description_field_is_optional_replacement_or_clear() {
+        assert!(matches!(
+            parse_pty_description(&serde_json::json!({})),
+            Ok(PtyDescriptionUpdate::Unchanged)
+        ));
+        assert_eq!(
+            parse_pty_description(&serde_json::json!({"pty_description": "  Run checks  "})),
+            Ok(PtyDescriptionUpdate::Set(Some("Run checks".to_string())))
+        );
+        assert_eq!(
+            parse_pty_description(&serde_json::json!({"pty_description": ""})),
+            Ok(PtyDescriptionUpdate::Set(None))
+        );
+        assert_eq!(
+            parse_pty_description(&serde_json::json!({"pty_description": null})),
+            Ok(PtyDescriptionUpdate::Set(None))
+        );
+        assert!(parse_pty_description(&serde_json::json!({"pty_description": 7})).is_err());
+    }
+
     async fn post_test_tool_call(
         state: Arc<AppState>,
         session_id: &str,
@@ -6386,6 +6473,7 @@ mod tests {
             kitty_states: dashmap::DashMap::new(),
             input_buffers: dashmap::DashMap::new(),
             last_prompts: dashmap::DashMap::new(),
+            pty_descriptions: dashmap::DashMap::new(),
             silence_states: dashmap::DashMap::new(),
             claude_usage_cache: parking_lot::Mutex::new(std::collections::HashMap::new()),
             log_buffer: std::sync::Arc::new(parking_lot::Mutex::new(
