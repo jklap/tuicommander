@@ -52,6 +52,7 @@ export interface AppInitDeps {
 				state?: {
 					shell_state?: "busy" | "idle";
 					agent_state?: "starting" | "working" | "awaiting_input" | "idle" | "completed";
+					agent_type?: string | null;
 					background_work?: boolean;
 				} | null;
 			}>
@@ -680,9 +681,7 @@ export async function initApp(deps: AppInitDeps) {
 				...(canApplySnapshotShell && session.state?.shell_state ? { shellState: session.state.shell_state } : {}),
 				...(session.is_remote !== undefined ? { isRemote: session.is_remote } : {}),
 				...(session.display_name_is_custom !== undefined ? { nameIsCustom: session.display_name_is_custom } : {}),
-				...(session.state?.agent_type !== undefined
-					? { agentType: parseAgentType(session.state.agent_type) }
-					: {}),
+				...(session.state?.agent_type !== undefined ? { agentType: parseAgentType(session.state.agent_type) } : {}),
 				ptyDescription: session.pty_description ?? null,
 				agentState: session.state?.agent_state ?? null,
 				backgroundWork: session.state?.background_work ?? false,
