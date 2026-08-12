@@ -22,7 +22,10 @@ pub(crate) enum PendingInjection {
     PeerMessage(String),
     /// The id is what the Compose panel deletes by: a queue position would shift
     /// under the caller as the FIFO drains on the next idle window.
-    UserCommand { id: u64, text: String },
+    UserCommand {
+        id: u64,
+        text: String,
+    },
 }
 
 /// Ids are unique per process, not per session — a Compose delete carries both.
