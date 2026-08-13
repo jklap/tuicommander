@@ -8555,7 +8555,9 @@ pub(crate) fn close_pty(
 
 /// Script interpreters that execute an agent CLI in their own process image.
 /// For these the executable path names the interpreter, not the tool the user
-/// launched, so the real identity has to come from argv[0].
+/// launched, so the real identity has to come from argv[0]. Windows exposes no
+/// argv in its process snapshot, so only the macOS and Linux arms use this.
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn is_script_interpreter(name: &str) -> bool {
     matches!(
         name,
@@ -8604,10 +8606,7 @@ pub(crate) fn process_name_from_pid(pid: u32) -> Option<String> {
     // See the macOS arm: an npm-installed agent CLI reports its interpreter here,
     // so fall back to argv[0] to recover the tool's own name.
     if is_script_interpreter(&comm)
-        && let Some(argv0) = std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
-            .ok()
-            .and_then(|raw| raw.split('\0').next().map(str::to_string))
-            .filter(|s| !s.is_empty())
+        && let Some(argv0) = crate::process_env::read_process_argv0(pid)
     {
         return Some(normalized_process_name(&argv0).to_string());
     }

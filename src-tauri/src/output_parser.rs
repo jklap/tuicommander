@@ -884,7 +884,9 @@ pub(crate) fn parse_osc777_notifies(text: &str) -> Vec<ParsedEvent> {
 
 /// Compatibility helper for callers that classify one notification. When a
 /// buffer contains several, the newest qualifying event retains the historical
-/// single-result behavior; production uses `parse_osc777_notifies` and keeps all.
+/// single-result behavior; production uses `parse_osc777_notifies` and keeps all,
+/// so this exists for tests only.
+#[cfg(test)]
 pub(crate) fn parse_osc777_notify(text: &str) -> Option<ParsedEvent> {
     parse_osc777_notifies(text).pop()
 }
