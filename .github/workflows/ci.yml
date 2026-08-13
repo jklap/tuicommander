@@ -58,7 +58,12 @@ jobs:
     name: Frontend (typecheck + tests)
     runs-on: ubuntu-22.04
     steps:
+      # The plugins submodule carries the built-in plugin sources that
+      # src/__tests__/plugins/*.test.ts import directly; without it vitest
+      # cannot resolve them and the suite fails to collect.
       - uses: actions/checkout@v6
+        with:
+          submodules: recursive
 
       - uses: pnpm/action-setup@v4
 
