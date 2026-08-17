@@ -1372,6 +1372,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             post(plugin_routes::plugin_unregister),
         )
         .route(
+            "/api/plugins/output-watchers",
+            post(plugin_routes::plugin_set_output_watchers),
+        )
+        .route(
             "/api/plugins/{plugin_id}/readme",
             get(plugin_routes::plugin_readme),
         )
@@ -2070,6 +2074,7 @@ mod tests {
             exit_codes: DashMap::new(),
             shell_state_since_ms: DashMap::new(),
             loaded_plugins: DashMap::new(),
+            plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
             relay: crate::state::RelayState::new(),
             peer_agents: DashMap::new(),
             agent_inbox: DashMap::new(),

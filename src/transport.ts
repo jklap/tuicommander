@@ -1827,6 +1827,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/api/plugins/${p("pluginId")}/unregister`,
 		}),
 	},
+	set_plugin_output_watchers: {
+		map: (args) => ({
+			method: "POST",
+			path: "/api/plugins/output-watchers",
+			body: { client_id: args.clientId, seq: args.seq, watchers: args.watchers },
+		}),
+	},
 	get_plugin_readme_path: {
 		map: (_args, p) => ({
 			method: "GET",

@@ -67,6 +67,7 @@ mod native_keys;
 #[cfg(feature = "desktop")]
 pub(crate) mod notification_sound;
 mod output_parser;
+pub(crate) mod output_watchers;
 #[cfg(feature = "desktop")]
 mod panel_window;
 pub(crate) mod plugin_credentials;
@@ -1825,6 +1826,7 @@ pub fn run() {
             plugins::uninstall_plugin,
             plugins::register_loaded_plugin,
             plugins::unregister_loaded_plugin,
+            plugins::set_plugin_output_watchers,
             plugin_fs::plugin_read_file,
             plugin_fs::plugin_read_file_base64,
             plugin_fs::plugin_list_directory,

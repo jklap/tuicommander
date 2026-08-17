@@ -2873,6 +2873,24 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		try {
 			transport = createTransport(props.sessionId);
 			invokeRef = (cmd, args) => transport!.invoke(cmd, args);
+			// Session events BEFORE the grid subscription: an event that lands
+			// while the listener is still being installed is gone — nothing
+			// replays a watcher line.
+			await transport.onEvent("cwd", (payload) => {
+				const cwd = (payload as { cwd: string }).cwd ?? (payload as string);
+				terminalsStore.update(props.terminalId, { cwd });
+				props.onCwdChange?.(props.terminalId, cwd);
+			});
+			await transport.onEvent("osc133", (payload) => {
+				const { marker, line, exit_code } = payload as { marker: string; line: number; exit_code: number | null };
+				terminalsStore.handleOsc133(props.terminalId, marker, line, exit_code ?? undefined);
+			});
+			// Lines assembled by the Rust reader, carrying the ids it already
+			// matched. No raw stream is scanned here any more.
+			await transport.onEvent("watcher-lines", (payload) => {
+				const { lines } = payload as { lines: Array<{ text: string; matched_ids: string[] }> };
+				pluginRegistry.handleWatcherLines(props.sessionId, lines);
+			});
 			await transport.subscribe((data) => onFrame(data));
 			if (!alive) {
 				// Unmounted while subscribe() was in flight. onCleanup already ran and
@@ -2897,24 +2915,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				sessionId: props.sessionId,
 				error: e,
 			});
-			// `unsubscribe` is already detachDomListeners (assigned before the await).
-		}
-
-		// Listen for session events via transport
-		if (transport) {
-			await transport.onEvent("cwd", (payload) => {
-				const cwd = (payload as { cwd: string }).cwd ?? (payload as string);
-				terminalsStore.update(props.terminalId, { cwd });
-				props.onCwdChange?.(props.terminalId, cwd);
-			});
-			await transport.onEvent("osc133", (payload) => {
-				const { marker, line, exit_code } = payload as { marker: string; line: number; exit_code: number | null };
-				terminalsStore.handleOsc133(props.terminalId, marker, line, exit_code ?? undefined);
-			});
-			await transport.onEvent("output", (payload) => {
-				const { data } = payload as { data: string };
-				pluginRegistry.processRawOutput(data, props.sessionId);
-			});
+			// `unsubscribe` is already detachDomListeners (assigned before the await),
+			// but the event listeners attached above it are not covered by it.
+			transport?.unsubscribe();
 		}
 
 		props.onRef?.({

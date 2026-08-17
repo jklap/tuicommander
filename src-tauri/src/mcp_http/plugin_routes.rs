@@ -275,6 +275,30 @@ pub(super) async fn plugin_unregister(
     json_result(Ok::<_, String>(()))
 }
 
+#[derive(Deserialize)]
+pub(super) struct OutputWatchersBody {
+    /// Identifies the frontend that owns this set — a desktop window and a
+    /// browser tab keep independent watchers.
+    pub client_id: String,
+    /// Monotonic per-client counter that orders the mutations, so a sync that
+    /// lost the race cannot install its older set.
+    pub seq: u64,
+    pub watchers: Vec<crate::output_watchers::WatcherSpec>,
+}
+
+pub(super) async fn plugin_set_output_watchers(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<OutputWatchersBody>,
+) -> Response {
+    let outcome = crate::plugins::set_plugin_output_watchers_impl(
+        &state,
+        &body.client_id,
+        body.seq,
+        &body.watchers,
+    );
+    json_result(Ok::<crate::output_watchers::SyncOutcome, String>(outcome))
+}
+
 // ---------------------------------------------------------------------------
 // README path
 // ---------------------------------------------------------------------------

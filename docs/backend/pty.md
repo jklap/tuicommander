@@ -91,7 +91,7 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 6. Write to `OutputRingBuffer` (64KB circular buffer for MCP access)
 7. Serialize parsed events once with `serde_json::to_value` — reused for both Tauri IPC and event bus (avoids double serialization)
 8. Broadcast to WebSocket clients (if any connected)
-9. Emit Tauri event `pty-output` with `{session_id, data}` — **throttled to ~10/s** (≥100ms between emits). The desktop canvas renders from grid frames and discards this text (it only drives the frontend activity dot / `lastDataAt`); emitting per-chunk flooded the WebView main thread under output storms (`yes`), starving keydown so Ctrl+C never reached `write_pty`. Dropping intermediate chunks is safe — only a periodic "output happened" pulse is needed.
+9. Assemble the lines of the chunk and match them against the compiled plugin OutputWatchers (`output_watchers.rs`), then emit `pty-watcher-lines-{session_id}` with the batch — see [Plugin OutputWatcher matching](#plugin-outputwatcher-matching) below. No raw-output Tauri event is emitted any more: the desktop canvas renders from grid frames, and the assembled lines are the only text the WebView needs. (The raw `output` frame of step 8 is unaffected — it is fed from the output ring buffer to raw-mode WebSocket clients.)
 
 **Cursor-up clamping** — The `clamp_cursor_up()` function limits `ESC[nA` (cursor up) and `ESC[nF` (cursor previous line) sequences to prevent them from moving the cursor beyond the visible viewport. This replaced the previous DiffRenderer approach for simpler escape sequence handling.
 
@@ -104,6 +104,71 @@ spawn_reader_thread(reader, paused, session_id, app, state)
 2. Emits `pty-exit` event with exit code
 3. Removes session from `AppState.sessions`
 4. Updates metrics (decrement `active_sessions`)
+
+### Plugin OutputWatcher matching
+
+Plugin `OutputWatcher` patterns are matched on the reader thread instead of the WebView
+main thread. Each frontend pushes its whole watcher set through
+`set_plugin_output_watchers` (HTTP: `POST /api/plugins/output-watchers`) with its
+`client_id` and a monotonic `seq`; `plugins.rs` compiles it into
+`AppState.plugin_output_watchers` (`OutputWatcherRegistry`, one set per client, at most
+8, least recently synced evicted). A stale `seq` answers `applied: false` and changes
+nothing — including for a client whose current set is empty, whose record is *parked*
+rather than removed so that a delayed older sync cannot resurrect a disposed set.
+
+**The frontend re-syncs every 30 s while it holds any watcher.** Rust is the only source
+of lines, so a client the backend does not know about is blind with no local symptom, and
+two paths lead there without raising an event: the sync failed, or the client bound
+evicted a live set (reloading a browser tab leaves its old id behind — no disconnect
+reaches the PTY reader). The heartbeat is both the recovery and the liveness signal
+eviction ranks by. It stops when the last watcher is disposed.
+
+**Rust is the only line assembler.** The WebView reassembles nothing. Per chunk,
+`assemble_watcher_lines()`:
+
+1. Takes one read lock for the whole chunk, so the compiled set and its "I still need every line" answer come from the same snapshot.
+2. When no watcher is registered at all (`is_idle`), feeds the chunk to `StreamLines::push_discarding` and returns. The pending partial line still has to be tracked: a watcher that registers mid-line must see that line whole.
+3. Otherwise reassembles complete lines with `StreamLines` (trailing `\r` trimmed, the partial line held until the newline arrives). A pending line that passes `MAX_PENDING_LINE` (256 KB) without a newline is **dropped whole**, with a warning, and so is the rest of it up to its closing newline: a producer that never emits `\n` (a redrawing progress bar) must not grow the buffer without bound, and keeping the tail instead was worse than dropping — `/^x+$/` fires on a truncated `yxxx…`, a line that was never on the wire. Both engines would agree on that fabricated text, so the frontend filter cannot catch it.
+4. Cleans each line with `clean_line()`, a port of `src/utils/stripAnsi.ts` plus a backtick strip. Both sides must match on exactly the same text.
+5. Keeps a line when a compiled pattern matched it. While some registered pattern could not be compiled (`needs_all_lines`), every assembled line is kept instead, because the WebView has to scan them itself.
+6. Batches the kept lines in `WatcherLineBatcher` and emits `pty-watcher-lines-{session_id}` (desktop) plus the `PluginWatcherLines` bus event (browser: `watcher-lines` WS frame on `/sessions/:id/stream` in both `?format=grid` and raw mode — `?format=log|text` delegates to a separate handler that does not carry it — plus `plugin-watcher-lines` SSE) with `{session_id, lines}`. Each line is `{text, matched_ids}`, where `matched_ids` are qualified `client_id/watcher_id`. The frontend runs the real JS `RegExp` on `text` to build the `RegExpExecArray` the plugin API promises.
+
+**Batching is throttled but lossless.** One event per `WATCHER_LINE_WINDOW` (100 ms),
+because each event is deserialized and dispatched on the WebView main thread and
+per-chunk emission starved keydown under an output flood. Lines inside a window are
+concatenated in order, never dropped — dropping was the original bug: with an assembler
+on each side, a dropped chunk spliced the tail of one chunk onto the head of a later one
+and reported a line that was never on the wire. A batch that reaches
+`WATCHER_BATCH_CAP` (256 KB of text) is emitted early rather than growing. The frame
+ticker drains a due tail, because `read()` blocks and the last line of a burst would
+otherwise wait for output that may never arrive. Teardown has exactly one drain, the
+reader's EOF path, which assembles the `flush_eof` remainder and then takes the batch
+unconditionally; both the ticker and the reader emit while holding the batcher lock, so
+an older tail can never overtake a newer batch. The EOF drain also flushes the
+assembler's unterminated tail (`StreamLines::flush`) — a command that exits without a
+final newline (`printf DONE`) still put that line on the wire.
+
+Losslessness is a property of the assembler and the batcher, **not of delivery**. The
+Tauri event and the per-session WS frame are live-only and never replayed: output a
+session produces before its terminal installs the listener (or during a WS reconnect
+gap) reaches no watcher, and a browser client whose socket stalls past the broadcast
+capacity gets `Lagged` and skips those batches. Every live event on this bus behaves the
+same way; the 100 ms window keeps the rate at ~10 events/s, which is what makes the lag
+case remote rather than routine.
+
+`OutputWatcherRegistry::sync` returns the ids of the patterns the `regex` crate cannot
+express — lookaround, backreferences, and a negated class escape inside a character
+class (`[\D.]`). Those are **not** compiled to something different: they are reported
+back and stay on the frontend path. `to_portable_pattern` rewrites the escapes whose
+Rust meaning is narrower than the ECMAScript one (`\d \D \w \W \s \S` to explicit ASCII
+sets wrapped in `(?-i:…)` so an `i` flag cannot case-fold a negated set and exclude what
+the fold pulled in, `\b`/`\B` to `(?-u:\b)`/`(?-u:\B)`), because the invariant is **Rust
+may over-match, never under-match**: the frontend re-runs the real `RegExp` and filters a
+false positive, while a false negative is invisible and permanent. The same invariant
+covers the `m` flag from the other side: ECMAScript anchors `^`/`$` at every
+LineTerminator, CR and U+2028/U+2029 included, so an `m`-flagged pattern is also tried
+against each of those segments of the line. `RegexBuilder::multi_line` knows LF only, and
+a cleaned line can carry a bare CR.
 
 ### Frame Emission Pipeline
 

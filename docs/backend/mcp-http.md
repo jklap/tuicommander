@@ -122,6 +122,7 @@ serving a configuration the disk disagrees with. See
 |--------|------|-------------|
 | `GET` | `/plugins/docs` | Plugin development guide (AI-optimized reference) |
 | `GET` | `/api/plugins/:plugin_id/data/*path` | Read plugin data file (JSON or plain text) |
+| `POST` | `/api/plugins/output-watchers` | Replace the OutputWatcher set of one frontend (`client_id` + `seq` + patterns) — what the PTY reader matches lines against. Returns `{applied, rejected}`; a rejected id keeps matching in the WebView. Not `:plugin_id`-scoped — one frontend owns one set for all its plugins |
 
 ### Worktrees
 

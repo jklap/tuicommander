@@ -10,6 +10,33 @@
 
 Features to test when TUICommander is more usable.
 
+## Rust-side plugin OutputWatcher matching (2026-08-17, **Rust change — needs `make dev` restart**) — story `599-6e94`
+
+The `pty-output` throttle dropped every chunk inside its 100 ms window, which corrupted the plugin
+OutputWatcher line reassembly in the WebView. Rust is now the only line assembler: the reader thread
+reassembles, cleans and matches the lines, and pushes `pty-watcher-lines-{session}` batches (100 ms
+window, ordered, and lossless through the batcher — delivery itself stays live-only, like every
+other event on this bus). The raw `pty-output` event, its coalescer and the frontend `LineBuffer`
+are gone. Watcher sets are per frontend, so a browser tab and the desktop window no longer overwrite
+each other, and browser clients receive watcher matches for the first time.
+
+- [x] Line assembly is identical at every chunk boundary and survives a watcher registering mid-line. _(verified: `output_watchers.rs` `stream_lines_reassembles_the_same_lines_at_every_chunk_boundary`, `discarding_keeps_the_partial_line_so_a_late_watcher_still_sees_it`)_
+- [x] The batch is lossless and ordered under the throttle, and bounded under a flood. _(verified: `output_watchers.rs` batcher tests + `a_line_that_never_ends_cannot_grow_without_bound`)_
+- [x] A pattern the Rust regex crate cannot express is rejected and keeps matching in the WebView. _(verified: `output_watchers.rs` `compile_rejects_patterns_the_crate_cannot_express`, `plugins.rs` `a_rejected_pattern_keeps_every_line_flowing`, `pluginRegistry.test.ts` "matches a pattern the backend rejected against the lines it ships")_
+- [x] Rust never matches less than JavaScript: `\d \D \w \W \s \S \b` keep their ECMAScript meaning. _(verified: `output_watchers.rs` `negated_digit_keeps_the_ascii_meaning_of_javascript`, `negated_word_and_space_keep_the_ascii_meaning_of_javascript`, `word_boundaries_use_the_ascii_definition`)_
+- [x] A stale sync cannot install its older set, and two frontends keep independent sets. _(verified: `plugins.rs` `a_stale_sync_changes_nothing`, `a_second_client_does_not_replace_the_first`; `pluginRegistry.test.ts` stale-reply and foreign-client tests)_
+- [x] One line never fires a watcher twice during the sync-acknowledgement window. _(verified: `pluginRegistry.test.ts` "fires a watcher exactly once when the backend flagged it and the line is delivered too")_
+- [x] IPC/HTTP parity: command, `POST /api/plugins/output-watchers`, per-session WS `watcher-lines`, `/events` SSE `plugin-watcher-lines`. _(verified: `transport.test.ts` mapping assertion + the routes themselves)_
+- [x] An `m`-flagged pattern anchors at every ECMAScript line terminator, CR included, not only LF. _(verified: `output_watchers.rs` `multiline_anchors_see_every_ecmascript_line_terminator`, `a_pattern_without_m_is_not_matched_per_segment`)_
+- [x] An over-long line is dropped whole rather than truncated, so no watcher fires for text that was never on the wire; a command that exits without a final newline still delivers its last line. _(verified: `output_watchers.rs` `an_overflowing_line_is_dropped_rather_than_truncated`, `flush_returns_the_unterminated_tail_at_end_of_stream`)_
+- [x] A disposed watcher set cannot be resurrected by a delayed older sync, and eviction takes the client that has been silent longest. _(verified: `output_watchers.rs` `an_empty_sync_still_blocks_a_delayed_older_sync`, `eviction_takes_the_least_recently_synced_client`)_
+- [x] The frontend re-syncs its set every 30 s while it holds a watcher, and stops when the last one goes. _(verified: `pluginRegistry.test.ts` "resyncs on a heartbeat while watchers exist, and stops when the last one goes")_
+- [ ] **After a `make dev` restart**: `claude-wakeup` still fires on a real `/done` line, and `at-capacity-retry` still fires on a real capacity line — both now matched in Rust.
+- [ ] **After a `make dev` restart**: run `yes` in a terminal, then Ctrl+C. It must still interrupt promptly (this is the flood the throttle exists for), and the terminal must stay responsive.
+- [ ] **After a `make dev` restart**: a rare line printed once, with the PTY then completely quiet, still reaches a watcher within ~100 ms (the ticker drains the tail; it no longer waits for more output).
+- [ ] **After a `make dev` restart**: open the web UI alongside the desktop app and confirm a watcher fires in the browser tab, and that neither client blinds the other.
+- [ ] **After a `make dev` restart**: reload the browser tab ten times (each reload leaves a client id behind, and the bound is 8), then confirm a watcher still fires in the desktop window within 30 s — the heartbeat has to re-install the set eviction dropped.
+
 ## Terminal copy gutter normalization (2026-08-17, **Rust change — needs `make dev` restart**) — story `622-6c69`
 
 Terminal selection extraction now removes Claude's repeated `NBSP NBSP ▎` visual

@@ -1,6 +1,6 @@
 # CanvasTerminal Feature Audit
 
-**Last updated:** 2026-08-03
+**Last updated:** 2026-08-17
 **Branch:** refactor/solid-architecture
 
 CanvasTerminal is the sole terminal renderer. xterm.js has been fully removed. The renderer is powered by `alacritty_terminal` (Rust) sending binary grid frames over a Tauri Channel.
@@ -28,7 +28,7 @@ Terminal.tsx (outer shell)
         +-- Keyboard input (VT100 + Kitty protocol)
         +-- Touch input (tap/swipe/pinch for mobile/tablet via offscreen textarea)
         +-- IntersectionObserver flow control (skip paint when hidden)
-        +-- Plugin raw output forwarding (pluginRegistry.processRawOutput)
+        +-- Plugin watcher lines from Rust (pluginRegistry.handleWatcherLines)
         +-- OSC 7 CWD + OSC 133 shell integration
         +-- Imperative controllers (no reactive frame-path state)
               +-- selection + search
@@ -54,6 +54,7 @@ Primary and alternate grids can reuse identical numeric row coordinates while re
 - **RAF coalescing:** All paint triggers (frame arrival, keydown selection clear, mousedown) go through `scheduleRepaint()` which schedules a single `requestAnimationFrame`. No synchronous paint calls — prevents double-paint in a single event loop turn.
 - **`send_grid_frame` clone guard:** Frame is only cloned for the `grid_watch` channel when `receiver_count() > 0` (i.e. WS clients connected). Desktop-only path (Tauri Channel) is zero-copy.
 - **`screen_text_rows_ref()`:** `TerminalGrid` exposes a borrowed `&[String]` view of cached screen rows. Used in `process_chunk` for chrome cutoff detection to avoid cloning 50 Strings per PTY chunk. Downstream parsers (slash-menu, choice-prompt) share a single owned snapshot computed once per chunk.
+- **Plugin OutputWatcher matching moved to Rust:** the reader thread assembles the lines, cleans them, and tests the compiled patterns (`output_watchers.rs`). Rust is now the only line assembler — the per-session `LineBuffer`s and the raw-output listener are gone, so the thread that paints the terminal no longer ANSI-strips and regex-tests every line. It is woken once per 100 ms window with the lines that matched. A pattern the `regex` crate cannot express (lookaround, backreferences) is reported back as rejected and keeps matching in the WebView, which then receives every assembled line.
 - **No per-chunk parser logs:** Slash-menu detection can remain active during a large output burst, so its hot path emits events only when a menu is found and never writes a debug record for every parse.
 - **Trim in-place:** `read_screen_text()` and `row_to_text()` use `String::truncate()` instead of `.trim_end().to_string()`, eliminating one allocation per row.
 
@@ -230,7 +231,7 @@ Primary and alternate grids can reuse identical numeric row coordinates while re
 | Intent row highlight | OK | |
 | Notifications (sounds) | OK | Handled by Terminal.tsx wrapper |
 | Flow control / backpressure | OK | IntersectionObserver: skip paint+ack when hidden |
-| Plugin raw output forwarding | OK | `pty-output-{sessionId}` → `pluginRegistry.processRawOutput` |
+| Plugin watcher lines | OK | `pty-watcher-lines-{sessionId}` (browser: `watcher-lines` WS frame) → `pluginRegistry.handleWatcherLines`. Rust assembled, cleaned and matched the lines on the reader thread; no raw stream is reassembled or scanned here. The listener is installed BEFORE the grid subscription — an event that lands while it is still being attached is gone, and nothing replays a watcher line |
 
 ## Remaining Gaps
 
