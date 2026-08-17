@@ -58,9 +58,29 @@ impl TriageSession {
     }
 
     fn is_valid(&self, model: &str) -> bool {
-        self.model == model
-            && self.messages.len() < MAX_SESSION_MESSAGES
-            && self.created_at.elapsed() < SESSION_TTL
+        self.model == model && self.created_at.elapsed() < SESSION_TTL
+    }
+
+    /// Append a message, trimming the oldest turns so the log stays bounded by
+    /// `MAX_SESSION_MESSAGES`.
+    ///
+    /// The cap used to be enforced by `is_valid`, whose only failure handling is
+    /// to drop the session and build a fresh one — which threw away
+    /// `classifications` and `file_hashes` as collateral and sent every
+    /// already-classified file back to the LLM. Trimming here bounds the
+    /// uploaded prompt without touching the caches.
+    ///
+    /// Turns are dropped in pairs so the remaining history still starts on a
+    /// user message. Dropping the oldest per-file turns is safe: each carries
+    /// its own file diff and expects one self-contained JSONL line back, and the
+    /// changeset overview lives in `summary`, not in the log. (#612-9a22)
+    fn push_msg(&mut self, role: MsgRole, content: String) {
+        self.messages.push(SessionMsg { role, content });
+        if self.messages.len() > MAX_SESSION_MESSAGES {
+            let excess = self.messages.len() - MAX_SESSION_MESSAGES;
+            let drop_n = (excess + excess % 2).min(self.messages.len());
+            self.messages.drain(..drop_n);
+        }
     }
 }
 
@@ -668,6 +688,25 @@ struct DiffSignals {
     hunk_count: u32,
 }
 
+/// SQL/schema statement prefixes, matched on the raw line.
+///
+/// Replaces `trimmed.to_ascii_uppercase()` + six `starts_with` calls, which
+/// allocated a full copy of every added and removed line of every diff. `(?i-u)`
+/// is ASCII-only case folding, exactly what `to_ascii_uppercase` did — Unicode
+/// `(?i)` would additionally fold characters like `ſ` into `s`. (#612-9a22)
+static SCHEMA_PREFIXES: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?i-u)^(?:CREATE TABLE|ALTER TABLE|DROP |INSERT |UPDATE |DELETE )")
+        .expect("static schema-prefix regex")
+});
+
+/// Auth/security keywords, matched on the raw line. Replaces
+/// `trimmed.to_ascii_lowercase()` + six `contains` calls — the second full copy
+/// of every changed line. (#612-9a22)
+static AUTH_WORDS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"(?i-u)password|secret|token|encrypt|decrypt|auth")
+        .expect("static auth-keyword regex")
+});
+
 fn analyze_diff(diff: &str) -> DiffSignals {
     let mut s = DiffSignals::default();
     for line in diff.lines() {
@@ -746,25 +785,11 @@ fn analyze_diff(diff: &str) -> DiffSignals {
             s.test_signals += 1;
         }
         // Schema/SQL signals
-        let upper = trimmed.to_ascii_uppercase();
-        if upper.starts_with("CREATE TABLE")
-            || upper.starts_with("ALTER TABLE")
-            || upper.starts_with("DROP ")
-            || upper.starts_with("INSERT ")
-            || upper.starts_with("UPDATE ")
-            || upper.starts_with("DELETE ")
-        {
+        if SCHEMA_PREFIXES.is_match(trimmed) {
             s.schema_signals += 1;
         }
         // Auth/security signals
-        let lower = trimmed.to_ascii_lowercase();
-        if lower.contains("password")
-            || lower.contains("secret")
-            || lower.contains("token")
-            || lower.contains("encrypt")
-            || lower.contains("decrypt")
-            || lower.contains("auth")
-        {
+        if AUTH_WORDS.is_match(trimmed) {
             s.auth_signals += 1;
         }
     }
@@ -1234,15 +1259,9 @@ async fn do_turn(
         let tool_calls = response.into_tool_calls();
 
         if tool_calls.is_empty() {
-            session.messages.push(SessionMsg {
-                role: MsgRole::User,
-                content: user_msg,
-            });
+            session.push_msg(MsgRole::User, user_msg);
             if let Some(ref t) = text {
-                session.messages.push(SessionMsg {
-                    role: MsgRole::Assistant,
-                    content: t.clone(),
-                });
+                session.push_msg(MsgRole::Assistant, t.clone());
             }
             return text;
         }
@@ -1254,10 +1273,7 @@ async fn do_turn(
         }
     }
 
-    session.messages.push(SessionMsg {
-        role: MsgRole::User,
-        content: user_msg,
-    });
+    session.push_msg(MsgRole::User, user_msg);
     None
 }
 
@@ -2532,16 +2548,69 @@ diff --git a/src/b.rs b/src/b.rs
         assert!(!s.is_valid("sonnet"));
     }
 
+    /// The message log must stay bounded — an unbounded conversation would grow
+    /// the uploaded prompt without limit.
     #[test]
-    fn session_is_valid_message_cap() {
+    fn session_message_log_is_trimmed_to_cap() {
         let mut s = TriageSession::new("haiku".to_string());
-        for i in 0..MAX_SESSION_MESSAGES {
-            s.messages.push(SessionMsg {
-                role: MsgRole::User,
-                content: format!("msg {i}"),
-            });
+        for i in 0..MAX_SESSION_MESSAGES * 2 {
+            s.push_msg(MsgRole::User, format!("msg {i}"));
         }
-        assert!(!s.is_valid("haiku"));
+        assert!(
+            s.messages.len() <= MAX_SESSION_MESSAGES,
+            "message log must stay bounded, got {}",
+            s.messages.len()
+        );
+        // Trimming drops the OLDEST turns — the newest must survive.
+        assert_eq!(
+            s.messages.last().unwrap().content,
+            format!("msg {}", MAX_SESSION_MESSAGES * 2 - 1)
+        );
+    }
+
+    /// Crossing the message cap used to make `is_valid` return false, and the
+    /// only handling of an invalid session is to drop it and build a fresh one
+    /// (diff_triage.rs:1631-1641 / :1843). That silently discarded
+    /// `classifications` and `file_hashes` too, so a long triage run sent every
+    /// already-classified file back to the LLM. Trimming the log must not cost
+    /// the caches. (#612-9a22)
+    #[test]
+    fn crossing_message_cap_keeps_classification_cache() {
+        let mut s = TriageSession::new("haiku".to_string());
+        let h = hash_diff("some diff content");
+        s.file_hashes.insert("src/foo.rs".to_string(), h);
+        s.classifications.insert(
+            "src/foo.rs".to_string(),
+            FileClassification {
+                path: "src/foo.rs".to_string(),
+                relevance: Relevance::High,
+                category: Category::BusinessLogic,
+                risk: Risk::BehavioralChange,
+                summary: "does stuff".to_string(),
+                findings: Vec::new(),
+                source: ClassificationSource::Llm,
+                additions: 10,
+                deletions: 2,
+            },
+        );
+
+        for i in 0..MAX_SESSION_MESSAGES + 10 {
+            s.push_msg(MsgRole::User, format!("msg {i}"));
+        }
+
+        assert!(
+            s.is_valid("haiku"),
+            "a session over the message cap must stay reusable so its caches survive"
+        );
+        assert!(
+            s.classifications.contains_key("src/foo.rs"),
+            "classification cache must survive the trim"
+        );
+        assert_eq!(
+            s.file_hashes.get("src/foo.rs").copied(),
+            Some(h),
+            "diff-hash cache must survive the trim"
+        );
     }
 
     #[test]
@@ -3029,6 +3098,36 @@ diff --git a/src/b.rs b/src/b.rs
     }
 
     // ── analyze_diff tests ───────────────────────────────────────────────────
+
+    /// Equivalence guard for #612-9a22: the schema and auth checks moved from
+    /// `to_ascii_uppercase()`/`to_ascii_lowercase()` copies of every changed line
+    /// to two static regexes. The folding must stay ASCII-only, so a Unicode
+    /// look-alike must NOT be treated as its ASCII counterpart the way a plain
+    /// `(?i)` pattern would.
+    #[test]
+    fn analyze_diff_signal_matching_is_ascii_case_insensitive() {
+        // Mixed case + leading whitespace, on both added and removed lines.
+        let diff =
+            "+  create TABLE users (id int);\n-  Alter Table users drop col;\n+  DELETE from t;";
+        let s = analyze_diff(diff);
+        assert_eq!(
+            s.schema_signals, 3,
+            "ASCII case must fold in both directions"
+        );
+
+        let auth = "+  let API_Token = readSecret();\n-  const PassWord = 1;\n+  fn Authorize() {}";
+        let s = analyze_diff(auth);
+        assert_eq!(s.auth_signals, 3);
+
+        // `ſ` (long s) folds to `s` under Unicode `(?i)` but not under ASCII
+        // folding, which is what the replaced `to_ascii_lowercase` did.
+        let unicode = "+  let ſecret = 1;\n+  ſELECT 1;";
+        let s = analyze_diff(unicode);
+        assert_eq!(
+            s.auth_signals, 0,
+            "Unicode look-alikes must not match — folding is ASCII-only"
+        );
+    }
 
     #[test]
     fn analyze_diff_rust_pub_fn_added() {

@@ -458,7 +458,24 @@ pub fn tool_definitions() -> Value {
 /// redacted when preceded by a secret-context word (`token=`, `secret:`,
 /// `password=`, etc.), so `git log/show/diff`, `Cargo.lock`, and
 /// `package-lock.json` round-trip verbatim. (#1369-f051)
+///
 pub fn redact_secrets(text: &str) -> String {
+    redact_secrets_cow(text).into_owned()
+}
+
+/// Implementation of [`redact_secrets`], borrowing when nothing matched.
+///
+/// Chaining `replace_all(..).to_string()` per pattern used to copy the whole
+/// input once per pattern — 20 copies even when no pattern matched. Each pattern
+/// is now `is_match`-gated so only matching ones allocate.
+///
+/// This stays private and `redact_secrets` returns an owned `String`: measured on
+/// this machine, the copy a borrowing return would save is 476ns of a 214µs call
+/// for a 31KB screen scrape, and 110µs of a 35.6ms call for 5MB of command
+/// output — 0.2-0.3%, not worth changing the ownership contract of a function
+/// with 17 call sites. The variant exists so the no-copy invariant stays
+/// unit-testable. (#612-9a22)
+fn redact_secrets_cow(text: &str) -> std::borrow::Cow<'_, str> {
     use regex::Regex;
     use std::sync::LazyLock;
 
@@ -537,11 +554,21 @@ pub fn redact_secrets(text: &str) -> String {
         ]
     });
 
-    let mut result = text.to_owned();
+    // Only the patterns that actually match allocate. `is_match` first keeps
+    // the non-matching majority allocation-free.
+    let mut owned: Option<String> = None;
     for (pattern, replacement) in PATTERNS.iter() {
-        result = pattern.replace_all(&result, *replacement).to_string();
+        let haystack: &str = owned.as_deref().unwrap_or(text);
+        if !pattern.is_match(haystack) {
+            continue;
+        }
+        let replaced = pattern.replace_all(haystack, *replacement).into_owned();
+        owned = Some(replaced);
     }
-    result
+    match owned {
+        Some(s) => std::borrow::Cow::Owned(s),
+        None => std::borrow::Cow::Borrowed(text),
+    }
 }
 
 // ── Key mapping ───────────────────────────────────────────────
@@ -1844,26 +1871,51 @@ fn exec_search_code(state: &Arc<AppState>, session_id: &str, args: &Value) -> To
         idx.search(query, limit)
     };
 
-    let query_words: Vec<String> = query.split_whitespace().map(|w| w.to_lowercase()).collect();
+    // One case-insensitive automaton for all result files, compiled once per
+    // search. The previous per-line `line.to_lowercase()` allocated a copy of
+    // every line of every result file. (#612-9a22)
+    let word_matcher = build_query_matcher(query);
 
-    let out: Vec<Value> = results
-        .into_iter()
-        .map(|ranked| {
-            let abs = index_arc.read().absolute_path(&ranked.rel_path);
-            let snippet = extract_bm25_snippet(&abs, &query_words);
-            json!({
-                "path": ranked.rel_path,
-                "score": ranked.score,
-                "snippet": snippet,
+    // Resolve `repo_root` once: `absolute_path` is a plain `join`, so taking the
+    // index read lock inside the per-result loop was pure lock churn — up to
+    // SEARCH_CODE_MAX_RESULTS acquisitions for no added information. (#612-9a22)
+    let out: Vec<Value> = {
+        let idx = index_arc.read();
+        results
+            .into_iter()
+            .map(|ranked| {
+                let abs = idx.absolute_path(&ranked.rel_path);
+                let snippet = extract_bm25_snippet(&abs, word_matcher.as_ref());
+                json!({
+                    "path": ranked.rel_path,
+                    "score": ranked.score,
+                    "snippet": snippet,
+                })
             })
-        })
-        .collect();
+            .collect()
+    };
 
     ToolResult::ok(json!({ "results": out }).to_string())
 }
 
-/// Read `path` and return a 3-line window around the line with the most query-word hits.
-fn extract_bm25_snippet(path: &std::path::Path, query_words: &[String]) -> String {
+/// Case-insensitive literal matcher for the whitespace-separated words of
+/// `query`. `None` when the query has no words to match.
+fn build_query_matcher(query: &str) -> Option<regex::RegexSet> {
+    let patterns: Vec<String> = query
+        .split_whitespace()
+        .map(|w| format!("(?i){}", regex::escape(w)))
+        .collect();
+    if patterns.is_empty() {
+        return None;
+    }
+    // Patterns are `regex::escape`d literals, so construction cannot fail on
+    // user input; a size-limit failure just means no snippet highlighting.
+    regex::RegexSet::new(&patterns).ok()
+}
+
+/// Read `path` and return a 3-line window around the line matching the most
+/// query words.
+fn extract_bm25_snippet(path: &std::path::Path, words: Option<&regex::RegexSet>) -> String {
     let Ok(content) = std::fs::read_to_string(path) else {
         return String::new();
     };
@@ -1871,20 +1923,15 @@ fn extract_bm25_snippet(path: &std::path::Path, query_words: &[String]) -> Strin
     if lines.is_empty() {
         return String::new();
     }
-    let best = lines
-        .iter()
-        .enumerate()
-        .map(|(i, line)| {
-            let lower = line.to_lowercase();
-            let hits = query_words
-                .iter()
-                .filter(|w| lower.contains(w.as_str()))
-                .count();
-            (i, hits)
-        })
-        .max_by_key(|(_, hits)| *hits)
-        .map(|(i, _)| i)
-        .unwrap_or(0);
+    let best = match words {
+        Some(set) => lines
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, line)| set.matches(line).iter().count())
+            .map(|(i, _)| i)
+            .unwrap_or(0),
+        None => 0,
+    };
     let start = best.saturating_sub(1);
     let end = (best + 2).min(lines.len());
     lines[start..end].join("\n")
@@ -2610,6 +2657,82 @@ mod tests {
     }
 
     // ── redact_secrets ─────────────────────────────────────────
+
+    /// `exec_run_command_inner` redacts BEFORE `truncate_output`, and it must
+    /// keep doing so. Swapping the order (proposed under #612-9a22 F111 as a way
+    /// to avoid scanning bytes that get discarded) breaks the PEM rule: the
+    /// multi-line `BEGIN…END` pattern needs both delimiters, so once the cut
+    /// drops the `END` line the head keeps raw private-key body bytes and only
+    /// the header is redacted by the bare-header fallback.
+    ///
+    /// This test asserts the leak the swap would introduce, so the ordering is
+    /// not "optimised" later. The wasted scan is addressed instead by making
+    /// `redact_secrets` allocation-free on non-matching input.
+    #[test]
+    fn redacting_after_truncation_would_leak_private_key_body() {
+        const MARKER: &str = "MIIEpAIBAAKCAQEA";
+        let half = RUN_COMMAND_OUTPUT_CAP / 2;
+        // A PEM block positioned so the head/tail cut falls inside its body,
+        // with enough trailing output that the `END` line is discarded.
+        let body = format!("{MARKER}\n").repeat(200);
+        let pem = format!("-----BEGIN RSA PRIVATE KEY-----\n{body}-----END RSA PRIVATE KEY-----\n");
+        let lead = "compiling crate\n".repeat((half - 1000) / 16);
+        let trail = "linking\n".repeat((half + 5000) / 8);
+        let raw = format!("{lead}{pem}{trail}");
+        assert!(raw.len() > RUN_COMMAND_OUTPUT_CAP);
+        assert!(
+            lead.len() < half && lead.len() + pem.len() > half,
+            "fixture must straddle the cut: lead={} pem={} half={half}",
+            lead.len(),
+            pem.len()
+        );
+
+        // Current order — redact, then truncate. Nothing survives.
+        let (safe, truncated) = truncate_output(&redact_secrets(&raw));
+        assert!(truncated);
+        assert!(
+            !safe.contains(MARKER),
+            "redact-then-truncate must not leak key body"
+        );
+
+        // Proposed order — truncate, then redact. Key body survives in the head.
+        let (cut, _) = truncate_output(&raw);
+        let leaked = redact_secrets(&cut);
+        assert!(
+            leaked.contains(MARKER),
+            "truncate-then-redact leaks key body — this is why the order stands"
+        );
+    }
+
+    /// Secret-free text is the overwhelmingly common case (every screen scrape,
+    /// every grep line). It must reach the end of the pattern loop without a
+    /// single copy — the old implementation did `replace_all(..).to_string()` per
+    /// pattern, i.e. 20 full copies of the input even when nothing matched.
+    ///
+    /// Asserted on the internal `Cow` variant because the public function returns
+    /// an owned `String` by design; this is the only way to pin the allocation
+    /// invariant rather than just the output text. (#612-9a22)
+    #[test]
+    fn redact_clean_text_reaches_the_end_without_copying() {
+        let input = "cargo test --package tuicommander -- --nocapture\nok, 42 passed";
+        assert!(
+            matches!(redact_secrets_cow(input), std::borrow::Cow::Borrowed(_)),
+            "clean input must not be copied by any of the 20 patterns"
+        );
+    }
+
+    /// A single matching pattern must produce exactly one owned buffer; the
+    /// remaining patterns must not each re-copy it.
+    #[test]
+    fn redact_dirty_text_owns_once() {
+        let input = "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE";
+        let out = redact_secrets_cow(input);
+        assert!(
+            matches!(out, std::borrow::Cow::Owned(_)),
+            "input with a secret must be returned owned"
+        );
+        assert!(out.contains("[REDACTED]"));
+    }
 
     #[test]
     fn redact_sk_key() {
@@ -4565,6 +4688,62 @@ mod tests {
         );
         assert!(results[0]["score"].as_f64().unwrap() > 0.0);
         assert!(!results[0]["snippet"].as_str().unwrap().is_empty());
+    }
+
+    /// Equivalence guard for the #612-9a22 refactor of `exec_search_code`:
+    /// the index read lock is now taken once for the whole result set instead of
+    /// once per result, and `extract_bm25_snippet` matches query words with a
+    /// prebuilt case-insensitive `RegexSet` instead of allocating a lowercased
+    /// copy of every line of every result file.
+    ///
+    /// Both changes must be invisible from the outside: multi-result responses
+    /// keep one snippet per result, and snippet selection stays case-insensitive
+    /// including non-ASCII case folding.
+    #[tokio::test]
+    async fn search_code_snippets_survive_single_lock_refactor() {
+        let (dir, state) = fs_test_state("s1");
+        let repo_root = dir.path().to_path_buf();
+        // Several matching files so the per-result path runs more than once.
+        // The match line is deliberately NOT the first line, and its case
+        // differs from the query, so snippet selection has to fold case.
+        for name in ["a.rs", "b.rs", "c.rs"] {
+            std::fs::write(
+                repo_root.join(name),
+                "// header\n// filler\nlet RÉSUMÉ_TOKEN = AUTHENTICATION;\n// trailer\n",
+            )
+            .unwrap();
+        }
+
+        let canonical_root = repo_root.canonicalize().unwrap();
+        let index = crate::content_index::ContentIndex::build(
+            canonical_root.clone(),
+            None,
+            std::collections::HashMap::new(),
+        );
+        let index_arc = Arc::new(parking_lot::RwLock::new(index));
+        state
+            .content_indices
+            .insert(canonical_root.to_string_lossy().to_string(), index_arc);
+
+        let r = dispatch(
+            &state,
+            "s1",
+            "search_code",
+            &json!({ "query": "authentication résumé", "limit": 3 }),
+        )
+        .await;
+        assert!(r.success, "{}", r.output);
+        let parsed: Value = serde_json::from_str(&r.output).unwrap();
+        let results = parsed["results"].as_array().unwrap();
+        assert!(!results.is_empty(), "expected results: {}", r.output);
+
+        for res in results {
+            let snippet = res["snippet"].as_str().unwrap();
+            assert!(
+                snippet.contains("RÉSUMÉ_TOKEN"),
+                "snippet must centre on the case-folded match line, got: {snippet:?}"
+            );
+        }
     }
 
     #[tokio::test]
