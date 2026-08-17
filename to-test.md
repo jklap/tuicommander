@@ -10,6 +10,28 @@
 
 Features to test when TUICommander is more usable.
 
+## Duplicate and orphan event listeners (2026-08-17, **Rust change — needs `make dev` restart**) — story `600-d664`
+
+F4/F5/F7/F11/F17 from the performance audit. Only `CanvasTerminal` listens for OSC 133 now;
+content-search batches and errors carry a `search_id`; the dead `pty-vt-log-total` emit is gone;
+the AI chat panel no longer subscribes to the producerless chat registry; improvement-scan
+proposals are published only by the `proposals-ready` event.
+
+- [x] Exactly one OSC 133 consumer exists in `src/`. _(verified: `src/__tests__/components/Terminal/osc133SingleConsumer.test.ts`, mutation-proven)_
+- [x] A batch carrying another panel's `search_id` is dropped, and its `is_final` does not stop this panel's spinner. _(verified: `FileBrowserPanel.test.tsx` "ignores batches belonging to another panel's search" + `contentSearch.test.ts`, mutation-proven)_
+- [x] The wire field is `search_id` on both the batch and the error. _(verified: `fs.rs` `a_batch_carries_its_search_id_under_that_exact_name`, `an_error_carries_the_same_search_id`)_
+- [x] A search cancelled by another panel starting one still emits a final batch under its own id, so its spinner stops. _(verified: `fs.rs` `a_search_cancelled_before_it_emits_still_closes_itself`, `a_search_cancelled_mid_stream_closes_after_the_chunks_it_sent` — both mutation-proven — plus `FileBrowserPanel.test.tsx` "stops searching on the empty final batch a cancelled search sends")_
+- [x] Exactly one batch is final, and no match is lost to the chunking. _(verified: `fs.rs` `a_completed_search_ends_with_a_single_final_batch`, `a_search_with_no_matches_still_emits_a_final_batch`)_
+- [x] Search ids are random per call, not per-realm counters, so two windows cannot mint the same one. _(verified: `newContentSearchId` returns `randomId("cs-")` — a `crypto.randomUUID` where one exists, and a timestamp+random string on a plain-http LAN client where `crypto.randomUUID` is undefined; `src/__tests__/utils/randomId.test.ts` covers both branches)_
+- [x] The AI chat panel does not call `chat_subscribe`. _(verified: `AIChatPanel.test.tsx` "does not subscribe to the producerless chat registry")_
+- [x] An improvement scan's return value does not publish proposals. _(verified: `githubOps.test.ts` "does not publish proposals from the scan's return value", mutation-proven)_
+- [ ] **After a `make dev` restart** — F4, which the audit could only verify by inspection: open a shell terminal with OSC 133 shell integration (not an agent — agent panes are alt-screen and emit none), run three or four commands, then check the block list. Each command must produce exactly one block with a command line and an exit code, and no empty block between them. Cmd+Up/Down block navigation and the scrollbar command marks must step through real commands only.
+- [ ] **After a `make dev` restart**: start a content search in the File Browser on a large repo and, while it is still streaming, open the command palette and run a different `?` search. Neither panel may show the other's matches, neither spinner may stop early, and — the case a single global cancel token creates — the File Browser spinner must still stop, keeping the matches it found before it was superseded.
+- [ ] **After a `make dev` restart**: detach the File Browser into its own window and search in both it and the main window. The two ids are minted at random per search now, not from a per-realm counter that both windows would start at 1, so neither window may see the other's matches.
+- [ ] **After a `make dev` restart** — the OSC 133 subscription moved ahead of the canvas font load, so the very first prompt marker of a session is no longer racing it: open a brand-new shell tab and confirm the first command already has a block (the first prompt used to be the one at risk of being dropped once the second listener was gone).
+- [ ] **After a `make dev` restart**: open a saved conversation from the AI chat history and confirm its messages stay on screen (they used to blank a moment after loading).
+- [ ] **After a `make dev` restart**: run an improvement scan and confirm the proposals appear exactly once, and appear in a second window too.
+
 ## Content index freshness after a timestamp-preserving restore (2026-08-17, **Rust change — needs `make dev` restart**)
 
 `ContentIndex::is_current` compared modification times only, so a restore that preserves them left
