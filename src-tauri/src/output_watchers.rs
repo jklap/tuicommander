@@ -644,7 +644,11 @@ mod tests {
         // 'é' is a word character for the crate, not for ECMAScript.
         assert!(registry.matching_ids("é").contains(&"c1/w".to_string()));
         // U+0085 NEXT LINE is Unicode whitespace but not ECMAScript whitespace.
-        assert!(registry.matching_ids("\u{85}").contains(&"c1/s".to_string()));
+        assert!(
+            registry
+                .matching_ids("\u{85}")
+                .contains(&"c1/s".to_string())
+        );
     }
 
     #[test]
@@ -721,7 +725,10 @@ mod tests {
             registry.matching_ids("progress\u{2028}DONE"),
             vec!["c1/w".to_string()]
         );
-        assert_eq!(registry.matching_ids("progress\nDONE"), vec!["c1/w".to_string()]);
+        assert_eq!(
+            registry.matching_ids("progress\nDONE"),
+            vec!["c1/w".to_string()]
+        );
         assert!(registry.matching_ids("progress DONE").is_empty());
     }
 
@@ -988,8 +995,14 @@ mod tests {
         let start = Instant::now();
         b.push(line("opening"), start);
 
-        assert!(b.push(line("a"), start + Duration::from_millis(10)).is_none());
-        assert!(b.push(line("b"), start + Duration::from_millis(20)).is_none());
+        assert!(
+            b.push(line("a"), start + Duration::from_millis(10))
+                .is_none()
+        );
+        assert!(
+            b.push(line("b"), start + Duration::from_millis(20))
+                .is_none()
+        );
         assert_eq!(
             texts(b.push(line("c"), start + Duration::from_millis(120))),
             vec!["a", "b", "c"]

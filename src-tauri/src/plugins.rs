@@ -1293,8 +1293,14 @@ mod tests {
         set_plugin_output_watchers_impl(&state, "browser", 1, &[spec("w1", "beta")]);
 
         let watchers = state.plugin_output_watchers.read();
-        assert_eq!(watchers.matching_ids("alpha"), vec!["desktop/w1".to_string()]);
-        assert_eq!(watchers.matching_ids("beta"), vec!["browser/w1".to_string()]);
+        assert_eq!(
+            watchers.matching_ids("alpha"),
+            vec!["desktop/w1".to_string()]
+        );
+        assert_eq!(
+            watchers.matching_ids("beta"),
+            vec!["browser/w1".to_string()]
+        );
     }
 
     // -- Uninstall disposal (#485-1bd0) --
