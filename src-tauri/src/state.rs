@@ -1008,6 +1008,12 @@ pub struct McpSessionMeta {
     pub requires_meta_tools: bool,
     /// Whether this session has an active SSE stream (GET /mcp connected)
     pub has_sse_stream: bool,
+    /// Which GET /mcp stream currently owns this session. A reconnect can be
+    /// accepted while the previous half-open stream is still being dropped, and
+    /// that drop must not tear down its replacement: each stream records the
+    /// generation it was given and releases the session only when it still
+    /// holds it.
+    pub sse_generation: u64,
     /// Repo path extracted from MCP initialize `roots[0].uri` (file:// URI → absolute path).
     /// Used by downstream per-project filtering to scope tool access.
     pub repo_path: Option<String>,
@@ -2603,6 +2609,24 @@ impl AppState {
             .map(|e| e.key().clone())
     }
 
+    /// This session's knowledge record, read off disk when it is not resident.
+    ///
+    /// The startup load is capped at `MAX_RESIDENT_SESSIONS`, so a session with
+    /// a file on disk is not necessarily in memory. Starting a blank record for
+    /// it is how resuming an older session erased its own history: the next
+    /// flush persists what is in memory, over a file nothing had read.
+    pub(crate) fn knowledge_entry(
+        &self,
+        session_id: &str,
+    ) -> dashmap::mapref::one::RefMut<'_, String, Mutex<crate::ai_agent::knowledge::SessionKnowledge>>
+    {
+        self.session_knowledge
+            .entry(session_id.to_string())
+            .or_insert_with(|| {
+                Mutex::new(crate::ai_agent::knowledge::load_or_start_fresh(session_id))
+            })
+    }
+
     /// Record a command outcome into this session's knowledge store and mark it
     /// dirty for the background persister. Creates the entry on first use.
     pub(crate) fn record_outcome(
@@ -2629,11 +2653,7 @@ impl AppState {
             }
         };
 
-        let entry = self
-            .session_knowledge
-            .entry(session_id.to_string())
-            .or_insert_with(|| Mutex::new(crate::ai_agent::knowledge::SessionKnowledge::new()));
-        let id = entry.lock().record(outcome);
+        let id = self.knowledge_entry(session_id).lock().record(outcome);
         self.knowledge_dirty.insert(session_id.to_string(), ());
 
         #[cfg(feature = "desktop")]

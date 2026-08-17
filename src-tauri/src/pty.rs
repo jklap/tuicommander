@@ -13,8 +13,8 @@ use crate::output_parser::{OutputParser, ParsedEvent};
 use crate::state::{
     AppState, ChangedRow, EscapeAwareBuffer, KittyAction, KittyKeyboardState,
     MAX_CONCURRENT_SESSIONS, OUTPUT_RING_BUFFER_CAPACITY, OrchestratorStats, OutputRingBuffer,
-    PtyConfig, PtySession, Utf8ReadBuffer, VT_LOG_BUFFER_CAPACITY,
-    VtLogBuffer, strip_kitty_sequences,
+    PtyConfig, PtySession, Utf8ReadBuffer, VT_LOG_BUFFER_CAPACITY, VtLogBuffer,
+    strip_kitty_sequences,
 };
 use crate::worktree::{
     WorktreeConfig, WorktreeResult, create_worktree_with_stale_recovery, remove_worktree_internal,
@@ -4126,9 +4126,7 @@ impl ChunkProcessor {
         session_id: &str,
         state: &AppState,
     ) {
-        use crate::ai_agent::knowledge::{
-            CommandOutcome, OutcomeClass, SessionKnowledge, classify_error,
-        };
+        use crate::ai_agent::knowledge::{CommandOutcome, OutcomeClass, classify_error};
 
         // Deterministic state transitions from shell integration markers.
         // A = prompt shown (idle), C = command execution started (busy).
@@ -4204,13 +4202,7 @@ impl ChunkProcessor {
                     duration_ms,
                     id: 0,
                 };
-                {
-                    let entry = state
-                        .session_knowledge
-                        .entry(session_id.to_string())
-                        .or_insert_with(|| Mutex::new(SessionKnowledge::new()));
-                    entry.lock().terminal_mode = self.terminal_mode.clone();
-                }
+                state.knowledge_entry(session_id).lock().terminal_mode = self.terminal_mode.clone();
                 state.record_outcome(session_id, outcome);
             }
             _ => {}

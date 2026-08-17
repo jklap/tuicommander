@@ -89,7 +89,7 @@ pub struct CommandOutcome {
     pub id: u64,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionKnowledge {
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
@@ -103,6 +103,14 @@ pub struct SessionKnowledge {
     /// Counter for assigning unique outcome ids. Bumped on each `record`.
     #[serde(default)]
     pub next_outcome_id: u64,
+}
+
+/// Delegates to `new()`. A derived `Default` would stamp `schema_version: 0`,
+/// which the loader then reads as an old file and migrates on every start.
+impl Default for SessionKnowledge {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 fn default_schema_version() -> u32 {
@@ -506,6 +514,40 @@ pub fn load(session_id: &str) -> Option<SessionKnowledge> {
     Some(k)
 }
 
+/// Load a session's knowledge, or start a fresh record after moving aside a file
+/// that exists but could not be read.
+///
+/// `load` returns `None` both for "no such file" and for "the file is there but
+/// unreadable or unparseable". Treating the second as the first means the fresh
+/// record we start is written over the file on the next flush, and whatever it
+/// held — possibly recoverable, possibly just evidence of what went wrong — is
+/// gone with nothing said. Renaming it to `<id>.json.corrupt` first keeps the
+/// bytes and lets the session carry on.
+pub fn load_or_start_fresh(session_id: &str) -> SessionKnowledge {
+    if let Some(k) = load(session_id) {
+        return k;
+    }
+    let Ok(dir) = sessions_dir() else {
+        return SessionKnowledge::new();
+    };
+    let path = dir.join(format!("{session_id}.json"));
+    if path.exists() {
+        let aside = path.with_extension("json.corrupt");
+        match std::fs::rename(&path, &aside) {
+            Ok(()) => tracing::warn!(
+                session_id,
+                "knowledge file could not be read; moved aside as .json.corrupt and starting fresh"
+            ),
+            Err(e) => tracing::error!(
+                session_id,
+                error = %e,
+                "knowledge file could not be read or moved aside; the fresh record will overwrite it"
+            ),
+        }
+    }
+    SessionKnowledge::new()
+}
+
 const RETENTION_DAYS: u64 = 30;
 
 /// How many session files the startup load may bring into memory.
@@ -565,10 +607,21 @@ pub fn load_all(state: &crate::state::AppState) {
     candidates.sort_unstable_by_key(|(mtime, _)| std::cmp::Reverse(*mtime));
     let skipped = candidates.len().saturating_sub(MAX_RESIDENT_SESSIONS);
     for (_, sid) in candidates.into_iter().take(MAX_RESIDENT_SESSIONS) {
+        // Never replace a session already in memory. This load is spawned
+        // asynchronously at startup, so a command can be recorded for a session
+        // before this loop reaches it — `knowledge_entry` already read the file
+        // and appended to it. Inserting the file's state over that would drop the
+        // outcome, and the next flush would write the truncated record to disk.
+        if state.session_knowledge.contains_key(&sid) {
+            continue;
+        }
         if let Some(k) = load(&sid) {
+            // `entry` rather than `insert`: the check above can go stale between
+            // the read of the file and the write into the map.
             state
                 .session_knowledge
-                .insert(sid, parking_lot::Mutex::new(k));
+                .entry(sid)
+                .or_insert_with(|| parking_lot::Mutex::new(k));
         }
     }
     if skipped > 0 {
@@ -629,11 +682,19 @@ pub fn spawn_persist_task(state: std::sync::Arc<crate::state::AppState>) {
 /// Drain `knowledge_dirty` and persist each flagged session. Runs on a
 /// blocking-safe path (small JSON writes); keeps the tokio worker brief.
 ///
-/// Race-safety (#1374-b298): the dirty flag is cleared *before* snapshotting.
-/// If `record_outcome` runs concurrently, it re-inserts the flag and the new
-/// state is picked up by the next flush. If persist fails, the flag is
-/// re-inserted so we retry. Without this ordering, a write landing between
-/// snapshot-clone and remove was silently dropped (lost on shutdown/crash).
+/// Race-safety (#1374-b298): the dirty flag is cleared *before* reading the
+/// session. If `record_outcome` runs concurrently, it re-inserts the flag and the
+/// new state is picked up by the next flush. If persist fails, the flag is
+/// re-inserted so we retry. Without this ordering, a write landing between the
+/// read and the remove was silently dropped (lost on shutdown/crash).
+///
+/// Two flushes can run at once — the periodic ticker and the desktop Exit flush —
+/// so the write happens while the session lock is held rather than from an
+/// earlier snapshot. Taking a snapshot first and writing after lets the flush
+/// holding the *older* state write last: disk ends up with the older record while
+/// the dirty flag has already been cleared by the other flush, so nothing retries
+/// and the newer outcome is gone. Holding the lock across the write also spares a
+/// clone of a record that can reach several MB.
 pub fn flush_dirty(state: &crate::state::AppState) {
     let dirty: Vec<String> = state
         .knowledge_dirty
@@ -642,15 +703,16 @@ pub fn flush_dirty(state: &crate::state::AppState) {
         .collect();
     for sid in dirty {
         // Clear the flag FIRST. A concurrent record_outcome between this
-        // line and the snapshot below will re-insert the flag and be picked
+        // line and the read below will re-insert the flag and be picked
         // up by the next tick (or by the failure path below).
         state.knowledge_dirty.remove(&sid);
         let Some(entry) = state.session_knowledge.get(&sid) else {
             continue;
         };
-        let snapshot = entry.lock().clone();
-        if let Err(e) = persist(&sid, &snapshot) {
+        let knowledge = entry.lock();
+        if let Err(e) = persist(&sid, &knowledge) {
             tracing::warn!(session_id = %sid, error = %e, "knowledge persist failed, will retry");
+            drop(knowledge);
             state.knowledge_dirty.insert(sid, ());
         }
     }
@@ -772,6 +834,163 @@ mod persist_tests {
         );
     }
 
+    /// Two flushes run concurrently in production: the 2 s ticker and the desktop
+    /// Exit flush. Reading a session into a snapshot and writing it afterwards
+    /// lets the flush holding the *older* state write last — disk keeps the older
+    /// record while the other flush has already cleared the dirty flag, so nothing
+    /// retries and the newer outcome is gone.
+    ///
+    /// What removes that class is writing while the session lock is held: no
+    /// outcome can be recorded into a state a flush is already writing from, so
+    /// there is no such thing as a flush carrying a stale snapshot. That is what
+    /// this asserts — a `record_outcome` issued mid-write cannot return before the
+    /// write finishes. The record is at `MAX_COMMANDS` with full snippets so the
+    /// write takes tens of milliseconds, far more than the delay before the record.
+    #[test]
+    fn an_outcome_cannot_be_recorded_into_a_session_a_flush_is_writing() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _g = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = std::sync::Arc::new(make_test_app_state());
+
+        for n in 0..MAX_COMMANDS as u64 {
+            let mut o = sample_outcome();
+            o.timestamp = 1000 + n;
+            o.output_snippet = "x".repeat(SNIPPET_MAX_LEN - 1);
+            state.record_outcome("s-slow", o);
+        }
+
+        let flush_done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let first = {
+            let s = state.clone();
+            let done = flush_done.clone();
+            std::thread::spawn(move || {
+                flush_dirty(&s);
+                done.store(true, std::sync::atomic::Ordering::Release);
+            })
+        };
+
+        // Land inside the write, then record.
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let mut newer = sample_outcome();
+        newer.timestamp = 99_999;
+        newer.command = "the outcome that must survive".into();
+        state.record_outcome("s-slow", newer);
+        let flush_had_finished = flush_done.load(std::sync::atomic::Ordering::Acquire);
+
+        first.join().unwrap();
+        assert!(
+            flush_had_finished,
+            "record_outcome returned while a flush was still writing that session, \
+             so the flush is writing from a snapshot that can go stale"
+        );
+
+        // And the outcome recorded after that write still reaches disk.
+        flush_dirty(&state);
+        let on_disk = load("s-slow").expect("load from disk");
+        assert_eq!(on_disk.commands.len(), MAX_COMMANDS);
+        assert!(
+            on_disk
+                .commands
+                .iter()
+                .any(|c| c.command == "the outcome that must survive")
+        );
+        assert!(!state.knowledge_dirty.contains_key("s-slow"));
+    }
+
+    /// The startup load is spawned asynchronously, so a command can be recorded
+    /// for a session before the loop reaches its id. `knowledge_entry` has already
+    /// read that file and appended to it; inserting the file's state over it drops
+    /// the outcome, and the next flush writes the truncated record back to disk.
+    #[test]
+    fn load_all_does_not_overwrite_a_session_already_in_memory() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _g = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        // A file on disk holding one outcome.
+        let mut on_disk = SessionKnowledge::new();
+        on_disk.record(sample_outcome());
+        persist("s-live", &on_disk).unwrap();
+
+        // A live session that read that file and appended a second outcome.
+        let state = make_test_app_state();
+        let mut newer = sample_outcome();
+        newer.timestamp = 9999;
+        state.record_outcome("s-live", newer);
+        assert_eq!(
+            state
+                .session_knowledge
+                .get("s-live")
+                .unwrap()
+                .lock()
+                .commands
+                .len(),
+            2
+        );
+
+        load_all(&state);
+
+        assert_eq!(
+            state
+                .session_knowledge
+                .get("s-live")
+                .unwrap()
+                .lock()
+                .commands
+                .len(),
+            2,
+            "the startup load must not replace a session that is already live"
+        );
+    }
+
+    /// `load` says `None` both for "no file" and for "a file I could not read".
+    /// Starting fresh on the second overwrites it on the next flush, silently.
+    #[test]
+    fn an_unreadable_knowledge_file_is_kept_rather_than_overwritten() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _g = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let sessions = dir.path().join(SESSIONS_DIR);
+        std::fs::create_dir_all(&sessions).unwrap();
+        let path = sessions.join("s-corrupt.json");
+        std::fs::write(&path, "{ this is not json").unwrap();
+
+        let fresh = load_or_start_fresh("s-corrupt");
+        assert!(fresh.commands.is_empty(), "an unreadable file starts fresh");
+        assert_eq!(
+            fresh.schema_version, KNOWLEDGE_SCHEMA_VERSION,
+            "and starts at the current schema, not a derived zero"
+        );
+
+        assert!(
+            !path.exists(),
+            "the unreadable file must not be left where the next flush overwrites it"
+        );
+        let aside = sessions.join("s-corrupt.json.corrupt");
+        assert_eq!(
+            std::fs::read_to_string(&aside).unwrap(),
+            "{ this is not json",
+            "its bytes must be kept"
+        );
+    }
+
+    #[test]
+    fn a_session_with_no_file_at_all_starts_fresh_without_a_corrupt_copy() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _g = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let fresh = load_or_start_fresh("s-brand-new");
+        assert!(fresh.commands.is_empty());
+        assert!(
+            !dir.path()
+                .join(SESSIONS_DIR)
+                .join("s-brand-new.json.corrupt")
+                .exists()
+        );
+    }
+
     /// #1379-01bd: a panic inside spawn_blocking must not silently stop
     /// background persistence. The helper returns None and the caller can
     /// keep looping; tracing::error! is emitted for observability.
@@ -830,6 +1049,37 @@ mod persist_tests {
         load_all(&state);
         let restored = state.session_knowledge.get("s-restored").unwrap();
         assert_eq!(restored.lock().commands.len(), 1);
+    }
+
+    /// The startup load is capped, so a session inside the retention window may
+    /// have a file on disk and no record in memory. Recording an outcome for it
+    /// used to start a blank record, and the next flush wrote that blank over
+    /// the file — resuming an older session deleted its own history.
+    #[test]
+    fn an_outcome_for_a_non_resident_session_keeps_its_history() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _g = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let mut on_disk = SessionKnowledge::new();
+        on_disk.record(sample_outcome());
+        on_disk.record(sample_outcome());
+        persist("s-nonresident", &on_disk).unwrap();
+
+        // A fresh process that never loaded this file — exactly what the cap
+        // leaves behind for everything past the 40 newest sessions.
+        let state = make_test_app_state();
+        assert!(!state.session_knowledge.contains_key("s-nonresident"));
+
+        state.record_outcome("s-nonresident", sample_outcome());
+        flush_dirty(&state);
+
+        let reloaded = load("s-nonresident").expect("the file must still be there");
+        assert_eq!(
+            reloaded.commands.len(),
+            3,
+            "the resumed session must keep what it had recorded before"
+        );
     }
 
     /// `load_all` used to pull EVERY session file younger than 30 days into
