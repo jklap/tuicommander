@@ -1023,7 +1023,7 @@ describe("Sidebar", () => {
 			const prBadge = container.querySelector(".prBadge");
 			expect(prBadge).not.toBeNull();
 			expect(prBadge!.classList.contains("prMerged")).toBe(true);
-			expect(prBadge!.textContent).toBe("Merged");
+			expect(prBadge!.textContent).toBe("#42 Merged");
 		});
 
 		it("hides PR badge immediately for CLOSED PR", () => {
@@ -1059,7 +1059,7 @@ describe("Sidebar", () => {
 			const prBadge = container.querySelector(".prBadge");
 			expect(prBadge).not.toBeNull();
 			expect(prBadge!.classList.contains("prDraft")).toBe(true);
-			expect(prBadge!.textContent).toBe("Draft");
+			expect(prBadge!.textContent).toBe("#45 Draft");
 		});
 
 		it("shows open class with PR number when state is OPEN with no special conditions", () => {

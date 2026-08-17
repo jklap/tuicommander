@@ -13,16 +13,18 @@ describe("PrStateBadge conflict rendering", () => {
 		render(() => <PrStateBadge {...props} />).container.textContent;
 
 	it("shows Conflicts only when the backend says conflicting", () => {
-		expect(label({ prNumber: 1, state: "open", conflictState: "conflicting" })).toBe("Conflicts");
+		expect(label({ prNumber: 1, state: "open", conflictState: "conflicting" })).toBe("#1 Conflicts");
 	});
 
 	it("shows a neutral checking state while GitHub recomputes", () => {
-		expect(label({ prNumber: 2, state: "open", conflictState: "checking" })).toBe("Checking");
+		expect(label({ prNumber: 2, state: "open", conflictState: "checking" })).toBe("#2 Checking");
 	});
 
 	it("ignores a stale CONFLICTING mergeable while recomputing", () => {
 		// The exact regression: mergeable is the pre-push value, already invalidated.
-		expect(label({ prNumber: 3, state: "open", mergeable: "CONFLICTING", conflictState: "checking" })).toBe("Checking");
+		expect(label({ prNumber: 3, state: "open", mergeable: "CONFLICTING", conflictState: "checking" })).toBe(
+			"#3 Checking",
+		);
 	});
 
 	it("does not invent a conflict from mergeable alone", () => {
@@ -32,11 +34,11 @@ describe("PrStateBadge conflict rendering", () => {
 	});
 
 	it("still reports the other states in priority order", () => {
-		expect(label({ prNumber: 5, state: "open", isDraft: true, conflictState: "conflicting" })).toBe("Draft");
-		expect(label({ prNumber: 6, state: "merged", conflictState: "conflicting" })).toBe("Merged");
-		expect(label({ prNumber: 7, state: "open", conflictState: "clear", ciFailed: 1 })).toBe("CI Failed");
+		expect(label({ prNumber: 5, state: "open", isDraft: true, conflictState: "conflicting" })).toBe("#5 Draft");
+		expect(label({ prNumber: 6, state: "merged", conflictState: "conflicting" })).toBe("#6 Merged");
+		expect(label({ prNumber: 7, state: "open", conflictState: "clear", ciFailed: 1 })).toBe("#7 CI Failed");
 		expect(
 			label({ prNumber: 8, state: "open", conflictState: "clear", mergeable: "MERGEABLE", reviewDecision: "APPROVED" }),
-		).toBe("Ready");
+		).toBe("#8 Ready");
 	});
 });
