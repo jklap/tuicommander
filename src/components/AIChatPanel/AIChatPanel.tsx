@@ -17,6 +17,7 @@ import { terminalsStore } from "../../stores/terminals";
 import { cx } from "../../utils";
 import { onClickKeyDown } from "../../utils/a11y";
 import { writeClipboard } from "../../utils/clipboard";
+import { createThrottled } from "../../utils/createThrottled";
 import { getShellFamily, sendCommand } from "../../utils/sendCommand";
 import p from "../shared/panel.module.css";
 import { PanelResizeHandle } from "../ui/PanelResizeHandle";
@@ -33,6 +34,13 @@ const MarkdownContent: Component<{ content: string }> = (props) => (
 		<ContentRenderer content={props.content} />
 	</Suspense>
 );
+
+/** How often a growing stream is re-rendered as markdown.
+ *  ContentRenderer re-parses, re-sanitizes and re-inserts the WHOLE document on
+ *  every content change, so the cost of an answer is quadratic in its length.
+ *  The token batcher's 50 ms is right for data and wrong for layout; settled
+ *  messages are never throttled, only the live accumulators. */
+const STREAM_RENDER_MS = 200;
 
 const isPanelMode = () => new URLSearchParams(window.location.search).get("mode") === "panel";
 
@@ -290,10 +298,21 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 	// just read from disk. Restore the subscription only together with a
 	// producer.
 
+	// ── Rendered view of the live accumulators ─────────────────────────────
+	// The stores update ~20×/s; these mirror them at STREAM_RENDER_MS so the
+	// markdown pipeline and the DOM only see a fraction of those ticks.
+	const streamingRender = createThrottled(() => conversationStore.streamingText(), STREAM_RENDER_MS);
+	const reasoningRender = createThrottled(() => conversationStore.reasoningChunks(), STREAM_RENDER_MS);
+	const textChunksRender = createThrottled(() => conversationStore.textChunks() ?? "", STREAM_RENDER_MS);
+
 	// ── Auto-scroll on new messages / streaming chunks ──────────────────────
 	createEffect(() => {
-		// Subscribe to reactive dependencies
-		conversationStore.streamingText();
+		// Subscribe to what actually changes the DOM. Reading scrollHeight forces a
+		// synchronous layout, so tracking the raw accumulators would pay that cost
+		// on the ticks that render nothing.
+		streamingRender();
+		reasoningRender();
+		textChunksRender();
 		conversationStore.messages().length;
 		if (messageListRef) {
 			messageListRef.scrollTop = messageListRef.scrollHeight;
@@ -755,13 +774,13 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 						<details class={s.reasoningDisclosure} open={conversationStore.isThinking()}>
 							<summary class={s.reasoningSummary}>Thinking</summary>
 							<div class={s.reasoningBody}>
-								<MarkdownContent content={conversationStore.reasoningChunks()} />
+								<MarkdownContent content={reasoningRender()} />
 							</div>
 						</details>
 					</Show>
 
 					{/* Streaming text: render as markdown so formatting is progressive */}
-					<Show when={conversationStore.isStreaming() && conversationStore.streamingText()}>
+					<Show when={conversationStore.isStreaming() && streamingRender()}>
 						{(text) => (
 							<div class={s.assistantMsg}>
 								<MarkdownContent content={text()} />
@@ -777,7 +796,7 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 					{/* Agent text output */}
 					<Show when={conversationStore.textChunks()}>
 						<div class={s.assistantMsg}>
-							<MarkdownContent content={conversationStore.textChunks()!} />
+							<MarkdownContent content={textChunksRender()} />
 						</div>
 					</Show>
 				</Show>
