@@ -10,6 +10,72 @@
 
 Features to test when TUICommander is more usable.
 
+## Content index freshness after a timestamp-preserving restore (2026-08-17, **Rust change — needs `make dev` restart**)
+
+`ContentIndex::is_current` compared modification times only, so a restore that preserves them left
+the index reporting itself current with stale content. The stat fingerprint is now mtime **and**
+size, both already read by the same walk.
+
+- [x] Content replaced under a preserved mtime invalidates the index. _(verified: `content_index.rs` `is_current_detects_a_replacement_that_preserved_the_mtime`; proven to fail with the size term removed)_
+- [x] Edits, additions, deletions, same-second edits and undecodable files behave as before. _(verified: `content_index.rs` `is_current_detects_edits_additions_and_deletions`, `is_current_detects_a_same_second_edit`, `is_current_is_stable_for_a_file_that_cannot_be_decoded`)_
+- [ ] **After a `make dev` restart**: `search_code` for a phrase, then `cp -p` a different file over an indexed one and confirm the next search reflects the new content rather than the old.
+
+## Dictation truncation and model-snapshot staleness (2026-08-17, **Rust change — needs `make dev` restart**)
+
+The 300 s recording cap now reports what it dropped: `streaming_loop` counts the trimmed samples,
+`stop()` returns them, and `TranscribeResponse.truncated_s` carries them to `useDictation`, which
+says so instead of `Ready`. The model snapshot behind the 75 ms microphone meter expires after a
+second so a change made by the other build is noticed.
+
+- [x] The cap reports exactly how much it dropped, and an ordinary recording reports zero. _(verified: `streaming.rs` `the_retained_recording_is_capped`, `a_recording_under_the_cap_is_kept_whole`)_
+- [x] The assembled recording — streaming result plus the capture-buffer tail appended after the join — is capped too, and reports its own drop. _(verified: `streaming.rs` `the_assembled_recording_is_capped_after_the_thread_is_joined`, `a_finished_recording_under_the_cap_is_left_alone`)_
+- [x] A panicked streaming thread is reported as interrupted instead of transcribing the leftover fragment. _(verified: `streaming.rs` `a_panicked_streaming_thread_is_reported_as_interrupted`)_
+- [x] A truncated transcription tells the user instead of reporting success. _(verified: `useDictation.test.ts` `says the recording was truncated instead of reporting plain success`)_
+- [x] The snapshot is reused inside the window and recomputed after it, picking up a config change written by another process. _(verified: `commands.rs` `a_change_made_by_another_process_is_picked_up_when_the_snapshot_expires`)_
+- [ ] **After a `make dev` restart**: dictate normally and confirm the status still returns to `Ready`, then change the dictation model in a second window (or delete the model file) and confirm Settings > Dictation reflects it within about a second without a restart.
+
+## Resumed session knowledge (2026-08-17, **Rust change — needs `make dev` restart**)
+
+The startup load of session knowledge is capped at the 40 newest files, so a resumed older session
+had no record in memory. Recording an outcome for it started a blank one, and the next flush wrote
+that blank over the file. Both writers now read the file first.
+
+- [x] An outcome for a session that is on disk but not resident keeps that session's history. _(verified: `knowledge.rs` `an_outcome_for_a_non_resident_session_keeps_its_history`)_
+- [x] Concurrent saves cannot write an older record last — the write holds the session lock, so no outcome can be recorded into a state a flush is already writing. _(verified: `knowledge.rs` `an_outcome_cannot_be_recorded_into_a_session_a_flush_is_writing`; proven to fail with the snapshot-then-write ordering)_
+- [x] The asynchronous startup load never replaces a session already used since launch. _(verified: `knowledge.rs` `load_all_does_not_overwrite_a_session_already_in_memory`; proven to fail with the unconditional insert)_
+- [x] A history file that exists but cannot be read is moved aside as `.json.corrupt` rather than overwritten, and a session with no file starts fresh without one. _(verified: `knowledge.rs` `an_unreadable_knowledge_file_is_kept_rather_than_overwritten`, `a_session_with_no_file_at_all_starts_fresh_without_a_corrupt_copy`)_
+- [x] The startup load is still capped and still loads the newest files. _(verified: `knowledge.rs` `load_all_is_bounded_to_most_recent_sessions`)_
+- [ ] **After a `make dev` restart**: with more than 40 session-knowledge files present, reopen a session older than the newest 40, run a command in it, and confirm its earlier history survives in `<config dir>/ai-sessions/<id>.json`.
+
+## Wave-1 perf runtime re-measure (2026-08-17, **Rust change — needs `make dev` restart**) — story `620-3281`
+
+The unit tests cannot measure what these changes were made for. **Baseline, captured before the
+`605-f104` fix:** the last 4000 log lines of the running instance held **360** `Emit repo-changed
+(working-tree)` against **3** `(git-state)`. That ratio is what F40/F41/F42 has to move.
+
+- [x] `cargo nextest run --features desktop` is green on the changed tree. _(verified: 4481 passed at the wave-1 commits)_
+- [ ] **After a `make dev` restart**: re-measure `Emit repo-changed (working-tree)` vs `(git-state)` over ~4000 lines of `GET http://localhost:9876/logs` and compare against 360 vs 3.
+- [ ] **After a `make dev` restart**: sidebar diff badges and branch stats still update while an agent writes in a worktree — the emit reduction must not cost responsiveness.
+- [ ] **After a `make dev` restart**: Build Cleaner and the File Browser still behave after the `plugin_fs.rs` changes, and the app boots with no new warnings in `GET http://localhost:9876/logs`.
+
+## MCP stdio backlog and SSE stream ownership (2026-08-17, **Rust change — needs `make dev` restart**)
+
+The stdio upstream reader now uses a bounded, drop-oldest queue (256 lines / 8 MiB, 16 MiB per
+line) instead of an unbounded channel, and one RPC waits on a single deadline instead of a
+64-message budget. A `GET /mcp` SSE stream takes a process-wide generation on its session and its
+teardown releases the session only while it still holds it.
+
+- [x] The queue never grows past its bounds and the reader never parks — parking it would deadlock against a child that stopped reading its stdin. _(verified: `stdio_client.rs` `an_idle_upstream_that_never_stops_talking_cannot_grow_the_queue`)_
+- [x] A line that never ends is dropped whole rather than grown or truncated. _(verified: `stdio_client.rs` `a_line_that_never_ends_is_dropped_rather_than_grown`)_
+- [x] A queue that is always ready cannot outlive the deadline. _(verified: `stdio_client.rs` `a_full_queue_does_not_outrank_the_deadline`)_
+- [x] An upstream that emits 500 notifications before its reply still delivers that reply. _(verified: `stdio_client.rs` `a_chatty_upstream_still_delivers_its_reply`)_
+- [x] A mute upstream still times out and is torn down. _(verified: `stdio_client.rs` `call_tool_gives_up_on_a_mute_upstream`)_
+- [x] A superseded SSE stream's teardown leaves the replacement's channel and flag alone; the owner's teardown still releases both. _(verified: `mcp_transport.rs` `dropping_a_superseded_sse_stream_leaves_its_replacement_alive`, `dropping_the_sse_response_evicts_the_session_messaging_channel`)_
+- [x] A session id retired and recreated while its stream drains does not reissue that stream's generation. _(verified: `mcp_transport.rs` `a_recreated_session_does_not_reissue_a_live_stream_s_generation`)_
+- [x] Teardown of a stream whose session was already retired holds that session across the channel removal, so a reconnect landing in the window cannot lose its new sender. _(verified: `mcp_transport.rs` `teardown_of_a_retired_session_holds_it_across_the_channel_removal`)_
+- [x] Writing a request to an upstream that stopped reading its stdin gives up on the RPC deadline instead of parking forever, and the deadline is armed before the write. _(verified: `stdio_client.rs` `a_request_to_an_upstream_that_stopped_reading_gives_up_on_the_deadline`, `a_write_that_the_child_accepts_reports_success_and_sends_the_exact_bytes`, `a_write_to_a_broken_pipe_reports_the_failure_rather_than_timing_out`)_
+- [ ] **After a `make dev` restart**: with a real stdio upstream configured (mdkb, context7), connect it, call one of its tools with a large argument, and confirm the tool list and the call still work — the request now crosses a writer thread instead of going straight down the pipe. Then restart the bridge/agent so its `GET /mcp` reconnects, and confirm `notifications/tools/list_changed` still reaches the agent afterwards. Finally close the agent (`DELETE /mcp`) and reconnect it, and confirm notifications still arrive.
+
 ## Working-tree read freshness and artifact trim accounting (2026-08-17, **Rust change — needs `make dev` restart**)
 
 `get_working_tree_status` single-flight is now keyed by repository **plus** a generation counter that
