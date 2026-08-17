@@ -1,4 +1,5 @@
 import { type Component, createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createStore, produce } from "solid-js/store";
 import type { ContentSearchOptions } from "../../hooks/useFileBrowser";
 import { useFileBrowser } from "../../hooks/useFileBrowser";
 import { useSmartPrompts } from "../../hooks/useSmartPrompts";
@@ -139,7 +140,42 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 	type SearchMode = "filename" | "content";
 	const [searchMode, setSearchMode] = createSignal<SearchMode>("filename");
 	const [contentSearching, setContentSearching] = createSignal(false);
-	const [contentMatches, setContentMatches] = createSignal<ContentMatch[]>([]);
+	/**
+	 * Content matches, grouped by file path and built incrementally: a streamed
+	 * batch appends to the groups already on screen. Solid's `<For>` keys by
+	 * reference, so regrouping into fresh objects on every batch threw away and
+	 * rebuilt the whole result list each time — the Command Palette's append-only
+	 * result array never does. A store (not a signal) so appending to one group's
+	 * `matches` updates that group's rows without touching the outer list.
+	 */
+	const [contentMatchGroups, setContentMatchGroups] = createStore<{ path: string; matches: ContentMatch[] }[]>([]);
+	const [contentMatchCount, setContentMatchCount] = createSignal(0);
+	/** Group index per file path, so appending a match is O(1). */
+	const groupIndexByPath = new Map<string, number>();
+
+	const resetContentMatches = () => {
+		groupIndexByPath.clear();
+		setContentMatchGroups([]);
+		setContentMatchCount(0);
+	};
+
+	const appendContentMatches = (matches: ContentMatch[]) => {
+		if (matches.length === 0) return;
+		setContentMatchGroups(
+			produce((groups) => {
+				for (const m of matches) {
+					let idx = groupIndexByPath.get(m.path);
+					if (idx === undefined) {
+						idx = groups.length;
+						groupIndexByPath.set(m.path, idx);
+						groups.push({ path: m.path, matches: [] });
+					}
+					groups[idx].matches.push(m);
+				}
+			}),
+		);
+		setContentMatchCount((n) => n + matches.length);
+	};
 	const [contentStats, setContentStats] = createSignal<{
 		filesSearched: number;
 		filesSkipped: number;
@@ -293,6 +329,10 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 			}
 			lastRepoPath = fsRoot;
 			scrollCache.clear();
+			// Tree state is keyed by repo-relative path, so it would otherwise show the
+			// previous repo's children under a same-named node in the new one.
+			setTreeCache(new Map());
+			setExpandedDirs(new Set<string>());
 			pendingScrollRestore = null;
 			setCurrentSubdir(rootToSubdir.get(fsRoot) ?? ".");
 			setSearchQuery(rootToSearchQuery.get(fsRoot) ?? "");
@@ -390,10 +430,14 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		const unlisten = listen<{ dir_path: string }>("dir-changed", (event) => {
 			if (event.payload.dir_path === absPath) {
 				setDirRevision((n) => n + 1);
-				// Invalidate only the changed directory in tree cache
+				// Invalidate only the changed directory in tree cache. The payload path is
+				// absolute; tree cache keys are repo-relative, and `subdir` is exactly the
+				// relative form of the watched `absPath` — deleting the absolute path never
+				// matched a key, so the subtree stayed stale forever.
 				setTreeCache((prev) => {
+					if (!prev.has(subdir)) return prev;
 					const next = new Map(prev);
-					next.delete(event.payload.dir_path);
+					next.delete(subdir);
 					return next;
 				});
 			}
@@ -447,7 +491,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		const fsRoot = root();
 
 		if (!q || q.length < 3 || !fsRoot) {
-			setContentMatches([]);
+			resetContentMatches();
 			setContentSearching(false);
 			setContentStats({ filesSearched: 0, filesSkipped: 0, truncated: false });
 			return;
@@ -461,7 +505,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		};
 
 		setContentSearching(true);
-		setContentMatches([]);
+		resetContentMatches();
 		setContentStats({ filesSearched: 0, filesSkipped: 0, truncated: false });
 
 		let cancelled = false;
@@ -475,7 +519,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 			try {
 				const batchPromise = fb.onContentSearchBatch((batch) => {
 					if (cancelled) return;
-					setContentMatches((prev) => [...prev, ...batch.matches]);
+					appendContentMatches(batch.matches);
 					setContentStats({
 						filesSearched: batch.files_searched,
 						filesSkipped: batch.files_skipped,
@@ -516,24 +560,6 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 			unlistenBatch?.();
 			unlistenError?.();
 		});
-	});
-
-	/** Content matches grouped by file path */
-	const contentMatchGroups = createMemo(() => {
-		const matches = contentMatches();
-		if (matches.length === 0) return [];
-		const groups: { path: string; matches: ContentMatch[] }[] = [];
-		const map = new Map<string, ContentMatch[]>();
-		for (const m of matches) {
-			let arr = map.get(m.path);
-			if (!arr) {
-				arr = [];
-				map.set(m.path, arr);
-				groups.push({ path: m.path, matches: arr });
-			}
-			arr.push(m);
-		}
-		return groups;
 	});
 
 	/** Visible entries: search results when query active, directory listing otherwise, sorted */
@@ -1118,7 +1144,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 						if (next === "content") {
 							setSearchResults([]);
 						} else {
-							setContentMatches([]);
+							resetContentMatches();
 							setContentSearching(false);
 							setContentStats({ filesSearched: 0, filesSkipped: 0, truncated: false });
 						}
@@ -1179,7 +1205,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 						onClick={() => {
 							setSearchQuery("");
 							setSelectedIndex(0);
-							setContentMatches([]);
+							resetContentMatches();
 							setContentSearching(false);
 							setContentStats({ filesSearched: 0, filesSkipped: 0, truncated: false });
 						}}
@@ -1274,8 +1300,8 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 					<Show
 						when={contentSearching()}
 						fallback={
-							contentMatches().length > 0
-								? `${contentMatches().length} match${contentMatches().length !== 1 ? "es" : ""} in ${contentMatchGroups().length} file${contentMatchGroups().length !== 1 ? "s" : ""}${contentStats().truncated ? " (results limited)" : ""}${contentStats().filesSkipped > 0 ? ` \u00B7 ${contentStats().filesSkipped} skipped` : ""}`
+							contentMatchCount() > 0
+								? `${contentMatchCount()} match${contentMatchCount() !== 1 ? "es" : ""} in ${contentMatchGroups.length} file${contentMatchGroups.length !== 1 ? "s" : ""}${contentStats().truncated ? " (results limited)" : ""}${contentStats().filesSkipped > 0 ? ` \u00B7 ${contentStats().filesSkipped} skipped` : ""}`
 								: "No matches"
 						}
 					>
@@ -1299,10 +1325,10 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 
 				{/* Content search results */}
 				<Show when={searchMode() === "content" && searchQuery().trim().length >= 3}>
-					<Show when={!contentSearching() && contentMatches().length === 0}>
+					<Show when={!contentSearching() && contentMatchCount() === 0}>
 						<div class={s.empty}>{t("fileBrowser.noMatches", "No matches")}</div>
 					</Show>
-					<For each={contentMatchGroups()}>
+					<For each={contentMatchGroups}>
 						{(group) => (
 							<div class={s.contentGroup}>
 								<div

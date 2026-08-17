@@ -14,10 +14,31 @@ export interface FileIconProps {
 }
 
 /**
+ * Icon nodes parsed once, keyed by SVG source. A directory listing mounts one
+ * row per entry, and setting innerHTML per row re-parsed ~1.2 KB of markup every
+ * time. Cloning a cached node skips the parse. Bounded by the icon theme's
+ * distinct icons (~1k), and every row gets its own clone.
+ */
+const parsedIcons = new Map<string, Element>();
+
+function iconNode(svg: string): Node {
+	let parsed = parsedIcons.get(svg);
+	if (!parsed) {
+		const template = document.createElement("template");
+		template.innerHTML = svg;
+		// A provider may hand us markup with no element in it — render nothing
+		// rather than throwing, matching the old innerHTML behaviour.
+		parsed = template.content.firstElementChild ?? document.createElement("span");
+		parsedIcons.set(svg, parsed);
+	}
+	return parsed.cloneNode(true);
+}
+
+/**
  * Renders a file/folder icon from the active FileIconProvider plugin,
  * or falls back to default monochrome SVG icons.
  *
- * Renders as a <span> with innerHTML set to the SVG string.
+ * Renders as a <span> holding a clone of the parsed SVG.
  * Pass a CSS class for sizing/alignment (e.g. the entryIcon module class).
  */
 export const FileIcon: Component<FileIconProps> = (props) => {
@@ -29,5 +50,5 @@ export const FileIcon: Component<FileIconProps> = (props) => {
 
 	const svg = () => icon() ?? (props.isDir ? DEFAULT_FOLDER : DEFAULT_FILE);
 
-	return <span class={props.class} innerHTML={svg()} />;
+	return <span class={props.class}>{iconNode(svg())}</span>;
 };
