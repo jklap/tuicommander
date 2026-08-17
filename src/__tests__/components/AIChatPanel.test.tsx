@@ -126,20 +126,23 @@ describe("AIChatPanel lifecycle", () => {
 		cleanup();
 	});
 
-	it("subscribes to registry on mount with current chatId", async () => {
-		render(() => <AIChatPanel visible={true} onClose={() => {}} />);
+	// The Rust `ChatRegistry` has no producer — nothing calls `fan_out` or any
+	// `ConversationState` setter — so `chat_subscribe` answered with an empty
+	// default snapshot and then went silent. Applying that snapshot ran
+	// `setMessages([])`, one IPC hop after `loadConversation` had filled them, so
+	// opening a conversation from history blanked it. Subscribing again requires a
+	// producer first.
+	it("does not subscribe to the producerless chat registry", async () => {
+		const { container, unmount } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
+		// Wait for the panel to be mounted and its effects flushed before asserting
+		// a negative — otherwise the assertion passes before anything could run.
 		await vi.waitFor(() => {
-			expect(mockSubscribe).toHaveBeenCalledWith("chat-abc123");
+			expect(container.querySelector('button[title="Open in separate window"]')).not.toBeNull();
 		});
-	});
 
-	it("unsubscribes from registry on unmount", async () => {
-		const { unmount } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
-		await vi.waitFor(() => {
-			expect(mockSubscribe).toHaveBeenCalled();
-		});
+		expect(mockSubscribe).not.toHaveBeenCalled();
 		unmount();
-		expect(mockUnsubscribe).toHaveBeenCalled();
+		expect(mockUnsubscribe).not.toHaveBeenCalled();
 	});
 
 	it("renders detach button in main window mode", () => {
