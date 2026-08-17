@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildHttpUrl, INTENTIONALLY_UNMAPPED, isTauri, mapCommandToHttp } from "../transport";
@@ -67,7 +67,83 @@ function extractRegisteredTauriCommands(): Set<string> {
 	return new Set(commandList);
 }
 
+/** Every .ts/.tsx under src/, excluding the test tree itself. */
+function collectFrontendSources(): { path: string; source: string }[] {
+	const root = join(process.cwd(), "src");
+	const files: { path: string; source: string }[] = [];
+	const walk = (dir: string) => {
+		for (const entry of readdirSync(dir, { withFileTypes: true })) {
+			const full = join(dir, entry.name);
+			if (entry.isDirectory()) {
+				if (entry.name === "__tests__" || entry.name === "node_modules") continue;
+				walk(full);
+			} else if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
+				files.push({ path: full, source: readFileSync(full, "utf8") });
+			}
+		}
+	};
+	walk(root);
+	return files;
+}
+
+/**
+ * Per-session Tauri event names the frontend subscribes to, as `pty-<name>-`
+ * prefixes. Two spellings reach the same events:
+ *   - a literal `` listen(`pty-foo-${sessionId}`) ``
+ *   - `transport.onEvent("foo")`, which TauriTransport expands to
+ *     `pty-foo-${sessionId}` (canvasTerminalTransport.ts)
+ */
+function extractSubscribedPtyEvents(): Map<string, string[]> {
+	const subscribed = new Map<string, string[]>();
+	const add = (name: string, path: string) => {
+		const where = subscribed.get(name) ?? [];
+		where.push(path.replace(`${process.cwd()}/`, ""));
+		subscribed.set(name, where);
+	};
+	for (const { path, source } of collectFrontendSources()) {
+		for (const match of source.matchAll(/listen(?:<[^>]*>)?\(\s*`(pty-[a-z0-9-]+?)-\$\{/g)) {
+			add(match[1], path);
+		}
+		for (const match of source.matchAll(/\.onEvent\(\s*"([a-z0-9-]+)"/g)) {
+			add(`pty-${match[1]}`, path);
+		}
+	}
+	return subscribed;
+}
+
 describe("transport", () => {
+	/**
+	 * A listener whose emitter has been deleted fails silently and forever: the
+	 * callback simply stops running. That is not hypothetical — commit cda39f31
+	 * removed the Rust `pty-output` emit and left `subscribePty` subscribed to
+	 * it, freezing desktop `lastDataAt` and the background-tab unread flag for a
+	 * commit with nothing red (story 625-56b0).
+	 *
+	 * So: every per-session event the frontend listens for must be emitted by
+	 * Rust. This asserts the direction that broke. The reverse (an emit nobody
+	 * consumes) is wasteful but harmless, and is deliberately not asserted.
+	 */
+	describe("per-session Tauri event parity", () => {
+		it("every pty-* event the frontend subscribes to is emitted by Rust", () => {
+			const rustSources = ["src-tauri/src/pty.rs", "src-tauri/src/state.rs", "src-tauri/src/terminal_grid.rs"]
+				.map((relative) => readRepoFile(relative))
+				.join("\n");
+
+			const subscribed = extractSubscribedPtyEvents();
+			expect(subscribed.size).toBeGreaterThan(0);
+
+			const orphaned = [...subscribed.entries()].filter(([name]) => !rustSources.includes(`${name}-{session_id}`));
+
+			expect(orphaned.map(([name, where]) => `${name}-{session_id} (listened in ${where.join(", ")})`)).toEqual([]);
+		});
+
+		it("includes the activity pulse, which is the signal that regressed", () => {
+			// Guards the guard: if the extraction above silently stopped matching,
+			// the parity test would pass vacuously for the very event it exists for.
+			expect([...extractSubscribedPtyEvents().keys()]).toContain("pty-activity");
+		});
+	});
+
 	describe("isTauri()", () => {
 		const original = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
 
@@ -1636,6 +1712,76 @@ describe("transport", () => {
 			expect(wsInstance!.close).toHaveBeenCalled();
 
 			globalThis.WebSocket = origWs;
+		});
+
+		it("routes the WebSocket activity frame to onActivity, not onData", async () => {
+			const { subscribePty } = await import("../transport");
+
+			let wsInstance: {
+				onopen: (() => void) | null;
+				onmessage: ((event: { data: string }) => void) | null;
+				onclose: (() => void) | null;
+				onerror: unknown;
+				close: () => void;
+			};
+
+			class MockWebSocket {
+				onopen: (() => void) | null = null;
+				onmessage: ((event: { data: string }) => void) | null = null;
+				onclose: (() => void) | null = null;
+				onerror: unknown = null;
+				close = vi.fn();
+				constructor() {
+					wsInstance = this as never;
+				}
+			}
+
+			const origWs = globalThis.WebSocket;
+			globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+
+			const onData = vi.fn();
+			const onActivity = vi.fn();
+			const subscribePromise = subscribePty("sess-1", onData, vi.fn(), { onActivity });
+			wsInstance!.onopen!();
+			const unsub = await subscribePromise;
+
+			wsInstance!.onmessage!({ data: JSON.stringify({ type: "activity", session_id: "sess-1" }) });
+
+			expect(onActivity).toHaveBeenCalledTimes(1);
+			// The pulse carries no output; anything else would mean the browser is
+			// still deriving activity from bytes while desktop is not.
+			expect(onData).not.toHaveBeenCalled();
+
+			unsub();
+			globalThis.WebSocket = origWs;
+		});
+
+		it("routes the Tauri activity event to onActivity and subscribes to no output event", async () => {
+			const { listen } = await import("@tauri-apps/api/event");
+			const handlers = new Map<string, (event: { payload: unknown }) => void>();
+			vi.mocked(listen).mockImplementation((async (name: string, handler: never) => {
+				handlers.set(name, handler);
+				return vi.fn();
+			}) as never);
+
+			(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+			const { subscribePty } = await import("../transport");
+
+			const onData = vi.fn();
+			const onActivity = vi.fn();
+			const unsub = await subscribePty("sess-1", onData, vi.fn(), { onActivity });
+
+			expect([...handlers.keys()]).toContain("pty-activity-sess-1");
+			// The regression: a listener for an event Rust no longer emits.
+			expect([...handlers.keys()].filter((name) => name.startsWith("pty-output"))).toEqual([]);
+
+			handlers.get("pty-activity-sess-1")!({ payload: { session_id: "sess-1" } });
+			expect(onActivity).toHaveBeenCalledTimes(1);
+			expect(onData).not.toHaveBeenCalled();
+
+			unsub();
+			vi.mocked(listen).mockReset();
+			vi.mocked(listen).mockResolvedValue(vi.fn());
 		});
 
 		it("logs warning and schedules reconnect on abnormal WebSocket close", async () => {

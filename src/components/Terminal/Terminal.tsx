@@ -260,10 +260,19 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	const pty = usePty();
 
 	/** Track PTY activity for the activity dashboard. CanvasTerminal handles
-	 *  rendering and plugin dispatch; this callback only updates store metadata. */
-	const handlePtyData = (_data: string) => {
+	 *  rendering and plugin dispatch; this callback only updates store metadata.
+	 *
+	 *  Driven by the backend's payload-free activity pulse, not by output bytes:
+	 *  it never needed the data, and on desktop no output crosses IPC at all.
+	 *  Deriving this from grid frames instead would not work — CanvasTerminal
+	 *  stops acking frames while a terminal is hidden (the IntersectionObserver
+	 *  flow control), which is exactly the background-tab case the unread flag
+	 *  exists to report. */
+	const handlePtyActivity = () => {
 		if (disposed) return;
 		const now = Date.now();
+		// The producer already throttles to ~1/s; this guard keeps the store
+		// write bounded regardless of what that window is set to.
 		if (!lastDataAtTimestamp || now - lastDataAtTimestamp > 1000) {
 			lastDataAtTimestamp = now;
 			terminalsStore.touchLastDataAt(props.id, now);
@@ -551,10 +560,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 			pluginRegistry.dispatchStructuredEvent(parsed.type, parsed, targetSessionId);
 		};
 
-		// PTY output + exit via transport abstraction (Tauri listen or WebSocket)
+		// PTY activity + exit via transport abstraction (Tauri listen or WebSocket).
+		// The output bytes are ignored: browser mode still streams them over this
+		// socket for other consumers, desktop sends none, and neither is what this
+		// component needs — see handlePtyActivity.
 		unsubscribePty = await subscribePty(
 			targetSessionId,
-			(data: string) => handlePtyData(data),
+			() => {},
 			() => {
 				if (disposed) return;
 				// Guard: terminal may have been removed from the store already
@@ -609,6 +621,7 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				}
 			},
 			{
+				onActivity: handlePtyActivity,
 				onReconnecting: (attempt, max) => setReconnecting({ attempt, max }),
 				onReconnected: () => setReconnecting(null),
 				// Browser mode: receive parsed events via WebSocket JSON frames

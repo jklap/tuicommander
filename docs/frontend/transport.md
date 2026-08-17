@@ -52,13 +52,25 @@ This replaces the previous 370-line switch statement with a flat lookup table fo
 ```typescript
 export function subscribePty(
   sessionId: string,
-  onData: PtyDataHandler,
-  onExit: PtyExitHandler
+  onData: (data: string) => void,
+  onExit: () => void,
+  onParsedOrOptions?: ((event: WsParsedEvent) => void) | SubscribePtyOptions
 ): Unsubscribe
 ```
 
-- **Tauri mode:** Uses `listen("pty-output")` and `listen("pty-exit")` Tauri events
+- **Tauri mode:** Uses `listen("pty-activity-{id}")` and `listen("pty-exit-{id}")` Tauri events
 - **Browser mode:** Opens WebSocket to `/sessions/{id}/stream`
+
+`onData` receives PTY output in **browser/PWA mode only**. Desktop sends no output
+over IPC: the canvas renders from grid frames and plugin watcher lines are
+assembled in Rust, so no desktop consumer needs the bytes.
+
+For "is this session producing output", use `options.onActivity` — a payload-free
+pulse the backend throttles to ~1/s and delivers on both transports from one
+signal (`pty-activity-{id}` on desktop, the `{"type":"activity"}` WS frame in the
+browser). It is the only activity signal that works for a background tab: the
+canvas stops acking grid frames while a terminal is hidden, so frame traffic
+cannot stand in for it.
 
 ### URL Building
 

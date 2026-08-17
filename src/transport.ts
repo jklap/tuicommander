@@ -2126,14 +2126,22 @@ export interface WsParsedEvent {
 /**
  * Subscribe to PTY session events.
  *
- * In Tauri: uses listen() for pty-output-{sessionId}, pty-exit-{sessionId}.
+ * In Tauri: uses listen() for pty-activity-{sessionId}, pty-exit-{sessionId}.
  * In browser: uses WebSocket to /sessions/{sessionId}/stream with JSON framing:
  *   - {"type":"output","data":"..."} for raw PTY output
+ *   - {"type":"activity"} for the throttled "output happened" pulse
  *   - {"type":"parsed","event":{...}} for structured events (questions, rate limits)
  *   - {"type":"exit"} / {"type":"closed"} for session lifecycle
  *
+ * NOTE ON `onData`: desktop delivers NO output through this subscription. The
+ * canvas renders from grid frames and plugin watcher lines are assembled in
+ * Rust, so no desktop consumer needs the bytes and none crosses the IPC
+ * boundary. Browser/PWA still receives them — `src/mobile/OutputView.tsx` reads
+ * the stream directly. Use `onActivity` for "is this session producing output",
+ * which is the question both transports answer identically.
+ *
  * @param sessionId - PTY session ID
- * @param onData - Called with each chunk of PTY output
+ * @param onData - Called with each chunk of PTY output (browser/PWA only)
  * @param onExit - Called when the session exits
  * @param onParsed - Optional: called with structured parsed events (browser mode)
  * @returns Promise resolving to an unsubscribe function
@@ -2161,6 +2169,12 @@ export interface SubscribePtyOptions {
 	logOffset?: number;
 	/** Receive real-time SessionState snapshots pushed by the server on parsed events. */
 	onStateChange?: (state: Record<string, unknown>) => void;
+	/**
+	 * "This session produced output." Throttled to ~1/s by the Rust producer and
+	 * payload-free: it answers whether bytes are flowing, not what they were.
+	 * Delivered on both transports from one backend signal.
+	 */
+	onActivity?: () => void;
 	onParsed?: (event: WsParsedEvent) => void;
 	/** Called when WebSocket drops and reconnect is attempted (browser mode only). */
 	onReconnecting?: (attempt: number, maxAttempts: number) => void;
@@ -2180,8 +2194,12 @@ export async function subscribePty(
 	const onParsed = opts.onParsed;
 	if (isTauri()) {
 		const { listen } = await import("@tauri-apps/api/event");
-		const unlistenOutput = await listen<{ data: string }>(`pty-output-${sessionId}`, (event) => {
-			onData(event.payload.data);
+		// No pty-output listener: nothing emits that event. It was removed from
+		// Rust in cda39f31 when line assembly moved to the reader thread, and the
+		// listener outlived it by a commit — silently freezing lastDataAt and the
+		// unread flag on desktop (story 625-56b0).
+		const unlistenActivity = await listen(`pty-activity-${sessionId}`, () => {
+			opts.onActivity?.();
 		});
 		const unlistenExit = await listen(`pty-exit-${sessionId}`, () => {
 			onExit();
@@ -2194,7 +2212,7 @@ export async function subscribePty(
 		return () => {
 			if (disposed) return;
 			disposed = true;
-			Promise.resolve(unlistenOutput() as unknown).catch(() => {});
+			Promise.resolve(unlistenActivity() as unknown).catch(() => {});
 			Promise.resolve(unlistenExit() as unknown).catch(() => {});
 		};
 	}
@@ -2222,6 +2240,9 @@ export async function subscribePty(
 				switch (frame.type) {
 					case "output":
 						onData(frame.data as string);
+						break;
+					case "activity":
+						opts.onActivity?.();
 						break;
 					case "log": {
 						// Track the monotonic line cursor so reconnect resumes from the last

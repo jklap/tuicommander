@@ -85,6 +85,12 @@ pub enum AppEvent {
     },
     #[serde(rename = "pty-exit")]
     PtyExit { session_id: String },
+    /// "This session produced output." Payload-free on purpose: the only
+    /// consumers are a last-seen timestamp and an unread flag, neither of which
+    /// needs a byte of the output itself. Throttled at the producer — see
+    /// [`crate::pty::ACTIVITY_PULSE_WINDOW`] for why dropping pulses is sound.
+    #[serde(rename = "pty-activity")]
+    PtyActivity { session_id: String },
     /// Assembled PTY lines for the plugin OutputWatchers, carrying the ids Rust
     /// already matched. The frontend re-runs the real `RegExp` on the cleaned
     /// text to hand the plugin a genuine `RegExpExecArray`, and scans the line
@@ -244,6 +250,7 @@ impl AppEvent {
             | AppEvent::PtyParsed { session_id, .. }
             | AppEvent::PluginWatcherLines { session_id, .. }
             | AppEvent::PtyExit { session_id }
+            | AppEvent::PtyActivity { session_id }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
@@ -3093,6 +3100,14 @@ impl AppState {
             // A watcher hit says nothing about the session's own state — it is a
             // plugin-facing signal that rides the bus for browser clients only.
             AppEvent::PluginWatcherLines { .. } => {}
+            // Deliberately does NOT stamp `last_activity_ms`. That field answers
+            // "when did this session last do something notable" — it moves on
+            // SessionCreated/PtyParsed/PtyExit, i.e. on semantic events, and the
+            // mobile client renders it as such (`SessionCard.tsx`). This pulse
+            // answers the different question "are bytes flowing right now", which
+            // is true throughout a `tail -f` that produces no semantic event at
+            // all. Folding the two would silently redefine the mobile column.
+            AppEvent::PtyActivity { .. } => {}
             AppEvent::SessionClosed { session_id, .. } => {
                 state.session_states.remove(session_id);
             }
@@ -6293,6 +6308,34 @@ mod tests {
         );
         let s = apply(&state, &event);
         assert_eq!(s.agent_intent.as_deref(), Some("fixing the bug"));
+    }
+
+    /// `PtyActivity` (story 625-56b0) says bytes are flowing; `last_activity_ms`
+    /// says when the session last did something notable, and the mobile client
+    /// renders it as such (`SessionCard.tsx`). A `tail -f` produces the first
+    /// continuously and the second never, so the accumulator must ignore the
+    /// pulse — otherwise that column silently becomes "always just now" for any
+    /// session with output.
+    #[test]
+    fn test_session_state_pty_activity_does_not_restamp_last_activity() {
+        let state = fresh_state();
+        state
+            .session_states
+            .get_mut("s1")
+            .expect("fresh_state seeds s1")
+            .last_activity_ms = 1_000;
+
+        let s = apply(
+            &state,
+            &AppEvent::PtyActivity {
+                session_id: "s1".to_string(),
+            },
+        );
+
+        assert_eq!(
+            s.last_activity_ms, 1_000,
+            "the activity pulse must not restamp last_activity_ms"
+        );
     }
 
     #[test]
