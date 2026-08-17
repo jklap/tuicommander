@@ -139,8 +139,11 @@ export interface MarkdownProvider {
  * Provides SVG icons for files and folders based on name/extension.
  * Registered via PluginHost.registerFileIconProvider().
  *
- * The provider is queried for every file entry in the browser, command palette,
- * and tab bar. Return an inline SVG string or null for default icon.
+ * Queried for entries in the browser, command palette, and tab bar. Return an
+ * inline SVG string or null for the default icon. The result is cached per
+ * name + isDir for as long as this provider stays active (cleared when any
+ * provider registers or is disposed), so resolveFileIcon MUST be a pure
+ * function of its arguments — it is not re-asked once per row.
  */
 export interface FileIconProvider {
 	/**
