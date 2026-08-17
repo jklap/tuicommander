@@ -26,9 +26,9 @@ export const TIPS: Tip[] = [
 		shortcut: `${mod}+K`,
 	},
 	{
-		feature: "PTY Task Descriptions",
+		feature: "Terminal Context",
 		description:
-			"Orchestrated agents can show their assigned task above the terminal, alongside the last submitted prompt.",
+			"Expand Context above an agent terminal to see its current intent, assigned task, and last submitted prompt.",
 		shortcut: null,
 	},
 	{

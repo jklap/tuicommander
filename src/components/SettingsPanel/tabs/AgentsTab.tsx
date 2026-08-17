@@ -812,11 +812,12 @@ const AgentRow: Component<{
 									checked={configStore.getIntentTabTitle(props.agentType) ?? true}
 									onChange={(e) => configStore.setIntentTabTitle(props.agentType, e.currentTarget.checked)}
 								/>
-								<span>Show intent as tab title</span>
+								<span>Track agent intent</span>
 							</label>
 							<p class={s.hint}>
-								Emit <code>intent:</code> markers to update the tab name with current work phase. Turn off if parsing
-								misbehaves on this agent.
+								Ask the model to emit <code>intent:</code> markers at task start and phase changes. The current intent
+								appears in the terminal Context bar and may update the tab name. Turn off if parsing misbehaves on this
+								agent.
 							</p>
 						</div>
 
