@@ -325,8 +325,6 @@ const PTY_CHILD_NICE_DEFAULT: i32 = 10;
 /// corruption window when a duplication shows up in the wild.
 const PTY_RAW_RING_CAP: usize = 2 * 1024 * 1024;
 
-/// Throttle window for the `pty-output` event: at most one WebView event per
-/// window per session, however fast the PTY writes.
 /// One watcher-line batch per this window. Each batch is a Tauri event the
 /// WebView main thread must deserialize and dispatch; per-chunk emission
 /// starved the event loop under an output flood (`yes`), so keydown never ran
