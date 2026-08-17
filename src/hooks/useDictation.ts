@@ -8,6 +8,8 @@ interface TranscribeResponse {
 	text: string;
 	skip_reason: string | null;
 	duration_s: number;
+	/** Seconds of speech the recording cap dropped — 0 for an ordinary recording. */
+	truncated_s: number;
 }
 
 /** Dependencies injected into useDictation */
@@ -116,6 +118,13 @@ export function useDictation(deps: DictationDeps) {
 			return;
 		}
 
+		// A recording past the cap lost its beginning. Report it wherever the text
+		// lands — otherwise a truncated transcription reads as a complete one.
+		const doneMessage =
+			response.truncated_s > 0
+				? `Dictation: recording too long — the first ${Math.round(response.truncated_s)}s were not transcribed`
+				: "Ready";
+
 		// Use the focus target captured at key-press time
 		const el = focusTarget;
 		focusTarget = null;
@@ -138,12 +147,12 @@ export function useDictation(deps: DictationDeps) {
 			el.value = before + text + after;
 			el.selectionStart = el.selectionEnd = start + text.length;
 			el.dispatchEvent(new Event("input", { bubbles: true }));
-			deps.setStatusInfo("Ready");
+			deps.setStatusInfo(doneMessage);
 			return;
 		}
 		if (el && el.getAttribute("contenteditable") === "true") {
 			document.execCommand("insertText", false, text);
-			deps.setStatusInfo("Ready");
+			deps.setStatusInfo(doneMessage);
 			return;
 		}
 
@@ -158,7 +167,7 @@ export function useDictation(deps: DictationDeps) {
 				} else {
 					await writeFn(text);
 				}
-				deps.setStatusInfo("Ready");
+				deps.setStatusInfo(doneMessage);
 				requestAnimationFrame(() => active.ref?.focus());
 			} catch (err) {
 				appLogger.error("dictation", "Failed to write to terminal", err);

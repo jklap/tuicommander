@@ -72,8 +72,12 @@ pub struct TranscribeResponse {
     pub text: String,
     /// Human-readable reason when text is empty (None on success).
     pub skip_reason: Option<String>,
-    /// Duration of captured audio in seconds.
+    /// Duration of the audio that reached the final transcription, in seconds.
     pub duration_s: f64,
+    /// Seconds of speech the recording cap dropped before that transcription.
+    /// Zero for any ordinary recording; non-zero means the text is missing its
+    /// beginning, and the UI must say so rather than pass off a partial answer.
+    pub truncated_s: f64,
 }
 
 /// Resolve a model name from config, falling back to the default.
@@ -90,8 +94,20 @@ struct ModelSnapshot {
     size_mb: u64,
 }
 
-/// Cache slot for [`model_snapshot`].
-static MODEL_SNAPSHOT: parking_lot::Mutex<Option<ModelSnapshot>> = parking_lot::Mutex::new(None);
+/// Cache slot for [`model_snapshot`]: the snapshot and when it was taken.
+static MODEL_SNAPSHOT: parking_lot::Mutex<Option<(ModelSnapshot, std::time::Instant)>> =
+    parking_lot::Mutex::new(None);
+
+/// How long a snapshot may be served before it is recomputed.
+///
+/// The commands in this process invalidate explicitly, but they are not the only
+/// writer: a debug build and the installed app share one configuration directory
+/// and one model directory, so the other process can change the selected model,
+/// download it or delete it with nothing to tell us. Without an expiry this cache
+/// served that stale answer forever. One second keeps the 75 ms meter tick off
+/// the config file — the reason the cache exists — while bounding how long a
+/// change made elsewhere can go unnoticed.
+const MODEL_SNAPSHOT_TTL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Snapshot of the configured model for [`get_dictation_status`].
 ///
@@ -99,11 +115,11 @@ static MODEL_SNAPSHOT: parking_lot::Mutex<Option<ModelSnapshot>> = parking_lot::
 /// `stat` calls. The microphone meter polls `get_dictation_status` every 75 ms
 /// while recording (`startAudioLevelPolling` in `src/stores/dictation.ts`), so
 /// paying that per tick means ~13 config parses a second on the IPC thread.
-/// None of those inputs can change without going through a command that calls
-/// [`invalidate_model_snapshot`], so the snapshot is computed once per change.
 fn model_snapshot() -> ModelSnapshot {
     let mut slot = MODEL_SNAPSHOT.lock();
-    if let Some(snapshot) = slot.as_ref() {
+    if let Some((snapshot, taken)) = slot.as_ref()
+        && taken.elapsed() < MODEL_SNAPSHOT_TTL
+    {
         return snapshot.clone();
     }
     let model = resolve_model(&get_dictation_config().model);
@@ -112,7 +128,7 @@ fn model_snapshot() -> ModelSnapshot {
         downloaded: model::model_exists(model),
         size_mb: model::model_size_bytes(model) / 1_048_576,
     };
-    *slot = Some(snapshot.clone());
+    *slot = Some((snapshot.clone(), std::time::Instant::now()));
     snapshot
 }
 
@@ -453,7 +469,9 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
         let _guard = ProcessingGuard(processing);
 
         // Join the streaming thread (may block while last partial window finishes)
-        let mut all_audio = session.map(|s| s.stop()).unwrap_or_default();
+        let streamed = session.map(|s| s.stop()).unwrap_or_default();
+        let mut dropped_samples = streamed.dropped_samples;
+        let mut all_audio = streamed.audio;
 
         // Drain anything left in the audio capture buffer (arrived after last poll).
         // Safe: streaming thread is joined above, no more concurrent readers.
@@ -461,8 +479,31 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
             let remaining: Vec<f32> = buf.lock().drain(..).collect();
             all_audio.extend(remaining);
         }
+        // That tail never passed the streaming thread's cap, and a slow final
+        // window makes it arbitrarily long. Cap the assembled recording once.
+        dropped_samples += streaming::cap_finished_recording(&mut all_audio);
 
+        let truncated_s = dropped_samples as f64 / 16000.0;
         let total_duration_s = all_audio.len() as f64 / 16000.0;
+
+        // A panicked streaming thread took the recording with it. Whatever
+        // reached the capture buffer afterwards is not the recording, and
+        // transcribing it would report a fragment as the whole answer.
+        if streamed.interrupted {
+            app_logger::log_via_handle(
+                &app_clone,
+                "warn",
+                "dictation",
+                "Streaming thread was interrupted — the recording is not recoverable",
+            );
+            return TranscribeResponse {
+                text: String::new(),
+                // Rendered by `useDictation` as "Dictation: <reason>".
+                skip_reason: Some("recording was interrupted".to_string()),
+                duration_s: total_duration_s,
+                truncated_s,
+            };
+        }
         app_logger::log_via_handle(
             &app_clone,
             "info",
@@ -480,6 +521,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
                 text: String::new(),
                 skip_reason: Some("no speech detected".to_string()),
                 duration_s: total_duration_s,
+                truncated_s,
             };
         }
 
@@ -521,6 +563,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
                 text: String::new(),
                 skip_reason: Some("model not loaded".to_string()),
                 duration_s: total_duration_s,
+                truncated_s,
             };
         }
 
@@ -530,6 +573,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
                 text: String::new(),
                 skip_reason: Some("no speech detected".to_string()),
                 duration_s: total_duration_s,
+                truncated_s,
             };
         }
 
@@ -568,6 +612,7 @@ pub async fn stop_dictation_and_transcribe(app: AppHandle) -> Result<TranscribeR
             text: final_text,
             skip_reason: None,
             duration_s: total_duration_s,
+            truncated_s,
         }
     })
     .await
@@ -726,6 +771,49 @@ mod tests {
                 "meter tick {tick} re-read dictation-config.json"
             );
         }
+    }
+
+    /// A debug build and the installed app share one configuration directory and
+    /// one model directory. Whatever the other process changes there — the
+    /// selected model, a download, a deletion — reaches this one through nothing
+    /// but the expiry, so a snapshot that never expires is served forever.
+    #[test]
+    fn a_change_made_by_another_process_is_picked_up_when_the_snapshot_expires() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        write_model_config("small");
+        assert_eq!(model_snapshot().model, model::WhisperModel::Small);
+
+        // The other process rewrites the file. Nothing invalidates our cache:
+        // `set_dictation_config` ran in a different process.
+        std::fs::write(
+            dir.path().join(DICTATION_CONFIG_FILE),
+            serde_json::to_vec(&DictationConfig {
+                model: "large-v2".to_string(),
+                ..Default::default()
+            })
+            .expect("serialize"),
+        )
+        .expect("write config");
+
+        assert_eq!(
+            model_snapshot().model,
+            model::WhisperModel::Small,
+            "inside the window the cached answer is still served"
+        );
+
+        // Age the snapshot past its expiry.
+        {
+            let mut slot = MODEL_SNAPSHOT.lock();
+            let (_, taken) = slot.as_mut().expect("a snapshot was cached");
+            *taken = std::time::Instant::now() - MODEL_SNAPSHOT_TTL * 2;
+        }
+        assert_eq!(
+            model_snapshot().model,
+            model::WhisperModel::LargeV2,
+            "an expired snapshot must be recomputed from disk"
+        );
     }
 
     #[test]
