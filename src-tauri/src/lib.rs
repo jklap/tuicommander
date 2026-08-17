@@ -44,6 +44,7 @@ pub(crate) mod github_debug;
 pub(crate) mod github_poller;
 #[cfg(feature = "desktop")]
 mod global_hotkey;
+pub(crate) mod grid_gate;
 pub(crate) mod improvement_scan;
 mod input_line_buffer;
 pub(crate) mod llm_api;

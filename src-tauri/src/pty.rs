@@ -4666,8 +4666,7 @@ impl ChunkProcessor {
                             exit_code,
                         });
                     }
-                    TermEvent::Osc7(url) =>
-                    {
+                    TermEvent::Osc7(url) => {
                         #[allow(clippy::collapsible_if)]
                         if let Ok(cwd) = parse_osc7_cwd(&url) {
                             if let Some(entry) = state.sessions.get(session_id) {
@@ -5418,7 +5417,7 @@ pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
     #[cfg(feature = "desktop")]
     state.grid_channels.remove(session_id);
     state.grid_watch.remove(session_id);
-    state.grid_frame_in_flight.remove(session_id);
+    state.grid_gates.remove(session_id);
     state.pending_scroll.remove(session_id);
     state.ws_clients.remove(session_id);
     // Drop the per-session PTY event channel alongside ws_clients. Any final
@@ -5459,7 +5458,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     #[cfg(feature = "desktop")]
     state.grid_channels.remove(session_id);
     state.grid_watch.remove(session_id);
-    state.grid_frame_in_flight.remove(session_id);
+    state.grid_gates.remove(session_id);
     state.pending_scroll.remove(session_id);
     state.kitty_states.remove(session_id);
     state.input_buffers.remove(session_id);
@@ -7118,12 +7117,14 @@ pub(crate) fn spawn_reader_thread(
                 continue;
             }
             dirty_run = dirty_run.saturating_add(1);
-            let in_flight = ticker_state
-                .grid_frame_in_flight
+            // Clone the Arc out: the guard below would otherwise hold a DashMap
+            // shard read lock across the stuck back-off sleep, blocking every
+            // writer on that shard for up to a second.
+            let gate = ticker_state
+                .grid_gates
                 .get(&ticker_sid)
-                .map(|f| f.load(Ordering::Relaxed))
-                .unwrap_or(false);
-            if in_flight {
+                .map(|g| Arc::clone(g.value()));
+            if gate.as_ref().is_some_and(|g| !g.is_open()) {
                 let now = std::time::Instant::now();
                 let since = stuck_since.get_or_insert(now);
                 let elapsed = now.duration_since(*since).as_millis() as u64;
@@ -7133,10 +7134,11 @@ pub(crate) fn spawn_reader_thread(
                         session_id = %ticker_sid,
                         elapsed_ms = elapsed,
                         stuck_count,
-                        "grid_frame_in_flight stuck, force-resetting"
+                        outstanding = gate.as_ref().map_or(0, |g| g.outstanding()),
+                        "grid frame gate stuck, abandoning the outstanding frame"
                     );
-                    if let Some(flag) = ticker_state.grid_frame_in_flight.get(&ticker_sid) {
-                        flag.store(false, Ordering::Relaxed);
+                    if let Some(g) = gate.as_ref() {
+                        g.abandon();
                     }
                     stuck_since = None;
                     if stuck_count >= MAX_STUCK_BEFORE_PAUSE {
@@ -7550,7 +7552,7 @@ pub(crate) async fn create_pty(
     state
         .vt_log_buffers
         .insert(session_id.clone(), Mutex::new(vt_log));
-    let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+    let grid_watch_tx = crate::grid_gate::new_grid_watch();
     state.grid_watch.insert(session_id.clone(), grid_watch_tx);
     state
         .last_output_ms
@@ -7666,7 +7668,7 @@ pub(crate) async fn spawn_session_for_agent(
     state
         .vt_log_buffers
         .insert(session_id.clone(), Mutex::new(vt_log));
-    let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+    let grid_watch_tx = crate::grid_gate::new_grid_watch();
     state.grid_watch.insert(session_id.clone(), grid_watch_tx);
     state
         .last_output_ms
@@ -7835,7 +7837,7 @@ pub(crate) async fn create_pty_with_worktree(
     state
         .vt_log_buffers
         .insert(session_id.clone(), Mutex::new(vt_log));
-    let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+    let grid_watch_tx = crate::grid_gate::new_grid_watch();
     state.grid_watch.insert(session_id.clone(), grid_watch_tx);
     state
         .last_output_ms
@@ -9606,7 +9608,7 @@ pub(crate) fn read_vt_log(
     }
 }
 
-/// Send a grid frame via the session's channel and mark it in-flight.
+/// Send a grid frame through the session's channel and close the delivery gate.
 /// Also publishes to the watch channel for WebSocket subscribers.
 pub(crate) fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>) {
     if frame.is_empty() {
@@ -9618,14 +9620,30 @@ pub(crate) fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>
         .is_some_and(|tx| tx.receiver_count() > 0);
 
     if needs_watch && let Some(watch_tx) = state.grid_watch.get(session_id) {
-        let _ = watch_tx.send(frame.clone());
+        crate::grid_gate::publish_grid_frame(&watch_tx, frame.clone());
     }
     #[cfg(feature = "desktop")]
     if let Some(ch) = state.grid_channels.get(session_id) {
-        if let Some(flag) = state.grid_frame_in_flight.get(session_id) {
-            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+        let gate = state.grid_gates.get(session_id);
+        if let Some(gate) = gate.as_deref() {
+            gate.mark_sent();
         }
-        let _ = ch.send(frame);
+        // `tauri::ipc::Response` is what keeps this binary. A `Vec<u8>` matches
+        // only the blanket `IpcResponse` impl, i.e. `serde_json::to_string`, so a
+        // 110 KB frame left Rust as a ~280 KB string of decimal numbers, took the
+        // over-threshold path (one extra IPC round trip per frame) and arrived in
+        // JS as a `number[]` to be walked back into bytes. `Response` carries the
+        // bytes as `Raw` and the frontend already accepts an ArrayBuffer.
+        if let Err(error) = ch.send(tauri::ipc::Response::new(frame)) {
+            // A frame that never reached the webview will never be acked, and the
+            // counters are absolute: leaving this one counted would put the gate one
+            // frame behind for the rest of the session, i.e. every later frame would
+            // travel at the ticker's 500 ms give-up rate. Give up on it now instead.
+            tracing::debug!(session_id = %session_id, %error, "grid frame send failed");
+            if let Some(gate) = gate.as_deref() {
+                gate.abandon();
+            }
+        }
     }
 }
 
@@ -9633,32 +9651,55 @@ pub(crate) fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>
 /// The frontend calls this once per terminal; subsequent PTY output triggers
 /// `serialize_dirty_rows()` on the session's TerminalGrid and sends the result
 /// via the channel. Replaces any previously registered channel for the session.
+///
+/// Returns the subscription epoch. The frontend must carry it back on every
+/// `ack_terminal_frame` and on `unsubscribe_terminal_grid`: a terminal that
+/// remounts subscribes again before the old instance has finished tearing down,
+/// and without the epoch the late ack of the dead instance credits the fresh
+/// gate (opening it for frames nobody received) while its late unsubscribe
+/// deletes the fresh channel (blanking a mounted terminal).
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn subscribe_terminal_grid(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-    channel: tauri::ipc::Channel<Vec<u8>>,
-) {
-    state
-        .grid_frame_in_flight
-        .insert(session_id.clone(), Arc::new(AtomicBool::new(false)));
+    channel: tauri::ipc::Channel<tauri::ipc::Response>,
+) -> u64 {
+    // A fresh gate, counting from zero — the frontend resets its receipt counter
+    // on the same call.
+    let gate = Arc::new(crate::grid_gate::GridGate::new());
+    let epoch = gate.epoch();
+    state.grid_gates.insert(session_id.clone(), gate);
     state
         .pending_scroll
         .insert(session_id.clone(), Arc::new(AtomicI64::new(-1)));
     state.grid_channels.insert(session_id, channel);
+    epoch
 }
 
-/// Acknowledge that the frontend has painted the last grid frame.
-/// Clears the in-flight flag so the ticker can send the next frame.
-/// The ticker (16ms interval) is the sole normal damage-driven frame sender.
-/// The ack path only releases the backpressure gate. This caps frame rate at
-/// ~60Hz and prevents the tight ack→flush→ack loop that saturated the main thread.
+/// Report how many grid frames the frontend has received in total, which opens
+/// the delivery gate once it has caught up with what was sent.
+///
+/// The ticker (16 ms interval) is the sole normal damage-driven frame sender; this
+/// path only releases the gate. That caps the frame rate at ~60 Hz and prevents
+/// the tight ack→flush→ack loop that saturated the main thread.
+///
+/// `received` is a total, not a delta, so a duplicated or reordered ack is
+/// idempotent — and an ack for a frame the ticker already abandoned is a number
+/// in the past, which is what stops the burst-when-behind of story 601-82ef.
+///
+/// `epoch` is the value `subscribe_terminal_grid` returned; an ack that carries
+/// any other epoch belongs to a previous subscription and is dropped.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn ack_terminal_frame(state: State<'_, Arc<AppState>>, session_id: String) {
-    if let Some(flag) = state.grid_frame_in_flight.get(&session_id) {
-        flag.store(false, std::sync::atomic::Ordering::Relaxed);
+pub(crate) fn ack_terminal_frame(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    epoch: u64,
+    received: u64,
+) {
+    if let Some(gate) = state.grid_gates.get(&session_id) {
+        gate.ack(epoch, received);
     }
 }
 
@@ -9677,11 +9718,27 @@ pub(crate) fn terminal_request_frame(state: State<'_, Arc<AppState>>, session_id
 }
 
 /// Unregister the grid channel for a session (called by the frontend on unmount).
+///
+/// Only the subscription that owns `epoch` may tear the channel down. A terminal
+/// that remounts subscribes before the outgoing instance unsubscribes, so
+/// honouring a stale call would delete the live channel and leave a mounted
+/// terminal with no frames at all.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn unsubscribe_terminal_grid(state: State<'_, Arc<AppState>>, session_id: String) {
+pub(crate) fn unsubscribe_terminal_grid(
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    epoch: u64,
+) {
+    let is_current = state
+        .grid_gates
+        .get(&session_id)
+        .is_some_and(|gate| gate.epoch() == epoch);
+    if !is_current {
+        return;
+    }
     state.grid_channels.remove(&session_id);
-    state.grid_frame_in_flight.remove(&session_id);
+    state.grid_gates.remove(&session_id);
     state.pending_scroll.remove(&session_id);
 }
 
@@ -9748,6 +9805,12 @@ pub(crate) fn terminal_scroll_to_offset(
 /// Fetch a range of styled rows by absolute index, to fill the frontend's
 /// client-side row cache for smooth local scroll rendering. Read-only; called in
 /// background chunks as the viewport approaches uncached rows, not per frame.
+///
+/// Returns `tauri::ipc::Response` — a bare `Vec<u8>` would take the blanket
+/// `IpcResponse` impl and cross the IPC as a JSON array of decimal numbers
+/// (~140 KB of bytes becoming a ~350 KB string per chunk, plus a `number[]` for
+/// the JS engine to build and walk). `Response` marks the body raw, so the
+/// webview receives the bytes as an ArrayBuffer.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_styled_rows(
@@ -9755,12 +9818,13 @@ pub(crate) fn terminal_styled_rows(
     session_id: String,
     start: usize,
     count: usize,
-) -> Vec<u8> {
-    state
+) -> tauri::ipc::Response {
+    let bytes = state
         .vt_log_buffers
         .get(&session_id)
         .map(|vt| vt.lock().grid_serialize_styled_range(start, count))
-        .unwrap_or_default()
+        .unwrap_or_default();
+    tauri::ipc::Response::new(bytes)
 }
 
 #[cfg(feature = "desktop")]

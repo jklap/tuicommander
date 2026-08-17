@@ -107,6 +107,8 @@ export function decideFrameGrid(prev: FrameGridPrev, frame: DecodedFrame, fallba
 /** Inputs to the reconcile-fire gate (see shouldFireReconcile). */
 export interface ReconcileGate {
 	alive: boolean;
+	/** Off-screen (background tab): nothing it pulls back can be seen. */
+	hidden: boolean;
 	isScrolling: boolean;
 	/** Smooth-scroll fractional position; null when at rest on a line. */
 	scrollPosF: number | null;
@@ -123,9 +125,57 @@ export interface ReconcileGate {
  * but ONLY when the terminal is at rest and following output (offset 0). Firing
  * mid-gesture or while scrolled back would fight the active render or yank the
  * view. Pure, so the gate is unit-testable away from the CanvasTerminal closure.
+ *
+ * `hidden` belongs here for cost, not correctness: a background tab is
+ * `display:none` and never unmounted, and its rowMap is cleared on hide, so every
+ * partial frame it receives schedules a reconcile. Each fire forces
+ * `grid_force_full_damage()` — the most expensive frame there is — to be built,
+ * shipped, decoded and dropped, once a second, per hidden tab. The show path
+ * requests a fresh full frame anyway, so nothing is lost by staying quiet.
  */
 export function shouldFireReconcile(g: ReconcileGate): boolean {
-	return g.alive && !g.isScrolling && g.scrollPosF == null && g.displayOffset === 0;
+	return g.alive && !g.hidden && !g.isScrolling && g.scrollPosF == null && g.displayOffset === 0;
+}
+
+/** Trailing ack scheduler for a hidden terminal (see createHiddenAckThrottle). */
+export interface HiddenAckThrottle {
+	/** A frame arrived while hidden: arm the trailing ack if it is not already armed. */
+	schedule(): void;
+	/** Drop a pending ack (unmount, resubscribe, or the terminal became visible). */
+	cancel(): void;
+}
+
+/**
+ * Acknowledge frames received while hidden — late, and at most once per interval.
+ *
+ * A hidden terminal decodes each frame (the bell rides in the header) but paints
+ * nothing, so acking per frame would reopen the delivery gate at full rate for a
+ * viewport nobody can see. Never acking is worse than it looks: the gate then
+ * stays closed until the backend ticker declares the frontend stuck, which costs
+ * a warning per output burst and pins the hidden tab to the 500 ms force-reset
+ * floor anyway.
+ *
+ * One trailing ack per interval gets both: the hidden tab keeps receiving frames
+ * at ~1/interval, and the "gate stuck" warning goes back to meaning what it says.
+ * Call with an interval BELOW the backend's MAX_IN_FLIGHT_MS so the gate reopens
+ * on its own before the ticker gives up on the frame.
+ */
+export function createHiddenAckThrottle(ack: () => void, intervalMs: number): HiddenAckThrottle {
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	return {
+		schedule() {
+			if (timer != null) return;
+			timer = setTimeout(() => {
+				timer = null;
+				ack();
+			}, intervalMs);
+		},
+		cancel() {
+			if (timer == null) return;
+			clearTimeout(timer);
+			timer = null;
+		},
+	};
 }
 
 /**

@@ -1337,13 +1337,17 @@ pub struct AppState {
     /// offline replay (terminal_grid.rs `replay_capture_from_env`).
     pub(crate) pty_raw_rings: DashMap<String, Mutex<std::collections::VecDeque<u8>>>,
     #[cfg(feature = "desktop")]
-    pub(crate) grid_channels: DashMap<String, tauri::ipc::Channel<Vec<u8>>>,
+    /// Binary on purpose: `Channel<Vec<u8>>` serialises to a JSON number array,
+    /// `Channel<Response>` keeps the raw bytes. See `send_grid_frame`.
+    pub(crate) grid_channels: DashMap<String, tauri::ipc::Channel<tauri::ipc::Response>>,
     /// Watch channel for WebSocket grid streaming (session_id → sender).
     /// Uses latest-frame-wins semantics: slow WS clients skip intermediate frames.
-    pub(crate) grid_watch: DashMap<String, tokio::sync::watch::Sender<Vec<u8>>>,
-    /// Flow control: true while a grid frame is in-flight (awaiting frontend ack).
-    /// When set, the PTY reader skips sending frames — damage accumulates in alacritty.
-    pub(crate) grid_frame_in_flight: DashMap<String, Arc<AtomicBool>>,
+    pub(crate) grid_watch: DashMap<String, crate::grid_gate::GridWatchTx>,
+    /// Flow control: frames sent vs frames the frontend reported receiving. While
+    /// the gate is closed the ticker skips sending — damage accumulates in
+    /// alacritty. See [`crate::grid_gate::GridGate`] for why it counts instead of
+    /// holding a bool.
+    pub(crate) grid_gates: DashMap<String, Arc<crate::grid_gate::GridGate>>,
     /// Dirty flag: set by PTY reader when new data is processed, cleared by frame ticker.
     /// Decouples read() from frame serialization to coalesce rapid writes (spinners).
     pub(crate) grid_frame_dirty: DashMap<String, Arc<AtomicBool>>,
@@ -2459,7 +2463,7 @@ impl AppState {
             #[cfg(feature = "desktop")]
             grid_channels: DashMap::new(),
             grid_watch: DashMap::new(),
-            grid_frame_in_flight: DashMap::new(),
+            grid_gates: DashMap::new(),
             grid_frame_dirty: DashMap::new(),
             sync_update_active: DashMap::new(),
             pending_scroll: DashMap::new(),
@@ -5772,7 +5776,7 @@ mod tests {
             #[cfg(feature = "desktop")]
             grid_channels: dashmap::DashMap::new(),
             grid_watch: dashmap::DashMap::new(),
-            grid_frame_in_flight: dashmap::DashMap::new(),
+            grid_gates: dashmap::DashMap::new(),
             grid_frame_dirty: dashmap::DashMap::new(),
             sync_update_active: dashmap::DashMap::new(),
             pending_scroll: dashmap::DashMap::new(),

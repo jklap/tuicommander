@@ -447,7 +447,7 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [HUMAN] Use terminal normally for extended period → no blank screen
 - [HUMAN] Switch between tabs rapidly → terminal content preserved, no blank flash
 - [HUMAN] Hide and show terminal tab → content visible immediately on restore
-- [HUMAN] Check logs for `grid_frame_in_flight stuck` warning — should NOT appear under normal use
+- [HUMAN] Check logs for the `grid frame gate stuck` warning — should NOT appear under normal use (a hidden tab acks on a 400 ms timer, so background tabs must not trigger it either)
 - [HUMAN] Force a decode failure (e.g. truncate a frame in dev) → terminal recovers within 500ms, no permanent blank
 
 ## Content Index Strategy (2026-05-24)

@@ -3394,7 +3394,7 @@ fn handle_agent_with_parent_cwd(
             }
             // Register grid_watch so format=grid WebSocket streams work for
             // MCP-spawned agent sessions (mirrors session.rs spawn_pty_session).
-            let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+            let grid_watch_tx = crate::grid_gate::new_grid_watch();
             state.grid_watch.insert(session_id.clone(), grid_watch_tx);
 
             // Broadcast session-created to SSE/WebSocket consumers
@@ -6634,7 +6634,7 @@ mod tests {
             #[cfg(feature = "desktop")]
             grid_channels: dashmap::DashMap::new(),
             grid_watch: dashmap::DashMap::new(),
-            grid_frame_in_flight: dashmap::DashMap::new(),
+            grid_gates: dashmap::DashMap::new(),
             pending_scroll: dashmap::DashMap::new(),
             kitty_states: dashmap::DashMap::new(),
             input_buffers: dashmap::DashMap::new(),

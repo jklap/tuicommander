@@ -172,8 +172,17 @@ POST /sessions/:id/visible              { "visible": bool }   -> { "ok": true }
 GET  /sessions/:id/terminal/selection-text?startRow=&startCol=&endRow=&endCol=  -> { "text": string }
 GET  /sessions/:id/terminal/logical-line?row=N         -> [logicalStartRow, text]
 GET  /sessions/:id/terminal/hyperlink-span?row=R&col=C -> [startCol, endCol, url] | null
+GET  /sessions/:id/terminal/styled-rows?start=N&count=N -> application/octet-stream (packed rows)
 GET  /process/stats                                    -> ProcessStats[]
 ```
+
+`terminal/styled-rows` fills the CanvasTerminal client-side row cache and answers
+**binary**, not JSON: a 64-row chunk is ~141 KB of packed cells, which as a JSON
+number array becomes ~350 KB of decimal text for the client to parse back into the
+bytes it started as. The desktop `terminal_styled_rows` command returns the same
+payload raw (`tauri::ipc::Response`), and `rpcImpl` decides between
+`arrayBuffer()` and `json()` on the content-type alone. An empty body means "no
+such session or range" — a valid empty chunk, not an error.
 
 Read-only PTY/terminal state mirroring the desktop Tauri commands (story 062). The
 `{field}`-wrapped responses are unwrapped by the frontend transport to match the
@@ -278,6 +287,13 @@ needs, each one the desktop Tauri payload plus a `type` key:
 
 Frames the server has no grid consumer for are dropped rather than forwarded, so this
 socket does not carry `output`, `parsed` or the activity pulse.
+
+**Dropped-frame recovery.** Binary frames are deltas, and the `watch` channel behind
+this socket keeps only the newest value — a client that cannot keep up skips frames
+and would apply a delta onto a row map missing rows. Each published frame therefore
+carries a Rust-internal sequence number; when the reader sees a gap it re-serialises
+the full grid and sends that instead. The sequence never reaches the wire, so the
+binary frame format is unchanged.
 
 ### Server-Sent Events (SSE)
 
