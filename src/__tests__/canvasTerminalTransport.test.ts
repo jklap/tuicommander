@@ -161,6 +161,38 @@ describe("canvasTerminalTransport", () => {
 			expect(handler).toHaveBeenCalledWith({ event: { kind: "cwd" } });
 		});
 
+		// The frames below are byte-for-byte what `grid_ws_frame` serialises in
+		// src-tauri/src/mcp_http/session.rs — snake_case `exit_code` included,
+		// because the desktop side sends `Osc133Event` and the two must agree.
+		// Asserting against a hand-built object would prove nothing about the wire.
+		it("delivers an osc133 frame with the field names the Rust event carries", async () => {
+			const transport = new WsTransport("sess-1");
+			const subscribePromise = transport.subscribe(vi.fn());
+			wsInstances[0].onopen!();
+			await subscribePromise;
+
+			const handler = vi.fn();
+			await transport.onEvent("osc133", handler);
+
+			wsInstances[0].onmessage!({
+				data: JSON.stringify({ type: "osc133", marker: "D", line: 42, exit_code: 1 }),
+			});
+			expect(handler).toHaveBeenCalledWith({ marker: "D", line: 42, exit_code: 1 });
+		});
+
+		it("delivers a cwd frame as the same { cwd } object the desktop event carries", async () => {
+			const transport = new WsTransport("sess-1");
+			const subscribePromise = transport.subscribe(vi.fn());
+			wsInstances[0].onopen!();
+			await subscribePromise;
+
+			const handler = vi.fn();
+			await transport.onEvent("cwd", handler);
+
+			wsInstances[0].onmessage!({ data: JSON.stringify({ type: "cwd", cwd: "/tmp/work" }) });
+			expect(handler).toHaveBeenCalledWith({ cwd: "/tmp/work" });
+		});
+
 		it("reconnects on unexpected close", async () => {
 			const transport = new WsTransport("sess-1");
 			const subscribePromise = transport.subscribe(vi.fn());

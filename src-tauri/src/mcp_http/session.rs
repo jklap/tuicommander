@@ -1396,6 +1396,64 @@ async fn handle_ws_log_session(
     send_task.abort();
 }
 
+/// Build the JSON text frame the grid WebSocket sends for one bus event, or
+/// `None` for events this socket does not carry.
+///
+/// A function rather than an inline `match` so a test can assert the shape that
+/// actually goes on the wire. A test that rebuilds the frame by hand proves only
+/// that the test agrees with itself: it stays green while the wire carries
+/// something the client cannot read.
+///
+/// SHAPE CONTRACT: `WsTransport` destructures each frame as
+/// `const { type, ...payload } = event` and hands `payload` to the same handler
+/// the desktop `listen()` feeds. So every frame here must be its Tauri event
+/// payload plus a `type` discriminator — no renamed fields, no extra nesting —
+/// or `CanvasTerminal` needs a per-transport branch.
+fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
+    // Per-session channel — every event belongs to this session.
+    Some(match event {
+        crate::state::AppEvent::PtyParsed { parsed, .. } => {
+            serde_json::json!({"type": "parsed", "event": parsed})
+        }
+        crate::state::AppEvent::PtyExit { session_id: sid } => {
+            serde_json::json!({"type": "exit", "session_id": sid})
+        }
+        crate::state::AppEvent::PluginWatcherLines {
+            session_id: sid,
+            lines,
+        } => {
+            serde_json::json!({"type": "watcher-lines", "session_id": sid, "lines": lines})
+        }
+        crate::state::AppEvent::SessionClosed {
+            session_id: sid,
+            reason,
+        } => {
+            serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})
+        }
+        crate::state::AppEvent::PtyDescriptionChanged {
+            session_id: sid,
+            description,
+        } => {
+            serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
+        }
+        // Mirrors the desktop `Osc133Event` field for field — see the shape
+        // contract above. Without this a browser/PWA client had no command
+        // blocks, no gutter marks and no Cmd+Up/Down navigation.
+        crate::state::AppEvent::PtyOsc133 {
+            marker,
+            line,
+            exit_code,
+            ..
+        } => {
+            serde_json::json!({"type": "osc133", "marker": marker, "line": line, "exit_code": exit_code})
+        }
+        crate::state::AppEvent::PtyCwd { cwd, .. } => {
+            serde_json::json!({"type": "cwd", "cwd": cwd})
+        }
+        _ => return None,
+    })
+}
+
 /// Handle a WebSocket connection in grid mode (`?format=grid`).
 ///
 /// Streams binary grid frames (same format as Tauri Channel) using the
@@ -1457,25 +1515,7 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
                 result = event_rx.recv() => {
                     match result {
                         Ok(event) => {
-                            // Per-session channel — every event belongs to this session.
-                            let payload = match &event {
-                                crate::state::AppEvent::PtyParsed { parsed, .. } => {
-                                    serde_json::json!({"type": "parsed", "event": parsed})
-                                }
-                                crate::state::AppEvent::PtyExit { session_id: sid } => {
-                                    serde_json::json!({"type": "exit", "session_id": sid})
-                                }
-                                crate::state::AppEvent::PluginWatcherLines { session_id: sid, lines } => {
-                                    serde_json::json!({"type": "watcher-lines", "session_id": sid, "lines": lines})
-                                }
-                                crate::state::AppEvent::SessionClosed { session_id: sid, reason } => {
-                                    serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})
-                                }
-                                crate::state::AppEvent::PtyDescriptionChanged { session_id: sid, description } => {
-                                    serde_json::json!({"type": "pty-description", "session_id": sid, "description": description})
-                                }
-                                _ => continue,
-                            };
+                            let Some(payload) = grid_ws_frame(&event) else { continue };
                             if futures_util::SinkExt::send(
                                 &mut ws_sender,
                                 Message::Text(payload.to_string().into()),
@@ -2048,6 +2088,128 @@ mod tests {
         //    bytes the writer had committed at snapshot time.
         assert!(snapshot_total <= CHUNK_COUNT * CHUNK_SIZE as u64);
         assert!(snapshot_total >= snapshot_indices.len() as u64 * CHUNK_SIZE as u64);
+    }
+
+    // --- Grid WS frame shapes (story 623-d369) ---
+    //
+    // The client destructures every frame as `const { type, ...payload } = event`
+    // and hands `payload` to the same handler the desktop `listen()` feeds. So a
+    // frame is correct only if it equals its Tauri payload plus a `type` key.
+    //
+    // These drive the real `grid_ws_frame` and compare against the serialized
+    // Rust struct the desktop side emits — NOT against a hand-built object. A
+    // test that rebuilds the expected shape by hand agrees only with itself and
+    // stays green while the wire carries something the client cannot read.
+
+    /// Strip the discriminator: what is left must be the Tauri event payload.
+    fn frame_payload(frame: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+        let mut map = frame.as_object().expect("frame must be an object").clone();
+        assert!(map.remove("type").is_some(), "frame must carry a type");
+        map
+    }
+
+    #[test]
+    fn grid_ws_osc133_frame_matches_the_desktop_event_payload() {
+        for (marker, exit_code) in [("A", None), ("D", Some(0)), ("D", Some(130))] {
+            let frame = grid_ws_frame(&crate::state::AppEvent::PtyOsc133 {
+                session_id: "s1".to_string(),
+                marker: marker.to_string(),
+                line: 42,
+                exit_code,
+            })
+            .expect("osc133 must be carried by the grid WS");
+
+            assert_eq!(frame["type"], "osc133");
+
+            // The exact payload the desktop AppHandle emits for the same marker.
+            let desktop = serde_json::to_value(crate::terminal_grid::Osc133Event {
+                marker: marker.to_string(),
+                line: 42,
+                exit_code,
+            })
+            .expect("Osc133Event must serialize");
+
+            assert_eq!(
+                serde_json::Value::Object(frame_payload(&frame)),
+                desktop,
+                "grid WS payload drifted from the desktop Osc133Event ({marker})"
+            );
+        }
+    }
+
+    /// `exit_code: None` must survive as an explicit `null`, not vanish. The
+    /// client reads `exit_code ?? undefined`, so a missing key and a null key
+    /// happen to behave alike today — but a dropped key is one `skip_serializing_if`
+    /// away from meaning "field removed" to any other consumer.
+    #[test]
+    fn grid_ws_osc133_frame_keeps_a_null_exit_code() {
+        let frame = grid_ws_frame(&crate::state::AppEvent::PtyOsc133 {
+            session_id: "s1".to_string(),
+            marker: "A".to_string(),
+            line: 0,
+            exit_code: None,
+        })
+        .expect("osc133 must be carried by the grid WS");
+
+        assert!(frame.get("exit_code").is_some(), "exit_code key must exist");
+        assert!(frame["exit_code"].is_null());
+    }
+
+    /// The cwd payload is `{ cwd }` on BOTH transports. It cannot be a bare
+    /// string on the wire — a frame needs its `type` discriminator — so the
+    /// desktop emit was changed to match rather than the client made to branch.
+    #[test]
+    fn grid_ws_cwd_frame_carries_the_same_object_as_the_desktop_event() {
+        let frame = grid_ws_frame(&crate::state::AppEvent::PtyCwd {
+            session_id: "s1".to_string(),
+            cwd: "/tmp/project".to_string(),
+        })
+        .expect("cwd must be carried by the grid WS");
+
+        assert_eq!(frame["type"], "cwd");
+        assert_eq!(
+            serde_json::Value::Object(frame_payload(&frame)),
+            serde_json::json!({ "cwd": "/tmp/project" })
+        );
+    }
+
+    /// The regression this story fixes: both events used to reach the desktop
+    /// AppHandle alone, so a browser/PWA client got no command blocks, no gutter
+    /// marks, no Cmd+Up/Down navigation and no cwd tracking.
+    #[test]
+    fn grid_ws_carries_osc133_and_cwd_at_all() {
+        assert!(
+            grid_ws_frame(&crate::state::AppEvent::PtyOsc133 {
+                session_id: "s1".to_string(),
+                marker: "A".to_string(),
+                line: 1,
+                exit_code: None,
+            })
+            .is_some(),
+            "OSC 133 must reach browser clients"
+        );
+        assert!(
+            grid_ws_frame(&crate::state::AppEvent::PtyCwd {
+                session_id: "s1".to_string(),
+                cwd: "/tmp".to_string(),
+            })
+            .is_some(),
+            "OSC 7 cwd must reach browser clients"
+        );
+    }
+
+    /// Not every bus event belongs on this socket. The activity pulse
+    /// (story 625-56b0) rides the subscribePty stream and has no consumer here,
+    /// and waking every grid client for it would be pure cost.
+    #[test]
+    fn grid_ws_drops_events_it_has_no_consumer_for() {
+        assert!(
+            grid_ws_frame(&crate::state::AppEvent::PtyActivity {
+                session_id: "s1".to_string(),
+            })
+            .is_none(),
+            "the activity pulse must not be forwarded on the grid WS"
+        );
     }
 
     // --- Grid watch channel (format=grid WS endpoint) ---
