@@ -1,7 +1,14 @@
 import { createMemo, createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
 import { subscribePty } from "../../transport";
-import { groupLineBlocks, type LogLine, lineMatchesQuery, normalizeLogLine, spanStyle } from "../utils/logLine";
+import {
+	groupLineBlocks,
+	type LogLine,
+	lineMatchesNeedle,
+	normalizeLogLine,
+	sameLine,
+	spanStyle,
+} from "../utils/logLine";
 import styles from "./OutputView.module.css";
 
 const MAX_LINES = 500;
@@ -53,7 +60,7 @@ export function OutputView(props: OutputViewProps) {
 				setLogLines(json.lines.map(normalizeLogLine));
 			}
 			if (json.screen && json.screen.length > 0) {
-				setScreenRows((json.screen as unknown[]).map(normalizeLogLine));
+				reconcileScreenRows(json.screen as unknown[]);
 			}
 			// Sync initial input_line from HTTP response
 			if (props.onInputLine) {
@@ -111,6 +118,23 @@ export function OutputView(props: OutputViewProps) {
 		}
 	}
 
+	/**
+	 * The backend re-sends the whole screen on every frame, but almost every row
+	 * renders exactly as it did before. Each row arrives freshly deserialized, so
+	 * identity has to be re-established by value: keeping the previous frame's
+	 * LogLine for an unchanged row keeps the block wrapper `<For>` is keyed on,
+	 * and with it the row's DOM nodes.
+	 */
+	function reconcileScreenRows(rows: unknown[]) {
+		setScreenRows((prev) =>
+			rows.map((raw, i) => {
+				const line = normalizeLogLine(raw);
+				const before = prev[i];
+				return before && sameLine(before, line) ? before : line;
+			}),
+		);
+	}
+
 	// Touch inertia guard: while the user is actively touching, don't auto-scroll
 	let touchActive = false;
 	const handleTouchStart = () => {
@@ -154,7 +178,7 @@ export function OutputView(props: OutputViewProps) {
 					() => {}, // unused — onLogLines handles log delivery
 					() => {
 						setLogLines((prev) => [...prev, { spans: [{ text: "--- session exited ---" }] }]);
-						setScreenRows([]);
+						reconcileScreenRows([]);
 					},
 					{
 						format: "log",
@@ -167,7 +191,7 @@ export function OutputView(props: OutputViewProps) {
 							scrollToBottom();
 						},
 						onScreenRows(rows) {
-							setScreenRows(rows.map(normalizeLogLine));
+							reconcileScreenRows(rows);
 							scrollToBottom();
 						},
 						onStateChange: props.onStateChange,
@@ -193,7 +217,8 @@ export function OutputView(props: OutputViewProps) {
 	const displayedLines = createMemo(() => {
 		const q = props.searchQuery;
 		if (!q) return allLines();
-		return allLines().filter((line) => lineMatchesQuery(line, q));
+		const needle = q.toLowerCase();
+		return allLines().filter((line) => lineMatchesNeedle(line, needle));
 	});
 
 	const lineBlocks = createMemo(() => groupLineBlocks(displayedLines()));
