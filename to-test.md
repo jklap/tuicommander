@@ -23,6 +23,23 @@ elements of screen rows that did not change. Vite reloads this without a restart
 - [ ] **[MANUAL]** Ask the AI chat a question with a long answer (a few thousand words) and confirm the panel stays responsive to the end — it used to slow down progressively as the answer grew. Watch that code fences and tables still render correctly as they stream in.
 - [ ] **[MANUAL]** Open a session on a phone or at `:9877` in a narrow browser window, run something with a busy full-screen redraw (`htop`, a TUI agent), and confirm the output stays smooth and the search filter reacts instantly while output flows.
 
+## OSC 133 and OSC 7 cwd in browser mode (2026-08-18, **Rust change — needs `make dev` restart**) — story `623-d369`
+
+Both markers reached the desktop `AppHandle` only, so a browser/PWA client had no command
+blocks, no gutter marks, no Cmd+Up/Down navigation and a cwd frozen at session start. They
+are dual-emitted now and carried on the `?format=grid` WS the canvas already holds. Nothing
+below works against the currently running binary.
+
+- [x] The grid WS frame uses the same field names as the desktop event, `exit_code` included. _(verified: Rust `grid_ws_osc133_frame_matches_the_desktop_event_payload` compares against `serde_json::to_value(Osc133Event)`, mutation-proven by renaming the field)_
+- [x] A `D` marker with no exit code keeps `exit_code: null` rather than dropping the key. _(verified: Rust `grid_ws_osc133_frame_keeps_a_null_exit_code`)_
+- [x] The cwd frame is the `{ cwd }` object on both transports, so the handler needs no branch. _(verified: Rust `grid_ws_cwd_frame_carries_the_same_object_as_the_desktop_event` + `canvasTerminalTransport.test.ts`, mutation-proven)_
+- [x] Frames with no grid consumer are still dropped rather than forwarded. _(verified: Rust `grid_ws_drops_events_it_has_no_consumer_for`)_
+- [ ] **After a `make dev` restart**: open a session at `:9877` in a browser, run a few commands, and confirm command blocks appear — gutter marks beside each prompt, and Cmd+Up/Down jumping between them.
+- [ ] **After a `make dev` restart**: in the same browser session, `cd` into a subdirectory and confirm the context bar's path follows. It used to stay pinned to the launch directory forever.
+- [ ] **After a `make dev` restart**: run a failing command (`false`) in browser mode and confirm its block is marked as failed — that is the `exit_code` path, and a field-name drift would silently render every command successful.
+- [ ] **After a `make dev` restart**: confirm desktop still works unchanged — the desktop emit was kept, not replaced.
+- [ ] **[HUMAN]** Compare the gutter marks side by side, browser vs desktop, on the same session. Canvas painting is not observable over HTTP, so only a visual check proves the marks land on the same rows.
+
 ## Desktop PTY activity pulse (2026-08-17, **Rust change — needs `make dev` restart**) — story `625-56b0`
 
 `cda39f31` deleted the `pty-output` emit and left the listener, so desktop lost every

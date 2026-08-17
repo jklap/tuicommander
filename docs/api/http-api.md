@@ -252,6 +252,33 @@ When `?format=log` is specified, the connection streams VT100-extracted log line
 - While running: polls every 200ms and sends new lines batched by offset
 - PTY input passthrough is still available (write text/binary frames to send to PTY)
 
+#### WebSocket format=grid
+
+```
+WS /sessions/:id/stream?format=grid
+```
+
+The transport behind `CanvasTerminal` in browser/PWA mode. Binary frames carry the
+serialised terminal grid; JSON text frames carry the side-channel events the canvas
+needs, each one the desktop Tauri payload plus a `type` key:
+
+```json
+{"type": "osc133", "marker": "D", "line": 42, "exit_code": 0}
+{"type": "cwd", "cwd": "/Users/me/project"}
+{"type": "watcher-lines", "session_id": "abc", "lines": [{"text": "clean line", "matched_ids": ["<client_id>/w0"]}]}
+```
+
+- `osc133` — Shell-integration marker (`A` prompt, `B` command start, `C` output start,
+  `D` command end). Drives command blocks, gutter marks and Cmd+Up/Down navigation.
+  `exit_code` is `null` for every marker except `D`, and `null` on a `D` without one.
+  The field is `exit_code`, not `exitCode` — it is serialised from the same Rust struct
+  as the desktop `pty-osc133-{id}` event, and the two must not drift
+- `cwd` — OSC 7 working-directory change. Same `{ cwd }` object as the desktop event
+- `watcher-lines` — See the frame list above; carried here as well as on the raw stream
+
+Frames the server has no grid consumer for are dropped rather than forwarded, so this
+socket does not carry `output`, `parsed` or the activity pulse.
+
 ### Server-Sent Events (SSE)
 
 ```
@@ -291,6 +318,9 @@ the server is back to the filter the connection was opened with.
 | `head-changed` | `{repo_path, branch}` | Git HEAD changed (branch switch) |
 | `pty-parsed` | `{session_id, parsed}` | Structured output event from PTY parser |
 | `pty-exit` | `{session_id}` | PTY process exited |
+| `pty-activity` | `{session_id}` | Bytes are flowing from the PTY. Payload-free pulse, at most one per second — a dropped pulse loses nothing |
+| `pty-osc133` | `{session_id, marker, line, exit_code}` | Shell-integration marker (OSC 133). `exit_code` is `null` except on a `D` marker that reported one |
+| `pty-cwd` | `{session_id, cwd}` | Working directory changed (OSC 7) |
 | `plugin-watcher-lines` | `{session_id, lines}` | A batch of assembled PTY lines for the plugin OutputWatchers; each line is `{text, matched_ids}`, where `text` is the cleaned text the match was made on |
 | `plugin-changed` | `{plugin_ids}` | Plugin(s) installed/removed/updated |
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
