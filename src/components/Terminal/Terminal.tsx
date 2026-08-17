@@ -193,7 +193,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 	// synchronous try/catch that cannot see the rejection.
 	let unlistenParsed: (() => unknown) | undefined;
 	let unlistenKitty: (() => unknown) | undefined;
-	let unlistenOsc133: (() => unknown) | undefined;
 	let unlistenTitle: (() => unknown) | undefined;
 	let unlistenClipboardStore: (() => unknown) | undefined;
 
@@ -663,20 +662,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				return;
 			}
 
-			// Listen for OSC 133 shell integration markers from Rust (native renderer)
-			unlistenOsc133 = await listen<{ marker: string; line: number; exit_code: number | null }>(
-				`pty-osc133-${targetSessionId}`,
-				(event) => {
-					if (disposed) return;
-					const { marker, line, exit_code } = event.payload;
-					terminalsStore.handleOsc133(props.id, marker, line, exit_code ?? undefined);
-				},
-			);
-			if (disposed) {
-				safeUnlisten(unlistenOsc133);
-				unlistenOsc133 = undefined;
-				return;
-			}
+			// No `pty-osc133` listener here: CanvasTerminal subscribes to the same
+			// event through the transport, and is the only subscriber.
+			// A second desktop delivery would reach a sink that is not idempotent
+			// for the `A` marker — `handleOsc133` finalizes the block the first
+			// delivery had just installed, inventing one empty command block per
+			// prompt. `agent-block` above still feeds the same sink, but that is a
+			// different source for agents with no shell integration, not a copy.
 
 			// Listen for OSC 0/2 title changes from Rust (native renderer)
 			unlistenTitle = await listen<string>(`pty-title-${targetSessionId}`, (event) => {
@@ -801,8 +793,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 					unlistenParsed = undefined;
 					safeUnlisten(unlistenKitty);
 					unlistenKitty = undefined;
-					safeUnlisten(unlistenOsc133);
-					unlistenOsc133 = undefined;
 					safeUnlisten(unlistenTitle);
 					unlistenTitle = undefined;
 					safeUnlisten(unlistenClipboardStore);
@@ -944,8 +934,6 @@ export const Terminal: Component<TerminalProps> = (props) => {
 		unlistenParsed = undefined;
 		safeUnlisten(unlistenKitty);
 		unlistenKitty = undefined;
-		safeUnlisten(unlistenOsc133);
-		unlistenOsc133 = undefined;
 		safeUnlisten(unlistenTitle);
 		unlistenTitle = undefined;
 		safeUnlisten(unlistenClipboardStore);

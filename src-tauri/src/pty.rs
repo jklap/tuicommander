@@ -4047,15 +4047,9 @@ struct ChunkProcessor {
     /// When a new ESC[nA arrives with n < last_cursor_up_n, content has shrunk
     /// and we need a clear to prevent ghost artifacts.
     last_cursor_up_n: u16,
-    /// Last VtLogBuffer total_lines observed — used to detect growth and emit
-    /// `pty-vt-log-total-{session_id}` for the scrollback overlay.
+    /// Last VtLogBuffer total_lines observed — distinguishes a chunk that
+    /// scrolled in new output from one that only repainted existing rows.
     last_vt_log_total: usize,
-    /// Last VtLogBuffer oldest_offset observed — emit when buffer rotation
-    /// advances oldest so the frontend can invalidate stale chunks proactively.
-    last_vt_log_oldest: usize,
-    /// Last time we emitted a `pty-vt-log-total-*` event. Throttled to ~100 ms
-    /// to avoid flooding the frontend during heavy output.
-    last_vt_log_emit: Option<std::time::Instant>,
     /// Command text captured on OSC 133 C — used when the matching D arrives
     /// to build a `CommandOutcome`. Cleared after D.
     pending_command: Option<String>,
@@ -4096,8 +4090,6 @@ impl ChunkProcessor {
             alt_buffer_needs_clear: false,
             last_cursor_up_n: 0,
             last_vt_log_total: 0,
-            last_vt_log_oldest: 0,
-            last_vt_log_emit: None,
             pending_command: None,
             pending_command_started: None,
             tuic_session,
@@ -4393,12 +4385,11 @@ impl ChunkProcessor {
             .and_then(|s| s.agent_type.clone());
 
         // Feed raw data (post-kitty-strip) into VT100 log buffer.
-        // Also capture the post-process `total_lines` and `oldest_offset` so
-        // we can emit a throttled growth/rotation event for the scrollback overlay.
+        // `total_lines` comes back with it: a chunk that grew the buffer produced
+        // real output, a chunk that did not merely repainted the screen.
         let (
             changed_rows,
             vt_log_total,
-            vt_log_oldest,
             term_events,
             screen_cache,
             screen_activity,
@@ -4416,7 +4407,6 @@ impl ChunkProcessor {
                 flag.store(vt.is_sync_update_active(), Ordering::Relaxed);
             }
             let total = vt.total_lines();
-            let oldest = vt.oldest_offset();
             let hist = vt.grid_history_size();
             let tevts = vt.grid_drain_events();
             // Did ANYTHING on screen move? Taken before the chrome filter below,
@@ -4475,7 +4465,6 @@ impl ChunkProcessor {
             (
                 changed,
                 Some(total),
-                Some(oldest),
                 tevts,
                 screen,
                 screen_activity,
@@ -4487,7 +4476,6 @@ impl ChunkProcessor {
         } else {
             (
                 Vec::new(),
-                None,
                 None,
                 Vec::new(),
                 None,
@@ -4507,28 +4495,17 @@ impl ChunkProcessor {
             .map(|t| t > self.last_vt_log_total)
             .unwrap_or(false);
 
-        // Emit scrollback-overlay growth/rotation event (throttled to 100ms).
-        // Frontend listens to `pty-vt-log-total-{session_id}` and updates
-        // cache.total and cache.oldest for the scrollback overlay.
-        if let Some(new_total) = vt_log_total
-            && new_total > self.last_vt_log_total
-        {
-            let should_emit = self
-                .last_vt_log_emit
-                .map(|t| t.elapsed() >= std::time::Duration::from_millis(100))
-                .unwrap_or(true);
-            if should_emit {
-                #[cfg(feature = "desktop")]
-                if let Some(a) = state.app_handle.read().as_ref() {
-                    let _ = a.emit(&format!("pty-vt-log-total-{session_id}"), new_total);
-                }
-                self.last_vt_log_emit = Some(std::time::Instant::now());
-            }
-            self.last_vt_log_total = new_total;
-        }
-        // Update oldest tracking (no event needed — frontend reads it on chunk fetch)
-        if let Some(new_oldest) = vt_log_oldest {
-            self.last_vt_log_oldest = new_oldest;
+        // Nothing is emitted for scrollback growth. There was a throttled
+        // `pty-vt-log-total-{session_id}` here whose comment claimed the frontend
+        // listened for it and refreshed the scrollback overlay; no such listener
+        // ever existed on either transport. `Manager::emit` serializes the
+        // payload before it consults the listener registry, so a dead event is
+        // not free — and a comment describing a consumer that is not there costs
+        // more, because the next reader builds the frontend half rather than
+        // deleting the emit. The overlay reads the totals when it fetches a
+        // chunk. `last_vt_log_total` stays: `vt_log_grew` above is a real reader.
+        if let Some(new_total) = vt_log_total {
+            self.last_vt_log_total = self.last_vt_log_total.max(new_total);
         }
 
         // Handle terminal events from alacritty (title, clipboard, PTY writes, OSC 133, TUIC)
@@ -4600,6 +4577,13 @@ impl ChunkProcessor {
                             .has_osc133_integration
                             .insert(session_id.to_string(), ());
                         self.handle_osc133_event(command, &params, session_id, state);
+                        // DEFERRED (2026-08-17) — IPC/HTTP parity gap: this push has no
+                        // `AppEvent` variant, so the grid WS never carries it and a
+                        // browser/PWA client gets no command blocks, no gutter marks and
+                        // no Cmd+Up/Down navigation. Same for `pty-cwd` below. Bridging
+                        // it needs a variant plus a dual-emit and a WS arm in
+                        // `mcp_http/session.rs`; out of scope for the listener cleanup
+                        // that landed here.
                         #[cfg(feature = "desktop")]
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(
@@ -5451,7 +5435,6 @@ struct ParentLifecycleDispatch {
 
 type VtProcessResult = (
     Vec<crate::state::ChangedRow>,
-    Option<usize>,
     Option<usize>,
     Vec<crate::terminal_grid::TermEvent>,
     Option<Vec<String>>,

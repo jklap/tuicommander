@@ -2013,6 +2013,46 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		});
 		installFrameTimingDebugHook();
 		acquireCache();
+
+		// Session events FIRST — before the font load below, not after the whole
+		// setup. These are fire-and-forget pushes: an OSC 133 prompt marker or a
+		// watcher line that lands while its listener is missing is gone, and the
+		// shell prints its first prompt as soon as the PTY spawns, while
+		// `document.fonts.load` may still have a cold-cache round trip to make.
+		// The grid subscription stays below: frames replay on subscribe.
+		transport = createTransport(props.sessionId);
+		invokeRef = (cmd, args) => transport!.invoke(cmd, args);
+		// Teardown covering what exists right now: unmounting during the font load
+		// below must not leave these listeners attached. Widened to the DOM
+		// listeners further down, once those exist.
+		unsubscribe = () => transport?.unsubscribe();
+		try {
+			await transport.onEvent("cwd", (payload) => {
+				const cwd = (payload as { cwd: string }).cwd ?? (payload as string);
+				terminalsStore.update(props.terminalId, { cwd });
+				props.onCwdChange?.(props.terminalId, cwd);
+			});
+			await transport.onEvent("osc133", (payload) => {
+				const { marker, line, exit_code } = payload as { marker: string; line: number; exit_code: number | null };
+				terminalsStore.handleOsc133(props.terminalId, marker, line, exit_code ?? undefined);
+			});
+			// Lines assembled by the Rust reader, carrying the ids it already
+			// matched. No raw stream is scanned here any more.
+			await transport.onEvent("watcher-lines", (payload) => {
+				const { lines } = payload as { lines: Array<{ text: string; matched_ids: string[] }> };
+				pluginRegistry.handleWatcherLines(props.sessionId, lines);
+			});
+		} catch (e) {
+			appLogger.error("terminal", "Failed to subscribe to terminal session events", {
+				sessionId: props.sessionId,
+				error: e,
+			});
+		}
+		if (!alive) {
+			transport.unsubscribe();
+			return;
+		}
+
 		const fontFamily = settingsStore.getFontFamily();
 		const fontSize = settingsStore.state.defaultFontSize;
 		const fontWeight = settingsStore.state.fontWeight;
@@ -2024,6 +2064,14 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			// real powerline glyph here U+E0B0 & co. render with a system fallback.
 			document.fonts.load(`400 ${fontSize}px "Symbols Nerd Font Mono"`, "\ue0b0"),
 		]).catch(() => document.fonts.ready);
+		// Unmounted while the fonts were loading. onCleanup has already run — it
+		// tore down the transport, the only thing installed at that point — and
+		// everything below installs observers and document listeners, then
+		// overwrites `unsubscribe` with a disposer nobody will call again. Without
+		// this the disposed component is retained for the page lifetime and its
+		// callbacks keep firing. Font loading is exactly the window a repo switch
+		// or a fast tab close lands in.
+		if (!alive) return;
 		remeasure();
 
 		resizeObserver = new ResizeObserver(() => {
@@ -2829,10 +2877,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		bindings.listen(document, "mousemove", onScrollDragMove);
 		bindings.listen(document, "mouseup", onScrollDragUp);
 
-		// Assign the DOM-listener cleanup NOW, before the transport.subscribe() await
-		// below. If the component unmounts mid-await, onCleanup runs while `unsubscribe`
-		// would otherwise still be undefined — leaking all four document listeners for
-		// the page lifetime. The success path augments this with transport.unsubscribe().
+		// Widen the cleanup NOW, before the transport.subscribe() await below. If the
+		// component unmounts mid-await, onCleanup runs while `unsubscribe` would
+		// otherwise still cover only the transport — leaking all four document
+		// listeners for the page lifetime.
 		const detachDomListeners = () => {
 			bindings.dispose();
 			if (scrollRafId) cancelAnimationFrame(scrollRafId);
@@ -2840,7 +2888,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			resetSmoothScroll();
 			stopSelectionScroll();
 		};
-		unsubscribe = detachDomListeners;
+		unsubscribe = () => {
+			detachDomListeners();
+			transport?.unsubscribe();
+		};
 
 		// Touch input (mobile/tablet)
 		cleanupTouch = installTouchHandlers(canvasRef, touchTextareaRef, {
@@ -2869,40 +2920,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			},
 		});
 
-		// Subscribe to grid channel via transport abstraction
+		// Subscribe to the grid channel. The transport and its session-event
+		// listeners already exist — installed before the font load above.
 		try {
-			transport = createTransport(props.sessionId);
-			invokeRef = (cmd, args) => transport!.invoke(cmd, args);
-			// Session events BEFORE the grid subscription: an event that lands
-			// while the listener is still being installed is gone — nothing
-			// replays a watcher line.
-			await transport.onEvent("cwd", (payload) => {
-				const cwd = (payload as { cwd: string }).cwd ?? (payload as string);
-				terminalsStore.update(props.terminalId, { cwd });
-				props.onCwdChange?.(props.terminalId, cwd);
-			});
-			await transport.onEvent("osc133", (payload) => {
-				const { marker, line, exit_code } = payload as { marker: string; line: number; exit_code: number | null };
-				terminalsStore.handleOsc133(props.terminalId, marker, line, exit_code ?? undefined);
-			});
-			// Lines assembled by the Rust reader, carrying the ids it already
-			// matched. No raw stream is scanned here any more.
-			await transport.onEvent("watcher-lines", (payload) => {
-				const { lines } = payload as { lines: Array<{ text: string; matched_ids: string[] }> };
-				pluginRegistry.handleWatcherLines(props.sessionId, lines);
-			});
 			await transport.subscribe((data) => onFrame(data));
 			if (!alive) {
 				// Unmounted while subscribe() was in flight. onCleanup already ran and
-				// invoked the DOM-only unsubscribe assigned before the await — but the
-				// transport subscription is now live and would leak. Tear it down here.
+				// tore down what existed then — but the grid subscription only became
+				// live on the line above and would leak. Tear it down here.
 				transport.unsubscribe();
 				return;
 			}
-			unsubscribe = () => {
-				detachDomListeners();
-				transport?.unsubscribe();
-			};
 			// Paint the current grid now. The browser-mode WS subscribe (unlike the
 			// Tauri event channel) does not replay the current frame, so an idle
 			// session with no pending output would render nothing and leave the
@@ -2915,8 +2943,9 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				sessionId: props.sessionId,
 				error: e,
 			});
-			// `unsubscribe` is already detachDomListeners (assigned before the await),
-			// but the event listeners attached above it are not covered by it.
+			// `unsubscribe` already covers this on unmount; drop the session-event
+			// listeners now rather than keeping them alive on a terminal that will
+			// never paint.
 			transport?.unsubscribe();
 		}
 
