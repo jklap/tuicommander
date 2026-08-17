@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
-import { listen } from "../../invoke";
+import { emitLocalEvent, listen } from "../../invoke";
 import type { ContentSearchBatch } from "../../types/fs";
-import { startContentSearch } from "../../utils/contentSearch";
+import { listenContentSearch, newContentSearchId, startContentSearch } from "../../utils/contentSearch";
 
 const invokeMock = vi.hoisted(() => vi.fn());
 
@@ -42,9 +42,13 @@ describe("startContentSearch", () => {
 		const batches: ContentSearchBatch[] = [];
 		const unlisten = await listen<ContentSearchBatch>("content-search-batch", (e) => batches.push(e.payload));
 
-		await startContentSearch("search_content", { repoPath: "/repo", query: "needle" });
+		await startContentSearch("search_content", { repoPath: "/repo", query: "needle" }, "cs-test");
 
-		expect(invokeMock).toHaveBeenCalledWith("search_content", { repoPath: "/repo", query: "needle" });
+		expect(invokeMock).toHaveBeenCalledWith("search_content", {
+			repoPath: "/repo",
+			query: "needle",
+			searchId: "cs-test",
+		});
 		expect(batches).toHaveLength(1);
 		expect(batches[0].matches).toEqual(RESULT.matches);
 		expect(batches[0].is_final).toBe(true);
@@ -58,7 +62,7 @@ describe("startContentSearch", () => {
 		const batches: ContentSearchBatch[] = [];
 		const unlisten = await listen<ContentSearchBatch>("content-search-batch", (e) => batches.push(e.payload));
 
-		await startContentSearch("search_content", { repoPath: "/repo", query: "nothing" });
+		await startContentSearch("search_content", { repoPath: "/repo", query: "nothing" }, "cs-test");
 
 		expect(batches).toHaveLength(1);
 		expect(batches[0].matches).toEqual([]);
@@ -71,7 +75,7 @@ describe("startContentSearch", () => {
 		const batches: ContentSearchBatch[] = [];
 		const unlisten = await listen<ContentSearchBatch>("content-search-batch", (e) => batches.push(e.payload));
 
-		await startContentSearch("search_content_all", { query: "needle" });
+		await startContentSearch("search_content_all", { query: "needle" }, "cs-test");
 
 		expect(batches[0].repos_pending).toBe(2);
 		expect(batches[0].repos_searched).toBe(5);
@@ -88,7 +92,7 @@ describe("startContentSearch", () => {
 		const unlisten = await listen<ContentSearchBatch>("content-search-batch", (e) => batches.push(e.payload));
 		setTauriEnv(true);
 
-		await startContentSearch("search_content", { repoPath: "/repo", query: "needle" });
+		await startContentSearch("search_content", { repoPath: "/repo", query: "needle" }, "cs-test");
 
 		expect(invokeMock).toHaveBeenCalledOnce();
 		expect(batches).toHaveLength(0);
@@ -97,6 +101,69 @@ describe("startContentSearch", () => {
 
 	it("propagates a transport failure to the caller", async () => {
 		invokeMock.mockRejectedValue(new Error("boom"));
-		await expect(startContentSearch("search_content", { repoPath: "/repo", query: "x" })).rejects.toThrow("boom");
+		await expect(startContentSearch("search_content", { repoPath: "/repo", query: "x" }, "cs-test")).rejects.toThrow(
+			"boom",
+		);
+	});
+
+	it("stamps the synthesized browser-mode batch with the caller's id", async () => {
+		invokeMock.mockResolvedValue(RESULT);
+		const batches: ContentSearchBatch[] = [];
+		const unlisten = await listen<ContentSearchBatch>("content-search-batch", (e) => batches.push(e.payload));
+
+		await startContentSearch("search_content", { repoPath: "/repo", query: "needle" }, "cs-mine");
+
+		expect(batches[0].search_id).toBe("cs-mine");
+		unlisten();
+	});
+});
+
+describe("listenContentSearch", () => {
+	beforeEach(() => {
+		setTauriEnv(false);
+		invokeMock.mockReset();
+	});
+
+	// One global event, three listening panels. Without the id, the palette's
+	// batches append to the file browser's list and its `is_final` stops the
+	// wrong spinner.
+	it("delivers only the batches carrying its own search id", async () => {
+		const seen: ContentSearchBatch[] = [];
+		const unlisten = await listenContentSearch("cs-mine", { onBatch: (b) => seen.push(b) });
+
+		emitLocalEvent("content-search-batch", { ...RESULT, search_id: "cs-theirs", is_final: true });
+		emitLocalEvent("content-search-batch", { ...RESULT, search_id: "cs-mine", is_final: true });
+
+		expect(seen).toHaveLength(1);
+		expect(seen[0].search_id).toBe("cs-mine");
+		unlisten();
+	});
+
+	it("delivers only the errors carrying its own search id", async () => {
+		const seen: string[] = [];
+		const unlisten = await listenContentSearch("cs-mine", {
+			onBatch: () => {},
+			onError: (message) => seen.push(message),
+		});
+
+		emitLocalEvent("content-search-error", { search_id: "cs-theirs", message: "not mine" });
+		emitLocalEvent("content-search-error", { search_id: "cs-mine", message: "mine" });
+
+		expect(seen).toEqual(["mine"]);
+		unlisten();
+	});
+
+	it("stops delivering once unsubscribed", async () => {
+		const seen: ContentSearchBatch[] = [];
+		const unlisten = await listenContentSearch("cs-mine", { onBatch: (b) => seen.push(b), onError: () => {} });
+		unlisten();
+
+		emitLocalEvent("content-search-batch", { ...RESULT, search_id: "cs-mine", is_final: true });
+
+		expect(seen).toHaveLength(0);
+	});
+
+	it("hands out a fresh id per search", () => {
+		expect(newContentSearchId()).not.toBe(newContentSearchId());
 	});
 });

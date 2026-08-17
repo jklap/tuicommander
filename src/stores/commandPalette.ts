@@ -1,8 +1,8 @@
 import { createStore } from "solid-js/store";
-import { invoke, listen } from "../invoke";
+import { invoke } from "../invoke";
 import type { TerminalMatch } from "../types";
-import type { ContentMatch, ContentSearchBatch, DirEntry } from "../types/fs";
-import { startContentSearch } from "../utils/contentSearch";
+import type { ContentMatch, DirEntry } from "../types/fs";
+import { listenContentSearch, newContentSearchId, startContentSearch } from "../utils/contentSearch";
 import { appLogger } from "./appLogger";
 import { repositoriesStore } from "./repositories";
 import { terminalsStore } from "./terminals";
@@ -73,7 +73,6 @@ function createCommandPaletteStore() {
 	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 	let cancelled = false;
 	let unlistenBatch: (() => void) | null = null;
-	let unlistenError: (() => void) | null = null;
 
 	function cleanupSearch(): void {
 		cancelled = true;
@@ -83,8 +82,6 @@ function createCommandPaletteStore() {
 		}
 		unlistenBatch?.();
 		unlistenBatch = null;
-		unlistenError?.();
-		unlistenError = null;
 		setState({
 			contentResults: [],
 			contentSearching: false,
@@ -136,27 +133,28 @@ function createCommandPaletteStore() {
 		});
 
 		// Subscribe to streaming results BEFORE invoking search
+		const searchId = newContentSearchId();
 		try {
-			unlistenBatch = await listen<ContentSearchBatch>("content-search-batch", (event) => {
-				if (cancelled) return;
-				const batch = event.payload;
-				setState("contentResults", (prev) => {
-					if (prev.length >= MAX_CONTENT_RESULTS) return prev;
-					const combined = [...prev, ...batch.matches];
-					return combined.slice(0, MAX_CONTENT_RESULTS);
-				});
-				setState({
-					contentReposPending: batch.repos_pending ?? 0,
-					contentReposSearched: batch.repos_searched ?? 0,
-				});
-				if (batch.is_final) {
-					setState("contentSearching", false);
-				}
-			});
-
-			unlistenError = await listen<string>("content-search-error", (event) => {
-				if (cancelled) return;
-				setState({ contentError: event.payload, contentSearching: false });
+			unlistenBatch = await listenContentSearch(searchId, {
+				onBatch: (batch) => {
+					if (cancelled) return;
+					setState("contentResults", (prev) => {
+						if (prev.length >= MAX_CONTENT_RESULTS) return prev;
+						const combined = [...prev, ...batch.matches];
+						return combined.slice(0, MAX_CONTENT_RESULTS);
+					});
+					setState({
+						contentReposPending: batch.repos_pending ?? 0,
+						contentReposSearched: batch.repos_searched ?? 0,
+					});
+					if (batch.is_final) {
+						setState("contentSearching", false);
+					}
+				},
+				onError: (message) => {
+					if (cancelled) return;
+					setState({ contentError: message, contentSearching: false });
+				},
 			});
 		} catch (err) {
 			appLogger.error("app", "Failed to subscribe to content search events", err);
@@ -167,14 +165,18 @@ function createCommandPaletteStore() {
 		if (cancelled) return;
 
 		const invocation = allRepos
-			? startContentSearch("search_content_all", { query: searchQuery, caseSensitive: false })
-			: startContentSearch("search_content", {
-					repoPath,
-					query: searchQuery,
-					caseSensitive: false,
-					useRegex: false,
-					wholeWord: false,
-				});
+			? startContentSearch("search_content_all", { query: searchQuery, caseSensitive: false }, searchId)
+			: startContentSearch(
+					"search_content",
+					{
+						repoPath,
+						query: searchQuery,
+						caseSensitive: false,
+						useRegex: false,
+						wholeWord: false,
+					},
+					searchId,
+				);
 		invocation.catch((err) => {
 			if (!cancelled) {
 				appLogger.error("app", "Content search failed", err);
@@ -291,8 +293,6 @@ function createCommandPaletteStore() {
 			cancelled = true;
 			unlistenBatch?.();
 			unlistenBatch = null;
-			unlistenError?.();
-			unlistenError = null;
 
 			if (nextQuery.length >= CONTENT_SEARCH_MIN_CHARS) {
 				setState("contentSearching", false);
@@ -326,8 +326,6 @@ function createCommandPaletteStore() {
 		cancelled = true;
 		unlistenBatch?.();
 		unlistenBatch = null;
-		unlistenError?.();
-		unlistenError = null;
 		if (nextQuery.length >= CONTENT_SEARCH_MIN_CHARS) {
 			setState({ contentResults: [], contentError: null });
 			triggerContentSearch(nextQuery);

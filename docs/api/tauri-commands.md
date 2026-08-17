@@ -229,11 +229,11 @@ Conversational AI companion with terminal context injection. See [`docs/user-gui
 
 ### Chat Registry (`ai_chat_registry.rs`)
 
-Cross-window state synchronization for the AI Chat panel. The registry is the Rust-side source of truth; frontends subscribe via `Channel<ChatEvent>` for real-time projection.
+Cross-window state synchronization for the AI Chat panel, **as designed — not as it runs.** Nothing calls `fan_out` or any `ConversationState` setter, so the registry holds the empty default for every chat and no event is ever published. The frontend consumer was removed in story `600-d664`. Every command below still works; they just have no producer behind them, and the AI Chat panel is not a client of any of them. Wire a producer before treating this as a source of truth.
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `chat_subscribe` | `chat_id, on_event: Channel<ChatEvent>` | `{ subscriptionId, snapshot }` | Subscribe to a chat's state changes. Returns current snapshot + subscription ID. Events: `snapshot`, `chunk { delta }`, `error { message }`, `cleared` |
+| `chat_subscribe` | `chat_id, on_event: Channel<ChatEvent>` | `{ subscriptionId, snapshot }` | Subscribe to a chat's state changes. Returns current snapshot + subscription ID. Events: `snapshot`, `chunk { delta }`, `error { message }`, `cleared`. **No frontend caller**: `ChatRegistry` has no producer, so the snapshot is always the empty default and no event ever follows. The AI chat panel stopped subscribing — applying that snapshot wiped the history it had just loaded. Wire a producer before using this. |
 | `chat_unsubscribe` | `chat_id, subscription_id` | `()` | Remove a subscriber (normal cleanup path) |
 | `chat_get_state` | `chat_id` | `ConversationStateSnapshot` | Read-only snapshot of a chat's current state |
 | `chat_push_message` | `chat_id, role, content` | `()` | Push a message to the registry and fan-out to subscribers |
@@ -426,8 +426,8 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 | `fs_transfer_paths` | `destDir, paths, mode ("move"\|"copy"), allowRecursive` | `TransferResult { moved, skipped, errors, needs_confirm }` | Move/copy OS paths into a destination directory. Skips silently on name conflicts; returns `needs_confirm=true` (no-op) when a source is a directory and `allowRecursive=false`. Used by the drag-drop handler when dropping files onto a folder in the file browser. |
 | `add_to_gitignore` | `path, pattern` | `()` | Add pattern to .gitignore |
 | `search_files` | `path, query` | `Vec<SearchResult>` | Search files by name in directory |
-| `search_content` | `repoPath, query, caseSensitive?, useRegex?, wholeWord?, limit?` | `()` | Full-text content search; streams results progressively via `content-search-batch` events. Binary files and files >1 MB are skipped. Supports cancellation. |
-| `search_content_all` | `query, caseSensitive?, limit?` | `()` | Cross-repo BM25 content search over every ready index; streams via the same `content-search-batch` events with each match tagged `repo_path`. Only repos whose index is built participate (depends on Content Indexing strategy). Shares the cancellation slot with `search_content`. |
+| `search_content` | `repoPath, query, searchId, caseSensitive?, useRegex?, wholeWord?, limit?` | `()` | Full-text content search; streams results progressively via `content-search-batch` events, each echoing `searchId`. Binary files and files >1 MB are skipped. Supports cancellation. |
+| `search_content_all` | `query, searchId, caseSensitive?, limit?` | `()` | Cross-repo BM25 content search over every ready index; streams via the same `content-search-batch` events with each match tagged `repo_path` and every batch echoing `searchId`. Only repos whose index is built participate (depends on Content Indexing strategy). Shares the cancellation slot with `search_content`. |
 
 ## Plugin Management (`plugins.rs`)
 

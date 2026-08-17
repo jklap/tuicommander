@@ -14,6 +14,7 @@ import { repositoriesStore } from "../stores/repositories";
 import { sidebarPluginStore } from "../stores/sidebarPluginStore";
 import { statusBarTicker } from "../stores/statusBarTicker";
 import { terminalsStore } from "../stores/terminals";
+import { randomId } from "../utils/randomId";
 import { sanitizeSvgIcon } from "../utils/sanitizeSvg";
 import { getShellFamily, sendCommand } from "../utils/sendCommand";
 import { dashboardRegistry } from "./dashboardRegistry";
@@ -79,16 +80,10 @@ function createPluginRegistry() {
 	// Identifies this frontend to the backend. A desktop window and a browser tab
 	// hold independent watcher sets, and watcher ids are per-frontend counters —
 	// without this they would collide and one client would fire the other's.
-	const clientId = newClientId();
+	const clientId = randomId("c");
 	// Orders the *mutations*, not the replies: two syncs can be in flight and the
 	// backend must ignore the older one. The same counter guards the replies here.
 	let watcherSyncSeq = 0;
-
-	function newClientId(): string {
-		const uuid = globalThis.crypto?.randomUUID?.();
-		// The id must not contain "/": the backend qualifies watcher ids with it.
-		return uuid ?? `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-	}
 
 	/**
 	 * Push the watcher set to Rust, which assembles PTY lines on the reader

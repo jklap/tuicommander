@@ -13,6 +13,7 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
 import { appLogger } from "./stores/appLogger";
 import { isTauri, rpc } from "./transport";
+import { randomId } from "./utils/randomId";
 
 type InvokeFn = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 
@@ -122,12 +123,7 @@ const _sseAttached = new Set<string>();
  * replays nothing, so a `repo-changed` in that gap leaves a panel stale until
  * something else happens to fire.
  */
-const _sseStreamId = newStreamId();
-
-function newStreamId(): string {
-	const uuid = globalThis.crypto?.randomUUID?.();
-	return uuid ?? `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
-}
+const _sseStreamId = randomId("s");
 
 /**
  * Open (or reopen) the shared stream, filtered to the registered event types.

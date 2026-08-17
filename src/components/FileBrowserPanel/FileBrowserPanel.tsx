@@ -509,43 +509,44 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		setContentStats({ filesSearched: 0, filesSkipped: 0, truncated: false });
 
 		let cancelled = false;
-		let unlistenBatch: (() => void) | null = null;
-		let unlistenError: (() => void) | null = null;
+		let unlistenSearch: (() => void) | null = null;
 
 		const timer = setTimeout(async () => {
 			if (cancelled) return;
 
-			// Set up batch listener before starting the search
 			try {
-				const batchPromise = fb.onContentSearchBatch((batch) => {
-					if (cancelled) return;
-					appendContentMatches(batch.matches);
-					setContentStats({
-						filesSearched: batch.files_searched,
-						filesSkipped: batch.files_skipped,
-						truncated: batch.truncated,
-					});
-					if (batch.is_final) {
-						setContentSearching(false);
-					}
-				});
-				const errorPromise = fb.onContentSearchError((err) => {
-					if (cancelled) return;
-					appLogger.error("app", "Content search error", err);
-					setContentSearching(false);
-				});
-
-				const [batchUn, errorUn] = await Promise.all([batchPromise, errorPromise]);
-				unlistenBatch = batchUn;
-				unlistenError = errorUn;
-
+				// Subscribing and starting are one call: they share the search's
+				// correlation id, without which this panel would collect the
+				// command palette's matches too.
+				const unlisten = await fb.searchContent(
+					fsRoot,
+					q,
+					{
+						onBatch: (batch) => {
+							if (cancelled) return;
+							appendContentMatches(batch.matches);
+							setContentStats({
+								filesSearched: batch.files_searched,
+								filesSkipped: batch.files_skipped,
+								truncated: batch.truncated,
+							});
+							if (batch.is_final) {
+								setContentSearching(false);
+							}
+						},
+						onError: (err) => {
+							if (cancelled) return;
+							appLogger.error("app", "Content search error", err);
+							setContentSearching(false);
+						},
+					},
+					opts,
+				);
 				if (cancelled) {
-					unlistenBatch();
-					unlistenError();
+					unlisten();
 					return;
 				}
-
-				await fb.searchContent(fsRoot, q, opts);
+				unlistenSearch = unlisten;
 			} catch (err) {
 				if (!cancelled) {
 					appLogger.error("app", "Content search failed", err);
@@ -557,8 +558,7 @@ export const FileBrowserPanel: Component<FileBrowserPanelProps> = (props) => {
 		onCleanup(() => {
 			cancelled = true;
 			clearTimeout(timer);
-			unlistenBatch?.();
-			unlistenError?.();
+			unlistenSearch?.();
 		});
 	});
 
