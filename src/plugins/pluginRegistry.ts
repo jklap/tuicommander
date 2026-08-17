@@ -625,9 +625,9 @@ function createPluginRegistry() {
 				await invoke("delete_build_artifact", { path, repoPaths, pluginId });
 			},
 
-			async trimBuildArtifact(path: string, repoPaths: string[]): Promise<void> {
+			async trimBuildArtifact(path: string, repoPaths: string[]): Promise<number> {
 				requireCapability(pluginId, capabilities, "fs:delete");
-				await invoke("trim_build_artifact", { path, repoPaths, pluginId });
+				return await invoke<number>("trim_build_artifact", { path, repoPaths, pluginId });
 			},
 
 			async watchPath(

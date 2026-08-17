@@ -1024,6 +1024,10 @@ const BUILD_ARTIFACT_SCAN_MAX_READY: usize = 8;
 enum ArtifactScanCacheEntry {
     Running {
         invalidated: bool,
+        /// This walk began *because* something asked for fresh data — a forced
+        /// refresh, or a re-run after an invalidation. A forced caller can share
+        /// it; it cannot share a walk that started on its own schedule.
+        fresh: bool,
     },
     Ready {
         completed_at: Instant,
@@ -1067,7 +1071,19 @@ impl ArtifactScanCache {
                 Self::prune_expired(&mut entries, ttl);
             }
             match entries.get_mut(&key) {
-                Some(ArtifactScanCacheEntry::Running { .. }) => {
+                Some(ArtifactScanCacheEntry::Running { invalidated, fresh }) => {
+                    // A forced rescan asks for data that is fresh as of the
+                    // request. A walk that started on the TTL's schedule does not
+                    // answer that — it may have passed the directory before the
+                    // artifact appeared — so it is invalidated: its leader
+                    // discards that pass and runs again, and this wait ends on
+                    // the re-run rather than on a second concurrent walk. A walk
+                    // that is already a refresh is shared as it is; two clicks of
+                    // Rescan must not cost two walks.
+                    if force_refresh && !*fresh {
+                        *invalidated = true;
+                        *fresh = true;
+                    }
                     waited_for_running = true;
                     #[cfg(test)]
                     self.waiter_count
@@ -1089,7 +1105,10 @@ impl ArtifactScanCache {
                 _ => {
                     entries.insert(
                         key.clone(),
-                        ArtifactScanCacheEntry::Running { invalidated: false },
+                        ArtifactScanCacheEntry::Running {
+                            invalidated: false,
+                            fresh: force_refresh,
+                        },
                     );
                     break;
                 }
@@ -1105,11 +1124,18 @@ impl ArtifactScanCache {
                 Ok(result) => {
                     if matches!(
                         entries.get(&key),
-                        Some(ArtifactScanCacheEntry::Running { invalidated: true })
+                        Some(ArtifactScanCacheEntry::Running {
+                            invalidated: true,
+                            ..
+                        })
                     ) {
+                        // The re-run starts now, after whatever invalidated it.
                         entries.insert(
                             key.clone(),
-                            ArtifactScanCacheEntry::Running { invalidated: false },
+                            ArtifactScanCacheEntry::Running {
+                                invalidated: false,
+                                fresh: true,
+                            },
                         );
                         drop(entries);
                         continue;
@@ -1177,7 +1203,7 @@ impl ArtifactScanCache {
                 return true;
             }
             match entry {
-                ArtifactScanCacheEntry::Running { invalidated } => {
+                ArtifactScanCacheEntry::Running { invalidated, .. } => {
                     *invalidated = true;
                     true
                 }
@@ -1569,7 +1595,7 @@ pub async fn trim_build_artifact(
     repo_paths: Vec<String>,
     plugin_id: String,
     state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     trim_build_artifact_impl(&state, path, repo_paths, plugin_id).await
 }
 
@@ -1578,12 +1604,16 @@ pub(crate) async fn trim_build_artifact_impl(
     path: String,
     repo_paths: Vec<String>,
     plugin_id: String,
-) -> Result<(), String> {
+) -> Result<u64, String> {
     crate::plugins::check_plugin_capability(state, &plugin_id, "fs:delete")?;
     trim_build_artifact_inner(path, repo_paths).await
 }
 
-async fn trim_build_artifact_inner(path: String, repo_paths: Vec<String>) -> Result<(), String> {
+/// Returns the bytes actually reclaimed. The caller patches its cached totals
+/// with this instead of the `trimmable_bytes` of the last scan: a build between
+/// the scan and the trim moves that number, and subtracting the stale estimate
+/// publishes a total no measurement supports.
+async fn trim_build_artifact_inner(path: String, repo_paths: Vec<String>) -> Result<u64, String> {
     spawn_blocking_fs(move || {
         let (canonical, rule) = authorize_artifact(&path, &repo_paths)?;
 
@@ -1598,9 +1628,10 @@ async fn trim_build_artifact_inner(path: String, repo_paths: Vec<String>) -> Res
         if targets.is_empty() {
             // Already trimmed, or built with a layout the patterns don't cover.
             // Not an error — there is simply nothing to reclaim.
-            return Ok(());
+            return Ok(0);
         }
 
+        let mut reclaimed = 0u64;
         let mut failures = Vec::new();
         for target in &targets {
             // Belt and braces: `expand_trim_pattern` only ever descends from
@@ -1611,15 +1642,20 @@ async fn trim_build_artifact_inner(path: String, repo_paths: Vec<String>) -> Res
                 failures.push(format!("{}: outside the artifact dir", target.display()));
                 continue;
             }
+            // Measured before the removal, and only counted once the removal
+            // succeeded — a partial failure must not report bytes still on disk.
+            let (size, _) = measure_sizes(target, MAX_SIZE_DEPTH, &[], false);
             if let Err(e) = std::fs::remove_dir_all(target) {
                 failures.push(format!("{}: {e}", target.display()));
+            } else {
+                reclaimed += size;
             }
         }
 
         artifact_scan_cache().invalidate_path(&canonical);
 
         if failures.is_empty() {
-            Ok(())
+            Ok(reclaimed)
         } else {
             Err(format!("Failed to trim {}: {}", path, failures.join("; ")))
         }
@@ -2397,7 +2433,10 @@ mod tests {
         let running_key = vec![PathBuf::from("/running")];
         cache.entries.lock().insert(
             running_key.clone(),
-            ArtifactScanCacheEntry::Running { invalidated: false },
+            ArtifactScanCacheEntry::Running {
+                invalidated: false,
+                fresh: false,
+            },
         );
         for index in 0..(BUILD_ARTIFACT_SCAN_MAX_READY + 3) {
             cache.get_or_scan(
@@ -2420,6 +2459,58 @@ mod tests {
             entries.get(&running_key),
             Some(ArtifactScanCacheEntry::Running { .. })
         ));
+    }
+
+    /// A forced rescan must reflect the tree as it is when the user asks for it.
+    /// Waiting for a scan already in progress and returning its result does not:
+    /// that scan may have walked the directory before the artifact appeared.
+    #[test]
+    fn artifact_scan_cache_forced_refresh_never_returns_an_earlier_scan() {
+        let cache = Arc::new(ArtifactScanCache::new());
+        let entered = Arc::new(std::sync::Barrier::new(2));
+        let release = Arc::new(std::sync::Barrier::new(2));
+        let key = vec![PathBuf::from("/repo")];
+        let scans = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        // A slow scan is already running, and it is the one that misses the
+        // artifact created while it walks.
+        let running = {
+            let (cache, entered, release, key, scans) = (
+                Arc::clone(&cache),
+                Arc::clone(&entered),
+                Arc::clone(&release),
+                key.clone(),
+                Arc::clone(&scans),
+            );
+            std::thread::spawn(move || {
+                cache.get_or_scan(key, Duration::from_secs(60), false, || {
+                    if scans.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                        entered.wait();
+                        release.wait();
+                        return cached_artifact("stale");
+                    }
+                    cached_artifact("fresh")
+                })
+            })
+        };
+
+        entered.wait();
+        let forced = {
+            let (cache, key) = (Arc::clone(&cache), key.clone());
+            std::thread::spawn(move || {
+                cache.get_or_scan(key, Duration::from_secs(60), true, || {
+                    cached_artifact("unused")
+                })
+            })
+        };
+        cache.wait_until_waiter_is_blocked();
+        release.wait();
+
+        // The running scan is discarded and re-run, so both callers see the
+        // state after the forced request — with one extra walk, not two.
+        assert_eq!(running.join().unwrap()[0].path, "/fresh");
+        assert_eq!(forced.join().unwrap()[0].path, "/fresh");
+        assert_eq!(scans.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 
     #[test]
@@ -3072,6 +3163,52 @@ mod tests {
                 .contains_key(&cache_key),
             "successful deletion must invalidate the affected cached scan"
         );
+    }
+
+    /// The panel patches its cached total with what the trim returns. That
+    /// number must be what left the disk, not what the last scan estimated:
+    /// a build between the scan and the trim moves the estimate, and
+    /// subtracting it publishes a total no measurement supports.
+    #[test]
+    fn trim_build_artifact_inner_reports_the_bytes_it_removed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _guard = set_home_dir_override(tmp.path().to_path_buf());
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let target = rust_target_fixture(&repo);
+
+        let _config_guard = crate::config::set_config_dir_override(tmp.path().join("cfg"));
+        crate::config::save_repositories(serde_json::json!({
+            "repos": { repo.to_string_lossy().to_string(): {} }
+        }))
+        .unwrap();
+
+        let (before, _) = measure_sizes(&target, MAX_SIZE_DEPTH, &[], false);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let reclaimed = rt
+            .block_on(trim_build_artifact_inner(
+                target.to_string_lossy().to_string(),
+                vec![repo.to_string_lossy().to_string()],
+            ))
+            .expect("trim failed");
+        let (after, _) = measure_sizes(&target, MAX_SIZE_DEPTH, &[], false);
+
+        assert!(reclaimed > 0, "the fixture has intermediates to reclaim");
+        assert_eq!(
+            reclaimed,
+            before - after,
+            "the reported bytes must be the bytes that left the disk"
+        );
+
+        // Nothing left to separate: a second trim reclaims nothing rather than
+        // reporting the estimate again.
+        let again = rt
+            .block_on(trim_build_artifact_inner(
+                target.to_string_lossy().to_string(),
+                vec![repo.to_string_lossy().to_string()],
+            ))
+            .expect("second trim failed");
+        assert_eq!(again, 0);
     }
 
     #[test]
