@@ -97,3 +97,5 @@ PR.md
 __pycache__/
 *.pyc
 .wiz/
+.codex/**
+.mdkb/**
