@@ -297,26 +297,32 @@ function createPaneLayoutStore() {
 
 	// Debounced persistence — serializes tree+groups directly (no `this` needed)
 	let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function writeLayout(): void {
+		const groups: Record<string, PaneGroup> = {};
+		for (const key of Object.keys(state.groups)) {
+			const g = state.groups[key];
+			groups[key] = {
+				id: g.id,
+				tabs: g.tabs.map((t) => ({ id: t.id, type: t.type })),
+				activeTabId: g.activeTabId,
+			};
+		}
+		const snapshot: PaneLayoutState = {
+			root: tree ? structuredClone(tree) : null,
+			groups,
+			activeGroupId: state.activeGroupId,
+		};
+		invoke("save_pane_layout", { layout: snapshot }).catch((err: unknown) =>
+			appLogger.warn("app", "Failed to save pane layout", err),
+		);
+	}
+
 	function scheduleSave(): void {
 		if (saveTimer) clearTimeout(saveTimer);
 		saveTimer = setTimeout(() => {
-			const groups: Record<string, PaneGroup> = {};
-			for (const key of Object.keys(state.groups)) {
-				const g = state.groups[key];
-				groups[key] = {
-					id: g.id,
-					tabs: g.tabs.map((t) => ({ id: t.id, type: t.type })),
-					activeTabId: g.activeTabId,
-				};
-			}
-			const snapshot: PaneLayoutState = {
-				root: tree ? structuredClone(tree) : null,
-				groups,
-				activeGroupId: state.activeGroupId,
-			};
-			invoke("save_pane_layout", { layout: snapshot }).catch((err: unknown) =>
-				appLogger.warn("app", "Failed to save pane layout", err),
-			);
+			saveTimer = null;
+			writeLayout();
 		}, 500);
 	}
 
@@ -652,6 +658,13 @@ function createPaneLayoutStore() {
 
 	return {
 		...result,
+		/** Write a pending debounced save now — the app is going away. */
+		flushSave(): void {
+			if (!saveTimer) return;
+			clearTimeout(saveTimer);
+			saveTimer = null;
+			writeLayout();
+		},
 		_testCancelPendingSave(): void {
 			if (saveTimer) {
 				clearTimeout(saveTimer);

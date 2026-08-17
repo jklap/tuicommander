@@ -255,10 +255,32 @@ When `?format=log` is specified, the connection streams VT100-extracted log line
 ### Server-Sent Events (SSE)
 
 ```
-GET /events?types=repo-changed,pty-parsed
+GET /events?types=repo-changed,pty-parsed&stream_id=<uuid>
 ```
 
-Broadcasts server-side events to all browser/mobile clients. Supports optional `?types=` query parameter for comma-separated event name filtering. Uses monotonic event IDs and 15-second keep-alive pings.
+Broadcasts server-side events to all browser/mobile clients. Supports optional `?types=` query parameter for comma-separated event name filtering. Omitting `types` asks for every event; sending it empty is an empty allowlist and delivers none. Uses monotonic event IDs and 15-second keep-alive pings.
+
+`stream_id` is a client-chosen id for the connection. With one, `types` is only the
+*initial* filter and the client can widen it later on the same connection:
+
+```
+POST /events/types
+Content-Type: application/json
+
+{ "stream_id": "<uuid>", "types": ["repo-changed", "dir-changed"] }
+```
+
+`types` is the full set the client wants from now on, not a delta. `204` applies it to
+the live stream; `404` means the server is not tracking that stream (it ended, or more
+than 64 streams are already tracked), and the client must fall back to reconnecting with
+a wider `?types=`.
+
+A panel that mounts late needs an event type the stream was not opened with, and
+reconnecting to get it loses every event published between the close and the new
+subscription — the server subscribes to the event bus at connect time and replays
+nothing. That is what this route exists to avoid. A client that lets `EventSource`
+auto-reconnect must re-post its set on every `onopen`: the reconnect replays the URL, so
+the server is back to the filter the connection was opened with.
 
 | Event | Payload | Description |
 |-------|---------|-------------|

@@ -822,6 +822,36 @@ describe("paneLayoutStore", () => {
 		});
 	});
 
+	describe("flushSave", () => {
+		// The debounce timer dies with the WebView; the exit path has to write
+		// the layout out or the last split is lost.
+		it("writes a pending layout save immediately and only once", async () => {
+			const { invoke } = await import("../../invoke");
+			const mockInvoke = vi.mocked(invoke);
+			vi.useFakeTimers();
+			try {
+				testInScope(() => {
+					const g1 = store.createGroup();
+					store.setRoot({ type: "leaf", id: g1 });
+					store._testCancelPendingSave();
+					mockInvoke.mockClear();
+					store.split(g1, "horizontal");
+
+					store.flushSave();
+					expect(mockInvoke.mock.calls.filter((c) => c[0] === "save_pane_layout")).toHaveLength(1);
+
+					vi.advanceTimersByTime(600);
+					expect(
+						mockInvoke.mock.calls.filter((c) => c[0] === "save_pane_layout"),
+						"the flushed timer must not fire again",
+					).toHaveLength(1);
+				});
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+	});
+
 	describe("canSplit", () => {
 		it("returns true for a leaf at depth 0", () => {
 			testInScope(() => {

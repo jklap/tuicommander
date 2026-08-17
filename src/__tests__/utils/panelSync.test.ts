@@ -156,7 +156,10 @@ describe("panelSync", () => {
 			expect(mockEmitTo).toHaveBeenCalledTimes(3);
 		});
 
-		it("does not re-emit a snapshot that has not changed", () => {
+		// The suppression key is the snapshot the peer is known to *hold*, so it is
+		// recorded when the emit resolves. These advance the clock asynchronously
+		// to let that resolution run, as it does between two real intervals.
+		it("does not re-emit a snapshot that has not changed", async () => {
 			// Fresh object each call, identical content — an idle machine.
 			const serialize = vi.fn(() => ({ terminals: [{ id: "t1", state: "idle" }] }));
 			const provider = createPanelSyncProvider("activity", serialize, 1000);
@@ -164,29 +167,51 @@ describe("panelSync", () => {
 			provider.start();
 			expect(mockEmitTo).toHaveBeenCalledTimes(1);
 
-			vi.advanceTimersByTime(3000);
+			await vi.advanceTimersByTimeAsync(3000);
 			expect(mockEmitTo).toHaveBeenCalledTimes(1);
 
 			provider.stop();
 		});
 
-		it("emits again as soon as the snapshot changes", () => {
+		it("emits again as soon as the snapshot changes", async () => {
 			let state = "idle";
 			const serialize = vi.fn(() => ({ terminals: [{ id: "t1", state }] }));
 			const provider = createPanelSyncProvider("activity", serialize, 1000);
 
 			provider.start();
-			vi.advanceTimersByTime(2000);
+			await vi.advanceTimersByTimeAsync(2000);
 			expect(mockEmitTo).toHaveBeenCalledTimes(1);
 
 			state = "working";
-			vi.advanceTimersByTime(1000);
+			await vi.advanceTimersByTimeAsync(1000);
 			expect(mockEmitTo).toHaveBeenCalledTimes(2);
 			expect(mockEmitTo).toHaveBeenLastCalledWith(
 				"panel-activity",
 				"panel-sync",
 				expect.objectContaining({ snapshot: { terminals: [{ id: "t1", state: "working" }] } }),
 			);
+
+			provider.stop();
+		});
+
+		/// A failed emit is not a delivery. Recording the snapshot before the emit
+		/// resolved made the first failure permanent: the detached window may not
+		/// be addressable when `start()` fires its forced push, and every later
+		/// interval then suppressed that same snapshot as already sent.
+		it("retries an unchanged snapshot whose emit failed", async () => {
+			mockEmitTo.mockRejectedValueOnce(new Error("window not found"));
+			const serialize = vi.fn(() => ({ terminals: [{ id: "t1", state: "idle" }] }));
+			const provider = createPanelSyncProvider("activity", serialize, 1000);
+
+			provider.start();
+			expect(mockEmitTo).toHaveBeenCalledTimes(1);
+
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(mockEmitTo, "the undelivered snapshot must be sent again").toHaveBeenCalledTimes(2);
+
+			// Once it lands, the suppression resumes.
+			await vi.advanceTimersByTimeAsync(3000);
+			expect(mockEmitTo).toHaveBeenCalledTimes(2);
 
 			provider.stop();
 		});

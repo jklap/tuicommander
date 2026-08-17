@@ -487,6 +487,13 @@ function createUIStore() {
 	return {
 		state,
 		...actions,
+		/** Write a pending debounced save now — the app is going away. */
+		flushSave(): void {
+			if (!saveTimer) return;
+			clearTimeout(saveTimer);
+			saveTimer = null;
+			writeUIPrefs();
+		},
 		_testCancelPendingSave(): void {
 			if (saveTimer) {
 				clearTimeout(saveTimer);

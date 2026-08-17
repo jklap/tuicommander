@@ -106,10 +106,28 @@ export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<
 let _sseSource: EventSource | null = null;
 /** Listeners registered before or after SSE connects */
 const _sseListeners = new Map<string, Set<(payload: unknown) => void>>();
-/** The `types` filter the live stream was opened with — decides when to reopen. */
+/** The `types` filter the server is applying to the live stream. */
 let _sseOpenedFor = "";
+/** The `types` the current connection's URL asked for — what an auto-reconnect resets the server to. */
+let _sseUrlTypes = "";
 /** A coalesced open is already queued. */
 let _sseOpenQueued = false;
+/** Types already wired on the *current* connection — attaching twice dispatches twice. */
+const _sseAttached = new Set<string>();
+/**
+ * Identifies this page's stream so its filter can be widened in place.
+ *
+ * Reconnecting to widen it loses every event published between the close and
+ * the new subscription: the server subscribes to the bus at connect time and
+ * replays nothing, so a `repo-changed` in that gap leaves a panel stale until
+ * something else happens to fire.
+ */
+const _sseStreamId = newStreamId();
+
+function newStreamId(): string {
+	const uuid = globalThis.crypto?.randomUUID?.();
+	return uuid ?? `s${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
 
 /**
  * Open (or reopen) the shared stream, filtered to the registered event types.
@@ -124,9 +142,20 @@ function openSse(): void {
 	if (!types) return;
 
 	_sseSource?.close();
+	_sseAttached.clear();
 	_sseOpenedFor = types;
+	_sseUrlTypes = types;
 	const origin = typeof window !== "undefined" ? window.location.origin : "";
-	_sseSource = new EventSource(`${origin}/events?types=${encodeURIComponent(types)}`);
+	_sseSource = new EventSource(
+		`${origin}/events?types=${encodeURIComponent(types)}&stream_id=${encodeURIComponent(_sseStreamId)}`,
+	);
+
+	_sseSource.onopen = () => {
+		// An auto-reconnect replays the URL, so the server is back to the filter
+		// this connection was opened with. Anything widened since has to be
+		// re-applied, or those types stop arriving with no error anywhere.
+		if (_sseOpenedFor !== _sseUrlTypes) widenSse(_sseOpenedFor);
+	};
 
 	_sseSource.onerror = () => {
 		// EventSource auto-reconnects; just log
@@ -155,13 +184,51 @@ function ensureSse(): void {
 	_sseOpenQueued = true;
 	setTimeout(() => {
 		_sseOpenQueued = false;
+		const types = [..._sseListeners.keys()].sort().join(",");
+		if (_sseSource !== null && _sseSource.readyState !== EventSource.CLOSED && types) {
+			// Widen the live stream instead of replacing it: the replacement
+			// subscribes only after the old one is gone, and nothing covers that gap.
+			widenSse(types);
+			return;
+		}
 		openSse();
 	}, 0);
 }
 
+/**
+ * Ask the server to apply `types` to this page's live stream.
+ *
+ * A 404 means the server is not tracking this stream (it ended, or it has more
+ * live streams than it tracks), so the only way to widen is the lossy one.
+ */
+function widenSse(types: string): void {
+	const origin = typeof window !== "undefined" ? window.location.origin : "";
+	fetch(`${origin}/events/types`, {
+		method: "POST",
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify({ stream_id: _sseStreamId, types: types.split(",") }),
+	})
+		.then((response) => {
+			if (!response.ok) {
+				appLogger.debug("network", `SSE filter update refused (${response.status}) — reconnecting instead`);
+				openSse();
+				return;
+			}
+			_sseOpenedFor = types;
+			// The stream was opened before these types existed, so nothing is
+			// listening for them yet on this connection.
+			for (const eventType of _sseListeners.keys()) attachSseEventType(eventType);
+		})
+		.catch((err) => {
+			appLogger.debug("network", `SSE filter update failed (${err}) — reconnecting instead`);
+			openSse();
+		});
+}
+
 /** Attach a native SSE addEventListener for a given event type */
 function attachSseEventType(eventType: string) {
-	if (!_sseSource) return;
+	if (!_sseSource || _sseAttached.has(eventType)) return;
+	_sseAttached.add(eventType);
 	_sseSource.addEventListener(eventType, ((sseEvent: MessageEvent) => {
 		const listeners = _sseListeners.get(eventType);
 		if (!listeners) return;

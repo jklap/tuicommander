@@ -14,7 +14,7 @@ pub(crate) mod mcp_transport;
 mod plugin_docs;
 mod plugin_routes;
 mod session;
-mod sse_routes;
+pub(crate) mod sse_routes;
 mod static_files;
 mod types;
 mod watcher_routes;
@@ -886,6 +886,7 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route("/system/local-ip", get(git_routes::get_local_ip_http))
         // Server-Sent Events
         .route("/events", get(sse_routes::sse_events))
+        .route("/events/types", post(sse_routes::sse_update_types))
 }
 
 pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) -> Router {
@@ -2045,6 +2046,7 @@ mod tests {
             )),
             event_bus: tokio::sync::broadcast::channel(256).0,
             event_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sse_filters: Default::default(),
             session_states: dashmap::DashMap::new(),
             session_state_events: crate::state::SessionStateEventQueue::new(),
             mcp_upstream_registry: std::sync::Arc::new(

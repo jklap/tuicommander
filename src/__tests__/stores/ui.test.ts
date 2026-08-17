@@ -32,6 +32,34 @@ describe("uiStore", () => {
 		vi.advanceTimersByTime(600);
 	}
 
+	describe("flushSave", () => {
+		// The debounce timer dies with the WebView, so a preference toggled
+		// inside its window is lost unless the exit path writes it out.
+		it("writes a pending save immediately", () => {
+			testInScope(() => {
+				store.toggleSidebar();
+				expect(mockInvoke).not.toHaveBeenCalledWith("save_ui_prefs", expect.anything());
+
+				store.flushSave();
+				expect(mockInvoke).toHaveBeenCalledWith("save_ui_prefs", {
+					config: expect.objectContaining({ sidebar_visible: false }),
+				});
+
+				// The timer it replaced must not fire a second write.
+				mockInvoke.mockClear();
+				flushPersist();
+				expect(mockInvoke).not.toHaveBeenCalledWith("save_ui_prefs", expect.anything());
+			});
+		});
+
+		it("does nothing when no save is pending", () => {
+			testInScope(() => {
+				store.flushSave();
+				expect(mockInvoke).not.toHaveBeenCalledWith("save_ui_prefs", expect.anything());
+			});
+		});
+	});
+
 	describe("sidebar", () => {
 		it("defaults to visible", () => {
 			testInScope(() => {

@@ -62,6 +62,8 @@ export function createPanelSyncProvider(panelId: string, serialize: () => unknow
 	let resyncUnlisten: (() => void) | undefined;
 	let pushCount = 0;
 	let lastEncoded: string | undefined;
+	/** Ordinal of the newest snapshot known to have been delivered. */
+	let lastDelivered = 0;
 
 	/**
 	 * Emit a snapshot to the detached window.
@@ -76,7 +78,6 @@ export function createPanelSyncProvider(panelId: string, serialize: () => unknow
 		const snapshot = serialize();
 		const encoded = JSON.stringify(snapshot);
 		if (!force && encoded === lastEncoded) return;
-		lastEncoded = encoded;
 
 		pushCount++;
 		const label = `panel-${panelId}`;
@@ -85,11 +86,25 @@ export function createPanelSyncProvider(panelId: string, serialize: () => unknow
 			panelId,
 			ts: Date.now(),
 			snapshot,
-		}).catch((e) => {
-			if (count > 1) {
-				appLogger.warn("panel-sync", `Failed to push snapshot to ${label}`, e);
-			}
-		});
+		})
+			// Only a delivered snapshot is the peer's state. Recording it before
+			// the emit resolved made a failure permanent: the first push happens
+			// while the detached window may not be addressable yet, and every
+			// later interval then suppressed that same unchanged snapshot as
+			// already sent, leaving the panel empty until an explicit resync.
+			.then(() => {
+				// Two pushes can be in flight; the older one resolving last must
+				// not name an older snapshot as the peer's state, or a return to
+				// that snapshot is suppressed while the peer holds a newer one.
+				if (count < lastDelivered) return;
+				lastDelivered = count;
+				lastEncoded = encoded;
+			})
+			.catch((e) => {
+				if (count > 1) {
+					appLogger.warn("panel-sync", `Failed to push snapshot to ${label}`, e);
+				}
+			});
 	}
 
 	function start() {
