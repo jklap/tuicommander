@@ -1231,6 +1231,17 @@ describe("transport", () => {
 			expect(del.path).toBe("/api/plugins/build-cleaner/build-artifacts/delete");
 			expect(del.body).toEqual({ path: "/home/user/repoA/target", repoPaths: ["/home/user/repoA"] });
 
+			// trim_build_artifact — same body as delete, different route. A browser
+			// client must be able to reclaim intermediates without the desktop app.
+			const trim = mapCommandToHttp("trim_build_artifact", {
+				pluginId: "build-cleaner",
+				path: "/home/user/repoA/target",
+				repoPaths: ["/home/user/repoA"],
+			});
+			expect(trim.method).toBe("POST");
+			expect(trim.path).toBe("/api/plugins/build-cleaner/build-artifacts/trim");
+			expect(trim.body).toEqual({ path: "/home/user/repoA/target", repoPaths: ["/home/user/repoA"] });
+
 			// plugin_exec_cli
 			const ex = mapCommandToHttp("plugin_exec_cli", {
 				pluginId: "my-plugin",

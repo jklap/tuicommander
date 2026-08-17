@@ -151,6 +151,18 @@ pub(super) async fn plugin_delete_build_artifact(
     )
 }
 
+/// Same body as delete — the difference is how much of the dir is removed.
+pub(super) async fn plugin_trim_build_artifact(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(body): Json<DeleteArtifactBody>,
+) -> Response {
+    json_result(
+        crate::plugin_fs::trim_build_artifact_impl(&state, body.path, body.repo_paths, plugin_id)
+            .await,
+    )
+}
+
 // ---------------------------------------------------------------------------
 // CLI execution
 // ---------------------------------------------------------------------------

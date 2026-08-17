@@ -16,6 +16,7 @@ const {
 	basename,
 	relPath,
 	evaluateThresholds,
+	applyRemoval,
 	tickerPriority,
 	configToForm,
 	formToConfig,
@@ -26,10 +27,18 @@ const {
 	basename: (p: string) => string;
 	relPath: (child: string, repo: string) => string;
 	evaluateThresholds: (
-		entries: Array<{ kind: string; size_bytes: number; last_modified_secs: number; repo: string; path: string }>,
+		entries: Array<{
+			kind: string;
+			size_bytes: number;
+			trimmable_bytes?: number;
+			last_modified_secs: number;
+			repo: string;
+			path: string;
+		}>,
 		cfg: Record<string, unknown>,
 		now: number,
-	) => { severity: string; totalBytes: number; staleCount: number; largest: unknown };
+	) => { severity: string; totalBytes: number; trimmableBytes: number; staleCount: number; largest: unknown };
+	applyRemoval: <T>(entries: T[], path: string, trim: boolean) => T[];
 	tickerPriority: (sev: string) => number;
 	configToForm: (cfg: Record<string, unknown>) => Record<string, unknown>;
 	formToConfig: (form: Record<string, unknown>, base: Record<string, unknown>) => Record<string, unknown>;
@@ -78,11 +87,13 @@ const CFG = {
 	enabledKinds: [...KINDS],
 };
 
-/** An artifact built `ageHours` ago. */
-function art(kind: string, gib: number, ageHours: number, repo = "/home/u/repoA", name = kind) {
+/** An artifact built `ageHours` ago. `trimmableGib` defaults to 0 — the value
+ *  the backend reports for kinds with no separable intermediates. */
+function art(kind: string, gib: number, ageHours: number, repo = "/home/u/repoA", name = kind, trimmableGib = 0) {
 	return {
 		kind,
 		size_bytes: gib * GIB,
+		trimmable_bytes: trimmableGib * GIB,
 		last_modified_secs: NOW - ageHours * HOUR,
 		repo,
 		path: `${repo}/${name}`,
@@ -281,6 +292,97 @@ describe("build-cleaner pure helpers", () => {
 			const html = buildPanelHtml([evil], CFG, NOW);
 			expect(html).not.toContain("<script>alert(1)</script>");
 			expect(html).toContain("&lt;script&gt;");
+		});
+	});
+
+	describe("trim", () => {
+		it("totals the trimmable share of stale artifacts only", () => {
+			const res = evaluateThresholds(
+				[
+					art("rust", 30, 48, "/home/u/repoA", "target", 29.5),
+					// Built 1h ago — inside the hot window, so excluded from both totals.
+					art("rust", 10, 1, "/home/u/repoB", "target", 9.8),
+					// No separable intermediates: counts to the total, not to trimmable.
+					art("node", 2, 48, "/home/u/repoA", "node_modules"),
+				],
+				CFG,
+				NOW,
+			);
+			expect(res.totalBytes).toBe(32 * GIB);
+			expect(res.trimmableBytes).toBe(29.5 * GIB);
+		});
+
+		it("offers Trim only where the backend found intermediates", () => {
+			const html = buildPanelHtml(
+				[art("rust", 30, 48, "/home/u/repoA", "target", 29.5), art("node", 2, 48, "/home/u/repoA", "node_modules")],
+				CFG,
+				NOW,
+			);
+			expect(html).toContain('data-action="trim" data-path="/home/u/repoA/target"');
+			expect(html).not.toContain('data-action="trim" data-path="/home/u/repoA/node_modules"');
+			// Clean stays available for both — trim is an addition, not a replacement.
+			expect(html).toContain('data-action="delete" data-path="/home/u/repoA/target"');
+			expect(html).toContain('data-action="delete" data-path="/home/u/repoA/node_modules"');
+			expect(html).toContain("Safe to trim");
+		});
+
+		it("keeps a trimmed entry listed and drops a cleaned one", () => {
+			const entries = [
+				art("rust", 30, 48, "/home/u/repoA", "target", 29.5),
+				art("node", 2, 48, "/home/u/repoA", "node_modules"),
+			];
+
+			// A trim leaves the executables on disk, so the entry must survive with
+			// only the reclaimed bytes subtracted — dropping it would hide them.
+			const trimmed = applyRemoval(entries, "/home/u/repoA/target", true);
+			expect(trimmed).toHaveLength(2);
+			expect(trimmed[0].size_bytes).toBe(0.5 * GIB);
+			expect(trimmed[0].trimmable_bytes).toBe(0);
+			expect(entries[0].size_bytes).toBe(30 * GIB); // input untouched
+
+			const cleaned = applyRemoval(entries, "/home/u/repoA/target", false);
+			expect(cleaned).toHaveLength(1);
+			expect(cleaned[0].path).toBe("/home/u/repoA/node_modules");
+		});
+
+		it("routes a trim message to trimBuildArtifact, not delete", async () => {
+			vi.useFakeTimers();
+			let handlePanelMessage: ((message: unknown) => Promise<void>) | undefined;
+			const entry = art("rust", 30, 48, "/home/u/repoA", "target", 29.5);
+			const host = {
+				getRepos: vi.fn(() => [{ path: "/home/u/repoA" }]),
+				scanBuildArtifacts: vi.fn(async () => [entry]),
+				trimBuildArtifact: vi.fn(async () => undefined),
+				deleteBuildArtifact: vi.fn(async () => undefined),
+				invoke: vi.fn(async () => null),
+				registerSection: vi.fn(),
+				registerDashboard: vi.fn(),
+				openPanel: vi.fn((options: { onMessage: (message: unknown) => Promise<void> }) => {
+					handlePanelMessage = options.onMessage;
+					return { update: vi.fn() };
+				}),
+				clearTicker: vi.fn(),
+				removeItem: vi.fn(),
+				addItem: vi.fn(),
+				setTicker: vi.fn(),
+				log: vi.fn(),
+			};
+
+			try {
+				await buildCleanerPlugin.onload(host);
+				await Promise.resolve();
+				// registerDashboard is a no-op mock here; drive the panel directly.
+				const dashboard = host.registerDashboard.mock.calls[0][0] as { open: () => Promise<void> };
+				await dashboard.open();
+
+				await handlePanelMessage?.({ action: "trim", path: "/home/u/repoA/target" });
+
+				expect(host.trimBuildArtifact).toHaveBeenCalledWith("/home/u/repoA/target", ["/home/u/repoA"]);
+				expect(host.deleteBuildArtifact).not.toHaveBeenCalled();
+			} finally {
+				buildCleanerPlugin.onunload();
+				vi.useRealTimers();
+			}
 		});
 	});
 

@@ -297,6 +297,13 @@ export interface ArtifactEntry {
 	kind: string;
 	/** Total on-disk size in bytes (summed whole; nested artifacts folded in). */
 	size_bytes: number;
+	/**
+	 * The part of `size_bytes` held by regenerable intermediates — what
+	 * `trimBuildArtifact` would reclaim while leaving the built executables in
+	 * place. 0 when the toolchain has no safe subset (node_modules, .venv, …),
+	 * which is also the signal to offer a full clean only.
+	 */
+	trimmable_bytes: number;
 	/** Last-build signal: max mtime of the dir's direct children (Unix secs). */
 	last_modified_secs: number;
 	/** Registered repo root this artifact was found under. */
@@ -689,6 +696,21 @@ export interface PluginHost {
 	 * @param repoPaths - The registered repo roots (containment guard)
 	 */
 	deleteBuildArtifact(path: string, repoPaths: string[]): Promise<void>;
+
+	/**
+	 * Remove only a build-artifact directory's regenerable intermediates,
+	 * leaving the built executables in place — a full `deleteBuildArtifact` of a
+	 * Rust `target/` also deletes the binary the user may be running. Same
+	 * "fs:delete" gate and same containment guard as delete; on top of that only
+	 * paths named by the matched toolchain rule are removed.
+	 *
+	 * Rejects when the artifact's kind has no separable intermediates (check
+	 * `ArtifactEntry.trimmable_bytes > 0` before offering it). A no-op success
+	 * means there was nothing left to trim.
+	 * @param path - Absolute path of the artifact dir to trim
+	 * @param repoPaths - The registered repo roots (containment guard)
+	 */
+	trimBuildArtifact(path: string, repoPaths: string[]): Promise<void>;
 
 	/**
 	 * Watch a path for filesystem changes. Requires "fs:watch".

@@ -669,6 +669,7 @@ async fn plugin_rename_path_inner(from: String, to: String) -> Result<(), String
 /// only count as artifacts when a marker file sits beside them, otherwise a Go
 /// sysroot `bin`, an Xcode `PIFCache/target`, or Rust `src/bin` SOURCES would
 /// be reported (and deletable) as artifacts.
+#[derive(Debug)]
 enum ArtifactMarker {
     /// The dir name alone is unambiguous (e.g. `node_modules`, `__pycache__`).
     Always,
@@ -680,13 +681,19 @@ enum ArtifactMarker {
 
 /// One scanner/delete-guard rule: a dir name (exact, or prefix for IDE-suffixed
 /// dirs like `cmake-build-debug`), the kind it maps to, and the marker required
-/// beside it. First matching rule wins (`classify_artifact`), so e.g. `target`
+/// beside it. First matching rule wins (`matching_rule`), so e.g. `target`
 /// resolves to `rust` or `maven` depending on which project file is present.
+///
+/// `trim` lists the sub-paths that are pure regenerable intermediates — see
+/// `TRIM PATTERNS` below. Empty means the toolchain has no safe subset and only
+/// a full clean is offered.
+#[derive(Debug)]
 struct ArtifactRule {
     name: &'static str,
     prefix: bool,
     kind: &'static str,
     marker: ArtifactMarker,
+    trim: &'static [&'static str],
 }
 
 const fn rule(name: &'static str, kind: &'static str, marker: ArtifactMarker) -> ArtifactRule {
@@ -695,8 +702,92 @@ const fn rule(name: &'static str, kind: &'static str, marker: ArtifactMarker) ->
         prefix: false,
         kind,
         marker,
+        trim: &[],
     }
 }
+
+/// Same as `rule`, plus the trim patterns for toolchains with a known
+/// intermediate/output split.
+const fn trimmable_rule(
+    name: &'static str,
+    kind: &'static str,
+    marker: ArtifactMarker,
+    trim: &'static [&'static str],
+) -> ArtifactRule {
+    ArtifactRule {
+        name,
+        prefix: false,
+        kind,
+        marker,
+        trim,
+    }
+}
+
+// --- TRIM PATTERNS ---------------------------------------------------------
+//
+// A trim pattern is a `/`-separated list of segments, relative to the matched
+// artifact dir. Segments are matched against real directory names one level at
+// a time (`expand_trim_pattern`), so the separator never reaches the OS — the
+// same constants work on macOS, Linux and Windows.
+//
+// Segment forms: `deps` (literal) · `*` (any one dir) · `*.build` (suffix).
+//
+// The bar for inclusion: deleting it must cost only local CPU to rebuild. A dir
+// that needs the network to restore (cargo registry, SwiftPM `checkouts`,
+// `repositories`) stays out — trimming must never turn into "now you're offline
+// and stuck".
+
+/// Rust `target/`. `<profile>/` holds the linked executables at its root; every
+/// intermediate lives in one of these four. The `*/*/…` variants cover
+/// cross-compilation, where the profile dir sits under a target triple.
+/// Measured on 5 real repos: 98.2–99.8% of `target/` is these four dirs.
+const RUST_TRIM: &[&str] = &[
+    "*/deps",
+    "*/build",
+    "*/incremental",
+    "*/.fingerprint",
+    "*/*/deps",
+    "*/*/build",
+    "*/*/incremental",
+    "*/*/.fingerprint",
+];
+
+/// Swift `.build/`. `index-build/` is SourceKit's separate index tree and never
+/// holds the product binary; `ModuleCache`/`index` are caches; `<Module>.build/`
+/// holds per-module object files. `checkouts/`/`repositories/` are dependency
+/// SOURCES (network to restore) and `Modules/` holds the `.swiftmodule`
+/// interfaces — all four are deliberately kept.
+const SWIFT_TRIM: &[&str] = &["index-build", "*/*/ModuleCache", "*/*/index", "*/*/*.build"];
+
+/// Maven `target/`. The packaged `*.jar`/`*.war` sits at the root and survives.
+const MAVEN_TRIM: &[&str] = &[
+    "classes",
+    "test-classes",
+    "generated-sources",
+    "generated-test-sources",
+    "generated-test-resources",
+    "maven-status",
+    "maven-archiver",
+    "surefire-reports",
+    "failsafe-reports",
+];
+
+/// Gradle `build/`. Keeps `libs/`, `outputs/`, `distributions/`, `install/` —
+/// the four dirs Gradle publishes final artifacts into.
+const GRADLE_TRIM: &[&str] = &[
+    "classes",
+    "tmp",
+    "kotlin",
+    "intermediates",
+    "generated",
+    "reports",
+    "test-results",
+    "jacoco",
+];
+
+// DEFERRED (2026-08-16) — Python `.venv` trim (`**/__pycache__`). Measured at
+// only 115 MB of a 1341 MB venv (8.6%) and it needs a recursive `**` segment
+// that no other toolchain wants. Revisit if a `**` form is needed anyway.
 
 /// File extensions marking a directory as a .NET project/solution root — a
 /// sibling `bin`/`obj` is then a build-artifact dir.
@@ -712,8 +803,18 @@ const GRADLE_MARKERS: &[&str] = &[
 /// All scanner/delete-guard rules. Kinds MUST stay in sync with the
 /// build-cleaner plugin's `ALL_KINDS`/`KIND_LABELS` (`plugins/build-cleaner/main.js`).
 const ARTIFACT_RULES: &[ArtifactRule] = &[
-    rule("target", "rust", ArtifactMarker::AnyFile(&["Cargo.toml"])),
-    rule("target", "maven", ArtifactMarker::AnyFile(&["pom.xml"])),
+    trimmable_rule(
+        "target",
+        "rust",
+        ArtifactMarker::AnyFile(&["Cargo.toml"]),
+        RUST_TRIM,
+    ),
+    trimmable_rule(
+        "target",
+        "maven",
+        ArtifactMarker::AnyFile(&["pom.xml"]),
+        MAVEN_TRIM,
+    ),
     rule("node_modules", "node", ArtifactMarker::Always),
     rule(".next", "jscache", ArtifactMarker::Always),
     rule(".nuxt", "jscache", ArtifactMarker::Always),
@@ -730,7 +831,12 @@ const ARTIFACT_RULES: &[ArtifactRule] = &[
     rule("obj", "dotnet", ArtifactMarker::DotnetProject),
     rule("bin", "dotnet", ArtifactMarker::DotnetProject),
     rule(".gradle", "gradle", ArtifactMarker::Always),
-    rule("build", "gradle", ArtifactMarker::AnyFile(GRADLE_MARKERS)),
+    trimmable_rule(
+        "build",
+        "gradle",
+        ArtifactMarker::AnyFile(GRADLE_MARKERS),
+        GRADLE_TRIM,
+    ),
     rule(
         "build",
         "cmake",
@@ -746,11 +852,13 @@ const ARTIFACT_RULES: &[ArtifactRule] = &[
         prefix: true,
         kind: "cmake",
         marker: ArtifactMarker::AnyFile(&["CMakeLists.txt"]),
+        trim: &[],
     },
-    rule(
+    trimmable_rule(
         ".build",
         "swift",
         ArtifactMarker::AnyFile(&["Package.swift"]),
+        SWIFT_TRIM,
     ),
     rule("Pods", "swift", ArtifactMarker::AnyFile(&["Podfile"])),
     rule(".dart_tool", "flutter", ArtifactMarker::Always),
@@ -807,13 +915,80 @@ fn name_matches_any_rule(name: &str) -> bool {
     ARTIFACT_RULES.iter().any(|r| r.matches_name(name))
 }
 
-/// Resolve a name-matched dir to its kind, given the file names beside it.
-/// `None` means no rule's marker is satisfied — the dir is not an artifact.
-fn classify_artifact(name: &str, files: &[String]) -> Option<&'static str> {
+/// Resolve a name-matched dir to the rule that claims it, given the file names
+/// beside it. `None` means no rule's marker is satisfied — not an artifact.
+fn matching_rule(name: &str, files: &[String]) -> Option<&'static ArtifactRule> {
     ARTIFACT_RULES
         .iter()
         .find(|r| r.matches_name(name) && r.marker.satisfied(files))
-        .map(|r| r.kind)
+}
+
+/// Whether one trim-pattern segment matches a real directory name.
+/// `*` matches any name; `*<suffix>` matches by suffix (Swift `<Module>.build`);
+/// anything else is an exact match. A bare `*` never matches `.`/`..` because
+/// those are not yielded by `read_dir`.
+fn trim_segment_matches(segment: &str, name: &str) -> bool {
+    match segment.strip_prefix('*') {
+        Some("") => true,
+        Some(suffix) => name.ends_with(suffix) && name.len() > suffix.len(),
+        None => segment == name,
+    }
+}
+
+/// Expand one trim pattern under `root` into the real directories it names.
+///
+/// Descends one segment at a time through `read_dir`, so the pattern's `/`
+/// separators never reach the OS and the result is correct on Windows too.
+/// Symlinked dirs are skipped at every level — a `deps -> /` symlink can never
+/// widen the result — and only directories are ever yielded, so a *file* named
+/// `deps` is not a trim target.
+fn expand_trim_pattern(root: &std::path::Path, pattern: &str) -> Vec<PathBuf> {
+    let mut current = vec![root.to_path_buf()];
+    for segment in pattern.split('/') {
+        let mut next = Vec::new();
+        for dir in &current {
+            let Ok(rd) = std::fs::read_dir(dir) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let Ok(ft) = e.file_type() else { continue };
+                if !ft.is_dir() || ft.is_symlink() {
+                    continue;
+                }
+                if trim_segment_matches(segment, &e.file_name().to_string_lossy()) {
+                    next.push(e.path());
+                }
+            }
+        }
+        if next.is_empty() {
+            return Vec::new();
+        }
+        current = next;
+    }
+    current
+}
+
+/// Every existing trim target inside `dir` for `rule`, deduplicated so a nested
+/// match (e.g. `*/*/build` landing inside an already-matched `*/build`) is not
+/// counted or deleted twice. Empty when the rule has no trim patterns.
+fn trim_targets(dir: &std::path::Path, rule: &ArtifactRule) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = rule
+        .trim
+        .iter()
+        .flat_map(|p| expand_trim_pattern(dir, p))
+        .collect();
+    found.sort();
+    found.dedup();
+    // Drop any target contained in an earlier (shorter) one. Sorted order puts
+    // a parent immediately before its descendants.
+    let mut out: Vec<PathBuf> = Vec::with_capacity(found.len());
+    for p in found {
+        if out.last().is_some_and(|kept| p.starts_with(kept)) {
+            continue;
+        }
+        out.push(p);
+    }
+    out
 }
 
 /// Cap on scan-walk recursion into a repo (runaway backstop; real source trees
@@ -825,13 +1000,17 @@ const MAX_SCAN_DEPTH: u8 = 8;
 const MAX_SIZE_DEPTH: u8 = 64;
 
 /// One matched build-artifact directory: its absolute path, tool kind, total
-/// on-disk size, last-build age (max mtime of direct children, as Unix secs),
-/// and the repo root it was found under.
+/// on-disk size, the part of that size held by regenerable intermediates
+/// (`trimmable_bytes`, 0 when the toolchain has no safe subset), last-build age
+/// (max mtime of direct children, as Unix secs), and the repo root it was found
+/// under.
 #[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub struct ArtifactEntry {
     pub path: String,
     pub kind: String,
     pub size_bytes: u64,
+    pub trimmable_bytes: u64,
     pub last_modified_secs: u64,
     pub repo: String,
 }
@@ -1022,32 +1201,51 @@ fn artifact_scan_cache() -> &'static ArtifactScanCache {
     CACHE.get_or_init(ArtifactScanCache::new)
 }
 
-/// Recursively sum sizes of regular files under `dir`. Does not follow symlinks
-/// (uses `DirEntry` file types / non-traversing metadata), so it can't escape
-/// the tree or loop. Per-dir read errors are non-fatal — a macOS TCC-protected
-/// subdir is skipped, not counted, and never aborts the sum.
-fn dir_size_bytes(dir: &std::path::Path, depth: u8) -> u64 {
+/// Recursively sum sizes of regular files under `dir`, splitting the total into
+/// (everything, the part under a trim target). Does not follow symlinks (uses
+/// `DirEntry` file types / non-traversing metadata), so it can't escape the tree
+/// or loop. Per-dir read errors are non-fatal — a macOS TCC-protected subdir is
+/// skipped, not counted, and never aborts the sum.
+///
+/// Both numbers come from ONE walk on purpose: on a Rust `target/` the trim
+/// subtrees are ~99% of the tree, so measuring them separately would very nearly
+/// double an already multi-second scan. `in_trim` latches once the walk enters a
+/// target, which also removes the per-entry target lookup from the hot path.
+fn measure_sizes(
+    dir: &std::path::Path,
+    depth: u8,
+    targets: &[PathBuf],
+    in_trim: bool,
+) -> (u64, u64) {
     if depth == 0 {
-        return 0;
+        return (0, 0);
     }
     let Ok(rd) = std::fs::read_dir(dir) else {
-        return 0;
+        return (0, 0);
     };
     let mut total = 0u64;
+    let mut trimmable = 0u64;
     for e in rd.flatten() {
         let Ok(ft) = e.file_type() else { continue };
         if ft.is_symlink() {
             continue;
         }
         if ft.is_dir() {
-            total += dir_size_bytes(&e.path(), depth - 1);
+            let p = e.path();
+            let inside = in_trim || targets.contains(&p);
+            let (t, m) = measure_sizes(&p, depth - 1, targets, inside);
+            total += t;
+            trimmable += m;
         } else if ft.is_file()
             && let Ok(m) = e.metadata()
         {
             total += m.len();
+            if in_trim {
+                trimmable += m.len();
+            }
         }
     }
-    total
+    (total, trimmable)
 }
 
 /// Max mtime (Unix secs) among the direct children of `dir`. Dir mtime is
@@ -1069,12 +1267,16 @@ fn max_child_mtime_secs(dir: &std::path::Path) -> u64 {
     max
 }
 
-/// Measure a matched artifact dir into an `ArtifactEntry` (summed whole).
-fn measure(dir: &std::path::Path, kind: &str, repo: &str) -> ArtifactEntry {
+/// Measure a matched artifact dir into an `ArtifactEntry` — total size and the
+/// trimmable share, in a single walk.
+fn measure(dir: &std::path::Path, rule: &ArtifactRule, repo: &str) -> ArtifactEntry {
+    let targets = trim_targets(dir, rule);
+    let (size_bytes, trimmable_bytes) = measure_sizes(dir, MAX_SIZE_DEPTH, &targets, false);
     ArtifactEntry {
         path: dir.to_string_lossy().to_string(),
-        kind: kind.to_string(),
-        size_bytes: dir_size_bytes(dir, MAX_SIZE_DEPTH),
+        kind: rule.kind.to_string(),
+        size_bytes,
+        trimmable_bytes,
         last_modified_secs: max_child_mtime_secs(dir),
         repo: repo.to_string(),
     }
@@ -1084,7 +1286,7 @@ fn measure(dir: &std::path::Path, kind: &str, repo: &str) -> ArtifactEntry {
 /// is summed whole and NOT descended into (stop-at-match), so a `node_modules`
 /// nested inside another is folded into the outer entry — never double counted.
 /// Ambiguously-named matches (`target`, `bin`, `build`, …) require a marker
-/// file beside them (`classify_artifact`); unclaimed ones are walked like any
+/// file beside them (`matching_rule`); unclaimed ones are walked like any
 /// other dir. Skips `.git` and symlinked dirs; per-dir read errors are non-fatal.
 fn walk_artifacts(dir: &std::path::Path, repo: &str, depth: u8, out: &mut Vec<ArtifactEntry>) {
     if depth == 0 {
@@ -1107,8 +1309,8 @@ fn walk_artifacts(dir: &std::path::Path, repo: &str, depth: u8, out: &mut Vec<Ar
         let p = e.path();
         if name_matches_any_rule(&name) {
             let files = files.get_or_insert_with(|| file_names(dir));
-            if let Some(kind) = classify_artifact(&name, files) {
-                out.push(measure(&p, kind, repo));
+            if let Some(rule) = matching_rule(&name, files) {
+                out.push(measure(&p, rule, repo));
                 continue;
             }
         }
@@ -1234,7 +1436,7 @@ async fn scan_build_artifacts_inner(
 ///   2. strictly inside one of `repo_roots` (`starts_with` a root AND not
 ///      equal to it — never delete a repo root);
 ///   3. for ambiguous names (`target`, `bin`, `build`, …), a marker file sits
-///      beside the dir (`classify_artifact`) — refuses e.g. Rust `src/bin` sources.
+///      beside the dir (`matching_rule`) — refuses e.g. Rust `src/bin` sources.
 ///
 /// `repo_roots` is caller-supplied (`repo_paths`) but is NOT trusted as-is:
 /// the caller (`delete_build_artifact_inner`) intersects it with the backend's
@@ -1243,7 +1445,15 @@ async fn scan_build_artifacts_inner(
 /// (e.g. `$HOME`) that was never really registered. `$HOME` scoping is
 /// enforced separately by `validate_within_home` on both the target and each
 /// repo root before this runs (defense in depth).
-fn assert_deletable(path: &std::path::Path, repo_roots: &[PathBuf]) -> Result<(), String> {
+///
+/// Returns the rule that claimed the dir, so a caller that needs more than a
+/// yes/no (`trim_build_artifact_inner`, which needs the trim patterns) does not
+/// have to re-resolve it and risk resolving a *different* rule than the one the
+/// guard approved.
+fn assert_deletable(
+    path: &std::path::Path,
+    repo_roots: &[PathBuf],
+) -> Result<&'static ArtifactRule, String> {
     let c = path
         .canonicalize()
         .map_err(|e| format!("Failed to resolve path: {e}"))?;
@@ -1261,13 +1471,9 @@ fn assert_deletable(path: &std::path::Path, repo_roots: &[PathBuf]) -> Result<()
     }
 
     let files = c.parent().map(file_names).unwrap_or_default();
-    if classify_artifact(name, &files).is_none() {
-        return Err(format!(
-            "Refusing to delete: '{name}' has no matching project file beside it"
-        ));
-    }
-
-    Ok(())
+    matching_rule(name, &files).ok_or_else(|| {
+        format!("Refusing to delete: '{name}' has no matching project file beside it")
+    })
 }
 
 /// Delete a build-artifact directory. Destructive; gated by `fs:delete`. The
@@ -1295,32 +1501,128 @@ pub(crate) async fn delete_build_artifact_impl(
     delete_build_artifact_inner(path, repo_paths).await
 }
 
+/// Shared authorization for both destructive paths. Returns the canonical
+/// artifact dir and the rule that claims it, or the refusal reason.
+fn authorize_artifact(
+    path: &str,
+    repo_paths: &[String],
+) -> Result<(PathBuf, &'static ArtifactRule), String> {
+    // $HOME scope + canonicalization of the target.
+    let canonical = validate_within_home(path)?;
+
+    // Canonicalize each caller-supplied repo root (resolves symlinks so
+    // containment is compared apples-to-apples), then keep only those that
+    // are actually backed by a registered repository (`registered_repo_roots`)
+    // — a plugin cannot widen containment by passing an arbitrary root
+    // (e.g. `$HOME`) that was never really registered with the app. Roots
+    // that fail validation or aren't registered are dropped, not fatal.
+    let registered = registered_repo_roots();
+    let mut roots = Vec::new();
+    for r in repo_paths {
+        if let Ok(rc) = validate_within_home(r)
+            && is_within_registered_repo(&rc, &registered)
+        {
+            roots.push(rc);
+        }
+    }
+
+    let rule = assert_deletable(&canonical, &roots)?;
+    Ok((canonical, rule))
+}
+
 async fn delete_build_artifact_inner(path: String, repo_paths: Vec<String>) -> Result<(), String> {
     spawn_blocking_fs(move || {
-        // $HOME scope + canonicalization of the target.
-        let canonical = validate_within_home(&path)?;
-
-        // Canonicalize each caller-supplied repo root (resolves symlinks so
-        // containment is compared apples-to-apples), then keep only those that
-        // are actually backed by a registered repository (`registered_repo_roots`)
-        // — a plugin cannot widen containment by passing an arbitrary root
-        // (e.g. `$HOME`) that was never really registered with the app. Roots
-        // that fail validation or aren't registered are dropped, not fatal.
-        let registered = registered_repo_roots();
-        let mut roots = Vec::new();
-        for r in &repo_paths {
-            if let Ok(rc) = validate_within_home(r)
-                && is_within_registered_repo(&rc, &registered)
-            {
-                roots.push(rc);
-            }
-        }
-
-        assert_deletable(&canonical, &roots)?;
+        let (canonical, _rule) = authorize_artifact(&path, &repo_paths)?;
 
         std::fs::remove_dir_all(&canonical).map_err(|e| format!("Failed to remove: {e}"))?;
         artifact_scan_cache().invalidate_path(&canonical);
         Ok(())
+    })
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Build-artifact trim (capability-gated: fs:delete)
+//
+// The non-destructive-to-outputs half of the cleaner: removes only the
+// regenerable intermediates named by the matched rule's trim patterns, leaving
+// the linked executables in place. This exists because a full clean of a Rust
+// `target/` also deletes the binaries the user is currently RUNNING — while
+// reclaiming, on measured repos, only ~1% more disk than a trim.
+// ---------------------------------------------------------------------------
+
+/// Trim a build-artifact directory: remove only its intermediates. Destructive,
+/// gated by `fs:delete` (same blast-radius class as delete, on a subset).
+///
+/// Authorization is `delete`'s, unchanged — the target must pass `$HOME` scope,
+/// registered-repo containment and the artifact-rule marker check. On top of
+/// that, only paths produced by expanding the *matched rule's own* trim patterns
+/// are removed, and each is re-verified to be strictly inside the artifact dir
+/// before `remove_dir_all`, so a future pattern-table mistake cannot escape.
+///
+/// Every target is attempted even if one fails (a Windows read-only file must
+/// not strand the other 4 GB); the failures are reported together.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn trim_build_artifact(
+    path: String,
+    repo_paths: Vec<String>,
+    plugin_id: String,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<(), String> {
+    trim_build_artifact_impl(&state, path, repo_paths, plugin_id).await
+}
+
+pub(crate) async fn trim_build_artifact_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    path: String,
+    repo_paths: Vec<String>,
+    plugin_id: String,
+) -> Result<(), String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "fs:delete")?;
+    trim_build_artifact_inner(path, repo_paths).await
+}
+
+async fn trim_build_artifact_inner(path: String, repo_paths: Vec<String>) -> Result<(), String> {
+    spawn_blocking_fs(move || {
+        let (canonical, rule) = authorize_artifact(&path, &repo_paths)?;
+
+        if rule.trim.is_empty() {
+            return Err(format!(
+                "Refusing to trim: no intermediates are separable for kind '{}'",
+                rule.kind
+            ));
+        }
+
+        let targets = trim_targets(&canonical, rule);
+        if targets.is_empty() {
+            // Already trimmed, or built with a layout the patterns don't cover.
+            // Not an error — there is simply nothing to reclaim.
+            return Ok(());
+        }
+
+        let mut failures = Vec::new();
+        for target in &targets {
+            // Belt and braces: `expand_trim_pattern` only ever descends from
+            // `canonical` and never follows symlinks, so this cannot fail today.
+            // It is here so a bad pattern (a stray `..`) is refused rather than
+            // executed.
+            if !target.starts_with(&canonical) || target == &canonical {
+                failures.push(format!("{}: outside the artifact dir", target.display()));
+                continue;
+            }
+            if let Err(e) = std::fs::remove_dir_all(target) {
+                failures.push(format!("{}: {e}", target.display()));
+            }
+        }
+
+        artifact_scan_cache().invalidate_path(&canonical);
+
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("Failed to trim {}: {}", path, failures.join("; ")))
+        }
     })
     .await
 }
@@ -1658,6 +1960,35 @@ mod tests {
         assert!(!out.iter().any(|e| e.path.contains(".git")));
     }
 
+    /// The walk is bounded by `MAX_SCAN_DEPTH`, which is what keeps a scan off a
+    /// deep source tree's tail. Nothing below the cap is read, matched or measured.
+    #[test]
+    fn scan_build_artifacts_stops_at_the_depth_cap() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let mut deep = root.to_path_buf();
+        for i in 0..MAX_SCAN_DEPTH {
+            deep = deep.join(format!("d{i}"));
+        }
+        // One level shallower than the cap: reachable. One level deeper: not.
+        std::fs::create_dir_all(deep.join("node_modules")).unwrap();
+        std::fs::write(deep.join("node_modules/deep.js"), vec![0u8; 10]).unwrap();
+        let shallow = root.join("a/node_modules");
+        std::fs::create_dir_all(&shallow).unwrap();
+        std::fs::write(shallow.join("near.js"), vec![0u8; 20]).unwrap();
+
+        let mut out = Vec::new();
+        walk_artifacts(root, "repo", MAX_SCAN_DEPTH, &mut out);
+
+        assert_eq!(
+            out.len(),
+            1,
+            "only the in-range match may be reported, got {:?}",
+            out.iter().map(|e| &e.path).collect::<Vec<_>>()
+        );
+        assert_eq!(out[0].size_bytes, 20);
+    }
+
     #[test]
     fn scan_build_artifacts_no_double_count_nested() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1931,6 +2262,7 @@ mod tests {
             path: format!("/{label}"),
             kind: "test".into(),
             size_bytes: 1,
+            trimmable_bytes: 0,
             last_modified_secs: 1,
             repo: "/repo".into(),
         }]
@@ -2245,6 +2577,338 @@ mod tests {
         });
 
         assert_eq!(result[0].path, "/after-delete");
+    }
+
+    // -- trim tests --
+
+    /// A Rust `target/` with the real cargo layout: linked executables at the
+    /// root of each profile dir, everything else an intermediate.
+    fn rust_target_fixture(repo: &Path) -> PathBuf {
+        std::fs::write(repo.join("Cargo.toml"), b"[package]").unwrap();
+        let target = repo.join("target");
+        for profile in ["debug", "release"] {
+            let p = target.join(profile);
+            for inter in ["deps", "build", "incremental", ".fingerprint"] {
+                std::fs::create_dir_all(p.join(inter)).unwrap();
+                std::fs::write(p.join(inter).join("blob"), vec![0u8; 1000]).unwrap();
+            }
+            std::fs::create_dir_all(&p).unwrap();
+            std::fs::write(p.join("myapp"), vec![0u8; 10]).unwrap();
+        }
+        // Cross-compilation: the profile dir sits under a target triple.
+        let cross = target.join("aarch64-unknown-linux-gnu/release");
+        std::fs::create_dir_all(cross.join("deps")).unwrap();
+        std::fs::write(cross.join("deps/blob"), vec![0u8; 1000]).unwrap();
+        std::fs::write(cross.join("myapp"), vec![0u8; 10]).unwrap();
+        target
+    }
+
+    #[test]
+    fn trim_segment_matches_literal_any_and_suffix() {
+        assert!(trim_segment_matches("deps", "deps"));
+        assert!(!trim_segment_matches("deps", "deps2"));
+        assert!(trim_segment_matches("*", "anything"));
+        assert!(trim_segment_matches("*.build", "MCP.build"));
+        assert!(!trim_segment_matches("*.build", "other"));
+        // A bare `.build` is the artifact dir itself, not a per-module dir —
+        // the suffix form requires at least one character before the suffix.
+        assert!(!trim_segment_matches("*.build", ".build"));
+    }
+
+    #[test]
+    fn trim_targets_cover_rust_intermediates_at_both_depths() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let target = rust_target_fixture(&repo);
+        let rule = matching_rule("target", &["Cargo.toml".to_string()]).unwrap();
+
+        let targets = trim_targets(&target, rule);
+        let rel: Vec<String> = targets
+            .iter()
+            .map(|p| {
+                p.strip_prefix(&target)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+
+        for expected in [
+            "debug/deps",
+            "debug/build",
+            "debug/incremental",
+            "debug/.fingerprint",
+            "release/deps",
+            "aarch64-unknown-linux-gnu/release/deps",
+        ] {
+            assert!(
+                rel.contains(&expected.to_string()),
+                "missing {expected} in {rel:?}"
+            );
+        }
+        // The linked executable is never a target.
+        assert!(!rel.iter().any(|p| p.ends_with("myapp")), "{rel:?}");
+    }
+
+    // Unix-only like the other symlink tests here: creating one on Windows
+    // needs Developer Mode or admin, which an unprivileged runner lacks. The
+    // guard being tested (`ft.is_symlink()`) is platform-independent.
+    #[cfg(unix)]
+    #[test]
+    fn trim_targets_never_follow_symlinks() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let target = rust_target_fixture(&repo);
+        // An escape attempt: a symlinked `deps` pointing outside the repo.
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        let linked = target.join("evil");
+        std::fs::create_dir_all(&linked).unwrap();
+        std::os::unix::fs::symlink(&outside, linked.join("deps")).unwrap();
+
+        let rule = matching_rule("target", &["Cargo.toml".to_string()]).unwrap();
+        let targets = trim_targets(&target, rule);
+
+        assert!(
+            !targets.iter().any(|p| p.starts_with(&linked)),
+            "symlinked deps must not be a trim target: {targets:?}"
+        );
+        assert!(
+            targets.iter().all(|p| p.starts_with(&target)),
+            "every target must stay inside the artifact dir: {targets:?}"
+        );
+    }
+
+    #[test]
+    fn trim_targets_drop_nested_duplicates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("Cargo.toml"), b"[package]").unwrap();
+        // `debug/build` matches `*/build`; the `build` inside it would also
+        // match `*/*/build`. Only the outer one may be reported.
+        let target = repo.join("target");
+        std::fs::create_dir_all(target.join("debug/build/build")).unwrap();
+        let rule = matching_rule("target", &["Cargo.toml".to_string()]).unwrap();
+
+        let targets = trim_targets(&target, rule);
+        assert_eq!(targets, vec![target.join("debug/build")], "{targets:?}");
+    }
+
+    #[test]
+    fn measure_splits_total_and_trimmable_in_one_walk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let target = rust_target_fixture(&repo);
+        let rule = matching_rule("target", &["Cargo.toml".to_string()]).unwrap();
+
+        let entry = measure(&target, rule, "repo");
+        // 9 intermediate blobs of 1000 B; 3 executables of 10 B.
+        assert_eq!(entry.trimmable_bytes, 9000);
+        assert_eq!(entry.size_bytes, 9030);
+    }
+
+    #[test]
+    fn measure_reports_zero_trimmable_for_kinds_without_a_split() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let nm = repo.join("node_modules");
+        std::fs::create_dir_all(nm.join("dep")).unwrap();
+        std::fs::write(nm.join("dep/index.js"), vec![0u8; 100]).unwrap();
+        let rule = matching_rule("node_modules", &[]).unwrap();
+
+        let entry = measure(&nm, rule, "repo");
+        assert_eq!(entry.size_bytes, 100);
+        assert_eq!(
+            entry.trimmable_bytes, 0,
+            "node_modules has no separable intermediates"
+        );
+    }
+
+    #[test]
+    fn trim_removes_intermediates_and_keeps_executables() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let target = rust_target_fixture(&repo);
+        let rule = matching_rule("target", &["Cargo.toml".to_string()]).unwrap();
+
+        for t in trim_targets(&target, rule) {
+            std::fs::remove_dir_all(&t).unwrap();
+        }
+
+        assert!(
+            target.join("debug/myapp").exists(),
+            "executable must survive"
+        );
+        assert!(target.join("release/myapp").exists());
+        assert!(
+            target
+                .join("aarch64-unknown-linux-gnu/release/myapp")
+                .exists()
+        );
+        assert!(!target.join("debug/deps").exists());
+        assert!(!target.join("debug/incremental").exists());
+        assert!(!target.join("release/.fingerprint").exists());
+    }
+
+    #[test]
+    fn swift_trim_keeps_the_product_and_dependency_sources() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("Package.swift"), b"// swift-tools-version:5.9").unwrap();
+        let build = repo.join(".build");
+        let profile = build.join("arm64-apple-macosx/debug");
+        for d in ["ModuleCache", "index", "MCP.build", "Modules"] {
+            std::fs::create_dir_all(profile.join(d)).unwrap();
+        }
+        std::fs::write(profile.join("MyTool"), vec![0u8; 10]).unwrap();
+        std::fs::create_dir_all(build.join("index-build/debug")).unwrap();
+        std::fs::create_dir_all(build.join("checkouts/swift-nio")).unwrap();
+        std::fs::create_dir_all(build.join("repositories/swift-nio.git")).unwrap();
+
+        let rule = matching_rule(".build", &["Package.swift".to_string()]).unwrap();
+        let targets = trim_targets(&build, rule);
+        let rel: Vec<String> = targets
+            .iter()
+            .map(|p| {
+                p.strip_prefix(&build)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect();
+
+        assert!(rel.contains(&"index-build".to_string()), "{rel:?}");
+        assert!(
+            rel.contains(&"arm64-apple-macosx/debug/ModuleCache".to_string()),
+            "{rel:?}"
+        );
+        assert!(
+            rel.contains(&"arm64-apple-macosx/debug/MCP.build".to_string()),
+            "{rel:?}"
+        );
+        // Dependency SOURCES need the network to restore, and `Modules` holds
+        // the .swiftmodule interfaces — all three stay.
+        for kept in [
+            "checkouts",
+            "repositories",
+            "arm64-apple-macosx/debug/Modules",
+        ] {
+            assert!(
+                !rel.iter().any(|p| p == kept),
+                "{kept} must be kept: {rel:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn maven_trim_keeps_the_packaged_jar() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("pom.xml"), b"<project/>").unwrap();
+        let target = repo.join("target");
+        for d in [
+            "classes",
+            "test-classes",
+            "generated-sources",
+            "maven-status",
+        ] {
+            std::fs::create_dir_all(target.join(d)).unwrap();
+            std::fs::write(target.join(d).join("blob"), vec![0u8; 100]).unwrap();
+        }
+        std::fs::write(target.join("app-1.0.jar"), vec![0u8; 7]).unwrap();
+
+        let rule = matching_rule("target", &["pom.xml".to_string()]).unwrap();
+        assert_eq!(rule.kind, "maven");
+        let entry = measure(&target, rule, "repo");
+        assert_eq!(entry.trimmable_bytes, 400);
+        assert_eq!(entry.size_bytes, 407, "the jar is not trimmable");
+
+        for t in trim_targets(&target, rule) {
+            std::fs::remove_dir_all(&t).unwrap();
+        }
+        assert!(target.join("app-1.0.jar").exists());
+    }
+
+    #[test]
+    fn gradle_trim_keeps_libs_and_outputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::write(repo.join("build.gradle"), b"").unwrap();
+        let build = repo.join("build");
+        for d in ["classes", "tmp", "kotlin", "intermediates", "reports"] {
+            std::fs::create_dir_all(build.join(d)).unwrap();
+        }
+        for d in ["libs", "outputs", "distributions", "install"] {
+            std::fs::create_dir_all(build.join(d)).unwrap();
+        }
+
+        let rule = matching_rule("build", &["build.gradle".to_string()]).unwrap();
+        assert_eq!(rule.kind, "gradle");
+        let rel: Vec<String> = trim_targets(&build, rule)
+            .iter()
+            .map(|p| {
+                p.strip_prefix(&build)
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string()
+            })
+            .collect();
+
+        assert_eq!(rel.len(), 5, "{rel:?}");
+        for kept in ["libs", "outputs", "distributions", "install"] {
+            assert!(
+                !rel.iter().any(|p| p == kept),
+                "{kept} must be kept: {rel:?}"
+            );
+        }
+    }
+
+    /// The failure mode to fear is a trim silently escalating into a full clean
+    /// on a kind that has no separable intermediates. Two independent things
+    /// prevent it, and this asserts the second one over the WHOLE rule table:
+    /// `trim_build_artifact_inner` returns early on an empty `trim` list, and
+    /// an empty `trim` list can never expand to a target to delete.
+    #[test]
+    fn no_rule_without_trim_patterns_can_ever_yield_a_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("anything");
+        std::fs::create_dir_all(dir.join("deps/nested")).unwrap();
+        std::fs::create_dir_all(dir.join("classes")).unwrap();
+        std::fs::create_dir_all(dir.join("index-build")).unwrap();
+
+        for rule in ARTIFACT_RULES.iter().filter(|r| r.trim.is_empty()) {
+            assert!(
+                trim_targets(&dir, rule).is_empty(),
+                "{} ({}) has no trim patterns but produced targets",
+                rule.name,
+                rule.kind
+            );
+        }
+        // …and the kinds that DO have patterns are not accidentally empty.
+        assert!(
+            ARTIFACT_RULES.iter().filter(|r| !r.trim.is_empty()).count() >= 4,
+            "expected trim rules for rust, maven, gradle and swift"
+        );
+    }
+
+    #[test]
+    fn kinds_without_trim_rules_report_no_targets() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        let venv = repo.join(".venv/lib/python3.12/site-packages");
+        std::fs::create_dir_all(&venv).unwrap();
+        let rule = matching_rule(".venv", &[]).unwrap();
+
+        assert!(rule.trim.is_empty(), ".venv has no trim rules yet");
+        assert!(trim_targets(&repo.join(".venv"), rule).is_empty());
     }
 
     // -- delete_build_artifact tests --
