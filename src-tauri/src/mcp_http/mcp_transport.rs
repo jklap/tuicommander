@@ -708,6 +708,19 @@ fn apply_initialize_identity(state: &AppState, mcp_sid: &str, header: Option<&st
     if !is_valid_uuid(tuic) {
         return false;
     }
+    // Steady state for a connected bridge: it already routes to the identity and
+    // already owns it, so both branches below would rewrite the values that are
+    // there. Every bridge asserts this header on a `ping` every 3s, so without
+    // this the liveness poll serialises N terminals on a process-global mutex to
+    // do nothing. Any disagreement between the maps still takes the lock.
+    if mcp_session_routes_to(state, mcp_sid, tuic)
+        && state
+            .peer_agents
+            .get(tuic)
+            .is_some_and(|peer| peer.mcp_session_id == mcp_sid)
+    {
+        return true;
+    }
     let _bind_guard = PEER_IDENTITY_BIND_LOCK.lock();
     // Only a process that inherited this PTY's `$TUIC_SESSION` can assert the
     // header, so a second asserting bridge is a sibling inside that PTY, not a
@@ -5181,8 +5194,11 @@ pub(super) async fn mcp_post(
             // Native tools (no "__") dispatch through handle_mcp_tool_call_with_context,
             // which puts each blocking sync handler on the blocking pool itself
             // (see run_blocking_handler) — this call site does not wrap anything.
-            let allowed = resolve_allowed_upstreams(&state, session_id_str.as_deref());
             let (result, is_error) = if tool_name.contains("__") {
+                // Resolving the allowlist reads and parses repo-settings.json from
+                // disk. Only a proxied call consults it, so a native call must not
+                // pay for it.
+                let allowed = resolve_allowed_upstreams(&state, session_id_str.as_deref());
                 match state
                     .mcp_upstream_registry
                     .proxy_tool_call_for_repo(&tool_name, args.clone(), allowed.as_deref())
@@ -5229,6 +5245,23 @@ pub(super) async fn mcp_post(
             });
             Json(response).into_response()
         }
+    }
+}
+
+/// Releases the per-session SSE resources whenever the stream goes away —
+/// normal end, client disconnect, or server shutdown alike. Owned by the stream
+/// generator so it runs on drop; the only path a disconnect actually takes.
+struct SseStreamTeardown {
+    state: Arc<AppState>,
+    mcp_sid: String,
+}
+
+impl Drop for SseStreamTeardown {
+    fn drop(&mut self) {
+        if let Some(mut meta) = self.state.mcp_sessions.get_mut(&self.mcp_sid) {
+            meta.has_sse_stream = false;
+        }
+        self.state.messaging_channels.remove(&self.mcp_sid);
     }
 }
 
@@ -5287,10 +5320,16 @@ pub(super) async fn mcp_get(
 
     let mut tools_rx = state.mcp_tools_changed.subscribe();
     let mut msg_rx = msg_rx;
-    let cleanup_state = state.clone();
-    let cleanup_sid = sid.clone();
+    // Teardown hangs off a drop guard, not off code after the loop. A client that
+    // walks away has axum drop the response body mid-`select!`, so anything
+    // trailing the loop never runs and every reconnect would leak a sender.
+    let cleanup = SseStreamTeardown {
+        state: state.clone(),
+        mcp_sid: sid.clone(),
+    };
 
     let stream = async_stream::stream! {
+        let _cleanup = cleanup;
         loop {
             tokio::select! {
                 result = tools_rx.recv() => {
@@ -5322,11 +5361,6 @@ pub(super) async fn mcp_get(
                 }
             }
         }
-        // SSE stream ended — mark session as no longer having SSE
-        if let Some(mut meta) = cleanup_state.mcp_sessions.get_mut(&cleanup_sid) {
-            meta.has_sse_stream = false;
-        }
-        cleanup_state.messaging_channels.remove(&cleanup_sid);
     };
 
     axum::response::sse::Sse::new(stream)
@@ -14438,6 +14472,178 @@ mod tests {
         assert!(
             err.contains("localhost"),
             "Non-loopback should be rejected, got: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // SSE stream teardown (F66)
+    // -----------------------------------------------------------------------
+
+    fn insert_sse_session(state: &Arc<AppState>) -> String {
+        let sid = uuid::Uuid::new_v4().to_string();
+        state.mcp_sessions.insert(
+            sid.clone(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: false,
+                requires_meta_tools: false,
+                has_sse_stream: false,
+                repo_path: None,
+            },
+        );
+        sid
+    }
+
+    /// A client that walks away is the normal way a `GET /mcp` stream ends: axum
+    /// drops the response body, so nothing after the `select!` loop ever runs.
+    /// Teardown has to hang off the drop, otherwise every reconnect leaves a
+    /// broadcast sender behind and `messaging_channels` only ever grows.
+    #[tokio::test]
+    async fn dropping_the_sse_response_evicts_the_session_messaging_channel() {
+        let state = test_state();
+        let sid = insert_sse_session(&state);
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, sid.parse().unwrap());
+
+        let response = mcp_get(State(state.clone()), headers).await.into_response();
+        assert!(
+            state.messaging_channels.contains_key(&sid),
+            "subscribing must have created the per-session channel"
+        );
+        assert!(
+            state
+                .mcp_sessions
+                .get(&sid)
+                .is_some_and(|meta| meta.has_sse_stream),
+            "the session must be flagged as streaming while the response is alive"
+        );
+
+        drop(response);
+        assert!(
+            !state.messaging_channels.contains_key(&sid),
+            "dropping the stream must evict the messaging channel"
+        );
+        assert!(
+            state
+                .mcp_sessions
+                .get(&sid)
+                .is_some_and(|meta| !meta.has_sse_stream),
+            "dropping the stream must clear has_sse_stream"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Bridge liveness poll (F60)
+    // -----------------------------------------------------------------------
+
+    /// Every bridge pings every 3s and asserts `x-tuic-session` on that ping.
+    /// An already-bound bridge has nothing to bind, so the poll must not queue
+    /// behind the process-global identity lock — with one bridge per agent
+    /// terminal that is N/3 acquisitions per second to rewrite identical values.
+    #[test]
+    fn ping_from_an_already_bound_bridge_does_not_take_the_identity_lock() {
+        let state = test_state();
+        let sid = insert_sse_session(&state);
+        let tuic = uuid::Uuid::new_v4().to_string();
+        // Bind the identity the way initialize does, before we take the guard.
+        assert!(apply_initialize_identity(&state, &sid, Some(tuic.as_str())));
+
+        // Hold the identity lock, then let the bridge ping. A ping that needs the
+        // lock cannot answer until we let go.
+        let guard = PEER_IDENTITY_BIND_LOCK.lock();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ping_state = state.clone();
+        let ping_sid = sid.clone();
+        let ping_tuic = tuic.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let mut headers = HeaderMap::new();
+            headers.insert(MCP_SESSION_HEADER, ping_sid.parse().unwrap());
+            headers.insert(TUIC_SESSION_HEADER, ping_tuic.parse().unwrap());
+            let response = rt.block_on(async {
+                mcp_post(
+                    State(ping_state),
+                    ConnectInfo(loopback_addr()),
+                    headers,
+                    Json(serde_json::json!({
+                        "jsonrpc": "2.0", "id": 0, "method": "ping"
+                    })),
+                )
+                .await
+                .into_response()
+            });
+            let _ = tx.send(response.status());
+        });
+
+        let outcome = rx.recv_timeout(std::time::Duration::from_secs(2));
+        drop(guard);
+        assert_eq!(
+            outcome.ok(),
+            Some(StatusCode::OK),
+            "ping blocked on PEER_IDENTITY_BIND_LOCK"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Per-repo upstream allowlist resolution (F62)
+    // -----------------------------------------------------------------------
+
+    /// A native tool never consults the per-repo upstream allowlist, so it must
+    /// not pay for loading it. Proven by making `repo-settings.json` a reader-less
+    /// FIFO: `read_to_string` blocks in `open()`, so any call that still touches
+    /// the file never answers.
+    #[cfg(unix)]
+    #[test]
+    fn a_native_tool_call_does_not_read_repo_settings() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let fifo = dir.path().join("repo-settings.json");
+        let c_path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::mkfifo(c_path.as_ptr(), 0o644) },
+            0,
+            "mkfifo failed"
+        );
+        let _config_guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        let state = test_state();
+        let sid = uuid::Uuid::new_v4().to_string();
+        state.mcp_sessions.insert(
+            sid.clone(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: false,
+                requires_meta_tools: false,
+                // A repo_path is what makes the allowlist lookup reach the disk.
+                repo_path: Some("/test/repo".to_string()),
+                has_sse_stream: false,
+            },
+        );
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let call_state = state.clone();
+        std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("runtime");
+            let body = rt.block_on(post_test_tool_call(
+                call_state,
+                &sid,
+                "definitely_not_a_native_tool",
+                serde_json::json!({}),
+            ));
+            let _ = tx.send(body);
+        });
+
+        let outcome = rx.recv_timeout(std::time::Duration::from_secs(3));
+        assert!(
+            outcome.is_ok(),
+            "a native tool call blocked on reading repo-settings.json"
         );
     }
 }
