@@ -1780,6 +1780,14 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { path: args.path, repoPaths: args.repoPaths },
 		}),
 	},
+	// Same body as delete; removes only the artifact's regenerable intermediates.
+	trim_build_artifact: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/build-artifacts/trim`,
+			body: { path: args.path, repoPaths: args.repoPaths },
+		}),
+	},
 	plugin_exec_cli: {
 		map: (args, p) => ({
 			method: "POST",
