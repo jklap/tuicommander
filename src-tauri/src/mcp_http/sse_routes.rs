@@ -81,7 +81,10 @@ impl SseFilters {
         &self,
         stream_id: &str,
         initial: Option<Vec<String>>,
-    ) -> Option<(tokio::sync::watch::Receiver<Option<Vec<String>>>, FilterGuard)> {
+    ) -> Option<(
+        tokio::sync::watch::Receiver<Option<Vec<String>>>,
+        FilterGuard,
+    )> {
         let mut registry = self.inner.lock();
         if registry.streams.len() >= MAX_FILTERED_STREAMS
             && !registry.streams.contains_key(stream_id)
@@ -450,9 +453,7 @@ mod tests {
     /// Read the next SSE chunk, or `None` if nothing arrives promptly. The
     /// generator is a pull stream: it only advances while polled, so "nothing
     /// arrives" needs a timeout rather than an immediate poll.
-    async fn next_chunk(
-        body: &mut axum::body::BodyDataStream,
-    ) -> Option<String> {
+    async fn next_chunk(body: &mut axum::body::BodyDataStream) -> Option<String> {
         match tokio::time::timeout(Duration::from_millis(250), body.next()).await {
             Ok(Some(Ok(bytes))) => Some(String::from_utf8_lossy(&bytes).to_string()),
             _ => None,
@@ -489,7 +490,9 @@ mod tests {
         .into_response();
         let mut body = response.into_body().into_data_stream();
         assert!(
-            next_chunk(&mut body).await.is_some_and(|c| c.contains("retry")),
+            next_chunk(&mut body)
+                .await
+                .is_some_and(|c| c.contains("retry")),
             "the stream opens with the retry directive"
         );
 
@@ -588,7 +591,11 @@ mod tests {
     fn the_filter_registry_is_bounded() {
         let filters = SseFilters::default();
         let guards: Vec<_> = (0..MAX_FILTERED_STREAMS)
-            .map(|i| filters.register(&format!("s{i}"), None).expect("registered"))
+            .map(|i| {
+                filters
+                    .register(&format!("s{i}"), None)
+                    .expect("registered")
+            })
             .collect();
         assert!(
             filters.register("one-too-many", None).is_none(),
