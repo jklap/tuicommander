@@ -78,6 +78,7 @@ describe("GitHubPanel keyboard navigation", () => {
 
 	afterEach(() => {
 		document.body.innerHTML = "";
+		uiStore._testCancelPendingSave();
 	});
 
 	it("ArrowDown starts at the first row and walks down", () => {
@@ -171,6 +172,7 @@ describe("GitHubPanel section collapse persistence", () => {
 
 	afterEach(() => {
 		document.body.innerHTML = "";
+		uiStore._testCancelPendingSave();
 	});
 
 	it("writes the collapsed flag to the ui store when a header is clicked", () => {

@@ -172,6 +172,20 @@ function saveSettings(settings: Record<string, RepoSettings>): void {
 	);
 }
 
+/**
+ * Per-field resolution of the three-tier chain (per-repo > .tuic.json > global).
+ * One resolver per effective field, each reading only the signals its own field
+ * needs — so a caller that wants `terminalMetaHotkeys` does not subscribe to the
+ * ~50 signals the whole object touches. `getEffective` is built from this table,
+ * so the two entry points can never disagree.
+ */
+type EffectiveResolvers = {
+	[K in keyof EffectiveRepoSettings]: (
+		settings: RepoSettings,
+		local: () => RepoLocalConfig | null | undefined,
+	) => EffectiveRepoSettings[K];
+};
+
 /** Create repository settings store */
 function createRepoSettingsStore() {
 	const [state, setState] = createStore<RepoSettingsState>({
@@ -179,6 +193,44 @@ function createRepoSettingsStore() {
 		localConfigs: {},
 		activeRepoPath: null,
 	});
+
+	const resolvers: EffectiveResolvers = {
+		path: (s) => s.path,
+		displayName: (s) => s.displayName,
+		color: (s) => s.color,
+		baseBranch: (s, local) => s.baseBranch ?? local()?.base_branch ?? repoDefaultsStore.state.baseBranch,
+		copyIgnoredFiles: (s, local) =>
+			s.copyIgnoredFiles ?? local()?.copy_ignored_files ?? repoDefaultsStore.state.copyIgnoredFiles,
+		copyUntrackedFiles: (s, local) =>
+			s.copyUntrackedFiles ?? local()?.copy_untracked_files ?? repoDefaultsStore.state.copyUntrackedFiles,
+		// SECURITY: .tuic.json scripts are NOT merged here — a malicious repo could
+		// inject arbitrary shell commands via committed .tuic.json. Scripts must come
+		// from per-repo user settings or global defaults only. A future trust-on-first-use
+		// (TOFU) prompt will re-enable .tuic.json script inheritance.
+		setupScript: (s) => s.setupScript ?? repoDefaultsStore.state.setupScript,
+		runScript: (s) => s.runScript ?? repoDefaultsStore.state.runScript,
+		archiveScript: (s) => s.archiveScript ?? repoDefaultsStore.state.archiveScript,
+		terminalMetaHotkeys: (s) => s.terminalMetaHotkeys ?? true,
+		worktreeStorage: (s, local) =>
+			s.worktreeStorage ?? local()?.worktree_storage ?? repoDefaultsStore.state.worktreeStorage,
+		promptOnCreate: (s) => s.promptOnCreate ?? repoDefaultsStore.state.promptOnCreate,
+		deleteBranchOnRemove: (s, local) =>
+			s.deleteBranchOnRemove ?? local()?.delete_branch_on_remove ?? repoDefaultsStore.state.deleteBranchOnRemove,
+		autoArchiveMerged: (s, local) =>
+			s.autoArchiveMerged ?? local()?.auto_archive_merged ?? repoDefaultsStore.state.autoArchiveMerged,
+		orphanCleanup: (s, local) => s.orphanCleanup ?? local()?.orphan_cleanup ?? repoDefaultsStore.state.orphanCleanup,
+		prMergeStrategy: (s, local) =>
+			s.prMergeStrategy ?? local()?.pr_merge_strategy ?? repoDefaultsStore.state.prMergeStrategy,
+		afterMerge: (s, local) => s.afterMerge ?? local()?.after_merge ?? repoDefaultsStore.state.afterMerge,
+		autoFetchIntervalMinutes: (s) => s.autoFetchIntervalMinutes ?? repoDefaultsStore.state.autoFetchIntervalMinutes,
+		autoDeleteOnPrClose: (s, local) =>
+			s.autoDeleteOnPrClose ?? local()?.auto_delete_on_pr_close ?? repoDefaultsStore.state.autoDeleteOnPrClose,
+		mcpUpstreams: (s, local) => s.mcpUpstreams ?? local()?.mcp_upstreams ?? null,
+		prHideDrafts: (s) => s.prHideDrafts ?? settingsStore.state.prHideDrafts,
+		prHideConflicting: (s) => s.prHideConflicting ?? settingsStore.state.prHideConflicting,
+		prHideCiFailing: (s) => s.prHideCiFailing ?? settingsStore.state.prHideCiFailing,
+		branchLabels: (s) => s.branchLabels ?? {},
+	};
 
 	const actions = {
 		/** Load settings from Rust backend; migrate from localStorage on first run */
@@ -247,40 +299,50 @@ function createRepoSettingsStore() {
 			const settings = state.settings[path];
 			if (!settings) return undefined;
 
-			const local = state.localConfigs[path];
-			const defaults = repoDefaultsStore.state;
+			const local = () => state.localConfigs[path];
+			// Spelled out rather than looped so this stays one object literal with no
+			// intermediate arrays. The resolution rules live only in `resolvers`, and
+			// the literal must satisfy EffectiveRepoSettings, so neither can drift.
 			return {
-				path: settings.path,
-				displayName: settings.displayName,
-				color: settings.color,
-				baseBranch: settings.baseBranch ?? local?.base_branch ?? defaults.baseBranch,
-				copyIgnoredFiles: settings.copyIgnoredFiles ?? local?.copy_ignored_files ?? defaults.copyIgnoredFiles,
-				copyUntrackedFiles: settings.copyUntrackedFiles ?? local?.copy_untracked_files ?? defaults.copyUntrackedFiles,
-				// SECURITY: .tuic.json scripts are NOT merged here — a malicious repo could
-				// inject arbitrary shell commands via committed .tuic.json. Scripts must come
-				// from per-repo user settings or global defaults only. A future trust-on-first-use
-				// (TOFU) prompt will re-enable .tuic.json script inheritance.
-				setupScript: settings.setupScript ?? defaults.setupScript,
-				runScript: settings.runScript ?? defaults.runScript,
-				archiveScript: settings.archiveScript ?? defaults.archiveScript,
-				terminalMetaHotkeys: settings.terminalMetaHotkeys ?? true,
-				worktreeStorage: settings.worktreeStorage ?? local?.worktree_storage ?? defaults.worktreeStorage,
-				promptOnCreate: settings.promptOnCreate ?? defaults.promptOnCreate,
-				deleteBranchOnRemove:
-					settings.deleteBranchOnRemove ?? local?.delete_branch_on_remove ?? defaults.deleteBranchOnRemove,
-				autoArchiveMerged: settings.autoArchiveMerged ?? local?.auto_archive_merged ?? defaults.autoArchiveMerged,
-				orphanCleanup: settings.orphanCleanup ?? local?.orphan_cleanup ?? defaults.orphanCleanup,
-				prMergeStrategy: settings.prMergeStrategy ?? local?.pr_merge_strategy ?? defaults.prMergeStrategy,
-				afterMerge: settings.afterMerge ?? local?.after_merge ?? defaults.afterMerge,
-				autoFetchIntervalMinutes: settings.autoFetchIntervalMinutes ?? defaults.autoFetchIntervalMinutes,
-				autoDeleteOnPrClose:
-					settings.autoDeleteOnPrClose ?? local?.auto_delete_on_pr_close ?? defaults.autoDeleteOnPrClose,
-				mcpUpstreams: settings.mcpUpstreams ?? local?.mcp_upstreams ?? null,
-				prHideDrafts: settings.prHideDrafts ?? settingsStore.state.prHideDrafts,
-				prHideConflicting: settings.prHideConflicting ?? settingsStore.state.prHideConflicting,
-				prHideCiFailing: settings.prHideCiFailing ?? settingsStore.state.prHideCiFailing,
-				branchLabels: settings.branchLabels ?? {},
+				path: resolvers.path(settings, local),
+				displayName: resolvers.displayName(settings, local),
+				color: resolvers.color(settings, local),
+				baseBranch: resolvers.baseBranch(settings, local),
+				copyIgnoredFiles: resolvers.copyIgnoredFiles(settings, local),
+				copyUntrackedFiles: resolvers.copyUntrackedFiles(settings, local),
+				setupScript: resolvers.setupScript(settings, local),
+				runScript: resolvers.runScript(settings, local),
+				archiveScript: resolvers.archiveScript(settings, local),
+				terminalMetaHotkeys: resolvers.terminalMetaHotkeys(settings, local),
+				worktreeStorage: resolvers.worktreeStorage(settings, local),
+				promptOnCreate: resolvers.promptOnCreate(settings, local),
+				deleteBranchOnRemove: resolvers.deleteBranchOnRemove(settings, local),
+				autoArchiveMerged: resolvers.autoArchiveMerged(settings, local),
+				orphanCleanup: resolvers.orphanCleanup(settings, local),
+				prMergeStrategy: resolvers.prMergeStrategy(settings, local),
+				afterMerge: resolvers.afterMerge(settings, local),
+				autoFetchIntervalMinutes: resolvers.autoFetchIntervalMinutes(settings, local),
+				autoDeleteOnPrClose: resolvers.autoDeleteOnPrClose(settings, local),
+				mcpUpstreams: resolvers.mcpUpstreams(settings, local),
+				prHideDrafts: resolvers.prHideDrafts(settings, local),
+				prHideConflicting: resolvers.prHideConflicting(settings, local),
+				prHideCiFailing: resolvers.prHideCiFailing(settings, local),
+				branchLabels: resolvers.branchLabels(settings, local),
 			};
+		},
+
+		/**
+		 * Resolve a single effective field. Prefer this over `getEffective` in a
+		 * reactive scope: it subscribes only to the signals that field's own
+		 * inheritance chain reads, instead of all ~50 across the four stores.
+		 */
+		getEffectiveField<K extends keyof EffectiveRepoSettings>(
+			path: string,
+			field: K,
+		): EffectiveRepoSettings[K] | undefined {
+			const settings = state.settings[path];
+			if (!settings) return undefined;
+			return resolvers[field](settings, () => state.localConfigs[path]);
 		},
 
 		/** Update settings for a repository */

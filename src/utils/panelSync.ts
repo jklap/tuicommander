@@ -61,15 +61,30 @@ export function createPanelSyncProvider(panelId: string, serialize: () => unknow
 	let timer: ReturnType<typeof setInterval> | undefined;
 	let resyncUnlisten: (() => void) | undefined;
 	let pushCount = 0;
+	let lastEncoded: string | undefined;
 
-	function push() {
+	/**
+	 * Emit a snapshot to the detached window.
+	 *
+	 * Skipped when the snapshot is byte-identical to the last one sent: the
+	 * receiver replaces its whole state on every frame, so an unchanged push
+	 * costs a full IPC serialization plus a full DOM rebuild for no change.
+	 * `force` bypasses the check for the cases where the peer's copy is unknown
+	 * (first push after start, and an explicit resync request).
+	 */
+	function push(force = false) {
+		const snapshot = serialize();
+		const encoded = JSON.stringify(snapshot);
+		if (!force && encoded === lastEncoded) return;
+		lastEncoded = encoded;
+
 		pushCount++;
 		const label = `panel-${panelId}`;
 		const count = pushCount;
 		emitTo(label, "panel-sync", {
 			panelId,
 			ts: Date.now(),
-			snapshot: serialize(),
+			snapshot,
 		}).catch((e) => {
 			if (count > 1) {
 				appLogger.warn("panel-sync", `Failed to push snapshot to ${label}`, e);
@@ -80,14 +95,14 @@ export function createPanelSyncProvider(panelId: string, serialize: () => unknow
 	function start() {
 		if (timer) return;
 		listen<{ panelId: string }>("panel-resync-request", (e) => {
-			if (e.payload.panelId === panelId) push();
+			if (e.payload.panelId === panelId) push(true);
 		})
 			.then((fn) => {
 				resyncUnlisten = fn;
 			})
 			.catch((e) => appLogger.error("panel-sync", `Failed to register resync listener for ${panelId}`, e));
-		push();
-		timer = setInterval(push, intervalMs);
+		push(true);
+		timer = setInterval(() => push(), intervalMs);
 	}
 
 	function stop() {

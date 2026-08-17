@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createEffect, createRoot } from "solid-js";
+import { createStore } from "solid-js/store";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testInScope, testInScopeAsync } from "../helpers/store";
 
 const mockInvoke = vi.fn().mockResolvedValue(undefined);
@@ -7,15 +9,17 @@ vi.mock("@tauri-apps/api/core", () => ({
 	invoke: mockInvoke,
 }));
 
-// Mock repoDefaultsStore so getEffective tests are deterministic
-const mockDefaults = {
+// Mock repoDefaultsStore so getEffective tests are deterministic. It is a real
+// Solid store, not a plain object, so tests can observe which reads actually
+// subscribe to it.
+const [mockDefaults, setMockDefaults] = createStore({
 	baseBranch: "automatic",
 	copyIgnoredFiles: false,
 	copyUntrackedFiles: false,
 	setupScript: "",
 	runScript: "",
 	archiveScript: "",
-};
+});
 
 vi.mock("../../stores/repoDefaults", () => ({
 	repoDefaultsStore: { state: mockDefaults },
@@ -30,7 +34,7 @@ describe("repoSettingsStore", () => {
 		localStorage.clear();
 
 		// Reset mock defaults to known state
-		Object.assign(mockDefaults, {
+		setMockDefaults({
 			baseBranch: "automatic",
 			copyIgnoredFiles: false,
 			copyUntrackedFiles: false,
@@ -143,7 +147,7 @@ describe("repoSettingsStore", () => {
 				store.getOrCreate("/repo", "my-repo");
 				store.update("/repo", { baseBranch: "main", copyIgnoredFiles: true });
 
-				mockDefaults.baseBranch = "develop"; // global default is different
+				setMockDefaults("baseBranch", "develop"); // global default is different
 				const effective = store.getEffective("/repo");
 				expect(effective).toBeDefined();
 				expect(effective!.baseBranch).toBe("main"); // repo override wins
@@ -155,7 +159,7 @@ describe("repoSettingsStore", () => {
 			testInScope(() => {
 				store.getOrCreate("/repo", "my-repo");
 				// baseBranch is null (inherit) but global says "develop"
-				mockDefaults.baseBranch = "develop";
+				setMockDefaults("baseBranch", "develop");
 				const effective = store.getEffective("/repo");
 				expect(effective).toBeDefined();
 				expect(effective!.baseBranch).toBe("develop");
@@ -183,7 +187,7 @@ describe("repoSettingsStore", () => {
 		it("returns archiveScript from global default when not overridden", () => {
 			testInScope(() => {
 				store.getOrCreate("/repo", "my-repo");
-				mockDefaults.archiveScript = "cleanup.sh";
+				setMockDefaults("archiveScript", "cleanup.sh");
 				const effective = store.getEffective("/repo");
 				expect(effective!.archiveScript).toBe("cleanup.sh");
 			});
@@ -193,7 +197,7 @@ describe("repoSettingsStore", () => {
 			testInScope(() => {
 				store.getOrCreate("/repo", "my-repo");
 				store.update("/repo", { archiveScript: "my-cleanup.sh" });
-				mockDefaults.archiveScript = "global-cleanup.sh";
+				setMockDefaults("archiveScript", "global-cleanup.sh");
 				const effective = store.getEffective("/repo");
 				expect(effective!.archiveScript).toBe("my-cleanup.sh");
 			});
@@ -400,6 +404,109 @@ describe("repoSettingsStore", () => {
 			await testInScopeAsync(async () => {
 				await store.hydrate();
 				expect(localStorage.getItem("tui-commander-repo-settings")).toBeNull();
+			});
+		});
+	});
+	// ---- Per-field access (F73) ----
+	//
+	// getEffective() reads ~50 signals across four stores and allocates a
+	// 24-field object. Call sites that want one field (a branch label, a
+	// terminalMetaHotkeys flag) must not wake on every one of those.
+
+	describe("per-field effective access", () => {
+		let dispose: (() => void) | undefined;
+
+		afterEach(() => {
+			dispose?.();
+			dispose = undefined;
+		});
+
+		const flush = () => new Promise<void>((resolve) => queueMicrotask(resolve));
+
+		it("reading one field does not subscribe to unrelated global defaults", async () => {
+			store.getOrCreate("/repo", "my-repo");
+			let runs = 0;
+
+			createRoot((d) => {
+				dispose = d;
+				createEffect(() => {
+					// terminalMetaHotkeys resolves from the repo field alone.
+					void store.getEffectiveField("/repo", "terminalMetaHotkeys");
+					runs++;
+				});
+			});
+			await flush();
+			runs = 0;
+
+			// A default this field never consults.
+			setMockDefaults("baseBranch", "develop");
+			await flush();
+
+			expect(runs).toBe(0);
+		});
+
+		// The contrast that motivates getEffectiveField: the same one-field read
+		// through getEffective wakes on a default the field never consults,
+		// because getEffective touches all 53 properties on every call.
+		it("getEffective wakes a one-field reader on an unrelated default", async () => {
+			store.getOrCreate("/repo", "my-repo");
+			let runs = 0;
+
+			createRoot((d) => {
+				dispose = d;
+				createEffect(() => {
+					void store.getEffective("/repo")?.terminalMetaHotkeys;
+					runs++;
+				});
+			});
+			await flush();
+			runs = 0;
+
+			setMockDefaults("baseBranch", "develop");
+			await flush();
+
+			expect(runs).toBe(1);
+		});
+
+		it("still wakes when the field's own inheritance chain changes", async () => {
+			store.getOrCreate("/repo", "my-repo");
+			let seen: string | undefined;
+			let runs = 0;
+
+			createRoot((d) => {
+				dispose = d;
+				createEffect(() => {
+					seen = store.getEffectiveField("/repo", "baseBranch");
+					runs++;
+				});
+			});
+			await flush();
+			expect(seen).toBe("automatic");
+			runs = 0;
+
+			setMockDefaults("baseBranch", "develop");
+			await flush();
+
+			expect(runs).toBe(1);
+			expect(seen).toBe("develop");
+		});
+
+		it("agrees with getEffective on every field", () => {
+			testInScope(() => {
+				store.getOrCreate("/repo", "my-repo");
+				store.update("/repo", { baseBranch: "main", color: "#fff", autoFetchIntervalMinutes: 7 });
+				setMockDefaults("archiveScript", "cleanup.sh");
+
+				const effective = store.getEffective("/repo")!;
+				for (const key of Object.keys(effective) as (keyof typeof effective)[]) {
+					expect(store.getEffectiveField("/repo", key)).toEqual(effective[key]);
+				}
+			});
+		});
+
+		it("returns undefined for an unknown repo", () => {
+			testInScope(() => {
+				expect(store.getEffectiveField("/unknown", "baseBranch")).toBeUndefined();
 			});
 		});
 	});
