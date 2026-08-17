@@ -402,6 +402,30 @@ describe("repositoriesStore", () => {
 		});
 	});
 
+	describe("isGitRepo()", () => {
+		it("returns false for a registered plain directory", () => {
+			testInScope(() => {
+				store.add({ path: "/plain", displayName: "plain", isGitRepo: false });
+				expect(store.isGitRepo("/plain")).toBe(false);
+			});
+		});
+
+		it("returns true for a registered git repo", () => {
+			testInScope(() => {
+				store.add({ path: "/repo", displayName: "repo" });
+				expect(store.isGitRepo("/repo")).toBe(true);
+			});
+		});
+
+		// Worktree paths are not registered under their own key — callers pass the
+		// worktree path and must not be gated out of git calls.
+		it("returns true for an unknown path", () => {
+			testInScope(() => {
+				expect(store.isGitRepo("/never-registered")).toBe(true);
+			});
+		});
+	});
+
 	describe("getPaths()", () => {
 		it("returns all repo paths", () => {
 			testInScope(() => {
