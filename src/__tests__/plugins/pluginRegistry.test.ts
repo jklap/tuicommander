@@ -449,109 +449,238 @@ describe("dispatchLine", () => {
 });
 
 // ---------------------------------------------------------------------------
-// processRawOutput
+// handleWatcherLines — the Rust reader assembles the lines, this dispatches them
 // ---------------------------------------------------------------------------
 
-describe("processRawOutput", () => {
-	it("reassembles lines and dispatches clean (ANSI-stripped) lines to watchers", async () => {
+/** Read the payload of the last set_plugin_output_watchers invoke. */
+async function lastSync(): Promise<{
+	clientId: string;
+	seq: number;
+	watchers: Array<{ id: string; pattern: string; flags: string }>;
+}> {
+	const { invoke } = await import("../../invoke");
+	const calls = vi.mocked(invoke).mock.calls.filter((c) => c[0] === "set_plugin_output_watchers");
+	return calls[calls.length - 1]?.[1] as never;
+}
+
+describe("handleWatcherLines", () => {
+	it("pushes every registered watcher to the backend as source + flags, tagged with client and seq", async () => {
+		const { invoke } = await import("../../invoke");
+		vi.mocked(invoke).mockClear();
+		pluginRegistry.register(
+			makePlugin("p1", (host) => {
+				host.registerOutputWatcher({ pattern: /model is at capacity/i, onMatch: vi.fn() });
+			}),
+		);
+
+		const { clientId, seq, watchers } = await lastSync();
+		expect(watchers).toHaveLength(1);
+		expect(watchers[0].pattern).toBe("model is at capacity");
+		expect(watchers[0].flags).toBe("i");
+		expect(watchers[0].id).toBeTruthy();
+		expect(clientId).toBeTruthy();
+		// The backend orders mutations by this counter, so it must climb.
+		expect(seq).toBeGreaterThan(0);
+	});
+
+	it("fires a watcher the backend matched, with its capture groups", async () => {
+		const { invoke } = await import("../../invoke");
+		vi.mocked(invoke).mockClear();
+		vi.mocked(invoke).mockResolvedValueOnce({ applied: true, rejected: [] } as unknown as void);
 		const onMatch = vi.fn();
 		pluginRegistry.register(
 			makePlugin("p1", (host) => {
-				host.registerOutputWatcher({ pattern: /hello/, onMatch });
+				host.registerOutputWatcher({ pattern: /capacity (\w+)/, onMatch });
 			}),
 		);
-		// Raw chunk with ANSI color + newline
-		pluginRegistry.processRawOutput("\x1b[32mhello world\x1b[0m\n", "s1");
 		await flushMicrotasks();
+
+		const { clientId, watchers } = await lastSync();
+		pluginRegistry.handleWatcherLines("s1", [
+			{ text: "capacity exceeded", matched_ids: [`${clientId}/${watchers[0].id}`] },
+		]);
+		await flushMicrotasks();
+
 		expect(onMatch).toHaveBeenCalledOnce();
-		// First arg is RegExpExecArray, match[0] should be the clean text match
-		expect(onMatch.mock.calls[0][0][0]).toBe("hello");
+		expect(onMatch.mock.calls[0][0][1]).toBe("exceeded");
 		expect(onMatch.mock.calls[0][1]).toBe("s1");
 	});
 
-	it("holds partial lines until newline arrives", async () => {
+	it("ignores a match qualified with another frontend's client id", async () => {
+		const { invoke } = await import("../../invoke");
+		vi.mocked(invoke).mockResolvedValueOnce({ applied: true, rejected: [] } as unknown as void);
 		const onMatch = vi.fn();
 		pluginRegistry.register(
 			makePlugin("p1", (host) => {
-				host.registerOutputWatcher({ pattern: /hello/, onMatch });
+				host.registerOutputWatcher({ pattern: /capacity/, onMatch });
 			}),
 		);
-		pluginRegistry.processRawOutput("hel", "s1");
+		await flushMicrotasks();
+
+		const { watchers } = await lastSync();
+		// Same watcher id, different client: a browser tab's set travels on the
+		// same event and must not fire this window's watchers.
+		pluginRegistry.handleWatcherLines("s1", [
+			{ text: "capacity exceeded", matched_ids: [`other-client/${watchers[0].id}`] },
+		]);
 		await flushMicrotasks();
 		expect(onMatch).not.toHaveBeenCalled();
-		pluginRegistry.processRawOutput("lo\n", "s1");
-		await flushMicrotasks();
-		expect(onMatch).toHaveBeenCalledOnce();
 	});
 
-	it("is a no-op when no watchers are registered", () => {
-		// Should not throw even with no plugins registered
-		expect(() => pluginRegistry.processRawOutput("anything\n", "s1")).not.toThrow();
-	});
-
-	// The transport that feeds this function coalesces chunks under a throttle
-	// (PtyOutputCoalescer, src-tauri/src/state.rs). It must never DROP one: the
-	// LineBuffer carries the partial trailing line across chunks, so a missing
-	// chunk splices the tail of one chunk onto the head of a later one and
-	// reports a line that was never on the wire (audit finding F1).
-	it("reports the same lines no matter where the chunk boundaries fall", async () => {
-		const seen: string[] = [];
-		pluginRegistry.register(
-			makePlugin("p1", (host) => {
-				host.registerOutputWatcher({
-					pattern: /^.*$/,
-					onMatch: (m) => seen.push(m[0]),
-				});
-			}),
+	it("fires a watcher exactly once when the backend flagged it and the line is delivered too", async () => {
+		const { invoke } = await import("../../invoke");
+		vi.mocked(invoke).mockClear();
+		// The reply has not landed yet: the watcher is still `inRust: false` here
+		// while Rust already matches it — the acknowledgement window.
+		let ack: (v: unknown) => void = () => {};
+		vi.mocked(invoke).mockImplementationOnce(
+			() => new Promise((r) => (ack = r as (v: unknown) => void)) as Promise<void>,
 		);
-		const stream = "model is at capacity\nretrying now\ndone\n";
-
-		// Split the same byte stream at every possible boundary; each split is a
-		// different session so the buffers stay independent.
-		for (let cut = 0; cut <= stream.length; cut++) {
-			seen.length = 0;
-			pluginRegistry.processRawOutput(stream.slice(0, cut), `cut-${cut}`);
-			pluginRegistry.processRawOutput(stream.slice(cut), `cut-${cut}`);
-			await flushMicrotasks();
-			expect(seen, `split at ${cut}`).toEqual(["model is at capacity", "retrying now", "done"]);
-		}
-	});
-
-	it("fabricates a line that was never on the wire when a chunk is dropped", async () => {
-		const seen: string[] = [];
-		pluginRegistry.register(
-			makePlugin("p1", (host) => {
-				host.registerOutputWatcher({
-					pattern: /^.*$/,
-					onMatch: (m) => seen.push(m[0]),
-				});
-			}),
-		);
-		// Chunk B is what a dropping throttle would discard. Its loss joins the
-		// tail of A to the head of C — this is why the throttle must coalesce.
-		pluginRegistry.processRawOutput("model is at ", "s-lossy");
-		/* dropped: "capacity\nretrying " */
-		pluginRegistry.processRawOutput("now\n", "s-lossy");
-		await flushMicrotasks();
-
-		expect(seen).toEqual(["model is at now"]);
-		expect(seen).not.toContain("model is at capacity");
-	});
-
-	it("maintains separate LineBuffers per sessionId", async () => {
 		const onMatch = vi.fn();
 		pluginRegistry.register(
 			makePlugin("p1", (host) => {
 				host.registerOutputWatcher({ pattern: /done/, onMatch });
 			}),
 		);
-		pluginRegistry.processRawOutput("do", "session-a");
-		pluginRegistry.processRawOutput("ne\n", "session-b"); // different session
 		await flushMicrotasks();
-		expect(onMatch).not.toHaveBeenCalled(); // "done" not complete in session-b's buffer
-		pluginRegistry.processRawOutput("ne\n", "session-a"); // completes in session-a
+
+		const { clientId, watchers } = await lastSync();
+		pluginRegistry.handleWatcherLines("s1", [
+			{ text: "done", matched_ids: [`${clientId}/${watchers[0].id}`] },
+		]);
 		await flushMicrotasks();
 		expect(onMatch).toHaveBeenCalledOnce();
+
+		ack({ applied: true, rejected: [] });
+		await flushMicrotasks();
+	});
+
+	it("matches a pattern the backend rejected against the lines it ships", async () => {
+		const { invoke } = await import("../../invoke");
+		const onMatch = vi.fn();
+		vi.mocked(invoke).mockImplementationOnce((_cmd, args) => {
+			const { watchers } = args as { watchers: Array<{ id: string }> };
+			return Promise.resolve({ applied: true, rejected: [watchers[0].id] }) as unknown as Promise<void>;
+		});
+		pluginRegistry.register(
+			makePlugin("p1", (host) => {
+				// Rust cannot compile lookahead.
+				host.registerOutputWatcher({ pattern: /done(?= now)/, onMatch });
+			}),
+		);
+		await flushMicrotasks();
+
+		pluginRegistry.handleWatcherLines("s1", [{ text: "done now", matched_ids: [] }]);
+		await flushMicrotasks();
+		expect(onMatch).toHaveBeenCalledOnce();
+	});
+
+	it("ignores a stale sync reply that resolves after a newer one", async () => {
+		const { invoke } = await import("../../invoke");
+		vi.mocked(invoke).mockClear();
+		const onMatch = vi.fn();
+		// First sync (one watcher) is slow and answers "nothing rejected"; the
+		// second sync (two watchers) answers first and rejects the new pattern.
+		let resolveFirst: (v: unknown) => void = () => {};
+		vi.mocked(invoke)
+			.mockImplementationOnce(() => new Promise((r) => (resolveFirst = r as (v: unknown) => void)) as Promise<void>)
+			.mockImplementationOnce((_cmd, args) => {
+				const { watchers } = args as { watchers: Array<{ id: string }> };
+				return Promise.resolve({ applied: true, rejected: [watchers[1].id] }) as unknown as Promise<void>;
+			});
+
+		pluginRegistry.register(
+			makePlugin("p1", (host) => {
+				host.registerOutputWatcher({ pattern: /first/, onMatch: vi.fn() });
+				host.registerOutputWatcher({ pattern: /second(?= now)/, onMatch });
+			}),
+		);
+		await flushMicrotasks();
+		resolveFirst({ applied: true, rejected: [] });
+		await flushMicrotasks();
+
+		// The stale "nothing rejected" reply must not claim the lookahead watcher.
+		pluginRegistry.handleWatcherLines("s1", [{ text: "second now", matched_ids: [] }]);
+		await flushMicrotasks();
+		expect(onMatch).toHaveBeenCalledOnce();
+	});
+
+	it("keeps matching in the WebView when the backend refuses the sync as stale", async () => {
+		const { invoke } = await import("../../invoke");
+		const onMatch = vi.fn();
+		// `applied: false` describes a set the backend does not hold — its
+		// rejected list says nothing about who matches what.
+		vi.mocked(invoke).mockResolvedValueOnce({ applied: false, rejected: [] } as unknown as void);
+		pluginRegistry.register(
+			makePlugin("p1", (host) => {
+				host.registerOutputWatcher({ pattern: /done/, onMatch });
+			}),
+		);
+		await flushMicrotasks();
+
+		pluginRegistry.handleWatcherLines("s1", [{ text: "done", matched_ids: [] }]);
+		await flushMicrotasks();
+		expect(onMatch).toHaveBeenCalledOnce();
+	});
+
+	it("keeps matching in the WebView when the backend call fails", async () => {
+		const { invoke } = await import("../../invoke");
+		const onMatch = vi.fn();
+		vi.mocked(invoke).mockRejectedValueOnce(new Error("no such command"));
+		pluginRegistry.register(
+			makePlugin("p1", (host) => {
+				host.registerOutputWatcher({ pattern: /done/, onMatch });
+			}),
+		);
+		await flushMicrotasks();
+
+		pluginRegistry.handleWatcherLines("s1", [{ text: "done", matched_ids: [] }]);
+		await flushMicrotasks();
+		expect(onMatch).toHaveBeenCalledOnce();
+	});
+
+	it("is a no-op when no watcher is registered", () => {
+		expect(() => pluginRegistry.handleWatcherLines("s1", [{ text: "anything", matched_ids: [] }])).not.toThrow();
+	});
+
+	// Rust is the only source of lines, so a client the backend does not know
+	// about is blind with no local symptom — a failed sync, or an eviction when
+	// stale browser reloads fill the client bound. Neither raises an event, so
+	// recovery is periodic.
+	it("resyncs on a heartbeat while watchers exist, and stops when the last one goes", async () => {
+		vi.useFakeTimers();
+		try {
+			const { invoke } = await import("../../invoke");
+			vi.mocked(invoke).mockClear();
+			const syncCount = () =>
+				vi.mocked(invoke).mock.calls.filter((c) => c[0] === "set_plugin_output_watchers").length;
+
+			pluginRegistry.register(
+				makePlugin("p1", (host) => {
+					host.registerOutputWatcher({ pattern: /done/, onMatch: vi.fn() });
+				}),
+			);
+			expect(syncCount()).toBe(1);
+			const firstSeq = (await lastSync()).seq;
+
+			vi.advanceTimersByTime(30_000);
+			expect(syncCount()).toBe(2);
+			// A fresh sequence each time, so the backend can order the heartbeat
+			// against a concurrent mutation instead of refusing it as stale.
+			expect((await lastSync()).seq).toBe(firstSeq + 1);
+
+			vi.advanceTimersByTime(30_000);
+			expect(syncCount()).toBe(3);
+
+			// Disposal syncs the now-empty set, then the timer must stop: an idle
+			// frontend has nothing to keep alive.
+			pluginRegistry.unregister("p1");
+			const afterDisposal = syncCount();
+			vi.advanceTimersByTime(5 * 60_000);
+			expect(syncCount()).toBe(afterDisposal);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 
@@ -694,20 +823,16 @@ describe("onload failure", () => {
 // ---------------------------------------------------------------------------
 
 describe("removeSession", () => {
-	it("cleans up LineBuffer for a session", () => {
-		const onMatch = vi.fn();
+	it("tells plugins the session is gone", async () => {
+		const handler = vi.fn();
 		pluginRegistry.register(
 			makePlugin("p1", (host) => {
-				host.registerOutputWatcher({ pattern: /hello/, onMatch });
+				host.registerStructuredEventHandler("session-closed", handler);
 			}),
 		);
-		// Build up partial data in session buffer
-		pluginRegistry.processRawOutput("hel", "s1");
-		// Remove the session — the partial "hel" should be lost
 		pluginRegistry.removeSession("s1");
-		// Now send "lo\n" — should NOT complete "hello" since buffer was cleared
-		pluginRegistry.processRawOutput("lo\n", "s1");
-		expect(onMatch).not.toHaveBeenCalled();
+		await flushMicrotasks();
+		expect(handler).toHaveBeenCalledWith({}, "s1");
 	});
 
 	it("is a no-op for unknown session", () => {

@@ -192,8 +192,8 @@ terminalsStore.update(id, { shellState: state })
 handleShellStateChange(prev, next)  ← existing debounced busy logic
 ```
 
-The frontend does NOT derive shellState from raw PTY data. `handlePtyData` renders
-grid frames and updates `lastDataAt` — but never touches `shellState`.
+The frontend does NOT derive shellState from raw PTY data. `handlePtyData` updates
+`lastDataAt` and the tab activity flag — but never touches `shellState`.
 
 ### Transition table
 

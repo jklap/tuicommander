@@ -23,7 +23,8 @@ When modifying PluginHost API, capabilities, manifest schema, Tauri commands use
 | `src/plugins/types.ts` | PluginHost interface, PluginCapability union, snapshot types |
 | `src/plugins/pluginRegistry.ts` | Implementation in `buildHost()` |
 | `src/components/PluginPanel/pluginBaseStyles.ts` | Base CSS classes available to all plugin panels |
-| `src-tauri/src/plugins.rs` | `KNOWN_CAPABILITIES` list (new capabilities) |
+| `src-tauri/src/plugins.rs` | `KNOWN_CAPABILITIES` list (new capabilities); `set_plugin_output_watchers` sync |
+| `src-tauri/src/output_watchers.rs` | Rust-side OutputWatcher matching: `WatcherSpec`, `OutputWatcherRegistry::sync` (per-client sets; which patterns are rejected back to the frontend), `to_portable_pattern` (ECMAScript class escapes — Rust may over-match, never under-match), `clean_line` — a **port** of `src/utils/stripAnsi.ts` + the backtick strip — and `StreamLines`, the **only** line assembler. Changing `stripAnsi.ts` requires changing `clean_line`, or the two sides match on different text |
 | `src-tauri/src/lib.rs` | Register new Tauri commands in `invoke_handler` |
 | `docs/plugins.md` | Plugin developer guide (API reference, capabilities table, **Panel CSS Design Strategy** section, examples) |
 | `src-tauri/src/mcp_http/plugin_docs.rs` | AI-optimized plugin reference (`PLUGIN_DOCS` const — **must stay in sync with `docs/plugins.md`**) |
@@ -87,6 +88,7 @@ When adding a new `app.emit(event_name, payload)` call, document it here and lis
 | `native-key-down` | `{ key: "F13".."F20", cmd, ctrl, alt, shift }` | `native_keys.rs` — macOS only, scoped to the `main` window; the event is passed through (nothing native to suppress) | `useNativeKeyCombo.ts`, attached only while a shortcut recorder is open |
 | `mcp-toast` | `{ title, message, level, sound, origin_repo_path? }` | `mcp_transport.rs` — `ui action=toast`; derives origin from the calling MCP session rather than accepting caller-supplied scope | `useAppInit.ts` → repository-labelled toast + repository-scoped Messages item |
 | `pty-description-changed` | `{ session_id: string, description: string | null }` | `state.rs` — MCP `agent spawn` / `session input` updates the orchestrator-owned PTY description | `useAppInit.ts` → `terminalsStore.ptyDescription` → Context bar |
+| `pty-watcher-lines-{session_id}` | `{ session_id: string, lines: [{ text: string, matched_ids: string[] }] }` | `pty.rs emit_watcher_lines()` — one emit per 100 ms batch of assembled lines; `text` is the CLEANED text Rust matched on, `matched_ids` are qualified `client_id/watcher_id`. Rust ships every line only while a registered pattern could not be compiled, otherwise the matched ones alone. Dual-emitted on `event_bus` as `PluginWatcherLines` (`watcher-lines` WS frame on `/sessions/:id/stream` in both `?format=grid` and raw mode — **not** `?format=log|text`, which returns before the event loop — plus `plugin-watcher-lines` SSE) | `CanvasTerminal.tsx` → `transport.onEvent("watcher-lines", …)` → `pluginRegistry.handleWatcherLines()`, which re-runs the JS `RegExp` on each line. The listener is installed BEFORE the grid subscription — a line that lands while it is being attached is lost. **Not** in `useAppInit.ts` — the listener is per-session |
 
 ### HTTP & MCP Server
 When adding routes or changing server behavior:

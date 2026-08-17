@@ -228,6 +228,7 @@ WebSocket connections to `/sessions/:id/stream` receive JSON-framed messages:
 ```json
 {"type": "output", "data": "raw terminal output text"}
 {"type": "parsed", "event": {"type": "question", "text": "Allow?"}}
+{"type": "watcher-lines", "session_id": "abc", "lines": [{"text": "clean line", "matched_ids": ["<client_id>/w0"]}]}
 {"type": "exit"}
 {"type": "closed"}
 ```
@@ -236,6 +237,7 @@ Frame types:
 - `output` — Raw PTY output (ANSI-stripped when `?format=text`)
 - `log` — VT100-extracted clean lines batch (when `?format=log`): `{"type":"log","lines":[...],"offset":N}`
 - `parsed` — Structured events (questions, rate limits, errors) from the output parser
+- `watcher-lines` — A batch of assembled PTY lines for the plugin OutputWatchers registered through `POST /api/plugins/output-watchers`. Sent on the raw stream and on `?format=grid`; `?format=log|text` does not carry it. Each entry is `{text, matched_ids}`: `text` is the cleaned line Rust matched on, so the client can run its own `RegExp` on it and obtain the capture groups; `matched_ids` are the qualified ids (`<client_id>/<watcher_id>`) of the watchers Rust matched. A client ignores the ids of other clients. While every registered pattern compiles, only the matched lines are sent; while one does not, every line is sent
 - `exit` — Session process exited
 - `closed` — Session was closed
 
@@ -267,6 +269,7 @@ Broadcasts server-side events to all browser/mobile clients. Supports optional `
 | `head-changed` | `{repo_path, branch}` | Git HEAD changed (branch switch) |
 | `pty-parsed` | `{session_id, parsed}` | Structured output event from PTY parser |
 | `pty-exit` | `{session_id}` | PTY process exited |
+| `plugin-watcher-lines` | `{session_id, lines}` | A batch of assembled PTY lines for the plugin OutputWatchers; each line is `{text, matched_ids}`, where `text` is the cleaned text the match was made on |
 | `plugin-changed` | `{plugin_ids}` | Plugin(s) installed/removed/updated |
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
 | `mcp-toast` | `{title, message, level, sound, origin_repo_path?}` | Toast notification from MCP layer, including the caller repository/cwd when known |
@@ -1360,6 +1363,45 @@ Intentionally **not** mapped (native/host-only, stay Tauri-only): `plugin_watch_
 (OS keychain), and user-plugin install/uninstall (`install_plugin_from_*`,
 `uninstall_plugin` — local-FS install + AppHandle emit). `delete_plugin_data` is unmapped
 for lack of a frontend caller (YAGNI).
+
+### Plugin Output Watchers
+
+```
+POST /api/plugins/output-watchers
+Content-Type: application/json
+
+{
+  "client_id": "b7d1…",
+  "seq": 3,
+  "watchers": [{ "id": "w0", "pattern": "model is at capacity", "flags": "i" }]
+}
+```
+
+Replaces the compiled OutputWatcher set the PTY reader thread matches lines against
+(`set_plugin_output_watchers`). `pattern` and `flags` are the source and flags of a JS
+`RegExp`; `i`, `m` and `s` are applied. The route is not `:plugin_id`-scoped: one
+frontend owns one set, holding the watchers of all its plugins, and pushes all of it on
+every add or remove.
+
+`client_id` identifies the frontend. Sets are per client (at most 8; the least recently
+synced is evicted, and an empty `watchers` array leaves a parked record so a delayed
+older sync cannot resurrect the disposed set), so a desktop window and a browser tab
+cannot overwrite each other. A client is expected to re-post its set every 30 s while it
+holds any watcher: nothing signals a disconnect, so that heartbeat is both what keeps it
+from being evicted as dead and how it recovers if it was. It must not contain `/`, which qualifies the
+watcher ids reported back. `seq` is a monotonic per-client counter that orders the
+mutations: a sync whose `seq` is not above the stored one is stale and changes nothing.
+
+Returns `{ "applied": bool, "rejected": [id] }`. `rejected` lists the ids the Rust
+`regex` crate cannot compile (lookaround, backreferences, a negated class escape inside
+a character class). A rejected id is not an error — the frontend keeps matching that
+watcher itself, and Rust ships every assembled line for as long as one is registered.
+When `applied` is `false` the sync was stale: the client must ignore `rejected`, because
+it describes a set the backend does not hold.
+
+Assembled lines are pushed back as the `watcher-lines` WebSocket frame (on
+`/sessions/:id/stream` in both `?format=grid` and raw mode; `?format=log|text` does not
+carry it) and the `plugin-watcher-lines` SSE event.
 
 ## Worktree Endpoints
 

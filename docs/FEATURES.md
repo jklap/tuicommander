@@ -1557,6 +1557,8 @@ shortcuts and the Global Hotkey. Keys macOS itself claims before the process
 - Panel API: rich HTML panels in sandboxed iframes (`sandbox="allow-scripts"`) with structured message bridge (`onMessage`/`send`) and automatic CSS theme variable injection
 - Shared ticker system: `setTicker`/`clearTicker` API with source labels, priority tiers (low <10, normal 10-99, urgent >=100), counter badge, click-to-cycle, right-click popover
 - Agent-scoped plugins: `agentTypes` manifest field restricts output watchers and structured events to terminals running specific agents (e.g. `["claude"]`)
+- Output watchers match in Rust on the PTY reader thread: the frontend pushes its pattern set (`set_plugin_output_watchers`), Rust assembles and cleans the lines, and the WebView is only woken for a line that matched. Rust is the only line assembler, so a watcher that registers mid-line still sees that line whole. A pattern the Rust `regex` crate cannot express (lookaround, backreferences) is reported back and keeps matching in the WebView, which then receives every line
+- Watcher sets are per client (max 8): a desktop window and a browser tab keep independent sets, and browser/PWA clients receive watcher matches as well
 - Plugin manifest fields use camelCase (`minAppVersion`, `agentTypes`, `contentUri`) — matches Rust serde serialization
 
 ### 17.2 Plugin Management (Settings > Plugins)

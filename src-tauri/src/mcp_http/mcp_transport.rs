@@ -6634,6 +6634,7 @@ mod tests {
             exit_codes: dashmap::DashMap::new(),
             shell_state_since_ms: dashmap::DashMap::new(),
             loaded_plugins: dashmap::DashMap::new(),
+            plugin_output_watchers: parking_lot::RwLock::new(Default::default()),
             relay: crate::state::RelayState::new(),
             peer_agents: dashmap::DashMap::new(),
             agent_inbox: dashmap::DashMap::new(),

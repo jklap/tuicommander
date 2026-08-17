@@ -444,6 +444,7 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 | `install_plugin_from_folder` | `path` | `PluginManifest` | Install from local folder |
 | `register_loaded_plugin` | `plugin_id` | `()` | Register a plugin as loaded (for lifecycle tracking) |
 | `unregister_loaded_plugin` | `plugin_id` | `()` | Unregister a plugin (on unload/disable) |
+| `set_plugin_output_watchers` | `client_id`, `seq`, `watchers: [{ id, pattern, flags }]` | `{ applied, rejected }` | Replace the OutputWatcher set of one frontend — the patterns the PTY reader thread matches lines against. The frontend pushes its whole set on every add or remove; sets are per `client_id`, and `seq` orders the mutations so a stale sync answers `applied: false` and changes nothing. The frontend re-sends the same set every 30 s while it holds any watcher — the backend has no disconnect signal, so that heartbeat is what keeps a live set from being evicted and what recovers one that already was. `rejected` lists the ids the Rust `regex` crate cannot compile (lookaround, backreferences, a negated class escape inside a character class); those watchers keep matching in the WebView, which then receives every line. |
 
 ## Plugin Filesystem (`plugin_fs.rs`)
 

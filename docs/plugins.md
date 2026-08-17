@@ -64,11 +64,28 @@ export default {
 ## Architecture
 
 ```
-PTY output ──> pluginRegistry.processRawOutput()
-                  |
-                  +-- LineBuffer (reassemble lines)
-                  +-- stripAnsi (clean ANSI codes)
-                  +-- dispatchLine() --> OutputWatcher.onMatch()
+PTY reader thread (Rust) ──> output_watchers.rs
+                                 |
+                                 +-- StreamLines (assemble lines — the only assembler)
+                                 +-- clean_line (strip ANSI codes + backticks)
+                                 +-- OutputWatcherRegistry (compiled patterns, per client)
+                                 +-- WatcherLineBatcher (one event per 100ms, lossless)
+                                            |
+                                            v
+                            pty-watcher-lines event  [{text, matched_ids}]
+                            (matched lines only, or every line while a
+                             pattern stays in the WebView)
+                                            |
+                                            v
+                            pluginRegistry.handleWatcherLines()
+                                            |
+                                            +-- fire the ids Rust matched
+                                            +-- dispatchLine() — the watchers Rust
+                                                could not compile, skipping the
+                                                ids already fired
+                                            |
+                                            v
+                                    OutputWatcher.onMatch()
                                               |
                                               +-- host.addItem() --> Activity Center bell
                                                                            |
@@ -182,7 +199,7 @@ host.registerSection({
 
 #### host.registerOutputWatcher(watcher) -> Disposable
 
-Watches every PTY output line (after ANSI stripping and line reassembly).
+Watches every PTY output line (after ANSI stripping, backtick removal, and line reassembly).
 
 ```typescript
 host.registerOutputWatcher({
@@ -196,10 +213,35 @@ host.registerOutputWatcher({
 ```
 
 **Rules:**
-- `onMatch` must be synchronous and fast (< 1ms) — it's in the PTY hot path
+- `onMatch` must be synchronous and fast (< 1ms) — it runs on the interface main thread (deferred to a microtask, but a slow handler still blocks painting)
 - `pattern.lastIndex` is reset before each test (safe to use global flag, but unnecessary)
 - Input is ANSI-stripped but may contain Unicode (checkmarks, arrows, emoji)
 - Arguments are positional: `onMatch(match, sessionId)` — NOT destructured
+
+**Where the matching runs.** The registry sends the pattern source and flags of every
+watcher to Rust (`set_plugin_output_watchers`). The PTY reader thread assembles the
+lines, cleans them (`output_watchers.rs`, a port of `stripAnsi` plus the backtick strip),
+and tests them against the compiled patterns. Rust is the only line assembler: the
+WebView reassembles nothing, so a watcher that registers halfway through a line still
+sees that line whole. The WebView is only woken for a line that matched: it receives that
+cleaned line, runs your `RegExp` on it again, and gives `onMatch` a genuine
+`RegExpExecArray`. The `i`, `m` and `s` flags apply on both sides.
+
+Rust may match a little more than your `RegExp` does, never less — the re-run in the
+WebView filters the difference. One accepted divergence: a pattern that counts UTF-16
+code units of astral characters (`/^.{2}$/` against an emoji) matches in JavaScript only.
+
+**Patterns that stay in the WebView.** The Rust `regex` crate is not a superset of JS
+`RegExp` — it has no lookaround, no backreferences, and no negated class escape inside a
+character class (`[\D.]`). Rust reports such a pattern as rejected instead of compiling
+it to something different, and the registry keeps matching that watcher itself, on the
+same assembled lines. The behavior of the watcher does not change; only the thread that
+tests the line does. One rejected pattern makes Rust ship every line instead of the
+matched ones alone, so prefer a portable pattern when you have the choice.
+
+Every line is tested. The events are rate-limited to one per 100 ms, but the lines inside
+a window are concatenated in order, never dropped, so no line is lost and no line is
+fabricated from two spliced chunks.
 
 #### host.registerStructuredEventHandler(type, handler) -> Disposable
 
@@ -1427,16 +1469,33 @@ beforeEach(() => {
 
 ### Testing output watchers
 
+Rust assembles the lines, so a test pushes an assembled line rather than raw PTY text:
+
 ```typescript
-it("detects deployment from PTY output", () => {
+it("detects deployment from PTY output", async () => {
   pluginRegistry.register(myPlugin);
-  pluginRegistry.processRawOutput("Deployed: api-server to prod\n", "session-1");
+  pluginRegistry.handleWatcherLines("session-1", [
+    { text: "Deployed: api-server to prod", matched_ids: [] },
+  ]);
+  // onMatch is deferred with queueMicrotask
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
 
   const items = activityStore.getForSection("my-section");
   expect(items).toHaveLength(1);
   expect(items[0].title).toBe("api-server");
 });
 ```
+
+`registerOutputWatcher` also calls `set_plugin_output_watchers`, so the `invoke` mock must
+return a promise. Until it resolves to `{ applied: true, rejected: [] }`, the registry
+treats every watcher as its own and scans the line itself — which is what the example
+above exercises with an empty `matched_ids`.
+
+To test the Rust path instead, resolve the sync with `{ applied: true, rejected: [] }` and
+put the qualified id (`<clientId>/<watcherId>`, both read from the invoke payload) in
+`matched_ids`. A watcher fires **once** per line either way: an id Rust flagged is skipped
+by the frontend scan that follows. A reply with `applied: false` is ignored, because the
+set it describes is not the set the backend holds.
 
 ### Testing capability gating
 

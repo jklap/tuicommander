@@ -1121,6 +1121,9 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyExit { session_id: sid } => {
                                     serde_json::json!({"type": "exit", "session_id": sid})
                                 }
+                                crate::state::AppEvent::PluginWatcherLines { session_id: sid, lines } => {
+                                    serde_json::json!({"type": "watcher-lines", "session_id": sid, "lines": lines})
+                                }
                                 crate::state::AppEvent::SessionClosed { session_id: sid, reason } => {
                                     serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})
                                 }
@@ -1450,6 +1453,9 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
                                 }
                                 crate::state::AppEvent::PtyExit { session_id: sid } => {
                                     serde_json::json!({"type": "exit", "session_id": sid})
+                                }
+                                crate::state::AppEvent::PluginWatcherLines { session_id: sid, lines } => {
+                                    serde_json::json!({"type": "watcher-lines", "session_id": sid, "lines": lines})
                                 }
                                 crate::state::AppEvent::SessionClosed { session_id: sid, reason } => {
                                     serde_json::json!({"type": "closed", "session_id": sid, "reason": reason})

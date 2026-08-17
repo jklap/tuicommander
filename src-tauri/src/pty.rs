@@ -13,7 +13,7 @@ use crate::output_parser::{OutputParser, ParsedEvent};
 use crate::state::{
     AppState, ChangedRow, EscapeAwareBuffer, KittyAction, KittyKeyboardState,
     MAX_CONCURRENT_SESSIONS, OUTPUT_RING_BUFFER_CAPACITY, OrchestratorStats, OutputRingBuffer,
-    PtyConfig, PtyOutput, PtyOutputCoalescer, PtySession, Utf8ReadBuffer, VT_LOG_BUFFER_CAPACITY,
+    PtyConfig, PtySession, Utf8ReadBuffer, VT_LOG_BUFFER_CAPACITY,
     VtLogBuffer, strip_kitty_sequences,
 };
 use crate::worktree::{
@@ -327,26 +327,106 @@ const PTY_RAW_RING_CAP: usize = 2 * 1024 * 1024;
 
 /// Throttle window for the `pty-output` event: at most one WebView event per
 /// window per session, however fast the PTY writes.
-#[cfg(feature = "desktop")]
-const PTY_OUTPUT_WINDOW: std::time::Duration = std::time::Duration::from_millis(100);
+/// One watcher-line batch per this window. Each batch is a Tauri event the
+/// WebView main thread must deserialize and dispatch; per-chunk emission
+/// starved the event loop under an output flood (`yes`), so keydown never ran
+/// and Ctrl+C never reached write_pty.
+const WATCHER_LINE_WINDOW: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// Emit early once this much output is buffered, so an output flood cannot grow
-/// the coalescing buffer without bound. Reads are 64 KiB, so this is ~4 chunks.
-#[cfg(feature = "desktop")]
-const PTY_OUTPUT_COALESCE_CAP: usize = 256 * 1024;
+/// Emit early once this much text is batched, so a flood cannot grow the batch
+/// without bound.
+const WATCHER_BATCH_CAP: usize = 256 * 1024;
 
-/// Emit one coalesced `pty-output` payload to the desktop WebView.
-#[cfg(feature = "desktop")]
-fn emit_pty_output(state: &AppState, session_id: &str, data: String) {
-    if let Some(app) = state.app_handle.read().as_ref() {
-        let _ = app.emit(
-            &format!("pty-output-{session_id}"),
-            PtyOutput {
-                session_id: session_id.to_string(),
-                data,
-            },
-        );
+/// Push one batch of assembled lines to the frontends of this session.
+fn emit_watcher_lines(
+    state: &AppState,
+    session_id: &str,
+    lines: Vec<crate::output_watchers::WatcherLine>,
+) {
+    if lines.is_empty() {
+        return;
     }
+    #[cfg(feature = "desktop")]
+    {
+        if let Some(app) = state.app_handle.read().as_ref() {
+            let _ = app.emit(
+                &format!("pty-watcher-lines-{session_id}"),
+                crate::output_watchers::WatcherLines {
+                    session_id: session_id.to_string(),
+                    lines: lines.clone(),
+                },
+            );
+        }
+    }
+    // The bus carries the same batch to browser/PWA clients over their session
+    // WebSocket and to the SSE stream. Those are bounded broadcast channels: a
+    // client that lags far enough behind loses events, and nothing replays them.
+    // Batching is what keeps that theoretical — a session emits at most ten of
+    // these per second regardless of how many lines match — but a browser
+    // watcher is best-effort where a desktop one is not.
+    state.emit_pty_event(crate::state::AppEvent::PluginWatcherLines {
+        session_id: session_id.to_string(),
+        lines,
+    });
+}
+
+/// Assemble the lines of one PTY chunk and match them against the plugin
+/// OutputWatchers. Runs on the reader thread: the WebView is woken for the
+/// lines that matched instead of ANSI-stripping and regex-testing every line on
+/// the thread that paints the terminal (audit F3).
+///
+/// Rust is the only line assembler. When no watcher is registered the chunk
+/// still goes through [`StreamLines`], because a watcher that registers
+/// mid-line must still see that line whole — with two assemblers the line was
+/// split between them and seen by neither.
+fn assemble_watcher_lines(
+    state: &AppState,
+    session_id: &str,
+    chunk: &str,
+    lines: &mut crate::output_watchers::StreamLines,
+    batcher: &parking_lot::Mutex<crate::output_watchers::WatcherLineBatcher>,
+    eof: bool,
+) {
+    // One read lock for the whole chunk: the compiled set and its "I still need
+    // every line" answer must come from the same snapshot, or a line published
+    // between the two is matched by neither side.
+    let watchers = state.plugin_output_watchers.read();
+    if watchers.is_idle() {
+        drop(watchers);
+        lines.push_discarding(chunk);
+        return;
+    }
+    let needs_all = watchers.needs_all_lines();
+    let mut assembled = lines.push(chunk);
+    // At end of stream the unterminated tail is a line too: `printf DONE` put
+    // `DONE` on the wire and then exited, and nothing is coming to close it.
+    if eof && let Some(tail) = lines.flush() {
+        assembled.push(tail);
+    }
+    let mut pending = Vec::new();
+    for raw_line in assembled {
+        let text = crate::output_watchers::clean_line(&raw_line);
+        let matched_ids = watchers.matching_ids(&text);
+        if matched_ids.is_empty() && !needs_all {
+            continue;
+        }
+        pending.push(crate::output_watchers::WatcherLine { text, matched_ids });
+    }
+    drop(watchers);
+    if pending.is_empty() {
+        return;
+    }
+
+    let now = std::time::Instant::now();
+    // Emit under the batcher lock: releasing it between take and emit lets the
+    // frame ticker interleave and deliver an older tail after a newer batch.
+    let mut batch = batcher.lock();
+    for line in pending {
+        if let Some(due) = batch.push(line, now) {
+            emit_watcher_lines(state, session_id, due);
+        }
+    }
+    drop(batch);
 }
 
 /// Resolve the nice value to apply to PTY children: `TUIC_PTY_NICE` env override
@@ -6892,16 +6972,13 @@ pub(crate) fn spawn_reader_thread(
     state
         .sync_update_active
         .insert(session_id.clone(), sync_active.clone());
-    // Shared by the PTY reader (which buffers chunks) and the frame ticker (which
-    // drains a tail the reader cannot: read() blocks, so the last chunk of a burst
+    // Shared by the PTY reader (which batches lines) and the frame ticker (which
+    // drains a tail the reader cannot: read() blocks, so the last line of a burst
     // would otherwise wait for output that may never come).
-    #[cfg(feature = "desktop")]
-    let pty_output_coalescer = Arc::new(parking_lot::Mutex::new(PtyOutputCoalescer::new(
-        PTY_OUTPUT_WINDOW,
-        PTY_OUTPUT_COALESCE_CAP,
-    )));
-    #[cfg(feature = "desktop")]
-    let ticker_coalescer = pty_output_coalescer.clone();
+    let watcher_batcher = Arc::new(parking_lot::Mutex::new(
+        crate::output_watchers::WatcherLineBatcher::new(WATCHER_LINE_WINDOW, WATCHER_BATCH_CAP),
+    ));
+    let ticker_batcher = watcher_batcher.clone();
     let ticker_running = running.clone();
     let ticker_dirty = frame_dirty.clone();
     let ticker_sync_active = Some(sync_active);
@@ -6938,6 +7015,21 @@ pub(crate) fn spawn_reader_thread(
         let mut system_saturated = false;
         while ticker_running.load(Ordering::Relaxed) {
             std::thread::sleep(TICK);
+            // Drain a watcher-line tail the reader left batched. read() blocks, so
+            // without this the last line of a burst waits for output that may
+            // never arrive and a rare-line watcher matches minutes late. It must
+            // run BEFORE the dirty guard below: the tick that clears frame_dirty
+            // is usually the one *before* the batching window expires, and every
+            // later idle tick would return early and never look at the batch.
+            {
+                let mut batch = ticker_batcher.lock();
+                // Emit under the lock so this tail cannot be interleaved behind a
+                // newer batch the reader emits concurrently.
+                if let Some(due) = batch.flush_due(std::time::Instant::now()) {
+                    emit_watcher_lines(&ticker_state, &ticker_sid, due);
+                }
+                drop(batch);
+            }
             let mut effective_dirty = ticker_dirty.swap(false, Ordering::Relaxed);
             // DEC 2026: the vendored VTE records a 150ms deadline but never fires
             // it, so a synchronized update left open (delayed/lost ESU, or a stream
@@ -7057,16 +7149,6 @@ pub(crate) fn spawn_reader_thread(
                 ticker_dirty.store(true, Ordering::Relaxed); // keep pending for a later tick
                 continue;
             }
-            // Drain a pty-output tail the reader left buffered: read() blocks, so
-            // without this the last chunk of a burst waits for output that may
-            // never arrive — and a rare-line watcher would match minutes late.
-            #[cfg(feature = "desktop")]
-            {
-                let tail = ticker_coalescer.lock().flush_due(now);
-                if let Some(payload) = tail {
-                    emit_pty_output(&ticker_state, &ticker_sid, payload);
-                }
-            }
             if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
                 let mut g = vt.lock();
                 if let Some(p) = ticker_state.pending_scroll.get(&ticker_sid) {
@@ -7084,13 +7166,10 @@ pub(crate) fn spawn_reader_thread(
         // Final flush after reader exits. Session teardown is the other "no more
         // PTY bytes arrive" case: drain any still-buffered synchronized update
         // BEFORE serializing, or its content is dropped with the session.
-        #[cfg(feature = "desktop")]
-        {
-            let tail = ticker_coalescer.lock().take();
-            if let Some(payload) = tail {
-                emit_pty_output(&ticker_state, &ticker_sid, payload);
-            }
-        }
+        // No watcher-line drain here on purpose: teardown has exactly one owner,
+        // the reader's EOF path, which assembles the flush_eof remainder and
+        // drains whatever is still batched, in order. A second drain racing from
+        // this thread could deliver the older tail after it.
         if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
             let mut g = vt.lock();
             g.force_stop_sync_if_buffered();
@@ -7116,12 +7195,10 @@ pub(crate) fn spawn_reader_thread(
                 .get(&session_id)
                 .and_then(|s| s.lock().cwd.clone());
             let mut processor = ChunkProcessor::new(session_cwd, tuic_session);
-            // pty-output carries the text the plugin OutputWatcher matches on, plus
-            // the activity pulse Terminal.tsx stamps into lastDataAt. The canvas
-            // itself renders from grid frames and ignores this payload. Emitting it
-            // per-chunk flooded the WebView main thread under output storms (`yes`),
-            // starving keydown so Ctrl+C never reached write_pty — hence the ~10/s
-            // ceiling, applied by coalescing (never by dropping; see PtyOutputCoalescer).
+            // Line reassembly for plugin watcher matching. Separate from the VT
+            // parser: watchers match the byte stream as it scrolls past, not the
+            // screen contents.
+            let mut watcher_lines = crate::output_watchers::StreamLines::new();
             loop {
                 while paused.load(Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -7178,32 +7255,25 @@ pub(crate) fn spawn_reader_thread(
                                 }
                             }
 
-                            // Emit pty-output for the frontend, THROTTLED but LOSSLESS.
-                            // Root cause of the `yes`-flood Ctrl+C wedge (2026-06-16):
-                            // this event fired per read() chunk (thousands/s under a flood).
-                            // Each one is a Tauri event the WebView main thread must
-                            // deserialize+dispatch; the storm of short tasks starved the
-                            // event loop so keydown never ran → Ctrl+C never reached
-                            // write_pty (verified: 0 write_pty calls during flood, normal
-                            // when throttled).
+                            // Plugin OutputWatcher matching. The canvas renders
+                            // from grid frames and never read this text; the only
+                            // consumer was pluginRegistry, which reassembled lines
+                            // in the WebView. It happens here now, on the reader
+                            // thread, and only the lines that matter cross the
+                            // boundary — throttled but LOSSLESS.
                             //
-                            // The original throttle DROPPED the chunks inside its window.
-                            // That was wrong: CanvasTerminal routes this payload into
-                            // pluginRegistry.processRawOutput, whose LineBuffer carries the
-                            // partial trailing line across chunks — so a dropped chunk
-                            // splices the tail of one chunk onto the head of a later one
-                            // and reports a line that never existed (audit F1). The
-                            // coalescer keeps the one-event-per-window ceiling and
-                            // concatenates instead of dropping.
-                            #[cfg(feature = "desktop")]
-                            {
-                                let emit_now = pty_output_coalescer
-                                    .lock()
-                                    .push(&clamped_data, std::time::Instant::now());
-                                if let Some(payload) = emit_now {
-                                    emit_pty_output(&state, &session_id, payload);
-                                }
-                            }
+                            // Losslessness is the point: the original throttle
+                            // DROPPED chunks inside its window, which spliced the
+                            // tail of one chunk onto the head of a later one and
+                            // reported a line that never existed (audit F1).
+                            assemble_watcher_lines(
+                                &state,
+                                &session_id,
+                                &clamped_data,
+                                &mut watcher_lines,
+                                &watcher_batcher,
+                                false,
+                            );
                         }
 
                         frame_dirty.store(true, Ordering::Relaxed);
@@ -7235,16 +7305,26 @@ pub(crate) fn spawn_reader_thread(
             }
 
             let remaining = flush_eof(&mut utf8_buf, &mut esc_buf, &session_id, &state);
-            // Through the coalescer, not straight to the WebView: a tail buffered
-            // by the last read is still pending here, and emitting the EOF
-            // remainder directly would deliver it ahead of earlier bytes.
-            #[cfg(feature = "desktop")]
+            // The remainder goes through the assembler, not straight out: it may
+            // close a line the last read left partial. Then drain unconditionally
+            // — teardown has no later tick to flush the batch.
+            assemble_watcher_lines(
+                &state,
+                &session_id,
+                &remaining,
+                &mut watcher_lines,
+                &watcher_batcher,
+                true,
+            );
             {
-                let mut payload = pty_output_coalescer.lock().take().unwrap_or_default();
-                payload.push_str(&remaining);
-                if !payload.is_empty() {
-                    emit_pty_output(&state, &session_id, payload);
+                // Hold the lock across the emit: the ticker may still be running
+                // its own flush, and releasing between take and emit would let it
+                // deliver an earlier tail after this final batch.
+                let mut batch = watcher_batcher.lock();
+                if let Some(due) = batch.take() {
+                    emit_watcher_lines(&state, &session_id, due);
                 }
+                drop(batch);
             }
 
             state.emit_pty_event(crate::state::AppEvent::PtyExit {
