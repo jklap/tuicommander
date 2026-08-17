@@ -1357,6 +1357,11 @@ pub struct AppState {
     pub(crate) event_bus: tokio::sync::broadcast::Sender<AppEvent>,
     /// Monotonic counter for SSE event IDs.
     pub(crate) event_counter: Arc<AtomicU64>,
+    /// Live type filters of the open `/events` streams, so a browser that starts
+    /// listening for a new event type widens its stream in place instead of
+    /// reconnecting — a reconnect drops every event published between the close
+    /// and the new subscription, and nothing replays them.
+    pub(crate) sse_filters: crate::mcp_http::sse_routes::SseFilters,
     /// Per-session state accumulated from broadcast events (for REST polling).
     pub(crate) session_states: DashMap<String, SessionState>,
     /// Lossless single-consumer lane for PTY events that mutate `session_states`.
@@ -2439,6 +2444,7 @@ impl AppState {
             log_buffer,
             event_bus: tokio::sync::broadcast::channel(256).0,
             event_counter: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            sse_filters: Default::default(),
             session_states: DashMap::new(),
             session_state_events: SessionStateEventQueue::new(),
             oauth_flow_manager: Arc::new(crate::mcp_oauth::flow::OAuthFlowManager::new(
@@ -5726,6 +5732,7 @@ mod tests {
             )),
             event_bus: tokio::sync::broadcast::channel(256).0,
             event_counter: Arc::new(AtomicU64::new(0)),
+            sse_filters: Default::default(),
             session_states: DashMap::new(),
             session_state_events: SessionStateEventQueue::new(),
             mcp_upstream_registry: {

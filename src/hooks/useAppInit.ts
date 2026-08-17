@@ -14,6 +14,7 @@ import { repositoriesStore } from "../stores/repositories";
 import { settingsStore } from "../stores/settings";
 import { terminalsStore } from "../stores/terminals";
 import { toastsStore } from "../stores/toasts";
+import { uiStore } from "../stores/ui";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri } from "../transport";
 import type { SavedTerminal } from "../types";
@@ -249,7 +250,11 @@ export async function initApp(deps: AppInitDeps) {
 	// Snapshot terminal metadata, flush pending saves, and close PTY sessions on app exit
 	window.addEventListener("beforeunload", () => {
 		clearInterval(snapshotTimer);
+		// Every debounced persist has to land here: the timer dies with the
+		// WebView, so a preference toggled inside its window is simply lost.
 		activityStore.flushSave();
+		uiStore.flushSave();
+		paneLayoutStore.flushSave();
 
 		// 1. Snapshot terminal metadata per repo/branch before closing
 		const snapshots = collectTerminalSnapshots();
