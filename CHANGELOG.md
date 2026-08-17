@@ -8,10 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Terminal copy removes Claude's visual quote gutter** — Copying a multi-line Claude message no longer pastes the repeated non-breaking-space plus `▎` margin into Slack or other editors. The selection backend strips only coherent gutter runs, preserving isolated block characters, indentation, bullets, numbering, emoji shortcodes, and non-breaking spaces inside the content.
+- **Pull-request state badges retain the PR number** — Sidebar badges now show the PR identity together with states such as Draft, Conflicts, CI Failed, and Ready instead of replacing the number.
+- **Expanded terminal context no longer repeats its title** — The bar now uses one `Context` heading and distinct `Intent`, `Assignment`, and `Prompt` sections. The existing agent intent is shown first, and MCP instructions ask the model to declare it at task start as well as on material phase changes.
 - **Awaiting-input state is turn-scoped and transport-consistent** — Historical questions no longer re-arm after a later response or completion, bare Enter clears waits through desktop and HTTP input alike, and an open MCP UI confirmation no longer blocks other agents' requests.
 - **Agent state transitions cannot be dropped by a busy event consumer** — Sticky per-session state now uses a lossless reducer lane instead of depending on the best-effort broadcast bus, preserves every response-required OSC notification in a PTY chunk, keeps an unobserved shell in `starting`, and recognizes a non-empty input box above arbitrarily tall custom HUDs.
 - **Agent-state captures preserve causality** — New `.tcap` diagnostics retain PTY input/output boundaries, ordering, and timing, replay the chrome cutoff and input-line state, and are tracked against a Claude/Codex scenario matrix.
 - **Agent-raised notifications identify their repository** — `ui action=toast` now derives the caller's repository from its MCP session and working directory, shows the repository name in the toast and bell entry, and scopes the retained bell item to that repository.
+- **A plain directory added as a repository no longer floods the log** — The status bar and the Git panel Changes tab asked a non-git folder for its working-tree status on every repository revision, so each filesystem event logged `not a git repository`. Both now check the registered repository kind first, while worktrees keep querying through their parent repository.
 - **Codex-orchestrated subagents no longer lose their task description** — Spawn integrations whose schema has a task prompt but no `pty_description` now derive compact display metadata from that prompt. Explicit descriptions and clears retain precedence, and agent-specific launch and prompt-delivery paths are unchanged.
 
 ### Added

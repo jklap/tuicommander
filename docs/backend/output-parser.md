@@ -197,12 +197,12 @@ Agents receive this instruction automatically via MCP init. To use manually with
 
 ```
 ## Intent Declaration
-At the start of each distinct work phase, emit on its own line:
+At the start of every user task and each distinct material work phase, emit on its own line:
 intent: <action, present tense, <60 chars> (<tab title, max 3 words>)
 Example: `intent: Reading auth module for token flow (Auth review)`
 ```
 
-The activity dashboard shows intent (crosshair icon) when available, falling back to user prompt (speech bubble) otherwise.
+The terminal Context bar shows intent separately from the orchestrator assignment and user prompt. The activity dashboard also shows intent (crosshair icon) when available, falling back to user prompt (speech bubble) otherwise.
 
 **Colorization:** `colorize_intent()` wraps intent text in `\x1b[2;33m` (dim yellow) for the terminal output stream. The optional `(title)` suffix is stripped from the display. Colorization is agent-gated to prevent false positives.
 

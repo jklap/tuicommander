@@ -72,6 +72,11 @@ They must not rebuild a snapshot by appending a separately retained log to the
 screen: increasing terminal rows can move history back into the viewport and
 make the two representations overlap.
 
+Clipboard selections use the same absolute grid coordinates. TUICommander joins
+rows marked with `WRAPLINE`, trims terminal padding, and then removes only
+coherent multi-line Claude `NBSP NBSP ▎` visual gutters. This normalization is
+outside the Alacritty fork and is shared by desktop IPC and HTTP clients.
+
 ## Notable forks and patches (external)
 
 ### Zed Editor (zed-industries/alacritty)

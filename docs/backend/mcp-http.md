@@ -228,6 +228,7 @@ The BM25 index lives in `AppState::tool_search_index` (`parking_lot::RwLock<Tool
 
 The MCP instructions string returned by `initialize` (`build_mcp_instructions`) swaps to a "lazy discovery" guide when `collapse_tools: true` or the connecting Grok session requires compatibility mode, so agents know to call `search_tools` first rather than looking for a flat tool table.
 The TUIC connection acknowledgment in those instructions is emitted exactly once per MCP connection or reconnect, never once per conversational turn. TUIC protocol context remains in initialize instructions and native core-tool descriptions only; upstream tool descriptions are preserved instead of receiving a repeated TUIC preamble.
+When intent markers are enabled for the connecting agent, initialize instructions require `intent:` at the start of every user task and on material phase changes. The backend stores that dynamic intent independently from the spawn-time PTY description and the last submitted prompt.
 
 ### MCP Native Tools
 

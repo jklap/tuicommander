@@ -305,11 +305,14 @@ Some frontend-only stores persist to localStorage:
 - [x] Interactive agent prompts UI
 - [x] IDE launcher dropdown
 - [x] GitHub integration
+- [x] Sidebar PR badges retain `#number` while showing lifecycle, conflict, CI, and review state
 - [x] Parallel agent orchestration
 - [x] Orchestrated PTY task descriptions with prompt-derived fallback metadata
+- [x] Expandable terminal Context bar for agent intent, orchestrator assignment, and last user prompt
 - [x] Font selection setting
 - [x] Tab bar with keyboard navigation
 - [x] Density modes for readability
+- [x] Terminal selection copy unwraps soft-wrapped rows and removes coherent Claude visual gutters without altering literal block characters
 - [x] Status bar with branch and PR info
 - [x] Rate limit detection
 - [x] JSONL output parsing

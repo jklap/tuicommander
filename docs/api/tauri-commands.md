@@ -31,6 +31,7 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `debug_agent_detection` | `session_id: String` | `AgentDiagnostics` | Returns diagnostic breakdown of agent detection pipeline |
 | `set_session_name` | `session_id, name, is_custom?` | `()` | Set a session display name and whether it represents an explicit user rename |
 | `get_input_buffer_content` | `session_id` | `String` | Get the current content of the input line buffer (what the user is typing). Used by plugins with `pty:read` capability. |
+| `terminal_get_selection_text` | `session_id, start_row, start_col, end_row, end_col` | `String` | Read a scrollback-aware selection, join soft-wrapped rows, and remove coherent Claude visual gutter runs. Browser parity: `GET /sessions/:id/terminal/selection-text`. |
 | `get_process_stats` | -- | `Vec<ProcessStat>` | CPU% and RSS memory for TUIC and all child process trees |
 
 ## Generators (`generators.rs`)

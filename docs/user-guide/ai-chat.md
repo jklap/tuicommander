@@ -17,7 +17,8 @@ The same panel switches modes — no separate UI.
 - **Toolbar:** chat icon in the right section of the toolbar.
 - **Context menu:** right-click a terminal → *Send selection to AI Chat* or *Explain this error*.
 
-The panel docks on the right. Width is remembered per window (`aiChatPanelWidth`).
+The panel docks on the right. Drag its left edge to resize it; the width applies
+for the session and is not persisted across restarts.
 
 ## Providers
 

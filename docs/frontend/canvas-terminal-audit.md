@@ -140,10 +140,10 @@ Primary and alternate grids can reuse identical numeric row coordinates while re
 | Mouse drag selection | OK | |
 | Double-click word select | OK | `terminal_select_start` with `word:true` |
 | Triple-click line select | OK | |
-| Cmd+C copy with selection | OK | `terminal_select_text` IPC |
-| Trailing-space trim on copy | OK | `line.replace(/\s+$/, "")` |
+| Cmd+C copy with selection | OK | `terminal_get_selection_text` IPC/HTTP parity path |
+| Selection normalization | OK | Rust unwraps soft-wrapped rows, trims row padding, and removes coherent Claude `NBSP NBSP ▎` gutter runs |
 | Copy-on-select | OK | `copySelection()` called from `onMouseUp` |
-| getSelection() ref method | OK | `getLocalSelectionText()` reads from rowMap codepoints |
+| getSelection() ref method | OK | Returns the cached backend selection; `getLocalSelectionText()` is the transient fallback |
 
 ### Focus
 
