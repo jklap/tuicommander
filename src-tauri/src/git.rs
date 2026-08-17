@@ -1504,6 +1504,28 @@ fn get_last_commit_timestamps(
     result
 }
 
+/// The repo's branch→worktree-path map, shared across every phase of a refresh.
+///
+/// Progressive loading calls `get_repo_structure` then `get_repo_diff_stats` for
+/// one bump and both need this map, so reading it per call forked
+/// `git worktree list` twice for the same answer. `git_cache.worktree_paths` is
+/// invalidated by `invalidate_repo_caches` — which the repo watcher runs before
+/// every `repo-changed` — and by `notify_worktree_removed`, so a cache hit can
+/// only ever be from the current refresh.
+async fn cached_worktree_paths(
+    state: &AppState,
+    repo_path: String,
+) -> Result<HashMap<String, String>, String> {
+    let p = repo_path.clone();
+    cached_try(
+        state.git_cache.worktree_paths.clone(),
+        repo_path,
+        move || git_reads().worktree_paths(Path::new(&p)),
+    )
+    .await
+    .map_err(|e| format!("get_worktree_paths failed: {e}"))
+}
+
 /// Core implementation of get_repo_summary, callable from both Tauri command and HTTP route.
 /// Runs worktree_paths + merged_branches concurrently, then diff stats for each path concurrently.
 pub(crate) async fn get_repo_summary_impl(
@@ -1514,23 +1536,19 @@ pub(crate) async fn get_repo_summary_impl(
     // burst across many repos can't fan out hundreds of concurrent git
     // subprocesses (FD spike / CPU-IPC storm). Operational git is never gated.
     let _permit = state.monitoring_git_permit().await;
-    // Spawn worktree_paths concurrently while we fetch/check merged_branches cache.
-    let wt_path = repo_path.clone();
-    let worktree_handle =
-        tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)));
-
+    // worktree_paths and merged_branches run concurrently — both are cached, so
+    // a hit on either costs nothing.
     let mb_path = repo_path.clone();
-    let merged_branches = cached_try(
-        state.git_cache.merged_branches.clone(),
-        repo_path.clone(),
-        move || get_merged_branches_impl(Path::new(&mb_path)),
-    )
-    .await?;
-
-    let worktree_paths = worktree_handle
-        .await
-        .map_err(|e| format!("spawn_blocking error: {e}"))?
-        .map_err(|e| format!("get_worktree_paths failed: {e}"))?;
+    let (worktree_paths, merged_branches) = tokio::join!(
+        cached_worktree_paths(state, repo_path.clone()),
+        cached_try(
+            state.git_cache.merged_branches.clone(),
+            repo_path.clone(),
+            move || get_merged_branches_impl(Path::new(&mb_path)),
+        ),
+    );
+    let worktree_paths = worktree_paths?;
+    let merged_branches = merged_branches?;
 
     // Run diff stats and last-commit timestamps concurrently. The whole
     // function holds a monitoring_git_sem permit (acquired above), so this
@@ -1590,26 +1608,19 @@ pub(crate) async fn get_repo_structure_impl(
 ) -> Result<RepoStructure, String> {
     // Monitoring slot — see get_repo_summary_impl.
     let _permit = state.monitoring_git_permit().await;
-    let wt_path = repo_path.clone();
-    let worktree_handle =
-        tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)));
-
     let mb_path = repo_path.clone();
-    let merged_branches = cached_try(
-        state.git_cache.merged_branches.clone(),
-        repo_path.clone(),
-        move || get_merged_branches_impl(Path::new(&mb_path)),
-    )
-    .await?;
-
-    let worktree_paths = worktree_handle
-        .await
-        .map_err(|e| format!("spawn_blocking error: {e}"))?
-        .map_err(|e| format!("get_worktree_paths failed: {e}"))?;
+    let (worktree_paths, merged_branches) = tokio::join!(
+        cached_worktree_paths(state, repo_path.clone()),
+        cached_try(
+            state.git_cache.merged_branches.clone(),
+            repo_path.clone(),
+            move || get_merged_branches_impl(Path::new(&mb_path)),
+        ),
+    );
 
     Ok(RepoStructure {
-        worktree_paths,
-        merged_branches,
+        worktree_paths: worktree_paths?,
+        merged_branches: merged_branches?,
     })
 }
 
@@ -1630,13 +1641,9 @@ pub(crate) async fn get_repo_diff_stats_impl(
 ) -> Result<RepoDiffStats, String> {
     // Monitoring slot — see get_repo_summary_impl.
     let _permit = state.monitoring_git_permit().await;
-    // Need worktree paths to know which directories to diff
-    let wt_path = repo_path.clone();
-    let worktree_paths =
-        tokio::task::spawn_blocking(move || git_reads().worktree_paths(Path::new(&wt_path)))
-            .await
-            .map_err(|e| format!("spawn_blocking error: {e}"))?
-            .map_err(|e| format!("get_worktree_paths failed: {e}"))?;
+    // Need worktree paths to know which directories to diff. Phase 1
+    // (`get_repo_structure`) of this same refresh already read them.
+    let worktree_paths = cached_worktree_paths(state, repo_path.clone()).await?;
 
     let paths: Vec<String> = worktree_paths.values().cloned().collect();
     let mut diff_handles = Vec::with_capacity(paths.len());
@@ -2518,9 +2525,18 @@ pub(crate) fn enrich_with_numstat(repo_path: &Path, entries: &mut [StatusEntry],
     }
 }
 
-/// Get full working tree status from porcelain v2 output.
-#[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) async fn get_working_tree_status(path: String) -> Result<WorkingTreeStatus, String> {
+/// Test-only counter of how many times the porcelain read actually forked git.
+/// Proves the single-flight in `get_working_tree_status` collapses callers
+/// instead of merely returning the same value.
+#[cfg(test)]
+pub(crate) static WT_STATUS_COMPUTES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+/// Read the working tree status: one `git status --porcelain=v2` plus one
+/// `git diff --numstat` per side. Three subprocesses.
+async fn compute_working_tree_status(path: String) -> Result<WorkingTreeStatus, String> {
+    #[cfg(test)]
+    WT_STATUS_COMPUTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
         let out = git_cmd(&repo_path)
@@ -2543,6 +2559,69 @@ pub(crate) async fn get_working_tree_status(path: String) -> Result<WorkingTreeS
     })
     .await
     .map_err(|e| format!("spawn_blocking join error: {e}"))?
+}
+
+/// In-flight `get_working_tree_status` computations, keyed by repo path.
+///
+/// Deliberately NOT a TTL cache. ChangesTab stages a file and refetches
+/// immediately; any retained value would answer that with pre-mutation state.
+/// Single-flight collapses only callers that genuinely overlap, so it can never
+/// return anything staler than a read started right now.
+static WT_STATUS_IN_FLIGHT: std::sync::LazyLock<
+    dashmap::DashMap<String, tokio::sync::broadcast::Sender<Result<WorkingTreeStatus, String>>>,
+> = std::sync::LazyLock::new(dashmap::DashMap::new);
+
+/// Retires the in-flight entry when the leader finishes **or is cancelled**.
+///
+/// Cancellation is real: the HTTP route awaits this inside an axum handler, and
+/// a client disconnect drops that future. Without this guard the entry would
+/// outlive the leader and every later caller for the repo would wait on a
+/// computation that no longer exists. Dropping the sender instead wakes
+/// followers with `Closed`, which they answer by computing themselves.
+struct WtStatusLeader(String);
+
+impl Drop for WtStatusLeader {
+    fn drop(&mut self) {
+        WT_STATUS_IN_FLIGHT.remove(&self.0);
+    }
+}
+
+/// Get full working tree status from porcelain v2 output.
+///
+/// ChangesTab and StatusBar both refetch on every repo-revision bump, so one
+/// `repo-changed` would fork six git processes for the same answer. Concurrent
+/// callers for a repo share the leader's single read.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub(crate) async fn get_working_tree_status(path: String) -> Result<WorkingTreeStatus, String> {
+    use dashmap::mapref::entry::Entry;
+
+    // Subscribing happens under the entry lock and the leader publishes before
+    // its guard removes the entry, so a follower cannot miss the value.
+    let mut follower = match WT_STATUS_IN_FLIGHT.entry(path.clone()) {
+        Entry::Occupied(e) => Some(e.get().subscribe()),
+        Entry::Vacant(e) => {
+            e.insert(tokio::sync::broadcast::channel(1).0);
+            None
+        }
+    };
+
+    if let Some(rx) = follower.as_mut() {
+        return match rx.recv().await {
+            Ok(result) => result,
+            // Leader cancelled before publishing — do the work ourselves rather
+            // than surfacing an error the caller cannot act on.
+            Err(_) => compute_working_tree_status(path).await,
+        };
+    }
+
+    let guard = WtStatusLeader(path.clone());
+    let result = compute_working_tree_status(path.clone()).await;
+    if let Some(tx) = WT_STATUS_IN_FLIGHT.get(&path) {
+        // Errs only when nobody is listening, which is the common case.
+        let _ = tx.send(result.clone());
+    }
+    drop(guard);
+    result
 }
 
 // --- Stage / unstage / discard ---
@@ -4037,7 +4116,89 @@ mod tests {
         assert_eq!(status.unstaged[0].path, "src/main.rs");
     }
 
+    /// Progressive loading splits one refresh into `get_repo_structure` (phase 1)
+    /// then `get_repo_diff_stats` (phase 2), and both need the branch→path map.
+    /// Each was forking `git worktree list` for itself, so every repo-changed
+    /// bump paid for the same read twice — while `git_cache.worktree_paths`,
+    /// invalidated by exactly that event, sat unused by both.
+    #[tokio::test]
+    async fn repo_structure_and_diff_stats_share_one_worktree_paths_read() {
+        let (_dir, path) = setup_test_repo_with_commit();
+        let repo = path.to_string_lossy().to_string();
+        let state = crate::state::tests_support::make_test_app_state();
+
+        let structure = get_repo_structure_impl(&state, repo.clone())
+            .await
+            .expect("structure");
+        assert!(
+            !structure.worktree_paths.is_empty(),
+            "phase 1 must read the worktree paths"
+        );
+
+        // Poisoning the shared entry makes reuse observable: a phase 2 that forks
+        // git again would report the repo's real branch, never this sentinel.
+        state.git_cache.worktree_paths.insert(
+            repo.clone(),
+            Arc::new(HashMap::from([(
+                "sentinel-branch".to_string(),
+                repo.clone(),
+            )])),
+        );
+
+        let stats = get_repo_diff_stats_impl(&state, repo.clone())
+            .await
+            .expect("diff stats");
+        assert!(
+            stats.last_commit_ts.contains_key("sentinel-branch"),
+            "phase 2 must reuse phase 1's worktree paths, got {:?}",
+            stats.last_commit_ts.keys().collect::<Vec<_>>()
+        );
+    }
+
     // --- Integration tests for get_working_tree_status ---
+
+    /// ChangesTab and StatusBar both refetch on every repo-revision bump, so one
+    /// `repo-changed` used to fork six git processes for the same answer. The
+    /// concurrent callers must collapse onto one computation.
+    #[tokio::test]
+    async fn concurrent_working_tree_status_calls_share_one_computation() {
+        use std::sync::atomic::Ordering;
+        let (_dir, path) = setup_test_repo_with_commit();
+        std::fs::write(path.join("dirty.txt"), "edited").expect("write");
+        let repo = path.to_string_lossy().to_string();
+
+        WT_STATUS_COMPUTES.store(0, Ordering::Relaxed);
+
+        let mut set = tokio::task::JoinSet::new();
+        for _ in 0..4 {
+            let p = repo.clone();
+            set.spawn(async move { get_working_tree_status(p).await });
+        }
+        let mut results = Vec::new();
+        while let Some(joined) = set.join_next().await {
+            results.push(joined.expect("task").expect("status"));
+        }
+
+        assert_eq!(results.len(), 4);
+        for r in &results[1..] {
+            assert_eq!(*r, results[0], "every caller must get the same answer");
+        }
+        assert_eq!(
+            WT_STATUS_COMPUTES.load(Ordering::Relaxed),
+            1,
+            "four concurrent callers must fork git once, not four times"
+        );
+
+        // Single-flight, NOT a cache: a later call must re-read, otherwise a
+        // refetch right after a stage/unstage would answer with pre-mutation
+        // state.
+        let _ = get_working_tree_status(repo).await.expect("status");
+        assert_eq!(
+            WT_STATUS_COMPUTES.load(Ordering::Relaxed),
+            2,
+            "a sequential call must recompute — no value may be retained"
+        );
+    }
 
     #[tokio::test]
     async fn get_working_tree_status_nonexistent_path() {
