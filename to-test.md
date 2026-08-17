@@ -10,6 +10,17 @@
 
 Features to test when TUICommander is more usable.
 
+## Repo watcher ignore rules (2026-08-17, **Rust change — needs `make dev` restart**)
+
+`build` and `out` no longer count as build-output directory names; `.gitignore` decides, parents
+included. `.git/info/exclude` and the root `.gitignore` are separate layers in git's own
+precedence, and editing `info/exclude` now rebuilds the matcher.
+
+- [x] A tracked `build/` or `packages/build/` edit is a working-tree change, and a gitignored one is not. _(verified: `repo_watcher.rs` `test_classify_tracked_build_and_out_dirs_are_working_tree`)_
+- [x] A root `.gitignore` un-ignore beats an `info/exclude` entry for the same path. _(verified: `repo_watcher.rs` `test_root_gitignore_overrides_info_exclude`)_
+- [x] Editing `.git/info/exclude` rebuilds the matcher; a vendored `.gitignore` under `target/` does not. _(verified: `repo_watcher.rs` `test_ignore_source_changed_covers_info_exclude`)_
+- [ ] **After a `make dev` restart**: in a repo with a tracked `build/` or `out/` directory, edit a file there and confirm the git panel and file browser refresh. Then run a full `cargo build` and confirm the panels stay quiet — `target/` is still pruned.
+
 ## Rust-side plugin OutputWatcher matching (2026-08-17, **Rust change — needs `make dev` restart**) — story `599-6e94`
 
 The `pty-output` throttle dropped every chunk inside its 100 ms window, which corrupted the plugin
