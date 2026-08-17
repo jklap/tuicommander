@@ -587,7 +587,7 @@ Delete a build-artifact directory. Destructive. The backend guard requires (all 
 await host.deleteBuildArtifact("/Users/me/project/target", ["/Users/me/project"]);
 ```
 
-#### `host.trimBuildArtifact(path, repoPaths) -> Promise<void>`
+#### `host.trimBuildArtifact(path, repoPaths) -> Promise<number>`
 
 Remove only a build-artifact directory's **regenerable intermediates**, leaving the built executables in place. Prefer this over `deleteBuildArtifact`: a full clean of a Rust `target/` also deletes the binary the user may be running, while reclaiming (measured across 5 real repos) only ~1% more disk.
 
@@ -604,10 +604,10 @@ Which sub-paths count as intermediates is a per-rule table (`ARTIFACT_RULES[].tr
 
 The bar for inclusion is that rebuilding costs only local CPU — anything needing the network to restore (cargo registry, SwiftPM `checkouts`/`repositories`) is deliberately kept. Every other kind has an empty trim list: it reports `trimmable_bytes: 0` and rejects a trim, because there is no subset that spares an output (`node_modules`, `.venv`, `vendor`) or because the whole dir is already the intermediate half of a pair (.NET `obj` vs `bin`, which the scanner reports as two separate entries).
 
-Check `trimmable_bytes > 0` before offering it. A successful no-op means there was nothing left to trim. **Requires `"fs:delete"` capability** — same blast-radius class, on a subset.
+Check `trimmable_bytes > 0` before offering it. It resolves with the bytes it actually reclaimed, measured as it deleted; `0` means there was nothing left to trim. Patch cached totals with that number and never with the `trimmable_bytes` of the last scan — a build between the scan and the trim moves the estimate, and subtracting it publishes a total no measurement supports. **Requires `"fs:delete"` capability** — same blast-radius class, on a subset.
 
 ```typescript
-await host.trimBuildArtifact("/Users/me/project/target", ["/Users/me/project"]);
+const reclaimed = await host.trimBuildArtifact("/Users/me/project/target", ["/Users/me/project"]);
 ```
 
 ### Tier 3c: Status Bar Ticker (capability-gated)

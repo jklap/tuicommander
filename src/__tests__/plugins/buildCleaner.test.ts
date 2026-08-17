@@ -38,7 +38,7 @@ const {
 		cfg: Record<string, unknown>,
 		now: number,
 	) => { severity: string; totalBytes: number; trimmableBytes: number; staleCount: number; largest: unknown };
-	applyRemoval: <T>(entries: T[], path: string, trim: boolean) => T[];
+	applyRemoval: <T>(entries: T[], path: string, trim: boolean, reclaimedBytes?: number) => T[];
 	tickerPriority: (sev: string) => number;
 	configToForm: (cfg: Record<string, unknown>) => Record<string, unknown>;
 	formToConfig: (form: Record<string, unknown>, base: Record<string, unknown>) => Record<string, unknown>;
@@ -334,11 +334,18 @@ describe("build-cleaner pure helpers", () => {
 
 			// A trim leaves the executables on disk, so the entry must survive with
 			// only the reclaimed bytes subtracted — dropping it would hide them.
-			const trimmed = applyRemoval(entries, "/home/u/repoA/target", true);
+			// The number comes from the backend's measurement during the delete,
+			// not from the scan's estimate: a build in between moves that estimate,
+			// and subtracting it would publish a total nothing measured.
+			const trimmed = applyRemoval(entries, "/home/u/repoA/target", true, 29.5 * GIB);
 			expect(trimmed).toHaveLength(2);
 			expect(trimmed[0].size_bytes).toBe(0.5 * GIB);
 			expect(trimmed[0].trimmable_bytes).toBe(0);
 			expect(entries[0].size_bytes).toBe(30 * GIB); // input untouched
+
+			// The stale estimate said 29.5 GiB; the trim actually reclaimed 20.
+			const partial = applyRemoval(entries, "/home/u/repoA/target", true, 20 * GIB);
+			expect(partial[0].size_bytes).toBe(10 * GIB);
 
 			const cleaned = applyRemoval(entries, "/home/u/repoA/target", false);
 			expect(cleaned).toHaveLength(1);
@@ -352,7 +359,7 @@ describe("build-cleaner pure helpers", () => {
 			const host = {
 				getRepos: vi.fn(() => [{ path: "/home/u/repoA" }]),
 				scanBuildArtifacts: vi.fn(async () => [entry]),
-				trimBuildArtifact: vi.fn(async () => undefined),
+				trimBuildArtifact: vi.fn(async () => 29.5 * GIB),
 				deleteBuildArtifact: vi.fn(async () => undefined),
 				invoke: vi.fn(async () => null),
 				registerSection: vi.fn(),

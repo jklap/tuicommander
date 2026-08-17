@@ -708,12 +708,14 @@ export interface PluginHost {
 	 * paths named by the matched toolchain rule are removed.
 	 *
 	 * Rejects when the artifact's kind has no separable intermediates (check
-	 * `ArtifactEntry.trimmable_bytes > 0` before offering it). A no-op success
-	 * means there was nothing left to trim.
+	 * `ArtifactEntry.trimmable_bytes > 0` before offering it). Resolves with the
+	 * bytes actually reclaimed — `0` means there was nothing left to trim. Patch
+	 * cached totals with that number, never with the `trimmable_bytes` of the
+	 * last scan: a build between the scan and the trim moves it.
 	 * @param path - Absolute path of the artifact dir to trim
 	 * @param repoPaths - The registered repo roots (containment guard)
 	 */
-	trimBuildArtifact(path: string, repoPaths: string[]): Promise<void>;
+	trimBuildArtifact(path: string, repoPaths: string[]): Promise<number>;
 
 	/**
 	 * Watch a path for filesystem changes. Requires "fs:watch".

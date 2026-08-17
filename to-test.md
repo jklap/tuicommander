@@ -10,6 +10,19 @@
 
 Features to test when TUICommander is more usable.
 
+## Working-tree read freshness and artifact trim accounting (2026-08-17, **Rust change — needs `make dev` restart**)
+
+`get_working_tree_status` single-flight is now keyed by repository **plus** a generation counter that
+every mutating git command bumps, so a coalesced read can no longer answer with a snapshot taken
+before the mutation. A forced artifact rescan no longer joins a scan that started earlier, and
+`trim_build_artifact` measures each target before removing it and returns the reclaimed bytes.
+
+- [x] Two simultaneous status reads for the same repository still share one computation. _(verified: `git.rs` `concurrent_working_tree_status_calls_share_one_computation`)_
+- [x] A read that starts after a stage/discard/commit is not served by an older in-flight read, and the finished read leaves no entry behind. _(verified: `git.rs` `a_read_after_a_mutation_does_not_join_one_started_before_it`, `a_finished_read_leaves_no_entry_behind`)_
+- [x] A forced artifact refresh never returns an earlier scan's result, and two forced calls still share one walk. _(verified: `plugin_fs.rs` `artifact_scan_cache_forced_refresh_never_returns_an_earlier_scan`, `artifact_scan_cache_concurrent_forced_waiter_shares_refresh`)_
+- [x] Trim reports measured bytes, and the panel subtracts those instead of the scan estimate. _(verified: `plugin_fs.rs` `trim_build_artifact_inner_reports_the_bytes_it_removed` + `buildCleaner.test.ts` `applyRemoval` cases)_
+- [ ] **After a `make dev` restart**: stage a file in the Git panel and confirm the Changes list updates on the first refresh. Then open the Build Cleaner, trim a `target/` directory and confirm the reported size drops by what was removed, not by the old estimate.
+
 ## Repo watcher ignore rules (2026-08-17, **Rust change — needs `make dev` restart**)
 
 `build` and `out` no longer count as build-output directory names; `.gitignore` decides, parents
