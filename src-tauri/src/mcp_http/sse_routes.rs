@@ -255,6 +255,7 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::SessionClosed { .. } => "session-closed",
         AppEvent::PtyParsed { .. } => "pty-parsed",
         AppEvent::PtyExit { .. } => "pty-exit",
+        AppEvent::PtyActivity { .. } => "pty-activity",
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
         AppEvent::PluginChanged { .. } => "plugin-changed",
@@ -310,6 +311,9 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             serde_json::json!({ "session_id": session_id, "parsed": parsed })
         }
         AppEvent::PtyExit { session_id } => {
+            serde_json::json!({ "session_id": session_id })
+        }
+        AppEvent::PtyActivity { session_id } => {
             serde_json::json!({ "session_id": session_id })
         }
         AppEvent::PluginWatcherLines { session_id, lines } => {

@@ -10,6 +10,34 @@
 
 Features to test when TUICommander is more usable.
 
+## Render cadence of AI answers and the phone terminal (2026-08-17, frontend only) — story `603-c28f`
+
+F10/F130/F136/F137 from the performance audit. The chat panel renders the live answer on
+its own 200 ms cadence instead of once per token batch, and the mobile terminal reuses the
+elements of screen rows that did not change. Vite reloads this without a restart.
+
+- [x] The first token appears at once, a burst collapses into one render, and the final text always lands. _(verified: `src/__tests__/utils/createThrottled.test.ts`, mutation-proven)_
+- [x] Starting a new reply clears the previous one immediately rather than one window later. _(verified: `createThrottled.test.ts` "passes a reset through at once" + "renders the first token after a reset without waiting", mutation-proven)_
+- [x] An unchanged screen row keeps its DOM node across frames, and only the changed row is replaced. _(verified: `src/mobile/__tests__/outputViewScreenRows.test.tsx`, mutation-proven)_
+- [x] A line's text, box-drawing flag and block wrapper are derived once, not once per frame. _(verified: `src/mobile/__tests__/logLine.test.ts` "line derivation cache", mutation-proven)_
+- [ ] **[MANUAL]** Ask the AI chat a question with a long answer (a few thousand words) and confirm the panel stays responsive to the end — it used to slow down progressively as the answer grew. Watch that code fences and tables still render correctly as they stream in.
+- [ ] **[MANUAL]** Open a session on a phone or at `:9877` in a narrow browser window, run something with a busy full-screen redraw (`htop`, a TUI agent), and confirm the output stays smooth and the search filter reacts instantly while output flows.
+
+## Desktop PTY activity pulse (2026-08-17, **Rust change — needs `make dev` restart**) — story `625-56b0`
+
+`cda39f31` deleted the `pty-output` emit and left the listener, so desktop lost every
+activity signal for a commit. A payload-free `pty-activity-{id}` pulse replaces it,
+throttled to ~1/s and dual-emitted so browser and desktop read the same signal.
+Nothing below works against the currently running binary.
+
+- [x] The pulse fires on first output, collapses a burst to one, and resumes after the window. _(verified: Rust `activity_pulse_emits_on_first_output`, `activity_pulse_suppresses_repeats_inside_window`, `activity_pulse_resumes_after_window`)_
+- [x] It does not restamp `SessionState.last_activity_ms`, which the mobile session list renders. _(verified: Rust `test_session_state_pty_activity_does_not_restamp_last_activity`)_
+- [x] Both transports route it to `onActivity`, and nothing listens for `pty-output` any more. _(verified: `transport.test.ts` — the parity test reproduces the original bug and fails on it)_
+- [ ] **After a `make dev` restart**: open the Activity Dashboard, run `for i in $(seq 1 20); do echo $i; sleep 1; done` in a terminal, and confirm the `lastDataAt` column keeps advancing while it runs — it froze completely before.
+- [ ] **After a `make dev` restart**: with tab A focused, start long output in background tab B and confirm B raises its unread-activity dot *while output is still flowing*, not only when the command completes. This is the case grid frames cannot report, since the canvas stops acking them while hidden.
+- [ ] **After a `make dev` restart**: open the same session in browser mode (`:9877`) and desktop side by side; both must light up their activity indicator on the same output, since both now read one backend signal.
+- [ ] **After a `make dev` restart**: confirm the mobile session list's last-activity time still reflects notable events (command start/end) and does NOT tick continuously during a long `tail -f`.
+
 ## Duplicate and orphan event listeners (2026-08-17, **Rust change — needs `make dev` restart**) — story `600-d664`
 
 F4/F5/F7/F11/F17 from the performance audit. Only `CanvasTerminal` listens for OSC 133 now;

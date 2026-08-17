@@ -1121,6 +1121,17 @@ async fn handle_ws_session(
                                 crate::state::AppEvent::PtyExit { session_id: sid } => {
                                     serde_json::json!({"type": "exit", "session_id": sid})
                                 }
+                                // The browser counterpart of the desktop
+                                // `pty-activity-{id}` Tauri event. Both ride the
+                                // subscription `subscribePty` owns, so the two
+                                // transports carry the same signal by construction
+                                // rather than by coincidence. The grid WS below
+                                // deliberately does NOT forward this — CanvasTerminal
+                                // has no activity consumer, and a pulse nobody reads
+                                // is a wake-up nobody needs.
+                                crate::state::AppEvent::PtyActivity { session_id: sid } => {
+                                    serde_json::json!({"type": "activity", "session_id": sid})
+                                }
                                 crate::state::AppEvent::PluginWatcherLines { session_id: sid, lines } => {
                                     serde_json::json!({"type": "watcher-lines", "session_id": sid, "lines": lines})
                                 }

@@ -335,6 +335,73 @@ const WATCHER_LINE_WINDOW: std::time::Duration = std::time::Duration::from_milli
 /// without bound.
 const WATCHER_BATCH_CAP: usize = 256 * 1024;
 
+/// One "this session produced output" pulse per this window.
+///
+/// DROPPING PULSES INSIDE THE WINDOW IS CORRECT, and that is what separates this
+/// from the `pty-output` throttle deleted in `cda39f31`. That one dropped chunks
+/// of a byte stream whose reassembler (`LineBuffer`) carried a partial line
+/// across the gap, so a drop spliced the tail of one chunk onto the head of a
+/// later one and produced a line that never existed (audit F1). This pulse
+/// carries no payload and is idempotent: "output happened" does not accumulate,
+/// so N pulses in a window and one pulse in a window mean the same thing.
+/// Nothing reassembles it, nothing can be spliced, and there is no state to
+/// carry across a dropped pulse.
+///
+/// So do NOT "fix" this into a coalescer with a buffer behind it. There is
+/// nothing for such a buffer to hold.
+///
+/// One per second, not the old ten: the only consumers are a last-seen timestamp
+/// rendered at second resolution and a boolean unread flag that latches on the
+/// first pulse.
+const ACTIVITY_PULSE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Tell this session's frontends that output is flowing. Payload-free by design
+/// — see [`ACTIVITY_PULSE_WINDOW`].
+///
+/// Dual-emitted because there is no bus→window forwarder: the desktop Tauri
+/// event and the bus push are two separate writes of one signal. Desktop reads
+/// `pty-activity-{id}`, browser/PWA reads the `{"type":"activity"}` frame on the
+/// session WebSocket, and both arrive through `subscribePty` on the frontend.
+fn emit_pty_activity(state: &AppState, session_id: &str) {
+    #[cfg(feature = "desktop")]
+    if let Some(app) = state.app_handle.read().as_ref() {
+        let _ = app.emit(
+            &format!("pty-activity-{session_id}"),
+            serde_json::json!({ "session_id": session_id }),
+        );
+    }
+    state.emit_pty_event(crate::state::AppEvent::PtyActivity {
+        session_id: session_id.to_string(),
+    });
+}
+
+/// Rate limiter for [`emit_pty_activity`], owned by the PTY reader thread.
+///
+/// A struct rather than a bare `Option<Instant>` in the read loop so the
+/// throttle can be driven by a test: the loop itself needs a live PTY, but the
+/// decision of when a pulse is due does not.
+struct ActivityPulse {
+    last: Option<std::time::Instant>,
+}
+
+impl ActivityPulse {
+    fn new() -> Self {
+        Self { last: None }
+    }
+
+    /// Emit a pulse if one is due. `None` fires immediately, so a session that
+    /// emits one short burst and then goes quiet still reports it.
+    fn pulse(&mut self, state: &AppState, session_id: &str) {
+        if self
+            .last
+            .is_none_or(|t| t.elapsed() >= ACTIVITY_PULSE_WINDOW)
+        {
+            emit_pty_activity(state, session_id);
+            self.last = Some(std::time::Instant::now());
+        }
+    }
+}
+
 /// Push one batch of assembled lines to the frontends of this session.
 fn emit_watcher_lines(
     state: &AppState,
@@ -7172,6 +7239,7 @@ pub(crate) fn spawn_reader_thread(
             // parser: watchers match the byte stream as it scrolls past, not the
             // screen contents.
             let mut watcher_lines = crate::output_watchers::StreamLines::new();
+            let mut activity_pulse = ActivityPulse::new();
             loop {
                 while paused.load(Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -7247,6 +7315,13 @@ pub(crate) fn spawn_reader_thread(
                                 &watcher_batcher,
                                 false,
                             );
+
+                            // "Output happened" for the activity dot and the
+                            // last-seen timestamp. Sits here, in the same block the
+                            // deleted `pty-output` emit occupied, so it reports on
+                            // exactly the chunks that one did — a chunk the
+                            // processor swallowed whole was never activity.
+                            activity_pulse.pulse(&state, &session_id);
                         }
 
                         frame_dirty.store(true, Ordering::Relaxed);
@@ -14876,6 +14951,92 @@ mod tests {
             .unwrap_or(999);
         assert_eq!(sub, 0, "active_sub_tasks should be force-cleared to 0");
     }
+
+    // ---- Activity pulse (story 625-56b0) ----
+    //
+    // What these protect: commit cda39f31 deleted the `pty-output` emit and left
+    // the frontend listener subscribed to it, so desktop `lastDataAt` and the
+    // background-tab unread flag silently froze for a commit. Nothing failed,
+    // because no test tied a producer to a consumer.
+    //
+    // LIMIT, stated rather than papered over: these drive `ActivityPulse`
+    // directly. They prove the pulse throttles and reaches the bus, and the
+    // frontend suite (`transport.test.ts`) proves both transports route the
+    // event to `onActivity`. Neither proves the PTY reader loop still CALLS
+    // `pulse()` — that needs a live PTY, and this crate has no harness that
+    // spawns one. Deleting the call site would still pass; deleting or renaming
+    // either end of the signal would not.
+
+    /// A session that produces output must announce it on the bus.
+    #[test]
+    fn activity_pulse_emits_on_first_output() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut rx = state.event_bus.subscribe();
+        let mut pulse = ActivityPulse::new();
+
+        pulse.pulse(&state, "sess-a");
+
+        match rx.try_recv().expect("bus must receive the activity pulse") {
+            crate::state::AppEvent::PtyActivity { session_id } => {
+                assert_eq!(session_id, "sess-a");
+            }
+            other => panic!("unexpected event variant: {other:?}"),
+        }
+    }
+
+    /// Repeated output inside the window collapses to one pulse. Dropping is the
+    /// intended behaviour here — the signal is payload-free and idempotent, so a
+    /// suppressed pulse carries nothing a later one does not.
+    #[test]
+    fn activity_pulse_suppresses_repeats_inside_window() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut rx = state.event_bus.subscribe();
+        let mut pulse = ActivityPulse::new();
+
+        for _ in 0..50 {
+            pulse.pulse(&state, "sess-a");
+        }
+
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Ok(crate::state::AppEvent::PtyActivity { .. })
+            ),
+            "first pulse must go out"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "a burst inside one window must collapse to a single pulse"
+        );
+    }
+
+    /// ...but the session must not go quiet forever: once the window has passed,
+    /// the next chunk pulses again. A latch here would freeze `lastDataAt` at the
+    /// first byte of a long-running command, which is the bug in a new costume.
+    #[test]
+    fn activity_pulse_resumes_after_window() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let mut rx = state.event_bus.subscribe();
+        let mut pulse = ActivityPulse::new();
+
+        pulse.pulse(&state, "sess-a");
+        let _ = rx.try_recv();
+        // Reach back past the window instead of sleeping through it.
+        pulse.last = Some(std::time::Instant::now() - ACTIVITY_PULSE_WINDOW);
+        pulse.pulse(&state, "sess-a");
+
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Ok(crate::state::AppEvent::PtyActivity { .. })
+            ),
+            "a chunk after the window must pulse again"
+        );
+    }
+
+    // The matching guarantee — that the pulse must NOT restamp
+    // `SessionState.last_activity_ms` — is asserted in `state.rs`, next to the
+    // accumulator that owns that field.
 
     /// Story 1366-2b3e/H1: when the stale-subtasks recovery path force-clears
     /// the in-memory counter, the caller must emit ActiveSubtasks{count:0}

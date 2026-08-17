@@ -1,11 +1,5 @@
 // Shared types for TUICommander
 
-/** PTY output event from Tauri */
-export interface PtyOutput {
-	session_id: string;
-	data: string;
-}
-
 /** Repository info from git */
 export interface RepoInfo {
 	path: string;
@@ -64,10 +58,8 @@ export interface IPty {
 
 /**
  * PTY event handler types for Tauri event listeners.
- * Usage: listen<PtyOutput>(`pty-output-${sessionId}`, handler)
  * Usage: listen<PtyExit>(`pty-exit-${sessionId}`, handler)
  */
-export type PtyDataHandler = (data: PtyOutput) => void;
 export type PtyExitHandler = (data: PtyExit) => void;
 
 /** Git remote + branch status (PR/CI data comes from githubStore via batch query) */
