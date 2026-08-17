@@ -143,6 +143,48 @@ Spawns a local process and communicates via newline-delimited JSON-RPC on stdin/
 3. **`is_alive()`** — Non-blocking `try_wait()` check on the child process.
 4. **`shutdown()`** — Closes stdin (signals EOF), waits up to 2s for voluntary exit, then kills.
 
+### Reading stdout
+
+A dedicated thread pumps the child's stdout into a **bounded** queue so `read_line`
+can wait with a deadline — a blocking read straight off the pipe is uninterruptible,
+and the caller is a blocking-pool thread holding this client's mutex. Nothing drains
+that queue between calls, so the bound is what keeps an upstream that chatters while
+idle from growing TUIC's memory. Three limits, because a line count alone bounds
+nothing: 256 lines, 8 MiB queued in total, and 16 MiB for any single line (a longer
+one is discarded whole rather than published as a truncated line nobody sent).
+
+The queue is **lossy — it drops the oldest line, it never blocks the reader.**
+Blocking the reader parks the child on its stdout write, and a child that is not
+reading its stdin can then park TUIC on the write side: neither side moves again.
+What gets dropped is what a call discards anyway — messages that arrived while
+nothing was waiting for them. A reply lost to a genuine flood surfaces as the
+timeout the call already has, and the timeout log carries the drop count.
+
+### Writing stdin
+
+A second thread owns the child's stdin, for the same reason the reader has one:
+`write_all` on a pipe is uninterruptible. A request larger than the pipe buffer
+parks there until the child reads it, and a child that stopped reading never
+does — so the write parks a blocking-pool thread holding this client's mutex,
+and that upstream's call and health-check paths are wedged for the life of the
+process.
+
+`write_line` hands the line to that thread and waits on the **same deadline as
+the reply**, so an unresponsive child costs one `timeout_secs`, not forever.
+A write that runs out of time tears the client down: the bytes may still be
+half-inside the pipe, and a child holding a partial JSON-RPC frame cannot be
+spoken to again.
+
+One request waits on **one deadline for the whole exchange** (`timeout_secs`),
+armed **before** the write rather than after it, and covering write and reads
+alike. It is not a per-message count. Server notifications and log messages arriving in
+between are skipped, however many there are: a chatty upstream must not lose a
+reply it answered correctly. Being out of time outranks having a line ready to
+parse, or an upstream that refills the queue faster than TUIC drains it would keep
+a call alive forever. On timeout the client is torn down, because a request we gave
+up on may still be answered later and that stale reply must not be handed to the
+next call as its own.
+
 ### Environment Sanitization
 
 The parent environment is cleared before spawning to prevent credential leakage (`ANTHROPIC_API_KEY`, `AWS_SECRET_ACCESS_KEY`, etc.) to potentially untrusted MCP server processes. A safe allowlist is re-applied:
