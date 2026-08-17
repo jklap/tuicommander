@@ -43,7 +43,7 @@ Terminals are **never unmounted** from the DOM. When you switch branches or tabs
 - Press **Enter** to confirm, **Escape** to cancel
 - Explicit custom names persist through reconnects and are never replaced by agent output
 - Spawn-assigned agent labels are base names: an `intent: text (Title)` marker may replace them with the current work phase
-- Orchestrated PTYs show a short task description above the terminal; the orchestrator can provide it explicitly, while integrations without a description field derive it from the task prompt. The expandable Prompt bar retains the last substantial user prompt separately
+- Agent terminals show an expandable **Context** bar. It separates the model's current **Intent**, the orchestrator-owned **Assignment**, and the last substantial user **Prompt**. MCP-connected models are instructed to refresh intent at task start and whenever the material work phase changes
 
 ### Tab Reordering
 
@@ -198,7 +198,7 @@ Also accessible via the "Search Terminals" command in the palette.
 
 ## Copy & Paste
 
-- **Copy:** Select text in the terminal, then `Cmd+C`. A "Copied to clipboard" confirmation appears in the status bar.
+- **Copy:** Select text in the terminal, then `Cmd+C`. A "Copied to clipboard" confirmation appears in the status bar. Multi-line Claude messages paste as clean text: the repeated `▎` visual gutter is removed while bullets, numbering, and indentation are preserved.
 - **Paste:** `Cmd+V` writes clipboard content to the active terminal
 
 ### Copy on Select

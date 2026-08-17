@@ -528,7 +528,7 @@ await host.renamePath(
 
 Recursively scan the given repo roots for build-artifact directories (Rust/Maven `target/`, `node_modules/`, JS framework caches like `.next`/`.turbo`, Python `.venv`/`__pycache__`/tool caches, .NET `obj`/`bin`, Gradle/CMake/Flutter `build/`, SwiftPM `.build`/`Pods`, `.terraform`, Elixir `_build`, Zig, Haskell, Composer `vendor/`). Read-only. Unlike `listDirectory`, this **ignores `.gitignore`** (artifact dirs are gitignored by design) and stops descending on a match, so a nested `node_modules` is folded into the outer entry — never double counted. Ambiguously-named dirs (`target`, `bin`/`obj`, `build`, `vendor`, …) only count when a toolchain marker sits beside them (e.g. `Cargo.toml` or `pom.xml` for `target`; a `.csproj`/`.fsproj`/`.vbproj`/`.sln`/`.slnx` for `bin`/`obj`; `build.gradle`/`CMakeLists.txt`/`pubspec.yaml` for `build`; `composer.json` for `vendor`) — a Go sysroot `bin` or an Xcode `PIFCache/target` is walked like any other dir, not claimed. The full rule table is `ARTIFACT_RULES` in `src-tauri/src/plugin_fs.rs`. Each `repoPaths` entry is `$HOME`-scoped **and intersected server-side with the app's actual registered-repository list** — a path that isn't equal to or nested under a genuinely registered repo root is silently dropped, so a plugin cannot widen its scan surface by passing arbitrary `$HOME` paths. Results for the same normalized set of roots are shared across concurrent callers and reused for 30 seconds. Pass `{ forceRefresh: true }` to bypass a completed cached result; an already-running scan for the same roots is still shared. **Requires `"fs:scan"` capability.**
 
-Each `ArtifactEntry` is `{ path, kind, size_bytes, last_modified_secs, repo }` — `kind` is one of `rust | maven | node | jscache | python | dotnet | gradle | cmake | swift | flutter | terraform | elixir | zig | haskell | php`, `last_modified_secs` is the max mtime of the dir's direct children (a "last build" signal).
+Each `ArtifactEntry` is `{ path, kind, size_bytes, trimmable_bytes, last_modified_secs, repo }` — `kind` is one of `rust | maven | node | jscache | python | dotnet | gradle | cmake | swift | flutter | terraform | elixir | zig | haskell | php`, `last_modified_secs` is the max mtime of the dir's direct children (a "last build" signal), and `trimmable_bytes` is the share of `size_bytes` that `trimBuildArtifact` would reclaim (0 for kinds with no separable intermediates). Both sizes come from one filesystem walk.
 
 ```typescript
 const entries = await host.scanBuildArtifacts(host.getRepos().map((r) => r.path));
@@ -543,6 +543,29 @@ Delete a build-artifact directory. Destructive. The backend guard requires (all 
 
 ```typescript
 await host.deleteBuildArtifact("/Users/me/project/target", ["/Users/me/project"]);
+```
+
+#### `host.trimBuildArtifact(path, repoPaths) -> Promise<void>`
+
+Remove only a build-artifact directory's **regenerable intermediates**, leaving the built executables in place. Prefer this over `deleteBuildArtifact`: a full clean of a Rust `target/` also deletes the binary the user may be running, while reclaiming (measured across 5 real repos) only ~1% more disk.
+
+Authorization is `deleteBuildArtifact`'s, unchanged. On top of it, only paths produced by expanding the matched toolchain rule's own trim patterns are removed, and each is re-verified to sit strictly inside the artifact dir; symlinked directories are never followed or expanded into.
+
+Which sub-paths count as intermediates is a per-rule table (`ARTIFACT_RULES[].trim` in `src-tauri/src/plugin_fs.rs`):
+
+| Kind | Trimmed | Kept |
+| --- | --- | --- |
+| `rust` (`target/`) | `<profile>/{deps,build,incremental,.fingerprint}`, plus the same under a target triple | the linked executables at each profile root |
+| `swift` (`.build/`) | `index-build/`, `<triple>/<profile>/{ModuleCache,index,<Module>.build}` | the product binary, `Modules/`, `checkouts/`, `repositories/` |
+| `maven` (`target/`) | `classes`, `test-classes`, `generated-*`, `maven-status`, `maven-archiver`, `*-reports` | the packaged `*.jar`/`*.war` |
+| `gradle` (`build/`) | `classes`, `tmp`, `kotlin`, `intermediates`, `generated`, `reports`, `test-results`, `jacoco` | `libs/`, `outputs/`, `distributions/`, `install/` |
+
+The bar for inclusion is that rebuilding costs only local CPU — anything needing the network to restore (cargo registry, SwiftPM `checkouts`/`repositories`) is deliberately kept. Every other kind has an empty trim list: it reports `trimmable_bytes: 0` and rejects a trim, because there is no subset that spares an output (`node_modules`, `.venv`, `vendor`) or because the whole dir is already the intermediate half of a pair (.NET `obj` vs `bin`, which the scanner reports as two separate entries).
+
+Check `trimmable_bytes > 0` before offering it. A successful no-op means there was nothing left to trim. **Requires `"fs:delete"` capability** — same blast-radius class, on a subset.
+
+```typescript
+await host.trimBuildArtifact("/Users/me/project/target", ["/Users/me/project"]);
 ```
 
 ### Tier 3c: Status Bar Ticker (capability-gated)
@@ -1164,7 +1187,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `fs:write` | `host.writeFile()` | Can write files within `$HOME` (10 MB limit) |
 | `fs:rename` | `host.renamePath()` | Can rename/move files within `$HOME` |
 | `fs:scan` | `host.scanBuildArtifacts()` | Can recursively scan registered repos for build-artifact directories (read-only; ignores `.gitignore`) |
-| `fs:delete` | `host.deleteBuildArtifact()` | Can delete a build-artifact directory inside a registered repo (guarded `remove_dir_all`) |
+| `fs:delete` | `host.deleteBuildArtifact()`, `host.trimBuildArtifact()` | Can delete a build-artifact directory inside a registered repo (guarded `remove_dir_all`), or remove just its intermediates |
 | `exec:cli` | `host.execCli()` | Can execute CLI binaries declared in manifest `binaries` field |
 | `git:read` | `host.getGitBranches()`, `host.getRecentCommits()`, `host.getGitDiff()` | Read-only access to git repository state |
 | `ui:context-menu` | `host.registerTerminalAction()` | Can add actions to the terminal right-click "Actions" submenu |

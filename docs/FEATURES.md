@@ -85,6 +85,7 @@
 - Copy selection: `Cmd+C`
 - Paste to terminal: `Cmd+V`
 - **Trailing whitespace trimmed** — All copy paths (Cmd+C, Ctrl+C, copy-on-select) strip trailing spaces from terminal rows
+- **Claude gutter normalization** — Multi-line terminal selections remove Claude's repeated non-breaking-space plus `▎` visual margin while preserving isolated block characters and the content's indentation
 - **Copy on Select** — When enabled (Settings > General > Terminal or Settings > Appearance), selecting text in the terminal automatically copies it to the clipboard. A brief "Copied to clipboard" confirmation appears in the status bar.
 - **Copy feedback (Cmd+C)** — Copying via Cmd+C shows "Copied to clipboard" in the status bar, consistent with copy-on-select and Ctrl+C paths.
 - **OSC 52 clipboard writes** — Terminal programs (tmux, vim, ssh yank) can set the system clipboard via the OSC 52 escape sequence. Because any displayed file/log can also emit it, each write surfaces a non-blocking "Clipboard updated by &lt;session&gt;" notice, and the behavior can be disabled entirely via Settings > General > Terminal > "Allow OSC 52 clipboard writes". Suggestion chips (OSC 7770 `suggest=`) carrying shell metacharacters are inserted without auto-Enter so a click cannot silently execute a spoofed command.
@@ -244,7 +245,7 @@ Right-click the main worktree row → **Switch Branch** submenu to checkout a di
 - Double-click branch name: rename branch
 - Right-click context menu: Copy Path, Add Terminal, Create Worktree, Merge & Archive, Delete Worktree, Open in IDE, Rename Branch
 - CI ring: proportional arc segments (green=passed, red=failed, yellow=pending)
-- PR badge: colored by state (green=open, purple=merged, red=closed, gray=draft) — click for detail popover
+- PR badge: always shows `#number` plus its highest-priority state when applicable (Draft, Conflicts, CI, review, merged/closed), with state color — click for detail popover
 - Diff stats: `+N / -N` additions/deletions
 - Merged badge: branches merged into main show a "Merged" badge
 - Question indicator: `?` icon (orange, pulsing) when agent asks a question
@@ -582,7 +583,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 
 ### 5.2 GitHub Section (center)
 - Branch badge: name + ahead/behind counts — click for branch popover
-- PR badge: number + state color — click for PR detail popover
+- PR badge: number + highest-priority state label and color — click for PR detail popover
   - PR lifecycle filtering: CLOSED PRs hidden immediately; MERGED PRs hidden after 5 minutes of accumulated user activity
 - CI badge: ring indicator — click for PR detail popover
 
@@ -693,6 +694,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 
 ### 6.7 Intent Event Tracking
 - Agents declare work phases via `intent: text (Title)` tokens at column 0, colorized dim yellow in terminal output
+- MCP instructions request an intent at the start of every task and on each material phase change; the terminal Context bar shows it separately from the orchestrator assignment and user prompt
 - Intent titles may replace spawn-assigned tab labels; only an explicit user rename locks the tab title, including after reconnect
 - Colorization is agent-gated (only applied in sessions with a detected agent) to prevent false positives
 - Structural tokens stripped from log lines served to PWA/REST consumers via `LogLine::strip_structural_tokens()`

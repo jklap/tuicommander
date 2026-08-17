@@ -228,6 +228,10 @@ struct ChangedRow {
 
 Each session gets its own `VtLogBuffer` stored in `AppState.vt_log_buffers: DashMap<String, Mutex<VtLogBuffer>>`.
 
+### Selection extraction
+
+`TerminalGrid::get_selection_text()` is the canonical desktop and HTTP selection path. It reads absolute scrollback coordinates, skips wide-character spacer cells, removes row padding, and joins rows carrying Alacritty's `WRAPLINE` flag so a visual wrap does not become a newline. Before returning clipboard text, it removes only contiguous multi-line Claude visual gutters with the exact `NBSP NBSP ▎` prefix. A lone marker, ASCII-indented block character, and non-breaking spaces inside the selected content remain unchanged.
+
 ## OSC 7 CWD Tracking
 
 Shells that emit OSC 7 (`\x1b]7;file://hostname/path\x07`) report the current working directory after each command. TUICommander uses this to keep the Rust-side `PtySession.cwd` in sync:
