@@ -24,7 +24,7 @@ pub(crate) enum EventCategory {
 
 /// Classify a filesystem event path into an `EventCategory`.
 ///
-/// Pure function: no I/O, no side effects. The `gitignore` matcher is used
+/// Pure function: no I/O, no side effects. The `ignores` matcher is used
 /// to filter out ignored working-tree files. `worktree_roots` holds the working
 /// tree roots of the repo's linked worktrees (see `linked_worktree_roots`);
 /// they are matched before `repo_root` so a worktree stored *inside* the repo
@@ -35,7 +35,7 @@ pub(crate) fn classify_path(
     repo_root: &Path,
     git_dir: &Path,
     worktree_roots: &[PathBuf],
-    gitignore: &Gitignore,
+    ignores: &IgnoreSet,
 ) -> EventCategory {
     // Check if the path is inside .git/
     if let Ok(rel) = path.strip_prefix(git_dir) {
@@ -84,12 +84,12 @@ pub(crate) fn classify_path(
     // below would drop its edits as noise.
     for wt_root in worktree_roots {
         if let Ok(rel) = path.strip_prefix(wt_root) {
-            return classify_in_working_tree(rel, path, gitignore);
+            return classify_in_working_tree(rel, path, ignores);
         }
     }
 
     if let Ok(rel) = path.strip_prefix(repo_root) {
-        return classify_in_working_tree(rel, path, gitignore);
+        return classify_in_working_tree(rel, path, ignores);
     }
 
     // Path outside repo root entirely — shouldn't happen, treat as noise
@@ -100,27 +100,30 @@ pub(crate) fn classify_path(
 /// path relative to that root. Shared by the main checkout and every linked
 /// worktree so both obey the same exclusion rules.
 ///
-/// The `gitignore` matcher is always the main checkout's — linked worktrees
+/// The `ignores` matcher is always the main checkout's — linked worktrees
 /// share the tracked `.gitignore`, and a branch that diverges on it only shifts
 /// what we treat as noise, never what git reports.
-fn classify_in_working_tree(rel: &Path, path: &Path, gitignore: &Gitignore) -> EventCategory {
+fn classify_in_working_tree(rel: &Path, path: &Path, ignores: &IgnoreSet) -> EventCategory {
     // Always-excluded directories — noise regardless of .gitignore. Covers a
     // linked worktree's `.git` *file*, whose real state lives in the admin dir
     // under the main `.git` (already watched and classified there).
-    if let Some(first) = rel.components().next() {
-        let name = first.as_os_str();
-        if crate::fs::ALWAYS_EXCLUDED_DIRS
+    //
+    // EVERY component is checked, not just the first: a nested git repo
+    // (`plugins/.git`, a submodule, a vendored checkout) is not this repo's
+    // `git_dir`, so the `.git` test above misses it, and its `objects/`/`index`/
+    // `logs/` churn used to arrive here as a working-tree change on every
+    // command the inner repo ran. Same for build output one level down
+    // (`src-tauri/target/`, `frontend/node_modules/`).
+    if rel.components().any(|c| {
+        let name = c.as_os_str();
+        crate::fs::ALWAYS_EXCLUDED_DIRS
             .iter()
             .any(|d| name == std::ffi::OsStr::new(d))
-        {
-            return EventCategory::Noise;
-        }
+    }) {
+        return EventCategory::Noise;
     }
 
-    if gitignore
-        .matched_path_or_any_parents(rel, path.is_dir())
-        .is_ignore()
-    {
+    if ignores.is_ignored(rel, path.is_dir()) {
         return EventCategory::Noise;
     }
     EventCategory::WorkingTree
@@ -206,6 +209,30 @@ impl CategoryEmitter {
         self.trigger_with_delay(category, category.delay(), emit_fn);
     }
 
+    /// Drop a pending emit for `category` without firing it. No-op when nothing
+    /// is pending, and never touches another category.
+    ///
+    /// Used to dedupe `repo-changed`: a GitState emit already sent the event a
+    /// pending WorkingTree emit was going to send, so the second one is pure
+    /// duplication — one logical change, two frontend cascades.
+    pub(crate) fn cancel(&self, category: &EventCategory) {
+        if let Some(slot) = self.slot(category)
+            && let Some(handle) = slot.lock().take()
+        {
+            handle.abort();
+        }
+    }
+
+    /// The pending-emit slot for a category. `Noise` has none — it never emits.
+    fn slot(&self, category: &EventCategory) -> Option<&Mutex<Option<tokio::task::AbortHandle>>> {
+        match category {
+            EventCategory::Head => Some(&self.head),
+            EventCategory::GitState => Some(&self.git_state),
+            EventCategory::WorkingTree => Some(&self.working_tree),
+            EventCategory::Noise => None,
+        }
+    }
+
     /// Schedule a delayed emit with an explicit delay. If a pending emit
     /// exists for the same category, it is cancelled first (trailing debounce).
     pub(crate) fn trigger_with_delay<F>(
@@ -216,11 +243,8 @@ impl CategoryEmitter {
     ) where
         F: FnOnce() + Send + 'static,
     {
-        let slot = match category {
-            EventCategory::Head => &self.head,
-            EventCategory::GitState => &self.git_state,
-            EventCategory::WorkingTree => &self.working_tree,
-            EventCategory::Noise => return,
+        let Some(slot) = self.slot(category) else {
+            return;
         };
         let mut guard = slot.lock();
         if let Some(handle) = guard.take() {
@@ -247,17 +271,122 @@ pub(crate) struct HeadChangedPayload {
     pub branch: String,
 }
 
-/// Build a `Gitignore` matcher from the repo's `.gitignore` file.
-/// Returns an empty matcher if no `.gitignore` exists.
-fn build_gitignore(repo_root: &Path) -> Gitignore {
-    let gitignore_path = repo_root.join(".gitignore");
-    if gitignore_path.exists() {
-        let mut builder = ignore::gitignore::GitignoreBuilder::new(repo_root);
-        builder.add(&gitignore_path);
-        builder.build().unwrap_or_else(|_| Gitignore::empty())
-    } else {
-        Gitignore::empty()
+/// Every ignore source git consults for a repo, layered so a deeper rule wins:
+/// the user's global ignore file (`core.excludesFile`), the root `.gitignore`
+/// together with `.git/info/exclude`, and one matcher per nested `.gitignore`.
+///
+/// Reading only the root `.gitignore` — the previous behaviour — left the other
+/// three sources invisible, so every write under a nested-ignored path
+/// (`plugins/*/data/`, `.git/info/exclude`'s `src-tauri/history/`) reached the
+/// emitter as a working-tree change and fed the `repo-changed` storm.
+pub(crate) struct IgnoreSet {
+    /// `(anchor, matcher)` shallowest first. The anchor is relative to a
+    /// working-tree root, not absolute, so the same set matches paths in the
+    /// main checkout and in every linked worktree.
+    layers: Vec<(PathBuf, Gitignore)>,
+}
+
+impl IgnoreSet {
+    /// A matcher that ignores nothing.
+    #[cfg(test)]
+    pub(crate) fn empty() -> Self {
+        Self { layers: Vec::new() }
     }
+
+    /// Whether `rel` — a path relative to a working-tree root — is ignored.
+    ///
+    /// Layers are applied shallowest first so a deeper `.gitignore` overrides a
+    /// shallower rule, including via a negation. Git would not even descend into
+    /// a directory an outer rule already ignored, so a deep negation under one is
+    /// honoured here where git would not: that classifies a path as a working
+    /// tree change instead of noise, which costs an event rather than losing one.
+    fn is_ignored(&self, rel: &Path, is_dir: bool) -> bool {
+        let mut ignored = false;
+        for (anchor, gi) in &self.layers {
+            let Ok(sub) = rel.strip_prefix(anchor) else {
+                continue;
+            };
+            if sub.as_os_str().is_empty() {
+                continue;
+            }
+            match gi.matched_path_or_any_parents(sub, is_dir) {
+                ignore::Match::Ignore(_) => ignored = true,
+                ignore::Match::Whitelist(_) => ignored = false,
+                ignore::Match::None => {}
+            }
+        }
+        ignored
+    }
+}
+
+/// Build the repo's `IgnoreSet` from all of git's ignore sources.
+///
+/// Discovering the nested `.gitignore` files needs a walk, so this is far from
+/// free — it runs at watcher registration and only when a `.gitignore` that is
+/// itself not ignored changes, never per filesystem event. The rebuild path runs
+/// on notify's event thread, so a large repo stalls event delivery for the
+/// duration; that is why the caller gates it on the changed `.gitignore` not
+/// already being noise, which excludes the vendored ones cargo writes under
+/// `target/` during a build.
+fn build_ignore(repo_root: &Path, git_dir: &Path) -> IgnoreSet {
+    let mut layers: Vec<(PathBuf, Gitignore)> = Vec::new();
+
+    // The user's global ignore file. Its patterns are unanchored by convention
+    // (`*.swp`, `**/.claude/settings.local.json`), so matching them against a
+    // repo-relative path is what git does too.
+    let (global, err) = Gitignore::global();
+    if let Some(e) = err {
+        tracing::debug!(
+            source = "repo_watcher",
+            "Global gitignore not fully read: {e}"
+        );
+    }
+    if global.num_ignores() > 0 || global.num_whitelists() > 0 {
+        layers.push((PathBuf::new(), global));
+    }
+
+    // Root `.gitignore` + `.git/info/exclude` — both repo-root relative, so they
+    // share one matcher; `info/exclude` is added last and therefore wins.
+    let mut root = ignore::gitignore::GitignoreBuilder::new(repo_root);
+    root.add(repo_root.join(".gitignore"));
+    root.add(git_dir.join("info").join("exclude"));
+    if let Ok(gi) = root.build()
+        && (gi.num_ignores() > 0 || gi.num_whitelists() > 0)
+    {
+        layers.push((PathBuf::new(), gi));
+    }
+
+    // Nested `.gitignore` files, deepest last so their rules override.
+    let mut nested: Vec<(PathBuf, Gitignore)> = nested_gitignores(repo_root);
+    nested.sort_by_key(|(anchor, _)| anchor.components().count());
+    layers.extend(nested);
+
+    IgnoreSet { layers }
+}
+
+/// Every `.gitignore` below the repo root, paired with its directory relative to
+/// that root. The walk itself honours ignore rules, so a `.gitignore` inside an
+/// already-ignored directory is never returned — it could not matter anyway.
+fn nested_gitignores(repo_root: &Path) -> Vec<(PathBuf, Gitignore)> {
+    ignore::WalkBuilder::new(repo_root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .parents(false)
+        .filter_entry(|e| !crate::fs::is_always_excluded_dir(e))
+        .build()
+        .flatten()
+        .filter(|e| e.depth() > 0 && e.file_name() == std::ffi::OsStr::new(".gitignore"))
+        .filter_map(|e| {
+            let dir = e.path().parent()?;
+            let anchor = dir.strip_prefix(repo_root).ok()?.to_path_buf();
+            let mut builder = ignore::gitignore::GitignoreBuilder::new(dir);
+            builder.add(e.path());
+            let gi = builder.build().ok()?;
+            (gi.num_ignores() > 0 || gi.num_whitelists() > 0).then_some((anchor, gi))
+        })
+        .collect()
 }
 
 /// Fold the meaningful git-state inputs into a single u64 fingerprint.
@@ -588,7 +717,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
     // conventional `.git` location for path classification; the Linux `.git`
     // sub-watches below are skipped until it actually exists.
     let git_dir = crate::git::resolve_git_dir(&repo).unwrap_or_else(|| repo.join(".git"));
-    let gitignore = Arc::new(parking_lot::RwLock::new(build_gitignore(&repo)));
+    let gitignore = Arc::new(parking_lot::RwLock::new(build_ignore(&repo, &git_dir)));
     // Filled in by `sync_worktree_watches` once the handle is registered; the
     // event callback reads it to classify paths inside linked worktrees.
     let worktree_snapshot: Arc<parking_lot::RwLock<Vec<PathBuf>>> =
@@ -638,12 +767,21 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 return;
             }
 
-            // Check if .gitignore itself changed — rebuild matcher if so
-            let gitignore_changed = event.paths.iter().any(|p| {
-                p.file_name().is_some_and(|n| n == ".gitignore")
-            });
+            // Rebuild the matcher when a `.gitignore` that matters changes.
+            // Gated on the path not already being noise: a cargo build writes
+            // several vendored `.gitignore` files under `target/`, and each one
+            // would otherwise trigger the (walking) rebuild.
+            let gitignore_changed = {
+                let gi = gitignore_cb.read();
+                let worktrees = worktrees_cb.read();
+                event.paths.iter().any(|p| {
+                    p.file_name().is_some_and(|n| n == ".gitignore")
+                        && classify_path(p, &repo_for_cb, &git_dir_for_cb, &worktrees, &gi)
+                            != EventCategory::Noise
+                })
+            };
             if gitignore_changed {
-                *gitignore_cb.write() = build_gitignore(&repo_for_cb);
+                *gitignore_cb.write() = build_ignore(&repo_for_cb, &git_dir_for_cb);
             }
 
             // Classify all event paths and collect which categories fired
@@ -754,6 +892,7 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 let st = Arc::clone(&state_cb);
                 let repo = repo_for_cb.clone();
                 let git_dir = git_dir_for_cb.clone();
+                let em = Arc::clone(&emitter);
                 emitter.trigger(&EventCategory::GitState, move || {
                     // Skip the emit (and cache invalidation) when the meaningful git
                     // state is unchanged. A no-op `.git` touch — e.g. a non-writing
@@ -771,6 +910,16 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                     sync_worktree_watches(&st, &repo_path, &git_dir);
                     tracing::debug!(source = "repo_watcher", path = %repo_path, "Emit repo-changed (git-state)");
                     st.invalidate_repo_caches(&repo_path);
+                    // Dedupe: a pending working-tree emit would send this exact
+                    // event again in another second. `git add`, `git commit` and
+                    // `git checkout` all write `.git` *and* the working tree, so
+                    // one logical change scheduled two identical cascades.
+                    //
+                    // Only on an emit that actually fires — the fingerprint skip
+                    // above returns early, because a worktree-local edit leaves
+                    // the main checkout's fingerprint identical and the pending
+                    // working-tree emit is then the ONLY one that will report it.
+                    em.cancel(&EventCategory::WorkingTree);
                     let _ = bus.send(AppEvent::RepoChanged {
                         repo_path: repo_path.clone(),
                     });
@@ -886,12 +1035,18 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
 /// Stop watching a repository and retire its repo-local semantic caches, so a
 /// later restart starts cold instead of suppressing the first real change with
 /// stale state (issue #82).
+///
+/// Also releases the repo's BM25 content index — the heaviest per-repo
+/// allocation we hold. Every caller of this means "no longer in use": the user
+/// removed the repo, parked it, or the refresh coordinator retired it. An
+/// in-flight build keeps its own `Arc` and simply writes into an orphan.
 pub(crate) fn stop_watching(repo_path: &str, state: &Arc<AppState>) {
     if state.repo_watchers.remove(repo_path).is_some() {
         tracing::info!(source = "repo_watcher", path = %repo_path, "Stopping watcher");
     }
     state.repo_head_targets.remove(repo_path);
     state.repo_git_fingerprints.remove(repo_path);
+    state.content_indices.remove(repo_path);
 }
 
 // --- Tauri commands ---
@@ -923,18 +1078,20 @@ mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
 
-    /// Build an empty Gitignore matcher (matches nothing).
-    fn empty_gitignore() -> Gitignore {
-        Gitignore::empty()
+    /// Build an empty matcher (matches nothing).
+    fn empty_gitignore() -> IgnoreSet {
+        IgnoreSet::empty()
     }
 
-    /// Build a Gitignore matcher from pattern strings.
-    fn gitignore_from_patterns(repo_root: &Path, patterns: &[&str]) -> Gitignore {
+    /// Build a single-layer `IgnoreSet` from repo-root-relative pattern strings.
+    fn gitignore_from_patterns(repo_root: &Path, patterns: &[&str]) -> IgnoreSet {
         let mut builder = ignore::gitignore::GitignoreBuilder::new(repo_root);
         for pat in patterns {
             builder.add_line(None, pat).unwrap();
         }
-        builder.build().unwrap()
+        IgnoreSet {
+            layers: vec![(PathBuf::new(), builder.build().unwrap())],
+        }
     }
 
     #[test]
@@ -1191,6 +1348,139 @@ mod tests {
         );
     }
 
+    /// A nested git repo (`plugins/.git` here — a real one in this repo) is not
+    /// this repo's git dir, so `strip_prefix(git_dir)` misses it. It must still
+    /// be noise: its `objects/`, `index` and `logs/` churn on every command the
+    /// inner repo runs, and every one of those writes used to reach the emitter
+    /// as a working-tree change.
+    #[test]
+    fn test_classify_nested_git_repo_is_noise() {
+        let root = Path::new("/repo");
+        let git = Path::new("/repo/.git");
+        let gi = empty_gitignore();
+
+        assert_eq!(
+            classify_path(
+                Path::new("/repo/plugins/.git/objects/ab/cdef"),
+                root,
+                git,
+                &[],
+                &gi
+            ),
+            EventCategory::Noise
+        );
+        assert_eq!(
+            classify_path(Path::new("/repo/plugins/.git/index"), root, git, &[], &gi),
+            EventCategory::Noise
+        );
+        // Same rule for every always-excluded dir at any depth, not just the
+        // first path component: build output nested one level down is still
+        // build output.
+        assert_eq!(
+            classify_path(
+                Path::new("/repo/src-tauri/target/debug/x.d"),
+                root,
+                git,
+                &[],
+                &gi
+            ),
+            EventCategory::Noise
+        );
+        assert_eq!(
+            classify_path(
+                Path::new("/repo/frontend/app/node_modules/x/i.js"),
+                root,
+                git,
+                &[],
+                &gi
+            ),
+            EventCategory::Noise
+        );
+        // A tracked file that merely *contains* an excluded name as a suffix is
+        // untouched — only whole components count.
+        assert_eq!(
+            classify_path(Path::new("/repo/src/build_helper.rs"), root, git, &[], &gi),
+            EventCategory::WorkingTree
+        );
+    }
+
+    /// The watcher must honour every ignore source git honours. Reading only the
+    /// root `.gitignore` left nested `.gitignore` files, `.git/info/exclude` and
+    /// the user's global ignore file invisible, so writes under those paths
+    /// reached the emitter as working-tree changes.
+    #[test]
+    fn test_ignore_set_covers_nested_and_info_exclude() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git_dir = root.join(".git");
+        std::fs::create_dir_all(git_dir.join("info")).unwrap();
+        std::fs::write(root.join(".gitignore"), "/root-only.txt\n").unwrap();
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/.gitignore"), "data/\n").unwrap();
+        std::fs::create_dir_all(root.join("sub/data")).unwrap();
+        std::fs::write(root.join("sub/data/x.json"), "{}").unwrap();
+        std::fs::write(git_dir.join("info/exclude"), "history/\n").unwrap();
+        std::fs::create_dir_all(root.join("history")).unwrap();
+        std::fs::create_dir_all(root.join("src")).unwrap();
+
+        let gi = build_ignore(root, &git_dir);
+        let classify = |rel: &str| classify_path(&root.join(rel), root, &git_dir, &[], &gi);
+
+        assert_eq!(
+            classify("root-only.txt"),
+            EventCategory::Noise,
+            "root .gitignore"
+        );
+        assert_eq!(
+            classify("sub/data/x.json"),
+            EventCategory::Noise,
+            "nested sub/.gitignore"
+        );
+        assert_eq!(
+            classify("history/2026.md"),
+            EventCategory::Noise,
+            ".git/info/exclude"
+        );
+        // A nested pattern must not leak upwards: `data/` under `sub/` says
+        // nothing about a `data/` at the repo root.
+        assert_eq!(classify("data/x.json"), EventCategory::WorkingTree);
+        assert_eq!(classify("src/main.rs"), EventCategory::WorkingTree);
+    }
+
+    /// `core.excludesFile` (the user's global ignore) is a third source git
+    /// consults. `GIT_CONFIG_GLOBAL` is process-wide, which is safe here because
+    /// `cargo nextest` runs each test in its own process.
+    #[test]
+    fn test_ignore_set_covers_global_excludes_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git_dir = root.join(".git");
+        std::fs::create_dir_all(&git_dir).unwrap();
+        let global_ignore = dir.path().join("global-ignore");
+        std::fs::write(&global_ignore, "*.swp\n").unwrap();
+        let gitconfig = dir.path().join("gitconfig");
+        std::fs::write(
+            &gitconfig,
+            format!(
+                "[core]\n\texcludesFile = {}\n",
+                global_ignore.to_string_lossy()
+            ),
+        )
+        .unwrap();
+        unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &gitconfig) };
+
+        let gi = build_ignore(root, &git_dir);
+        assert_eq!(
+            classify_path(&root.join("src/main.rs.swp"), root, &git_dir, &[], &gi),
+            EventCategory::Noise,
+            "the global ignore file must be honoured"
+        );
+        assert_eq!(
+            classify_path(&root.join("src/main.rs"), root, &git_dir, &[], &gi),
+            EventCategory::WorkingTree
+        );
+    }
+
     #[test]
     fn test_classify_noise_gitignored() {
         let root = Path::new("/repo");
@@ -1301,6 +1591,66 @@ mod tests {
 
         // Only the second trigger should have fired (value 10, not 1 or 11)
         assert_eq!(counter.load(Ordering::Relaxed), 10);
+    }
+
+    /// A GitState emit sends the exact same `RepoChanged` a pending WorkingTree
+    /// emit would send a second later, so one logical change (a `git add`, a
+    /// `git checkout`, a commit — all of which write `.git` *and* the working
+    /// tree) produced two identical events and two full frontend cascades.
+    /// Cancelling the pending one is the dedupe.
+    #[tokio::test]
+    async fn test_emitter_cancel_drops_a_pending_emit() {
+        let emitter = CategoryEmitter::new(tokio::runtime::Handle::current());
+        let wt = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let head = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        let c = Arc::clone(&wt);
+        emitter.trigger_with_delay(
+            &EventCategory::WorkingTree,
+            Duration::from_millis(80),
+            move || {
+                c.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+        let h = Arc::clone(&head);
+        emitter.trigger(&EventCategory::Head, move || {
+            h.fetch_add(1, Ordering::Relaxed);
+        });
+
+        emitter.cancel(&EventCategory::WorkingTree);
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(
+            wt.load(Ordering::Relaxed),
+            0,
+            "the cancelled working-tree emit must not fire"
+        );
+        assert_eq!(
+            head.load(Ordering::Relaxed),
+            1,
+            "cancelling one category must leave the others pending"
+        );
+    }
+
+    /// Cancelling with nothing pending is a no-op, and must not stop the *next*
+    /// emit for that category — the GitState path calls it unconditionally after
+    /// every emit it makes.
+    #[tokio::test]
+    async fn test_emitter_cancel_with_nothing_pending_is_harmless() {
+        let emitter = CategoryEmitter::new(tokio::runtime::Handle::current());
+        emitter.cancel(&EventCategory::WorkingTree);
+
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let c = Arc::clone(&counter);
+        emitter.trigger_with_delay(
+            &EventCategory::WorkingTree,
+            Duration::from_millis(50),
+            move || {
+                c.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert_eq!(counter.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
@@ -1561,6 +1911,36 @@ mod tests {
         );
 
         stop_watching(&repo_path, &state);
+    }
+
+    /// A repo's BM25 content index is the heaviest per-repo allocation we hold
+    /// (every text file's tokens). `stop_watching` runs when the user removes a
+    /// repo, parks it, or the refresh coordinator retires it — all of which mean
+    /// "no longer in use" — so the index must be released there, alongside the
+    /// semantic caches. Without this the map only ever grows for the life of the
+    /// process.
+    #[test]
+    fn test_stop_watching_reaps_the_content_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo_path = dir.path().to_string_lossy().to_string();
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.content_indices.insert(
+            repo_path.clone(),
+            Arc::new(parking_lot::RwLock::new(
+                crate::content_index::ContentIndex::empty(dir.path().to_path_buf()),
+            )),
+        );
+        state
+            .repo_head_targets
+            .insert(repo_path.clone(), "t".into());
+
+        stop_watching(&repo_path, &state);
+
+        assert!(
+            !state.content_indices.contains_key(&repo_path),
+            "a repo that is no longer watched must not keep its content index"
+        );
+        assert!(!state.repo_head_targets.contains_key(&repo_path));
     }
 
     #[test]
