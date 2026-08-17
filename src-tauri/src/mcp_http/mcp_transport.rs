@@ -797,6 +797,7 @@ fn refresh_mcp_session(
                 is_claude_code,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -5035,6 +5036,7 @@ pub(super) async fn mcp_post(
                         is_claude_code,
                         requires_meta_tools,
                         has_sse_stream: false,
+                        sse_generation: 0,
                         repo_path,
                     },
                 );
@@ -5248,20 +5250,59 @@ pub(super) async fn mcp_post(
     }
 }
 
+/// Streams are numbered from one counter for the whole process, never from the
+/// session. A session id can be removed and auto-recovered while an older stream
+/// for the previous incarnation is still draining; a per-session counter would
+/// restart at zero and hand that stale stream a number the new one also holds,
+/// and its teardown would then close the replacement.
+fn next_sse_generation() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Releases the per-session SSE resources whenever the stream goes away —
 /// normal end, client disconnect, or server shutdown alike. Owned by the stream
 /// generator so it runs on drop; the only path a disconnect actually takes.
+///
+/// A half-open stream can still be alive when its own reconnect is accepted, so
+/// the release is conditional: the guard only clears the session it still owns.
+/// Unconditional cleanup let the older stream's drop remove the sender the new
+/// stream had just subscribed to, which closed the replacement immediately.
+///
+/// Lock order is `mcp_sessions` → `messaging_channels`, here and in `mcp_get`.
+/// Nothing may hold a `messaging_channels` reference while taking `mcp_sessions`.
 struct SseStreamTeardown {
     state: Arc<AppState>,
     mcp_sid: String,
+    generation: u64,
 }
 
 impl Drop for SseStreamTeardown {
     fn drop(&mut self) {
-        if let Some(mut meta) = self.state.mcp_sessions.get_mut(&self.mcp_sid) {
-            meta.has_sse_stream = false;
+        use dashmap::mapref::entry::Entry;
+
+        // The session entry is held across the channel removal: releasing it
+        // first would let a reconnect take ownership and subscribe in between,
+        // and this drop would then remove the sender out from under it.
+        //
+        // `entry` rather than `get_mut` because the absent case needs the hold
+        // just as much: DELETE or the reaper can remove the session while this
+        // stream is still draining, and `get_mut` returning `None` releases the
+        // shard before the removal below. A reconnect landing in that window
+        // recreates the session, subscribes to a fresh sender, and then loses it
+        // to this drop. Only `entry` keeps the shard locked over an absent key.
+        match self.state.mcp_sessions.entry(self.mcp_sid.clone()) {
+            // Superseded: a newer stream owns the session and its channel.
+            Entry::Occupied(meta) if meta.get().sse_generation != self.generation => {}
+            Entry::Occupied(mut meta) => {
+                meta.get_mut().has_sse_stream = false;
+                self.state.messaging_channels.remove(&self.mcp_sid);
+            }
+            // The session itself is gone; nobody is left to own the channel.
+            Entry::Vacant(_) => {
+                self.state.messaging_channels.remove(&self.mcp_sid);
+            }
         }
-        self.state.messaging_channels.remove(&self.mcp_sid);
     }
 }
 
@@ -5277,45 +5318,45 @@ pub(super) async fn mcp_get(
         .and_then(|v| v.to_str().ok())
         .map(|s| s.to_string());
     let is_cc_ua = detect_claude_code_from_headers(&headers);
-    let session_valid = session_id
-        .as_deref()
-        .map(|sid| {
-            if !state.mcp_sessions.contains_key(sid) {
-                tracing::warn!(
-                    "MCP SSE session auto-recovered (stale session_id: {sid}); \
-                 is_claude_code={is_cc_ua} (from User-Agent)"
-                );
-                let now = std::time::Instant::now();
-                state.mcp_sessions.insert(
-                    sid.to_string(),
-                    crate::state::McpSessionMeta {
-                        last_activity: now,
-                        is_claude_code: is_cc_ua,
-                        requires_meta_tools: false,
-                        has_sse_stream: false,
-                        repo_path: None,
-                    },
-                );
-            }
-            // Mark this session as having an active SSE stream
-            if let Some(mut meta) = state.mcp_sessions.get_mut(sid) {
-                meta.has_sse_stream = true;
-            }
-            true
-        })
-        .unwrap_or(false);
-    if !session_valid {
+    let Some(sid) = session_id else {
         return StatusCode::UNAUTHORIZED.into_response();
-    }
-    let sid = session_id.unwrap(); // safe: session_valid=true implies Some
+    };
 
-    // Create or subscribe to per-session messaging channel
-    let msg_rx = {
+    if !state.mcp_sessions.contains_key(&sid) {
+        tracing::warn!(
+            "MCP SSE session auto-recovered (stale session_id: {sid}); \
+             is_claude_code={is_cc_ua} (from User-Agent)"
+        );
+        state.mcp_sessions.insert(
+            sid.clone(),
+            crate::state::McpSessionMeta {
+                last_activity: std::time::Instant::now(),
+                is_claude_code: is_cc_ua,
+                requires_meta_tools: false,
+                has_sse_stream: false,
+                sse_generation: 0,
+                repo_path: None,
+            },
+        );
+    }
+
+    // Take ownership of the session and subscribe to its channel under one hold
+    // of the session entry — the same one the teardown takes. Split apart, a
+    // superseded stream's teardown could pass its generation check, then remove
+    // the sender *after* this stream had already subscribed to it, and the
+    // replacement would open onto a closed channel.
+    let (generation, msg_rx) = {
+        let Some(mut meta) = state.mcp_sessions.get_mut(&sid) else {
+            // Removed between the insert above and here (DELETE /mcp, reaper).
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        meta.has_sse_stream = true;
+        meta.sse_generation = next_sse_generation();
         let tx = state
             .messaging_channels
             .entry(sid.clone())
             .or_insert_with(|| tokio::sync::broadcast::channel(64).0);
-        tx.subscribe()
+        (meta.sse_generation, tx.subscribe())
     };
 
     let mut tools_rx = state.mcp_tools_changed.subscribe();
@@ -5326,6 +5367,7 @@ pub(super) async fn mcp_get(
     let cleanup = SseStreamTeardown {
         state: state.clone(),
         mcp_sid: sid.clone(),
+        generation,
     };
 
     let stream = async_stream::stream! {
@@ -7175,6 +7217,7 @@ mod tests {
                 is_claude_code: false,
                 requires_meta_tools: false,
                 has_sse_stream: true,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -7227,6 +7270,7 @@ mod tests {
                 is_claude_code: true,
                 requires_meta_tools: false,
                 has_sse_stream: true,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -7831,6 +7875,7 @@ mod tests {
                 is_claude_code: false,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -8195,6 +8240,7 @@ mod tests {
                 is_claude_code: false,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -9234,6 +9280,7 @@ mod tests {
                 is_claude_code: true,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -9360,6 +9407,7 @@ mod tests {
                 is_claude_code: true,
                 requires_meta_tools: false,
                 has_sse_stream: true, // historical flag alone is not live ownership
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -9616,6 +9664,7 @@ mod tests {
                 is_claude_code: true,
                 requires_meta_tools: false,
                 has_sse_stream: true,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -9769,6 +9818,7 @@ mod tests {
                 is_claude_code: true,
                 requires_meta_tools: false,
                 has_sse_stream: true,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -9831,6 +9881,7 @@ mod tests {
                 is_claude_code: true,
                 requires_meta_tools: false,
                 has_sse_stream: true,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -9935,6 +9986,7 @@ mod tests {
                 is_claude_code: true,
                 requires_meta_tools: false,
                 has_sse_stream: true,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -10497,6 +10549,7 @@ mod tests {
                 is_claude_code: false,
                 requires_meta_tools: true,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -11509,6 +11562,7 @@ mod tests {
                 is_claude_code: true,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: Some("/Gits/personal/gamma".to_string()),
             },
         );
@@ -12847,6 +12901,7 @@ mod tests {
                 is_claude_code: false,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -14490,6 +14545,7 @@ mod tests {
                 is_claude_code: false,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -14531,6 +14587,161 @@ mod tests {
                 .get(&sid)
                 .is_some_and(|meta| !meta.has_sse_stream),
             "dropping the stream must clear has_sse_stream"
+        );
+    }
+
+    /// A reconnect can be accepted while the stream it replaces is still
+    /// half-open. Teardown used to release the session unconditionally, so the
+    /// older stream's drop removed the sender the replacement had just
+    /// subscribed to: the new stream saw `Closed` and every later server
+    /// message was lost.
+    #[tokio::test]
+    async fn dropping_a_superseded_sse_stream_leaves_its_replacement_alive() {
+        let state = test_state();
+        let sid = insert_sse_session(&state);
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, sid.parse().unwrap());
+
+        let first = mcp_get(State(state.clone()), headers.clone())
+            .await
+            .into_response();
+        let second = mcp_get(State(state.clone()), headers).await.into_response();
+
+        // The replacement holds a receiver on the session's sender.
+        let mut rx = state
+            .messaging_channels
+            .get(&sid)
+            .expect("the replacement must have a channel")
+            .subscribe();
+
+        drop(first);
+        assert!(
+            state.messaging_channels.contains_key(&sid),
+            "the superseded stream must not evict the live stream's channel"
+        );
+        assert!(
+            state
+                .mcp_sessions
+                .get(&sid)
+                .is_some_and(|meta| meta.has_sse_stream),
+            "the session is still streaming through the replacement"
+        );
+        assert!(
+            !matches!(
+                rx.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed)
+            ),
+            "the replacement's receiver must still be open"
+        );
+
+        // The owner's own teardown still releases everything.
+        drop(second);
+        assert!(!state.messaging_channels.contains_key(&sid));
+        assert!(
+            state
+                .mcp_sessions
+                .get(&sid)
+                .is_some_and(|meta| !meta.has_sse_stream)
+        );
+    }
+
+    /// Generations come from one process-wide counter, not from the session.
+    /// A `DELETE /mcp` can retire a session id while its stream is still
+    /// half-open, and the next `GET` auto-recovers that id from scratch — a
+    /// per-session counter would restart at zero and reissue the number the
+    /// half-open stream still holds, whose teardown would then close the new one.
+    #[tokio::test]
+    async fn a_recreated_session_does_not_reissue_a_live_stream_s_generation() {
+        let state = test_state();
+        let sid = insert_sse_session(&state);
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, sid.parse().unwrap());
+
+        let first = mcp_get(State(state.clone()), headers.clone())
+            .await
+            .into_response();
+        // DELETE /mcp retires the session while `first` is still draining.
+        state.mcp_sessions.remove(&sid);
+        // The same id comes back and is auto-recovered from scratch.
+        let second = mcp_get(State(state.clone()), headers).await.into_response();
+
+        let mut rx = state
+            .messaging_channels
+            .get(&sid)
+            .expect("the new stream must have a channel")
+            .subscribe();
+
+        drop(first);
+        assert!(
+            state.messaging_channels.contains_key(&sid),
+            "the retired stream must not release the recreated session"
+        );
+        assert!(
+            !matches!(
+                rx.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed)
+            ),
+            "the new stream's receiver must still be open"
+        );
+        drop(second);
+        assert!(!state.messaging_channels.contains_key(&sid));
+    }
+
+    /// The generation check protects the *present* session. When `DELETE /mcp`
+    /// or the reaper has already retired the id, there is no generation to
+    /// compare and teardown removes the channel outright — so that removal must
+    /// still be serialized against a reconnect, which recreates the session and
+    /// subscribes to a fresh sender. `get_mut` returning `None` cannot do it: it
+    /// releases the shard first, and a `GET` landing in that window gets its
+    /// brand-new sender deleted underneath it. Only holding the shard over the
+    /// absent key does, so that is what this asserts — the race window itself is
+    /// nanoseconds wide and cannot be hit on demand.
+    #[test]
+    fn teardown_of_a_retired_session_holds_it_across_the_channel_removal() {
+        use dashmap::try_result::TryResult;
+
+        let state = test_state();
+        let sid = insert_sse_session(&state);
+        let mut headers = HeaderMap::new();
+        headers.insert(MCP_SESSION_HEADER, sid.parse().unwrap());
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let first = rt
+            .block_on(mcp_get(State(state.clone()), headers))
+            .into_response();
+
+        // DELETE /mcp retires the id: teardown will take the absent-key path.
+        state.mcp_sessions.remove(&sid);
+
+        // Hold the channel's shard so the removal inside teardown has to wait
+        // there, with whatever it took on the session map still held.
+        let channel_shard = state.messaging_channels.entry(sid.clone());
+
+        let dropper = std::thread::spawn(move || drop(first));
+
+        let mut held = false;
+        for _ in 0..200 {
+            if matches!(state.mcp_sessions.try_get(&sid), TryResult::Locked) {
+                // A momentary `get_mut` on an absent key also locks the shard,
+                // so a single observation proves nothing — the hold has to last.
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                held = matches!(state.mcp_sessions.try_get(&sid), TryResult::Locked);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(
+            held,
+            "teardown must still own the retired session while it removes the channel"
+        );
+
+        drop(channel_shard);
+        dropper.join().expect("teardown thread");
+        assert!(
+            !state.messaging_channels.contains_key(&sid),
+            "with nobody left to own it, the channel is still released"
         );
     }
 
@@ -14623,6 +14834,7 @@ mod tests {
                 // A repo_path is what makes the allowlist lookup reach the disk.
                 repo_path: Some("/test/repo".to_string()),
                 has_sse_stream: false,
+                sse_generation: 0,
             },
         );
 

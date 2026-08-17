@@ -3161,6 +3161,7 @@ mod tests {
                 is_claude_code: false,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -3221,6 +3222,7 @@ mod tests {
                 is_claude_code: true,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -4627,6 +4629,7 @@ mod tests {
                 is_claude_code: false,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
@@ -4665,6 +4668,7 @@ mod tests {
                 is_claude_code: false,
                 requires_meta_tools: false,
                 has_sse_stream: false,
+                sse_generation: 0,
                 repo_path: None,
             },
         );
