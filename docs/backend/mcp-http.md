@@ -182,6 +182,32 @@ protocol session, and `GET` answers `401` without it.
 
 The `GET /mcp` SSE stream emits `notifications/tools/list_changed` whenever the available tool set changes (e.g., native tools are enabled/disabled via config, or upstream MCP servers connect/disconnect). The bridge sidecar subscribes to this stream and forwards the notification to the AI agent.
 
+A session may briefly hold two `GET /mcp` streams: a reconnect can be accepted while
+the stream it replaces is still half-open. Each stream takes a generation on the
+session and its teardown releases the session — the `has_sse_stream` flag and the
+per-session messaging sender — **only while it still holds that generation**. An
+unconditional release let the older stream's drop remove the sender its own
+replacement had just subscribed to, closing the new stream immediately.
+
+Three details in that guard are easy to get wrong:
+
+- Generations come from **one process-wide counter**, never per session. A
+  `DELETE /mcp` can retire a session id while its stream is still draining, and the
+  next `GET` auto-recovers that id from scratch — a per-session counter would restart
+  and reissue a number the half-open stream still holds.
+- The teardown holds the `mcp_sessions` entry **across** the channel removal, and
+  `mcp_get` holds it across its subscribe. Split apart, a superseded stream can pass
+  its generation check and then remove the sender after the replacement subscribed.
+  Lock order is `mcp_sessions` → `messaging_channels`; nothing may hold a
+  `messaging_channels` reference while taking `mcp_sessions`.
+- That hold is taken with `entry`, not `get_mut`, because the **absent** case needs
+  it too. When `DELETE` or the reaper has already retired the id there is no
+  generation to compare and teardown removes the channel outright; `get_mut`
+  returning `None` releases the shard before that removal, and a reconnect landing
+  in the window recreates the session, subscribes, and then loses its brand-new
+  sender to the older stream's drop. Only `entry` keeps the shard locked over a key
+  that is not there.
+
 The bridge uses the standard MCP `ping` request for its three-second liveness check. This keeps health traffic constant-size as terminal count grows; it does not rebuild or serialize the complete tool catalog. If IPC is reachable but `/mcp` is unavailable, the bridge reports that the MCP endpoint is unavailable instead of incorrectly claiming the desktop process is not running.
 
 The bridge retains the downstream client's last `initialize` request and replays
