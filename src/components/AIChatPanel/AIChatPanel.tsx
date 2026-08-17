@@ -300,10 +300,14 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 
 	// ── Rendered view of the live accumulators ─────────────────────────────
 	// The stores update ~20×/s; these mirror them at STREAM_RENDER_MS so the
-	// markdown pipeline and the DOM only see a fraction of those ticks.
-	const streamingRender = createThrottled(() => conversationStore.streamingText(), STREAM_RENDER_MS);
-	const reasoningRender = createThrottled(() => conversationStore.reasoningChunks(), STREAM_RENDER_MS);
-	const textChunksRender = createThrottled(() => conversationStore.textChunks() ?? "", STREAM_RENDER_MS);
+	// markdown pipeline and the DOM only see a fraction of those ticks. `chatId`
+	// is the stream identity: it differs per terminal and changes on a new or
+	// loaded conversation, which is what tells a switch apart from growth when the
+	// two answers happen to start with the same words.
+	const generation = () => conversationStore.chatId();
+	const streamingRender = createThrottled(() => conversationStore.streamingText(), STREAM_RENDER_MS, generation);
+	const reasoningRender = createThrottled(() => conversationStore.reasoningChunks(), STREAM_RENDER_MS, generation);
+	const textChunksRender = createThrottled(() => conversationStore.textChunks() ?? "", STREAM_RENDER_MS, generation);
 
 	// ── Auto-scroll on new messages / streaming chunks ──────────────────────
 	createEffect(() => {

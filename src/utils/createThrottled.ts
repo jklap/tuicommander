@@ -19,15 +19,21 @@ import { type Accessor, createEffect, createSignal, onCleanup } from "solid-js";
  * rendering nothing costs nothing, so it must not spend the budget the first
  * token of the next answer needs.
  *
- * That test is by value, not by stream identity, and it does not need to be
- * anything more. Delaying a value happens only when the rendered text is a
- * prefix of it, so the rendered text is a prefix of the true one at all times —
- * including across a switch that happens to land on an answer beginning with the
- * same words, where the delay is indistinguishable from ordinary lag.
+ * The value test alone cannot decide that, because a switch may land on an
+ * answer that begins with the words already on screen: "Hello" growing into
+ * "Hello world" looks the same whether one conversation wrote both or two wrote
+ * one each. `generation` names which stream the value belongs to — the caller
+ * passes the conversation id — and a change of it always emits at once, so a
+ * held-back partial can never be shown under a header that has moved on.
  */
-export function createThrottled(source: Accessor<string>, intervalMs: number): Accessor<string> {
+export function createThrottled(
+	source: Accessor<string>,
+	intervalMs: number,
+	generation: Accessor<unknown>,
+): Accessor<string> {
 	const [value, setValue] = createSignal(source());
 	let emitted = source();
+	let emittedGeneration = generation();
 	let lastEmit = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -45,6 +51,16 @@ export function createThrottled(source: Accessor<string>, intervalMs: number): A
 
 	createEffect(() => {
 		const next = source();
+		const nextGeneration = generation();
+		const switched = nextGeneration !== emittedGeneration;
+		emittedGeneration = nextGeneration;
+		if (switched) {
+			// The prefix relation holds inside one stream and says nothing across
+			// two, so the new stream starts on an unspent window: whatever it has
+			// now renders at once, and so does its first value if it has none yet.
+			cancelPending();
+			lastEmit = 0;
+		}
 		// Covers the effect's first run, which only re-reads the value the signal
 		// was seeded with. Comparing rather than skipping unconditionally matters
 		// when the source moved between the seed and that run — with a panel

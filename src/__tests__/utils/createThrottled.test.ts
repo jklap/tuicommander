@@ -15,13 +15,14 @@ import { createThrottled } from "../../utils/createThrottled";
 describe("createThrottled", () => {
 	function harness(intervalMs = 200) {
 		const [source, setSource] = createSignal("");
+		const [generation, setGeneration] = createSignal("conversation-a");
 		let throttled!: Accessor<string>;
 		let dispose!: () => void;
 		createRoot((d) => {
 			dispose = d;
-			throttled = createThrottled(source, intervalMs);
+			throttled = createThrottled(source, intervalMs, generation);
 		});
-		return { setSource, throttled: () => throttled(), dispose };
+		return { setSource, setGeneration, throttled: () => throttled(), dispose };
 	}
 
 	beforeEach(() => {
@@ -106,6 +107,47 @@ describe("createThrottled", () => {
 		dispose();
 	});
 
+	it("shows a switch whose answer begins with the same words at once", () => {
+		const { setSource, setGeneration, throttled, dispose } = harness();
+		setSource("Hello");
+		vi.advanceTimersByTime(10);
+		// Terminal B's answer happens to start with the text A had emitted. By value
+		// alone this is indistinguishable from A growing, so the text test lets B's
+		// answer wait behind A's — and A's partial stays on screen under B's header.
+		setGeneration("conversation-b");
+		setSource("Hello world");
+		expect(throttled()).toBe("Hello world");
+		dispose();
+	});
+
+	it("still throttles growth inside one conversation", () => {
+		const { setSource, setGeneration, throttled, dispose } = harness();
+		setGeneration("conversation-b");
+		setSource("Hello");
+		vi.advanceTimersByTime(10);
+		setSource("Hello world");
+		expect(throttled()).toBe("Hello");
+		vi.advanceTimersByTime(200);
+		expect(throttled()).toBe("Hello world");
+		dispose();
+	});
+
+	it("charges the window to the conversation it switched to", () => {
+		const { setSource, setGeneration, throttled, dispose } = harness();
+		setSource("Hello");
+		vi.advanceTimersByTime(10);
+		setGeneration("conversation-b");
+		setSource("Hello world");
+		// The switch spent the budget; B's next token waits for its own window
+		// instead of inheriting whatever A had left.
+		setSource("Hello world again");
+		vi.advanceTimersByTime(150);
+		expect(throttled()).toBe("Hello world");
+		vi.advanceTimersByTime(100);
+		expect(throttled()).toBe("Hello world again");
+		dispose();
+	});
+
 	it("keeps a change that lands before the first effect run", () => {
 		// A panel opened mid-answer reads one value when the signal is seeded and
 		// another by the time effects flush. Skipping that first run outright
@@ -115,7 +157,7 @@ describe("createThrottled", () => {
 		let dispose!: () => void;
 		createRoot((d) => {
 			dispose = d;
-			throttled = createThrottled(source, 200);
+			throttled = createThrottled(source, 200, () => "conversation-a");
 			setSource("seed and more");
 		});
 		expect(throttled()).toBe("seed and more");
