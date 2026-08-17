@@ -1156,10 +1156,13 @@ export const Terminal: Component<TerminalProps> = (props) => {
 				when={
 					settingsStore.state.showLastPrompt &&
 					terminalsStore.get(props.id)?.agentType &&
-					(terminalsStore.get(props.id)?.lastPrompt || terminalsStore.get(props.id)?.ptyDescription)
+					(terminalsStore.get(props.id)?.agentIntent ||
+						terminalsStore.get(props.id)?.lastPrompt ||
+						terminalsStore.get(props.id)?.ptyDescription)
 				}
 			>
 				<LastPromptBar
+					intent={() => terminalsStore.get(props.id)?.agentIntent ?? null}
 					ptyDescription={() => terminalsStore.get(props.id)?.ptyDescription ?? null}
 					prompt={() => terminalsStore.get(props.id)?.lastPrompt ?? null}
 				/>
