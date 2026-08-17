@@ -2033,7 +2033,7 @@ mod tests {
             #[cfg(feature = "desktop")]
             grid_channels: DashMap::new(),
             grid_watch: DashMap::new(),
-            grid_frame_in_flight: DashMap::new(),
+            grid_gates: DashMap::new(),
             pending_scroll: DashMap::new(),
             kitty_states: DashMap::new(),
             input_buffers: DashMap::new(),

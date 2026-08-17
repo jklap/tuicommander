@@ -15,14 +15,15 @@ import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
 import { createCanvasLinkController } from "./canvasTerminalLinks";
-import { createCanvasScrollController } from "./canvasTerminalScroll";
+import { createCanvasScrollController, ROW_CACHE_CHUNK } from "./canvasTerminalScroll";
 import { createCanvasSearchController, createCanvasSelectionController } from "./canvasTerminalSelection";
 import { installTouchHandlers } from "./canvasTerminalTouch";
-import { createTransport, type TerminalTransport } from "./canvasTerminalTransport";
+import { createTransport, type TerminalTransport, toBinaryPayload } from "./canvasTerminalTransport";
 import {
 	type CellMetrics,
 	type CursorShape,
 	computeCursorRect,
+	createHiddenAckThrottle,
 	type DecodedFrame,
 	type DecodedRow,
 	decideFrameGrid,
@@ -114,8 +115,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	const scroll = createCanvasScrollController();
 	const rowCache = scroll.rowCache;
 	const requestedChunks = scroll.requestedChunks;
-	const ROW_CACHE_CHUNK = 64;
-	const ROW_CACHE_MAX = 6000;
 	// Base-grid renderer (the canvas2d paint implementation). Created in onMount
 	// once ctx exists.
 	let gridRenderer!: GridRenderer;
@@ -237,6 +236,20 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let fullRepaintNeeded = true;
 	let hidden = false;
 	let lastHistorySize = -1;
+	// How many grid frames this transport has delivered. The ack echoes it so Rust
+	// can tell "the frontend caught up" from "a late ack for a frame the ticker
+	// already gave up on" — without an id, the second one reopened the gate and
+	// sent a burst at exactly the moment the frontend was behind. Reset with the
+	// channel: (re)subscribing gives Rust a fresh gate counting from zero.
+	let framesReceived = 0;
+
+	function ackFrame() {
+		transport?.ackFrame(framesReceived);
+	}
+
+	// Below the backend's MAX_IN_FLIGHT_MS (500 ms): the gate must reopen on this
+	// ack, not on the ticker deciding the frontend is stuck.
+	const hiddenAck = createHiddenAckThrottle(ackFrame, 400);
 
 	function writePtyNoScroll(data: string) {
 		invokeRef?.("write_pty", { sessionId: props.sessionId, data }).catch((e) => {
@@ -1057,6 +1070,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const off = currentFrame?.displayOffset ?? -1;
 				const fire = shouldFireReconcile({
 					alive,
+					hidden,
 					isScrolling: scroll.scrolling,
 					scrollPosF: scroll.position,
 					displayOffset: off,
@@ -1186,23 +1200,21 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		const start = chunk * ROW_CACHE_CHUNK;
 		const cacheGeneration = scroll.cacheGeneration;
 		try {
-			const res = (await invokeRef("terminal_styled_rows", {
+			const res = await invokeRef("terminal_styled_rows", {
 				sessionId: props.sessionId,
 				start,
 				count: ROW_CACHE_CHUNK,
-			})) as number[] | undefined;
+			});
 			// Unmounted during the await: the row cache is released, so don't
 			// repopulate it or schedule a render against it.
 			if (!alive || !scroll.isCacheGenerationCurrent(cacheGeneration)) return;
-			// Guard the shape, not just falsiness: a wrong-typed/object response
-			// would throw in the Uint8Array constructor if the command ever changes.
-			if (!Array.isArray(res)) return;
-			const decoded = decodeStyledRange(new Uint8Array(res).buffer);
+			// Both transports deliver raw bytes; the shape still gets checked so a
+			// non-binary answer is dropped rather than decoded as an empty chunk.
+			const buffer = toBinaryPayload(res);
+			if (!buffer) return;
+			const decoded = decodeStyledRange(buffer);
 			if (!decoded) return;
-			for (const { abs, row } of decoded.rows) rowCache.set(abs, row);
-			if (rowCache.size > ROW_CACHE_MAX) {
-				scroll.clearCache();
-			}
+			scroll.cacheRows(decoded.rows);
 			if (scroll.position != null) scheduleSmoothRender();
 		} catch (e) {
 			if (!scroll.isCacheGenerationCurrent(cacheGeneration)) return;
@@ -1275,7 +1287,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	function seedCacheFromCurrentFrame() {
 		if (!currentFrame) return;
 		const base = currentFrame.historyBase + currentFrame.historySize - currentFrame.displayOffset;
-		for (const [r, row] of rowMap) rowCache.set(base + r, row);
+		scroll.cacheRows(Array.from(rowMap, ([r, row]) => ({ abs: base + r, row })));
 	}
 
 	function applySmoothScroll(deltaLines: number) {
@@ -1340,23 +1352,53 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		applySmoothScroll((dy * factor) / ch);
 	}
 
-	function onFrame(data: ArrayBuffer | number[]) {
+	// The transport normalizes every payload shape (see toBinaryPayload) and drops
+	// the ones that are not binary, so a frame arrives here as bytes or not at all.
+	function onFrame(buffer: ArrayBuffer) {
 		// Freeze-investigation: a frame storm starving the rAF loop breadcrumbs here.
 		markPerf("term.onFrame");
-		const buffer = data instanceof ArrayBuffer ? data : new Uint8Array(data).buffer;
 
-		// Frame receipt ordering: ack FIRST (the ack only clears the in-flight flag;
+		// Frame receipt ordering: ack FIRST (the ack only reopens the delivery gate;
 		// the ticker sends the next frame on its own schedule, so ack must never wait
 		// on decode/paint), then decode (cheap) which keeps rowMap + currentFrame alive
 		// for the overlay (cursor/selection/links/search/scrollbar) and input semantics.
-		invokeRef?.("ack_terminal_frame", { sessionId: props.sessionId }).catch(ipcErr("ack_terminal_frame"));
+		//
+		// A hidden terminal acks late instead of per frame. That is the whole of the
+		// flow control this observer promises: a background tab is display:none and
+		// never unmounted, so Rust keeps a producer running for it, and acking at
+		// once reopens the gate at full rate for a frame nobody can see. The trailing
+		// ack drops it to ~2 frames/s while still clearing the gate itself — staying
+		// silent would leave that to the ticker's stuck-frontend path, which is a
+		// warning per output burst for a tab that is merely in the background.
+		framesReceived++;
+		if (hidden) hiddenAck.schedule();
+		else ackFrame();
 		const timing = isFrameTimingEnabled();
 		const decodeT0 = timing ? performance.now() : 0;
 		const frame = decodeBinaryFrame(buffer);
 		if (timing) recordFrameTiming(props.sessionId, "decode", performance.now() - decodeT0);
-		if (!frame) return;
+		if (!frame) {
+			// The only way to land here is a buffer shorter than the 26-byte header:
+			// truncated row data decodes into the rows that did survive. The backend
+			// never sends one, so this is a wire-format bug and must not be silent.
+			// DEFERRED (2026-08-18) — no resync request on this path. The rows of a
+			// dropped frame are gone (damage was consumed backend-side), but asking
+			// for a full frame on a stream that is producing malformed buffers turns
+			// one bad frame into a request loop at IPC rate. Revisit if this log is
+			// ever seen in the wild — then we know the real failure mode.
+			appLogger.error("terminal", "grid frame too short to decode", {
+				sessionId: props.sessionId,
+				byteLength: buffer.byteLength,
+			});
+			return;
+		}
 
+		// Decoded even while hidden: the bell rides in the frame header and a
+		// background tab is exactly where it needs to reach the user.
 		if (frame.bell) props.onBell?.();
+		// Everything below paints, scans links or fills the scroll cache for a
+		// viewport that is not on screen.
+		if (hidden) return;
 
 		// Grid decision: geom/scroll/full-replace/scroll-wait for the rowMap.
 		const decision = decideFrameGrid(
@@ -1507,9 +1549,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// (brief flicker / wrong overscan). Only seed when at rest or when the backend
 		// has caught up to our integer offset.
 		if (scroll.position == null || frame.displayOffset === Math.floor(scroll.position)) {
-			for (const row of frame.rows) {
-				rowCache.set(frame.historyBase + frame.historySize - frame.displayOffset + row.index, row);
-			}
+			const base = frame.historyBase + frame.historySize - frame.displayOffset;
+			scroll.cacheRows(frame.rows.map((row) => ({ abs: base + row.index, row })));
 		}
 		if (scroll.acceptSettledFrame(frame.displayOffset)) {
 			// Backend reached the snapped line — hand off to normal rendering
@@ -1539,9 +1580,6 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (nowText !== selection.cachedText) selection.clear();
 		}
 
-		if (hidden) {
-			return;
-		}
 		scheduleRepaint();
 		scheduleFileLinkVerification();
 	}
@@ -2082,12 +2120,16 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		});
 		resizeObserver.observe(containerRef);
 
-		// Flow control: stop acking frames when hidden, request full frame on show
+		// Flow control: ack on a trailing timer when hidden, request full frame on show
 		visibilityObserver = new IntersectionObserver(
 			(entries) => {
 				const isVisible = entries[0]?.isIntersecting ?? false;
 				if (isVisible && hidden) {
 					hidden = false;
+					// Back to full rate: clear the gate now instead of waiting out the
+					// hidden interval, so the frame requested below is not queued behind it.
+					hiddenAck.cancel();
+					ackFrame();
 					fullRepaintNeeded = true;
 					lastDisplayOffset = -1;
 					// Freeze-investigation: hidden→visible is the repo-switch show path.
@@ -2925,6 +2967,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// Subscribe to the grid channel. The transport and its session-event
 		// listeners already exist — installed before the font load above.
 		try {
+			// Rust installs a fresh delivery gate on subscribe, so the echoed receipt
+			// count has to start from zero with it.
+			hiddenAck.cancel();
+			framesReceived = 0;
 			await transport.subscribe((data) => onFrame(data));
 			if (!alive) {
 				// Unmounted while subscribe() was in flight. onCleanup already ran and
@@ -2966,6 +3012,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				invokeRef?.("terminal_request_frame", { sessionId: props.sessionId }).catch(ipcErr("terminal_request_frame"));
 			},
 			resubscribe: async () => {
+				// A pending hidden ack would report the old channel's receipt count
+				// against the fresh gate Rust installs on resubscribe.
+				hiddenAck.cancel();
+				framesReceived = 0;
 				await transport?.resubscribe();
 			},
 			searchFind: async (query: string, blockScope?: boolean) => {
@@ -3114,6 +3164,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			smoothRafId = 0;
 		}
 		clearSettlePending();
+		hiddenAck.cancel();
 		if (reconcileTimer) clearTimeout(reconcileTimer);
 		clearTimeout(resizeDebounce);
 		resizeObserver?.disconnect();

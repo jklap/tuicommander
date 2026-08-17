@@ -1547,6 +1547,53 @@ describe("transport", () => {
 			expect(JSON.parse(fetchCall[1].body)).toEqual({ rows: 24, cols: 80, shell: null, cwd: "/tmp" });
 		});
 
+		// Styled row chunks are packed bytes, ~141 KB each. Reading them with
+		// `text()` (the pre-binary path) hands the decoder a mojibake string, and
+		// `json()` throws. The content-type is what tells the two apart.
+		it("reads an octet-stream response as an ArrayBuffer", async () => {
+			const { rpc } = await import("../transport");
+
+			const payload = new Uint8Array([26, 0, 200, 7]);
+			const mockResponse = {
+				ok: true,
+				headers: new Headers({ "content-type": "application/octet-stream" }),
+				arrayBuffer: vi.fn().mockResolvedValue(payload.buffer),
+				json: vi.fn(),
+				text: vi.fn(),
+			};
+			globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+			const result = await rpc<ArrayBuffer>("terminal_styled_rows", {
+				sessionId: "s1",
+				start: 0,
+				count: 64,
+			});
+			expect(result).toBeInstanceOf(ArrayBuffer);
+			expect([...new Uint8Array(result)]).toEqual([26, 0, 200, 7]);
+			expect(mockResponse.text).not.toHaveBeenCalled();
+			expect(mockResponse.json).not.toHaveBeenCalled();
+		});
+
+		// A dead session answers with zero bytes. That is a valid empty chunk, and
+		// the generic "empty response body" guard must not turn it into a throw.
+		it("accepts an empty octet-stream body", async () => {
+			const { rpc } = await import("../transport");
+
+			const mockResponse = {
+				ok: true,
+				headers: new Headers({ "content-type": "application/octet-stream" }),
+				arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(0)),
+			};
+			globalThis.fetch = vi.fn().mockResolvedValue(mockResponse);
+
+			const result = await rpc<ArrayBuffer>("terminal_styled_rows", {
+				sessionId: "s1",
+				start: 0,
+				count: 64,
+			});
+			expect(result.byteLength).toBe(0);
+		});
+
 		it("handles text response without content-type as JSON fallback", async () => {
 			const { rpc } = await import("../transport");
 

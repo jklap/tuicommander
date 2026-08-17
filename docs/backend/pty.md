@@ -175,9 +175,42 @@ a cleaned line can carry a bare CR.
 Frame emission is decoupled from PTY reading via a per-session **frame ticker** thread (same approach as iTerm2's Metal display-link renderer):
 
 1. **Reader thread**: processes PTY data into the alacritty VT grid, sets a `grid_frame_dirty` AtomicBool flag
-2. **Ticker thread**: every 16ms, checks the dirty flag → if set, serializes dirty rows via `serialize_dirty_rows()` → sends frame via `send_grid_frame()` (respects `grid_frame_in_flight` backpressure)
+2. **Ticker thread**: every 16ms, checks the dirty flag → if set, serializes dirty rows via `serialize_dirty_rows()` → sends frame via `send_grid_frame()` (respects the `GridGate` backpressure)
 3. **Frontend**: coalesces paint triggers via `requestAnimationFrame` (~60fps)
-4. **Ack handler**: clears only the in-flight flag; the ticker sends any dirty rows accumulated while the prior frame was in flight
+4. **Ack handler**: credits the gate; the ticker sends any dirty rows accumulated while the prior frame was in flight
+
+**Delivery gate (`grid_gate.rs`).** A frame is a *delta*, so a dropped one strands
+rows that exist nowhere else. Both transports are guarded, and both count rather
+than flag:
+
+- **Desktop.** `GridGate` holds `sent` and `acked` counters; the frontend echoes
+  its total receipt count in `ack_terminal_frame { received }`. The gate is open
+  only when the echo has caught up. The counters exist because a bare boolean
+  could not tell a fresh ack from a late one: after the ticker gave a frame up
+  for lost (`MAX_IN_FLIGHT_MS` = 500 ms, `abandon()`) and sent the next, the late
+  ack reopened the gate and a third frame went out at once — a burst at exactly
+  the moment the frontend was proven to be behind.
+  Each gate also carries an `epoch`, returned by `subscribe_terminal_grid` and
+  echoed on `ack_terminal_frame` / `unsubscribe_terminal_grid`. A remount
+  subscribes before the outgoing instance tears down, so the backend receives the
+  dead instance's calls against the new gate: without the epoch its late ack
+  credits frames the new terminal never received, and its late unsubscribe
+  deletes the live channel and leaves a mounted terminal blank.
+- **Browser/WS.** The `watch` channel keeps only the newest value, so a slow
+  client silently skips frames. Frames carry a Rust-internal `seq`
+  (`GridWatchFrame`); when the reader sees a gap it re-serializes the whole grid
+  instead of forwarding a delta onto a row map with holes in it. The sequence
+  never reaches the wire — the frame format is unchanged.
+- **Hidden terminals** decode each frame (the bell rides in the header) but ack
+  on a 400 ms trailing timer, below the ticker's deadline: a background tab drops
+  to ~2 frames/s without making the ticker's stuck-frontend warning fire.
+
+Frames and styled-row chunks cross the desktop IPC as **raw bytes**
+(`tauri::ipc::Channel<tauri::ipc::Response>`, `tauri::ipc::Response`). A bare
+`Vec<u8>` takes Tauri's blanket `IpcResponse` impl and is serialized as a JSON
+array of decimal numbers — ~250 KB of string per 110 KB frame, plus an extra IPC
+round trip. The HTTP twin (`/sessions/{id}/terminal/styled-rows`) answers
+`application/octet-stream` for the same reason.
 
 This coalesces rapid writes (e.g. spinner CR+erase+rewrite within 16ms) into a single frame, eliminating flicker from intermediate erase states. The ticker exits when the reader's `running` flag clears, with a final flush to avoid losing the last frame.
 

@@ -445,7 +445,7 @@ pub(super) async fn spawn_agent_session(
     // Register the grid_watch channel so `GET /sessions/{id}/stream?format=grid`
     // works for agent sessions — without it handle_ws_grid_session finds no entry
     // and silently closes the socket. Mirrors session.rs spawn_pty_session.
-    let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+    let grid_watch_tx = crate::grid_gate::new_grid_watch();
     state.grid_watch.insert(session_id.clone(), grid_watch_tx);
 
     // Broadcast to SSE/WebSocket consumers (before state is moved to reader thread)

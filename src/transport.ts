@@ -2093,6 +2093,13 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 
 	const contentType = resp.headers.get("content-type") || "";
 	let data: unknown;
+	if (contentType.includes("application/octet-stream")) {
+		// Packed binary (styled row chunks). Text/JSON decoding would corrupt it,
+		// and an empty body is a legitimate "nothing to send", so this returns the
+		// buffer directly and skips the empty-body guard below.
+		const buffer = await resp.arrayBuffer();
+		return (mapping.transform ? mapping.transform(buffer) : buffer) as T;
+	}
 	if (contentType.includes("application/json")) {
 		data = await resp.json();
 	} else {

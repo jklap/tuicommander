@@ -574,7 +574,7 @@ pub(super) fn spawn_pty_session(
     state
         .last_output_ms
         .insert(session_id.clone(), std::sync::atomic::AtomicU64::new(0));
-    let (grid_watch_tx, _) = tokio::sync::watch::channel(Vec::new());
+    let grid_watch_tx = crate::grid_gate::new_grid_watch();
     state.grid_watch.insert(session_id.clone(), grid_watch_tx);
 
     // Broadcast to SSE/WebSocket consumers (before state is moved to reader thread)
@@ -1457,8 +1457,11 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
 /// Handle a WebSocket connection in grid mode (`?format=grid`).
 ///
 /// Streams binary grid frames (same format as Tauri Channel) using the
-/// `grid_watch` channel. Uses latest-frame-wins semantics: slow clients
-/// automatically skip intermediate frames via `tokio::sync::watch`.
+/// `grid_watch` channel. The channel keeps only the newest frame, so a client
+/// that cannot keep up skips intermediate ones — and those frames are DELTAS, so
+/// a skip strands the rows it carried. Each frame therefore rides with a sequence
+/// number (Rust-side only, the wire format is untouched) and a gap is repaired
+/// with a fresh full frame instead of being rendered as a hole.
 ///
 /// On connect, sends a full frame (all rows marked dirty). Subsequent frames
 /// are delta-based (only changed rows). Client sends text messages for
@@ -1466,7 +1469,7 @@ fn grid_ws_frame(event: &crate::state::AppEvent) -> Option<serde_json::Value> {
 async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Arc<AppState>) {
     let (mut ws_sender, mut ws_receiver) = socket.split();
 
-    // Subscribe to the grid watch channel (latest-frame-wins for slow clients).
+    // Subscribe to the grid watch channel (newest-frame-wins for slow clients).
     let mut frame_rx = match state.grid_watch.get(&session_id) {
         Some(tx) => tx.subscribe(),
         None => {
@@ -1474,15 +1477,15 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
             return;
         }
     };
+    // Whatever has been published so far is superseded by the full frame below,
+    // so start from the current sequence rather than zero — otherwise the first
+    // delta of a long-running session would always look like a gap.
+    let mut last_seq = frame_rx.borrow_and_update().seq;
 
-    // Send initial full frame so the client can render immediately.
-    // Scope the MutexGuard so it's dropped before the .await.
-    let initial_frame = state.vt_log_buffers.get(&session_id).and_then(|vt| {
-        let mut vt = vt.lock();
-        vt.grid_force_full_damage();
-        let frame = vt.serialize_dirty_rows();
-        if frame.is_empty() { None } else { Some(frame) }
-    });
+    // Send initial full frame so the client can render immediately. The helper
+    // scopes the MutexGuard (dropped before the .await) and gives the damage back
+    // so this connect does not cost the desktop channel its next frame.
+    let initial_frame = full_frame_for_single_client(&state, &session_id);
     if let Some(frame) = initial_frame
         && futures_util::SinkExt::send(&mut ws_sender, Message::Binary(frame.into()))
             .await
@@ -1494,13 +1497,42 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
     // Subscribe to this session's per-session PTY event channel (exit, closed, parsed).
     let mut event_rx = state.subscribe_pty_events(&session_id);
     let sid_for_events = session_id.clone();
+    let resync_state = state.clone();
+    let resync_sid = session_id.clone();
 
     let send_task = tokio::spawn(async move {
         loop {
             tokio::select! {
                 result = frame_rx.changed() => {
                     if result.is_err() { break; } // sender dropped
-                    let frame = frame_rx.borrow_and_update().clone();
+                    let (seq, frame) = {
+                        let slot = frame_rx.borrow_and_update();
+                        (slot.seq, slot.frame.clone())
+                    };
+                    // Frames the channel dropped carried dirty rows that exist
+                    // nowhere else. Sending this delta on top of a row map missing
+                    // them would leave stale content on screen with no error, so
+                    // re-serialize the whole grid instead — through the helper that
+                    // hands the damage back to the other transports.
+                    //
+                    // DEFERRED (2026-08-18) — a bell flag carried by a skipped frame
+                    // is lost: the resync reports the grid's current state, and the
+                    // bell is an event, not state. Fixing it means latching bells per
+                    // subscriber, which is a second piece of per-client state on a
+                    // path that only skips frames when the client is already too slow
+                    // to keep up. Revisit if a missed bell is ever reported.
+                    let frame = if crate::grid_gate::watch_dropped_frames(last_seq, seq) {
+                        tracing::debug!(
+                            session_id = %resync_sid,
+                            last_seq,
+                            seq,
+                            "grid watch dropped frames, resyncing with a full frame"
+                        );
+                        full_frame_for_single_client(&resync_state, &resync_sid).unwrap_or(frame)
+                    } else {
+                        frame
+                    };
+                    last_seq = seq;
                     if !frame.is_empty()
                         && futures_util::SinkExt::send(
                             &mut ws_sender,
@@ -1761,10 +1793,47 @@ pub(super) async fn terminal_get_lines(
     Json(serde_json::json!({"lines": lines})).into_response()
 }
 
+/// Serialize the whole grid for ONE client, without taking the rows the other
+/// clients have not received yet.
+///
+/// Damage is tracked per session and `serialize_dirty_rows` consumes it, so a
+/// frame built for a single WS socket would otherwise leave the desktop ticker
+/// with nothing to send — the desktop would never learn about rows that changed
+/// just before the WS client connected or resynced, and nothing would report it.
+/// Marking the grid damaged again and waking the ticker costs one extra full
+/// frame to the other clients and keeps every transport whole.
+fn full_frame_for_single_client(state: &Arc<AppState>, session_id: &str) -> Option<Vec<u8>> {
+    let frame = {
+        let vt = state.vt_log_buffers.get(session_id)?;
+        let mut vt = vt.lock();
+        vt.grid_force_full_damage();
+        let frame = vt.serialize_dirty_rows();
+        vt.grid_force_full_damage();
+        frame
+    };
+    if let Some(dirty) = state.grid_frame_dirty.get(session_id) {
+        dirty.store(true, Ordering::Relaxed);
+    }
+    if frame.is_empty() { None } else { Some(frame) }
+}
+
+/// Wrap packed row bytes as a binary body.
+///
+/// Deliberately not `Json(bytes)`: that spells a 141 KB chunk as ~350 KB of
+/// decimal numbers for the client to parse back into the bytes it started as.
+/// The desktop command hands the same payload over raw, and `rpcImpl` decides
+/// between `arrayBuffer()` and `json()` on this header alone.
+fn styled_rows_response(bytes: Vec<u8>) -> impl IntoResponse {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/octet-stream")],
+        bytes,
+    )
+}
+
 /// Styled row range as packed bytes (same encoding as the desktop
 /// `terminal_styled_rows` command). Fills the CanvasTerminal client-side row
 /// cache so scrolled-back history renders during smooth scroll in browser mode
-/// instead of showing blank rows. Returns an empty array when the session or
+/// instead of showing blank rows. Returns an empty body when the session or
 /// range is gone — the frontend treats that as "nothing to cache".
 pub(super) async fn terminal_styled_rows(
     State(state): State<Arc<AppState>>,
@@ -1779,7 +1848,7 @@ pub(super) async fn terminal_styled_rows(
                 .grid_serialize_styled_range(query.start, query.count)
         })
         .unwrap_or_default();
-    Json(bytes)
+    styled_rows_response(bytes)
 }
 
 pub(super) async fn terminal_get_cursor_line(
@@ -2090,6 +2159,137 @@ mod tests {
         assert!(snapshot_total >= snapshot_indices.len() as u64 * CHUNK_SIZE as u64);
     }
 
+    // --- Single-client full frames (story 601-82ef) ---
+    //
+    // Damage is tracked once per session, not per subscriber, and
+    // `serialize_dirty_rows` CONSUMES it. So a full frame built for one WS client
+    // silently takes the rows every other client was about to receive: the desktop
+    // ticker's next serialize returns nothing and the desktop never learns those
+    // rows changed. That is invisible row-map corruption on the other transport,
+    // which is why this path has to hand the damage back.
+
+    /// Feed enough output to dirty the grid, then drain the frame the ticker would
+    /// have sent, leaving the buffer in the state a live session is in.
+    fn dirty_session(state: &Arc<AppState>, session_id: &str, text: &str) {
+        state.vt_log_buffers.insert(
+            session_id.to_string(),
+            parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+        state.grid_frame_dirty.insert(
+            session_id.to_string(),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
+        let vt = state.vt_log_buffers.get(session_id).expect("just inserted");
+        let mut vt = vt.lock();
+        vt.process(text.as_bytes());
+    }
+
+    #[test]
+    fn a_full_frame_for_one_client_does_not_consume_the_others_rows() {
+        let state = super::super::tests::test_state();
+        dirty_session(&state, "shared-damage", "hello from the pty\r\n");
+
+        let frame = full_frame_for_single_client(&state, "shared-damage")
+            .expect("a dirty session must produce a frame");
+        assert!(!frame.is_empty());
+
+        // What the desktop ticker does on its next tick.
+        let ticker_frame = {
+            let vt = state
+                .vt_log_buffers
+                .get("shared-damage")
+                .expect("session exists");
+            let mut vt = vt.lock();
+            vt.serialize_dirty_rows()
+        };
+        assert!(
+            !ticker_frame.is_empty(),
+            "the WS resync ate the rows the desktop channel was about to be sent"
+        );
+    }
+
+    /// The ticker only serializes when the session is marked dirty, so handing the
+    /// damage back is worthless unless it also wakes the ticker up.
+    #[test]
+    fn a_full_frame_for_one_client_wakes_the_ticker() {
+        let state = super::super::tests::test_state();
+        dirty_session(&state, "wake-ticker", "hello\r\n");
+        state
+            .grid_frame_dirty
+            .get("wake-ticker")
+            .expect("flag exists")
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+
+        full_frame_for_single_client(&state, "wake-ticker").expect("frame");
+
+        assert!(
+            state
+                .grid_frame_dirty
+                .get("wake-ticker")
+                .expect("flag exists")
+                .load(std::sync::atomic::Ordering::Relaxed),
+            "restored damage that no tick will ever pick up is still a lost frame"
+        );
+    }
+
+    #[test]
+    fn a_full_frame_for_a_session_that_is_gone_is_none() {
+        let state = super::super::tests::test_state();
+        assert!(full_frame_for_single_client(&state, "no-such-session").is_none());
+    }
+
+    // --- Styled rows over HTTP (story 601-82ef) ---
+    //
+    // The desktop command hands these bytes over raw (`tauri::ipc::Response`), so
+    // the browser transport must get them raw too, or the same `fetchChunk` code
+    // has to branch per transport. `rpcImpl` picks `resp.arrayBuffer()` off the
+    // content-type alone — the header IS the contract.
+
+    #[tokio::test]
+    async fn styled_rows_travel_as_binary_not_as_a_json_number_array() {
+        use axum::body::to_bytes;
+
+        let bytes = vec![26u8, 0, 255, 7];
+        let response = styled_rows_response(bytes.clone()).into_response();
+
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/octet-stream"),
+            "rpcImpl branches on this header to call arrayBuffer()"
+        );
+
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body must be readable");
+        assert_eq!(body.as_ref(), bytes.as_slice(), "bytes must survive intact");
+    }
+
+    /// A closed session or an out-of-range request serializes to nothing. That is
+    /// a valid empty chunk, not an error — and it must still be typed binary so
+    /// the client decodes it the same way as any other chunk.
+    #[tokio::test]
+    async fn an_empty_styled_row_range_is_still_a_binary_body() {
+        use axum::body::to_bytes;
+
+        let response = styled_rows_response(Vec::new()).into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok()),
+            Some("application/octet-stream")
+        );
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("body must be readable");
+        assert!(body.is_empty());
+    }
+
     // --- Grid WS frame shapes (story 623-d369) ---
     //
     // The client destructures every frame as `const { type, ...payload } = event`
@@ -2279,12 +2479,16 @@ mod tests {
             "spawn_pty_session must register a grid_watch channel"
         );
 
-        // Verify the channel is functional
+        // Verify the channel is functional, and that a published frame carries
+        // the sequence number the WS reader needs to spot a dropped delta.
         let tx = state.grid_watch.get(&session_id).unwrap();
         let mut rx = tx.subscribe();
-        tx.send(vec![1, 2, 3]).unwrap();
+        let first_seq = rx.borrow_and_update().seq;
+        crate::grid_gate::publish_grid_frame(&tx, vec![1, 2, 3]);
         rx.changed().await.unwrap();
-        assert_eq!(*rx.borrow_and_update(), vec![1, 2, 3]);
+        let slot = rx.borrow_and_update();
+        assert_eq!(slot.frame, vec![1, 2, 3]);
+        assert_eq!(slot.seq, first_seq + 1);
     }
 
     /// A client-provided session id is honored (browser duplicate-tab fix): the
