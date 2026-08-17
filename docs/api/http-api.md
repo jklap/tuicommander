@@ -1225,9 +1225,14 @@ Chat registry live stream (event-bridge plan Step 4). WebSocket upgrade: the fir
 frame is a `ChatEvent::Snapshot` (`{"kind":"snapshot",...}`), then live `ChatEvent`
 frames (`chunk`/`error`/`cleared`/`snapshot`) as they are fanned out. Closing the
 socket unsubscribes (no explicit `chat_unsubscribe` call). Browser parity for the
-desktop `chat_subscribe` Tauri Channel — frames are byte-identical so the same
-`applyRegistryEvent` handler consumes both. Dedicated per-chat WS, NOT the global
+desktop `chat_subscribe` Tauri Channel. Dedicated per-chat WS, NOT the global
 `/events` bus (high-frequency token stream).
+
+**No producer, and no client.** Nothing in the backend calls `fan_out` or any
+`ConversationState` setter, so the only frame this stream ever sends is the empty
+default snapshot. The frontend consumer was removed in story `600-d664`: applying
+that snapshot ran `setMessages([])` and wiped the history `loadConversation` had
+just read from disk. The route stays, unused, until something produces the events.
 
 ### AI Agent Loop control + knowledge + scheduler (story 068 RPC slice)
 

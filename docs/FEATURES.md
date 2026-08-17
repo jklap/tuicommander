@@ -339,7 +339,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
 - Each result row shows file path, line number, and highlighted match context
 - Click a result to open the file in the code editor at the matched line
 - Binary files and files larger than 1 MB are automatically skipped
-- Backed by `search_content` Tauri command; results delivered via `content-search-batch` events
+- Backed by `search_content` Tauri command; results delivered via `content-search-batch` events, each carrying the `search_id` of the panel that asked (the event is global and three panels listen)
 
 ### 3.5 Code Editor (CodeMirror 6)
 - Opens in main tab area when clicking a file in file browser
@@ -763,7 +763,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Conversation history panel** — click the clock/history icon in the header to browse all saved conversations (title, terminal name, message count, date). Click a row to load it
 - **Usage footer** — live token counter at the bottom: prompt tokens (↑N), completion tokens (↓N), estimated cost ($X.XXXX), cache hit rate
 - Terminal context menu: *Send selection to AI Chat*, *Explain this error*. Toolbar toggle + hotkey
-- **Detachable panel** — click the detach icon in the header to pop the panel into a separate window (500×700). The main window shows a placeholder with "Bring back". Cross-window sync via a Rust-side `ChatRegistry` using `Channel<ChatEvent>` fan-out — streaming chunks, messages, and errors are projected in real-time to all subscribers. Closing the detached window automatically restores the panel
+- **Detachable panel** — click the detach icon in the header to pop the panel into a separate window (500×700). The main window shows a placeholder with "Bring back". Closing the detached window automatically restores the panel. **The two windows do not share state.** The detached window is handed the chat id and selects it, but nothing loads that conversation, so it opens empty; sending from it starts a fresh exchange under the same id. A Rust-side `ChatRegistry` and its `chat_subscribe` / `/ai/chat/{id}/stream` surfaces exist but have **no producer** — nothing ever published to them, and the frontend subscription that consumed them wiped loaded history with an empty snapshot, so it was removed (see story `624-a6c3`)
 - Full user guide: [`docs/user-guide/ai-chat.md`](user-guide/ai-chat.md)
 
 ### 6.15 AI Agent Loop (ReAct)
@@ -967,7 +967,7 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 ### 8.10 GitHub Ops Dashboard
 - Dedicated GitHub Ops dashboard tab with live columns for PR review findings, auto-fix sessions, conflict assists, improvement proposals, and CI / merge readiness.
 - Improvement scans run a one-shot Headless-slot LLM pass over local repo context with focus modes: `refactor`, `testing`, and `perf`.
-- Proposals are notification-first: scan results emit `proposals-ready` over desktop events and `/events` SSE; no GitHub issue is created automatically.
+- Proposals are notification-first: scan results emit `proposals-ready` over desktop events and `/events` SSE; that event is the *only* path that publishes them into the store — the scan's return value is for the caller, not for the panel. No GitHub issue is created automatically.
 - Each proposal can be promoted to a GitHub issue only through an explicit user action, using the existing authenticated issue creation path.
 
 ### 8.11 Polling

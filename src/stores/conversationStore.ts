@@ -14,7 +14,7 @@ import type { Accessor, Setter } from "solid-js";
 import { batch, createSignal } from "solid-js";
 import { invoke } from "../invoke";
 import { isTauri } from "../transport";
-import { openChatStream, openConversationStream } from "../utils/aiStream";
+import { openConversationStream } from "../utils/aiStream";
 import { appLogger } from "./appLogger";
 
 // ---------------------------------------------------------------------------
@@ -114,27 +114,6 @@ type LegacyAgentEvent =
 	| { type: "error"; session_id: string; message: string }
 	| { type: "completed"; session_id: string; iterations: number; reason: string };
 
-// Registry subscription for cross-window sync
-type RegistryChatEvent =
-	| {
-			kind: "snapshot";
-			messages: Array<{ role: string; content: string; timestamp: number }>;
-			isStreaming: boolean;
-			streamingText: string;
-			error: string | null;
-			attachedSessionId: string | null;
-			pinned: boolean;
-	  }
-	| { kind: "chunk"; delta: string }
-	| { kind: "error"; message: string }
-	| { kind: "cleared" };
-
-interface RegistrySubscription {
-	chatId: string;
-	subscriptionId: number;
-	cleanup: () => Promise<void>;
-}
-
 /** Conversation mode: "assisted" = chat streaming, "autonomous" = agent with tool cards */
 type ConversationMode = "assisted" | "autonomous";
 
@@ -178,7 +157,6 @@ export interface PerTerminalConversationState {
 	activeSessionId: string | null;
 	persistTimer: ReturnType<typeof setTimeout> | null;
 	initialized: boolean;
-	registrySubscription: RegistrySubscription | null;
 	// Browser/PWA only: disposer for the active conversation token-stream WS.
 	// Desktop uses a Tauri Channel (auto-cleaned), so this stays null there.
 	conversationStreamDispose: (() => void) | null;
@@ -258,7 +236,6 @@ function createState(): PerTerminalConversationState {
 		activeSessionId: null,
 		persistTimer: null,
 		initialized: false,
-		registrySubscription: null,
 		conversationStreamDispose: null,
 	};
 }
@@ -965,11 +942,6 @@ async function onTerminalClose(key: string): Promise<void> {
 		s.persistTimer = null;
 	}
 
-	if (s.registrySubscription) {
-		await s.registrySubscription.cleanup();
-		s.registrySubscription = null;
-	}
-
 	// Browser/PWA: the terminal is gone, so close the token-stream WS rather than
 	// leak it waiting for a terminal frame that no one will consume.
 	closeConversationStream(s);
@@ -1003,122 +975,6 @@ function setChatId(id: string): void {
 
 function setError(e: string | null): void {
 	activeConversation().setError(e);
-}
-
-// ---------------------------------------------------------------------------
-// Registry subscription (cross-window sync)
-// ---------------------------------------------------------------------------
-
-function applyRegistryEvent(s: PerTerminalConversationState, event: RegistryChatEvent): void {
-	switch (event.kind) {
-		case "snapshot":
-			batch(() => {
-				s.setMessages(
-					event.messages
-						.filter((m) => m.role === "user" || m.role === "assistant" || m.role === "system")
-						.map((m) => ({ role: m.role as ConversationMessage["role"], content: m.content, timestamp: m.timestamp }))
-						.slice(-MAX_MESSAGES),
-				);
-				s.setIsStreaming(event.isStreaming);
-				s.setStreamingText(event.streamingText);
-				s.setError(event.error);
-			});
-			break;
-		case "chunk":
-			s.setStreamingText((prev) => prev + event.delta);
-			break;
-		case "error":
-			batch(() => {
-				s.setIsStreaming(false);
-				s.setStreamingText("");
-				s.setError(event.message);
-			});
-			break;
-		case "cleared":
-			batch(() => {
-				s.setMessages([]);
-				s.setIsStreaming(false);
-				s.setStreamingText("");
-				s.setError(null);
-			});
-			break;
-	}
-}
-
-async function subscribeToRegistry(targetChatId: string): Promise<void> {
-	const s = activeConversation();
-
-	if (s.registrySubscription) {
-		await s.registrySubscription.cleanup();
-		s.registrySubscription = null;
-	}
-
-	// Browser/PWA: dedicated chat WS (event-bridge plan Step 5). First frame is
-	// the snapshot (carries kind:"snapshot"); WS close unsubscribes.
-	if (!isTauri()) {
-		try {
-			const dispose = openChatStream<RegistryChatEvent>(targetChatId, (event) => applyRegistryEvent(s, event));
-			s.registrySubscription = {
-				chatId: targetChatId,
-				subscriptionId: 0,
-				cleanup: async () => dispose(),
-			};
-		} catch (e) {
-			appLogger.warn("conversation", "subscribeToRegistry (ws) failed", { error: String(e) });
-		}
-		return;
-	}
-
-	try {
-		const { invoke, Channel } = await import("@tauri-apps/api/core");
-		const channel = new Channel<RegistryChatEvent>();
-
-		let buffered: RegistryChatEvent[] = [];
-		let ready = false;
-
-		channel.onmessage = (event) => {
-			if (!ready) {
-				buffered.push(event);
-			} else {
-				applyRegistryEvent(s, event);
-			}
-		};
-
-		const result = await invoke<{ subscriptionId: number; snapshot: RegistryChatEvent & { kind: "snapshot" } }>(
-			"chat_subscribe",
-			{ chatId: targetChatId, onEvent: channel },
-		);
-
-		applyRegistryEvent(s, result.snapshot);
-		ready = true;
-		for (const event of buffered) applyRegistryEvent(s, event);
-		buffered = [];
-
-		const subId = result.subscriptionId;
-		s.registrySubscription = {
-			chatId: targetChatId,
-			subscriptionId: subId,
-			cleanup: async () => {
-				ready = false;
-				try {
-					await invoke("chat_unsubscribe", { chatId: targetChatId, subscriptionId: subId });
-				} catch (e) {
-					appLogger.warn("conversation", "chat_unsubscribe failed", { error: String(e) });
-				}
-			},
-		};
-		appLogger.debug("conversation", `subscribed to registry: chatId=${targetChatId} subId=${subId}`);
-	} catch (e) {
-		appLogger.warn("conversation", "subscribeToRegistry failed", { error: String(e) });
-	}
-}
-
-async function unsubscribeFromRegistry(): Promise<void> {
-	const s = activeConversation();
-	if (s.registrySubscription) {
-		await s.registrySubscription.cleanup();
-		s.registrySubscription = null;
-	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1241,10 +1097,6 @@ export const conversationStore = {
 	// Persistence
 	initFromDisk,
 	persistNow,
-
-	// Registry subscription
-	subscribeToRegistry,
-	unsubscribeFromRegistry,
 
 	// History
 	listAllConversations,

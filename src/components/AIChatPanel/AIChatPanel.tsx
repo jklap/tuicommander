@@ -281,14 +281,14 @@ export const AIChatPanel: Component<AIChatPanelProps> = (props) => {
 		setShowHistory(false);
 	};
 
-	// ── Registry subscription lifecycle ─────────────────────────────────────
-	createEffect(() => {
-		const id = conversationStore.chatId();
-		void conversationStore.subscribeToRegistry(id);
-	});
-	onCleanup(() => {
-		void conversationStore.unsubscribeFromRegistry();
-	});
+	// No registry subscription here. The Rust `ChatRegistry` has no producer —
+	// nothing calls `fan_out` or any `ConversationState` setter — so every
+	// `chat_subscribe` was a round-trip that answered with an empty default
+	// snapshot and then went silent. Worse, applying that snapshot ran
+	// `setMessages([])`: the effect re-fired on each `chatId` change, so one IPC
+	// hop after `loadConversation` the empty snapshot wiped the history it had
+	// just read from disk. Restore the subscription only together with a
+	// producer.
 
 	// ── Auto-scroll on new messages / streaming chunks ──────────────────────
 	createEffect(() => {
