@@ -133,6 +133,39 @@ fn evaluate_push_hint(
 }
 
 // ---------------------------------------------------------------------------
+// What reaches the phone
+// ---------------------------------------------------------------------------
+
+/// Whether a mobile peer is on the other end of the relay.
+///
+/// `Waiting` is the relay holding the slot open for a peer that has not arrived,
+/// so it is not an audience: encrypting and shipping the whole event bus to it
+/// burns CPU and uplink on frames nobody reads.
+fn peer_is_attached(status: &PeerStatus) -> bool {
+    match status {
+        PeerStatus::Connected => true,
+        PeerStatus::Waiting | PeerStatus::Disconnected | PeerStatus::Timeout => false,
+    }
+}
+
+/// Whether an event means anything to a remote client.
+///
+/// The dropped variants are instructions aimed at the desktop process itself —
+/// a phone cannot open a tab in the app's webview, drive the desktop browser
+/// through an OAuth flow, or reload a locally-installed plugin — plus raw
+/// filesystem-watcher churn, which fires per write during a build.
+fn is_relayable(event: &AppEvent) -> bool {
+    !matches!(
+        event,
+        AppEvent::UiTab { .. }
+            | AppEvent::CloseHtmlTabs { .. }
+            | AppEvent::McpOAuthStart { .. }
+            | AppEvent::PluginChanged { .. }
+            | AppEvent::DirChanged { .. }
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Relay client lifecycle
 // ---------------------------------------------------------------------------
 
@@ -262,6 +295,9 @@ async fn connect_and_run(
     // Subscribe to event bus — reset backoff on successful connection
     let mut event_rx = state.event_bus.subscribe();
     let mut awaiting_by_session: HashMap<String, bool> = HashMap::new();
+    // The relay tells us when a phone is actually listening. Until it does, the
+    // only thing worth sending is a push hint — that is what wakes the phone up.
+    let mut peer_attached = false;
 
     loop {
         tokio::select! {
@@ -299,11 +335,16 @@ async fn connect_and_run(
                             awaiting_by_session.remove(session_id);
                         }
 
-                        // Encrypt and forward event
-                        let json = serde_json::to_vec(evt)?;
-                        let encrypted = encrypt(cipher, &json)?;
-                        if ws_sink.send(Message::Binary(encrypted.into())).await.is_err() {
-                            return Ok(ShutdownReason::Disconnected);
+                        // Encrypt and forward the event — but only when a peer is
+                        // there to read it, and only for events it can use. The
+                        // awaiting bookkeeping above runs either way, so the state
+                        // is already correct when a phone attaches.
+                        if peer_attached && is_relayable(evt) {
+                            let json = serde_json::to_vec(evt)?;
+                            let encrypted = encrypt(cipher, &json)?;
+                            if ws_sink.send(Message::Binary(encrypted.into())).await.is_err() {
+                                return Ok(ShutdownReason::Disconnected);
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -332,6 +373,7 @@ async fn connect_and_run(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<RelayMessage>(&text) {
                             Ok(RelayMessage::Status { peer }) => {
+                                peer_attached = peer_is_attached(&peer);
                                 let label = match peer {
                                     PeerStatus::Connected => "mobile peer connected",
                                     PeerStatus::Disconnected => "mobile peer disconnected",
@@ -489,6 +531,78 @@ mod tests {
         let (aw, push) = evaluate_push_hint(&parsed, None);
         assert_eq!(aw, None);
         assert!(!push);
+    }
+
+    // -----------------------------------------------------------------------
+    // What reaches the phone (F65)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn only_a_connected_peer_counts_as_an_audience() {
+        assert!(peer_is_attached(&PeerStatus::Connected));
+        // `Waiting` is a reserved slot, not a listener. Treating it as one is how
+        // the whole event bus got encrypted and shipped to nobody.
+        assert!(!peer_is_attached(&PeerStatus::Waiting));
+        assert!(!peer_is_attached(&PeerStatus::Disconnected));
+        assert!(!peer_is_attached(&PeerStatus::Timeout));
+    }
+
+    #[test]
+    fn desktop_only_instructions_are_not_relayed() {
+        for event in [
+            AppEvent::UiTab {
+                id: "panel".to_string(),
+                title: "Panel".to_string(),
+                html: String::new(),
+                url: None,
+                pinned: false,
+                focus: false,
+                origin_repo_path: None,
+            },
+            AppEvent::CloseHtmlTabs {
+                tab_ids: vec!["panel".to_string()],
+            },
+            AppEvent::McpOAuthStart {
+                name: "upstream".to_string(),
+                authorization_url: "https://example.test/auth".to_string(),
+            },
+            AppEvent::PluginChanged {
+                plugin_ids: vec!["p".to_string()],
+            },
+            AppEvent::DirChanged {
+                dir_path: "/tmp".to_string(),
+            },
+        ] {
+            assert!(
+                !is_relayable(&event),
+                "a phone cannot act on {event:?} — it must not cost an encrypt"
+            );
+        }
+    }
+
+    #[test]
+    fn session_and_repo_events_are_relayed() {
+        for event in [
+            AppEvent::PtyExit {
+                session_id: "s1".to_string(),
+            },
+            AppEvent::SessionClosed {
+                session_id: "s1".to_string(),
+                reason: "exit".to_string(),
+            },
+            AppEvent::RepoChanged {
+                repo_path: "/repo".to_string(),
+            },
+            AppEvent::PtyParsed {
+                session_id: "s1".to_string(),
+                parsed: serde_json::json!({ "type": "question" }),
+            },
+        ] {
+            assert!(
+                is_relayable(&event),
+                "{event:?} is what a remote client is watching for"
+            );
+        }
     }
 
     // -----------------------------------------------------------------------

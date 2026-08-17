@@ -1037,6 +1037,25 @@ fn raise_fd_limit() {
 #[cfg(not(unix))]
 fn raise_fd_limit() {}
 
+/// Runtime that owns the relay client task.
+///
+/// Single-threaded on purpose: `relay_client::run` is one `select!` over two
+/// channels plus a WSS socket and never calls `spawn_blocking`, so the default
+/// `Runtime::new()` was paying a worker thread per core plus a blocking pool for
+/// work that fits on one thread.
+///
+/// DEFERRED (2026-08-17) — the thread and runtime could go away entirely by
+/// `tokio::spawn`ing the relay onto the HTTP server's runtime, which
+/// `keep_server_owner_runtime_alive` already parks for the process lifetime. That
+/// means moving the spawn inside the server closure, which reorders startup: the
+/// closure awaits Tailscale detection and TLS provisioning before it reaches the
+/// current spawn point. Left for the cold-start story that owns that sequencing.
+fn relay_runtime() -> std::io::Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+}
+
 #[cfg(feature = "desktop")]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -1192,8 +1211,7 @@ pub fn run() {
         *state.relay.shutdown.lock() = Some(relay_tx);
         let relay_state = state.clone();
         std::thread::spawn(move || {
-            let rt = tokio::runtime::Runtime::new()
-                .expect("Failed to create tokio runtime for relay client");
+            let rt = relay_runtime().expect("Failed to create tokio runtime for relay client");
             rt.block_on(relay_client::run(relay_state, relay_rx));
         });
     }
@@ -2239,6 +2257,19 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The relay task is one `select!` over two channels plus a WSS socket. The
+    /// default `Runtime::new()` is the multi-thread flavour, so it was paying a
+    /// worker thread per core plus a blocking pool to do that.
+    #[test]
+    fn the_relay_runtime_does_not_spawn_a_worker_pool() {
+        let rt = relay_runtime().expect("build relay runtime");
+        assert_eq!(
+            rt.handle().runtime_flavor(),
+            tokio::runtime::RuntimeFlavor::CurrentThread,
+            "the relay must not carry a worker-per-core pool for a two-channel select"
+        );
+    }
 
     #[tokio::test]
     async fn initial_server_runtime_stays_alive_after_tcp_shutdown() {
