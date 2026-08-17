@@ -2027,8 +2027,10 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// listeners further down, once those exist.
 		unsubscribe = () => transport?.unsubscribe();
 		try {
+			// One shape on both transports: the Tauri event and the WS frame both
+			// carry `{ cwd }`, so there is nothing to normalise here.
 			await transport.onEvent("cwd", (payload) => {
-				const cwd = (payload as { cwd: string }).cwd ?? (payload as string);
+				const { cwd } = payload as { cwd: string };
 				terminalsStore.update(props.terminalId, { cwd });
 				props.onCwdChange?.(props.terminalId, cwd);
 			});

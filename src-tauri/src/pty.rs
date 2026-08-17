@@ -4642,13 +4642,12 @@ impl ChunkProcessor {
                             .has_osc133_integration
                             .insert(session_id.to_string(), ());
                         self.handle_osc133_event(command, &params, session_id, state);
-                        // DEFERRED (2026-08-17) — IPC/HTTP parity gap: this push has no
-                        // `AppEvent` variant, so the grid WS never carries it and a
-                        // browser/PWA client gets no command blocks, no gutter marks and
-                        // no Cmd+Up/Down navigation. Same for `pty-cwd` below. Bridging
-                        // it needs a variant plus a dual-emit and a WS arm in
-                        // `mcp_http/session.rs`; out of scope for the listener cleanup
-                        // that landed here.
+                        // Dual-emitted: there is no bus→window forwarder, so the
+                        // desktop event and the bus push are two separate writes of
+                        // one signal. The bus copy is what gives a browser/PWA
+                        // client its command blocks, gutter marks and Cmd+Up/Down
+                        // navigation, through the `osc133` grid-WS frame.
+                        let exit_code = parse_osc133_exit_code(command, &params);
                         #[cfg(feature = "desktop")]
                         if let Some(a) = state.app_handle.read().as_ref() {
                             let _ = a.emit(
@@ -4656,10 +4655,16 @@ impl ChunkProcessor {
                                 &Osc133Event {
                                     marker: command.to_string(),
                                     line,
-                                    exit_code: parse_osc133_exit_code(command, &params),
+                                    exit_code,
                                 },
                             );
                         }
+                        state.emit_pty_event(crate::state::AppEvent::PtyOsc133 {
+                            session_id: session_id.to_string(),
+                            marker: command.to_string(),
+                            line,
+                            exit_code,
+                        });
                     }
                     TermEvent::Osc7(url) =>
                     {
@@ -4668,10 +4673,22 @@ impl ChunkProcessor {
                             if let Some(entry) = state.sessions.get(session_id) {
                                 entry.lock().cwd = Some(cwd.clone());
                             }
+                            // `{ cwd }` rather than a bare string so this payload
+                            // is identical to the `cwd` grid-WS frame — a WS frame
+                            // must carry a `type` discriminator and therefore
+                            // cannot be a bare string. Same shape on both
+                            // transports means no branch in CanvasTerminal.
                             #[cfg(feature = "desktop")]
                             if let Some(a) = state.app_handle.read().as_ref() {
-                                let _ = a.emit(&format!("pty-cwd-{session_id}"), &cwd);
+                                let _ = a.emit(
+                                    &format!("pty-cwd-{session_id}"),
+                                    serde_json::json!({ "cwd": cwd }),
+                                );
                             }
+                            state.emit_pty_event(crate::state::AppEvent::PtyCwd {
+                                session_id: session_id.to_string(),
+                                cwd,
+                            });
                         }
                     }
                     TermEvent::Tuic {

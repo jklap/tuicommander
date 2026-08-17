@@ -256,6 +256,8 @@ fn event_type_name(event: &AppEvent) -> &'static str {
         AppEvent::PtyParsed { .. } => "pty-parsed",
         AppEvent::PtyExit { .. } => "pty-exit",
         AppEvent::PtyActivity { .. } => "pty-activity",
+        AppEvent::PtyOsc133 { .. } => "pty-osc133",
+        AppEvent::PtyCwd { .. } => "pty-cwd",
         AppEvent::PluginWatcherLines { .. } => "plugin-watcher-lines",
         AppEvent::PtyDescriptionChanged { .. } => "pty-description-changed",
         AppEvent::PluginChanged { .. } => "plugin-changed",
@@ -315,6 +317,22 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
         }
         AppEvent::PtyActivity { session_id } => {
             serde_json::json!({ "session_id": session_id })
+        }
+        AppEvent::PtyOsc133 {
+            session_id,
+            marker,
+            line,
+            exit_code,
+        } => {
+            serde_json::json!({
+                "session_id": session_id,
+                "marker": marker,
+                "line": line,
+                "exit_code": exit_code,
+            })
+        }
+        AppEvent::PtyCwd { session_id, cwd } => {
+            serde_json::json!({ "session_id": session_id, "cwd": cwd })
         }
         AppEvent::PluginWatcherLines { session_id, lines } => {
             serde_json::json!({ "session_id": session_id, "lines": lines })

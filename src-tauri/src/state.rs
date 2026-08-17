@@ -85,6 +85,19 @@ pub enum AppEvent {
     },
     #[serde(rename = "pty-exit")]
     PtyExit { session_id: String },
+    /// An OSC 133 shell-integration marker. Field-for-field identical to the
+    /// desktop `Osc133Event` payload so the grid WS frame and the Tauri event
+    /// carry the same shape and the frontend needs no per-transport branch.
+    #[serde(rename = "pty-osc133")]
+    PtyOsc133 {
+        session_id: String,
+        marker: String,
+        line: usize,
+        exit_code: Option<i32>,
+    },
+    /// Working directory reported by the shell through OSC 7.
+    #[serde(rename = "pty-cwd")]
+    PtyCwd { session_id: String, cwd: String },
     /// "This session produced output." Payload-free on purpose: the only
     /// consumers are a last-seen timestamp and an unread flag, neither of which
     /// needs a byte of the output itself. Throttled at the producer — see
@@ -251,6 +264,8 @@ impl AppEvent {
             | AppEvent::PluginWatcherLines { session_id, .. }
             | AppEvent::PtyExit { session_id }
             | AppEvent::PtyActivity { session_id }
+            | AppEvent::PtyOsc133 { session_id, .. }
+            | AppEvent::PtyCwd { session_id, .. }
             | AppEvent::PtyDescriptionChanged { session_id, .. }
             | AppEvent::SessionClosed { session_id, .. } => Some(session_id),
             _ => None,
@@ -3108,6 +3123,11 @@ impl AppState {
             // is true throughout a `tail -f` that produces no semantic event at
             // all. Folding the two would silently redefine the mobile column.
             AppEvent::PtyActivity { .. } => {}
+            // Shell-integration markers and the OSC 7 cwd are terminal-rendering
+            // signals, not session state. The cwd that state cares about is
+            // written straight onto the `sessions` entry at the emit site; this
+            // event exists to reach clients, not to be accumulated.
+            AppEvent::PtyOsc133 { .. } | AppEvent::PtyCwd { .. } => {}
             AppEvent::SessionClosed { session_id, .. } => {
                 state.session_states.remove(session_id);
             }
