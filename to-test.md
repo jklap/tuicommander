@@ -10,6 +10,66 @@
 
 Features to test when TUICommander is more usable.
 
+## Terminal copy gutter normalization (2026-08-17, **Rust change — needs `make dev` restart**) — story `622-6c69`
+
+Terminal selection extraction now removes Claude's repeated `NBSP NBSP ▎` visual
+gutter only from coherent multi-line runs. It continues to join soft-wrapped rows
+and preserves literal block characters, indentation, bullets, numbering, emoji
+shortcodes, and non-breaking spaces inside the message.
+
+- [x] The copied form of the reported `Hola :wave:` message loses gutter-only rows and prefixes while preserving blank lines and nested content. _(verified: `copied_selection_strips_repeated_claude_gutters`)_
+- [x] An NBSP separator is accepted without converting body NBSPs. _(verified: `copied_selection_accepts_nbsp_separator_and_preserves_body_nbsp`)_
+- [x] Lone, non-contiguous, ASCII-indented, and inline `▎` characters remain unchanged. _(verified: `copied_selection_keeps_lone_or_non_claude_gutters`)_
+- [x] Gutter normalization runs after Alacritty soft-wrap joining. _(verified: `copied_selection_normalizes_after_unwrapping_soft_wrapped_rows`; all six existing `get_selection_text` regressions also pass)_
+- [ ] **After a `make dev` restart**: copy the original long Claude message and paste it into Slack; no `▎` gutter or gutter NBSPs remain, while lists, blank lines, indentation, `:wave:`, `:pray:`, and the body spacing in `QA  Engineering` are unchanged.
+- [ ] **After a `make dev` restart**: copy a lone `▎` and an ASCII-indented `  ▎` code/table line; both paste unchanged.
+
+## Build Cleaner: Trim vs Clean (2026-08-16, **Rust change — needs `make dev` restart**) — story `598-e7fe`
+
+Artifact rows gained a second action. **Trim** removes only regenerable intermediates
+(Rust `<profile>/{deps,build,incremental,.fingerprint}`, Swift `index-build` + `ModuleCache`/`index`/`*.build`,
+Maven `classes`/`generated-*`/`*-reports`, Gradle `classes`/`tmp`/`intermediates`/…) and leaves the built
+executables on disk; **Clean** is the old full `remove_dir_all`. Measured on 5 real Rust repos:
+113.9 GB of `target/`, 112.9 GB trimmable (98.2–99.8%), 1.04 GB of actual output.
+
+- [x] Trim patterns cover both the plain and cross-compiled Rust profile layouts, and never name a profile-root executable. _(verified: `trim_targets_cover_rust_intermediates_at_both_depths`, `trim_removes_intermediates_and_keeps_executables`)_
+- [x] Swift `.build` keeps the product binary, `Modules/`, `checkouts/` and `repositories/`. _(verified: `swift_trim_keeps_the_product_and_dependency_sources`)_
+- [x] Maven keeps the packaged jar; Gradle keeps `libs`/`outputs`/`distributions`/`install`. _(verified: `maven_trim_keeps_the_packaged_jar`, `gradle_trim_keeps_libs_and_outputs`)_
+- [x] A kind with no separable intermediates can never yield a delete target — no silent escalation of Trim into Clean. _(verified: `no_rule_without_trim_patterns_can_ever_yield_a_target` over the whole rule table)_
+- [x] Symlinked dirs are never expanded into, and every target stays strictly inside the artifact dir. _(verified: `trim_targets_never_follow_symlinks`)_
+- [x] `trimmable_bytes` comes from the same single walk as `size_bytes`. _(verified: `measure_splits_total_and_trimmable_in_one_walk`)_
+- [x] The dashboard offers Trim only when `trimmable_bytes > 0`, keeps Clean for both, and shows the Safe-to-trim card. _(verified: `buildCleaner.test.ts` → "offers Trim only where the backend found intermediates")_
+- [x] A trim message routes to `trimBuildArtifact`, never to `deleteBuildArtifact`. _(verified: same suite)_
+- [x] HTTP parity for browser/PWA clients. _(verified: `transport.test.ts` → `/api/plugins/build-cleaner/build-artifacts/trim`)_
+- [x] The restarted binary serves the trim route and reports trimmable bytes. _(verified 2026-08-17 against the live app on :9876: `POST /api/plugins/build-cleaner/build-artifacts/scan` returns `src-tauri/target` at 58.23 GiB with 57.73 GiB trimmable, 99.1%)_
+- [x] A real Trim removes only intermediates and leaves a runnable executable. _(verified 2026-08-17 end-to-end through the live HTTP route on a throwaway cargo project inside the registered `CC_Playground/test` repo: 1072 KB → 472 KB, `deps`/`build`/`incremental`/`.fingerprint` gone, `target/debug/trim-probe` still on disk and still prints `Hello, world!`. Both guards fired first — `/tmp` was rejected as outside the home directory, `~/trim-probe` as outside every registered repo.)_
+- [ ] **After a `make dev` restart**: click **Trim** on the real `src-tauri/target` in the dashboard — not done on purpose, the row is 58 GiB and a Trim forces a full rebuild of the running dev app. Boss's call.
+- [x] `node_modules` reports nothing trimmable, so the row offers **Clean** only. _(verified 2026-08-17: all three registered `node_modules` return `trimmable_bytes: 0` from the live scan; the `trimmable_bytes > 0` gate is covered by `buildCleaner.test.ts`)_
+- [ ] **After a `make dev` restart**: a running `cargo build` in another window is not broken by a Trim of a *different* repo's `target` (the hot-window badge should mark the active one "recent").
+- [ ] Visual: the two-tier button styling reads correctly in light and dark themes — `.safe` on accent, `.danger` on error — and the armed states ("Trim?" vs "Delete all?") are distinguishable at a glance.
+- [ ] Cross-platform: on Windows and Linux, confirm a Trim of a Rust `target/` reclaims the same four dirs and leaves `*.exe`/the binary in place. The pattern matcher is separator-agnostic by construction and clippy compiles on Windows CI, but **Windows CI does not run the Rust tests** (`if: matrix.platform != 'windows-latest'`), so this is unverified at runtime.
+
+## Authoritative agent state (2026-08-12, **Rust change — needs `make dev` restart**) — story `592-acde`
+
+Question/choice lifecycle, causal capture replay, non-blocking MCP UI confirmation, lossless
+session-state reducer, OSC 777 batching, shell-starting semantics, tall-HUD chrome cutoff, and
+strengthened MCP `intent:` instructions. All Rust-backed, so none of it is live until a restart.
+
+- [ ] **After a `make dev` restart**: a stale historical question does not re-arm after submitting a later turn.
+- [ ] **After a `make dev` restart**: a bare Enter clears an active question or choice, on desktop *and* over HTTP/PWA input.
+- [ ] **After a `make dev` restart**: leaving an MCP `ui action=confirm` dialog unanswered does not block requests from other agents.
+- [ ] **After a `make dev` restart**: a non-empty Codex composer above a status HUD taller than 15 rows does not leak HUD text into question parsing.
+- [ ] **After a `make dev` restart**: a newly spawned detected agent reports `starting` until real busy or idle evidence arrives.
+- [ ] **After a `make dev` restart**: a newly initialized MCP agent emits `intent:` at task start and on material phase changes.
+
+## Prompt-derived descriptions for orchestrated PTYs (2026-08-12, **Rust change — needs `make dev` restart**) — story `597-e4dc`
+
+Codex collaboration exposes `task_name`/`message` but no `pty_description`; the backend now derives
+display-only metadata from the original spawn prompt.
+
+- [x] An omitted `pty_description` derives normalized display-only metadata from the spawn prompt; explicit values and explicit clears keep precedence; the inferred text is Unicode-safe and capped at 160 chars. _(verified: Rust tests, `make check` green)_
+- [ ] **After a `make dev` restart**: a Codex collaboration subagent shows its task description above the terminal.
+
 ## Agent worktree creation prompt (2026-08-05)
 
 - [ ] Create a worktree through MCP while an agent terminal is active, then choose **Open Worktree**: the worktree's terminal must open while the agent terminal remains attached to its original branch and working directory, with no injected stop/switch message.
