@@ -486,7 +486,7 @@ describe("handleWatcherLines", () => {
 	it("fires a watcher the backend matched, with its capture groups", async () => {
 		const { invoke } = await import("../../invoke");
 		vi.mocked(invoke).mockClear();
-		vi.mocked(invoke).mockResolvedValueOnce({ applied: true, rejected: [] } as unknown as void);
+		vi.mocked(invoke).mockResolvedValueOnce({ applied: true, rejected: [] } as unknown as undefined);
 		const onMatch = vi.fn();
 		pluginRegistry.register(
 			makePlugin("p1", (host) => {
@@ -508,7 +508,7 @@ describe("handleWatcherLines", () => {
 
 	it("ignores a match qualified with another frontend's client id", async () => {
 		const { invoke } = await import("../../invoke");
-		vi.mocked(invoke).mockResolvedValueOnce({ applied: true, rejected: [] } as unknown as void);
+		vi.mocked(invoke).mockResolvedValueOnce({ applied: true, rejected: [] } as unknown as undefined);
 		const onMatch = vi.fn();
 		pluginRegistry.register(
 			makePlugin("p1", (host) => {
@@ -545,9 +545,7 @@ describe("handleWatcherLines", () => {
 		await flushMicrotasks();
 
 		const { clientId, watchers } = await lastSync();
-		pluginRegistry.handleWatcherLines("s1", [
-			{ text: "done", matched_ids: [`${clientId}/${watchers[0].id}`] },
-		]);
+		pluginRegistry.handleWatcherLines("s1", [{ text: "done", matched_ids: [`${clientId}/${watchers[0].id}`] }]);
 		await flushMicrotasks();
 		expect(onMatch).toHaveBeenCalledOnce();
 
@@ -610,7 +608,7 @@ describe("handleWatcherLines", () => {
 		const onMatch = vi.fn();
 		// `applied: false` describes a set the backend does not hold — its
 		// rejected list says nothing about who matches what.
-		vi.mocked(invoke).mockResolvedValueOnce({ applied: false, rejected: [] } as unknown as void);
+		vi.mocked(invoke).mockResolvedValueOnce({ applied: false, rejected: [] } as unknown as undefined);
 		pluginRegistry.register(
 			makePlugin("p1", (host) => {
 				host.registerOutputWatcher({ pattern: /done/, onMatch });
@@ -652,8 +650,7 @@ describe("handleWatcherLines", () => {
 		try {
 			const { invoke } = await import("../../invoke");
 			vi.mocked(invoke).mockClear();
-			const syncCount = () =>
-				vi.mocked(invoke).mock.calls.filter((c) => c[0] === "set_plugin_output_watchers").length;
+			const syncCount = () => vi.mocked(invoke).mock.calls.filter((c) => c[0] === "set_plugin_output_watchers").length;
 
 			pluginRegistry.register(
 				makePlugin("p1", (host) => {
