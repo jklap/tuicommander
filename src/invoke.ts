@@ -106,25 +106,57 @@ export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<
 let _sseSource: EventSource | null = null;
 /** Listeners registered before or after SSE connects */
 const _sseListeners = new Map<string, Set<(payload: unknown) => void>>();
+/** The `types` filter the live stream was opened with — decides when to reopen. */
+let _sseOpenedFor = "";
+/** A coalesced open is already queued. */
+let _sseOpenQueued = false;
 
-/** Get or create the shared SSE connection for browser mode */
-function ensureSse(): EventSource {
-	if (_sseSource && _sseSource.readyState !== EventSource.CLOSED) return _sseSource;
+/**
+ * Open (or reopen) the shared stream, filtered to the registered event types.
+ *
+ * The server fixes the filter at connect time, so a type registered later can
+ * only be delivered by reconnecting with a wider filter.
+ */
+function openSse(): void {
+	const types = [..._sseListeners.keys()].sort().join(",");
+	// An empty `types=` is not "send everything" — the server reads it as an empty
+	// allowlist and drops every event. Never open a stream that can receive nothing.
+	if (!types) return;
 
+	_sseSource?.close();
+	_sseOpenedFor = types;
 	const origin = typeof window !== "undefined" ? window.location.origin : "";
-	_sseSource = new EventSource(`${origin}/events`);
+	_sseSource = new EventSource(`${origin}/events?types=${encodeURIComponent(types)}`);
 
 	_sseSource.onerror = () => {
 		// EventSource auto-reconnects; just log
 		appLogger.debug("network", "SSE connection error — will auto-reconnect");
 	};
 
-	// Re-attach listeners for all registered event types
 	for (const eventType of _sseListeners.keys()) {
 		attachSseEventType(eventType);
 	}
+}
 
-	return _sseSource;
+/**
+ * Make sure the live stream covers every registered event type.
+ *
+ * Opens are coalesced onto a macrotask because startup registers a dozen types
+ * back to back; connecting per `listen()` call would trade the wide filter for a
+ * reconnect storm. Shrinking the filter is not worth a reconnect, so an unsubscribe
+ * leaves the stream as it is.
+ */
+function ensureSse(): void {
+	const live = _sseSource !== null && _sseSource.readyState !== EventSource.CLOSED;
+	const covered = new Set(_sseOpenedFor ? _sseOpenedFor.split(",") : []);
+	if (live && ![..._sseListeners.keys()].some((type) => !covered.has(type))) return;
+	if (_sseOpenQueued) return;
+
+	_sseOpenQueued = true;
+	setTimeout(() => {
+		_sseOpenQueued = false;
+		openSse();
+	}, 0);
 }
 
 /** Attach a native SSE addEventListener for a given event type */
@@ -185,16 +217,12 @@ export function listen<T>(event: string, handler: (event: { payload: T }) => voi
 	// Browser mode: SSE via shared EventSource
 	const wrappedHandler = (payload: unknown) => handler({ payload: payload as T });
 
-	if (!_sseListeners.has(event)) {
-		_sseListeners.set(event, new Set());
-		// If SSE is already connected, attach this new event type
-		if (_sseSource && _sseSource.readyState !== EventSource.CLOSED) {
-			attachSseEventType(event);
-		}
-	}
+	if (!_sseListeners.has(event)) _sseListeners.set(event, new Set());
 	_sseListeners.get(event)!.add(wrappedHandler);
 
-	// Ensure SSE connection exists
+	// Connect, or reconnect if this type is outside the live filter. `openSse`
+	// owns attaching — attaching here would not help, since the server never
+	// sends a type the stream did not ask for.
 	ensureSse();
 
 	return Promise.resolve(() => {
