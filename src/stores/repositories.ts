@@ -588,6 +588,14 @@ function createRepositoriesStore() {
 			return state.repositories[path];
 		},
 
+		/** True unless the repo is a registered plain directory. Unknown paths
+		 *  (worktrees keyed under their parent) default to true. Callers that
+		 *  invoke git commands MUST check this — a plain directory makes every
+		 *  git call fail with "not a git repository". */
+		isGitRepo(path: string): boolean {
+			return state.repositories[path]?.isGitRepo !== false;
+		},
+
 		/** Get active repository */
 		getActive(): RepositoryState | undefined {
 			return state.activeRepoPath ? state.repositories[state.activeRepoPath] : undefined;
