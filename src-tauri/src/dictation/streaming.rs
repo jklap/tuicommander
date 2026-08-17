@@ -37,6 +37,20 @@ const VAD_LAST_MS: u32 = 1000;
 const POLL_INTERVAL_MS: u64 = 50;
 /// Maximum buffer accumulation before forced flush (seconds).
 const MAX_BUFFER_S: f32 = 30.0;
+/// Hard cap on the audio retained for the final transcription (seconds).
+///
+/// Dictation is push-to-talk — `useDictationHotkey` starts on key press and
+/// stops on release — so a real utterance lasts seconds. `all_audio` keeps the
+/// whole recording for the final high-quality pass, which makes a stuck key both
+/// an unbounded allocation (16 kHz mono f32 = 64 KB/s) and an unbounded whisper
+/// pass. The cap keeps the most recent audio and sits far above anything a
+/// person dictates while holding a key.
+const MAX_RECORDING_S: f32 = 300.0;
+/// Hysteresis for the cap: trim only once this much audio is over the limit.
+///
+/// Trimming is a memmove of the whole retained buffer, so trimming on every 50 ms
+/// poll would cost more than the memory it saves.
+const TRIM_HYSTERESIS_S: f32 = 30.0;
 /// Convert milliseconds to sample count at 16kHz.
 fn ms_to_samples(ms: u32) -> usize {
     (SAMPLE_RATE as usize * ms as usize) / 1000
@@ -137,6 +151,10 @@ fn streaming_loop(
 
     let keep_samples = ms_to_samples(KEEP_MS);
     let max_buffer_samples = (MAX_BUFFER_S * SAMPLE_RATE as f32) as usize;
+    let max_recording_samples = (MAX_RECORDING_S * SAMPLE_RATE as f32) as usize;
+    let trim_threshold_samples =
+        max_recording_samples + (TRIM_HYSTERESIS_S * SAMPLE_RATE as f32) as usize;
+    let mut trim_logged = false;
 
     loop {
         if stop.load(Ordering::Acquire) {
@@ -153,6 +171,21 @@ fn streaming_loop(
         if !swap_buf.is_empty() {
             all_audio.extend(swap_buf.iter());
             step_buf.extend(swap_buf.drain(..));
+
+            // Cap the retained recording, keeping the most recent audio. See
+            // MAX_RECORDING_S — the hysteresis makes this at most one memmove per
+            // TRIM_HYSTERESIS_S of speech rather than one per poll.
+            if all_audio.len() > trim_threshold_samples {
+                let excess = all_audio.len() - max_recording_samples;
+                all_audio.drain(..excess);
+                if !trim_logged {
+                    trim_logged = true;
+                    tracing::warn!(
+                        source = "dictation",
+                        "Recording passed {MAX_RECORDING_S}s — audio older than that is dropped from the final transcription"
+                    );
+                }
+            }
         }
 
         let current_step_samples = ms_to_samples(current_step_ms);
@@ -501,6 +534,77 @@ mod tests {
         assert!(result.is_some());
         let text = result.unwrap();
         assert!(text.contains("samples"));
+    }
+
+    #[test]
+    fn the_retained_recording_is_capped() {
+        // A stuck push-to-talk key would otherwise grow all_audio without limit,
+        // and hand the whole thing to the final whisper pass.
+        let transcriber: Arc<dyn Transcriber> = Arc::new(EchoTranscriber::new());
+        let buffer: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, _rx) = mpsc::channel::<String>();
+
+        let cap_samples = (MAX_RECORDING_S * SAMPLE_RATE as f32) as usize;
+        let total = cap_samples + ms_to_samples((TRIM_HYSTERESIS_S as u32 + 10) * 1000);
+        // A ramp, so the surviving slice identifies which end was kept.
+        {
+            let mut buf = buffer.lock();
+            buf.extend((0..total).map(|i| i as f32));
+        }
+
+        let buf_clone = buffer.clone();
+        let stop_clone = stop.clone();
+        let handle = std::thread::spawn(move || {
+            streaming_loop(transcriber, buf_clone, tx, stop_clone, None)
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(400));
+        stop.store(true, Ordering::Release);
+        let all_audio = handle.join().expect("Loop should not panic");
+
+        assert_eq!(
+            all_audio.len(),
+            cap_samples,
+            "retained recording must be trimmed back to the cap"
+        );
+        // The newest audio is what the final transcription needs. Exact compares are
+        // deliberate: the ramp values are integers below 2^24, so the f32 casts are
+        // lossless, and these assertions exist to pin the exact trim boundary — a
+        // tolerance would let an off-by-one `excess` slip through.
+        #[allow(clippy::float_cmp)]
+        {
+            assert_eq!(*all_audio.last().expect("non-empty"), (total - 1) as f32);
+            assert_eq!(all_audio[0], (total - cap_samples) as f32);
+        }
+    }
+
+    #[test]
+    fn a_recording_under_the_cap_is_kept_whole() {
+        let transcriber: Arc<dyn Transcriber> = Arc::new(EchoTranscriber::new());
+        let buffer: Arc<Mutex<VecDeque<f32>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, _rx) = mpsc::channel::<String>();
+
+        // Just over the hysteresis margin but far under the cap — the ordinary case.
+        let input = speech_samples(5_000);
+        let expected_len = input.len();
+        {
+            let mut buf = buffer.lock();
+            buf.extend(input);
+        }
+
+        let buf_clone = buffer.clone();
+        let stop_clone = stop.clone();
+        let handle = std::thread::spawn(move || {
+            streaming_loop(transcriber, buf_clone, tx, stop_clone, None)
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        stop.store(true, Ordering::Release);
+        let all_audio = handle.join().expect("Loop should not panic");
+
+        assert_eq!(all_audio.len(), expected_len);
     }
 
     #[test]
