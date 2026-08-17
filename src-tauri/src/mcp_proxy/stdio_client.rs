@@ -25,6 +25,8 @@ pub(crate) struct StdioConfig {
     pub(crate) args: Vec<String>,
     pub(crate) env: std::collections::HashMap<String, String>,
     pub(crate) cwd: Option<String>,
+    /// How long to wait for one response line before declaring the upstream mute.
+    pub(crate) timeout: Duration,
 }
 
 /// Client for a single upstream MCP server over stdio (spawned process).
@@ -32,8 +34,12 @@ pub(crate) struct StdioMcpClient {
     config: StdioConfig,
     /// Running child process (if connected).
     child: Option<std::process::Child>,
-    /// Buffered reader over the child's stdout.
-    stdout_reader: Option<BufReader<std::process::ChildStdout>>,
+    /// Response lines pumped off the child's stdout by a dedicated reader thread.
+    /// Reading through a channel instead of straight off the pipe is what makes
+    /// the deadline in `read_line` possible: a blocking `BufRead::read_line` on a
+    /// mute upstream is uninterruptible, and the caller is a blocking-pool thread
+    /// holding this client's mutex. The channel closes when stdout hits EOF.
+    stdout_rx: Option<std::sync::mpsc::Receiver<String>>,
     /// Writable handle to the child's stdin.
     stdin: Option<std::process::ChildStdin>,
     /// When was the last spawn attempted (for rate limiting).
@@ -48,7 +54,7 @@ impl StdioMcpClient {
         Self {
             config,
             child: None,
-            stdout_reader: None,
+            stdout_rx: None,
             stdin: None,
             last_spawn: None,
             request_id: 0,
@@ -59,6 +65,7 @@ impl StdioMcpClient {
     pub(crate) fn from_upstream_config(
         name: String,
         transport: &crate::mcp_upstream_config::UpstreamTransport,
+        timeout_secs: u32,
     ) -> Option<Self> {
         match transport {
             crate::mcp_upstream_config::UpstreamTransport::Stdio {
@@ -72,6 +79,7 @@ impl StdioMcpClient {
                 args: args.clone(),
                 env: env.clone(),
                 cwd: cwd.clone(),
+                timeout: Duration::from_secs(timeout_secs.max(1) as u64),
             })),
             crate::mcp_upstream_config::UpstreamTransport::Http { .. } => None,
         }
@@ -216,7 +224,24 @@ impl StdioMcpClient {
             });
         }
 
-        self.stdout_reader = Some(BufReader::new(stdout));
+        // Pump stdout into a channel so `read_line` can wait with a deadline.
+        // The thread ends on EOF, which happens when `shutdown_internal` kills the
+        // child or the child exits on its own.
+        let (line_tx, line_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                match line {
+                    Ok(l) => {
+                        if line_tx.send(l).is_err() {
+                            break;
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+
+        self.stdout_rx = Some(line_rx);
         self.stdin = Some(stdin);
         self.child = Some(child);
 
@@ -334,7 +359,7 @@ impl StdioMcpClient {
                         // exited or error
                         self.child = None;
                         self.stdin = None;
-                        self.stdout_reader = None;
+                        self.stdout_rx = None;
                         false
                     }
                 }
@@ -351,7 +376,7 @@ impl StdioMcpClient {
     fn shutdown_internal(&mut self) {
         // Close stdin first — signals EOF to the child
         drop(self.stdin.take());
-        drop(self.stdout_reader.take());
+        drop(self.stdout_rx.take());
 
         if let Some(mut child) = self.child.take() {
             // Wait up to 2s for voluntary exit
@@ -454,27 +479,37 @@ impl StdioMcpClient {
         })
     }
 
-    /// Read a newline-delimited JSON response from stdout.
+    /// Read a newline-delimited JSON response from stdout, waiting at most
+    /// `config.timeout` for it.
+    ///
+    /// On timeout the client is torn down. That is not tidiness: the request we
+    /// gave up on may still be answered later, and leaving the pipe in place
+    /// would hand that stale reply to the next call as if it were its own.
     fn read_line(&mut self) -> Result<Value, String> {
-        let reader = self
-            .stdout_reader
-            .as_mut()
+        let rx = self
+            .stdout_rx
+            .as_ref()
             .ok_or_else(|| format!("Upstream '{}': stdout not available", self.config.name))?;
 
-        let mut line = String::new();
-        reader.read_line(&mut line).map_err(|e| {
-            format!(
-                "Upstream '{}': failed to read from stdout: {e}",
-                self.config.name
-            )
-        })?;
-
-        if line.is_empty() {
-            return Err(format!(
-                "Upstream '{}': server closed stdout (process may have crashed)",
-                self.config.name
-            ));
-        }
+        let line = match rx.recv_timeout(self.config.timeout) {
+            Ok(line) => line,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                let message = format!(
+                    "Upstream '{}': timed out after {}ms waiting for a response",
+                    self.config.name,
+                    self.config.timeout.as_millis()
+                );
+                tracing::warn!(source = "mcp_proxy", upstream = %self.config.name, "{message}");
+                self.shutdown_internal();
+                return Err(message);
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(format!(
+                    "Upstream '{}': server closed stdout (process may have crashed)",
+                    self.config.name
+                ));
+            }
+        };
 
         serde_json::from_str(line.trim()).map_err(|e| {
             format!(
@@ -519,6 +554,7 @@ mod tests {
             args: vec![tmp.to_str().unwrap().to_string()],
             env: HashMap::new(),
             cwd: None,
+            timeout: Duration::from_secs(30),
         }
     }
 
@@ -585,6 +621,7 @@ done
             args: vec![],
             env: HashMap::new(),
             cwd: None,
+            timeout: Duration::from_secs(30),
         };
         let mut client = StdioMcpClient::new(config);
         assert!(!client.is_alive());
@@ -620,6 +657,7 @@ exit 0
             args: vec![],
             env: HashMap::new(),
             cwd: None,
+            timeout: Duration::from_secs(30),
         };
         let mut client = StdioMcpClient::new(config);
         let result = client.spawn_and_initialize();
@@ -635,6 +673,7 @@ exit 0
             args: vec![],
             env: HashMap::new(),
             cwd: None,
+            timeout: Duration::from_secs(30),
         };
         let mut client = StdioMcpClient::new(config);
 
@@ -703,6 +742,7 @@ done
             args: vec![tmp.to_str().unwrap().to_string()],
             env,
             cwd: None,
+            timeout: Duration::from_secs(30),
         };
 
         let mut client = StdioMcpClient::new(config);
@@ -719,7 +759,7 @@ done
             env: HashMap::new(),
             cwd: None,
         };
-        let client = StdioMcpClient::from_upstream_config("test".to_string(), &transport);
+        let client = StdioMcpClient::from_upstream_config("test".to_string(), &transport, 30);
         assert!(client.is_some());
     }
 
@@ -728,7 +768,7 @@ done
         let transport = crate::mcp_upstream_config::UpstreamTransport::Http {
             url: "http://localhost:8080/mcp".to_string(),
         };
-        let client = StdioMcpClient::from_upstream_config("test".to_string(), &transport);
+        let client = StdioMcpClient::from_upstream_config("test".to_string(), &transport, 30);
         assert!(client.is_none());
     }
 
@@ -765,6 +805,58 @@ done
         assert_eq!(tools[0].original_name, "alpha");
         assert_eq!(tools[1].original_name, "beta");
         client.shutdown();
+    }
+
+    /// A mute upstream used to park the calling thread inside `read_line`
+    /// forever. The stdio client is held behind a mutex and driven from the
+    /// blocking pool, so one such call wedges every other call to that upstream
+    /// and never gives the pool thread back.
+    #[test]
+    fn call_tool_gives_up_on_a_mute_upstream() {
+        // Handshake answers; `tools/call` is read and deliberately left unanswered.
+        let script = r#"#!/bin/sh
+while IFS= read -r line; do
+    method=$(echo "$line" | sed 's/.*"method":"\([^"]*\)".*/\1/')
+    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+    case "$method" in
+        initialize)
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"}}}\n' "$id"
+            ;;
+        notifications/initialized) ;;
+        tools/list)
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"hang","description":"H","inputSchema":{"type":"object"}}]}}\n' "$id"
+            ;;
+        tools/call)
+            # Silence. The upstream is alive but will never answer.
+            ;;
+    esac
+done
+"#;
+        let mut config = make_config_for_echo_server(script);
+        config.timeout = Duration::from_millis(300);
+
+        // Drive the call off-thread so a client with no deadline fails the test
+        // instead of hanging it.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut client = StdioMcpClient::new(config);
+            client.spawn_and_initialize().expect("handshake");
+            let result = client.call_tool("hang", serde_json::json!({}));
+            let _ = tx.send((result, client.is_alive()));
+        });
+
+        let (result, still_alive) = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("call_tool never returned — no read deadline");
+        let err = result.expect_err("a mute upstream must not report success");
+        assert!(
+            err.contains("timed out"),
+            "expected a timeout error, got: {err}"
+        );
+        assert!(
+            !still_alive,
+            "a timed-out client must be torn down so the next call cannot read a stale reply"
+        );
     }
 
     #[test]
