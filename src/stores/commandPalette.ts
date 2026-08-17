@@ -224,138 +224,150 @@ function createCommandPaletteStore() {
 		});
 	}
 
-	return {
-		state,
+	/** Derived mode based on query prefix: ! = filename, ? = content, ~ = terminal */
+	function mode(): PaletteMode {
+		if (state.query.startsWith("!")) return "filename";
+		if (state.query.startsWith("?")) return "content";
+		if (state.query.startsWith("~")) return "terminal";
+		return "command";
+	}
 
-		/** Derived mode based on query prefix: ! = filename, ? = content, ~ = terminal */
-		mode(): PaletteMode {
-			if (state.query.startsWith("!")) return "filename";
-			if (state.query.startsWith("?")) return "content";
-			if (state.query.startsWith("~")) return "terminal";
-			return "command";
-		},
+	/** The effective search query (strips prefix character and leading space) */
+	function searchQuery(): string {
+		if (state.query.startsWith("!") || state.query.startsWith("?") || state.query.startsWith("~"))
+			return state.query.slice(1).trimStart();
+		return "";
+	}
 
-		/** The effective search query (strips prefix character and leading space) */
-		searchQuery(): string {
-			if (state.query.startsWith("!") || state.query.startsWith("?") || state.query.startsWith("~"))
-				return state.query.slice(1).trimStart();
-			return "";
-		},
+	function open(): void {
+		cleanupSearch();
+		setState("isOpen", true);
+		setState("query", "");
+	}
 
-		open(): void {
+	function close(): void {
+		cleanupSearch();
+		setState("isOpen", false);
+		setState("query", "");
+	}
+
+	function toggle(): void {
+		if (state.isOpen) {
+			close();
+		} else {
+			open();
+		}
+	}
+
+	function setQuery(query: string): void {
+		const prevMode = mode();
+		setState("query", query);
+		const newMode = mode();
+
+		// Mode changed → cleanup previous search
+		if (prevMode !== newMode && prevMode !== "command") {
 			cleanupSearch();
-			setState("isOpen", true);
-			setState("query", "");
-		},
+		}
 
-		close(): void {
-			cleanupSearch();
-			setState("isOpen", false);
-			setState("query", "");
-		},
+		if (newMode === "filename") {
+			const nextQuery = query.slice(1).trimStart();
+			if (debounceTimer) {
+				clearTimeout(debounceTimer);
+				debounceTimer = null;
+			}
+			cancelled = true;
 
-		toggle(): void {
-			if (state.isOpen) {
-				this.close();
+			if (nextQuery.length >= FILENAME_SEARCH_MIN_CHARS) {
+				debounceTimer = setTimeout(() => triggerFilenameSearch(nextQuery), SEARCH_DEBOUNCE_MS);
 			} else {
-				this.open();
+				setState({ filenameResults: [], filenameSearching: false });
 			}
-		},
-
-		setQuery(query: string): void {
-			const prevMode = this.mode();
-			setState("query", query);
-			const newMode = this.mode();
-
-			// Mode changed → cleanup previous search
-			if (prevMode !== newMode && prevMode !== "command") {
-				cleanupSearch();
+		} else if (newMode === "content") {
+			const nextQuery = query.slice(1).trimStart();
+			if (debounceTimer) {
+				clearTimeout(debounceTimer);
+				debounceTimer = null;
 			}
-
-			if (newMode === "filename") {
-				const searchQuery = query.slice(1).trimStart();
-				if (debounceTimer) {
-					clearTimeout(debounceTimer);
-					debounceTimer = null;
-				}
-				cancelled = true;
-
-				if (searchQuery.length >= FILENAME_SEARCH_MIN_CHARS) {
-					debounceTimer = setTimeout(() => triggerFilenameSearch(searchQuery), SEARCH_DEBOUNCE_MS);
-				} else {
-					setState({ filenameResults: [], filenameSearching: false });
-				}
-			} else if (newMode === "content") {
-				const searchQuery = query.slice(1).trimStart();
-				if (debounceTimer) {
-					clearTimeout(debounceTimer);
-					debounceTimer = null;
-				}
-				cancelled = true;
-				unlistenBatch?.();
-				unlistenBatch = null;
-				unlistenError?.();
-				unlistenError = null;
-
-				if (searchQuery.length >= CONTENT_SEARCH_MIN_CHARS) {
-					setState("contentSearching", false);
-					debounceTimer = setTimeout(() => triggerContentSearch(searchQuery), SEARCH_DEBOUNCE_MS);
-				} else {
-					setState({ contentResults: [], contentSearching: false, contentError: null });
-				}
-			} else if (newMode === "terminal") {
-				const searchQuery = query.slice(1).trimStart();
-				if (debounceTimer) {
-					clearTimeout(debounceTimer);
-					debounceTimer = null;
-				}
-				cancelled = true;
-
-				if (searchQuery.length >= TERMINAL_SEARCH_MIN_CHARS) {
-					debounceTimer = setTimeout(() => triggerTerminalSearch(searchQuery), SEARCH_DEBOUNCE_MS);
-				} else {
-					setState({ terminalResults: [], terminalSearching: false });
-				}
-			}
-		},
-
-		/** Toggle content search between the active repo and all indexed repos,
-		 *  re-running the current query immediately when in content mode. */
-		setContentAllRepos(value: boolean): void {
-			if (state.contentAllRepos === value) return;
-			setState("contentAllRepos", value);
-			if (this.mode() !== "content") return;
-			const searchQuery = this.searchQuery();
 			cancelled = true;
 			unlistenBatch?.();
 			unlistenBatch = null;
 			unlistenError?.();
 			unlistenError = null;
-			if (searchQuery.length >= CONTENT_SEARCH_MIN_CHARS) {
-				setState({ contentResults: [], contentError: null });
-				triggerContentSearch(searchQuery);
+
+			if (nextQuery.length >= CONTENT_SEARCH_MIN_CHARS) {
+				setState("contentSearching", false);
+				debounceTimer = setTimeout(() => triggerContentSearch(nextQuery), SEARCH_DEBOUNCE_MS);
 			} else {
 				setState({ contentResults: [], contentSearching: false, contentError: null });
 			}
-		},
-
-		/** Open palette with a pre-filled query (e.g. "~ " for terminal search mode) */
-		openWithQuery(query: string): void {
-			cleanupSearch();
-			setState({ isOpen: true, query });
-			// Re-run setQuery to trigger mode-specific search logic
-			this.setQuery(query);
-		},
-
-		recordUsage(actionId: string): void {
-			const updated = [actionId, ...state.recentActions.filter((id) => id !== actionId)].slice(0, MAX_RECENT);
-			setState("recentActions", updated);
-			try {
-				localStorage.setItem(RECENT_ACTIONS_KEY, JSON.stringify(updated));
-			} catch (err) {
-				appLogger.warn("app", "Failed to persist recent actions to localStorage", err);
+		} else if (newMode === "terminal") {
+			const nextQuery = query.slice(1).trimStart();
+			if (debounceTimer) {
+				clearTimeout(debounceTimer);
+				debounceTimer = null;
 			}
-		},
+			cancelled = true;
+
+			if (nextQuery.length >= TERMINAL_SEARCH_MIN_CHARS) {
+				debounceTimer = setTimeout(() => triggerTerminalSearch(nextQuery), SEARCH_DEBOUNCE_MS);
+			} else {
+				setState({ terminalResults: [], terminalSearching: false });
+			}
+		}
+	}
+
+	/** Toggle content search between the active repo and all indexed repos,
+	 *  re-running the current query immediately when in content mode. */
+	function setContentAllRepos(value: boolean): void {
+		if (state.contentAllRepos === value) return;
+		setState("contentAllRepos", value);
+		if (mode() !== "content") return;
+		const nextQuery = searchQuery();
+		cancelled = true;
+		unlistenBatch?.();
+		unlistenBatch = null;
+		unlistenError?.();
+		unlistenError = null;
+		if (nextQuery.length >= CONTENT_SEARCH_MIN_CHARS) {
+			setState({ contentResults: [], contentError: null });
+			triggerContentSearch(nextQuery);
+		} else {
+			setState({ contentResults: [], contentSearching: false, contentError: null });
+		}
+	}
+
+	/** Open palette with a pre-filled query (e.g. "~ " for terminal search mode) */
+	function openWithQuery(query: string): void {
+		cleanupSearch();
+		setState({ isOpen: true, query });
+		// Re-run setQuery to trigger mode-specific search logic
+		setQuery(query);
+	}
+
+	function recordUsage(actionId: string): void {
+		const updated = [actionId, ...state.recentActions.filter((id) => id !== actionId)].slice(0, MAX_RECENT);
+		setState("recentActions", updated);
+		try {
+			localStorage.setItem(RECENT_ACTIONS_KEY, JSON.stringify(updated));
+		} catch (err) {
+			appLogger.warn("app", "Failed to persist recent actions to localStorage", err);
+		}
+	}
+
+	// Methods are plain closures, never `this`-bound: every one of them is handed
+	// around as a bare reference (keyboard handler map, action registry), which
+	// would strip a `this` binding.
+	return {
+		state,
+		mode,
+		searchQuery,
+		open,
+		close,
+		toggle,
+		setQuery,
+		setContentAllRepos,
+		openWithQuery,
+		recordUsage,
 	};
 }
 
