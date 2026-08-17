@@ -1468,6 +1468,59 @@ impl TerminalGrid {
     ///
     /// Absolute rows: 0 = oldest history line, historySize = first screen line.
     /// Columns are 0-based cell indices.
+    fn normalize_copied_selection(text: &str) -> String {
+        const CLAUDE_GUTTER: &str = "\u{a0}\u{a0}▎";
+
+        fn gutter_content<'a>(line: &'a str, gutter: &str) -> Option<&'a str> {
+            let rest = line.strip_prefix(gutter)?;
+            if rest.is_empty() {
+                return Some("");
+            }
+            rest.strip_prefix(' ')
+                .or_else(|| rest.strip_prefix('\u{a0}'))
+        }
+
+        let lines: Vec<&str> = text.split('\n').collect();
+        let mut normalized = String::with_capacity(text.len());
+        let mut index = 0;
+
+        while index < lines.len() {
+            if gutter_content(lines[index], CLAUDE_GUTTER).is_none() {
+                if index > 0 {
+                    normalized.push('\n');
+                }
+                normalized.push_str(lines[index]);
+                index += 1;
+                continue;
+            }
+
+            let run_start = index;
+            while index < lines.len() && gutter_content(lines[index], CLAUDE_GUTTER).is_some() {
+                index += 1;
+            }
+            let should_strip = lines[run_start..index]
+                .iter()
+                .filter_map(|line| gutter_content(line, CLAUDE_GUTTER))
+                .filter(|content| !content.is_empty())
+                .count()
+                >= 2;
+
+            for (offset, line) in lines[run_start..index].iter().enumerate() {
+                let line_index = run_start + offset;
+                if line_index > 0 {
+                    normalized.push('\n');
+                }
+                if should_strip {
+                    normalized.push_str(gutter_content(line, CLAUDE_GUTTER).unwrap_or(line));
+                } else {
+                    normalized.push_str(line);
+                }
+            }
+        }
+
+        normalized
+    }
+
     pub fn get_selection_text(
         &self,
         start_row: usize,
@@ -1526,8 +1579,7 @@ impl TerminalGrid {
             }
         }
 
-        let trimmed = result.trim_end_matches('\n');
-        trimmed.to_owned()
+        Self::normalize_copied_selection(result.trim_end_matches('\n'))
     }
 
     /// Serialize dirty rows as a compact binary frame.
@@ -3068,6 +3120,60 @@ mod tests {
         // Row 0: "abcdefghij" (WRAPLINE), Row 1: "klmno" (no wrap), Row 2: "second"
         let text = grid.get_selection_text(0, 0, 2, 5);
         assert_eq!(text, "abcdefghijklmno\nsecond");
+    }
+
+    #[test]
+    fn copied_selection_strips_repeated_claude_gutters() {
+        let input = concat!(
+            "Hola :wave:\n",
+            "\u{a0}\u{a0}▎\n",
+            "\u{a0}\u{a0}▎ First paragraph\n",
+            "\u{a0}\u{a0}▎   • nested bullet\n",
+            "\u{a0}\u{a0}▎ 1. numbered item\n",
+            "\u{a0}\u{a0}▎ Thanks :pray:"
+        );
+
+        assert_eq!(
+            TerminalGrid::normalize_copied_selection(input),
+            "Hola :wave:\n\nFirst paragraph\n  • nested bullet\n1. numbered item\nThanks :pray:"
+        );
+    }
+
+    #[test]
+    fn copied_selection_accepts_nbsp_separator_and_preserves_body_nbsp() {
+        let input = concat!(
+            "\u{a0}\u{a0}▎\u{a0}QA\u{a0}\u{a0}Engineering\n",
+            "\u{a0}\u{a0}▎\u{a0}UX team"
+        );
+
+        assert_eq!(
+            TerminalGrid::normalize_copied_selection(input),
+            "QA\u{a0}\u{a0}Engineering\nUX team"
+        );
+    }
+
+    #[test]
+    fn copied_selection_keeps_lone_or_non_claude_gutters() {
+        let input = concat!(
+            "\u{a0}\u{a0}▎ one candidate\n",
+            "plain separator\n",
+            "\u{a0}\u{a0}▎ another candidate\n",
+            "  ▎ ASCII-indented code\n",
+            "table | ▎ | value"
+        );
+
+        assert_eq!(TerminalGrid::normalize_copied_selection(input), input);
+    }
+
+    #[test]
+    fn copied_selection_normalizes_after_unwrapping_soft_wrapped_rows() {
+        let mut grid = TerminalGrid::new(5, 12, 0);
+        let _ = grid.process(
+            concat!("\u{a0}\u{a0}▎ first long\r\n", "\u{a0}\u{a0}▎ second long").as_bytes(),
+        );
+
+        let text = grid.get_selection_text(0, 0, 3, 11);
+        assert_eq!(text, "first long\nsecond long");
     }
 
     // --- Logical line tests ---
