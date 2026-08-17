@@ -694,6 +694,132 @@ describe("paneLayoutStore", () => {
 				expect(store.state.activeGroupId).toBe(g2);
 			});
 		});
+
+		it("preserves group and tab identity when the restored layout is equivalent", () => {
+			testInScope(() => {
+				// Fresh objects each call — what globalWorkspace's syncToPaneStore hands us.
+				const layout = () => ({
+					root: { type: "leaf" as const, id: "g1" },
+					groups: {
+						g1: { id: "g1", tabs: [{ id: "term-1", type: "terminal" as const }], activeTabId: "term-1" },
+					},
+					activeGroupId: "g1",
+				});
+
+				store.restore(layout());
+				const groupBefore = store.state.groups.g1;
+				const tabBefore = store.state.groups.g1.tabs[0];
+
+				store.restore(layout());
+
+				// New proxies here mean <For> sees all-new items and every
+				// PaneTabContent — hence every CanvasTerminal — is torn down.
+				expect.soft(store.state.groups.g1).toBe(groupBefore);
+				expect.soft(store.state.groups.g1.tabs[0]).toBe(tabBefore);
+			});
+		});
+
+		it("still applies a genuinely changed layout", () => {
+			testInScope(() => {
+				store.restore({
+					root: { type: "leaf", id: "g1" },
+					groups: { g1: { id: "g1", tabs: [{ id: "term-1", type: "terminal" }], activeTabId: "term-1" } },
+					activeGroupId: "g1",
+				});
+
+				store.restore({
+					root: { type: "leaf", id: "g2" },
+					groups: {
+						g2: {
+							id: "g2",
+							tabs: [
+								{ id: "term-2", type: "terminal" },
+								{ id: "term-3", type: "terminal" },
+							],
+							activeTabId: "term-3",
+						},
+					},
+					activeGroupId: "g2",
+				});
+
+				expect(store.state.groups.g1).toBeUndefined();
+				expect(store.state.groups.g2.tabs.map((t) => t.id)).toEqual(["term-2", "term-3"]);
+				expect(store.state.groups.g2.activeTabId).toBe("term-3");
+				expect(store.state.activeGroupId).toBe("g2");
+			});
+		});
+	});
+
+	describe("reset", () => {
+		it("is a no-op when the layout is already empty — no save, no tree notification", async () => {
+			const { invoke } = await import("../../invoke");
+			const mockInvoke = vi.mocked(invoke);
+			vi.useFakeTimers();
+			try {
+				testInScope(() => {
+					store._testCancelPendingSave();
+					mockInvoke.mockClear();
+					const revisionBefore = store.treeRevision();
+					const groupsBefore = store.state.groups;
+
+					store.reset();
+
+					// The `groups` node must not be replaced by a freshly allocated {}
+					expect.soft(store.state.groups).toBe(groupsBefore);
+					expect.soft(store.treeRevision()).toBe(revisionBefore);
+					vi.advanceTimersByTime(600);
+					expect.soft(mockInvoke.mock.calls.filter((c) => c[0] === "save_pane_layout")).toHaveLength(0);
+				});
+			} finally {
+				vi.useRealTimers();
+			}
+		});
+
+		it("still clears restoredFromDisk when the layout is already empty", async () => {
+			const { invoke } = await import("../../invoke");
+			vi.mocked(invoke).mockResolvedValueOnce({
+				root: { type: "leaf", id: "g1" },
+				groups: { g1: { id: "g1", tabs: [{ id: "term-1", type: "terminal" }], activeTabId: "term-1" } },
+				activeGroupId: "g1",
+			});
+
+			await testInScope(async () => {
+				await store.loadFromDisk();
+				// Closing the last pane empties the layout but leaves the flag set.
+				store.closePane("g1");
+				expect(store.getRoot()).toBeNull();
+				expect(store.state.activeGroupId).toBeNull();
+
+				store.reset();
+
+				expect(store.consumeRestoredFromDisk()).toBe(false);
+			});
+		});
+
+		it("clears a non-empty layout and persists the empty result", async () => {
+			const { invoke } = await import("../../invoke");
+			const mockInvoke = vi.mocked(invoke);
+			vi.useFakeTimers();
+			try {
+				testInScope(() => {
+					const g1 = store.createGroup();
+					store.setRoot({ type: "leaf", id: g1 });
+					store.setActiveGroup(g1);
+					store._testCancelPendingSave();
+					mockInvoke.mockClear();
+
+					store.reset();
+
+					expect(store.getRoot()).toBeNull();
+					expect(store.state.groups).toEqual({});
+					expect(store.state.activeGroupId).toBeNull();
+					vi.advanceTimersByTime(600);
+					expect(mockInvoke.mock.calls.filter((c) => c[0] === "save_pane_layout")).toHaveLength(1);
+				});
+			} finally {
+				vi.useRealTimers();
+			}
+		});
 	});
 
 	describe("canSplit", () => {

@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { createStore, produce } from "solid-js/store";
+import { createStore, produce, reconcile } from "solid-js/store";
 import { invoke } from "../invoke";
 import { appLogger } from "./appLogger";
 
@@ -571,10 +571,15 @@ function createPaneLayoutStore() {
 
 			tree = saved.root;
 			bumpTree();
-			setState({
-				groups: saved.groups,
-				activeGroupId: saved.activeGroupId,
-			});
+			// reconcile, not a wholesale node replace: `saved.groups` is always a
+			// fresh object, so a plain setState would hand every group and every
+			// PaneTab a new proxy and remount every CanvasTerminal in the layout.
+			setState(
+				reconcile({
+					groups: saved.groups,
+					activeGroupId: saved.activeGroupId,
+				}),
+			);
 		},
 
 		/** Remap terminal IDs in all groups (used after lazy restore creates new terminal IDs) */
@@ -597,6 +602,14 @@ function createPaneLayoutStore() {
 
 		/** Reset to single pane (no split) */
 		reset(): void {
+			// Every branch select calls this, almost always on an already-empty
+			// layout. Writing a fresh `{}` would replace the `groups` node, bump
+			// treeRevision for every isSplit() subscriber and rewrite
+			// pane-layout.json with identical bytes — all for no change.
+			if (tree === null && state.activeGroupId === null && Object.keys(state.groups).length === 0) {
+				restoredFromDisk = false;
+				return;
+			}
 			tree = null;
 			restoredFromDisk = false;
 			bumpTree();

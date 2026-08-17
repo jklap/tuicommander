@@ -47,6 +47,7 @@ describe("useDetachedPanelBridge", () => {
 	beforeEach(() => {
 		for (const key of Object.keys(panelRegistry)) delete panelRegistry[key];
 		for (const key of Object.keys(uiStore.state.detachedPanels)) uiStore.clearDetached(key);
+		uiStore._testCancelPendingSave();
 		handlers = new Map();
 		unlisteners.length = 0;
 		mockInvoke.mockReset().mockResolvedValue(undefined);

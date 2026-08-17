@@ -65,6 +65,7 @@ describe("Toolbar", () => {
 	afterEach(() => {
 		prNotificationsStore._testCancelPendingTimers();
 		repositoriesStore._testCancelPendingSave();
+		uiStore._testCancelPendingSave();
 	});
 
 	function addTestNotif(overrides: Partial<Parameters<typeof prNotificationsStore.add>[0]> = {}) {

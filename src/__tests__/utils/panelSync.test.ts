@@ -137,7 +137,8 @@ describe("panelSync", () => {
 		});
 
 		it("pushes snapshots at configured interval", () => {
-			const serialize = vi.fn().mockReturnValue({ terminals: [] });
+			let tick = 0;
+			const serialize = vi.fn(() => ({ tick: tick++ }));
 			const provider = createPanelSyncProvider("activity", serialize, 1000);
 
 			provider.start();
@@ -155,8 +156,44 @@ describe("panelSync", () => {
 			expect(mockEmitTo).toHaveBeenCalledTimes(3);
 		});
 
+		it("does not re-emit a snapshot that has not changed", () => {
+			// Fresh object each call, identical content — an idle machine.
+			const serialize = vi.fn(() => ({ terminals: [{ id: "t1", state: "idle" }] }));
+			const provider = createPanelSyncProvider("activity", serialize, 1000);
+
+			provider.start();
+			expect(mockEmitTo).toHaveBeenCalledTimes(1);
+
+			vi.advanceTimersByTime(3000);
+			expect(mockEmitTo).toHaveBeenCalledTimes(1);
+
+			provider.stop();
+		});
+
+		it("emits again as soon as the snapshot changes", () => {
+			let state = "idle";
+			const serialize = vi.fn(() => ({ terminals: [{ id: "t1", state }] }));
+			const provider = createPanelSyncProvider("activity", serialize, 1000);
+
+			provider.start();
+			vi.advanceTimersByTime(2000);
+			expect(mockEmitTo).toHaveBeenCalledTimes(1);
+
+			state = "working";
+			vi.advanceTimersByTime(1000);
+			expect(mockEmitTo).toHaveBeenCalledTimes(2);
+			expect(mockEmitTo).toHaveBeenLastCalledWith(
+				"panel-activity",
+				"panel-sync",
+				expect.objectContaining({ snapshot: { terminals: [{ id: "t1", state: "working" }] } }),
+			);
+
+			provider.stop();
+		});
+
 		it("uses monotonic timestamps that always increase", () => {
-			const serialize = vi.fn().mockReturnValue({});
+			let tick = 0;
+			const serialize = vi.fn(() => ({ tick: tick++ }));
 			const provider = createPanelSyncProvider("activity", serialize, 500);
 
 			provider.start();
@@ -175,7 +212,8 @@ describe("panelSync", () => {
 		});
 
 		it("does not start twice", () => {
-			const serialize = vi.fn().mockReturnValue({});
+			let tick = 0;
+			const serialize = vi.fn(() => ({ tick: tick++ }));
 			const provider = createPanelSyncProvider("activity", serialize, 1000);
 
 			provider.start();
@@ -211,6 +249,28 @@ describe("panelSync", () => {
 					snapshot: { data: "fresh" },
 				}),
 			);
+		});
+
+		it("forces a push on resync even when the snapshot is unchanged", () => {
+			let resyncCallback: ((event: { payload: { panelId: string } }) => void) | null = null;
+			mockListen.mockImplementation((event: string, cb: (event: { payload: { panelId: string } }) => void) => {
+				if (event === "panel-resync-request") {
+					resyncCallback = cb;
+				}
+				return Promise.resolve(() => {});
+			});
+
+			const serialize = vi.fn(() => ({ data: "fresh" }));
+			const provider = createPanelSyncProvider("activity", serialize, 5000);
+			provider.start();
+			expect(mockEmitTo).toHaveBeenCalledTimes(1);
+
+			// The panel window asked because it does not trust its own copy —
+			// change detection must not swallow the answer.
+			resyncCallback!({ payload: { panelId: "activity" } });
+			expect(mockEmitTo).toHaveBeenCalledTimes(2);
+
+			provider.stop();
 		});
 
 		it("ignores resync for other panels", () => {
