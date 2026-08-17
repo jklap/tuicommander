@@ -76,21 +76,59 @@ pub struct TranscribeResponse {
     pub duration_s: f64,
 }
 
-/// Resolve the configured model from persisted config.
-fn configured_model() -> model::WhisperModel {
-    let config = get_dictation_config();
-    model::WhisperModel::from_name(&config.model).unwrap_or(model::WhisperModel::LargeV3Turbo)
+/// Resolve a model name from config, falling back to the default.
+fn resolve_model(name: &str) -> model::WhisperModel {
+    model::WhisperModel::from_name(name).unwrap_or(model::WhisperModel::LargeV3Turbo)
+}
+
+/// The model-derived half of [`DictationStatus`]: which model is configured,
+/// whether it is on disk and how big the file is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModelSnapshot {
+    model: model::WhisperModel,
+    downloaded: bool,
+    size_mb: u64,
+}
+
+/// Cache slot for [`model_snapshot`].
+static MODEL_SNAPSHOT: parking_lot::Mutex<Option<ModelSnapshot>> = parking_lot::Mutex::new(None);
+
+/// Snapshot of the configured model for [`get_dictation_status`].
+///
+/// Computing one costs a `dictation-config.json` read, a JSON parse and two
+/// `stat` calls. The microphone meter polls `get_dictation_status` every 75 ms
+/// while recording (`startAudioLevelPolling` in `src/stores/dictation.ts`), so
+/// paying that per tick means ~13 config parses a second on the IPC thread.
+/// None of those inputs can change without going through a command that calls
+/// [`invalidate_model_snapshot`], so the snapshot is computed once per change.
+fn model_snapshot() -> ModelSnapshot {
+    let mut slot = MODEL_SNAPSHOT.lock();
+    if let Some(snapshot) = slot.as_ref() {
+        return snapshot.clone();
+    }
+    let model = resolve_model(&get_dictation_config().model);
+    let snapshot = ModelSnapshot {
+        model,
+        downloaded: model::model_exists(model),
+        size_mb: model::model_size_bytes(model) / 1_048_576,
+    };
+    *slot = Some(snapshot.clone());
+    snapshot
+}
+
+/// Drop the cached snapshot after the configured model or a model file changed.
+fn invalidate_model_snapshot() {
+    *MODEL_SNAPSHOT.lock() = None;
 }
 
 #[tauri::command]
 pub fn get_dictation_status(
     dictation: State<'_, DictationState>,
 ) -> Result<DictationStatus, String> {
-    let whisper_model = configured_model();
-    let model_downloaded = model::model_exists(whisper_model);
+    let snapshot = model_snapshot();
     let has_transcriber = dictation.transcriber_arc.lock().is_some();
 
-    let model_status = if !model_downloaded {
+    let model_status = if !snapshot.downloaded {
         "not_downloaded"
     } else if has_transcriber {
         "ready"
@@ -100,8 +138,8 @@ pub fn get_dictation_status(
 
     Ok(DictationStatus {
         model_status: model_status.to_string(),
-        model_name: whisper_model.name().to_string(),
-        model_size_mb: model::model_size_bytes(whisper_model) / 1_048_576,
+        model_name: snapshot.model.name().to_string(),
+        model_size_mb: snapshot.size_mb,
         recording: dictation.recording.load(Ordering::Acquire),
         processing: dictation.processing.load(Ordering::Acquire),
         audio_level: dictation
@@ -148,6 +186,9 @@ pub async fn download_whisper_model(app: AppHandle, model_name: String) -> Resul
     })
     .await?;
 
+    // The model is on disk now — its size and download state are cached.
+    invalidate_model_snapshot();
+
     Ok(format!("Downloaded to {}", path.display()))
 }
 
@@ -167,10 +208,24 @@ pub fn delete_whisper_model(
     }
 
     model::delete_model(whisper_model)?;
+    // The model file is gone — its size and download state are cached.
+    invalidate_model_snapshot();
     Ok(format!("Deleted {}", whisper_model.display_name()))
 }
 
-#[tauri::command]
+/// Start push-to-talk recording.
+///
+/// `command(async)` rather than a plain `command`: a sync Tauri command runs on
+/// the main thread, and the first press of the hotkey loads the whisper model
+/// there — a multi-second GGML + GPU init that freezes the whole UI. `async`
+/// makes Tauri run this body on its async runtime instead, which is separate
+/// from the runtime the HTTP server owns (see `lib.rs`), so nothing else stalls.
+/// The function itself stays sync, so the HTTP route calls it unchanged.
+///
+// DEFERRED (2026-08-17) — the load still occupies one Tauri runtime worker for
+// its duration. Moving it to `spawn_blocking` needs an async fn, which means
+// changing this signature and the caller in `mcp_http/dictation_routes.rs`.
+#[tauri::command(async)]
 pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> Result<(), String> {
     // Atomic test-and-set: prevents TOCTOU race from concurrent IPC calls
     if dictation
@@ -206,7 +261,10 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
         permission::MicPermission::Authorized => {}
     }
 
-    let whisper_model = configured_model();
+    // One read of dictation-config.json for the whole start: the model, the
+    // input device and the language all come from this snapshot.
+    let config = get_dictation_config();
+    let whisper_model = resolve_model(&config.model);
 
     // Reload transcriber if model changed or not loaded
     let mut transcriber_arc_lock = dictation.transcriber_arc.lock();
@@ -252,7 +310,6 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
     drop(transcriber_arc_lock);
 
     // Start audio capture using the configured device (or system default)
-    let config = get_dictation_config();
     let device_name = config.device.as_deref().filter(|s| !s.is_empty());
     let capture = audio::AudioCapture::start_with_device(device_name).map_err(|e| {
         app_logger::log_via_handle(
@@ -278,7 +335,6 @@ pub fn start_dictation(app: AppHandle, dictation: State<'_, DictationState>) -> 
     *dictation.audio.lock() = Some(capture);
 
     // Start streaming session
-    let config = get_dictation_config();
     let lang = if config.language == "auto" {
         None
     } else {
@@ -616,7 +672,10 @@ pub fn get_dictation_config() -> DictationConfig {
 
 #[tauri::command]
 pub fn set_dictation_config(config: DictationConfig) -> Result<(), String> {
-    crate::config::ConfigFile::<DictationConfig>::new(DICTATION_CONFIG_FILE).save(&config)
+    crate::config::ConfigFile::<DictationConfig>::new(DICTATION_CONFIG_FILE).save(&config)?;
+    // The configured model is part of the cached status snapshot.
+    invalidate_model_snapshot();
+    Ok(())
 }
 
 /// Check microphone permission status (macOS TCC).
@@ -630,4 +689,97 @@ pub fn check_microphone_permission() -> String {
 #[tauri::command]
 pub fn open_microphone_settings() {
     permission::open_settings();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Persist a config that names `model`, then clear the snapshot cache so the
+    /// next read observes it.
+    fn write_model_config(model: &str) {
+        set_dictation_config(DictationConfig {
+            model: model.to_string(),
+            ..Default::default()
+        })
+        .expect("config save");
+    }
+
+    #[test]
+    fn the_meter_tick_does_not_re_read_config_or_stat_the_model() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        // "small" is not the default, so a fresh read is distinguishable from
+        // the fallback in `resolve_model`.
+        write_model_config("small");
+        assert_eq!(model_snapshot().model, model::WhisperModel::Small);
+
+        // Delete the config file. A snapshot recomputed per call would now read
+        // nothing and fall back to the default model.
+        std::fs::remove_file(dir.path().join(DICTATION_CONFIG_FILE)).expect("remove config");
+
+        for tick in 0..13 {
+            assert_eq!(
+                model_snapshot().model,
+                model::WhisperModel::Small,
+                "meter tick {tick} re-read dictation-config.json"
+            );
+        }
+    }
+
+    #[test]
+    fn saving_the_config_invalidates_the_snapshot() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        write_model_config("small");
+        assert_eq!(model_snapshot().model, model::WhisperModel::Small);
+
+        write_model_config("large-v2");
+        assert_eq!(
+            model_snapshot().model,
+            model::WhisperModel::LargeV2,
+            "set_dictation_config must invalidate the cached snapshot"
+        );
+    }
+
+    #[test]
+    fn the_snapshot_reports_a_missing_model_as_not_downloaded() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        write_model_config("small");
+        let snapshot = model_snapshot();
+        assert!(!snapshot.downloaded);
+        assert_eq!(snapshot.size_mb, 0);
+    }
+
+    #[test]
+    fn the_snapshot_reports_a_present_model_with_its_on_disk_size() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _guard = crate::config::set_config_dir_override(dir.path().to_path_buf());
+
+        // `model_exists` requires more than 1 MB to treat a file as a real model.
+        std::fs::create_dir_all(model::models_dir()).expect("models dir");
+        std::fs::write(
+            model::model_path(model::WhisperModel::Small),
+            vec![0u8; 3 * 1_048_576],
+        )
+        .expect("write model");
+
+        write_model_config("small");
+        let snapshot = model_snapshot();
+        assert!(snapshot.downloaded);
+        assert_eq!(snapshot.size_mb, 3);
+    }
+
+    #[test]
+    fn resolve_model_falls_back_to_the_default_on_an_unknown_name() {
+        assert_eq!(resolve_model("small"), model::WhisperModel::Small);
+        assert_eq!(
+            resolve_model("nonexistent"),
+            model::WhisperModel::LargeV3Turbo
+        );
+    }
 }

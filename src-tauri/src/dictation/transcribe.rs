@@ -1,6 +1,9 @@
+use parking_lot::Mutex;
 use serde::Serialize;
 use std::path::Path;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
+};
 
 /// True when a GPU backend is compiled into this build.
 /// - macOS: Metal (always, via target-specific dep).
@@ -53,7 +56,18 @@ pub trait Transcriber: Send + Sync {
 
 /// Whisper model wrapper for transcription.
 pub struct WhisperTranscriber {
-    ctx: WhisperContext,
+    /// Decoder state, created once at load and reused for every transcription.
+    ///
+    /// `create_state` allocates the decoder's KV cache and mel buffers, which
+    /// the streaming loop otherwise paid on every 1.5–3 s window.
+    /// `whisper_full_with_state` resets the state at the start of each run, so
+    /// reuse is exactly what whisper.cpp's own streaming example does.
+    ///
+    /// The mutex is only there to satisfy `full()`'s `&mut self`; it never
+    /// contends, because the streaming thread is joined before the final pass
+    /// runs. The state owns an `Arc` to the loaded model, so the model lives as
+    /// long as this transcriber.
+    state: Mutex<WhisperState>,
 }
 
 impl WhisperTranscriber {
@@ -71,9 +85,14 @@ impl WhisperTranscriber {
 
         let ctx = WhisperContext::new_with_params(path_str, params)
             .map_err(|e| format!("Failed to load Whisper model: {e}"))?;
+        let state = ctx
+            .create_state()
+            .map_err(|e| format!("Failed to create Whisper state: {e}"))?;
 
         tracing::info!(backend, "Whisper model loaded");
-        Ok(Self { ctx })
+        Ok(Self {
+            state: Mutex::new(state),
+        })
     }
 }
 
@@ -111,10 +130,7 @@ impl Transcriber for WhisperTranscriber {
             });
         }
 
-        let mut state = self
-            .ctx
-            .create_state()
-            .map_err(|e| format!("Failed to create Whisper state: {e}"))?;
+        let mut state = self.state.lock();
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         params.set_language(language);
@@ -341,5 +357,38 @@ mod tests {
         assert!(!is_hallucination("apri il file browser"));
         assert!(!is_hallucination("run the tests"));
         assert!(!is_hallucination(""));
+    }
+
+    /// Reusing one decoder state across windows is only safe if
+    /// `whisper_full_with_state` really resets it per run. Transcribing the same
+    /// audio twice must therefore give the same text — greedy sampling is
+    /// deterministic, so any drift means the previous run leaked into this one.
+    ///
+    /// Ignored by default: it needs the ~1.6 GB model on disk. Run with
+    /// `cargo nextest run --run-ignored all decoder_state`.
+    #[test]
+    #[ignore = "requires a downloaded whisper model"]
+    fn a_reused_decoder_state_gives_identical_results_across_calls() {
+        use std::f32::consts::PI;
+
+        let path = crate::dictation::model::model_path(
+            crate::dictation::model::WhisperModel::LargeV3Turbo,
+        );
+        let transcriber = WhisperTranscriber::load(&path).expect("model load");
+
+        // Two seconds of tone: the text is irrelevant, its stability is not.
+        let audio: Vec<f32> = (0..32_000)
+            .map(|i| (2.0 * PI * 220.0 * i as f32 / 16_000.0).sin() * 0.3)
+            .collect();
+
+        let first = transcriber
+            .transcribe(&audio, Some("en"))
+            .expect("first run");
+        let second = transcriber
+            .transcribe(&audio, Some("en"))
+            .expect("second run");
+
+        assert_eq!(first.text, second.text, "reused state leaked between runs");
+        assert_eq!(first.skip_reason, second.skip_reason);
     }
 }
