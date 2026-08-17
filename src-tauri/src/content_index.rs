@@ -7,7 +7,7 @@
 //!
 //! The index is stored per-repo in `AppState::content_indices` and rebuilt on
 //! `RepoChanged` events, but only when a stat-only walk finds an indexable file
-//! whose mtime moved (`ContentIndex::is_current`) — a git-state change that
+//! whose mtime or size moved (`ContentIndex::is_current`) — a git-state change that
 //! touches no file content must not pay for a full re-read of the repo. The
 //! rebuild itself is whole-corpus, not per-file. `repo_watcher::stop_watching`
 //! releases a repo's index when it is no longer in use.
@@ -79,34 +79,54 @@ impl IndexerThrottle {
     }
 }
 
+/// The stat-only fingerprint `is_current` compares a file against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileStamp {
+    /// File mtime at indexing time, in nanoseconds since the epoch.
+    ///
+    /// Nanoseconds, not seconds: an agent editing the same file twice inside one
+    /// second is the normal case here — second granularity would report the index
+    /// as still current and the edit would stay unsearchable until something else
+    /// invalidated it.
+    mtime: u64,
+    /// File size in bytes.
+    ///
+    /// mtime alone misses a content replacement that preserves it, and the tools
+    /// that restore files do exactly that: `cp -p`, `rsync -a`, `tar -x`, `unzip`
+    /// with timestamps. The index would then serve the old text for as long as
+    /// nothing else touched the file. The size is free — the walk already stats
+    /// every file — and catches such a replacement whenever the length changes. A
+    /// same-size, same-mtime rewrite still slips through; catching that needs the
+    /// content read this check exists to avoid.
+    len: u64,
+}
+
 /// A single indexed file entry.
 #[derive(Debug, Clone)]
 struct FileEntry {
     /// Path relative to repo root (forward-slash separated).
     rel_path: String,
-    /// File mtime at indexing time, in nanoseconds since the epoch.
-    ///
-    /// Nanoseconds, not seconds: this is what `is_current` compares, and an
-    /// agent editing the same file twice inside one second is the normal case
-    /// here — second granularity would report the index as still current and the
-    /// edit would stay unsearchable until something else invalidated it.
-    mtime: u64,
+    /// What the file looked like on disk when it was indexed.
+    stamp: FileStamp,
 }
 
-/// A file's mtime in nanoseconds since the epoch, `0` when unavailable.
-fn file_mtime(metadata: &std::fs::Metadata) -> u64 {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-        .map_or(0, |d| d.as_nanos() as u64)
+/// A file's stat fingerprint; the mtime is `0` when unavailable.
+fn file_stamp(metadata: &std::fs::Metadata) -> FileStamp {
+    FileStamp {
+        mtime: metadata
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos() as u64),
+        len: metadata.len(),
+    }
 }
 
 /// Pre-built BM25 index over file contents in a single repository.
 pub struct ContentIndex {
     engine: bm25::SearchEngine<u32>,
     entries: Vec<FileEntry>,
-    /// rel_path → index into `entries`, for `is_current`'s mtime comparison.
+    /// rel_path → index into `entries`, for `is_current`'s stamp comparison.
     path_to_idx: HashMap<String, usize>,
     /// Absolute repo root used to resolve relative paths.
     repo_root: PathBuf,
@@ -114,9 +134,9 @@ pub struct ContentIndex {
     ready: bool,
     /// When the last successful build completed.
     built_at: std::time::Instant,
-    /// Files confirmed binary (rel_path → mtime). Carried across rebuilds
-    /// so we skip the 8KB read probe for files whose mtime hasn't changed.
-    known_binaries: HashMap<String, u64>,
+    /// Files confirmed binary (rel_path → stamp). Carried across rebuilds
+    /// so we skip the 8KB read probe for files whose stamp hasn't changed.
+    known_binaries: HashMap<String, FileStamp>,
 }
 
 /// Result of a BM25 file-level query: ranked file paths.
@@ -155,7 +175,7 @@ impl ContentIndex {
     pub fn build(
         repo_root: PathBuf,
         throttle: Option<&IndexerThrottle>,
-        prior_binaries: HashMap<String, u64>,
+        prior_binaries: HashMap<String, FileStamp>,
     ) -> Self {
         let canonical = repo_root
             .canonicalize()
@@ -200,17 +220,17 @@ impl ContentIndex {
                 Err(_) => continue,
             };
 
-            let mtime = file_mtime(&metadata);
+            let stamp = file_stamp(&metadata);
 
-            // Skip binary files — use cached result if mtime unchanged
-            if let Some(&cached_mtime) = prior_binaries.get(&rel_path)
-                && cached_mtime == mtime
+            // Skip binary files — use cached result if the stamp is unchanged
+            if let Some(&cached) = prior_binaries.get(&rel_path)
+                && cached == stamp
             {
-                known_binaries.insert(rel_path, mtime);
+                known_binaries.insert(rel_path, stamp);
                 continue;
             }
             if is_binary(entry.path()) {
-                known_binaries.insert(rel_path, mtime);
+                known_binaries.insert(rel_path, stamp);
                 continue;
             }
 
@@ -222,7 +242,7 @@ impl ContentIndex {
                 // neither map would report the index stale on every single event
                 // for the life of the repo.
                 Err(_) => {
-                    known_binaries.insert(rel_path, mtime);
+                    known_binaries.insert(rel_path, stamp);
                     continue;
                 }
             };
@@ -233,7 +253,7 @@ impl ContentIndex {
             // BM25 document: filename + content for searchability
             corpus.push(format!("{}\n{}", rel_path, content));
 
-            entries.push(FileEntry { rel_path, mtime });
+            entries.push(FileEntry { rel_path, stamp });
         }
 
         let engine = SearchEngineBuilder::<u32>::with_corpus(Language::English, corpus).build();
@@ -294,10 +314,10 @@ impl ContentIndex {
                 .path_to_idx
                 .get(&rel_path)
                 .and_then(|&i| self.entries.get(i))
-                .map(|e| e.mtime)
+                .map(|e| e.stamp)
                 .or_else(|| self.known_binaries.get(&rel_path).copied());
-            // A file we have never seen, or one whose mtime moved: stale.
-            if known != Some(file_mtime(&metadata)) {
+            // A file we have never seen, or one whose mtime or size moved: stale.
+            if known != Some(file_stamp(&metadata)) {
                 return false;
             }
             matched += 1;
@@ -775,6 +795,44 @@ mod tests {
         assert!(
             !index.is_current(),
             "an edit within the same second as the build must invalidate"
+        );
+    }
+
+    /// A restore that preserves timestamps — `cp -p`, `rsync -a`, `tar -x`,
+    /// unpacking a build cache — replaces the content while leaving mtime exactly
+    /// as the build recorded it. On mtime alone the index reports itself current
+    /// and keeps serving the old text for as long as nothing else touches the
+    /// file. The size is stat'd by the same walk, so comparing it costs nothing.
+    #[test]
+    fn is_current_detects_a_replacement_that_preserved_the_mtime() {
+        let repo = make_test_repo();
+        let target = repo.path().join("main.rs");
+        let original_mtime = fs::metadata(&target).unwrap().modified().unwrap();
+
+        let index = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
+        assert!(index.is_current());
+
+        // Different content, different length, mtime restored to the indexed value.
+        fs::write(
+            &target,
+            "fn main() { println!(\"restored from an archive\"); }",
+        )
+        .unwrap();
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&target)
+            .unwrap()
+            .set_modified(original_mtime)
+            .unwrap();
+        assert_eq!(
+            fs::metadata(&target).unwrap().modified().unwrap(),
+            original_mtime,
+            "the test must actually restore the mtime, or it proves nothing"
+        );
+
+        assert!(
+            !index.is_current(),
+            "content replaced under a preserved mtime must invalidate"
         );
     }
 
