@@ -513,6 +513,77 @@ impl Utf8ReadBuffer {
     }
 }
 
+/// Coalescing buffer for the throttled `pty-output` event.
+///
+/// The throttle used to *drop* the chunks that arrived inside its window. That is
+/// not loss but corruption: the plugin OutputWatcher keeps the partial trailing
+/// line across chunks, so a dropped chunk splices the tail of one chunk onto the
+/// head of a later one and reports a line that was never on the wire. Chunks are
+/// now concatenated and emitted whole at the tick, which keeps the original
+/// benefit (at most one WebView event per window under an output flood) without
+/// touching the byte stream.
+pub(crate) struct PtyOutputCoalescer {
+    pending: String,
+    last_emit: Option<Instant>,
+    window: Duration,
+    /// Emit early rather than let a flood grow the buffer without bound.
+    max_pending: usize,
+}
+
+impl PtyOutputCoalescer {
+    pub(crate) fn new(window: Duration, max_pending: usize) -> Self {
+        Self {
+            pending: String::new(),
+            last_emit: None,
+            window,
+            max_pending,
+        }
+    }
+
+    /// Buffer a chunk. Returns the payload to emit now — when the throttle window
+    /// has elapsed, on the very first chunk, or when the buffer reached its cap.
+    pub(crate) fn push(&mut self, chunk: &str, now: Instant) -> Option<String> {
+        self.pending.push_str(chunk);
+        let due = self
+            .last_emit
+            .is_none_or(|last| now.duration_since(last) >= self.window);
+        if due || self.pending.len() >= self.max_pending {
+            self.emit(now)
+        } else {
+            None
+        }
+    }
+
+    /// Drain a buffered tail once the window elapsed. Called from the frame
+    /// ticker: reads block, so a trailing chunk would otherwise sit in the buffer
+    /// until more output arrives — which, for a rare-line watcher, may be never.
+    pub(crate) fn flush_due(&mut self, now: Instant) -> Option<String> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let due = self
+            .last_emit
+            .is_none_or(|last| now.duration_since(last) >= self.window);
+        if due { self.emit(now) } else { None }
+    }
+
+    /// Unconditional drain at session teardown.
+    pub(crate) fn take(&mut self) -> Option<String> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        Some(std::mem::take(&mut self.pending))
+    }
+
+    fn emit(&mut self, now: Instant) -> Option<String> {
+        self.last_emit = Some(now);
+        if self.pending.is_empty() {
+            return None;
+        }
+        Some(std::mem::take(&mut self.pending))
+    }
+}
+
 /// Buffer that prevents escape sequences from being split across write boundaries.
 /// Detects incomplete ANSI/OSC sequences at the end of a chunk and carries them
 /// to the next call, so xterm.js always receives complete sequences.
@@ -4079,6 +4150,113 @@ pub(crate) mod tests_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── PtyOutputCoalescer: the throttle must not drop a chunk ──
+    //
+    // The plugin OutputWatcher reassembles lines across chunk boundaries, so a
+    // dropped chunk splices the tail of one chunk onto the head of a later one
+    // and invents a line that was never on the wire (audit finding F1).
+
+    const TEST_WINDOW: Duration = Duration::from_millis(100);
+    const TEST_CAP: usize = 32;
+
+    fn coalescer() -> PtyOutputCoalescer {
+        PtyOutputCoalescer::new(TEST_WINDOW, TEST_CAP)
+    }
+
+    #[test]
+    fn coalescer_emits_the_first_chunk_immediately() {
+        let mut c = coalescer();
+        let now = Instant::now();
+
+        assert_eq!(c.push("first", now).as_deref(), Some("first"));
+    }
+
+    #[test]
+    fn coalescer_concatenates_every_chunk_inside_the_window() {
+        let mut c = coalescer();
+        let start = Instant::now();
+        c.push("opening", start);
+
+        // Three chunks arrive inside one throttle window: none may reach the
+        // frontend yet, and none may be lost either.
+        assert_eq!(c.push("a", start + Duration::from_millis(10)), None);
+        assert_eq!(c.push("b", start + Duration::from_millis(20)), None);
+        assert_eq!(c.push("c", start + Duration::from_millis(30)), None);
+
+        assert_eq!(
+            c.push("d", start + TEST_WINDOW).as_deref(),
+            Some("abcd"),
+            "chunks buffered during the window must be emitted whole and in order"
+        );
+    }
+
+    #[test]
+    fn coalescer_emits_early_when_the_buffer_reaches_its_cap() {
+        let mut c = coalescer();
+        let start = Instant::now();
+        c.push("opening", start);
+
+        let big = "x".repeat(TEST_CAP);
+        assert_eq!(
+            c.push(&big, start + Duration::from_millis(1)).as_deref(),
+            Some(big.as_str()),
+            "a burst larger than the cap is emitted immediately instead of growing the buffer"
+        );
+    }
+
+    #[test]
+    fn flush_due_drains_a_trailing_chunk_once_the_pty_goes_quiet() {
+        let mut c = coalescer();
+        let start = Instant::now();
+        c.push("opening", start);
+        c.push("tail", start + Duration::from_millis(10));
+
+        // Still inside the window: the ticker must not emit yet.
+        assert_eq!(c.flush_due(start + Duration::from_millis(20)), None);
+        // Window elapsed with no further reads — the tail cannot wait for the
+        // next chunk, which may never arrive.
+        assert_eq!(c.flush_due(start + TEST_WINDOW).as_deref(), Some("tail"));
+        // Nothing left to send.
+        assert_eq!(c.flush_due(start + Duration::from_secs(1)), None);
+    }
+
+    #[test]
+    fn take_drains_the_buffer_at_teardown() {
+        let mut c = coalescer();
+        let start = Instant::now();
+        c.push("opening", start);
+        c.push("last words", start + Duration::from_millis(1));
+
+        assert_eq!(c.take().as_deref(), Some("last words"));
+        assert_eq!(c.take(), None);
+    }
+
+    #[test]
+    fn every_pushed_byte_is_emitted_exactly_once_in_order() {
+        let mut c = coalescer();
+        let start = Instant::now();
+        let chunks: Vec<String> = (0..50).map(|i| format!("line-{i}\n")).collect();
+
+        let mut emitted = String::new();
+        for (i, chunk) in chunks.iter().enumerate() {
+            // Advance well inside and across windows so both the buffering and
+            // the emitting branch are exercised.
+            let now = start + Duration::from_millis(i as u64 * 30);
+            if let Some(payload) = c.push(chunk, now) {
+                emitted.push_str(&payload);
+            }
+        }
+        if let Some(payload) = c.take() {
+            emitted.push_str(&payload);
+        }
+
+        assert_eq!(
+            emitted,
+            chunks.concat(),
+            "the coalesced stream must be byte-identical to the raw stream"
+        );
+    }
 
     fn make_msg(id: &str) -> AgentMessage {
         AgentMessage {
