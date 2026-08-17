@@ -96,6 +96,29 @@ pub(crate) fn classify_path(
     EventCategory::Noise
 }
 
+/// Whether a changed path is an ignore source the matcher was built from, so the
+/// matcher has to be rebuilt.
+///
+/// Two sources qualify. A `.gitignore` counts only when it is not already noise:
+/// a cargo build writes several vendored `.gitignore` files under `target/`, and
+/// each one would otherwise trigger the (walking) rebuild. `.git/info/exclude`
+/// counts unconditionally — it lives inside `.git`, so it is noise by
+/// construction, and gating on that would mean its rules stayed cached for the
+/// lifetime of the watcher.
+fn ignore_source_changed(
+    path: &Path,
+    repo_root: &Path,
+    git_dir: &Path,
+    worktrees: &[PathBuf],
+    ignores: &IgnoreSet,
+) -> bool {
+    if path == git_dir.join("info").join("exclude") {
+        return true;
+    }
+    path.file_name().is_some_and(|n| n == ".gitignore")
+        && classify_path(path, repo_root, git_dir, worktrees, ignores) != EventCategory::Noise
+}
+
 /// Classify a path already known to sit under a working-tree root, given its
 /// path relative to that root. Shared by the main checkout and every linked
 /// worktree so both obey the same exclusion rules.
@@ -114,6 +137,10 @@ fn classify_in_working_tree(rel: &Path, path: &Path, ignores: &IgnoreSet) -> Eve
     // `logs/` churn used to arrive here as a working-tree change on every
     // command the inner repo ran. Same for build output one level down
     // (`src-tauri/target/`, `frontend/node_modules/`).
+    //
+    // The list holds no name a project uses for tracked source — `build/` and
+    // `out/` are not in it. Whether those are generated is `.gitignore`'s answer,
+    // and the check below asks it (parents included).
     if rel.components().any(|c| {
         let name = c.as_os_str();
         crate::fs::ALWAYS_EXCLUDED_DIRS
@@ -345,15 +372,22 @@ fn build_ignore(repo_root: &Path, git_dir: &Path) -> IgnoreSet {
         layers.push((PathBuf::new(), global));
     }
 
-    // Root `.gitignore` + `.git/info/exclude` — both repo-root relative, so they
-    // share one matcher; `info/exclude` is added last and therefore wins.
-    let mut root = ignore::gitignore::GitignoreBuilder::new(repo_root);
-    root.add(repo_root.join(".gitignore"));
-    root.add(git_dir.join("info").join("exclude"));
-    if let Ok(gi) = root.build()
-        && (gi.num_ignores() > 0 || gi.num_whitelists() > 0)
-    {
-        layers.push((PathBuf::new(), gi));
+    // `.git/info/exclude` and the root `.gitignore` are both repo-root relative,
+    // but they are NOT one matcher: git ranks a per-directory `.gitignore` above
+    // `$GIT_DIR/info/exclude`, so a root `!generated.txt` must beat an
+    // `info/exclude` entry for the same path. Later layers win here, so exclude
+    // goes first.
+    for source in [
+        git_dir.join("info").join("exclude"),
+        repo_root.join(".gitignore"),
+    ] {
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(repo_root);
+        builder.add(source);
+        if let Ok(gi) = builder.build()
+            && (gi.num_ignores() > 0 || gi.num_whitelists() > 0)
+        {
+            layers.push((PathBuf::new(), gi));
+        }
     }
 
     // Nested `.gitignore` files, deepest last so their rules override.
@@ -767,17 +801,12 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                 return;
             }
 
-            // Rebuild the matcher when a `.gitignore` that matters changes.
-            // Gated on the path not already being noise: a cargo build writes
-            // several vendored `.gitignore` files under `target/`, and each one
-            // would otherwise trigger the (walking) rebuild.
+            // Rebuild the matcher when an ignore source that matters changes.
             let gitignore_changed = {
                 let gi = gitignore_cb.read();
                 let worktrees = worktrees_cb.read();
                 event.paths.iter().any(|p| {
-                    p.file_name().is_some_and(|n| n == ".gitignore")
-                        && classify_path(p, &repo_for_cb, &git_dir_for_cb, &worktrees, &gi)
-                            != EventCategory::Noise
+                    ignore_source_changed(p, &repo_for_cb, &git_dir_for_cb, &worktrees, &gi)
                 })
             };
             if gitignore_changed {
@@ -1402,6 +1431,93 @@ mod tests {
             classify_path(Path::new("/repo/src/build_helper.rs"), root, git, &[], &gi),
             EventCategory::WorkingTree
         );
+    }
+
+    /// `build/` and `out/` are names projects really use for tracked source — a
+    /// monorepo package, a directory of release scripts. Matching the bare name
+    /// classified every edit under them as noise, so no panel ever refreshed for
+    /// them. Only `.gitignore` decides whether such a directory is generated.
+    #[test]
+    fn test_classify_tracked_build_and_out_dirs_are_working_tree() {
+        let root = Path::new("/repo");
+        let git = Path::new("/repo/.git");
+        let gi = empty_gitignore();
+
+        for tracked in [
+            "/repo/build/release.sh",
+            "/repo/packages/build/src/index.ts",
+            "/repo/out/schema.json",
+            "/repo/src/out/protocol.rs",
+        ] {
+            assert_eq!(
+                classify_path(Path::new(tracked), root, git, &[], &gi),
+                EventCategory::WorkingTree,
+                "{tracked} is tracked source, not build output"
+            );
+        }
+
+        // Generated ones stay noise — via `.gitignore`, the source of truth.
+        let ignored = gitignore_from_patterns(root, &["build/", "out/"]);
+        assert_eq!(
+            classify_path(Path::new("/repo/build/main.o"), root, git, &[], &ignored),
+            EventCategory::Noise
+        );
+        assert_eq!(
+            classify_path(Path::new("/repo/out/bundle.js"), root, git, &[], &ignored),
+            EventCategory::Noise
+        );
+    }
+
+    /// Git ranks a per-directory `.gitignore` above `$GIT_DIR/info/exclude`, so a
+    /// root un-ignore must beat an `info/exclude` entry for the same path. Both
+    /// sources are repo-root relative; folding them into one matcher made the
+    /// later-added `info/exclude` win instead, hiding files git reports.
+    #[test]
+    fn test_root_gitignore_overrides_info_exclude() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let git_dir = root.join(".git");
+        std::fs::create_dir_all(git_dir.join("info")).unwrap();
+        std::fs::write(git_dir.join("info/exclude"), "*.gen.ts\n").unwrap();
+        std::fs::write(root.join(".gitignore"), "!api.gen.ts\n").unwrap();
+
+        let gi = build_ignore(root, &git_dir);
+        let classify = |rel: &str| classify_path(&root.join(rel), root, &git_dir, &[], &gi);
+
+        assert_eq!(
+            classify("api.gen.ts"),
+            EventCategory::WorkingTree,
+            "root .gitignore un-ignores what info/exclude hid"
+        );
+        assert_eq!(
+            classify("other.gen.ts"),
+            EventCategory::Noise,
+            "info/exclude still applies to everything the root file says nothing about"
+        );
+    }
+
+    /// The matcher is rebuilt only when an ignore source it was built from
+    /// changes. `.git/info/exclude` is one of those sources, and it lives inside
+    /// `.git` — so the noise gate that protects the `.gitignore` case must not
+    /// apply to it, or its rules stay cached until the watcher restarts.
+    #[test]
+    fn test_ignore_source_changed_covers_info_exclude() {
+        let root = Path::new("/repo");
+        let git = Path::new("/repo/.git");
+        let gi = empty_gitignore();
+        let changed = |p: &str| ignore_source_changed(Path::new(p), root, git, &[], &gi);
+
+        assert!(changed("/repo/.git/info/exclude"));
+        assert!(changed("/repo/.gitignore"));
+        assert!(changed("/repo/src/.gitignore"));
+        // Vendored ignore files under an excluded dir stay out: a cargo build
+        // writes several, and each would trigger a walking rebuild.
+        assert!(!changed("/repo/target/debug/pkg/.gitignore"));
+        assert!(!changed("/repo/node_modules/pkg/.gitignore"));
+        // Unrelated `.git` internals must not rebuild anything.
+        assert!(!changed("/repo/.git/index"));
+        assert!(!changed("/repo/.git/info/attributes"));
+        assert!(!changed("/repo/src/main.rs"));
     }
 
     /// The watcher must honour every ignore source git honours. Reading only the

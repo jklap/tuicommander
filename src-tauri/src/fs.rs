@@ -133,6 +133,13 @@ fn validate_path_for_creation(
 /// Directory names that are always excluded from repo walks — VCS internals and
 /// heavy build/cache outputs that are useless to search and often bypass `.gitignore`
 /// (missing, incomplete, or outside-of-git).
+///
+/// A name lands here only when no project uses it for tracked source. `build` and
+/// `out` do not qualify and were removed: a `build/` of tracked release scripts and
+/// a monorepo package named `packages/build/` are both ordinary source that git
+/// reports, and matching the bare name classified every edit under them as noise.
+/// Generated `build/` and `out/` directories are gitignored, and every walker here
+/// honours git's ignore rules (parents included), so they stay pruned anyway.
 pub(crate) const ALWAYS_EXCLUDED_DIRS: &[&str] = &[
     ".git",
     ".hg",
@@ -142,8 +149,6 @@ pub(crate) const ALWAYS_EXCLUDED_DIRS: &[&str] = &[
     "node_modules",
     "target",
     "dist",
-    "build",
-    "out",
     ".next",
     ".nuxt",
     ".svelte-kit",
