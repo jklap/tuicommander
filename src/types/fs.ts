@@ -38,6 +38,9 @@ export interface ContentSearchResult {
 
 /** A batch of content search results, emitted progressively via events */
 export interface ContentSearchBatch {
+	/** Echoed from the request. The event is global and several panels listen at
+	 *  once, so a batch belongs only to the panel whose id it carries. */
+	search_id: string;
 	matches: ContentMatch[];
 	is_final: boolean;
 	files_searched: number;
@@ -47,4 +50,10 @@ export interface ContentSearchBatch {
 	repos_pending: number;
 	/** Cross-repo search: registered repos actually searched (0 for single-repo). */
 	repos_searched: number;
+}
+
+/** A content search that failed, correlated the same way its batches are. */
+export interface ContentSearchError {
+	search_id: string;
+	message: string;
 }

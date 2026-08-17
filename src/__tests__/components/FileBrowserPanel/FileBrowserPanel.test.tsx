@@ -63,7 +63,8 @@ const match = (path: string, line: number): ContentMatch => ({
 	match_end: 3,
 });
 
-const batch = (matches: ContentMatch[], isFinal: boolean): ContentSearchBatch => ({
+const batch = (matches: ContentMatch[], isFinal: boolean, searchId: string): ContentSearchBatch => ({
+	search_id: searchId,
 	matches,
 	is_final: isFinal,
 	files_searched: 1,
@@ -187,14 +188,19 @@ describe("FileBrowserPanel tree cache", () => {
 });
 
 describe("FileBrowserPanel streamed content search", () => {
-	const startContentSearch = async (container: HTMLElement) => {
+	/** The correlation id the panel sent with its `search_content` invoke. */
+	const sentSearchId = (): string | null => {
+		const call = [...mockInvoke.mock.calls].reverse().find(([cmd]) => cmd === "search_content");
+		return (call?.[1] as { searchId?: string } | undefined)?.searchId ?? null;
+	};
+
+	const startContentSearch = async (container: HTMLElement): Promise<string> => {
 		const modeToggle = container.querySelector('button[title="Switch to content search"]') as HTMLButtonElement;
 		fireEvent.click(modeToggle);
 		const input = container.querySelector("input") as HTMLInputElement;
 		fireEvent.input(input, { target: { value: "hit" } });
-		await waitFor(() => expect(listeners.get("content-search-batch")?.length ?? 0).toBeGreaterThan(0), {
-			timeout: 2000,
-		});
+		await waitFor(() => expect(sentSearchId()).not.toBeNull(), { timeout: 2000 });
+		return sentSearchId() as string;
 	};
 
 	it("keeps existing group and match rows across streamed batches", async () => {
@@ -202,9 +208,9 @@ describe("FileBrowserPanel streamed content search", () => {
 			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
 		));
 
-		await startContentSearch(container);
+		const searchId = await startContentSearch(container);
 
-		emitEvent("content-search-batch", batch([match("a.ts", 1), match("a.ts", 2)], false));
+		emitEvent("content-search-batch", batch([match("a.ts", 1), match("a.ts", 2)], false, searchId));
 		await waitFor(() => expect(container.querySelectorAll(".contentGroup").length).toBe(1));
 
 		const firstGroup = container.querySelector(".contentGroup") as HTMLElement;
@@ -212,7 +218,7 @@ describe("FileBrowserPanel streamed content search", () => {
 		expect(firstMatchRows.length).toBe(2);
 
 		// A later batch adds a match to the same file plus a new file.
-		emitEvent("content-search-batch", batch([match("a.ts", 3), match("b.ts", 9)], true));
+		emitEvent("content-search-batch", batch([match("a.ts", 3), match("b.ts", 9)], true, searchId));
 		await waitFor(() => expect(container.querySelectorAll(".contentGroup").length).toBe(2));
 
 		// The already-rendered group and its rows must be the very same DOM nodes.
@@ -227,12 +233,61 @@ describe("FileBrowserPanel streamed content search", () => {
 			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
 		));
 
-		await startContentSearch(container);
+		const searchId = await startContentSearch(container);
 
-		emitEvent("content-search-batch", batch([match("a.ts", 1), match("a.ts", 2)], false));
-		emitEvent("content-search-batch", batch([match("a.ts", 3), match("b.ts", 9)], true));
+		emitEvent("content-search-batch", batch([match("a.ts", 1), match("a.ts", 2)], false, searchId));
+		emitEvent("content-search-batch", batch([match("a.ts", 3), match("b.ts", 9)], true, searchId));
 
 		await waitFor(() => expect(container.querySelector(".searchStatus")?.textContent).toBe("4 matches in 2 files"));
 		expect(container.querySelector(".contentGroupCount")?.textContent).toBe("3 matches");
+	});
+
+	/// `content-search-batch` is one global event with three panels listening. The
+	/// backend cancels the previous search when a new one starts, but the listeners
+	/// are not mutually exclusive — so the command palette's batches used to append
+	/// to this panel's list and flip its spinner off on someone else's `is_final`.
+	it("ignores batches belonging to another panel's search", async () => {
+		const { container } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+
+		const searchId = await startContentSearch(container);
+		emitEvent("content-search-batch", batch([match("a.ts", 1)], false, searchId));
+		await waitFor(() => expect(container.querySelectorAll(".contentMatch").length).toBe(1));
+
+		// The command palette's search answers while this one is still streaming.
+		emitEvent("content-search-batch", batch([match("other.ts", 7), match("other.ts", 8)], true, "cs-someone-else"));
+
+		expect(container.querySelectorAll(".contentMatch").length).toBe(1);
+		// Its `is_final` must not stop this panel's spinner either.
+		expect(container.querySelector(".searchStatus")?.textContent).toBe("Searching…");
+
+		// …and this panel's own final batch still lands, and does stop it.
+		emitEvent("content-search-batch", batch([match("a.ts", 2)], true, searchId));
+		await waitFor(() => expect(container.querySelectorAll(".contentMatch").length).toBe(2));
+		expect(container.querySelector(".searchStatus")?.textContent).toBe("2 matches in 1 file");
+	});
+
+	/// Starting any other content search cancels this one — the backend has a
+	/// single cancellation slot for the whole process. The cancelled search still
+	/// emits an empty final batch under its own id (`dispatch_content_batches` in
+	/// `fs.rs`), and that terminator is the only thing that can stop this
+	/// spinner: the search that cancelled it carries a different `search_id` and
+	/// is dropped above. Without it the panel spins for the life of the window.
+	it("stops searching on the empty final batch a cancelled search sends", async () => {
+		const { container } = render(() => (
+			<FileBrowserPanel visible={true} repoPath="/repo" onClose={() => {}} onFileOpen={() => {}} />
+		));
+
+		const searchId = await startContentSearch(container);
+		emitEvent("content-search-batch", batch([match("a.ts", 1)], false, searchId));
+		await waitFor(() => expect(container.querySelectorAll(".contentMatch").length).toBe(1));
+
+		// Cancelled mid-stream: no further matches, only the terminator.
+		emitEvent("content-search-batch", batch([], true, searchId));
+
+		await waitFor(() => expect(container.querySelector(".searchStatus")?.textContent).toBe("1 match in 1 file"));
+		// What it did find before being cut short stays on screen.
+		expect(container.querySelectorAll(".contentMatch").length).toBe(1);
 	});
 });

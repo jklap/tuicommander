@@ -61,6 +61,10 @@ pub struct ContentSearchResult {
 /// Streamed batch payload emitted via the `content-search-batch` event.
 #[derive(Debug, Clone, Serialize)]
 pub struct ContentSearchBatch {
+    /// Echoed from the request that started this search. The event is global and
+    /// several panels listen to it at once; without it, the command palette's
+    /// results land in the file browser's list and flip its spinner off.
+    pub search_id: String,
     pub matches: Vec<ContentMatch>,
     pub is_final: bool,
     pub files_searched: u32,
@@ -70,6 +74,15 @@ pub struct ContentSearchBatch {
     /// "not searched yet" on a cross-repo search.
     pub repos_pending: u32,
     pub repos_searched: u32,
+}
+
+/// Failure payload emitted via the `content-search-error` event. Carries the
+/// same `search_id` as the batches, for the same reason: only the panel that
+/// started the search may show the error.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContentSearchError {
+    pub search_id: String,
+    pub message: String,
 }
 
 /// Managed state for cancelling in-flight content searches.
@@ -481,53 +494,69 @@ pub fn warm_content_index(
     crate::content_index::ensure_index(&app_state, &repo_path);
 }
 
-/// Emit a `ContentSearchResult` to the frontend as `content-search-batch` events
-/// in chunks of 50, honoring cancellation. Always emits a final (possibly empty)
-/// batch so the UI knows the search is done. Shared by single- and all-repo search.
-#[cfg(feature = "desktop")]
-fn emit_content_batches(
-    app: &tauri::AppHandle,
+/// Split a `ContentSearchResult` into `content-search-batch` payloads of 50
+/// matches, handing each to `emit`, and stop early once `cancel` is raised.
+///
+/// **Every search gets a final batch, cancelled ones included.** There is one
+/// cancellation slot for the whole process, so starting a search in the command
+/// palette cancels the file browser's — and the file browser only listens for
+/// batches carrying its own `search_id`, so the palette's `is_final` cannot
+/// release it. Returning early on cancellation left that panel spinning for the
+/// life of the window. The cut-short search still owes its caller a last word.
+///
+/// Takes a sink rather than an `AppHandle` so the batching and the cancellation
+/// contract are testable without a running Tauri app.
+fn dispatch_content_batches(
     result: ContentSearchResult,
-    cancel: &Arc<AtomicBool>,
+    cancel: &AtomicBool,
+    search_id: &str,
+    mut emit: impl FnMut(ContentSearchBatch),
 ) {
+    let mut batch = |matches: Vec<ContentMatch>, is_final: bool| {
+        emit(ContentSearchBatch {
+            search_id: search_id.to_string(),
+            matches,
+            is_final,
+            files_searched: result.files_searched,
+            files_skipped: result.files_skipped,
+            truncated: result.truncated,
+            repos_pending: result.repos_pending,
+            repos_searched: result.repos_searched,
+        });
+    };
+
     let batch_size = 50;
     let total = result.matches.len();
     let mut sent = 0;
 
     for chunk in result.matches.chunks(batch_size) {
         if cancel.load(Ordering::Relaxed) {
-            return;
+            break;
         }
         sent += chunk.len();
-        let _ = app.emit(
-            "content-search-batch",
-            &ContentSearchBatch {
-                matches: chunk.to_vec(),
-                is_final: sent >= total,
-                files_searched: result.files_searched,
-                files_skipped: result.files_skipped,
-                truncated: result.truncated,
-                repos_pending: result.repos_pending,
-                repos_searched: result.repos_searched,
-            },
-        );
+        batch(chunk.to_vec(), sent >= total);
     }
 
-    // No matches → still emit a final empty batch so the UI stops spinning.
-    if total == 0 {
-        let _ = app.emit(
-            "content-search-batch",
-            &ContentSearchBatch {
-                matches: Vec::new(),
-                is_final: true,
-                files_searched: result.files_searched,
-                files_skipped: result.files_skipped,
-                truncated: result.truncated,
-                repos_pending: result.repos_pending,
-                repos_searched: result.repos_searched,
-            },
-        );
+    // Nothing to send, or cancelled before the last chunk: close the search with
+    // an empty final batch. The counters are the real ones, so a panel that was
+    // superseded reports what it did search rather than claiming zero.
+    if sent < total || total == 0 {
+        batch(Vec::new(), true);
     }
+}
+
+/// Emit a `ContentSearchResult` to the frontend as `content-search-batch`
+/// events. Shared by single- and all-repo search.
+#[cfg(feature = "desktop")]
+fn emit_content_batches(
+    app: &tauri::AppHandle,
+    result: ContentSearchResult,
+    cancel: &Arc<AtomicBool>,
+    search_id: &str,
+) {
+    dispatch_content_batches(result, cancel, search_id, |batch| {
+        let _ = app.emit("content-search-batch", &batch);
+    });
 }
 
 /// Every registered repo, from `repositories.json` — NOT just the ones that
@@ -626,6 +655,7 @@ pub async fn search_content_all(
     query: String,
     case_sensitive: Option<bool>,
     limit: Option<usize>,
+    search_id: String,
 ) -> Result<(), String> {
     // Cancel any previous search (shares the slot with single-repo search).
     let cancel_token = Arc::new(AtomicBool::new(false));
@@ -645,10 +675,10 @@ pub async fn search_content_all(
     tokio::task::spawn_blocking(move || {
         let _throttle_guard = throttle_guard;
         let result = search_content_all_impl(&app_state, &query, case_sensitive, global_limit);
-        if cancel_token.load(Ordering::Relaxed) {
-            return;
-        }
-        emit_content_batches(&app, result, &cancel_token);
+        // No early return on cancellation: `emit_content_batches` skips the
+        // payload but still closes the search with a final batch under this
+        // `search_id`, which is the only thing that stops the caller's spinner.
+        emit_content_batches(&app, result, &cancel_token, &search_id);
     });
 
     Ok(())
@@ -667,6 +697,7 @@ pub async fn search_content(
     use_regex: Option<bool>,
     whole_word: Option<bool>,
     limit: Option<usize>,
+    search_id: String,
 ) -> Result<(), String> {
     // Cancel any previous search
     let cancel_token = Arc::new(AtomicBool::new(false));
@@ -703,13 +734,18 @@ pub async fn search_content(
             limit,
         ) {
             Ok(result) => {
-                if cancel_token.load(Ordering::Relaxed) {
-                    return;
-                }
-                emit_content_batches(&app, result, &cancel_token);
+                // Cancellation is handled inside: a superseded search still owes
+                // its panel a final batch carrying its own `search_id`.
+                emit_content_batches(&app, result, &cancel_token, &search_id);
             }
             Err(e) => {
-                let _ = app.emit("content-search-error", &e);
+                let _ = app.emit(
+                    "content-search-error",
+                    &ContentSearchError {
+                        search_id: search_id.clone(),
+                        message: e,
+                    },
+                );
             }
         }
     });
@@ -1695,6 +1731,130 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::TempDir;
+
+    /// `content-search-batch` is one global event with three panels listening,
+    /// and each drops anything whose `search_id` is not its own. The field name
+    /// is that contract: rename it here and every panel silently stops
+    /// accepting its own results, with nothing on either side to fail.
+    #[test]
+    fn a_batch_carries_its_search_id_under_that_exact_name() {
+        let batch = ContentSearchBatch {
+            search_id: "cs-7".to_string(),
+            matches: Vec::new(),
+            is_final: true,
+            files_searched: 0,
+            files_skipped: 0,
+            truncated: false,
+            repos_pending: 0,
+            repos_searched: 0,
+        };
+        let wire = serde_json::to_value(&batch).unwrap();
+        assert_eq!(wire["search_id"], "cs-7");
+    }
+
+    /// A failed search has to be as correlated as a successful one, or the
+    /// panel that did not ask is the one that shows the error.
+    #[test]
+    fn an_error_carries_the_same_search_id() {
+        let wire = serde_json::to_value(ContentSearchError {
+            search_id: "cs-7".to_string(),
+            message: "boom".to_string(),
+        })
+        .unwrap();
+        assert_eq!(wire["search_id"], "cs-7");
+        assert_eq!(wire["message"], "boom");
+    }
+
+    fn result_with_matches(count: usize) -> ContentSearchResult {
+        ContentSearchResult {
+            matches: (0..count)
+                .map(|i| ContentMatch {
+                    path: format!("src/f{i}.rs"),
+                    line_number: 1,
+                    line_text: "hit".to_string(),
+                    match_start: 0,
+                    match_end: 3,
+                    repo_path: None,
+                })
+                .collect(),
+            files_searched: 12,
+            files_skipped: 3,
+            truncated: false,
+            repos_pending: 0,
+            repos_searched: 1,
+        }
+    }
+
+    fn collect_batches(
+        result: ContentSearchResult,
+        cancel: &AtomicBool,
+    ) -> Vec<ContentSearchBatch> {
+        let mut batches = Vec::new();
+        dispatch_content_batches(result, cancel, "cs-7", |b| batches.push(b));
+        batches
+    }
+
+    /// Exactly one batch closes the search, and it is the last one.
+    #[test]
+    fn a_completed_search_ends_with_a_single_final_batch() {
+        let batches = collect_batches(result_with_matches(120), &AtomicBool::new(false));
+        assert_eq!(batches.len(), 3, "50 + 50 + 20");
+        assert_eq!(
+            batches.iter().filter(|b| b.is_final).count(),
+            1,
+            "a second final would let a panel accept results after it stopped listening"
+        );
+        assert!(batches.last().unwrap().is_final);
+        assert_eq!(
+            batches.iter().map(|b| b.matches.len()).sum::<usize>(),
+            120,
+            "no match may be dropped by the chunking"
+        );
+    }
+
+    /// An empty result still has to say so. Without this the panel spins on a
+    /// search that found nothing.
+    #[test]
+    fn a_search_with_no_matches_still_emits_a_final_batch() {
+        let batches = collect_batches(result_with_matches(0), &AtomicBool::new(false));
+        assert_eq!(batches.len(), 1);
+        assert!(batches[0].is_final);
+        assert!(batches[0].matches.is_empty());
+    }
+
+    /// The regression this guards: a search cancelled by a *different* panel
+    /// starting its own must still close under its own `search_id`. It is the
+    /// only event that panel accepts, so dropping it strands the spinner for
+    /// the life of the window.
+    #[test]
+    fn a_search_cancelled_before_it_emits_still_closes_itself() {
+        let batches = collect_batches(result_with_matches(120), &AtomicBool::new(true));
+        assert_eq!(batches.len(), 1, "the payload is skipped, the close is not");
+        assert_eq!(batches[0].search_id, "cs-7");
+        assert!(batches[0].is_final);
+        assert!(batches[0].matches.is_empty());
+        assert_eq!(
+            batches[0].files_searched, 12,
+            "the counters report the work actually done, not zero"
+        );
+    }
+
+    /// Cancellation part-way through: the chunks already sent stand, and the
+    /// search still gets its terminator.
+    #[test]
+    fn a_search_cancelled_mid_stream_closes_after_the_chunks_it_sent() {
+        let cancel = AtomicBool::new(false);
+        let mut batches = Vec::new();
+        dispatch_content_batches(result_with_matches(120), &cancel, "cs-7", |b| {
+            cancel.store(true, Ordering::Relaxed);
+            batches.push(b);
+        });
+        assert_eq!(batches.len(), 2, "one chunk, then the close");
+        assert_eq!(batches[0].matches.len(), 50);
+        assert!(!batches[0].is_final);
+        assert!(batches[1].is_final);
+        assert!(batches[1].matches.is_empty());
+    }
 
     fn setup_test_repo() -> TempDir {
         let dir = TempDir::new().unwrap();
