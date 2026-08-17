@@ -489,6 +489,55 @@ describe("processRawOutput", () => {
 		expect(() => pluginRegistry.processRawOutput("anything\n", "s1")).not.toThrow();
 	});
 
+	// The transport that feeds this function coalesces chunks under a throttle
+	// (PtyOutputCoalescer, src-tauri/src/state.rs). It must never DROP one: the
+	// LineBuffer carries the partial trailing line across chunks, so a missing
+	// chunk splices the tail of one chunk onto the head of a later one and
+	// reports a line that was never on the wire (audit finding F1).
+	it("reports the same lines no matter where the chunk boundaries fall", async () => {
+		const seen: string[] = [];
+		pluginRegistry.register(
+			makePlugin("p1", (host) => {
+				host.registerOutputWatcher({
+					pattern: /^.*$/,
+					onMatch: (m) => seen.push(m[0]),
+				});
+			}),
+		);
+		const stream = "model is at capacity\nretrying now\ndone\n";
+
+		// Split the same byte stream at every possible boundary; each split is a
+		// different session so the buffers stay independent.
+		for (let cut = 0; cut <= stream.length; cut++) {
+			seen.length = 0;
+			pluginRegistry.processRawOutput(stream.slice(0, cut), `cut-${cut}`);
+			pluginRegistry.processRawOutput(stream.slice(cut), `cut-${cut}`);
+			await flushMicrotasks();
+			expect(seen, `split at ${cut}`).toEqual(["model is at capacity", "retrying now", "done"]);
+		}
+	});
+
+	it("fabricates a line that was never on the wire when a chunk is dropped", async () => {
+		const seen: string[] = [];
+		pluginRegistry.register(
+			makePlugin("p1", (host) => {
+				host.registerOutputWatcher({
+					pattern: /^.*$/,
+					onMatch: (m) => seen.push(m[0]),
+				});
+			}),
+		);
+		// Chunk B is what a dropping throttle would discard. Its loss joins the
+		// tail of A to the head of C — this is why the throttle must coalesce.
+		pluginRegistry.processRawOutput("model is at ", "s-lossy");
+		/* dropped: "capacity\nretrying " */
+		pluginRegistry.processRawOutput("now\n", "s-lossy");
+		await flushMicrotasks();
+
+		expect(seen).toEqual(["model is at now"]);
+		expect(seen).not.toContain("model is at capacity");
+	});
+
 	it("maintains separate LineBuffers per sessionId", async () => {
 		const onMatch = vi.fn();
 		pluginRegistry.register(

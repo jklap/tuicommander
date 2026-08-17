@@ -13,8 +13,8 @@ use crate::output_parser::{OutputParser, ParsedEvent};
 use crate::state::{
     AppState, ChangedRow, EscapeAwareBuffer, KittyAction, KittyKeyboardState,
     MAX_CONCURRENT_SESSIONS, OUTPUT_RING_BUFFER_CAPACITY, OrchestratorStats, OutputRingBuffer,
-    PtyConfig, PtyOutput, PtySession, Utf8ReadBuffer, VT_LOG_BUFFER_CAPACITY, VtLogBuffer,
-    strip_kitty_sequences,
+    PtyConfig, PtyOutput, PtyOutputCoalescer, PtySession, Utf8ReadBuffer, VT_LOG_BUFFER_CAPACITY,
+    VtLogBuffer, strip_kitty_sequences,
 };
 use crate::worktree::{
     WorktreeConfig, WorktreeResult, create_worktree_with_stale_recovery, remove_worktree_internal,
@@ -324,6 +324,30 @@ const PTY_CHILD_NICE_DEFAULT: i32 = 10;
 /// 2 MiB ≈ several minutes of heavy agent output — enough to capture the
 /// corruption window when a duplication shows up in the wild.
 const PTY_RAW_RING_CAP: usize = 2 * 1024 * 1024;
+
+/// Throttle window for the `pty-output` event: at most one WebView event per
+/// window per session, however fast the PTY writes.
+#[cfg(feature = "desktop")]
+const PTY_OUTPUT_WINDOW: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Emit early once this much output is buffered, so an output flood cannot grow
+/// the coalescing buffer without bound. Reads are 64 KiB, so this is ~4 chunks.
+#[cfg(feature = "desktop")]
+const PTY_OUTPUT_COALESCE_CAP: usize = 256 * 1024;
+
+/// Emit one coalesced `pty-output` payload to the desktop WebView.
+#[cfg(feature = "desktop")]
+fn emit_pty_output(state: &AppState, session_id: &str, data: String) {
+    if let Some(app) = state.app_handle.read().as_ref() {
+        let _ = app.emit(
+            &format!("pty-output-{session_id}"),
+            PtyOutput {
+                session_id: session_id.to_string(),
+                data,
+            },
+        );
+    }
+}
 
 /// Resolve the nice value to apply to PTY children: `TUIC_PTY_NICE` env override
 /// if set and parseable, else [`PTY_CHILD_NICE_DEFAULT`].
@@ -6868,6 +6892,16 @@ pub(crate) fn spawn_reader_thread(
     state
         .sync_update_active
         .insert(session_id.clone(), sync_active.clone());
+    // Shared by the PTY reader (which buffers chunks) and the frame ticker (which
+    // drains a tail the reader cannot: read() blocks, so the last chunk of a burst
+    // would otherwise wait for output that may never come).
+    #[cfg(feature = "desktop")]
+    let pty_output_coalescer = Arc::new(parking_lot::Mutex::new(PtyOutputCoalescer::new(
+        PTY_OUTPUT_WINDOW,
+        PTY_OUTPUT_COALESCE_CAP,
+    )));
+    #[cfg(feature = "desktop")]
+    let ticker_coalescer = pty_output_coalescer.clone();
     let ticker_running = running.clone();
     let ticker_dirty = frame_dirty.clone();
     let ticker_sync_active = Some(sync_active);
@@ -7023,6 +7057,16 @@ pub(crate) fn spawn_reader_thread(
                 ticker_dirty.store(true, Ordering::Relaxed); // keep pending for a later tick
                 continue;
             }
+            // Drain a pty-output tail the reader left buffered: read() blocks, so
+            // without this the last chunk of a burst waits for output that may
+            // never arrive — and a rare-line watcher would match minutes late.
+            #[cfg(feature = "desktop")]
+            {
+                let tail = ticker_coalescer.lock().flush_due(now);
+                if let Some(payload) = tail {
+                    emit_pty_output(&ticker_state, &ticker_sid, payload);
+                }
+            }
             if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
                 let mut g = vt.lock();
                 if let Some(p) = ticker_state.pending_scroll.get(&ticker_sid) {
@@ -7040,6 +7084,13 @@ pub(crate) fn spawn_reader_thread(
         // Final flush after reader exits. Session teardown is the other "no more
         // PTY bytes arrive" case: drain any still-buffered synchronized update
         // BEFORE serializing, or its content is dropped with the session.
+        #[cfg(feature = "desktop")]
+        {
+            let tail = ticker_coalescer.lock().take();
+            if let Some(payload) = tail {
+                emit_pty_output(&ticker_state, &ticker_sid, payload);
+            }
+        }
         if let Some(vt) = ticker_state.vt_log_buffers.get(&ticker_sid) {
             let mut g = vt.lock();
             g.force_stop_sync_if_buffered();
@@ -7065,18 +7116,12 @@ pub(crate) fn spawn_reader_thread(
                 .get(&session_id)
                 .and_then(|s| s.lock().cwd.clone());
             let mut processor = ChunkProcessor::new(session_cwd, tuic_session);
-            // pty-output is emitted only for frontend activity detection (the canvas
-            // renders from grid frames and discards the text). Emitting it per-chunk
-            // flooded the WebView main thread under output storms (`yes`), starving
-            // keydown so Ctrl+C never reached write_pty. Throttle to ~10/s — enough for
-            // the activity dot / lastDataAt, no flood.
-            // DEFERRED (2026-06-16) — cleaner: compute activity fully in Rust and drop
-            // pty-output in desktop entirely (frontend-only-renders rule). Needs moving
-            // Terminal.tsx activity/lastDataAt onto an existing throttled signal.
-            // Only the desktop build emits (and throttles) pty-output; the headless
-            // remote build never touches this, so gate it to avoid an unused_mut warning.
-            #[cfg(feature = "desktop")]
-            let mut last_pty_output_emit: Option<std::time::Instant> = None;
+            // pty-output carries the text the plugin OutputWatcher matches on, plus
+            // the activity pulse Terminal.tsx stamps into lastDataAt. The canvas
+            // itself renders from grid frames and ignores this payload. Emitting it
+            // per-chunk flooded the WebView main thread under output storms (`yes`),
+            // starving keydown so Ctrl+C never reached write_pty — hence the ~10/s
+            // ceiling, applied by coalescing (never by dropping; see PtyOutputCoalescer).
             loop {
                 while paused.load(Ordering::Relaxed) {
                     std::thread::sleep(std::time::Duration::from_millis(10));
@@ -7133,31 +7178,30 @@ pub(crate) fn spawn_reader_thread(
                                 }
                             }
 
-                            // Emit pty-output for frontend activity detection, THROTTLED.
+                            // Emit pty-output for the frontend, THROTTLED but LOSSLESS.
                             // Root cause of the `yes`-flood Ctrl+C wedge (2026-06-16):
                             // this event fired per read() chunk (thousands/s under a flood).
                             // Each one is a Tauri event the WebView main thread must
                             // deserialize+dispatch; the storm of short tasks starved the
                             // event loop so keydown never ran → Ctrl+C never reached
                             // write_pty (verified: 0 write_pty calls during flood, normal
-                            // when throttled). The canvas renders from grid frames and
-                            // discards this text (handlePtyData ignores `data`), so dropping
-                            // intermediate chunks is safe — we only need a periodic "output
-                            // happened" pulse for the activity dot / lastDataAt.
+                            // when throttled).
+                            //
+                            // The original throttle DROPPED the chunks inside its window.
+                            // That was wrong: CanvasTerminal routes this payload into
+                            // pluginRegistry.processRawOutput, whose LineBuffer carries the
+                            // partial trailing line across chunks — so a dropped chunk
+                            // splices the tail of one chunk onto the head of a later one
+                            // and reports a line that never existed (audit F1). The
+                            // coalescer keeps the one-event-per-window ceiling and
+                            // concatenates instead of dropping.
                             #[cfg(feature = "desktop")]
                             {
-                                let should_emit = last_pty_output_emit
-                                    .map(|t| t.elapsed() >= std::time::Duration::from_millis(100))
-                                    .unwrap_or(true);
-                                if should_emit && let Some(app) = state.app_handle.read().as_ref() {
-                                    let _ = app.emit(
-                                        &format!("pty-output-{session_id}"),
-                                        PtyOutput {
-                                            session_id: session_id.clone(),
-                                            data: clamped_data,
-                                        },
-                                    );
-                                    last_pty_output_emit = Some(std::time::Instant::now());
+                                let emit_now = pty_output_coalescer
+                                    .lock()
+                                    .push(&clamped_data, std::time::Instant::now());
+                                if let Some(payload) = emit_now {
+                                    emit_pty_output(&state, &session_id, payload);
                                 }
                             }
                         }
@@ -7191,17 +7235,16 @@ pub(crate) fn spawn_reader_thread(
             }
 
             let remaining = flush_eof(&mut utf8_buf, &mut esc_buf, &session_id, &state);
+            // Through the coalescer, not straight to the WebView: a tail buffered
+            // by the last read is still pending here, and emitting the EOF
+            // remainder directly would deliver it ahead of earlier bytes.
             #[cfg(feature = "desktop")]
-            if !remaining.is_empty()
-                && let Some(app) = state.app_handle.read().as_ref()
             {
-                let _ = app.emit(
-                    &format!("pty-output-{session_id}"),
-                    PtyOutput {
-                        session_id: session_id.clone(),
-                        data: remaining,
-                    },
-                );
+                let mut payload = pty_output_coalescer.lock().take().unwrap_or_default();
+                payload.push_str(&remaining);
+                if !payload.is_empty() {
+                    emit_pty_output(&state, &session_id, payload);
+                }
             }
 
             state.emit_pty_event(crate::state::AppEvent::PtyExit {
