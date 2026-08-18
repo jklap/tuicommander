@@ -1,6 +1,6 @@
 import { createMemo, createSignal, For, Index, onCleanup, onMount, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
-import { subscribePty } from "../../transport";
+import { type PtySubscription, subscribePty } from "../../transport";
 import {
 	groupLineBlocks,
 	type LogLine,
@@ -9,6 +9,7 @@ import {
 	sameLine,
 	spanStyle,
 } from "../utils/logLine";
+import { createVisibilityGate } from "../utils/pageVisibility";
 import styles from "./OutputView.module.css";
 
 const MAX_LINES = 500;
@@ -35,7 +36,7 @@ export function OutputView(props: OutputViewProps) {
 	const [subscribeError, setSubscribeError] = createSignal<string | null>(null);
 	const [loadingOlder, setLoadingOlder] = createSignal(false);
 	let containerEl: HTMLDivElement | undefined;
-	let unsubscribe: (() => void) | null = null;
+	let unsubscribe: PtySubscription | null = null;
 	// When the user scrolls up manually, stop auto-scrolling until they
 	// return near the bottom.
 	let userScrolledUp = false;
@@ -165,6 +166,14 @@ export function OutputView(props: OutputViewProps) {
 		}
 	}
 
+	// A backgrounded PWA renders nothing, so every frame a busy agent pushes is
+	// pure battery and radio cost. Registered in the component body, not in the
+	// async mount, so the listener has an owner to be released by.
+	createVisibilityGate(
+		() => unsubscribe?.pause(),
+		() => unsubscribe?.resume(),
+	);
+
 	onMount(async () => {
 		containerEl?.addEventListener("scroll", handleScroll, { passive: true });
 		containerEl?.addEventListener("touchstart", handleTouchStart, { passive: true });
@@ -198,6 +207,11 @@ export function OutputView(props: OutputViewProps) {
 						onInputLine: props.onInputLine,
 					},
 				)) ?? null;
+			// The subscription is installed after an awaited fetch. A page hidden
+			// during that window produced no visibilitychange to catch, so without
+			// this the stream would run until the next one — which for a tab
+			// restored in the background may never come.
+			if (document.visibilityState === "hidden") unsubscribe?.pause();
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
 			appLogger.error("terminal", "Failed to subscribe to PTY output", { error: msg });

@@ -1,4 +1,5 @@
 import { onCleanup } from "solid-js";
+import { createVisibilityGate } from "./pageVisibility";
 
 /**
  * `setInterval` that only ticks while the page is visible.
@@ -23,21 +24,12 @@ export function createVisibilityInterval(tick: () => void, intervalMs: number): 
 		}
 	};
 
-	const sync = () => {
-		if (document.visibilityState === "hidden") {
-			stop();
-		} else if (timer === null) {
-			// Catch up on whatever happened while hidden, then resume ticking.
-			tick();
-			start();
-		}
-	};
-
 	if (document.visibilityState !== "hidden") start();
-	document.addEventListener("visibilitychange", sync);
-
-	onCleanup(() => {
-		stop();
-		document.removeEventListener("visibilitychange", sync);
+	createVisibilityGate(stop, () => {
+		// Catch up on whatever happened while hidden, then resume ticking.
+		tick();
+		start();
 	});
+
+	onCleanup(stop);
 }

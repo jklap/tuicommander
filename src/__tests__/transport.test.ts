@@ -2166,5 +2166,354 @@ describe("transport", () => {
 			globalThis.WebSocket = origWs;
 			vi.useRealTimers();
 		});
+
+		/**
+		 * A backgrounded PWA must stop draining the socket, and the naive way to
+		 * do that ships two silent bugs: `ws.close()` looks exactly like a session
+		 * exit to the close handler, and re-subscribing from scratch replays from
+		 * the MOUNT offset because the live cursor is closure-private. So pause and
+		 * resume live here, next to the cursor they have to preserve.
+		 */
+		describe("pause/resume", () => {
+			interface FakeWs {
+				url: string;
+				onopen: (() => void) | null;
+				onmessage: ((e: { data: string }) => void) | null;
+				onclose: ((e: { code: number; reason?: string }) => void) | null;
+				onerror: unknown;
+				close: ReturnType<typeof vi.fn>;
+			}
+
+			let instances: FakeWs[] = [];
+			let origWs: typeof WebSocket;
+
+			beforeEach(() => {
+				instances = [];
+				class MockWebSocket {
+					url: string;
+					onopen: (() => void) | null = null;
+					onmessage: ((e: { data: string }) => void) | null = null;
+					onclose: ((e: { code: number; reason?: string }) => void) | null = null;
+					onerror: unknown = null;
+					close = vi.fn();
+					constructor(url: string) {
+						this.url = url;
+						instances.push(this as unknown as FakeWs);
+					}
+				}
+				origWs = globalThis.WebSocket;
+				globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+			});
+
+			afterEach(() => {
+				globalThis.WebSocket = origWs;
+			});
+
+			/** Mount in log mode at the given offset and settle the handshake. */
+			async function mount(onExit = vi.fn(), opts: Record<string, unknown> = {}) {
+				const { subscribePty } = await import("../transport");
+				const onLogLines = vi.fn();
+				const pending = subscribePty("sess-1", vi.fn(), onExit, {
+					format: "log",
+					logOffset: 50,
+					onLogLines,
+					...opts,
+				});
+				instances[0].onopen?.();
+				return { sub: await pending, onExit, onLogLines };
+			}
+
+			it("closes the socket on pause without reporting a session exit", async () => {
+				const { sub, onExit } = await mount();
+
+				sub.pause();
+				// A real socket answers close() with onclose, and 1000 is the code the
+				// live handler reads as "the session is over".
+				instances[0].onclose?.({ code: 1000 });
+
+				expect(instances[0].close).toHaveBeenCalled();
+				expect(onExit).not.toHaveBeenCalled();
+			});
+
+			it("delivers nothing that arrives after a pause", async () => {
+				const { sub, onLogLines } = await mount();
+
+				sub.pause();
+				instances[0].onmessage?.({
+					data: JSON.stringify({ type: "log", lines: [{ spans: [{ text: "late" }] }], total_lines: 99 }),
+				});
+
+				expect(onLogLines).not.toHaveBeenCalled();
+			});
+
+			it("resumes from the live cursor, not the mount offset", async () => {
+				const { sub } = await mount();
+
+				// Server advances the consumed line cursor to 80.
+				instances[0].onmessage?.({
+					data: JSON.stringify({ type: "log", lines: [{ spans: [{ text: "x" }] }], total_lines: 80 }),
+				});
+				sub.pause();
+				instances[0].onclose?.({ code: 1000 });
+				sub.resume();
+
+				expect(instances.length).toBe(2);
+				expect(instances[1].url).toContain("offset=80");
+				expect(instances[1].url).not.toContain("offset=50");
+				instances[1].onopen?.();
+			});
+
+			it("delivers again after a resume", async () => {
+				const { sub, onLogLines } = await mount();
+
+				sub.pause();
+				sub.resume();
+				instances[1].onopen?.();
+				instances[1].onmessage?.({
+					data: JSON.stringify({ type: "log", lines: [{ spans: [{ text: "back" }] }], total_lines: 81 }),
+				});
+
+				expect(onLogLines).toHaveBeenCalledTimes(1);
+			});
+
+			it("does not open a second socket when resume follows no pause", async () => {
+				const { sub } = await mount();
+
+				sub.resume();
+
+				expect(instances.length).toBe(1);
+			});
+
+			it("does not reconnect while paused", async () => {
+				vi.useFakeTimers();
+				const { sub } = await mount();
+
+				sub.pause();
+				// An abnormal code is the reconnect trigger; a paused subscription
+				// must not race the backoff timer against its own resume.
+				instances[0].onclose?.({ code: 1006 });
+				await vi.advanceTimersByTimeAsync(60_000);
+
+				expect(instances.length).toBe(1);
+				vi.useRealTimers();
+			});
+
+			it("cancels a pending reconnect when it is paused mid-backoff", async () => {
+				vi.useFakeTimers();
+				const { sub } = await mount();
+
+				instances[0].onclose?.({ code: 1006 });
+				sub.pause();
+				await vi.advanceTimersByTimeAsync(60_000);
+
+				expect(instances.length).toBe(1);
+				vi.useRealTimers();
+			});
+
+			/**
+			 * Pause suppresses DATA, never lifecycle. Swallowing the exit frame
+			 * would leave the view showing a live session until the reconnect
+			 * backoff finally gave up — ten attempts, roughly three minutes — and
+			 * on desktop, where there is no socket to fail, forever.
+			 */
+			it("reports a session exit that arrives while paused", async () => {
+				const { sub, onExit } = await mount();
+
+				sub.pause();
+				instances[0].onmessage?.({ data: JSON.stringify({ type: "exit" }) });
+
+				expect(onExit).toHaveBeenCalledTimes(1);
+			});
+
+			it("does not reopen the socket after an exit seen while paused", async () => {
+				const { sub } = await mount();
+
+				sub.pause();
+				instances[0].onmessage?.({ data: JSON.stringify({ type: "exit" }) });
+				sub.resume();
+
+				expect(instances.length).toBe(1);
+			});
+
+			it("still reports the exit on desktop while paused", async () => {
+				const { listen } = await import("@tauri-apps/api/event");
+				const handlers = new Map<string, (event: { payload: unknown }) => void>();
+				vi.mocked(listen).mockImplementation((async (name: string, handler: never) => {
+					handlers.set(name, handler);
+					return vi.fn();
+				}) as never);
+				(globalThis as Record<string, unknown>).__TAURI_INTERNALS__ = {};
+
+				const { subscribePty } = await import("../transport");
+				const onExit = vi.fn();
+				const onActivity = vi.fn();
+				const sub = await subscribePty("sess-1", vi.fn(), onExit, { onActivity });
+
+				sub.pause();
+				handlers.get("pty-activity-sess-1")?.({ payload: {} });
+				handlers.get("pty-exit-sess-1")?.({ payload: {} });
+
+				expect(onActivity).not.toHaveBeenCalled();
+				expect(onExit).toHaveBeenCalledTimes(1);
+
+				sub();
+				delete (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
+				vi.mocked(listen).mockReset();
+				vi.mocked(listen).mockResolvedValue(vi.fn());
+			});
+
+			/**
+			 * `close()` is asynchronous: the socket a pause dropped can still fire
+			 * its handlers after the resume that replaced it. A `paused` flag alone
+			 * cannot see that — by then the flag is false again — so the guard has
+			 * to be socket identity, not subscription state.
+			 */
+			it("ignores data from the socket it already paused, even after resume", async () => {
+				const { sub, onLogLines } = await mount();
+
+				instances[0].onmessage?.({
+					data: JSON.stringify({ type: "log", lines: [{ spans: [{ text: "a" }] }], total_lines: 80 }),
+				});
+				sub.pause();
+				sub.resume();
+				instances[1].onopen?.();
+				onLogLines.mockClear();
+
+				// The dropped socket flushes what it had buffered, late.
+				instances[0].onmessage?.({
+					data: JSON.stringify({ type: "log", lines: [{ spans: [{ text: "stale" }] }], total_lines: 200 }),
+				});
+
+				expect(onLogLines).not.toHaveBeenCalled();
+			});
+
+			it("does not let a stale socket's cursor rewrite the live one", async () => {
+				const { sub } = await mount();
+
+				instances[0].onmessage?.({
+					data: JSON.stringify({ type: "log", lines: [{ spans: [{ text: "a" }] }], total_lines: 80 }),
+				});
+				sub.pause();
+				sub.resume();
+				instances[1].onopen?.();
+				// A late frame from the dropped socket claiming a cursor we never
+				// consumed. If it were tracked, the NEXT reconnect would resume past
+				// lines the user never saw.
+				instances[0].onmessage?.({
+					data: JSON.stringify({ type: "log", lines: [{ spans: [{ text: "stale" }] }], total_lines: 999 }),
+				});
+
+				sub.pause();
+				sub.resume();
+				instances[2].onopen?.();
+
+				expect(instances[2].url).toContain("offset=80");
+				expect(instances[2].url).not.toContain("offset=999");
+			});
+
+			it("does not read a stale socket's close as a session exit", async () => {
+				const { sub, onExit } = await mount();
+
+				sub.pause();
+				sub.resume();
+				instances[1].onopen?.();
+				instances[0].onclose?.({ code: 1000 });
+
+				expect(onExit).not.toHaveBeenCalled();
+			});
+
+			it("does not reconnect on a stale socket's abnormal close", async () => {
+				vi.useFakeTimers();
+				const { sub } = await mount();
+
+				sub.pause();
+				sub.resume();
+				instances[1].onopen?.();
+				instances[0].onclose?.({ code: 1006 });
+				await vi.advanceTimersByTimeAsync(60_000);
+
+				expect(instances.length).toBe(2);
+				vi.useRealTimers();
+			});
+
+			/**
+			 * The window a pause can land in is not just "connected": a backoff
+			 * timer may already have called connect(), which assigns the socket
+			 * synchronously but resolves much later. That in-flight attempt has to
+			 * be superseded, or its late failure schedules a reconnect of its own
+			 * and the session ends up on two live sockets at once.
+			 */
+			it("does not open a parallel socket when a pause lands mid-connect", async () => {
+				vi.useFakeTimers();
+				const { sub } = await mount();
+
+				instances[0].onclose?.({ code: 1006 });
+				await vi.advanceTimersByTimeAsync(1000);
+				expect(instances.length).toBe(2); // the backoff attempt, still opening
+
+				sub.pause();
+				sub.resume();
+				instances[2].onopen?.();
+				// The superseded attempt now reports its failure, late.
+				instances[1].onclose?.({ code: 1006 });
+				await vi.advanceTimersByTimeAsync(60_000);
+
+				expect(instances.length).toBe(3);
+				vi.useRealTimers();
+			});
+
+			it("closes an attempt that opens after it was superseded", async () => {
+				vi.useFakeTimers();
+				const { sub } = await mount();
+
+				instances[0].onclose?.({ code: 1006 });
+				await vi.advanceTimersByTimeAsync(1000);
+				sub.pause();
+				sub.resume();
+				instances[2].onopen?.();
+				instances[1].close.mockClear();
+				// The superseded attempt completes its handshake anyway. Left open it
+				// would stream a second copy of the session at the server's expense.
+				instances[1].onopen?.();
+
+				expect(instances[1].close).toHaveBeenCalled();
+				vi.useRealTimers();
+			});
+
+			it("gives up for good once the retry budget is spent", async () => {
+				vi.useFakeTimers();
+				const { sub, onExit } = await mount();
+
+				// Ten failures is MAX_RETRIES; the eleventh close is the one that
+				// finds the budget spent.
+				for (let i = 0; i < 11; i++) {
+					instances[instances.length - 1].onclose?.({ code: 1006 });
+					await vi.advanceTimersByTimeAsync(60_000);
+				}
+				expect(onExit).toHaveBeenCalledTimes(1);
+
+				const opened = instances.length;
+				sub.pause();
+				sub.resume();
+				await vi.advanceTimersByTimeAsync(60_000);
+
+				// A dead subscription stays dead. Refilling the budget on every
+				// hide/show would let a session that is gone retry forever, and
+				// report its exit again each time the budget ran out.
+				expect(instances.length).toBe(opened);
+				expect(onExit).toHaveBeenCalledTimes(1);
+				vi.useRealTimers();
+			});
+
+			it("stays disposed when pause or resume arrive after unsubscribe", async () => {
+				const { sub } = await mount();
+
+				sub();
+				sub.pause();
+				sub.resume();
+
+				expect(instances.length).toBe(1);
+			});
+		});
 	});
 });

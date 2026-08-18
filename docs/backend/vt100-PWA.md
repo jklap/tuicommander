@@ -291,6 +291,8 @@ interface SubscribePtyOptions {
 
 On reconnect the WebSocket reopens with `?offset=<last total_lines>` (log mode) so the server's catch-up only sends lines committed since the last one the client received. The raw (`format` omitted) path uses `total_written` byte offsets for the same purpose.
 
+**Returns** a `PtySubscription`: callable to dispose, plus `pause()` / `resume()`. A backgrounded PWA renders nothing, so `OutputView` pauses on `visibilitychange` and the socket is dropped. The cursor above is what makes that safe — `resume()` reopens from it, so a hide/show cycle neither duplicates nor drops scrollback, and `onExit` is not raised for a close the client asked for.
+
 ### `rpc("write_pty", { sessionId, data })`
 
 Maps to `POST /sessions/{sessionId}/write` with body `{ data: "..." }`.

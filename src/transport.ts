@@ -2239,6 +2239,24 @@ async function rpcImpl<T>(command: string, args: Record<string, unknown>, connec
 /** Unsubscribe function returned by subscribe() */
 export type Unsubscribe = () => void;
 
+/**
+ * A PTY subscription: still callable to dispose it, plus the two controls a
+ * backgrounded client needs.
+ *
+ * It is a callable object rather than a record so every existing caller — which
+ * only ever invokes the handle — keeps working unchanged.
+ */
+export interface PtySubscription extends Unsubscribe {
+	/**
+	 * Stop draining the stream and drop the socket. NOT a session exit: `onExit`
+	 * stays silent, and the consumed-line cursor survives so `resume` picks up
+	 * exactly where delivery stopped.
+	 */
+	pause(): void;
+	/** Re-open from the live cursor. A no-op unless currently paused. */
+	resume(): void;
+}
+
 /** Parsed event from WebSocket JSON framing */
 export interface WsParsedEvent {
 	type: string;
@@ -2309,11 +2327,15 @@ export async function subscribePty(
 	onData: (data: string) => void,
 	onExit: () => void,
 	onParsedOrOptions?: ((event: WsParsedEvent) => void) | SubscribePtyOptions,
-): Promise<Unsubscribe> {
+): Promise<PtySubscription> {
 	// Normalize overloaded 4th param: function (legacy) or options object
 	const opts: SubscribePtyOptions =
 		typeof onParsedOrOptions === "function" ? { onParsed: onParsedOrOptions } : (onParsedOrOptions ?? {});
 	const onParsed = opts.onParsed;
+	// Shared by both transports so a caller can pause without knowing which one
+	// it is on. Desktop has no socket to drop, so pausing there means suppressing
+	// delivery — the same observable contract, at the only cost desktop has.
+	let paused = false;
 	if (isTauri()) {
 		const { listen } = await import("@tauri-apps/api/event");
 		// No pty-output listener: nothing emits that event. It was removed from
@@ -2321,8 +2343,12 @@ export async function subscribePty(
 		// listener outlived it by a commit — silently freezing lastDataAt and the
 		// unread flag on desktop (story 625-56b0).
 		const unlistenActivity = await listen(`pty-activity-${sessionId}`, () => {
+			if (paused) return;
 			opts.onActivity?.();
 		});
+		// No `paused` guard: an exit is lifecycle, not data. Desktop has no
+		// reconnect to eventually notice a dead session, so suppressing it here
+		// would lose it for good.
 		const unlistenExit = await listen(`pty-exit-${sessionId}`, () => {
 			onExit();
 		});
@@ -2331,12 +2357,20 @@ export async function subscribePty(
 		// listeners[eventId].handlerId on undefined). A sync try/catch can't catch an
 		// async rejection — swallow the promise rejection explicitly instead.
 		let disposed = false;
-		return () => {
+		const dispose = () => {
 			if (disposed) return;
 			disposed = true;
 			Promise.resolve(unlistenActivity() as unknown).catch(() => {});
 			Promise.resolve(unlistenExit() as unknown).catch(() => {});
 		};
+		return Object.assign(dispose, {
+			pause: () => {
+				paused = true;
+			},
+			resume: () => {
+				paused = false;
+			},
+		});
 	}
 
 	// Browser mode: WebSocket with JSON framing and auto-reconnect
@@ -2349,12 +2383,33 @@ export async function subscribePty(
 	let activeWs: WebSocket | null = null;
 	let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-	const handleMessage = (event: MessageEvent) => {
+	/**
+	 * `socket` is the connection the frame arrived on. `close()` is asynchronous,
+	 * so a socket dropped by `pause()` can still deliver after the `resume()` that
+	 * replaced it — and by then a `paused` flag reads false again. Identity
+	 * against `activeWs` is the guard that survives that; the flag cannot be.
+	 */
+	const handleMessage = (event: MessageEvent, socket: WebSocket) => {
+		if (disposed) return;
 		const raw = event.data as string;
 		// JSON frame detection: starts with { and contains "type"
 		if (raw.startsWith("{")) {
 			try {
 				const frame = JSON.parse(raw) as WsParsedEvent;
+				// Lifecycle is never suppressed. A session that dies while the page
+				// is hidden is still dead, and swallowing this frame would leave the
+				// view showing it as live until the reconnect backoff gave up ten
+				// attempts later.
+				if (frame.type === "exit" || frame.type === "closed") {
+					disposed = true; // Session truly ended — don't reconnect
+					onExit();
+					return;
+				}
+				// Everything below is data, and only the live socket's data counts.
+				// A paused subscription has no live socket, so nothing reaches the
+				// consumer — and because the cursor only advances on delivery,
+				// nothing is skipped either.
+				if (socket !== activeWs) return;
 				// Track total_written for reconnect delta
 				if (typeof (frame as Record<string, unknown>).total_written === "number") {
 					lastTotalWritten = (frame as Record<string, unknown>).total_written as number;
@@ -2408,17 +2463,13 @@ export async function subscribePty(
 					case "parsed":
 						onParsed?.(frame);
 						break;
-					case "exit":
-					case "closed":
-						disposed = true; // Session truly ended — don't reconnect
-						onExit();
-						break;
 				}
 				return;
 			} catch {
 				// Not valid JSON — treat as raw output (backward compat)
 			}
 		}
+		if (socket !== activeWs) return;
 		onData(raw);
 	};
 
@@ -2443,10 +2494,25 @@ export async function subscribePty(
 			activeWs = ws;
 
 			ws.onopen = () => {
+				// A pause, or a newer attempt, replaced this one while it was still
+				// opening. Leaving it open would stream a second copy of the session
+				// into the same consumer, so it closes itself and reports failure to
+				// whoever is awaiting it.
+				if (ws !== activeWs) {
+					ws.close();
+					reject(new Error(`WebSocket attempt superseded: ${sessionId}`));
+					return;
+				}
 				transportLogger().debug("network", `WebSocket connected: ${sessionId}`);
 				// Re-wire onclose for live session
 				ws.onclose = (evt: CloseEvent) => {
 					if (disposed) return;
+					// This socket is no longer the live one: a pause dropped it, or a
+					// resume already replaced it. Reading that as a session exit is
+					// the trap this feature exists to avoid — the view would print
+					// "session exited" and clear the screen on every tab switch — and
+					// reconnecting on it would race the live socket.
+					if (ws !== activeWs) return;
 					if (evt.code === 1000 || evt.code === 1001) {
 						// Normal close or going away — don't reconnect
 						onExit();
@@ -2466,7 +2532,7 @@ export async function subscribePty(
 				reject(new Error(`WebSocket closed before opening (code ${evt.code}): ${evt.reason || "no reason"}`));
 			};
 
-			ws.onmessage = handleMessage;
+			ws.onmessage = (event: MessageEvent) => handleMessage(event, ws);
 		});
 
 	// Reconnect with exponential backoff
@@ -2476,9 +2542,13 @@ export async function subscribePty(
 	let retryCount = 0;
 
 	const scheduleReconnect = () => {
-		if (disposed) return;
+		if (disposed || paused) return;
 		if (retryCount >= MAX_RETRIES) {
 			transportLogger().warn("network", `WebSocket reconnect failed after ${MAX_RETRIES} attempts: ${sessionId}`);
+			// Terminal, like the exit frame. Without this the subscription stays
+			// live-looking, and a later resume would restart the whole doomed
+			// budget and report the exit again when it ran out.
+			disposed = true;
 			onExit();
 			return;
 		}
@@ -2487,13 +2557,19 @@ export async function subscribePty(
 		transportLogger().debug("network", `WebSocket reconnecting in ${delay}ms (attempt ${retryCount}/${MAX_RETRIES})`);
 		opts.onReconnecting?.(retryCount, MAX_RETRIES);
 		reconnectTimer = setTimeout(async () => {
-			if (disposed) return;
+			if (disposed || paused) return;
+			const pending = connect(lastTotalWritten);
+			// connect() installs its socket synchronously, so this names THIS
+			// attempt. A pause or a newer attempt during the handshake replaces it,
+			// and a superseded attempt must not schedule anything of its own.
+			const mine = activeWs;
 			try {
-				await connect(lastTotalWritten);
+				await pending;
 				retryCount = 0; // Reset on success
 				opts.onReconnected?.();
 			} catch {
 				// connect() failed (e.g. session gone → 404 triggers immediate close)
+				if (mine !== activeWs) return;
 				scheduleReconnect();
 			}
 		}, delay);
@@ -2502,11 +2578,44 @@ export async function subscribePty(
 	// Initial connection
 	await connect();
 
-	return () => {
+	const dispose = () => {
 		disposed = true;
 		if (reconnectTimer) clearTimeout(reconnectTimer);
 		activeWs?.close();
 	};
+
+	return Object.assign(dispose, {
+		pause: () => {
+			if (disposed || paused) return;
+			paused = true;
+			// A backoff timer already in flight would otherwise reopen the socket
+			// behind the pause: it was scheduled before the flag was set.
+			if (reconnectTimer) {
+				clearTimeout(reconnectTimer);
+				reconnectTimer = null;
+			}
+			activeWs?.close();
+			activeWs = null;
+		},
+		resume: () => {
+			if (disposed || !paused) return;
+			paused = false;
+			// Reconnect at once rather than through the backoff, so coming back to
+			// the tab is not made to wait out a delay earned before it was hidden.
+			// The retry budget is NOT refilled here: only a successful connect
+			// clears it, or a dead session would get a fresh ten attempts on every
+			// hide/show and never reach the exit the user needs to see.
+			const pending = connect(lastTotalWritten);
+			const mine = activeWs;
+			pending
+				.then(() => {
+					retryCount = 0;
+				})
+				.catch(() => {
+					if (mine === activeWs) scheduleReconnect();
+				});
+		},
+	});
 }
 
 /**
