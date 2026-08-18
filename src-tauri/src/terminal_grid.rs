@@ -1548,57 +1548,42 @@ impl TerminalGrid {
     ///
     /// Absolute rows: 0 = oldest history line, historySize = first screen line.
     /// Columns are 0-based cell indices.
-    fn normalize_copied_selection(text: &str) -> String {
-        const CLAUDE_GUTTER: &str = "\u{a0}\u{a0}▎";
-
-        fn gutter_content<'a>(line: &'a str, gutter: &str) -> Option<&'a str> {
-            let rest = line.strip_prefix(gutter)?;
-            if rest.is_empty() {
-                return Some("");
-            }
-            rest.strip_prefix(' ')
-                .or_else(|| rest.strip_prefix('\u{a0}'))
-        }
-
+    fn normalize_copied_selection(text: &str, num_cols: usize) -> String {
         let lines: Vec<&str> = text.split('\n').collect();
-        let mut normalized = String::with_capacity(text.len());
+        let mut out: Vec<String> = Vec::with_capacity(lines.len());
         let mut index = 0;
 
         while index < lines.len() {
-            if gutter_content(lines[index], CLAUDE_GUTTER).is_none() {
-                if index > 0 {
-                    normalized.push('\n');
-                }
-                normalized.push_str(lines[index]);
+            if gutter_content(lines[index]).is_none() {
+                out.push(lines[index].to_string());
                 index += 1;
                 continue;
             }
 
             let run_start = index;
-            while index < lines.len() && gutter_content(lines[index], CLAUDE_GUTTER).is_some() {
+            while index < lines.len() && gutter_content(lines[index]).is_some() {
                 index += 1;
             }
-            let should_strip = lines[run_start..index]
+            let contents: Vec<&str> = lines[run_start..index]
                 .iter()
-                .filter_map(|line| gutter_content(line, CLAUDE_GUTTER))
+                .filter_map(|line| gutter_content(line))
+                .collect();
+            // A single quoted line is more likely a coincidence (a table rule, a
+            // box-drawn frame) than a Claude blockquote, so leave it verbatim.
+            let should_strip = contents
+                .iter()
                 .filter(|content| !content.is_empty())
                 .count()
                 >= 2;
 
-            for (offset, line) in lines[run_start..index].iter().enumerate() {
-                let line_index = run_start + offset;
-                if line_index > 0 {
-                    normalized.push('\n');
-                }
-                if should_strip {
-                    normalized.push_str(gutter_content(line, CLAUDE_GUTTER).unwrap_or(line));
-                } else {
-                    normalized.push_str(line);
-                }
+            if should_strip {
+                out.extend(reflow_quoted_run(&contents, num_cols));
+            } else {
+                out.extend(lines[run_start..index].iter().map(|line| line.to_string()));
             }
         }
 
-        normalized
+        out.join("\n")
     }
 
     pub fn get_selection_text(
@@ -1659,7 +1644,7 @@ impl TerminalGrid {
             }
         }
 
-        Self::normalize_copied_selection(result.trim_end_matches('\n'))
+        Self::normalize_copied_selection(result.trim_end_matches('\n'), num_cols)
     }
 
     /// Serialize dirty rows as a compact binary frame.
@@ -1927,6 +1912,128 @@ impl TerminalGrid {
     pub(crate) fn term(&self) -> &Term<TermEventCollector> {
         &self.term
     }
+}
+
+/// Content of a Claude blockquote row, with the `▎` gutter removed.
+///
+/// Claude Code draws a markdown blockquote as a two-cell indent, U+258E, and a
+/// separator. The indent cells are plain spaces in current releases and were
+/// non-breaking spaces in older ones, so both are accepted — matching only NBSP
+/// silently disabled the whole strip and pasted raw `▎` bars into Slack.
+/// Separators are consumed the same way; body NBSPs past the first survive,
+/// because agents use them to align columns inside the quote.
+fn gutter_content(line: &str) -> Option<&str> {
+    const GUTTER_BAR: char = '▎';
+
+    let mut chars = line.chars();
+    for _ in 0..2 {
+        match chars.next() {
+            Some(' ') | Some('\u{a0}') => {}
+            _ => return None,
+        }
+    }
+    if chars.next() != Some(GUTTER_BAR) {
+        return None;
+    }
+    let rest = chars.as_str();
+    if rest.is_empty() {
+        return Some("");
+    }
+    rest.strip_prefix(' ')
+        .or_else(|| rest.strip_prefix('\u{a0}'))
+}
+
+/// Rejoin rows that Claude Code broke only to fit the terminal width.
+///
+/// Claude wraps its own output and emits real newlines, so `WRAPLINE` is unset
+/// and the row-level unwrap in `get_selection_text` cannot help: pasting a
+/// quoted draft into a chat client keeps every mid-sentence break.
+///
+/// The join rule is the inverse of greedy word wrap. With width `W`, a wrapper
+/// breaks after a line exactly when the next word no longer fits, so a break is
+/// mechanical when `line + " " + next_word` would exceed `W`, and deliberate
+/// when it would have fit. `W` is the widest row in the run, the only exact
+/// width evidence the copied text carries — agents wrap short of the terminal
+/// edge by a margin of their own choosing.
+///
+/// That estimate is only meaningful once the run proves it was wrapped at all.
+/// A short quote of three deliberate ten-column lines yields `W = 10`, under
+/// which every following word overflows and the whole quote collapses into one
+/// line. So a run whose widest row stays far from the terminal edge is left
+/// untouched: `num_cols` is the one thing here that cannot be inferred from the
+/// text, and without the gate the rule fails open on exactly the quotes a user
+/// wrote by hand.
+///
+/// Blank rows, list markers and deeper indents always start a new line: they
+/// mark structure the author chose, which the width rule alone cannot see.
+fn reflow_quoted_run(contents: &[&str], num_cols: usize) -> Vec<String> {
+    // Gutter overhead: two indent cells, the bar, and the separator space.
+    const GUTTER_COLS: usize = 4;
+    // Room for an agent's own right margin plus the ragged edge a greedy
+    // wrapper leaves when the overflowing word is long.
+    const WRAP_EVIDENCE_SLACK: usize = 24;
+    // Below this the slack swallows the whole terminal and the gate would let
+    // every run through. Prose quotes do not happen at such widths anyway.
+    const MIN_REFLOW_COLS: usize = 48;
+
+    let width = contents
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let wrap_threshold = num_cols.saturating_sub(GUTTER_COLS + WRAP_EVIDENCE_SLACK);
+    if num_cols < MIN_REFLOW_COLS || width < wrap_threshold {
+        return contents.iter().map(|line| (*line).to_string()).collect();
+    }
+    let mut out: Vec<String> = Vec::with_capacity(contents.len());
+    // The width rule asks what the *previous screen row* looked like, so the
+    // measurements come from the source row, never from the paragraph built so
+    // far. A joined paragraph always exceeds the wrap width, so measuring the
+    // accumulator would make every later row overflow and glue the author's own
+    // short lines onto the paragraph.
+    let mut previous_row: Option<(usize, usize)> = None;
+
+    for line in contents {
+        let trimmed = line.trim_start();
+        let length = line.chars().count();
+        let indent = length - trimmed.chars().count();
+
+        let joinable = match previous_row {
+            Some((previous_length, previous_indent)) => {
+                !trimmed.is_empty()
+                    && previous_length > previous_indent
+                    && indent <= previous_indent
+                    && !starts_list_item(trimmed)
+                    && previous_length + 1 + trimmed.split(' ').next().unwrap_or("").chars().count()
+                        > width
+            }
+            None => false,
+        };
+
+        if joinable {
+            let previous = out.last_mut().expect("joinable implies a previous line");
+            previous.push(' ');
+            previous.push_str(trimmed);
+        } else {
+            out.push((*line).to_string());
+        }
+        previous_row = Some((length, indent));
+    }
+
+    out
+}
+
+/// Whether a line opens a bullet or an ordered-list item.
+fn starts_list_item(trimmed: &str) -> bool {
+    if let Some(rest) = trimmed.strip_prefix(['-', '*', '+', '•', '·']) {
+        return rest.starts_with(' ');
+    }
+    let digits: String = trimmed.chars().take_while(char::is_ascii_digit).collect();
+    if digits.is_empty() {
+        return false;
+    }
+    let rest = &trimmed[digits.len()..];
+    matches!(rest.strip_prefix(['.', ')']), Some(after) if after.starts_with(' '))
 }
 
 #[cfg(test)]
@@ -3361,8 +3468,21 @@ mod tests {
         );
 
         assert_eq!(
-            TerminalGrid::normalize_copied_selection(input),
+            TerminalGrid::normalize_copied_selection(input, 80),
             "Hola :wave:\n\nFirst paragraph\n  • nested bullet\n1. numbered item\nThanks :pray:"
+        );
+    }
+
+    #[test]
+    fn copied_selection_strips_space_indented_gutters() {
+        // Claude Code v2.1.x indents the blockquote bar with ASCII spaces, not
+        // the non-breaking spaces older releases used. Matching NBSP alone let
+        // every bar through and pasted them into Slack verbatim.
+        let input = concat!("  ▎ first quoted line\n", "  ▎ second quoted line");
+
+        assert_eq!(
+            TerminalGrid::normalize_copied_selection(input, 80),
+            "first quoted line\nsecond quoted line"
         );
     }
 
@@ -3374,7 +3494,7 @@ mod tests {
         );
 
         assert_eq!(
-            TerminalGrid::normalize_copied_selection(input),
+            TerminalGrid::normalize_copied_selection(input, 80),
             "QA\u{a0}\u{a0}Engineering\nUX team"
         );
     }
@@ -3385,11 +3505,11 @@ mod tests {
             "\u{a0}\u{a0}▎ one candidate\n",
             "plain separator\n",
             "\u{a0}\u{a0}▎ another candidate\n",
-            "  ▎ ASCII-indented code\n",
+            "plain separator\n",
             "table | ▎ | value"
         );
 
-        assert_eq!(TerminalGrid::normalize_copied_selection(input), input);
+        assert_eq!(TerminalGrid::normalize_copied_selection(input, 80), input);
     }
 
     #[test]
@@ -3401,6 +3521,80 @@ mod tests {
 
         let text = grid.get_selection_text(0, 0, 3, 11);
         assert_eq!(text, "first long\nsecond long");
+    }
+
+    /// The Slack-paste report: a quoted draft Claude wrapped at its own margin,
+    /// then copied verbatim into a chat client. Widths are the ones measured on
+    /// the reported 106-column session.
+    #[test]
+    fn copied_selection_rejoins_rows_claude_wrapped_for_width() {
+        let input = concat!(
+            "  ▎ Question about three existing custom fields\n",
+            "  ▎\n",
+            "  ▎ Our Jira has three custom fields with very similar names. They look unused, but I can't check them\n",
+            "  ▎ without admin rights:\n",
+            "  ▎\n",
+            "  ▎ - customfield_12217 — \"Work Category\" (option)\n",
+            "  ▎ - customfield_10489 — \"Cost Allocation\" (option)\n",
+            "  ▎\n",
+            "  ▎ If one of them is clean and fits, I'd rather reuse it than create a new field. If they are\n",
+            "  ▎ half-configured or in use for something else, I'll ask for new fields instead."
+        );
+
+        assert_eq!(
+            TerminalGrid::normalize_copied_selection(input, 106),
+            concat!(
+                "Question about three existing custom fields\n",
+                "\n",
+                "Our Jira has three custom fields with very similar names. They look unused, but I can't check them without admin rights:\n",
+                "\n",
+                "- customfield_12217 — \"Work Category\" (option)\n",
+                "- customfield_10489 — \"Cost Allocation\" (option)\n",
+                "\n",
+                "If one of them is clean and fits, I'd rather reuse it than create a new field. If they are half-configured or in use for something else, I'll ask for new fields instead."
+            )
+        );
+    }
+
+    #[test]
+    fn copied_selection_keeps_deliberate_breaks_in_a_short_quote() {
+        // No row comes near the terminal edge, so nothing shows the agent
+        // wrapped anything — every break here is the author's own.
+        let input = concat!("  ▎ Ship it\n", "  ▎ Then tell the team\n", "  ▎ Thanks");
+
+        assert_eq!(
+            TerminalGrid::normalize_copied_selection(input, 106),
+            "Ship it\nThen tell the team\nThanks"
+        );
+    }
+
+    /// Once a paragraph is rejoined it is far wider than the wrap width, so the
+    /// rule has to keep measuring the source rows. Measuring the accumulator
+    /// instead swallowed every short line that followed a wrapped paragraph.
+    #[test]
+    fn copied_selection_stops_rejoining_after_the_wrapped_paragraph_ends() {
+        let filler = "y".repeat(91);
+        let input = format!(
+            "  ▎ {filler} wordy\n  ▎ continuation words\n  ▎ Short deliberate line\n  ▎ Another one"
+        );
+
+        assert_eq!(
+            TerminalGrid::normalize_copied_selection(&input, 106),
+            format!("{filler} wordy continuation words\nShort deliberate line\nAnother one")
+        );
+    }
+
+    /// A wrapped bullet keeps its continuation, but the next bullet stays on its
+    /// own line even though the width rule alone would swallow it.
+    #[test]
+    fn copied_selection_rejoins_bullet_continuations_but_not_the_next_bullet() {
+        let filler = "x".repeat(90);
+        let input = format!("  ▎ - {filler} wordy\n  ▎ continuation text\n  ▎ 2. second item");
+
+        assert_eq!(
+            TerminalGrid::normalize_copied_selection(&input, 106),
+            format!("- {filler} wordy continuation text\n2. second item")
+        );
     }
 
     // --- Logical line tests ---
