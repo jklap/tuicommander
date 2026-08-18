@@ -51,6 +51,19 @@ function modifierParam(e: KeyboardEvent): number {
 }
 
 /**
+ * Ctrl+punctuation → control character. Module scope, not a literal rebuilt
+ * inside the hot path: `keyToSequence` runs on every keydown.
+ */
+const CTRL_PUNCT: Record<string, number> = {
+	"@": 0x00,
+	"[": 0x1b,
+	"\\": 0x1c,
+	"]": 0x1d,
+	"^": 0x1e,
+	_: 0x1f,
+};
+
+/**
  * Convert a KeyboardEvent to the terminal escape sequence string to send to the PTY.
  * Returns null if the key should not be handled (modifier-only, Meta/Cmd).
  */
@@ -92,16 +105,8 @@ export function keyToSequence(e: KeyboardEvent): string | null {
 		if (code >= 0x61 && code <= 0x7a) {
 			return String.fromCharCode(code - 0x60);
 		}
-		const ctrlPunct: Record<string, number> = {
-			"@": 0x00,
-			"[": 0x1b,
-			"\\": 0x1c,
-			"]": 0x1d,
-			"^": 0x1e,
-			_: 0x1f,
-		};
-		if (e.key in ctrlPunct) {
-			return String.fromCharCode(ctrlPunct[e.key]);
+		if (e.key in CTRL_PUNCT) {
+			return String.fromCharCode(CTRL_PUNCT[e.key]);
 		}
 	}
 
@@ -250,4 +255,24 @@ export function altSequenceFromCode(e: KeyboardEvent): string | null {
 	}
 
 	return null;
+}
+
+/**
+ * Whether a pointer event landed inside a canvas's own box.
+ *
+ * The mouse handlers live on `document`, so every terminal sees every move —
+ * including ones over another terminal, or over no terminal at all. A hidden
+ * terminal shrinks its canvas to 1x1 and `canvasToGrid` clamps, so an unbounded
+ * handler reports cell (0,0) into a PTY the pointer never touched.
+ */
+export function isPointerInsideRect(
+	e: { clientX: number; clientY: number },
+	rect: { left: number; top: number; width: number; height: number },
+): boolean {
+	return (
+		e.clientX >= rect.left &&
+		e.clientX < rect.left + rect.width &&
+		e.clientY >= rect.top &&
+		e.clientY < rect.top + rect.height
+	);
 }

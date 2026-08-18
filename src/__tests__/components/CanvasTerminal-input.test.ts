@@ -3,6 +3,7 @@ import {
 	altSequenceFromCode,
 	createCompositionState,
 	DUP_KEYDOWN_WINDOW_MS,
+	isPointerInsideRect,
 	keyToSequence,
 } from "../../components/Terminal/terminalInput";
 
@@ -402,5 +403,34 @@ describe("createCompositionState — dead-key / IME composition", () => {
 		// No compositionend yet — user is mid dead-key sequence
 		expect(state.shouldSuppressKeydown(true)).toBe(true);
 		expect(state.shouldSuppressKeydown(true)).toBe(true);
+	});
+});
+
+describe("isPointerInsideRect", () => {
+	const rect = { left: 100, top: 50, width: 800, height: 400 };
+	const at = (clientX: number, clientY: number) => ({ clientX, clientY });
+
+	it("accepts a pointer inside the box", () => {
+		expect(isPointerInsideRect(at(500, 250), rect)).toBe(true);
+	});
+
+	it("rejects a pointer outside the box on every side", () => {
+		expect(isPointerInsideRect(at(99, 250), rect)).toBe(false);
+		expect(isPointerInsideRect(at(901, 250), rect)).toBe(false);
+		expect(isPointerInsideRect(at(500, 49), rect)).toBe(false);
+		expect(isPointerInsideRect(at(500, 451), rect)).toBe(false);
+	});
+
+	it("treats an unlaid-out box as containing nothing", () => {
+		// A terminal that has never been measured reports a 0x0 rect. Without the
+		// strict upper bound below, `clientX >= left` alone would accept the whole
+		// half-plane and report cells into a PTY the pointer never touched.
+		expect(isPointerInsideRect(at(0, 0), { left: 0, top: 0, width: 0, height: 0 })).toBe(false);
+		expect(isPointerInsideRect(at(400, 300), { left: 0, top: 0, width: 0, height: 0 })).toBe(false);
+	});
+
+	it("accepts the top-left corner and rejects the bottom-right edge", () => {
+		expect(isPointerInsideRect(at(100, 50), rect)).toBe(true);
+		expect(isPointerInsideRect(at(900, 450), rect)).toBe(false);
 	});
 });
