@@ -169,7 +169,8 @@
 - Output is byte-faithful: only lines that genuinely scroll off the top are kept. An in-place redraw produces no history, while a refresh taller than the viewport (as emitted by `gh run watch`) keeps each overflowing snapshot, including repetitions
 - The alternate grid has its own bounded, ephemeral history. It is wiped on every enter/exit and never mixes with the shell's history
 - Entering or leaving the alternate screen atomically invalidates scroll, selection, search, link, and row-cache state before the new grid is painted
-- Apps with mouse reporting (`vim`, `htop`, `lazygit`) still receive the wheel themselves — `Shift+wheel` or a scrollbar drag scrolls TUICommander's history
+- Apps with mouse reporting (`vim`, `htop`, `lazygit`, `grok --no-alt-screen`) still receive the wheel themselves — `Shift+wheel` or a scrollbar drag scrolls TUICommander's history
+- An inline TUI that enables mouse reporting *without* `1049h` (`grok --no-alt-screen`) is classified as FullscreenTui and excluded from the durable log the same way alt-screen is. Grid history stays so the scrollbar works.
 
 ### 1.18 Scrollback History Overlay (Experimental)
 - Read-only overlay for viewing full terminal scrollback beyond the visible buffer
