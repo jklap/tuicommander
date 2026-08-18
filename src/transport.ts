@@ -1621,6 +1621,15 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			transform: (data) => data ?? null,
 		}),
 	},
+	// POST, unlike its single-candidate sibling: a whole screen's candidates do
+	// not fit a query string, and being able to send many is the point.
+	resolve_terminal_paths: {
+		map: (args) => ({
+			method: "POST",
+			path: "/fs/resolve-terminal-paths",
+			body: { cwd: args.cwd, candidates: args.candidates },
+		}),
+	},
 	stat_path: {
 		map: (_args, p) => ({ method: "GET", path: `/fs/stat?path=${p("path")}` }),
 	},
@@ -2026,11 +2035,7 @@ interface WriteQueue {
 
 const _writeQueues = new Map<string, WriteQueue>();
 
-function queuedWrite(
-	queueKey: string,
-	data: string,
-	send: (data: string) => Promise<unknown>,
-): Promise<unknown> {
+function queuedWrite(queueKey: string, data: string, send: (data: string) => Promise<unknown>): Promise<unknown> {
 	const existing = _writeQueues.get(queueKey);
 	if (existing) {
 		existing.pending += data;

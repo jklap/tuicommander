@@ -274,6 +274,15 @@ pub(super) async fn resolve_terminal_path_http(
     ))
 }
 
+/// Resolve a whole screen's worth of path candidates in one request. POST, not
+/// GET: the batch is the point, and a screenful of candidates does not belong in
+/// a query string. Same non-gating rationale as the single-candidate route.
+pub(super) async fn resolve_terminal_paths_http(
+    Json(body): Json<FsResolveTerminalPathsRequest>,
+) -> Response {
+    json_result(crate::fs::resolve_terminal_paths(body.cwd, body.candidates).await)
+}
+
 /// Stat an absolute path. Metadata-only (exists/is_dir/size/mtime), no content,
 /// so it is not repo-root gated — `stat_path_impl` already refuses TCC-protected dirs.
 pub(super) async fn stat_path_http(Query(q): Query<FsExternalFileQuery>) -> Response {

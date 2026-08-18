@@ -427,7 +427,8 @@ Uses incremental parsing with a file-size-based cache (`claude-usage-cache.json`
 
 | Command | Args | Returns | Description |
 |---------|------|---------|-------------|
-| `resolve_terminal_path` | `path` | `String` | Resolve terminal path |
+| `resolve_terminal_path` | `cwd, candidate` | `Option<ResolvedFilePath>` | Resolve one terminal path candidate against `cwd`; `null` on a miss |
+| `resolve_terminal_paths` | `cwd, candidates` | `Vec<Option<ResolvedFilePath>>` | Batched form, answered **positionally**: entry `i` is the result for `candidates[i]`. One IPC round-trip per terminal screen instead of one per candidate |
 | `list_directory` | `path` | `Vec<DirEntry>` | List directory contents |
 | `fs_read_file` | `path` | `String` | Read file contents |
 | `write_file` | `path, content` | `()` | Write file |

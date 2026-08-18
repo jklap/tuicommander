@@ -357,6 +357,12 @@ pub(super) struct FsResolveTerminalPathQuery {
 }
 
 #[derive(Deserialize)]
+pub(super) struct FsResolveTerminalPathsRequest {
+    pub cwd: String,
+    pub candidates: Vec<String>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct FsWarmIndexRequest {
     #[serde(rename = "repoPath")]
     pub repo_path: String,

@@ -24,6 +24,7 @@ import {
 	type CursorShape,
 	computeCursorRect,
 	createHiddenAckThrottle,
+	createLeadingThrottle,
 	type DecodedFrame,
 	type DecodedRow,
 	decideFrameGrid,
@@ -32,6 +33,7 @@ import {
 	GUTTER_PX,
 	gridDimsForBox,
 	reconcileDelay,
+	rowText,
 	shouldFireReconcile,
 	snapLineHeight,
 } from "./canvasTerminalUtils";
@@ -40,7 +42,7 @@ import { acquireCache, getSharedMetrics, invalidateGlyphCache, releaseCache } fr
 import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex } from "./linkProvider";
-import { continuationRowsAfterSuggest, isSuggestBlock } from "./suggestOverlay";
+import { INTENT_HIGHLIGHT_RE, planSuggestOverlay, SUGGEST_ANCHOR_RE } from "./suggestOverlay";
 import { altSequenceFromCode, createCompositionState, isPointerInsideRect, keyToSequence } from "./terminalInput";
 
 // Re-export for external consumers
@@ -75,13 +77,11 @@ export interface CanvasTerminalProps {
 	onBell?: () => void;
 }
 
-const SUGGEST_ANCHOR_RE = /^[\s●⏺]*suggest:\s+\S/;
-const INTENT_RE = /^[\s●⏺]*intent:\s+/;
-
-/** How long to wait after the last grid change before re-running the open search.
+/** Shortest gap between two runs of the open search.
  *  A redrawing TUI emits frames far faster than a regex sweep over the whole
- *  scrollback is worth running. */
-const SEARCH_REFRESH_DEBOUNCE_MS = 150;
+ *  scrollback is worth running, so the sweep is bounded to one per window —
+ *  bounded, not postponed: waiting for the frames to stop meant never running. */
+const SEARCH_REFRESH_THROTTLE_MS = 150;
 
 const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	let canvasRef!: HTMLCanvasElement;
@@ -137,7 +137,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	// the ones that still hit.
 	let searchQuery = "";
 	let searchBlockScope = false;
-	let searchRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+	/** Leading-edge, so a continuously redrawing TUI still refreshes the search.
+	 *  A trailing debounce reset its timer on every frame and so never fired. */
+	const searchRefresh = createLeadingThrottle(() => {
+		// Nobody awaits this one, so it needs its own catch: the backend read
+		// can reject (a closed session over HTTP, a failed blocking-pool task),
+		// and an unhandled rejection from a timer is invisible until it isn't.
+		// The matches simply stay as they were until the next frame retriggers.
+		runSearchQuery(false).catch((e) => {
+			appLogger.warn("terminal", "search refresh failed", { error: String(e) });
+		});
+	}, SEARCH_REFRESH_THROTTLE_MS);
 	let cursorBlinkOn = true;
 	let blinkInterval: ReturnType<typeof setInterval> | undefined;
 	let blinkResetAt = 0;
@@ -581,23 +591,12 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 	 *  regex sweep over the whole scrollback is worth running. */
 	function scheduleSearchRefresh(): void {
 		if (!searchQuery) return;
-		clearTimeout(searchRefreshTimer);
-		searchRefreshTimer = setTimeout(() => {
-			searchRefreshTimer = undefined;
-			// Nobody awaits this one, so it needs its own catch: the backend read
-			// can reject (a closed session over HTTP, a failed blocking-pool task),
-			// and an unhandled rejection from a timer is invisible until it isn't.
-			// The matches simply stay as they were until the next frame retriggers.
-			runSearchQuery(false).catch((e) => {
-				appLogger.warn("terminal", "search refresh failed", { error: String(e) });
-			});
-		}, SEARCH_REFRESH_DEBOUNCE_MS);
+		searchRefresh.trigger();
 	}
 
 	function clearSearchState(): void {
 		searchQuery = "";
-		clearTimeout(searchRefreshTimer);
-		searchRefreshTimer = undefined;
+		searchRefresh.cancel();
 		search.clear();
 	}
 
@@ -875,14 +874,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 
 	// --- Suggest / Intent overlay ---
 
-	function rowToText(row: DecodedFrame["rows"][0]): string {
-		let text = "";
-		for (let ci = 0; ci < row.count; ci++) {
-			const cp = row.codepoints[ci];
-			text += cp === 0 ? " " : String.fromCodePoint(cp);
-		}
-		return text;
-	}
+	const rowToText = rowText;
 
 	function makeOverlayDiv(top: number, height: number, background: string): HTMLDivElement {
 		const div = document.createElement("div");
@@ -909,7 +901,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				const row = rowMap.get(idx);
 				if (!row) continue;
 				const text = rowToText(row);
-				if (SUGGEST_ANCHOR_RE.test(text) || INTENT_RE.test(text)) {
+				if (SUGGEST_ANCHOR_RE.test(text) || INTENT_HIGHLIGHT_RE.test(text)) {
 					hasSuggestContent = true;
 					break;
 				}
@@ -931,36 +923,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				return { text: rowToText(row), isWrapped: row.wrapped };
 			});
 
-		// Build new overlay key to detect changes
-		const parts: string[] = [];
-		const newChildren: HTMLDivElement[] = [];
-		for (let row = 0; row < numRows; row++) {
-			const snapshot = getRowSnapshot(row);
-			if (!snapshot) continue;
-			const text = snapshot.text;
-
-			if (SUGGEST_ANCHOR_RE.test(text) && isSuggestBlock(row, numRows, getRowSnapshot)) {
-				newChildren.push(makeOverlayDiv(row * m.cellHeight, m.cellHeight, bg));
-				parts.push(`s${row}`);
-				const hiddenRows = continuationRowsAfterSuggest(row, numRows, getRowSnapshot);
-				for (const contRow of hiddenRows) {
-					newChildren.push(makeOverlayDiv(contRow * m.cellHeight, m.cellHeight, bg));
-					parts.push(`c${contRow}`);
-				}
-				if (hiddenRows.length > 0) row = hiddenRows[hiddenRows.length - 1];
-			} else if (INTENT_RE.test(text)) {
-				newChildren.push(makeOverlayDiv(row * m.cellHeight, m.cellHeight, "rgba(181,147,90,0.12)"));
-				parts.push(`i${row}`);
-			}
-		}
-
-		const newKey = parts.join(",");
-		if (newKey === lastSuggestOverlayKey) return;
-		lastSuggestOverlayKey = newKey;
+		// Decide what to mask before building anything: most repaints leave the
+		// plan untouched, and the elements were being created and dropped just to
+		// discover that.
+		const { key, blocks } = planSuggestOverlay(numRows, getRowSnapshot);
+		if (key === lastSuggestOverlayKey) return;
+		lastSuggestOverlayKey = key;
 
 		overlayRef.textContent = "";
-		for (const child of newChildren) {
-			overlayRef.appendChild(child);
+		for (const block of blocks) {
+			const background = block.kind === "intent" ? "rgba(181,147,90,0.12)" : bg;
+			overlayRef.appendChild(makeOverlayDiv(block.row * m.cellHeight, m.cellHeight, background));
 		}
 	}
 
@@ -1676,30 +1649,36 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		let anyFound = false;
 
 		// Single-row verification
-		for (const item of toCheck) {
-			if (!alive) return;
-			const resolved = await Promise.all(
-				item.candidates.map(async (c) => {
-					try {
-						const r = (await ref("resolve_terminal_path", { cwd, candidate: c.raw })) as {
-							absolute_path: string;
-							is_directory: boolean;
-						} | null;
-						return r ? { colStart: c.colStart, colEnd: c.colEnd } : null;
-					} catch (e) {
-						appLogger.debug("terminal", "resolve_terminal_path failed", { candidate: c.raw, error: e });
-						return null;
-					}
-				}),
-			);
-			if (!alive || generation !== screenGeneration) return;
-			const verified = resolved.filter((r): r is { colStart: number; colEnd: number } => r !== null);
-			if (fileLinkCache.size >= FILE_LINK_CACHE_MAX) {
-				const oldest = fileLinkCache.keys().next().value;
-				if (oldest !== undefined) fileLinkCache.delete(oldest);
+		// One call for the whole screen. This used to be one IPC per candidate,
+		// awaited row by row, so a screen with links on twenty rows cost twenty
+		// serial round trips — each one a filesystem-resolving hop for a single
+		// string. The backend answers positionally, so the flat result is sliced
+		// back onto the rows it came from.
+		if (toCheck.length > 0) {
+			const flat = toCheck.flatMap((item) => item.candidates.map((c) => c.raw));
+			let resolved: (unknown | null)[];
+			try {
+				resolved = (await ref("resolve_terminal_paths", { cwd, candidates: flat })) as (unknown | null)[];
+			} catch (e) {
+				appLogger.debug("terminal", "resolve_terminal_paths failed", { count: flat.length, error: e });
+				resolved = [];
 			}
-			fileLinkCache.set(item.text, { spans: verified.length > 0 ? verified : null, ts: Date.now() });
-			if (verified.length > 0) anyFound = true;
+			if (!alive || generation !== screenGeneration) return;
+
+			let at = 0;
+			for (const item of toCheck) {
+				const verified: { colStart: number; colEnd: number }[] = [];
+				for (const c of item.candidates) {
+					if (resolved[at]) verified.push({ colStart: c.colStart, colEnd: c.colEnd });
+					at++;
+				}
+				if (fileLinkCache.size >= FILE_LINK_CACHE_MAX) {
+					const oldest = fileLinkCache.keys().next().value;
+					if (oldest !== undefined) fileLinkCache.delete(oldest);
+				}
+				fileLinkCache.set(item.text, { spans: verified.length > 0 ? verified : null, ts: Date.now() });
+				if (verified.length > 0) anyFound = true;
+			}
 		}
 
 		// Multi-row pass: detect web (http/https) + file:// URLs spanning
@@ -3189,7 +3168,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		cleanupTouch?.();
 		clearTimeout(linkThrottle);
 		clearTimeout(scrollGestureEndTimer);
-		clearTimeout(searchRefreshTimer);
+		searchRefresh.cancel();
 		linkController.dispose();
 		resetFrameTiming(props.sessionId);
 		rowMap.clear();
