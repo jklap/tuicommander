@@ -11,8 +11,13 @@
 //! touches no file content must not pay for a full re-read of the repo. The
 //! rebuild itself is whole-corpus, not per-file. `repo_watcher::stop_watching`
 //! releases a repo's index when it is no longer in use.
+//!
+//! Search results need only the BM25 embeddings and their file ids. The source
+//! text is deliberately dropped after each build; a future feature that needs
+//! snippets or previews must read the current file from disk rather than serve
+//! a stale second copy retained by the index.
 
-use bm25::{Language, SearchEngineBuilder, SearchResult};
+use bm25::{DefaultTokenizer, Embedder, EmbedderBuilder, Language, Scorer, Tokenizer};
 use dashmap::DashSet;
 use ignore::WalkBuilder;
 use std::collections::HashMap;
@@ -36,8 +41,8 @@ const THROTTLE_SEARCH_POLL: Duration = Duration::from_millis(100);
 /// is significantly slower and runs unoptimised.
 const THROTTLE_BUILD_YIELD: Duration = Duration::from_millis(10);
 
-/// Cooperative throttle that yields CPU during index builds and pauses
-/// indexing while user-initiated searches are in flight.
+/// Cooperative throttle that yields CPU during index builds and gives
+/// user-initiated searches a bounded head start.
 #[derive(Default)]
 pub struct IndexerThrottle {
     search_active: AtomicUsize,
@@ -69,10 +74,12 @@ impl IndexerThrottle {
     }
 
     /// Called from the indexer loop every `THROTTLE_CHECKPOINT_INTERVAL` files.
-    /// Blocks (via `thread::sleep`) while any search is active, then yields
-    /// unconditionally so index builds don't saturate CPU cores.
+    /// Defers once when a search is active, then yields unconditionally so
+    /// index builds don't saturate CPU cores. A fallback grep can span the whole
+    /// repository, so waiting for every search guard to drop would starve the
+    /// missing index whose absence selected that fallback in the first place.
     pub fn checkpoint(&self) {
-        while self.search_active.load(Ordering::Acquire) > 0 {
+        if self.search_active.load(Ordering::Acquire) > 0 {
             std::thread::sleep(THROTTLE_SEARCH_POLL);
         }
         std::thread::sleep(THROTTLE_BUILD_YIELD);
@@ -124,7 +131,7 @@ fn file_stamp(metadata: &std::fs::Metadata) -> FileStamp {
 
 /// Pre-built BM25 index over file contents in a single repository.
 pub struct ContentIndex {
-    engine: bm25::SearchEngine<u32>,
+    engine: EmbeddingIndex,
     entries: Vec<FileEntry>,
     /// rel_path → index into `entries`, for `is_current`'s stamp comparison.
     path_to_idx: HashMap<String, usize>,
@@ -147,15 +154,102 @@ pub struct RankedFile {
     pub score: f32,
 }
 
+type BuildTokenCache = HashMap<(usize, usize), Vec<String>>;
+
+/// Shares tokens between the crate's avgdl-fitting and embedding passes. The
+/// pointer key is valid only while `EmbeddingIndex::build` owns the corpus; the
+/// cache is cleared before it returns, avoiding a second copy of each document.
+struct BuildTokenizer {
+    inner: DefaultTokenizer,
+    cache: Arc<parking_lot::Mutex<Option<BuildTokenCache>>>,
+    #[cfg(test)]
+    tokenizations: Arc<AtomicUsize>,
+}
+
+impl Tokenizer for BuildTokenizer {
+    fn tokenize(&self, input_text: &str) -> Vec<String> {
+        let key = (input_text.as_ptr() as usize, input_text.len());
+        if let Some(tokens) = self
+            .cache
+            .lock()
+            .as_ref()
+            .and_then(|cache| cache.get(&key))
+            .cloned()
+        {
+            return tokens;
+        }
+
+        let tokens = self.inner.tokenize(input_text);
+        let mut cache = self.cache.lock();
+        if let Some(cache) = cache.as_mut() {
+            cache.insert(key, tokens.clone());
+            #[cfg(test)]
+            self.tokenizations.fetch_add(1, Ordering::Relaxed);
+        }
+        tokens
+    }
+}
+
+/// The parts of the BM25 crate needed to rank file ids. Its higher-level
+/// `SearchEngine` also retains every document string so it can return the text
+/// with each result, but callers map ids back to `entries` and never use it.
+struct EmbeddingIndex {
+    embedder: Embedder<u32, BuildTokenizer>,
+    scorer: Scorer<u32>,
+    #[cfg(test)]
+    build_cache: Arc<parking_lot::Mutex<Option<BuildTokenCache>>>,
+    #[cfg(test)]
+    build_document_tokenizations: usize,
+}
+
+impl EmbeddingIndex {
+    fn build(corpus: &[String]) -> Self {
+        let documents: Vec<&str> = corpus.iter().map(String::as_str).collect();
+        let cache = Arc::new(parking_lot::Mutex::new(Some(HashMap::new())));
+        #[cfg(test)]
+        let tokenizations = Arc::new(AtomicUsize::new(0));
+        let tokenizer = BuildTokenizer {
+            inner: DefaultTokenizer::new(Language::English),
+            cache: Arc::clone(&cache),
+            #[cfg(test)]
+            tokenizations: Arc::clone(&tokenizations),
+        };
+        let embedder = EmbedderBuilder::<u32, BuildTokenizer>::with_tokenizer_and_fit_to_corpus(
+            tokenizer, &documents,
+        )
+        .build();
+        let mut scorer = Scorer::new();
+        for (id, document) in corpus.iter().enumerate() {
+            scorer.upsert(&(id as u32), embedder.embed(document));
+        }
+        // The cache only bridges the crate's avgdl-fitting and embedding passes.
+        // Queries tokenize directly, and no source text survives this point.
+        drop(cache.lock().take());
+        Self {
+            embedder,
+            scorer,
+            #[cfg(test)]
+            build_cache: cache,
+            #[cfg(test)]
+            build_document_tokenizations: tokenizations.load(Ordering::Relaxed),
+        }
+    }
+
+    fn search(&self, query: &str, limit: usize) -> Vec<bm25::ScoredDocument<u32>> {
+        let query = self.embedder.embed(query);
+        self.scorer
+            .matches(&query)
+            .into_iter()
+            .take(limit)
+            .collect()
+    }
+}
+
 impl ContentIndex {
     /// Create an empty, not-yet-built index for a repo.
     pub fn empty(repo_root: PathBuf) -> Self {
         Self {
-            engine: SearchEngineBuilder::<u32>::with_corpus(
-                Language::English,
-                Vec::<String>::new(),
-            )
-            .build(),
+            engine: EmbeddingIndex::build(&[]),
             entries: Vec::new(),
             path_to_idx: HashMap::new(),
             repo_root,
@@ -170,8 +264,8 @@ impl ContentIndex {
     /// This is I/O-heavy and should be called from `spawn_blocking`. Respects
     /// .gitignore, skips binary files and files > 1 MB. When `throttle` is
     /// provided, the walker yields cooperatively every `THROTTLE_CHECKPOINT_INTERVAL`
-    /// files and pauses entirely while a search is active. Pass `None` for
-    /// tests or one-shot builds where throttling is irrelevant.
+    /// files and briefly defers to an active search at each checkpoint. Pass
+    /// `None` for tests or one-shot builds where throttling is irrelevant.
     pub fn build(
         repo_root: PathBuf,
         throttle: Option<&IndexerThrottle>,
@@ -256,7 +350,7 @@ impl ContentIndex {
             entries.push(FileEntry { rel_path, stamp });
         }
 
-        let engine = SearchEngineBuilder::<u32>::with_corpus(Language::English, corpus).build();
+        let engine = EmbeddingIndex::build(&corpus);
 
         Self {
             engine,
@@ -339,16 +433,14 @@ impl ContentIndex {
             return Vec::new();
         }
 
-        let results: Vec<SearchResult<u32>> = self.engine.search(query, limit);
-        results
+        self.engine
+            .search(query, limit)
             .into_iter()
             .filter_map(|r| {
-                self.entries
-                    .get(r.document.id as usize)
-                    .map(|e| RankedFile {
-                        rel_path: e.rel_path.clone(),
-                        score: r.score,
-                    })
+                self.entries.get(r.id as usize).map(|e| RankedFile {
+                    rel_path: e.rel_path.clone(),
+                    score: r.score,
+                })
             })
             .collect()
     }
@@ -362,6 +454,22 @@ impl ContentIndex {
     #[cfg(test)]
     pub fn len(&self) -> usize {
         self.entries.len()
+    }
+
+    /// The custom engine retains embeddings and ids only; there is no document
+    /// store whose byte count could grow with the source corpus.
+    #[cfg(test)]
+    fn retained_document_text_bytes(&self) -> usize {
+        self.engine
+            .build_cache
+            .lock()
+            .as_ref()
+            .map_or(0, |cache| cache.values().flatten().map(String::len).sum())
+    }
+
+    #[cfg(test)]
+    fn build_document_tokenizations(&self) -> usize {
+        self.engine.build_document_tokenizations
     }
 }
 
@@ -633,6 +741,30 @@ mod tests {
     }
 
     #[test]
+    fn build_does_not_retain_document_text() {
+        let repo = make_test_repo();
+        let index = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
+
+        assert_eq!(
+            index.retained_document_text_bytes(),
+            0,
+            "search needs embeddings and file ids, not a second in-memory copy of every file"
+        );
+    }
+
+    #[test]
+    fn build_tokenizes_each_document_once() {
+        let repo = make_test_repo();
+        let index = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
+
+        assert_eq!(
+            index.build_document_tokenizations(),
+            index.len(),
+            "fitting avgdl and creating embeddings must share the first tokenization"
+        );
+    }
+
+    #[test]
     fn search_finds_relevant_file() {
         let repo = make_test_repo();
         let index = ContentIndex::build(repo.path().to_path_buf(), None, HashMap::new());
@@ -667,6 +799,28 @@ mod tests {
         let index = ContentIndex::empty(PathBuf::from("/nonexistent"));
         assert!(!index.is_ready());
         assert!(index.search("anything", 5).is_empty());
+    }
+
+    #[test]
+    fn a_fallback_search_guard_cannot_starve_an_index_checkpoint() {
+        let throttle = Arc::new(IndexerThrottle::default());
+        let guard = throttle.begin_search();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            throttle.checkpoint();
+            tx.send(()).unwrap();
+        });
+
+        let completed_while_search_was_active = rx
+            .recv_timeout(THROTTLE_SEARCH_POLL * 2 + Duration::from_millis(100))
+            .is_ok();
+        drop(guard);
+        worker.join().unwrap();
+
+        assert!(
+            completed_while_search_was_active,
+            "a long fallback grep must defer the build briefly, not pause it until grep completes"
+        );
     }
 
     #[test]
