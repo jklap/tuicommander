@@ -4279,6 +4279,10 @@ mod tests {
         );
     }
 
+    // The embedded dist only exists in the desktop build; without this gate
+    // `cargo check --no-default-features --tests` cannot compile at all, which
+    // hides every other cfg regression in test code.
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn test_serve_static_js() {
         // Find an actual JS file in the embedded dist
@@ -4308,6 +4312,10 @@ mod tests {
         }
     }
 
+    // The embedded dist only exists in the desktop build; without this gate
+    // `cargo check --no-default-features --tests` cannot compile at all, which
+    // hides every other cfg regression in test code.
+    #[cfg(feature = "desktop")]
     #[tokio::test]
     async fn test_serve_static_font() {
         let font_file = static_files::FRONTEND_DIST
