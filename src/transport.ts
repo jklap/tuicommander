@@ -2014,56 +2014,82 @@ function isIdempotentRpc(command: string, args: Record<string, unknown>): boolea
 }
 
 /**
- * Per-session write queue — serializes write_pty calls in browser mode to prevent
- * letter reordering when typing fast. Parallel HTTP POSTs can arrive out of order;
- * chaining them ensures each write completes before the next is sent.
+ * Per-session single-flight queue: one request in flight, and everything that
+ * piles up behind it leaves as ONE follow-up request.
  *
- * Chaining alone capped typing at one character per round trip: on a slow link
- * every keystroke waited for the previous POST. So keystrokes that arrive while a
- * request is in flight accumulate in `pending` and leave together as one write.
- * That is byte-identical to sending them one at a time — `write_pty` carries only
- * `{ sessionId, data }`, and the PTY appends what it receives.
+ * Two call sites need this, for opposite reasons, which is why `merge` is a
+ * parameter rather than baked in:
+ *
+ * - `write_pty` — parallel HTTP POSTs can arrive out of order and reorder the
+ *   letters the user typed, so writes must be chained. Chaining alone capped
+ *   typing at one character per round trip, so keystrokes that arrive during a
+ *   request accumulate. Nothing may be dropped: `merge` appends.
+ * - `resize_pty` — a drag fires one per frame, the backend reflows on the
+ *   blocking pool, and two in flight race for the per-session lock. Applied
+ *   newest-first they leave the PTY at the OLD size with nothing to correct it.
+ *   Only the newest size means anything: `merge` replaces, so an intermediate
+ *   size is never in flight and can never land last.
  */
-interface WriteQueue {
+interface CoalescingQueue<P> {
 	/** Resolves when the queue, including anything still pending, has drained. */
 	tail: Promise<unknown>;
-	/** Keystrokes that arrived during the in-flight write, in arrival order. */
-	pending: string;
+	/** What arrived during the in-flight request, already merged. */
+	pending: P | null;
 	/** Set once a flush is chained for `pending`, so it is not chained twice. */
 	flushChained: boolean;
 }
 
-const _writeQueues = new Map<string, WriteQueue>();
-
-function queuedWrite(queueKey: string, data: string, send: (data: string) => Promise<unknown>): Promise<unknown> {
-	const existing = _writeQueues.get(queueKey);
+/**
+ * @param merge Folds a newly arrived payload into whatever is already waiting.
+ *   Receives `null` when nothing is waiting yet.
+ */
+function coalescedRpc<P>(
+	queues: Map<string, CoalescingQueue<P>>,
+	queueKey: string,
+	payload: P,
+	merge: (pending: P | null, next: P) => P,
+	send: (payload: P) => Promise<unknown>,
+): Promise<unknown> {
+	const existing = queues.get(queueKey);
 	if (existing) {
-		existing.pending += data;
+		existing.pending = merge(existing.pending, payload);
 		if (!existing.flushChained) {
 			existing.flushChained = true;
 			// Chain on failure too: dropping the batch would reorder the line
 			// just as surely as a parallel POST would.
 			const flush = () => {
-				const batch = existing.pending;
-				existing.pending = "";
+				const batch = existing.pending as P;
+				existing.pending = null;
 				existing.flushChained = false;
-				return send(batch).finally(() => reapDrainedQueue(queueKey, existing));
+				return send(batch).finally(() => reapDrainedQueue(queues, queueKey, existing));
 			};
 			existing.tail = existing.tail.then(flush, flush);
 		}
 		return existing.tail;
 	}
-	const queue: WriteQueue = { tail: Promise.resolve(), pending: "", flushChained: false };
-	_writeQueues.set(queueKey, queue);
-	queue.tail = send(data).finally(() => reapDrainedQueue(queueKey, queue));
+	const queue: CoalescingQueue<P> = { tail: Promise.resolve(), pending: null, flushChained: false };
+	queues.set(queueKey, queue);
+	queue.tail = send(payload).finally(() => reapDrainedQueue(queues, queueKey, queue));
 	return queue.tail;
 }
 
 /** Forget a queue once nothing is in flight and nothing is waiting behind it. */
-function reapDrainedQueue(queueKey: string, queue: WriteQueue): void {
-	if (_writeQueues.get(queueKey) === queue && !queue.flushChained) {
-		_writeQueues.delete(queueKey);
+function reapDrainedQueue<P>(
+	queues: Map<string, CoalescingQueue<P>>,
+	queueKey: string,
+	queue: CoalescingQueue<P>,
+): void {
+	if (queues.get(queueKey) === queue && !queue.flushChained) {
+		queues.delete(queueKey);
 	}
+}
+
+const _writeQueues = new Map<string, CoalescingQueue<string>>();
+const _resizeQueues = new Map<string, CoalescingQueue<{ rows: number; cols: number }>>();
+
+/** Two connections to the same session id are two different backends. */
+function queueKeyFor(sessionId: string, connectionId?: string): string {
+	return connectionId ? `${connectionId}:${sessionId}` : sessionId;
 }
 
 /**
@@ -2077,11 +2103,29 @@ export function rpc<T>(command: string, args: Record<string, unknown> = {}, conn
 	if (command === "write_pty" && (!isTauri() || connectionId)) {
 		const sessionId = (args.sessionId ?? args.id) as string;
 		if (sessionId && typeof args.data === "string") {
-			// Keyed with the connection: two connections to the same session id
-			// are two different backends, and their bytes must not merge.
-			const queueKey = connectionId ? `${connectionId}:${sessionId}` : sessionId;
-			return queuedWrite(queueKey, args.data, (data) =>
-				rpcImpl<T>(command, { ...args, data }, connectionId),
+			return coalescedRpc(
+				_writeQueues,
+				// Keyed with the connection: two connections to the same session id
+				// are two different backends, and their bytes must not merge.
+				queueKeyFor(sessionId, connectionId),
+				args.data,
+				(pending, next) => (pending ?? "") + next,
+				(data) => rpcImpl<T>(command, { ...args, data }, connectionId),
+			) as Promise<T>;
+		}
+	}
+	// Unlike writes, this is NOT browser-only: `resize_pty` is an async Tauri
+	// command, so the desktop hands each call to the blocking pool too and has
+	// the same newest-first hazard.
+	if (command === "resize_pty") {
+		const sessionId = (args.sessionId ?? args.id) as string;
+		if (sessionId && typeof args.rows === "number" && typeof args.cols === "number") {
+			return coalescedRpc(
+				_resizeQueues,
+				queueKeyFor(sessionId, connectionId),
+				{ rows: args.rows, cols: args.cols },
+				(_pending, next) => next,
+				(dims) => rpcImpl<T>(command, { ...args, ...dims }, connectionId),
 			) as Promise<T>;
 		}
 	}

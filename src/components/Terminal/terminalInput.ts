@@ -276,3 +276,22 @@ export function isPointerInsideRect(
 		e.clientY < rect.top + rect.height
 	);
 }
+
+/**
+ * Whether a mouse-report release must go out, given where the pointer is and
+ * which buttons this canvas reported down.
+ *
+ * Bounding the release by pointer position alone is wrong in one direction: the
+ * press leaves from a canvas `mousedown`, the release from a `document`
+ * `mouseup`, and a press-inside/drag-out/release-outside gesture never lands
+ * back inside. In normal mouse mode no later report follows, so the application
+ * stays logically held on a button the user let go of. A release answering a
+ * press THIS canvas sent is not a spurious report — it is the other half of one.
+ */
+export function shouldReportMouseUp(
+	reportedDown: ReadonlySet<number>,
+	button: number,
+	pointerInside: boolean,
+): boolean {
+	return pointerInside || reportedDown.has(button);
+}

@@ -1679,7 +1679,7 @@ describe("transport", () => {
 			await Promise.all(resizes);
 
 			expect(sent[0]).toEqual({ rows: 10, cols: 40 });
-			expect(sent.at(-1)).toEqual({ rows: 40, cols: 160 });
+			expect(sent[sent.length - 1]).toEqual({ rows: 40, cols: 160 });
 			expect(sent).toHaveLength(2);
 		});
 

@@ -43,7 +43,13 @@ import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex } from "./linkProvider";
 import { INTENT_HIGHLIGHT_RE, planSuggestOverlay, SUGGEST_ANCHOR_RE } from "./suggestOverlay";
-import { altSequenceFromCode, createCompositionState, isPointerInsideRect, keyToSequence } from "./terminalInput";
+import {
+	altSequenceFromCode,
+	createCompositionState,
+	isPointerInsideRect,
+	keyToSequence,
+	shouldReportMouseUp,
+} from "./terminalInput";
 
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame };
@@ -555,11 +561,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			return { index: -1, count: 0 };
 		}
 		const generation = screenGeneration;
+		const query = searchQuery;
 		let matches = (await invokeRef("terminal_search", {
 			sessionId: props.sessionId,
-			query: searchQuery,
+			query,
 		})) as { row: number; col_start: number; col_end: number }[];
-		if (generation !== screenGeneration) return { index: -1, count: 0 };
+		// The query can be cleared or replaced while the sweep is in flight, and
+		// neither bumps `screenGeneration`. Cancelling the refresh throttle stops
+		// the timer, not a request already out — so without this the stale answer
+		// resurrects highlights the user just cleared, or overwrites the newer
+		// query's matches with the older query's.
+		if (generation !== screenGeneration || query !== searchQuery) return { index: -1, count: 0 };
 		if (searchBlockScope && currentFrame) {
 			const term = terminalsStore.get(props.terminalId);
 			if (term) {
@@ -2574,6 +2586,8 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		// --- Mouse selection ---
 		let clickCount = 0;
 		let lastClickTime = 0;
+		/** Buttons this canvas reported down, so their release is owed to the app. */
+		const reportedDown = new Set<number>();
 
 		bindings.listen(canvasRef, "mousedown", (e: MouseEvent) => {
 			keyInputRef.focus({ preventScroll: true });
@@ -2589,6 +2603,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				}
 				if (currentFrame.sgrMouse) {
 					writePtyNoScroll(sgrMouseSequence(e.button, pos.col, pos.row, true, e));
+					reportedDown.add(e.button);
 				}
 				e.preventDefault();
 				return;
@@ -2755,10 +2770,17 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		};
 
 		const onMouseUp = (e: MouseEvent) => {
-			if (hidden) return;
+			// A release we owe the application outlives the reasons to stay quiet:
+			// hiding the terminal or dragging off it mid-gesture would otherwise
+			// leave the button logically held with nothing left to retract it.
+			const rect = canvasRef.getBoundingClientRect();
+			const reportUp = shouldReportMouseUp(reportedDown, e.button, isPointerInsideRect(e, rect));
+			const owed = reportedDown.delete(e.button);
+			if (hidden && !owed) return;
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
-				const rect = canvasRef.getBoundingClientRect();
-				if (!isPointerInsideRect(e, rect)) return;
+				if (!reportUp) return;
+				// canvasToGrid clamps to the grid, so a release outside the canvas
+				// reports the edge cell — what a terminal does for a drag-out.
 				const pos = canvasToGrid(e, rect);
 				if (currentFrame.sgrMouse) {
 					writePtyNoScroll(sgrMouseSequence(e.button, pos.col, pos.row, false, e));
