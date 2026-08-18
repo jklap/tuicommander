@@ -554,3 +554,79 @@ Declared explicitly so chunk 2b does not re-derive the boundary:
   Reproducing it needs a shell session with OSC 133 integration and a read of
   `terminalsStore.state.terminals[id].commandBlocks` — worth doing before the fix
   lands, to confirm the phantom count matches the prompt count 1:1.
+
+---
+
+## Post-fix re-verification pass (2026-08-19)
+
+Re-run of the verification pass demanded by story 616-71e1, against the code as
+it stands after Perf 1-17 landed. Read-only; no file was modified by the pass
+and the working tree was unchanged by it. Every one of the 122 headed findings
+(F1-F9 in this file, F10-F139 across `perf-scan/*.md`; unused ranges F36-F39,
+F51-F59, F76-F79) now carries a definite verdict, so the previous pass's
+unattributed "PARTIAL x16" bucket no longer exists — whatever those 16 were,
+each finding below is now closed, re-filed or dropped.
+
+**This pass answers only what code can answer.** No measurement was taken: the
+running app is still the pre-fix binary, so every magnitude in this document
+(F2 640 KB/s, F4 ~50%, F8 byte counts, F10 4 MB/400 ticks, F20 7-9 MB/s,
+F22 260 KB/s, F28 wakeups) remains an unverified estimate. Structural claims
+were verdicted; their magnitudes were not.
+
+| Verdict | Count |
+|---|---|
+| FIXED | 100 |
+| STILL-OPEN | 20 |
+| WRONG (dropped) | 2 |
+| **Total** | **122** |
+
+### Still open after the fix wave
+
+| id | where it still bites |
+|---|---|
+| F7 | `pty-vt-log-total-{id}` still emitted with no frontend listener — `src-tauri/src/pty.rs:4653` |
+| F16 | diff_triage "done" still emits an empty slice, so findingsCount is 0 — `src-tauri/src/diff_triage.rs:1938` |
+| F23 | `encode_col_count` always returns `num_cols`; `TermDamage::Partial` left/right bounds discarded — `src-tauri/src/terminal_grid.rs:344` |
+| F24 | `viewport_changed` still calls `mark_fully_damaged()` on every scroll — `src-tauri/src/terminal_grid.rs:1713` |
+| F26 | vt mutex still held across `serialize_dirty_rows()` — `src-tauri/src/pty.rs:7355` |
+| F28 | no subscriber check before serialization; 16 ms per-session ticker unchanged — `src-tauri/src/pty.rs:7355` |
+| F29 | per-glyph `fillText`, per-cell `fillRect`, 7 `DataView` reads per cell — `src/components/Terminal/gridRenderer.ts:1256` |
+| F30 | 1 Hz `syncAgentLifecycleStates` interval, ungated — `src/hooks/useAgentPolling.ts:311` |
+| F60 | bridge still POSTs every 3 s on a fresh connection (server-side lock fast-path landed) — `src-tauri/crates/tuic-bridge/src/main.rs:743` |
+| F67 | embedded assets recompressed per request, no cached body — `src-tauri/src/mcp_http/static_files.rs:134` |
+| F68 | `rotate()` still has no non-test caller — `src-tauri/src/tunnels/audit.rs:159` |
+| F87 | boot hydrate/themes/paneLayout still sequential; repo-config loop covers all repos — `src/hooks/useAppInit.ts:277` |
+| F100 | plugin `srcdoc` still renavigates on every update with full base CSS + SDK — `src/components/PluginPanel/PluginPanel.tsx:129` |
+| F102 | all md tabs stay mounted behind `display:none` — `src/components/TerminalArea.tsx:208` |
+| F107 | `saveActivity` rewrites the whole items array per mutation — `src/stores/activityStore.ts:15` |
+| F110 | knowledge `persist()` pretty-prints the whole session and `sync_all()`s per write — `src-tauri/src/ai_agent/knowledge.rs:484` |
+| F112 | full `ChatRequest` (31 tool schemas) cloned per stream iteration — `src-tauri/src/ai_agent/conversation_engine.rs:809` |
+| F113 | chat request rebuilt from every stored message each turn — `src-tauri/src/diff_triage.rs:1245` |
+| F114 | context/knowledge reassembled before the `!=` comparison; no revision counter — `src-tauri/src/ai_agent/conversation_engine.rs:749` |
+| F119 | inferred-outcome recording still stores 500-char screen tails per idle transition — `src-tauri/src/pty.rs:3374` |
+
+F23, F24, F26, F28 and F29 are exactly the five findings parked under story
+602-11ce: each needs either a grid-frame wire-format change or an architectural
+one (double-buffering, ticker condvar wakeup). They are open by decision, not by
+oversight.
+
+### Dropped as incorrect
+
+- **F25** — claims rows are stringified 2-3x per frame by `+=` concatenation.
+  No `+=` string concatenation exists in `terminal_grid.rs`; every `+=` in the
+  file is integer arithmetic. `read_screen_text` (:1870) and `row_to_text`
+  (:1892) both build with `String::with_capacity(num_cols)` + `push(cell.c)`,
+  once per damaged row per frame. The finding describes code that does not exist.
+- **F69** — already retracted by the 2026-08-17 pass; the credential vault is
+  process-wide cached (`src-tauri/src/credentials.rs:242`).
+
+### Coverage limits of this pass
+
+- Magnitudes were not measured — see the note above. Criteria 2-4 of story
+  616-71e1 stay open until the app is rebuilt and restarted.
+- The owed reproductions (F11 live snapshot and history-wipe, F4 and F90 focused
+  UI/PTY repro, F120 macOS/WebView thread evidence) were not performed; they need
+  a running post-fix build.
+- F129 is verdicted FIXED against the build-cleaner poll gate from story
+  617-fa7d, which currently lives **uncommitted** in the `plugins` submodule.
+  Re-check it once that submodule is committed.
