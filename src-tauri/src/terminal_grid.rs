@@ -423,6 +423,19 @@ pub struct TerminalGrid {
     processor: ansi::Processor,
     prev_rows: Vec<String>,
     last_frame_display_offset: Option<usize>,
+    /// The last query compiled by [`Self::compiled_query`], kept so a repainting
+    /// screen re-runs the user's search without rebuilding its DFAs. Behind a
+    /// mutex because both searches take `&self`.
+    search_regex: parking_lot::Mutex<Option<(String, RegexSearch)>>,
+    /// How many queries have actually been compiled. Test-only: it is how a test
+    /// tells a cache hit from a rebuild without reaching into the cache.
+    #[cfg(test)]
+    regex_compiles: std::sync::atomic::AtomicUsize,
+    /// How many times `process` fell back to reading and diffing the whole
+    /// screen. Test-only: it is how a test tells the fast path from the slow one
+    /// without asserting on private state.
+    #[cfg(test)]
+    full_screen_reads: usize,
     last_frame_history_size: Option<usize>,
     last_frame_screen_lines: Option<usize>,
     last_frame_columns: Option<usize>,
@@ -468,6 +481,11 @@ impl TerminalGrid {
             processor: ansi::Processor::new(),
             prev_rows: Vec::new(),
             last_frame_display_offset: None,
+            search_regex: parking_lot::Mutex::new(None),
+            #[cfg(test)]
+            regex_compiles: std::sync::atomic::AtomicUsize::new(0),
+            #[cfg(test)]
+            full_screen_reads: 0,
             last_frame_history_size: None,
             last_frame_screen_lines: None,
             last_frame_columns: None,
@@ -487,19 +505,29 @@ impl TerminalGrid {
         // Prefer the alacritty parse-damage set: read+diff ONLY the lines whose
         // content actually changed, instead of rebuilding+diffing the whole screen
         // (O(rows*cols)) on every PTY chunk. Fall back to a full read+diff when a
-        // full re-read is required (initial frame / resize / scroll / alt-screen /
-        // clear) or when the view is scrolled (display_offset != 0) — the latter
-        // sidesteps any viewport-vs-grid line-index mismatch. The text-equality
-        // check is preserved in BOTH paths, so an over-reported damaged line (e.g.
-        // cursor-only movement) never produces a spurious ChangedRow.
+        // full re-read is required (initial frame / resize / alt-screen / clear).
+        // The text-equality check is preserved in BOTH paths, so an over-reported
+        // damaged line (e.g. cursor-only movement) never produces a spurious
+        // ChangedRow.
+        //
+        // A scrolled-back view (`display_offset != 0`) deliberately does NOT force
+        // the full path. It used to, to sidestep a viewport-vs-grid line-index
+        // mismatch — but there is none to sidestep: `read_screen_text`,
+        // `row_to_text` and the parse-damage indices all address the active screen
+        // region through `Line(i)`, and the display offset moves the viewport, not
+        // those rows. Forcing it meant a user reading scrollback paid a whole-screen
+        // rebuild per PTY chunk, precisely when a busy agent emits them fastest.
+        // `process_damage_matches_full_diff_while_scrolled_back` holds the line.
         let parse_damage = self.term.parse_damage();
         self.term.reset_parse_damage();
 
-        let must_full = self.prev_rows.is_empty()
-            || self.term.grid().display_offset() != 0
-            || matches!(parse_damage, TermParseDamage::Full);
+        let must_full = self.prev_rows.is_empty() || matches!(parse_damage, TermParseDamage::Full);
 
         if must_full {
+            #[cfg(test)]
+            {
+                self.full_screen_reads += 1;
+            }
             let curr_rows = self.read_screen_text();
             let changed: Vec<ChangedRow> = curr_rows
                 .iter()
@@ -598,6 +626,11 @@ impl TerminalGrid {
         if !self.prev_rows.is_empty() {
             self.prev_rows = self.read_screen_text();
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn full_screen_reads(&self) -> usize {
+        self.full_screen_reads
     }
 
     /// Reference (pre-optimization) implementation of `process`: always rebuilds
@@ -1298,6 +1331,42 @@ impl TerminalGrid {
 
     // --- Search API ---
 
+    /// Run `f` with the compiled form of `query`, compiling it only when the
+    /// query differs from the cached one.
+    ///
+    /// `RegexSearch::new` builds four DFAs, and a redrawing TUI re-ran the search
+    /// on every frame — for a query that only changes when the user types.
+    ///
+    /// The closure takes `&mut RegexSearch` because the DFAs are LAZY: matching
+    /// mutates their caches. It is not per-search state — a search's origin,
+    /// iterator and current DFA state are fresh locals inside alacritty's
+    /// `regex_search_internal`, so nothing about one search is carried into the
+    /// next through this value. That is why one compiled instance can serve both
+    /// `search` and `search_buffer`; the mutex is what keeps two callers from
+    /// touching the shared caches at once.
+    fn compiled_query<T>(&self, query: &str, f: impl FnOnce(&mut RegexSearch) -> T) -> Option<T> {
+        let mut slot = self.search_regex.lock();
+        if slot.as_ref().is_none_or(|(cached, _)| cached != query) {
+            let Ok(compiled) = RegexSearch::new(query) else {
+                // Leave the previous entry: an invalid query is what a user types
+                // halfway through a valid one, and the next keystroke may fix it.
+                return None;
+            };
+            #[cfg(test)]
+            self.regex_compiles
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            *slot = Some((query.to_string(), compiled));
+        }
+        let (_, regex) = slot.as_mut().expect("just populated");
+        Some(f(regex))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn regex_compiles(&self) -> usize {
+        self.regex_compiles
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Regex search across visible grid + scrollback using alacritty's native DFA engine.
     /// Returns matches as (row, col_start, col_end) in absolute coordinates.
     /// The query is auto-escaped for literal substring search unless it contains
@@ -1306,10 +1375,6 @@ impl TerminalGrid {
         if query.is_empty() || query.len() > 1024 {
             return Vec::new();
         }
-        let mut regex = match RegexSearch::new(query) {
-            Ok(r) => r,
-            Err(_) => return Vec::new(),
-        };
         let history = self.term.grid().history_size();
         let topmost = self.term.topmost_line();
         let bottommost = self.term.bottommost_line();
@@ -1318,51 +1383,50 @@ impl TerminalGrid {
         let start = Point::new(topmost, Column(0));
         let end = Point::new(bottommost, last_col);
 
-        let mut matches = Vec::new();
-        let mut origin = start;
+        self.compiled_query(query, |regex| {
+            let mut matches = Vec::new();
+            let mut origin = start;
 
-        while let Some(m) = self.term.regex_search_right(&mut regex, origin, end) {
-            let m_start = *m.start();
-            let m_end = *m.end();
+            while let Some(m) = self.term.regex_search_right(regex, origin, end) {
+                let m_start = *m.start();
+                let m_end = *m.end();
 
-            let abs_row = (m_start.line.0 + history as i32) as usize;
-            // A match can span a wrapped line. `SearchMatch` carries a single row, so
-            // taking `m_end.column` from a DIFFERENT row would paint a highlight on the
-            // start row covering cells that never matched. Clip to the end of the start
-            // row instead: an under-highlight is invisible, an over-highlight is a bug.
-            // DEFERRED (2026-08-07) — full multi-row highlighting needs SearchMatch to
-            // carry per-row segments and the match count to stay 1 per logical hit.
-            let col_end = if m_end.line == m_start.line {
-                m_end.column.0 + 1
-            } else {
-                last_col.0 + 1
-            };
-            matches.push(SearchMatch {
-                row: abs_row,
-                col_start: m_start.column.0,
-                col_end,
-            });
+                let abs_row = (m_start.line.0 + history as i32) as usize;
+                // A match can span a wrapped line. `SearchMatch` carries a single row, so
+                // taking `m_end.column` from a DIFFERENT row would paint a highlight on the
+                // start row covering cells that never matched. Clip to the end of the start
+                // row instead: an under-highlight is invisible, an over-highlight is a bug.
+                // DEFERRED (2026-08-07) — full multi-row highlighting needs SearchMatch to
+                // carry per-row segments and the match count to stay 1 per logical hit.
+                let col_end = if m_end.line == m_start.line {
+                    m_end.column.0 + 1
+                } else {
+                    last_col.0 + 1
+                };
+                matches.push(SearchMatch {
+                    row: abs_row,
+                    col_start: m_start.column.0,
+                    col_end,
+                });
 
-            // Advance past this match
-            if m_end.column < last_col {
-                origin = Point::new(m_end.line, m_end.column + 1);
-            } else if m_end.line < bottommost {
-                origin = Point::new(m_end.line + 1i32, Column(0));
-            } else {
-                break;
+                // Advance past this match
+                if m_end.column < last_col {
+                    origin = Point::new(m_end.line, m_end.column + 1);
+                } else if m_end.line < bottommost {
+                    origin = Point::new(m_end.line + 1i32, Column(0));
+                } else {
+                    break;
+                }
             }
-        }
-        matches
+            matches
+        })
+        .unwrap_or_default()
     }
 
     pub fn search_buffer(&self, query: &str) -> Vec<BufferSearchMatch> {
         if query.is_empty() || query.len() > 1024 {
             return Vec::new();
         }
-        let mut regex = match RegexSearch::new(query) {
-            Ok(r) => r,
-            Err(_) => return Vec::new(),
-        };
         let history = self.term.grid().history_size();
         let topmost = self.term.topmost_line();
         let bottommost = self.term.bottommost_line();
@@ -1371,39 +1435,42 @@ impl TerminalGrid {
         let start = Point::new(topmost, Column(0));
         let end = Point::new(bottommost, last_col);
 
-        let mut matches = Vec::new();
-        let mut origin = start;
-        let mut last_row_line: Option<(usize, String)> = None;
+        self.compiled_query(query, |regex| {
+            let mut matches = Vec::new();
+            let mut origin = start;
+            let mut last_row_line: Option<(usize, String)> = None;
 
-        while let Some(m) = self.term.regex_search_right(&mut regex, origin, end) {
-            let m_start = *m.start();
-            let m_end = *m.end();
-            let abs_row = (m_start.line.0 + history as i32) as usize;
+            while let Some(m) = self.term.regex_search_right(regex, origin, end) {
+                let m_start = *m.start();
+                let m_end = *m.end();
+                let abs_row = (m_start.line.0 + history as i32) as usize;
 
-            let line_text = if last_row_line.as_ref().is_some_and(|(r, _)| *r == abs_row) {
-                last_row_line.as_ref().unwrap().1.clone()
-            } else {
-                let text = self.row_to_text(m_start.line).unwrap_or_default();
-                last_row_line = Some((abs_row, text.clone()));
-                text
-            };
+                let line_text = if last_row_line.as_ref().is_some_and(|(r, _)| *r == abs_row) {
+                    last_row_line.as_ref().unwrap().1.clone()
+                } else {
+                    let text = self.row_to_text(m_start.line).unwrap_or_default();
+                    last_row_line = Some((abs_row, text.clone()));
+                    text
+                };
 
-            matches.push(BufferSearchMatch {
-                line_index: abs_row,
-                line_text,
-                match_start: m_start.column.0,
-                match_end: m_end.column.0 + 1,
-            });
+                matches.push(BufferSearchMatch {
+                    line_index: abs_row,
+                    line_text,
+                    match_start: m_start.column.0,
+                    match_end: m_end.column.0 + 1,
+                });
 
-            if m_end.column < last_col {
-                origin = Point::new(m_end.line, m_end.column + 1);
-            } else if m_end.line < bottommost {
-                origin = Point::new(m_end.line + 1i32, Column(0));
-            } else {
-                break;
+                if m_end.column < last_col {
+                    origin = Point::new(m_end.line, m_end.column + 1);
+                } else if m_end.line < bottommost {
+                    origin = Point::new(m_end.line + 1i32, Column(0));
+                } else {
+                    break;
+                }
             }
-        }
-        matches
+            matches
+        })
+        .unwrap_or_default()
     }
 
     /// Get text of a single screen row (0-based, relative to viewport).
@@ -2120,6 +2187,139 @@ mod tests {
                 rows.iter().filter(|row| row.as_str() == record).count(),
                 1,
                 "{record} duplicated or lost after timeout: {rows:?}"
+            );
+        }
+    }
+
+    /// A live TUI redraw re-runs the same search over and over, and each run was
+    /// compiling the query from scratch — `RegexSearch::new` builds four DFAs
+    /// (forward/backward x literal/regex). The query changes when the user types,
+    /// not when the screen repaints, so the compiled form is worth keeping.
+    #[test]
+    fn repeating_a_search_compiles_the_query_once() {
+        let mut grid = TerminalGrid::new(24, 80, 500);
+        grid.process(b"hello world\r\nhello again\r\n");
+
+        let before = grid.regex_compiles();
+        for _ in 0..5 {
+            assert_eq!(grid.search("hello").len(), 2);
+        }
+        assert_eq!(
+            grid.regex_compiles() - before,
+            1,
+            "the query was recompiled on every repaint"
+        );
+    }
+
+    /// ...but a different query must not be answered with the cached one.
+    #[test]
+    fn changing_the_query_recompiles_it() {
+        let mut grid = TerminalGrid::new(24, 80, 500);
+        grid.process(b"alpha beta\r\n");
+
+        assert_eq!(grid.search("alpha").len(), 1);
+        assert_eq!(grid.search("beta").len(), 1);
+        assert_eq!(grid.search("gamma").len(), 0);
+        assert_eq!(grid.search("alpha").len(), 1);
+        assert_eq!(
+            grid.regex_compiles(),
+            4,
+            "each distinct query compiles once"
+        );
+    }
+
+    /// The buffer search shares the cache: it is the same query, from the same
+    /// find bar, and compiling it a second time defeats the point.
+    #[test]
+    fn the_buffer_search_shares_the_compiled_query() {
+        let mut grid = TerminalGrid::new(24, 80, 500);
+        grid.process(b"needle here\r\n");
+
+        assert_eq!(grid.search("needle").len(), 1);
+        let after_first = grid.regex_compiles();
+        assert_eq!(grid.search_buffer("needle").len(), 1);
+        assert_eq!(grid.regex_compiles(), after_first);
+    }
+
+    /// A user reading scrollback pinned `process()` to the slow path: the
+    /// `display_offset != 0` guard rebuilt and diffed the WHOLE screen for every
+    /// PTY chunk, exactly while a busy agent is producing them fastest.
+    ///
+    /// Measured against a control at the bottom of the buffer, because a chunk
+    /// that scrolls the grid marks damage `Full` either way — the guard's cost
+    /// is only visible on writes that stay within the screen. Scrolling the
+    /// viewport still costs ONE rebuild (`scroll_to_offset` marks the screen
+    /// fully damaged so the next frame is complete); what must not happen is one
+    /// per chunk after that.
+    #[test]
+    fn reading_scrollback_does_not_force_a_full_rebuild_per_chunk() {
+        fn seeded() -> TerminalGrid {
+            let mut grid = TerminalGrid::new(6, 40, 200);
+            for i in 0..40 {
+                grid.process(format!("history line {i}\r\n").as_bytes());
+            }
+            grid
+        }
+        fn in_place_writes(grid: &mut TerminalGrid) -> usize {
+            let before = grid.full_screen_reads();
+            for i in 0..10 {
+                grid.process(format!("\x1b[1;1Hstreamed {i}").as_bytes());
+            }
+            grid.full_screen_reads() - before
+        }
+
+        let mut control = seeded();
+        let at_bottom = in_place_writes(&mut control);
+
+        let mut scrolled = seeded();
+        scrolled.scroll_to_offset(20);
+        assert!(
+            scrolled.display_offset() > 0,
+            "test needs a scrolled-back view"
+        );
+        let while_scrolled = in_place_writes(&mut scrolled);
+
+        assert_eq!(
+            while_scrolled,
+            at_bottom + 1,
+            "reading scrollback costs a full screen rebuild per chunk, not one for the jump"
+        );
+    }
+
+    /// The differential oracle again, this time with the view scrolled back:
+    /// the fast path must report the same `ChangedRow`s the full rebuild would.
+    #[test]
+    fn process_damage_matches_full_diff_while_scrolled_back() {
+        let inputs: &[&[u8]] = &[
+            b"streaming line one",
+            b"\r\nstreaming line two",
+            b"\x1b[1;1Hoverwrite row 0",
+            b"\r\n\r\n\r\n",
+            b"wide \xe4\xb8\xad\xe6\x96\x87 while scrolled",
+            b"\x1b[2Ktrailing erase",
+            b"\r\nlast one",
+        ];
+
+        let mut opt = TerminalGrid::new(8, 40, 200);
+        let mut reference = TerminalGrid::new(8, 40, 200);
+        for i in 0..30 {
+            let seed = format!("seed {i}\r\n");
+            opt.process(seed.as_bytes());
+            reference.process_full(seed.as_bytes());
+        }
+        opt.scroll_to_offset(15);
+        reference.scroll_to_offset(15);
+
+        for (idx, chunk) in inputs.iter().enumerate() {
+            let mut a = opt.process(chunk);
+            let mut b = reference.process_full(chunk);
+            a.sort_by_key(|r| r.row_index);
+            b.sort_by_key(|r| r.row_index);
+            assert_eq!(
+                a,
+                b,
+                "scrolled-back ChangedRow mismatch at chunk {idx} ({:?})",
+                String::from_utf8_lossy(chunk),
             );
         }
     }
