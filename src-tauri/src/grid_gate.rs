@@ -126,6 +126,20 @@ pub(crate) fn publish_grid_frame(tx: &GridWatchTx, frame: Vec<u8>) {
     });
 }
 
+/// Free the retained frame after the last grid client leaves.
+///
+/// A `watch` keeps its last value for the life of the channel, and the channel
+/// lives as long as the session — so a browser that watched a 110 KB grid once
+/// pinned those bytes until the PTY closed. Nothing needs them: a client that
+/// reconnects is answered with a fresh full frame.
+///
+/// The sequence is deliberately left alone. It is what a reconnecting reader
+/// compares against to tell a delta from a gap, and rewinding it would make the
+/// next real frame look like a replay.
+pub(crate) fn release_grid_frame(tx: &GridWatchTx) {
+    tx.send_modify(|slot| slot.frame = Vec::new());
+}
+
 /// Did the watch channel drop frames between `last_seq` and `seq`?
 ///
 /// Consecutive means nothing was lost. The same sequence twice means the reader
@@ -141,6 +155,45 @@ pub(crate) fn watch_dropped_frames(last_seq: u64, seq: u64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- Retained watch frame (604-cb45 F18) ---
+
+    #[test]
+    fn releasing_the_watch_frame_frees_the_bytes_but_keeps_the_sequence() {
+        let tx = new_grid_watch();
+        publish_grid_frame(&tx, vec![7u8; 64 * 1024]);
+        let seq_before = tx.borrow().seq;
+
+        // The last grid client left. Holding its final frame for the rest of the
+        // session buys nothing — a reconnect is answered with a fresh full frame.
+        release_grid_frame(&tx);
+
+        assert!(
+            tx.borrow().frame.is_empty(),
+            "the retained frame must be freed"
+        );
+        assert_eq!(
+            tx.borrow().seq,
+            seq_before,
+            "the sequence must not rewind — a reconnecting client compares against it"
+        );
+    }
+
+    #[test]
+    fn a_released_watch_still_publishes_afterwards() {
+        let tx = new_grid_watch();
+        publish_grid_frame(&tx, vec![1u8, 2, 3]);
+        release_grid_frame(&tx);
+
+        publish_grid_frame(&tx, vec![4u8, 5]);
+
+        assert_eq!(tx.borrow().frame, vec![4u8, 5]);
+        assert_eq!(
+            tx.borrow().seq,
+            2,
+            "release must not consume a sequence number"
+        );
+    }
 
     #[test]
     fn a_fresh_gate_is_open() {

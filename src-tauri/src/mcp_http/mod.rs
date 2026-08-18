@@ -4602,6 +4602,133 @@ mod tests {
         assert_eq!(state.ws_clients.get(&session_id).unwrap().len(), 1);
     }
 
+    // --- WS client fan-out (604-cb45 F13) ---
+    //
+    // A browser that connects once leaves a Vec behind. While that Vec exists
+    // the PTY reader copies every chunk into it before discovering there is
+    // nobody to hand the copy to, for the whole life of the session.
+
+    #[test]
+    fn test_ws_clients_purge_drops_the_empty_entry() {
+        let state = test_state();
+        let session_id = "gone-session".to_string();
+
+        let (tx, rx) = crate::state::new_ws_client_channel();
+        state
+            .ws_clients
+            .entry(session_id.clone())
+            .or_default()
+            .push(tx);
+        drop(rx);
+
+        crate::state::purge_dead_ws_clients(&state.ws_clients, &session_id);
+
+        assert!(
+            state.ws_clients.get(&session_id).is_none(),
+            "the last client leaving must take the map entry with it, so the \
+             reader's lookup misses instead of finding an empty Vec"
+        );
+    }
+
+    #[test]
+    fn test_ws_broadcast_reaps_the_entry_when_every_client_is_gone() {
+        let state = test_state();
+        let session_id = "dead-session".to_string();
+
+        let (tx, rx) = crate::state::new_ws_client_channel();
+        state
+            .ws_clients
+            .entry(session_id.clone())
+            .or_default()
+            .push(tx);
+        drop(rx);
+
+        crate::state::broadcast_to_ws_clients(&state.ws_clients, &session_id, "output");
+
+        assert!(
+            state.ws_clients.get(&session_id).is_none(),
+            "a send that finds every client dead must reap the entry, not leave \
+             an empty Vec for the next chunk to copy into"
+        );
+    }
+
+    #[test]
+    fn test_ws_broadcast_delivers_to_a_live_client() {
+        let state = test_state();
+        let session_id = "live-session".to_string();
+
+        let (tx, mut rx) = crate::state::new_ws_client_channel();
+        state
+            .ws_clients
+            .entry(session_id.clone())
+            .or_default()
+            .push(tx);
+
+        crate::state::broadcast_to_ws_clients(&state.ws_clients, &session_id, "hello");
+
+        assert_eq!(rx.try_recv().ok(), Some("hello".to_string()));
+        assert_eq!(state.ws_clients.get(&session_id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_ws_broadcast_is_a_no_op_without_clients() {
+        let state = test_state();
+
+        crate::state::broadcast_to_ws_clients(&state.ws_clients, "never-connected", "output");
+
+        assert!(state.ws_clients.get("never-connected").is_none());
+    }
+
+    // --- Raw-output WS backpressure (604-cb45 F15) ---
+
+    #[test]
+    fn test_ws_broadcast_drops_a_client_that_stopped_draining() {
+        // An unbounded queue makes a stalled browser a memory leak on the PTY
+        // reader: the producer cannot block (it holds the ring lock), so the
+        // only honest options are drop-the-client or grow forever.
+        let state = test_state();
+        let session_id = "stalled-session".to_string();
+
+        let (tx, _rx) = crate::state::new_ws_client_channel();
+        state
+            .ws_clients
+            .entry(session_id.clone())
+            .or_default()
+            .push(tx);
+
+        for _ in 0..(crate::state::WS_CLIENT_QUEUE_CAPACITY + 8) {
+            crate::state::broadcast_to_ws_clients(&state.ws_clients, &session_id, "chunk");
+        }
+
+        assert!(
+            state.ws_clients.get(&session_id).is_none(),
+            "a client that never drains must be dropped, not queued without limit"
+        );
+    }
+
+    #[test]
+    fn test_ws_broadcast_keeps_a_client_that_drains() {
+        let state = test_state();
+        let session_id = "healthy-session".to_string();
+
+        let (tx, mut rx) = crate::state::new_ws_client_channel();
+        state
+            .ws_clients
+            .entry(session_id.clone())
+            .or_default()
+            .push(tx);
+
+        for _ in 0..(crate::state::WS_CLIENT_QUEUE_CAPACITY * 3) {
+            crate::state::broadcast_to_ws_clients(&state.ws_clients, &session_id, "chunk");
+            assert!(
+                rx.try_recv().is_ok(),
+                "the drained client must keep receiving"
+            );
+        }
+
+        assert_eq!(state.ws_clients.get(&session_id).unwrap().len(), 1);
+    }
+
     // --- MCP proxy wiring tests ---
 
     /// tools/list returns only native tools when no upstream is connected.
