@@ -1292,6 +1292,33 @@ enum ProgressSink<'a> {
     },
 }
 
+/// Build the `review-progress` payload.
+///
+/// `files` carries the COUNT, not the classification vector: this fires on every
+/// file the engine classifies, over both the Tauri window and the SSE bus, and
+/// the only consumer (`githubOpsStore`) reads `files.length` and nothing else.
+/// The frontend already accepts either shape, so a stale client keeps working.
+#[cfg(feature = "desktop")]
+fn pr_review_payload(
+    pr_number: i64,
+    summary: Option<&str>,
+    files: &[FileClassification],
+    phase: &'static str,
+    done: bool,
+    llm_used: bool,
+    llm_model: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "pr_number": pr_number,
+        "summary": summary,
+        "files": files.len(),
+        "phase": phase,
+        "done": done,
+        "llm_used": llm_used,
+        "llm_model": llm_model,
+    })
+}
+
 #[cfg(feature = "desktop")]
 impl ProgressSink<'_> {
     #[allow(clippy::too_many_arguments)]
@@ -1316,15 +1343,8 @@ impl ProgressSink<'_> {
                 state,
                 pr_number,
             } => {
-                let payload = serde_json::json!({
-                    "pr_number": pr_number,
-                    "summary": summary,
-                    "files": files,
-                    "phase": phase,
-                    "done": done,
-                    "llm_used": llm_used,
-                    "llm_model": llm_model,
-                });
+                let payload =
+                    pr_review_payload(*pr_number, summary, files, phase, done, llm_used, llm_model);
                 // Desktop window event (native listener), if a handle exists.
                 if let Some(app) = app {
                     let _ = app.emit(
@@ -1952,6 +1972,31 @@ pub(crate) async fn run_pr_review(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The PR-review progress payload is emitted on every file the engine
+    /// classifies, over BOTH the Tauri window and the SSE bus. Its only consumer
+    /// (`githubOpsStore`, src/stores/githubOps.ts) reads nothing but the number
+    /// of files, so shipping the whole classification vector serialized, sent
+    /// and JSON-parsed a payload that was thrown away on arrival.
+    #[cfg(feature = "desktop")]
+    #[test]
+    fn pr_review_payload_ships_the_count_not_the_vector() {
+        let files = vec![
+            heuristic_classify("Cargo.lock", 10, 5).unwrap(),
+            heuristic_classify("package-lock.json", 3, 1).unwrap(),
+        ];
+
+        let payload =
+            pr_review_payload(42, Some("sum"), &files, "classify", false, true, Some("m"));
+
+        assert_eq!(payload["files"], serde_json::json!(2));
+        assert_eq!(payload["pr_number"], serde_json::json!(42));
+        assert_eq!(payload["summary"], serde_json::json!("sum"));
+        assert_eq!(payload["phase"], serde_json::json!("classify"));
+        assert_eq!(payload["done"], serde_json::json!(false));
+        assert_eq!(payload["llm_used"], serde_json::json!(true));
+        assert_eq!(payload["llm_model"], serde_json::json!("m"));
+    }
 
     fn classify(path: &str) -> Option<FileClassification> {
         heuristic_classify(path, 10, 5)

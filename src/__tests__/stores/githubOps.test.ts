@@ -37,6 +37,22 @@ describe("githubOpsStore", () => {
 		});
 	});
 
+	/**
+	 * The backend sends `files` as a COUNT, not the classification vector: the
+	 * event fires per classified file and this store reads nothing but the
+	 * length. The array form is still accepted so a new client keeps working
+	 * against an older backend.
+	 */
+	it("accepts a numeric files count from the backend", () => {
+		testInScope(() => {
+			store.handleEvent("review-progress", {
+				repo_path: "/repo1",
+				payload: { pr_number: 7, files: 12, phase: "analyzing", done: false },
+			});
+			expect(store.getState("/repo1").reviews[7].findingsCount).toBe(12);
+		});
+	});
+
 	it("updates an existing review in place for the same PR", () => {
 		testInScope(() => {
 			store.handleEvent("review-progress", {
