@@ -144,6 +144,46 @@ describe("transport", () => {
 		});
 	});
 
+	/**
+	 * The desktop app receives `repo-changed` over Tauri IPC; browser, PWA and
+	 * remote clients receive it over `/events` SSE. They are two transports for
+	 * one event, and the same store code consumes both — so the payload keys
+	 * must be identical, not merely similar.
+	 *
+	 * This is the shape the `kind` field was added to. Adding a field to the
+	 * Tauri struct and forgetting the SSE arm (or vice versa) is silent: the
+	 * desktop build keeps working and only remote clients degrade, which is
+	 * exactly the class of drift nobody notices locally.
+	 */
+	describe("repo-changed cross-transport payload parity", () => {
+		/** Field names of the `RepoChangedPayload` struct the Tauri emit sends. */
+		function tauriPayloadFields(): string[] {
+			const source = readRepoFile("src-tauri/src/repo_watcher.rs");
+			const struct = source.match(/pub\(crate\) struct RepoChangedPayload \{([\s\S]*?)\n\}/);
+			expect(struct, "RepoChangedPayload struct not found — the extractor is stale").not.toBeNull();
+			return [...struct![1].matchAll(/pub (\w+):/g)].map((m) => m[1]).sort();
+		}
+
+		/** JSON keys the `/events` SSE arm sends for `AppEvent::RepoChanged`. */
+		function ssePayloadKeys(): string[] {
+			const source = readRepoFile("src-tauri/src/mcp_http/sse_routes.rs");
+			const arm = source.match(/AppEvent::RepoChanged \{[^}]*\} => \{\s*serde_json::json!\(\{([^}]*)\}\)/);
+			expect(arm, "RepoChanged SSE arm not found — the extractor is stale").not.toBeNull();
+			return [...arm![1].matchAll(/"(\w+)":/g)].map((m) => m[1]).sort();
+		}
+
+		it("the Tauri emit and the SSE arm carry the identical field set", () => {
+			expect(ssePayloadKeys()).toEqual(tauriPayloadFields());
+		});
+
+		it("that field set is the one the frontend reads", () => {
+			// Guards the guard: both extractors returning [] would make the
+			// equality above pass vacuously. These are the two keys
+			// useAppInit.ts and remoteEventBridge.ts destructure.
+			expect(tauriPayloadFields()).toEqual(["kind", "repo_path"]);
+		});
+	});
+
 	describe("isTauri()", () => {
 		const original = (globalThis as Record<string, unknown>).__TAURI_INTERNALS__;
 

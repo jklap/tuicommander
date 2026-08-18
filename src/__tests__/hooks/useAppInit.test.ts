@@ -920,7 +920,7 @@ describe("initApp", () => {
 	describe("scoped cache invalidation", () => {
 		function captureRepoAndHeadChanged() {
 			const listenMock = vi.mocked(listen);
-			let repoChangedCb: ((event: { payload: { repo_path: string } }) => void) | null = null;
+			let repoChangedCb: ((event: { payload: { repo_path: string; kind: string } }) => void) | null = null;
 			let headChangedCb: ((event: { payload: { repo_path: string; branch: string } }) => void) | null = null;
 			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
 				if (event === "repo-changed") repoChangedCb = handler as typeof repoChangedCb;
@@ -937,17 +937,21 @@ describe("initApp", () => {
 			mockInvoke.mockClear();
 		});
 
-		it("repo-changed calls clear_repo_caches with repo path, not clear_caches", async () => {
+		// The backend already invalidated. Every producer of `repo-changed`
+		// (the watcher's git-state and working-tree emits, and worktree
+		// creation) calls `invalidate_repo_caches` before it sends the event,
+		// and `clear_repo_caches` does nothing else — so this round trip could
+		// only ever re-clear caches that were already empty, once per repo per
+		// event, on the IPC thread.
+		it("repo-changed does not re-invalidate caches the backend already cleared", async () => {
 			const { getRepoChanged } = captureRepoAndHeadChanged();
 			const deps = createMockDeps();
 			await initApp(deps);
 
 			mockInvoke.mockClear();
-			getRepoChanged()!({ payload: { repo_path: "/my/repo" } });
+			getRepoChanged()!({ payload: { repo_path: "/my/repo", kind: "git-state" } });
 
-			// Should call scoped invalidation
-			expect(mockInvoke).toHaveBeenCalledWith("clear_repo_caches", { path: "/my/repo" });
-			// Should NOT call the global clear_caches
+			expect(mockInvoke).not.toHaveBeenCalledWith("clear_repo_caches", { path: "/my/repo" });
 			expect(mockInvoke).not.toHaveBeenCalledWith("clear_caches");
 		});
 
@@ -967,18 +971,66 @@ describe("initApp", () => {
 			expect(mockInvoke).not.toHaveBeenCalledWith("clear_caches");
 		});
 
-		it("repo-changed scopes invalidation to the specific repo that changed", async () => {
-			const { getRepoChanged } = captureRepoAndHeadChanged();
+		// head-changed keeps its call: `resolve_head_target` short-circuits the
+		// watcher's git-state emit when only HEAD moved, so nothing else
+		// invalidated for a plain branch switch.
+		it("repo-changed leaves the head-changed invalidation untouched", async () => {
+			const { getRepoChanged, getHeadChanged } = captureRepoAndHeadChanged();
+			repositoriesStore.add({ path: "/my/repo", displayName: "Repo" });
+			repositoriesStore.setBranch("/my/repo", "main", { worktreePath: null });
+			repositoriesStore.setActiveBranch("/my/repo", "main");
 			const deps = createMockDeps();
 			await initApp(deps);
 
 			mockInvoke.mockClear();
-			getRepoChanged()!({ payload: { repo_path: "/repo-a" } });
-			getRepoChanged()!({ payload: { repo_path: "/repo-b" } });
+			getRepoChanged()!({ payload: { repo_path: "/my/repo", kind: "git-state" } });
+			expect(mockInvoke).not.toHaveBeenCalledWith("clear_repo_caches", { path: "/my/repo" });
 
-			// Each repo gets its own scoped invalidation call
-			expect(mockInvoke).toHaveBeenCalledWith("clear_repo_caches", { path: "/repo-a" });
-			expect(mockInvoke).toHaveBeenCalledWith("clear_repo_caches", { path: "/repo-b" });
+			getHeadChanged()!({ payload: { repo_path: "/my/repo", branch: "feature" } });
+			expect(mockInvoke).toHaveBeenCalledWith("clear_repo_caches", { path: "/my/repo" });
+		});
+	});
+
+	// The narrowing is only safe because it is a strict subset: `getRevision`
+	// still moves on every event, so a panel that was never migrated cannot go
+	// stale. Only `getGitRevision` is held back on a working-tree change.
+	describe("repo-changed change kind", () => {
+		function captureRepoChanged() {
+			const listenMock = vi.mocked(listen);
+			let cb: ((event: { payload: { repo_path: string; kind: string } }) => void) | null = null;
+			listenMock.mockImplementation(((event: string, handler: (event: { payload: unknown }) => void) => {
+				if (event === "repo-changed") cb = handler as typeof cb;
+				return Promise.resolve(vi.fn());
+			}) as unknown as typeof listen);
+			return () => cb;
+		}
+
+		it("a working-tree change bumps the general revision but not the git one", async () => {
+			const getCb = captureRepoChanged();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const revision = repositoriesStore.getRevision("/repo");
+			const gitRevision = repositoriesStore.getGitRevision("/repo");
+			getCb()!({ payload: { repo_path: "/repo", kind: "working-tree" } });
+			await vi.advanceTimersByTimeAsync(20);
+
+			expect(repositoriesStore.getRevision("/repo")).toBe(revision + 1);
+			expect(repositoriesStore.getGitRevision("/repo")).toBe(gitRevision);
+		});
+
+		it("a git-state change bumps both", async () => {
+			const getCb = captureRepoChanged();
+			const deps = createMockDeps();
+			await initApp(deps);
+
+			const revision = repositoriesStore.getRevision("/repo");
+			const gitRevision = repositoriesStore.getGitRevision("/repo");
+			getCb()!({ payload: { repo_path: "/repo", kind: "git-state" } });
+			await vi.advanceTimersByTimeAsync(20);
+
+			expect(repositoriesStore.getRevision("/repo")).toBe(revision + 1);
+			expect(repositoriesStore.getGitRevision("/repo")).toBe(gitRevision + 1);
 		});
 	});
 

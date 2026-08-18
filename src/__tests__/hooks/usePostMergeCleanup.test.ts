@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "../mocks/tauri";
 import { mockInvoke } from "../mocks/tauri";
 
-const { mockRemoveBranch, mockBumpRevision, mockGetBranches } = vi.hoisted(() => ({
+const { mockRemoveBranch, mockBumpRevision, mockBumpGitRevision, mockGetBranches } = vi.hoisted(() => ({
 	mockRemoveBranch: vi.fn(),
 	mockBumpRevision: vi.fn(),
+	mockBumpGitRevision: vi.fn(),
 	mockGetBranches: vi.fn(),
 }));
 
@@ -12,6 +13,7 @@ vi.mock("../../stores/repositories", () => ({
 	repositoriesStore: {
 		removeBranch: mockRemoveBranch,
 		bumpRevision: mockBumpRevision,
+		bumpGitRevision: mockBumpGitRevision,
 		get: mockGetBranches,
 	},
 }));
@@ -231,7 +233,7 @@ describe("executeCleanup", () => {
 		await executeCleanup(config);
 
 		expect(mockRemoveBranch).toHaveBeenCalledWith("/repo", "feature/login");
-		expect(mockBumpRevision).toHaveBeenCalledWith("/repo");
+		expect(mockBumpGitRevision).toHaveBeenCalledWith("/repo");
 	});
 
 	it("runs stash pop after switch when unstash is true", async () => {
@@ -388,6 +390,6 @@ describe("executeCleanup", () => {
 		});
 		await executeCleanup(config);
 
-		expect(mockBumpRevision).toHaveBeenCalledWith("/repo");
+		expect(mockBumpGitRevision).toHaveBeenCalledWith("/repo");
 	});
 });

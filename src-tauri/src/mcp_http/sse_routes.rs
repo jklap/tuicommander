@@ -285,13 +285,22 @@ fn event_type_name(event: &AppEvent) -> &'static str {
 
 /// Extract just the payload (without the wrapping `event`/`payload` tags).
 /// The SSE `event:` field already carries the type, so we only need the inner data.
+/// Let another module's test compare this payload against the desktop one.
+///
+/// The two are built by different code in different files, which is exactly why
+/// they drift; a test that can only see one of them cannot catch it.
+#[cfg(test)]
+pub(crate) fn event_payload_for_test(event: &AppEvent) -> serde_json::Value {
+    event_payload(event)
+}
+
 fn event_payload(event: &AppEvent) -> serde_json::Value {
     match event {
         AppEvent::HeadChanged { repo_path, branch } => {
             serde_json::json!({ "repo_path": repo_path, "branch": branch })
         }
-        AppEvent::RepoChanged { repo_path } => {
-            serde_json::json!({ "repo_path": repo_path })
+        AppEvent::RepoChanged { repo_path, kind } => {
+            serde_json::json!({ "repo_path": repo_path, "kind": kind })
         }
         AppEvent::SessionCreated {
             session_id,
@@ -485,6 +494,7 @@ mod tests {
     fn repo_changed() -> AppEvent {
         AppEvent::RepoChanged {
             repo_path: "/repo".into(),
+            kind: crate::repo_watcher::RepoChangeKind::WorkingTree,
         }
     }
 

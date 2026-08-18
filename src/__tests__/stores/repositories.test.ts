@@ -686,6 +686,47 @@ describe("repositoriesStore", () => {
 				expect(store.getRevision("/test")).toBe(2);
 			});
 		});
+
+		// The git revision is a strict subset of the general one: panels that only
+		// read committed history (log, reflog, stashes) subscribe to it so a mere
+		// file save stops re-running their git processes. The subset direction
+		// matters — a git-state change also changes what those panels show, so it
+		// MUST bump both. Bumping only the narrow counter would leave every
+		// `getRevision` subscriber stale on commits.
+		describe("git revision tracking", () => {
+			it("returns 0 for unknown repo", () => {
+				testInScope(() => {
+					expect(store.getGitRevision("/unknown-repo")).toBe(0);
+				});
+			});
+
+			it("leaves the git revision alone on a working-tree bump", () => {
+				testInScope(() => {
+					store.add({ path: "/test", displayName: "test" });
+					store.bumpRevision("/test");
+					expect(store.getRevision("/test")).toBe(1);
+					expect(store.getGitRevision("/test")).toBe(0);
+				});
+			});
+
+			it("bumps both counters on a git-state bump", () => {
+				testInScope(() => {
+					store.add({ path: "/test", displayName: "test" });
+					store.bumpGitRevision("/test");
+					expect(store.getGitRevision("/test")).toBe(1);
+					expect(store.getRevision("/test")).toBe(1);
+				});
+			});
+
+			it("drops the git revision when the repo is removed", () => {
+				testInScope(() => {
+					store.add({ path: "/test", displayName: "test" });
+					store.bumpGitRevision("/test");
+					store.remove("/test");
+					expect(store.getGitRevision("/test")).toBe(0);
+				});
+			});
+		});
 	});
 
 	describe("reorderTerminals()", () => {

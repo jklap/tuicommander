@@ -132,5 +132,5 @@ export async function executeCleanup(config: CleanupConfig): Promise<void> {
 	if (didDeleteLocal) {
 		repositoriesStore.removeBranch(repoPath, branchName);
 	}
-	repositoriesStore.bumpRevision(repoPath);
+	repositoriesStore.bumpGitRevision(repoPath);
 }

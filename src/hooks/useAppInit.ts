@@ -17,7 +17,7 @@ import { toastsStore } from "../stores/toasts";
 import { uiStore } from "../stores/ui";
 import { applyAppTheme, listenForThemeChanges, loadThemes } from "../themes";
 import { isTauri } from "../transport";
-import type { SavedTerminal } from "../types";
+import type { RepoChangeKind, SavedTerminal } from "../types";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { isAbsolutePath, normalizeSep, pathBasename, pathStartsWith, pathStripPrefix } from "../utils/pathUtils";
 import { createRevisionCoalescer } from "./revisionCoalescer";
@@ -375,19 +375,22 @@ export async function initApp(deps: AppInitDeps) {
 	// The coalescer collapses the burst WITHOUT losing bumps (each repo is flushed
 	// next frame), so panels re-fetch exactly once. (Backend already skips emits
 	// when git-state is unchanged; this is defense-in-depth for residual bursts.)
-	const revisionCoalescer = createRevisionCoalescer((repoPath) => repositoriesStore.bumpRevision(repoPath));
-	listen<{ repo_path: string }>("repo-changed", (event) => {
-		const { repo_path } = event.payload;
-		// Invalidate caches for this repo so panels fetch fresh data
-		invoke("clear_repo_caches", { path: repo_path }).catch((err) =>
-			appLogger.debug("app", "Failed to clear repo caches", err),
-		);
+	const revisionCoalescer = createRevisionCoalescer((repoPath, isGitState) =>
+		isGitState ? repositoriesStore.bumpGitRevision(repoPath) : repositoriesStore.bumpRevision(repoPath),
+	);
+	listen<{ repo_path: string; kind: RepoChangeKind }>("repo-changed", (event) => {
+		const { repo_path, kind } = event.payload;
+		// No cache invalidation here: every backend producer of this event calls
+		// `invalidate_repo_caches` before sending it, and `clear_repo_caches` does
+		// nothing more — the round trip only ever re-cleared empty caches.
 		// Reload .tuic.json (may have changed)
 		repoSettingsStore.loadLocalConfig(repo_path).catch(() => {});
 		// Signal panels to re-fetch on every logical change, coalesced per frame.
 		// (Not folded into the branchStatsTimer below — that setTimeout is cleared
 		// on each event, which would drop bumps and leave panels stale, story 1277-31a0.)
-		revisionCoalescer.bump(repo_path);
+		// The kind decides how far the bump reaches: a working-tree change moves
+		// only the general revision, so panels reading committed history sit still.
+		revisionCoalescer.bump(repo_path, kind === "git-state");
 		// Discover external worktree changes for THIS repo only. Use 500ms when
 		// idle, 1000ms when this repo's refresh is already running so the next
 		// scoped run doesn't race it. Only the branch-stats refresh is debounced;

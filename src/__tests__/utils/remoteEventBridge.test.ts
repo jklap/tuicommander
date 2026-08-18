@@ -2,13 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
 	bumpRevision: vi.fn(),
+	bumpGitRevision: vi.fn(),
 	debug: vi.fn(),
 	warn: vi.fn(),
 	previewLogPayload: vi.fn((value: string) => `preview:${value}`),
 }));
 
 vi.mock("../../stores/repositories", () => ({
-	repositoriesStore: { bumpRevision: mocks.bumpRevision },
+	repositoriesStore: { bumpRevision: mocks.bumpRevision, bumpGitRevision: mocks.bumpGitRevision },
 }));
 
 vi.mock("../../stores/appLogger", () => ({
@@ -65,11 +66,42 @@ describe("startRemoteEventBridge", () => {
 			expect.arrayContaining(["repo-changed", "session-status", "session-closed"]),
 		);
 
-		source.emit("repo-changed", JSON.stringify({ path: "/work/repo" }));
-		source.emit("repo-changed", JSON.stringify({ path: 42 }));
+		// `repo_path`, not `path` — this is the key `sse_routes::event_payload`
+		// has always sent. Reading the wrong one made the bridge silently drop
+		// every remote repo change.
+		source.emit("repo-changed", JSON.stringify({ repo_path: "/work/repo", kind: "working-tree" }));
+		source.emit("repo-changed", JSON.stringify({ repo_path: 42, kind: "working-tree" }));
 
 		expect(mocks.bumpRevision).toHaveBeenCalledTimes(1);
 		expect(mocks.bumpRevision).toHaveBeenCalledWith("/work/repo");
+		cleanup();
+	});
+
+	// Fail safe, not narrow. A remote daemon older than this field sends
+	// `{repo_path}` with no `kind`; treating that as working-tree would leave
+	// the committed-history panels stale on every remote commit, silently and
+	// forever. Narrow ONLY on an explicit "working-tree".
+	it("treats a missing or unknown kind as git-state", () => {
+		const cleanup = startRemoteEventBridge("remote-old", "http://remote.test");
+		const source = MockEventSource.instances[0];
+
+		source.emit("repo-changed", JSON.stringify({ repo_path: "/legacy" }));
+		source.emit("repo-changed", JSON.stringify({ repo_path: "/future", kind: "submodule" }));
+
+		expect(mocks.bumpGitRevision).toHaveBeenCalledWith("/legacy");
+		expect(mocks.bumpGitRevision).toHaveBeenCalledWith("/future");
+		expect(mocks.bumpRevision).not.toHaveBeenCalled();
+		cleanup();
+	});
+
+	it("routes a git-state change to the narrower counter", () => {
+		const cleanup = startRemoteEventBridge("remote-git", "http://remote.test");
+		const source = MockEventSource.instances[0];
+
+		source.emit("repo-changed", JSON.stringify({ repo_path: "/work/repo", kind: "git-state" }));
+
+		expect(mocks.bumpGitRevision).toHaveBeenCalledWith("/work/repo");
+		expect(mocks.bumpRevision).not.toHaveBeenCalled();
 		cleanup();
 	});
 
