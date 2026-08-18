@@ -933,6 +933,17 @@ function processEvent(raw: unknown): void {
 // Terminal lifecycle
 // ---------------------------------------------------------------------------
 
+/**
+ * Drop a terminal's cached "already read from disk" mark so the next switch to
+ * it re-reads the conversation. Needed when another window owned that
+ * conversation and changed it: `initFromDisk` skips a state it has already
+ * initialized, so without this the terminal keeps showing what it had before.
+ */
+function invalidateTerminal(key: string): void {
+	const s = stateMap.get(key);
+	if (s) s.initialized = false;
+}
+
 async function onTerminalClose(key: string): Promise<void> {
 	const s = stateMap.get(key);
 	if (!s) return;
@@ -995,9 +1006,19 @@ async function listAllConversations(): Promise<ConversationMeta[]> {
 async function loadConversation(id: string): Promise<void> {
 	if (!isTauri()) return;
 	const s = activeConversation();
+	// What the conversation held when the read started. A read only speaks for a
+	// conversation that has not moved on since: a detached window hydrates on
+	// mount without waiting for the disk, so a send can overtake the read, and
+	// applying it afterwards would erase the user's turn and drop the streaming
+	// flag — leaving the reply to land on a history that never asked anything.
+	const before = s.messages();
 	try {
 		const { invoke } = await import("@tauri-apps/api/core");
 		const conv = await invoke<BackendConversation>("load_conversation", { id });
+		if (s.messages() !== before) {
+			appLogger.info("conversation", "loadConversation: dropped a read the conversation outran", { id });
+			return;
+		}
 		batch(() => {
 			s.setChatId(conv.meta.id);
 			s.setMessages(
@@ -1047,6 +1068,7 @@ export const conversationStore = {
 	activeConversation,
 	getOrCreate,
 	setActiveTerminal,
+	invalidateTerminal,
 	onTerminalClose,
 
 	// Reactive getters (proxy through activeConversation)

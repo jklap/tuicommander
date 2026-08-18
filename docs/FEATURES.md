@@ -524,6 +524,7 @@ Tabbed side panel with four tabs: Changes, Log, Stashes, Branches. Replaces the 
 - Tab bar "Detach to Window" context menu entry for per-tab detach (PTY session stays alive in Rust)
 - Generic lifecycle functions: `togglePanel()`, `detachPanel()`, `reattachPanel()` replace per-panel callsites
 - `uiStore.detachedPanels` map tracks all detached panels (replaces former `aiChatDetached` boolean)
+- Disk-backed panels hand over through their store, not through a live link: the detached window is opened with the params from `detachParams()` and reads its own state on mount, and the main window re-reads it in `onReattach()` when the detached copy closes or reattaches
 
 ---
 
@@ -764,7 +765,11 @@ Every terminal tab has a stable UUID (`tuicSession`) injected as the `TUIC_SESSI
 - **Conversation history panel** — click the clock/history icon in the header to browse all saved conversations (title, terminal name, message count, date). Click a row to load it
 - **Usage footer** — live token counter at the bottom: prompt tokens (↑N), completion tokens (↓N), estimated cost ($X.XXXX), cache hit rate
 - Terminal context menu: *Send selection to AI Chat*, *Explain this error*. Toolbar toggle + hotkey
-- **Detachable panel** — click the detach icon in the header to pop the panel into a separate window (500×700). The main window shows a placeholder with "Bring back". Closing the detached window automatically restores the panel. **The two windows do not share state.** The detached window is handed the chat id and selects it, but nothing loads that conversation, so it opens empty; sending from it starts a fresh exchange under the same id. A Rust-side `ChatRegistry` and its `chat_subscribe` / `/ai/chat/{id}/stream` surfaces exist but have **no producer** — nothing ever published to them, and the frontend subscription that consumed them wiped loaded history with an empty snapshot, so it was removed (see story `624-a6c3`)
+- **Detachable panel** — click the detach icon in the header to pop the panel into a separate window (500×700). The main window shows a placeholder with "Bring back". Closing the detached window automatically restores the panel. **The two windows hand the conversation over through disk, they do not share it live.**
+  - **Hand-over out.** The window is opened with the chat id *and* the terminal it was detached from (key, PTY session, name), and adopts both before rendering — the terminal first, since conversations are stored per terminal. It then reads that conversation off disk. An id with nothing saved under it simply opens empty
+  - **It is a full chat, not a viewer.** It sends, runs the agent, and pauses/stops it against the terminal it was handed, and stays pinned to that terminal for its whole life even if the main window moves on. Detaching with no terminal focused hands over no session, and the window is read-only, exactly as the docked panel is. *Run in terminal* on a code block is the one thing that does not work there: it needs the terminal's live xterm handle, which cannot cross a window boundary
+  - **Hand-over back.** On close or reattach the main window re-reads that conversation, so whatever was sent from the detached copy is there. If the user switched terminals meanwhile, the detached terminal's cached conversation is invalidated instead, and re-read when they switch back to it
+  - The two are never live-linked: while both are open, neither sees the other's messages until the next hand-over. A Rust-side `ChatRegistry` and its `chat_subscribe` / `/ai/chat/{id}/stream` surfaces exist but have **no producer** — nothing ever published to them, and the frontend subscription that consumed them wiped loaded history with an empty snapshot, so it was removed (see story `624-a6c3`)
 - Full user guide: [`docs/user-guide/ai-chat.md`](user-guide/ai-chat.md)
 
 ### 6.15 AI Agent Loop (ReAct)

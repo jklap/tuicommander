@@ -1969,3 +1969,16 @@ nothing below works against the currently running binary.
 - [ ] **After a `make dev` restart**: confirm a generic OSC 777 `Claude Code needs your attention` completion notice does not leave the tab awaiting, while plan/skill pickers still do.
 - [ ] **[HUMAN] Listen to the selected `attention` sound in the rebuilt app** — Settings > Notifications > Attention > Test. Boss selected sample C on 2026-08-09: triangular G4→G4→E5, 75/75/140 ms, 50 ms gaps, gain 0.8. Confirm the native engine matches the approved direct-synthesis sample and remains identifiable from another room without being irritating.
 - [ ] **After a `make dev` restart**: `ui action=toast sound="attention"` from an MCP client shows the toast **on the desktop app** (it never did before — the event was bus-only) and plays the callback; muting Attention in Settings silences it while the toast still appears.
+
+## Detached AI Chat window (2026-08-18, frontend only) — story `624-a6c3`
+
+The detached chat now loads the conversation it was detached from and can send to the
+terminal it was detached from. Vite reloads this without a restart.
+
+- [x] The window opens on the conversation, not empty. _(verified: `src/__tests__/panelAdapters/aiChat.test.tsx` "adopts the chat id and loads that conversation from disk on mount")_
+- [x] An id with nothing saved under it opens empty and quiet. _(verified: `aiChatStore.persist.test.ts` "resolves and leaves the conversation empty when the backend read fails" — real store, rejecting backend)_
+- [x] Reattach brings the panel back, once. _(verified: `useDetachedPanelBridge.test.ts` "comes home once when reattach is followed by the window closing" — the paired events the real click sends)_
+- [ ] Detach the chat, type a message in the separate window, confirm it sends and the reply streams there (it was read-only before — the textarea said "Focus a terminal first").
+- [ ] Close the detached window, reopen the panel in the main window, confirm the exchange is there.
+- [ ] Detach from terminal A, switch the main window to terminal B, send from the detached window, close it, then switch back to A and confirm A shows the new messages.
+- [ ] Detach with a non-terminal tab focused and confirm the window is read-only, with the "No terminal focused" banner rather than a broken send.

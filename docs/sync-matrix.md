@@ -183,7 +183,8 @@ When modifying AI Chat panel, settings, context menu actions, or streaming backe
 | `src-tauri/src/ai_chat.rs` | Backend: config, streaming, context assembly, Ollama detection |
 | `src-tauri/src/ai_chat_registry.rs` | Chat Registry: cross-window state sync, Channel fan-out, subscribe/unsubscribe |
 | `src/stores/aiChatStore.ts` | Frontend store: messages, streaming state, registry subscription (sessionId passed per-call, derived from focused terminal) |
-| `src/components/AIChatPanel/AIChatPanel.tsx` | Chat panel component + detach button + registry lifecycle |
+| `src/components/AIChatPanel/AIChatPanel.tsx` | Chat panel component + detach button + registry lifecycle + the optional `terminal` binding a detached window is handed |
+| `src/panelAdapters/aiChat.tsx` | Detached-window adapter: params handed over at detach, terminal + chat id adoption on mount, re-read on reattach |
 | `src/components/AIChatPanel/contextMenuActions.ts` | Terminal context menu integration |
 | `src/components/PanelOrchestrator.tsx` | Switches between AIChatPanel and DetachedPlaceholder |
 | `src/components/DetachedPlaceholder.tsx` | Placeholder shown in main window when panel is detached |

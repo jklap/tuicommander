@@ -11,6 +11,7 @@ const {
 	mockReasoningChunks,
 	mockIsThinking,
 	mockMessages,
+	mockSendMessage,
 } = vi.hoisted(() => ({
 	mockSubscribe: vi.fn().mockResolvedValue(undefined),
 	mockUnsubscribe: vi.fn().mockResolvedValue(undefined),
@@ -21,6 +22,7 @@ const {
 	mockReasoningChunks: vi.fn(() => ""),
 	mockIsThinking: vi.fn(() => false),
 	mockMessages: vi.fn(() => [] as Array<{ role: string; content: string }>),
+	mockSendMessage: vi.fn(),
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -47,7 +49,7 @@ vi.mock("../../stores/conversationStore", () => ({
 		error: () => null,
 		chatId: mockChatId,
 		sessionUsage: () => null,
-		sendMessage: vi.fn(),
+		sendMessage: mockSendMessage,
 		cancelStream: vi.fn(),
 		clearHistory: vi.fn(),
 		subscribeToRegistry: mockSubscribe,
@@ -73,11 +75,18 @@ vi.mock("../../stores/conversationStore", () => ({
 	},
 }));
 
+// `activeId` is mutable so a test can reproduce a DETACHED window, where this
+// store is never hydrated and therefore holds no active terminal at all.
+const terminalsState = vi.hoisted(() => ({ activeId: "t1" as string | undefined, terminals: {} }));
+
 vi.mock("../../stores/terminals", () => ({
 	terminalsStore: {
-		state: { activeId: "t1", terminals: {} },
-		getIds: () => ["t1"],
-		get: () => ({ sessionId: "sess-1", tuicSession: "sess-1", name: "Terminal 1", ref: null }),
+		state: terminalsState,
+		getIds: () => (terminalsState.activeId ? ["t1"] : []),
+		get: () =>
+			terminalsState.activeId
+				? { sessionId: "sess-1", tuicSession: "sess-1", name: "Terminal 1", ref: null }
+				: undefined,
 	},
 }));
 
@@ -199,5 +208,89 @@ describe("AIChatPanel extended-thinking disclosure", () => {
 		mockIsThinking.mockReturnValue(false);
 		const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
 		expect(container.querySelector("details")?.hasAttribute("open")).toBe(false);
+	});
+});
+
+// A detached panel window is a separate WebView: `terminalsStore` is never
+// hydrated there (App returns at renderPanelMode before any main-window
+// effect), so deriving the terminal from that store left the detached chat
+// permanently read-only — it could show a conversation but never add to it.
+// The window is therefore handed its terminal binding explicitly, and that
+// binding is what every send, agent control and session lookup must use.
+describe("AIChatPanel terminal binding", () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mockMessages.mockReturnValue([]);
+		terminalsState.activeId = "t1";
+	});
+
+	afterEach(() => {
+		cleanup();
+		terminalsState.activeId = "t1";
+	});
+
+	const typeAndSend = (container: HTMLElement, text: string) => {
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		textarea.value = text;
+		textarea.dispatchEvent(new Event("input", { bubbles: true }));
+		textarea.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+		return textarea;
+	};
+
+	it("sends with the handed-over session when the store has no terminals", () => {
+		terminalsState.activeId = undefined; // the detached window
+		const { container } = render(() => (
+			<AIChatPanel
+				visible={true}
+				onClose={() => {}}
+				terminal={() => ({ sessionId: "sess-detached", name: "Terminal 7", attached: true })}
+			/>
+		));
+
+		const textarea = typeAndSend(container, "hello from the detached window");
+
+		expect(textarea.disabled).toBe(false);
+		expect(container.textContent).not.toContain("No terminal focused");
+		expect(mockSendMessage).toHaveBeenCalledWith("hello from the detached window", "sess-detached");
+	});
+
+	it("names the handed-over terminal in the header", () => {
+		terminalsState.activeId = undefined;
+		const { container } = render(() => (
+			<AIChatPanel
+				visible={true}
+				onClose={() => {}}
+				terminal={() => ({ sessionId: "sess-detached", name: "Terminal 7", attached: true })}
+			/>
+		));
+
+		expect(container.textContent).toContain("Terminal 7");
+	});
+
+	// Detaching while no terminal is focused hands over nothing to send to. The
+	// panel must stay read-only rather than send into a null session.
+	it("stays read-only when the handed-over binding has no terminal", () => {
+		terminalsState.activeId = undefined;
+		const { container } = render(() => (
+			<AIChatPanel
+				visible={true}
+				onClose={() => {}}
+				terminal={() => ({ sessionId: null, name: null, attached: false })}
+			/>
+		));
+
+		const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+		expect(textarea.disabled).toBe(true);
+		expect(container.textContent).toContain("No terminal focused");
+	});
+
+	// The main window passes no binding and must keep deriving it from the
+	// store exactly as before.
+	it("falls back to the terminals store when no binding is handed over", () => {
+		const { container } = render(() => <AIChatPanel visible={true} onClose={() => {}} />);
+
+		typeAndSend(container, "hello from the main window");
+
+		expect(mockSendMessage).toHaveBeenCalledWith("hello from the main window", "sess-1");
 	});
 });
