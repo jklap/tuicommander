@@ -239,8 +239,85 @@ fn ensure_window_visible(window: &WebviewWindow) {
 #[cfg(feature = "desktop")]
 /// Load configuration from cached AppState
 #[tauri::command]
-fn load_config(state: State<'_, Arc<AppState>>) -> config::AppConfig {
+async fn load_config(app: tauri::AppHandle) -> config::AppConfig {
+    let state = app.state::<Arc<AppState>>();
     state.config.read().clone()
+}
+
+#[cfg(feature = "desktop")]
+mod boot_commands {
+    use super::{config, provider_registry};
+
+    async fn load_boot_file<T, F>(name: &'static str, loader: F) -> Result<T, String>
+    where
+        T: Send + 'static,
+        F: FnOnce() -> T + Send + 'static,
+    {
+        tokio::task::spawn_blocking(loader)
+            .await
+            .map_err(|error| format!("{name} hydration task failed: {error}"))
+    }
+
+    #[tauri::command(rename = "load_repositories")]
+    pub(super) async fn load_repositories_async() -> Result<serde_json::Value, String> {
+        load_boot_file("repositories", config::load_repositories).await
+    }
+
+    #[tauri::command(rename = "load_ui_prefs")]
+    pub(super) async fn load_ui_prefs_async() -> Result<config::UIPrefsConfig, String> {
+        load_boot_file("UI preferences", config::load_ui_prefs).await
+    }
+
+    #[tauri::command(rename = "load_notification_config")]
+    pub(super) async fn load_notification_config_async()
+    -> Result<config::NotificationConfig, String> {
+        load_boot_file("notification config", config::load_notification_config).await
+    }
+
+    #[tauri::command(rename = "load_repo_settings")]
+    pub(super) async fn load_repo_settings_async() -> Result<config::RepoSettingsMap, String> {
+        load_boot_file("repository settings", config::load_repo_settings).await
+    }
+
+    #[tauri::command(rename = "load_repo_defaults")]
+    pub(super) async fn load_repo_defaults_async() -> Result<config::RepoDefaultsConfig, String> {
+        load_boot_file("repository defaults", config::load_repo_defaults).await
+    }
+
+    #[tauri::command(rename = "load_prompt_library")]
+    pub(super) async fn load_prompt_library_async() -> Result<config::PromptLibraryConfig, String> {
+        load_boot_file("prompt library", config::load_prompt_library).await
+    }
+
+    #[tauri::command(rename = "load_notes")]
+    pub(super) async fn load_notes_async() -> Result<serde_json::Value, String> {
+        load_boot_file("notes", config::load_notes).await?
+    }
+
+    #[tauri::command(rename = "load_activity")]
+    pub(super) async fn load_activity_async() -> Result<serde_json::Value, String> {
+        load_boot_file("activity", config::load_activity).await
+    }
+
+    #[tauri::command(rename = "load_keybindings")]
+    pub(super) async fn load_keybindings_async() -> Result<serde_json::Value, String> {
+        load_boot_file("keybindings", config::load_keybindings).await
+    }
+
+    #[tauri::command(rename = "load_agents_config")]
+    pub(super) async fn load_agents_config_async() -> Result<config::AgentsConfig, String> {
+        load_boot_file("agent config", config::load_agents_config).await
+    }
+
+    #[tauri::command(rename = "load_provider_registry")]
+    pub(super) async fn load_provider_registry_async()
+    -> Result<provider_registry::ProviderRegistry, String> {
+        load_boot_file(
+            "provider registry",
+            provider_registry::load_provider_registry,
+        )
+        .await
+    }
 }
 
 #[cfg(feature = "desktop")]
@@ -1051,23 +1128,34 @@ fn raise_fd_limit() {
 #[cfg(not(unix))]
 fn raise_fd_limit() {}
 
-/// Runtime that owns the relay client task.
-///
-/// Single-threaded on purpose: `relay_client::run` is one `select!` over two
-/// channels plus a WSS socket and never calls `spawn_blocking`, so the default
-/// `Runtime::new()` was paying a worker thread per core plus a blocking pool for
-/// work that fits on one thread.
-///
-/// DEFERRED (2026-08-17) — the thread and runtime could go away entirely by
-/// `tokio::spawn`ing the relay onto the HTTP server's runtime, which
-/// `keep_server_owner_runtime_alive` already parks for the process lifetime. That
-/// means moving the spawn inside the server closure, which reorders startup: the
-/// closure awaits Tailscale detection and TLS provisioning before it reaches the
-/// current spawn point. Left for the cold-start story that owns that sequencing.
-fn relay_runtime() -> std::io::Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
+const TAILSCALE_DETECTION_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(500);
+
+async fn detect_tailscale_bounded<F>(detection: F) -> tailscale::TailscaleState
+where
+    F: std::future::Future<Output = tailscale::TailscaleState>,
+{
+    match tokio::time::timeout(TAILSCALE_DETECTION_TIMEOUT, detection).await {
+        Ok(state) => state,
+        Err(_) => {
+            tracing::warn!(
+                source = "tailscale",
+                timeout_ms = TAILSCALE_DETECTION_TIMEOUT.as_millis(),
+                "Tailscale detection timed out; starting the local server without TLS"
+            );
+            tailscale::TailscaleState::NotInstalled
+        }
+    }
+}
+
+fn boot_repo_paths(repositories: &serde_json::Value) -> Vec<String> {
+    repositories
+        .get("repos")
+        .and_then(|repos| repos.as_object())
+        .into_iter()
+        .flat_map(|repos| repos.iter())
+        .filter(|(_, repo)| repo.get("parked").and_then(|value| value.as_bool()) != Some(true))
+        .map(|(path, _)| path.clone())
+        .collect()
 }
 
 #[cfg(feature = "desktop")]
@@ -1144,6 +1232,14 @@ pub fn run() {
     let state = Arc::new(app_state);
     state.wire_event_bus();
 
+    let relay_rx = if config.services.relay.enabled {
+        let (relay_tx, relay_rx) = tokio::sync::oneshot::channel();
+        *state.relay.shutdown.lock() = Some(relay_tx);
+        Some(relay_rx)
+    } else {
+        None
+    };
+
     // Always start HTTP API server (Unix socket is always on; TCP only if remote access enabled)
     // Tailscale detection + TLS provisioning happens inside the server thread (non-blocking to Tauri setup)
     {
@@ -1155,11 +1251,19 @@ pub fn run() {
             rt.block_on(async move {
                 spawn_background_tasks(&server_state);
 
+                if let Some(relay_rx) = relay_rx {
+                    let relay_state = server_state.clone();
+                    tokio::spawn(relay_client::run(relay_state, relay_rx));
+                }
+
                 // Detect Tailscale and provision TLS cert (async, doesn't block window render)
                 let tls_config = if remote_enabled {
-                    let ts_state = tokio::task::spawn_blocking(tailscale::detect)
-                        .await
-                        .unwrap_or(tailscale::TailscaleState::NotInstalled);
+                    let ts_state = detect_tailscale_bounded(async {
+                        tokio::task::spawn_blocking(tailscale::detect)
+                            .await
+                            .unwrap_or(tailscale::TailscaleState::NotInstalled)
+                    })
+                    .await;
                     tracing::info!(
                         source = "tailscale",
                         ?ts_state,
@@ -1219,19 +1323,9 @@ pub fn run() {
     // Skips agents the user explicitly disabled via Settings > Agents.
     agent_mcp::ensure_mcp_configs(&config.disabled_mcp_agents);
 
-    // Start relay client if configured
-    if config.services.relay.enabled {
-        let (relay_tx, relay_rx) = tokio::sync::oneshot::channel();
-        *state.relay.shutdown.lock() = Some(relay_tx);
-        let relay_state = state.clone();
-        std::thread::spawn(move || {
-            let rt = relay_runtime().expect("Failed to create tokio runtime for relay client");
-            rt.block_on(relay_client::run(relay_state, relay_rx));
-        });
-    }
-
     sanitize_window_state();
 
+    let index_strategy = config.index_strategy.clone();
     let builder = tauri::Builder::default();
     let builder = plugins::register_plugin_protocol(builder);
     let builder = builder
@@ -1328,7 +1422,7 @@ pub fn run() {
     }));
 
     builder
-        .setup(|app| {
+        .setup(move |app| {
             #[cfg(desktop)]
             app.handle()
                 .plugin(tauri_plugin_updater::Builder::new().build())?;
@@ -1419,24 +1513,25 @@ pub fn run() {
             // (inotify) notify emulates recursion with a per-directory walk, so
             // registration is not free there (see issue #82 / repo_watcher.rs).
             let repos_json = config::load_repositories();
-            let mut known_repo_paths: Vec<String> = Vec::new();
-            if let Some(repos) = repos_json.get("repos").and_then(|r| r.as_object()) {
-                for repo_path in repos.keys() {
-                    known_repo_paths.push(repo_path.clone());
-                    if let Err(e) = repo_watcher::start_watching(repo_path, app_state) {
-                        app_logger::log_via_state(
-                            app_state,
-                            "warn",
-                            "app",
-                            &format!("[RepoWatcher] Failed to watch {repo_path}: {e}"),
-                        );
-                    }
+            let mut known_repo_paths = boot_repo_paths(&repos_json);
+            for repo_path in &known_repo_paths {
+                if let Err(e) = repo_watcher::start_watching(repo_path, app_state) {
+                    app_logger::log_via_state(
+                        app_state,
+                        "warn",
+                        "app",
+                        &format!("[RepoWatcher] Failed to watch {repo_path}: {e}"),
+                    );
                 }
             }
 
             // Auto-update CLI binary if installed
             #[cfg(feature = "desktop")]
-            tuic_cli::auto_update_cli();
+            tauri::async_runtime::spawn(async {
+                if let Err(error) = tokio::task::spawn_blocking(tuic_cli::auto_update_cli).await {
+                    tracing::warn!(source = "tuic_cli", "CLI auto-update task failed: {error}");
+                }
+            });
 
             // Pre-warm content indices based on index_strategy setting:
             // - "active_only": only the active repo at boot
@@ -1449,9 +1544,7 @@ pub fn run() {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_owned());
 
-                let strategy = config::load_app_config().index_strategy;
-
-                let repos_to_warm = match strategy.as_str() {
+                let repos_to_warm = match index_strategy.as_str() {
                     "all_sequential" => {
                         if let Some(ref active) = active_repo
                             && let Some(pos) = known_repo_paths.iter().position(|p| p == active)
@@ -1711,11 +1804,11 @@ pub fn run() {
             global_hotkey::get_global_hotkey,
             config::load_app_config,
             config::save_app_config,
-            config::load_notification_config,
+            boot_commands::load_notification_config_async,
             config::save_notification_config,
-            config::load_ui_prefs,
+            boot_commands::load_ui_prefs_async,
             config::save_ui_prefs,
-            config::load_repo_settings,
+            boot_commands::load_repo_settings_async,
             config::save_repo_settings,
             config::set_branch_label,
             config::load_repo_local_config,
@@ -1731,27 +1824,27 @@ pub fn run() {
             mcp_oauth::commands::mcp_oauth_callback,
             mcp_oauth::commands::cancel_mcp_upstream_oauth,
             config::check_has_custom_settings,
-            config::load_repo_defaults,
+            boot_commands::load_repo_defaults_async,
             config::save_repo_defaults,
-            config::load_repositories,
+            boot_commands::load_repositories_async,
             config::save_repositories,
             config::load_pane_layout,
             config::save_pane_layout,
-            config::load_prompt_library,
+            boot_commands::load_prompt_library_async,
             config::save_prompt_library,
             config::load_ai_prompts,
             config::save_ai_prompts,
-            config::load_notes,
+            boot_commands::load_notes_async,
             config::save_notes,
             config::save_note_image,
             config::delete_note_assets,
             config::delete_note_assets_batch,
             config::get_note_images_dir,
-            config::load_activity,
+            boot_commands::load_activity_async,
             config::save_activity,
-            config::load_keybindings,
+            boot_commands::load_keybindings_async,
             config::save_keybindings,
-            config::load_agents_config,
+            boot_commands::load_agents_config_async,
             config::save_agents_config,
             agent_hook_commands::set_agent_hook_instrumentation,
             agent_hook_commands::get_agent_hook_state,
@@ -1767,7 +1860,7 @@ pub fn run() {
             prompt::resolve_prompt_variables,
             smart_prompt::execute_headless_prompt,
             smart_prompt::execute_shell_script,
-            provider_registry::load_provider_registry,
+            boot_commands::load_provider_registry_async,
             provider_registry::save_provider_registry,
             provider_registry::get_provider_api_key_exists,
             provider_registry::save_provider_api_key,
@@ -1812,6 +1905,7 @@ pub fn run() {
             sleep_prevention::block_sleep,
             sleep_prevention::unblock_sleep,
             fs::resolve_terminal_path,
+            fs::resolve_terminal_paths,
             fs::list_directory,
             fs::stat_path,
             fs::search_files,
@@ -2273,16 +2367,98 @@ pub async fn run_remote(port: u16) -> anyhow::Result<()> {
 mod tests {
     use super::*;
 
-    /// The relay task is one `select!` over two channels plus a WSS socket. The
-    /// default `Runtime::new()` is the multi-thread flavour, so it was paying a
-    /// worker thread per core plus a blocking pool to do that.
     #[test]
-    fn the_relay_runtime_does_not_spawn_a_worker_pool() {
-        let rt = relay_runtime().expect("build relay runtime");
+    fn relay_does_not_own_a_second_tokio_runtime() {
+        let source = include_str!("lib.rs");
+        assert!(
+            !source.contains(&["fn relay_", "runtime()"].concat()),
+            "the relay task must run on the long-lived HTTP server runtime"
+        );
+    }
+
+    #[tokio::test]
+    async fn tailscale_detection_is_bounded_before_server_bind() {
+        let started = std::time::Instant::now();
+        let state = detect_tailscale_bounded(async {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            tailscale::TailscaleState::NotInstalled
+        })
+        .await;
+
+        assert_eq!(state, tailscale::TailscaleState::NotInstalled);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "a stalled tailscale status must not delay local socket and HTTP binding"
+        );
+    }
+
+    #[test]
+    fn boot_repo_paths_exclude_parked_repositories() {
+        let repositories = serde_json::json!({
+            "repos": {
+                "/active": { "parked": false },
+                "/legacy": {},
+                "/parked": { "parked": true }
+            }
+        });
+
+        let paths = boot_repo_paths(&repositories);
+
+        assert_eq!(paths.len(), 2);
+        assert!(paths.iter().any(|path| path == "/active"));
+        assert!(paths.iter().any(|path| path == "/legacy"));
+        assert!(!paths.iter().any(|path| path == "/parked"));
+    }
+
+    #[test]
+    fn splash_gating_hydration_commands_are_async() {
+        let source = include_str!("lib.rs");
+        assert!(source.contains("async fn load_config("));
+        for command in [
+            "load_repositories",
+            "load_ui_prefs",
+            "load_notification_config",
+            "load_repo_settings",
+            "load_repo_defaults",
+            "load_prompt_library",
+            "load_notes",
+            "load_activity",
+            "load_keybindings",
+            "load_agents_config",
+            "load_provider_registry",
+        ] {
+            assert!(
+                source.contains(&format!("pub(super) async fn {command}_async(")),
+                "{command} must yield to the async runtime during parallel hydration"
+            );
+        }
+    }
+
+    #[test]
+    fn cli_auto_update_is_deferred_off_tauri_setup() {
+        let source = include_str!("lib.rs");
+        let deferred_call = ["spawn_blocking(tuic_cli::", "auto_update_cli)"].concat();
+        assert!(
+            source.contains(&deferred_call),
+            "CLI version probes and replacement must not block Tauri setup"
+        );
+    }
+
+    #[test]
+    fn desktop_setup_reuses_the_config_loaded_at_process_start() {
+        let source = include_str!("lib.rs");
+        let desktop_run = source
+            .split("pub fn run()")
+            .nth(1)
+            .expect("desktop run function")
+            .split("fn build_connect_url")
+            .next()
+            .expect("desktop run body");
+
         assert_eq!(
-            rt.handle().runtime_flavor(),
-            tokio::runtime::RuntimeFlavor::CurrentThread,
-            "the relay must not carry a worker-per-core pool for a two-channel select"
+            desktop_run.matches("config::load_app_config()").count(),
+            1,
+            "setup must reuse the boot config instead of taking the file lock again for index_strategy"
         );
     }
 

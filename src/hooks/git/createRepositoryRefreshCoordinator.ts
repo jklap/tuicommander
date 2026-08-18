@@ -460,11 +460,27 @@ export function createRepositoryRefreshCoordinator(deps: RepositoryRefreshCoordi
 	// event carries the one repo that changed, so scoping avoids re-scanning
 	// every open repo in unison on each filesystem event. Called with no arg
 	// (init, branch ops) it refreshes all active repos as before.
+	const refreshReposCapped = async (paths: string[], maxConcurrent: number): Promise<void> => {
+		let nextIndex = 0;
+		const worker = async () => {
+			while (nextIndex < paths.length) {
+				const path = paths[nextIndex++];
+				await refreshRepo(path);
+			}
+		};
+		await Promise.all(Array.from({ length: Math.min(maxConcurrent, paths.length) }, worker));
+	};
+
 	const refreshAllBranchStats = async (scopeRepoPath?: string) => {
 		// Skip parked repos — they should stay dormant. (#1358-caf5)
 		const activePaths = repositoriesStore.getActivePaths();
-		const paths = scopeRepoPath ? activePaths.filter((p) => p === scopeRepoPath) : activePaths;
-		await Promise.all(paths.map(refreshRepo));
+		const paths = scopeRepoPath ? activePaths.filter((p) => p === scopeRepoPath) : [...activePaths];
+		const activeRepoPath = repositoriesStore.state.activeRepoPath;
+		if (activeRepoPath && paths.includes(activeRepoPath)) {
+			paths.splice(paths.indexOf(activeRepoPath), 1);
+			paths.unshift(activeRepoPath);
+		}
+		await refreshReposCapped(paths, 4);
 	};
 
 	/** Detect orphaned linked worktrees and act based on the orphanCleanup setting. */

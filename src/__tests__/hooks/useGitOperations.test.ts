@@ -1326,6 +1326,38 @@ describe("useGitOperations", () => {
 			expect(branch?.deletions).toBe(3);
 		});
 
+		it("refreshes the active repo first and caps repo fan-out", async () => {
+			const pending: Array<{ path: string; resolve: (value: unknown) => void }> = [];
+			for (let index = 0; index < 7; index++) {
+				const path = `/repo-${index}`;
+				repositoriesStore.add({ path, displayName: `Repo ${index}` });
+				repositoriesStore.setBranch(path, "main", { worktreePath: path });
+			}
+			repositoriesStore.setActive("/repo-6");
+			mockRepo.getRepoStructure.mockImplementation(
+				(path: string) => new Promise((resolve) => pending.push({ path, resolve })),
+			);
+			mockRepo.getRepoDiffStats.mockResolvedValue({ diff_stats: {}, last_commit_ts: {} });
+
+			const refresh = gitOps.refreshAllBranchStats();
+			await vi.waitFor(() => expect(pending.length).toBeGreaterThan(0));
+
+			expect(pending[0].path).toBe("/repo-6");
+			expect(pending.length).toBeLessThanOrEqual(4);
+
+			let released = 0;
+			while (released < 7) {
+				while (released < pending.length) {
+					const item = pending[released++];
+					item.resolve({ worktree_paths: { main: item.path }, merged_branches: [] });
+				}
+				if (released < 7) {
+					await vi.waitFor(() => expect(pending.length).toBeGreaterThan(released));
+				}
+			}
+			await refresh;
+		});
+
 		it("git init: carries shell-branch terminals into the new git branch instead of orphaning them", async () => {
 			// Repro: a clean shell-only repo with two open terminals; `git init` used to
 			// remove the shell branch and create an empty git branch, orphaning the

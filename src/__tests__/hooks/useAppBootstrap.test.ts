@@ -112,6 +112,23 @@ describe("runAppBootstrap", () => {
 		expect(mockDeepLink).toHaveBeenCalledWith(expect.objectContaining({ openSettings: options.openSettings }));
 	});
 
+	it("starts agent detection only after splash-gating hydration completes", async () => {
+		const detectAgents = vi.fn().mockResolvedValue(undefined);
+		let detectionRanDuringHydration = false;
+		mockInitApp.mockImplementationOnce(async (deps) => {
+			const hydration = deps.stores.hydrate();
+			await Promise.resolve();
+			detectionRanDuringHydration = detectAgents.mock.calls.length > 0;
+			await hydration;
+		});
+
+		await runAppBootstrap(makeOptions({ detectAgents }));
+		await flushPromises();
+
+		expect(detectionRanDuringHydration).toBe(false);
+		expect(detectAgents).toHaveBeenCalledOnce();
+	});
+
 	it("offers and installs the CLI only for a first-run native user", async () => {
 		mockInvoke.mockImplementation((command: string) => {
 			if (command === "get_last_seen_version") return Promise.resolve("2.0.0");
