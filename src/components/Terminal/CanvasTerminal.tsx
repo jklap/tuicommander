@@ -41,7 +41,7 @@ import { createGridRenderer, type GridRenderer } from "./gridRenderer";
 import { kittySequenceForKey } from "./kittyKeyboard";
 import { filePathRegex, fileUrlRegex } from "./linkProvider";
 import { continuationRowsAfterSuggest, isSuggestBlock } from "./suggestOverlay";
-import { altSequenceFromCode, createCompositionState, keyToSequence } from "./terminalInput";
+import { altSequenceFromCode, createCompositionState, isPointerInsideRect, keyToSequence } from "./terminalInput";
 
 // Re-export for external consumers
 export type { CellMetrics, CursorShape, DecodedFrame };
@@ -2739,12 +2739,18 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		};
 
 		const onMouseMove = (e: MouseEvent) => {
+			// The listener is on document, so this fires for every terminal on every
+			// move. A hidden one has a 1x1 canvas and canvasToGrid clamps, so without
+			// this it reported cell (0,0) into a PTY the pointer never touched.
+			if (hidden) return;
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
+				const rect = canvasRef.getBoundingClientRect();
+				if (!isPointerInsideRect(e, rect)) return;
 				if (currentFrame.mouseMode >= 3) {
-					const pos = canvasToGrid(e);
+					const pos = canvasToGrid(e, rect);
 					writePtyNoScroll(sgrMouseSequence(35, pos.col, pos.row, true, e));
 				} else if (currentFrame.mouseMode >= 2 && e.buttons > 0) {
-					const pos = canvasToGrid(e);
+					const pos = canvasToGrid(e, rect);
 					const btn = e.buttons & 1 ? 0 : e.buttons & 4 ? 1 : 2;
 					writePtyNoScroll(sgrMouseSequence(32 + btn, pos.col, pos.row, true, e));
 				}
@@ -2770,8 +2776,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		};
 
 		const onMouseUp = (e: MouseEvent) => {
+			if (hidden) return;
 			if (currentFrame && currentFrame.mouseMode > 0 && !e.shiftKey) {
-				const pos = canvasToGrid(e);
+				const rect = canvasRef.getBoundingClientRect();
+				if (!isPointerInsideRect(e, rect)) return;
+				const pos = canvasToGrid(e, rect);
 				if (currentFrame.sgrMouse) {
 					writePtyNoScroll(sgrMouseSequence(e.button, pos.col, pos.row, false, e));
 				}
