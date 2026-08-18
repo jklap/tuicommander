@@ -95,7 +95,11 @@ pub enum AppEvent {
     #[serde(rename = "pty-parsed")]
     PtyParsed {
         session_id: String,
-        parsed: serde_json::Value,
+        /// Behind an `Arc` because `emit_pty_event` fans this out to three
+        /// broadcast lanes and every receiver clones again on `recv()`. Inline,
+        /// that is a deep JSON copy per lane per subscriber on every PTY chunk —
+        /// for consumers that read one `type` field and drop the rest.
+        parsed: Arc<serde_json::Value>,
     },
     #[serde(rename = "pty-exit")]
     PtyExit { session_id: String },
@@ -451,7 +455,7 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
     }
     state.emit_pty_event(AppEvent::PtyParsed {
         session_id: session_id.to_string(),
-        parsed: serde_json::json!({ "type": "choice-cleared" }),
+        parsed: serde_json::json!({ "type": "choice-cleared" }).into(),
     });
     true
 }
@@ -1264,7 +1268,7 @@ pub struct AppState {
     /// Active MCP Streamable HTTP sessions (session_id -> metadata for TTL reaping + client identity)
     pub mcp_sessions: DashMap<String, McpSessionMeta>,
     /// WebSocket clients per PTY session for streaming output
-    pub ws_clients: DashMap<String, Vec<tokio::sync::mpsc::UnboundedSender<String>>>,
+    pub ws_clients: DashMap<String, Vec<WsClientTx>>,
     /// Cached AppConfig to avoid re-reading from disk on every request
     pub(crate) config: parking_lot::RwLock<crate::config::AppConfig>,
     /// TTL caches for git and GitHub query results
@@ -2936,11 +2940,75 @@ impl GitCacheState {
 /// on idle PTY sessions that produce no output (which would otherwise
 /// be the only trigger for retain-based cleanup).
 pub(crate) fn purge_dead_ws_clients(
-    ws_clients: &DashMap<String, Vec<tokio::sync::mpsc::UnboundedSender<String>>>,
+    ws_clients: &DashMap<String, Vec<WsClientTx>>,
     session_id: &str,
 ) {
     if let Some(mut clients) = ws_clients.get_mut(session_id) {
         clients.retain(|tx| !tx.is_closed());
+        let emptied = clients.is_empty();
+        drop(clients);
+        if emptied {
+            reap_empty_ws_entry(ws_clients, session_id);
+        }
+    }
+}
+
+/// Drop the map entry once its last client is gone.
+///
+/// An empty `Vec` left behind is not free: it makes the reader's lookup succeed,
+/// so every chunk is copied for a session nobody is watching. Separate fn
+/// because the `RefMut` must be dropped before touching the same map again.
+fn reap_empty_ws_entry(
+    ws_clients: &DashMap<String, Vec<WsClientTx>>,
+    session_id: &str,
+) {
+    ws_clients.remove_if(session_id, |_, clients| clients.is_empty());
+}
+
+/// How many output chunks may be queued for one raw-output WebSocket client.
+///
+/// The raw lane was the only one of the three stream types without a bound: the
+/// log lane paces itself on the sink it awaits, the grid lane is a `watch` that
+/// keeps one frame, and this one grew for as long as a stalled browser stayed
+/// connected. 256 matches the broadcast lanes.
+pub(crate) const WS_CLIENT_QUEUE_CAPACITY: usize = 256;
+
+pub(crate) type WsClientTx = tokio::sync::mpsc::Sender<String>;
+
+/// A bounded queue for one raw-output WebSocket client.
+pub(crate) fn new_ws_client_channel() -> (WsClientTx, tokio::sync::mpsc::Receiver<String>) {
+    tokio::sync::mpsc::channel(WS_CLIENT_QUEUE_CAPACITY)
+}
+
+/// Fan one chunk out to a session's WebSocket clients.
+///
+/// The single place that copies PTY output for browser clients — both the
+/// streaming path and the EOF flush go through it. It allocates only when
+/// somebody is actually listening, and reaps the entry when the last client
+/// leaves, so a browser that connected once stops costing the reader a copy of
+/// every chunk for the rest of the session's life.
+///
+/// Delivery is `try_send`, never `send`. The caller holds the output ring lock,
+/// which the PTY reader and every connecting client also take — awaiting a slow
+/// socket there would stall the session itself. A client whose queue is full has
+/// stopped draining, so it is dropped; reconnecting replays from the ring, which
+/// is the mechanism that exists for exactly this.
+pub(crate) fn broadcast_to_ws_clients(
+    ws_clients: &DashMap<String, Vec<WsClientTx>>,
+    session_id: &str,
+    data: &str,
+) {
+    let Some(mut clients) = ws_clients.get_mut(session_id) else {
+        return;
+    };
+    if !clients.is_empty() {
+        let owned = data.to_owned();
+        clients.retain(|tx| tx.try_send(owned.clone()).is_ok());
+    }
+    let emptied = clients.is_empty();
+    drop(clients);
+    if emptied {
+        reap_empty_ws_entry(ws_clients, session_id);
     }
 }
 
@@ -3304,11 +3372,11 @@ impl AppState {
                             });
                     }
                     "slash-menu" => {
+                        // Borrowed, like the choice-prompt arm below: `from_value`
+                        // would deep-clone the items subtree out of the very payload
+                        // the Arc exists to stop copying.
                         s.slash_menu_items = parsed.get("items").and_then(|v| {
-                            serde_json::from_value::<Vec<crate::output_parser::SlashMenuItem>>(
-                                v.clone(),
-                            )
-                            .ok()
+                            <Vec<crate::output_parser::SlashMenuItem> as serde::Deserialize>::deserialize(v).ok()
                         });
                     }
                     "choice-prompt" => {
@@ -3316,9 +3384,11 @@ impl AppState {
                         // (title/options/dismiss_key/amend_key) are flat at the top level
                         // alongside "type", and serde ignores the unknown "type" field.
                         let was_awaiting = s.awaiting_input;
-                        s.choice_prompt = serde_json::from_value::<
-                            crate::output_parser::ChoicePromptPayload,
-                        >(parsed.clone())
+                        // Deserialize from the borrowed payload: `from_value`
+                        // wants it owned, which would deep-clone the very tree the
+                        // Arc exists to stop copying.
+                        s.choice_prompt = <crate::output_parser::ChoicePromptPayload
+                            as serde::Deserialize>::deserialize(&**parsed)
                         .ok();
                         s.awaiting_input = true;
                         if !was_awaiting {
@@ -3734,7 +3804,9 @@ impl VtLogBuffer {
     ///
     /// Log extraction reads new primary-screen scrollback lines from the grid's
     /// history. Alternate history may exist for interactive scrolling, but it is
-    /// deliberately excluded from the durable log.
+    /// deliberately excluded from the durable log. The same exclusion applies
+    /// while mouse reporting is on the primary screen (`grok --no-alt-screen`):
+    /// the app owns the viewport and its SU/line dumps are not shell output.
     pub fn process(&mut self, data: &[u8]) -> Vec<ChangedRow> {
         let is_alternate = self.grid.is_alternate_screen();
 
@@ -3748,6 +3820,7 @@ impl VtLogBuffer {
         let changed = self.grid.process(data);
 
         let is_alternate = self.grid.is_alternate_screen();
+        let inline_tui = !is_alternate && self.grid.is_mouse_reporting();
 
         // --- Log extraction: read new scrollback lines from grid ---
         // The grid accumulates scrollback automatically when lines scroll
@@ -3755,12 +3828,14 @@ impl VtLogBuffer {
         //
         // When suppress_capture is set (side panel halved the terminal
         // width), Ink re-renders push fragmented junk into scrollback.
-        // Skip capture but keep scrollback_read in sync.
+        // Skip capture but keep scrollback_read in sync. Inline TUIs use
+        // the same keep-cursor-in-sync path so disabling mouse mode does
+        // not flush the TUI history into the log.
         if !is_alternate {
             let total_sb = self.grid.scrollback_count();
             let delta = total_sb.saturating_sub(self.scrollback_read);
             if delta > 0 {
-                if !self.suppress_capture {
+                if !self.suppress_capture && !inline_tui {
                     let mut new_lines = self.grid.read_scrollback_log_lines(delta);
                     mark_agent_chrome(&mut new_lines);
                     let pty_cols = self.pty_cols;
@@ -3939,6 +4014,10 @@ impl VtLogBuffer {
 
     pub(crate) fn is_alternate_screen(&self) -> bool {
         self.grid.is_alternate_screen()
+    }
+
+    pub(crate) fn is_mouse_reporting(&self) -> bool {
+        self.grid.is_mouse_reporting()
     }
 
     pub(crate) fn is_cursor_visible(&self) -> bool {
@@ -5064,7 +5143,7 @@ mod tests {
         // One event for "a" (has a channel) and one for "b" (no channel attached).
         state.emit_pty_event(AppEvent::PtyParsed {
             session_id: "a".to_string(),
-            parsed: serde_json::json!({ "type": "x" }),
+            parsed: serde_json::json!({ "type": "x" }).into(),
         });
         state.emit_pty_event(AppEvent::PtyExit {
             session_id: "b".to_string(),
@@ -5087,6 +5166,38 @@ mod tests {
             seen.push(e.pty_session_id().map(str::to_string));
         }
         assert_eq!(seen, vec![Some("a".to_string()), Some("b".to_string())]);
+    }
+
+    #[tokio::test]
+    async fn a_parsed_payload_is_shared_with_every_subscriber_not_copied() {
+        // emit_pty_event fans one event out to three lanes, and every broadcast
+        // receiver clones again on recv. With the payload held inline that is a
+        // deep JSON copy per lane per subscriber — paid on every PTY chunk, for
+        // consumers that mostly read one `type` field and drop the rest.
+        let state = tests_support::make_test_app_state();
+        let mut rx_session = state
+            .pty_event_channels
+            .entry("a".to_string())
+            .or_insert_with(|| tokio::sync::broadcast::channel(16).0)
+            .subscribe();
+        let mut rx_bus = state.event_bus.subscribe();
+
+        let parsed: Arc<serde_json::Value> =
+            Arc::new(serde_json::json!({ "type": "status-line", "content": "x" }));
+        state.emit_pty_event(AppEvent::PtyParsed {
+            session_id: "a".to_string(),
+            parsed: Arc::clone(&parsed),
+        });
+
+        for rx in [&mut rx_session, &mut rx_bus] {
+            match rx.try_recv() {
+                Ok(AppEvent::PtyParsed { parsed: got, .. }) => assert!(
+                    Arc::ptr_eq(&parsed, &got),
+                    "every lane must share the payload, not copy it"
+                ),
+                other => panic!("expected PtyParsed, got {other:?}"),
+            }
+        }
     }
 
     #[tokio::test]
@@ -6311,7 +6422,7 @@ mod tests {
         }
         AppEvent::PtyParsed {
             session_id: "s1".to_string(),
-            parsed: obj,
+            parsed: obj.into(),
         }
     }
 
@@ -7339,6 +7450,57 @@ mod tests {
         assert!(
             texts.iter().any(|l| l.starts_with("main")),
             "main lines present in log"
+        );
+    }
+
+    /// `grok --no-alt-screen` (and any inline TUI) enables mouse reporting on the
+    /// primary buffer and then scrolls its own viewport (`CSI S` / line dump).
+    /// Those rows must not enter the durable log — same contract as alt-screen.
+    #[test]
+    fn test_vt_log_primary_mouse_mode_suppresses_extraction() {
+        let mut buf = make_vt_log();
+        // Combined DECSET the way grok actually emits it (not `?1000h` alone).
+        buf.process(b"\x1b[?1000;1002;1003;1006h");
+        for i in 0..30 {
+            buf.process(format!("grok-frame {i}\r\n").as_bytes());
+        }
+        assert!(
+            buf.lines().is_empty(),
+            "mouse-mode primary TUI must not be logged, got: {:?}",
+            log_texts(&buf)
+        );
+        assert!(
+            buf.grid_history_size() > 0,
+            "grid scrollback must still accumulate so the scrollbar works"
+        );
+    }
+
+    /// Turning mouse reporting off resumes durable-log capture. Leftover TUI
+    /// rows still on the primary viewport may scroll into the log afterwards
+    /// (that is the point of `--no-alt-screen`); what must not happen is a
+    /// one-shot flush of the history that accumulated *while* mouse mode was on.
+    #[test]
+    fn test_vt_log_primary_mouse_mode_exit_resumes_capture() {
+        let mut buf = make_vt_log();
+        buf.process(b"\x1b[?1000h");
+        for i in 0..30 {
+            buf.process(format!("tui {i}\r\n").as_bytes());
+        }
+        let history_while_tui = buf.grid_history_size();
+        assert!(history_while_tui > 0, "TUI must have created grid history");
+        buf.process(b"\x1b[?1000l");
+        assert!(
+            buf.lines().is_empty(),
+            "disabling mouse mode must not flush TUI history, got: {:?}",
+            log_texts(&buf)
+        );
+        for i in 0..30 {
+            buf.process(format!("shell {i}\r\n").as_bytes());
+        }
+        let texts = log_texts(&buf);
+        assert!(
+            texts.iter().any(|l| l.starts_with("shell")),
+            "shell lines must appear after mouse mode ends, got: {texts:?}"
         );
     }
 
