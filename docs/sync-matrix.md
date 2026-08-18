@@ -26,6 +26,7 @@ When modifying PluginHost API, capabilities, manifest schema, Tauri commands use
 | `src-tauri/src/plugins.rs` | `KNOWN_CAPABILITIES` list (new capabilities); `set_plugin_output_watchers` sync |
 | `src-tauri/src/output_watchers.rs` | Rust-side OutputWatcher matching: `WatcherSpec`, `OutputWatcherRegistry::sync` (per-client sets; which patterns are rejected back to the frontend), `to_portable_pattern` (ECMAScript class escapes — Rust may over-match, never under-match), `clean_line` — a **port** of `src/utils/stripAnsi.ts` + the backtick strip — and `StreamLines`, the **only** line assembler. Changing `stripAnsi.ts` requires changing `clean_line`, or the two sides match on different text |
 | `src-tauri/src/lib.rs` | Register new Tauri commands in `invoke_handler` |
+| `docs/backend/command-threading.md` | Where a new command runs (`fn` = macOS main thread). Update the audit when a command changes placement |
 | `docs/plugins.md` | Plugin developer guide (API reference, capabilities table, **Panel CSS Design Strategy** section, examples) |
 | `src-tauri/src/mcp_http/plugin_docs.rs` | AI-optimized plugin reference (`PLUGIN_DOCS` const — **must stay in sync with `docs/plugins.md`**) |
 | `docs/api/tauri-commands.md` | Tauri commands reference table |

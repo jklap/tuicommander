@@ -7,18 +7,19 @@ use super::types::*;
 use super::{err_500, json_result, validate_path_string, validate_repo_path};
 
 // `list_directory_http` intentionally omits `State` + `indexer_throttle`: the
-// underlying `fs::list_directory_impl` is a single `read_dir` + sort, which
-// completes in microseconds on non-pathological directories and does not walk
-// recursively. The throttle exists to keep *long* blocking walks (search,
-// content grep, BM25 indexing) off the Tokio executor.
+// throttle exists to bound *concurrent* blocking walks (search, content grep,
+// BM25 indexing) against each other, and a directory listing is not one of them.
+//
+// It is NOT free, though — `fs::list_directory_impl` runs `git status
+// --porcelain` as a subprocess for the requested subdir, which is tens to
+// hundreds of ms on a large repo. It is reached through the command so this
+// route and the IPC one make the same threading decision (story 607-f483); the
+// blocking work happens inside `spawn_blocking_fs` there.
 pub(super) async fn list_directory_http(Query(q): Query<FsDirQuery>) -> Response {
     if let Err(e) = validate_repo_path(&q.repo_path) {
         return e.into_response();
     }
-    json_result(crate::fs::list_directory_impl(
-        q.repo_path,
-        q.subdir.unwrap_or_default(),
-    ))
+    json_result(crate::fs::list_directory(q.repo_path, q.subdir.unwrap_or_default()).await)
 }
 
 pub(super) async fn search_files_http(
@@ -51,20 +52,27 @@ pub(super) async fn search_content_http(
     let whole_word = q.whole_word.unwrap_or(false);
     let case_sensitive = q.case_sensitive.unwrap_or(false);
 
-    // Use BM25 index when available and applicable. Guard is held for the
-    // duration of the in-memory query (fast, stays on the executor).
+    // Use the BM25 index when available and applicable. This is NOT a cheap
+    // in-memory lookup: ranking is proportional to the index and the grep phase
+    // then opens up to 50 files, so it goes to the blocking pool like the
+    // fallback below. Its IPC twin has always offloaded (story 607-f483).
     let can_use_index = !use_regex && !whole_word && !q.query.is_empty();
     if can_use_index {
-        let _guard = state.indexer_throttle.begin_search();
+        let guard = state.indexer_throttle.begin_search();
         let index_arc = crate::content_index::ensure_index(&state, &q.repo_path);
-        let index = index_arc.read();
-        if index.is_ready() {
-            return json_result(crate::fs::search_via_index(
-                &index,
-                &q.query,
-                case_sensitive,
-                q.limit,
-            ));
+        let query = q.query.clone();
+        let limit = q.limit;
+        let indexed = tokio::task::spawn_blocking(move || {
+            let _g = guard;
+            let index = index_arc.read();
+            index
+                .is_ready()
+                .then(|| crate::fs::search_via_index(&index, &query, case_sensitive, limit))
+        })
+        .await
+        .unwrap_or(None);
+        if let Some(result) = indexed {
+            return json_result(result);
         }
     }
 
@@ -96,17 +104,25 @@ pub(super) async fn search_content_all_http(
     let case_sensitive = q.case_sensitive.unwrap_or(false);
     let global_limit = q.limit.unwrap_or(100);
 
-    let _guard = state.indexer_throttle.begin_search();
-    let result = crate::fs::search_content_all_impl(&state, &q.query, case_sensitive, global_limit);
+    // Same offload as the IPC twin `fs::search_content_all`: the impl queries
+    // every ready BM25 index and falls back to a walk, so it must not run on the
+    // executor (story 607-f483).
+    let guard = state.indexer_throttle.begin_search();
+    let result = tokio::task::spawn_blocking(move || {
+        let _g = guard;
+        crate::fs::search_content_all_impl(&state, &q.query, case_sensitive, global_limit)
+    })
+    .await
+    .map_err(|e| format!("search task panicked: {e}"));
 
-    json_result(Ok::<crate::fs::ContentSearchResult, String>(result))
+    json_result(result)
 }
 
 pub(super) async fn fs_read_file_http(Query(q): Query<FsFileQuery>) -> Response {
     if let Err(e) = validate_repo_path(&q.repo_path) {
         return e.into_response();
     }
-    json_result(crate::fs::fs_read_file(q.repo_path, q.file))
+    json_result(crate::fs::fs_read_file(q.repo_path, q.file).await)
 }
 
 /// Repo file read for the code editor, at the larger `MAX_EDITOR_LARGE_FILE_SIZE` cap.
@@ -114,11 +130,9 @@ pub(super) async fn read_editor_file_http(Query(q): Query<FsFileQuery>) -> Respo
     if let Err(e) = validate_repo_path(&q.repo_path) {
         return e.into_response();
     }
-    json_result(crate::read_file_impl_with_limit(
-        q.repo_path,
-        q.file,
-        crate::MAX_EDITOR_LARGE_FILE_SIZE,
-    ))
+    // Through the command, so this route and the IPC one make the same threading
+    // decision: a 250 MB read belongs on the blocking pool, not the executor.
+    json_result(crate::read_editor_file(q.repo_path, q.file).await)
 }
 
 /// Check if a path falls within any of the given repository roots.
@@ -173,7 +187,7 @@ pub(super) async fn read_external_file_http(Query(q): Query<FsExternalFileQuery>
     if let Some(resp) = deny_unless_in_roots(&q.path, &registered_repo_roots()) {
         return resp;
     }
-    json_result(crate::read_external_file(q.path))
+    json_result(crate::read_external_file(q.path).await)
 }
 
 /// External (absolute-path) file read for the code editor, at the larger
@@ -184,17 +198,16 @@ pub(super) async fn read_editor_file_external_http(
     if let Some(resp) = deny_unless_in_roots(&q.path, &registered_repo_roots()) {
         return resp;
     }
-    json_result(crate::read_external_file_with_limit(
-        &q.path,
-        crate::MAX_EDITOR_LARGE_FILE_SIZE,
-    ))
+    // Through the command, for the same threading-parity reason as
+    // `read_editor_file_http`.
+    json_result(crate::read_editor_file_external(q.path).await)
 }
 
 pub(super) async fn write_file_http(Json(body): Json<FsWriteFileRequest>) -> Response {
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
-    match crate::fs::write_file(body.repo_path, body.file, body.content) {
+    match crate::fs::write_file(body.repo_path, body.file, body.content).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
     }
@@ -204,7 +217,7 @@ pub(super) async fn create_directory_http(Json(body): Json<FsDirCreateRequest>) 
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
-    match crate::fs::create_directory(body.repo_path, body.dir) {
+    match crate::fs::create_directory(body.repo_path, body.dir).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
     }
@@ -214,7 +227,7 @@ pub(super) async fn delete_path_http(Json(body): Json<FsPathRequest>) -> Respons
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
-    match crate::fs::delete_path(body.repo_path, body.path) {
+    match crate::fs::delete_path(body.repo_path, body.path).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
     }
@@ -224,7 +237,7 @@ pub(super) async fn rename_path_http(Json(body): Json<FsRenameRequest>) -> Respo
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
-    match crate::fs::rename_path(body.repo_path, body.from, body.to) {
+    match crate::fs::rename_path(body.repo_path, body.from, body.to).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
     }
@@ -234,7 +247,7 @@ pub(super) async fn copy_path_http(Json(body): Json<FsCopyRequest>) -> Response 
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
-    match crate::fs::copy_path(body.repo_path, body.from, body.to) {
+    match crate::fs::copy_path(body.repo_path, body.from, body.to).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
     }
@@ -244,7 +257,7 @@ pub(super) async fn add_to_gitignore_http(Json(body): Json<FsGitignoreRequest>) 
     if let Err(e) = validate_repo_path(&body.repo_path) {
         return e.into_response();
     }
-    match crate::fs::add_to_gitignore(body.repo_path, body.pattern) {
+    match crate::fs::add_to_gitignore(body.repo_path, body.pattern).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
     }
@@ -290,7 +303,7 @@ pub(super) async fn write_external_file_http(Json(body): Json<FsExternalWriteReq
     if let Some(resp) = deny_unless_in_roots(&body.path, &registered_repo_roots()) {
         return resp;
     }
-    match crate::write_external_file(body.path, body.content) {
+    match crate::write_external_file(body.path, body.content).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
     }
@@ -302,7 +315,7 @@ pub(super) async fn copy_path_abs_http(Json(body): Json<FsAbsTransferRequest>) -
     if let Some(resp) = deny_unless_both_in_roots(&body.from, &body.to) {
         return resp;
     }
-    match crate::fs::copy_path_abs(body.from, body.to) {
+    match crate::fs::copy_path_abs(body.from, body.to).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
     }
@@ -314,7 +327,7 @@ pub(super) async fn move_path_abs_http(Json(body): Json<FsAbsTransferRequest>) -
     if let Some(resp) = deny_unless_both_in_roots(&body.from, &body.to) {
         return resp;
     }
-    match crate::fs::move_path_abs(body.from, body.to) {
+    match crate::fs::move_path_abs(body.from, body.to).await {
         Ok(()) => (StatusCode::OK, Json(serde_json::json!({"ok": true}))).into_response(),
         Err(e) => err_500(&e),
     }

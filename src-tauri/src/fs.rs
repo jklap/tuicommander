@@ -5,6 +5,28 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "desktop")]
 use tauri::Emitter;
 
+/// Run a blocking filesystem closure on Tokio's blocking pool, flattening the
+/// `JoinError` into the closure's own `Result<T, String>`.
+///
+/// This is what keeps a `#[tauri::command]` off the UI thread. A command written
+/// as a plain `fn` gets `ExecutionContext::Blocking` and runs inline in the IPC
+/// handler — on macOS that is the main thread, so a recursive copy or a 250 MB
+/// read freezes the WebView until it finishes. Writing the command as
+/// `async fn` moves it to the Tokio executor, and wrapping the actual syscalls
+/// here keeps them off the async workers too.
+///
+/// Both transports go through the commands, so the IPC and HTTP twins inherit
+/// the same threading decision instead of each choosing one (story 607-f483).
+pub(crate) async fn spawn_blocking_fs<T, F>(f: F) -> Result<T, String>
+where
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| format!("fs task failed: {e}"))?
+}
+
 /// A directory entry returned by `list_directory`.
 #[derive(Debug, Clone, Serialize)]
 pub struct DirEntry {
@@ -340,9 +362,13 @@ pub async fn stat_path(path: String) -> PathStat {
 }
 
 /// List entries in a directory within a repository.
+///
+/// Not the microsecond `read_dir` it looks like: `list_directory_impl` runs
+/// `git status --porcelain` as a **subprocess** for the requested subdir, which
+/// costs tens to hundreds of ms on a large repo. It goes to the blocking pool.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub async fn list_directory(repo_path: String, subdir: String) -> Result<Vec<DirEntry>, String> {
-    list_directory_impl(repo_path, subdir)
+    spawn_blocking_fs(move || list_directory_impl(repo_path, subdir)).await
 }
 
 pub(crate) fn list_directory_impl(
@@ -481,8 +507,16 @@ pub async fn search_files(
     query: String,
     limit: Option<usize>,
 ) -> Result<Vec<DirEntry>, String> {
-    let _guard = app_state.indexer_throttle.begin_search();
-    search_files_impl(repo_path, query, limit)
+    // `search_files_impl` is a synchronous `WalkBuilder` traversal and can block
+    // for hundreds of ms on large repos. The HTTP twin has always moved it off
+    // the executor; this one used to run it inline, so the same work made two
+    // different threading decisions depending on the transport (story 607-f483).
+    let guard = app_state.indexer_throttle.begin_search();
+    spawn_blocking_fs(move || {
+        let _g = guard; // hold across the walk; dropped when the closure returns
+        search_files_impl(repo_path, query, limit)
+    })
+    .await
 }
 
 #[cfg(feature = "desktop")]
@@ -796,7 +830,10 @@ pub(crate) fn search_via_index(
     use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
 
     let max_matches = limit.unwrap_or(1000);
-    // BM25 phase: get top-ranked files (~1ms)
+    // BM25 phase: rank the corpus and take the top 50 files. Scoring is
+    // in-memory but proportional to the index, and nothing bounds its duration —
+    // the grep phase below then OPENS each of those 50 files. Callers must treat
+    // this whole function as blocking (story 607-f483).
     let ranked_files = index.search(query, 50);
 
     if ranked_files.is_empty() {
@@ -1175,8 +1212,8 @@ fn build_search_pattern(query: &str) -> regex::Regex {
 /// Read a file's content within a repository.
 /// Re-uses the existing `read_file_impl` from lib.rs.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn fs_read_file(repo_path: String, file: String) -> Result<String, String> {
-    crate::read_file_impl(repo_path, file)
+pub async fn fs_read_file(repo_path: String, file: String) -> Result<String, String> {
+    spawn_blocking_fs(move || crate::read_file_impl(repo_path, file)).await
 }
 
 /// Atomically write `data` to `target` via temp-file + rename, PRESERVING the
@@ -1220,7 +1257,11 @@ pub(crate) fn atomic_write(target: &std::path::Path, data: &[u8]) -> Result<(), 
 
 /// Write content to a file within a repository.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn write_file(repo_path: String, file: String, content: String) -> Result<(), String> {
+pub async fn write_file(repo_path: String, file: String, content: String) -> Result<(), String> {
+    spawn_blocking_fs(move || write_file_impl(repo_path, file, content)).await
+}
+
+fn write_file_impl(repo_path: String, file: String, content: String) -> Result<(), String> {
     let (_canonical_repo, canonical_target) = if PathBuf::from(&repo_path).join(&file).exists() {
         validate_path(&repo_path, &file)?
     } else {
@@ -1233,7 +1274,11 @@ pub fn write_file(repo_path: String, file: String, content: String) -> Result<()
 
 /// Create a directory (and parents) within a repository.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn create_directory(repo_path: String, dir: String) -> Result<(), String> {
+pub async fn create_directory(repo_path: String, dir: String) -> Result<(), String> {
+    spawn_blocking_fs(move || create_directory_impl(repo_path, dir)).await
+}
+
+fn create_directory_impl(repo_path: String, dir: String) -> Result<(), String> {
     let repo = PathBuf::from(&repo_path);
     let target = repo.join(&dir);
 
@@ -1263,8 +1308,15 @@ pub fn create_directory(repo_path: String, dir: String) -> Result<(), String> {
 }
 
 /// Delete a file or directory within a repository.
+///
+/// `remove_dir_all` on a deep tree is unbounded work, which is why the command
+/// hands it to the blocking pool instead of running it on the IPC thread.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn delete_path(repo_path: String, path: String) -> Result<(), String> {
+pub async fn delete_path(repo_path: String, path: String) -> Result<(), String> {
+    spawn_blocking_fs(move || delete_path_impl(repo_path, path)).await
+}
+
+fn delete_path_impl(repo_path: String, path: String) -> Result<(), String> {
     let (_canonical_repo, canonical_target) = validate_path(&repo_path, &path)?;
 
     if canonical_target.is_dir() {
@@ -1277,7 +1329,11 @@ pub fn delete_path(repo_path: String, path: String) -> Result<(), String> {
 
 /// Rename/move a file or directory within a repository.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn rename_path(repo_path: String, from: String, to: String) -> Result<(), String> {
+pub async fn rename_path(repo_path: String, from: String, to: String) -> Result<(), String> {
+    spawn_blocking_fs(move || rename_path_impl(repo_path, from, to)).await
+}
+
+fn rename_path_impl(repo_path: String, from: String, to: String) -> Result<(), String> {
     let (_canonical_repo, canonical_from) = validate_path(&repo_path, &from)?;
     // NEVER canonicalize the destination — only its parent. On case-insensitive
     // filesystems (macOS APFS, Windows NTFS) `canonicalize("readme.md")` resolves
@@ -1290,7 +1346,11 @@ pub fn rename_path(repo_path: String, from: String, to: String) -> Result<(), St
 
 /// Copy a file within a repository.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn copy_path(repo_path: String, from: String, to: String) -> Result<(), String> {
+pub async fn copy_path(repo_path: String, from: String, to: String) -> Result<(), String> {
+    spawn_blocking_fs(move || copy_path_impl(repo_path, from, to)).await
+}
+
+fn copy_path_impl(repo_path: String, from: String, to: String) -> Result<(), String> {
     let (_canonical_repo, canonical_from) = validate_path(&repo_path, &from)?;
     // Same rule as `rename_path`: the destination keeps the requested spelling.
     let (_, canonical_to) = validate_path_for_creation(&repo_path, &to)?;
@@ -1323,7 +1383,11 @@ pub fn copy_path(repo_path: String, from: String, to: String) -> Result<(), Stri
 /// user is the trust boundary — so any path the user can already see is allowed
 /// (mirrors `read_external_file`).
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn copy_path_abs(from: String, to: String) -> Result<(), String> {
+pub async fn copy_path_abs(from: String, to: String) -> Result<(), String> {
+    spawn_blocking_fs(move || copy_path_abs_impl(from, to)).await
+}
+
+fn copy_path_abs_impl(from: String, to: String) -> Result<(), String> {
     let from_path = PathBuf::from(&from);
     let to_path = PathBuf::from(&to);
     if from_path == to_path {
@@ -1344,7 +1408,11 @@ pub fn copy_path_abs(from: String, to: String) -> Result<(), String> {
 /// Falls back to copy+remove when `rename` fails across filesystems (EXDEV).
 /// See [`copy_path_abs`] for the trust-boundary rationale.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn move_path_abs(from: String, to: String) -> Result<(), String> {
+pub async fn move_path_abs(from: String, to: String) -> Result<(), String> {
+    spawn_blocking_fs(move || move_path_abs_impl(from, to)).await
+}
+
+fn move_path_abs_impl(from: String, to: String) -> Result<(), String> {
     let from_path = PathBuf::from(&from);
     let to_path = PathBuf::from(&to);
     if from_path == to_path {
@@ -1424,6 +1492,15 @@ fn copy_dir_recursive(src: &std::path::Path, dst: &std::path::Path) -> std::io::
 /// directory, the function performs no filesystem operations and returns
 /// `needs_confirm=true`. When `allow_recursive=true`, directories are moved
 /// via rename (or copy+remove on cross-device) or copied recursively.
+///
+/// DEFERRED (2026-08-18) — still a sync command, so `copy_dir_recursive` runs
+/// on the IPC thread (the macOS main thread) and dropping a large folder
+/// freezes the WebView until the copy finishes. Every sibling command in this
+/// file was moved to `async fn` + `spawn_blocking_fs` in story 607-f483; this
+/// one was held back because it is the backend of a drag-drop and the D&D
+/// surface needs Boss's approval before it is touched. The conversion is
+/// mechanical when that approval comes: body → `fs_transfer_paths_impl`,
+/// command → `async fn` wrapper. Nothing else changes.
 #[cfg_attr(feature = "desktop", tauri::command)]
 pub fn fs_transfer_paths(
     dest_dir: String,
@@ -1654,7 +1731,11 @@ pub fn resolve_terminal_path(cwd: String, candidate: String) -> Option<ResolvedF
 
 /// Append a path pattern to the repo's .gitignore file.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub fn add_to_gitignore(repo_path: String, pattern: String) -> Result<(), String> {
+pub async fn add_to_gitignore(repo_path: String, pattern: String) -> Result<(), String> {
+    spawn_blocking_fs(move || add_to_gitignore_impl(repo_path, pattern)).await
+}
+
+fn add_to_gitignore_impl(repo_path: String, pattern: String) -> Result<(), String> {
     let repo = PathBuf::from(&repo_path);
     let canonical_repo = repo
         .canonicalize()
@@ -2042,7 +2123,7 @@ mod tests {
         let repo_path = dir.path().to_string_lossy().to_string();
 
         // Write a new file
-        write_file(
+        write_file_impl(
             repo_path.clone(),
             "new.txt".to_string(),
             "hello".to_string(),
@@ -2054,7 +2135,7 @@ mod tests {
         );
 
         // Overwrite
-        write_file(repo_path, "new.txt".to_string(), "world".to_string()).unwrap();
+        write_file_impl(repo_path, "new.txt".to_string(), "world".to_string()).unwrap();
         assert_eq!(
             fs::read_to_string(dir.path().join("new.txt")).unwrap(),
             "world"
@@ -2066,7 +2147,7 @@ mod tests {
         let dir = setup_test_repo();
         let repo_path = dir.path().to_string_lossy().to_string();
 
-        let result = write_file(repo_path, "../escape.txt".to_string(), "bad".to_string());
+        let result = write_file_impl(repo_path, "../escape.txt".to_string(), "bad".to_string());
         assert!(result.is_err());
     }
 
@@ -2075,7 +2156,7 @@ mod tests {
         let dir = setup_test_repo();
         let repo_path = dir.path().to_string_lossy().to_string();
 
-        create_directory(repo_path.clone(), "nested/deep/dir".to_string()).unwrap();
+        create_directory_impl(repo_path.clone(), "nested/deep/dir".to_string()).unwrap();
         assert!(dir.path().join("nested/deep/dir").is_dir());
     }
 
@@ -2085,7 +2166,7 @@ mod tests {
         let repo_path = dir.path().to_string_lossy().to_string();
 
         assert!(dir.path().join("README.md").exists());
-        delete_path(repo_path, "README.md".to_string()).unwrap();
+        delete_path_impl(repo_path, "README.md".to_string()).unwrap();
         assert!(!dir.path().join("README.md").exists());
     }
 
@@ -2095,7 +2176,7 @@ mod tests {
         let repo_path = dir.path().to_string_lossy().to_string();
 
         assert!(dir.path().join("src").exists());
-        delete_path(repo_path, "src".to_string()).unwrap();
+        delete_path_impl(repo_path, "src".to_string()).unwrap();
         assert!(!dir.path().join("src").exists());
     }
 
@@ -2104,7 +2185,7 @@ mod tests {
         let dir = setup_test_repo();
         let repo_path = dir.path().to_string_lossy().to_string();
 
-        rename_path(repo_path, "main.rs".to_string(), "app.rs".to_string()).unwrap();
+        rename_path_impl(repo_path, "main.rs".to_string(), "app.rs".to_string()).unwrap();
 
         assert!(!dir.path().join("main.rs").exists());
         assert!(dir.path().join("app.rs").exists());
@@ -2119,7 +2200,7 @@ mod tests {
         let dir = setup_test_repo();
         let repo_path = dir.path().to_string_lossy().to_string();
 
-        rename_path(repo_path, "main.rs".to_string(), "MAIN.rs".to_string()).unwrap();
+        rename_path_impl(repo_path, "main.rs".to_string(), "MAIN.rs".to_string()).unwrap();
 
         let names: Vec<String> = std::fs::read_dir(dir.path())
             .unwrap()
@@ -2137,7 +2218,7 @@ mod tests {
         let repo_path = dir.path().to_string_lossy().to_string();
         let before = std::fs::read_to_string(dir.path().join("main.rs")).unwrap();
 
-        let result = copy_path(repo_path, "main.rs".to_string(), "main.rs".to_string());
+        let result = copy_path_impl(repo_path, "main.rs".to_string(), "main.rs".to_string());
 
         assert!(result.is_err());
         assert_eq!(
@@ -2151,7 +2232,7 @@ mod tests {
         let dir = setup_test_repo();
         let repo_path = dir.path().to_string_lossy().to_string();
 
-        let result = rename_path(
+        let result = rename_path_impl(
             repo_path,
             "main.rs".to_string(),
             "../escaped.rs".to_string(),
@@ -2166,7 +2247,7 @@ mod tests {
         let from = src.path().join("main.rs").to_string_lossy().to_string();
         let to = dst.path().join("copied.rs").to_string_lossy().to_string();
 
-        copy_path_abs(from, to).unwrap();
+        copy_path_abs_impl(from, to).unwrap();
 
         assert!(
             dst.path().join("copied.rs").exists(),
@@ -2183,7 +2264,7 @@ mod tests {
         let to = dst.path().join("src_copy").to_string_lossy().to_string();
 
         assert!(
-            copy_path_abs(from, to).is_err(),
+            copy_path_abs_impl(from, to).is_err(),
             "directories cannot be copied"
         );
     }
@@ -2193,7 +2274,7 @@ mod tests {
         let src = setup_test_repo();
         let p = src.path().join("main.rs").to_string_lossy().to_string();
 
-        copy_path_abs(p.clone(), p).unwrap();
+        copy_path_abs_impl(p.clone(), p).unwrap();
 
         assert!(src.path().join("main.rs").exists());
     }
@@ -2205,7 +2286,7 @@ mod tests {
         let from = src.path().join("main.rs").to_string_lossy().to_string();
         let to = dst.path().join("moved.rs").to_string_lossy().to_string();
 
-        move_path_abs(from, to).unwrap();
+        move_path_abs_impl(from, to).unwrap();
 
         assert!(
             dst.path().join("moved.rs").exists(),
@@ -3351,5 +3432,157 @@ mod tests {
         let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o755, "atomic_write must preserve existing file mode");
         assert_eq!(fs::read_to_string(&target).unwrap(), "#!/bin/sh\necho new");
+    }
+
+    // ── Commands stay off the UI thread ──────────────────────────────────
+    //
+    // A `#[tauri::command]` declared as a plain `fn` gets
+    // `ExecutionContext::Blocking` and runs inline in the IPC handler; on macOS
+    // that is the main thread, so a directory copy or a large read freezes the
+    // WebView. Each mutation command is therefore an `async fn` that does its
+    // syscalls inside `spawn_blocking_fs`.
+    //
+    // These tests cannot observe *which* thread ran the work — they pin the
+    // shape that puts it there: the command is awaitable, and awaiting it
+    // performs the same operation as calling the `_impl` directly. If someone
+    // collapses a command back into a sync `fn`, these stop compiling.
+
+    #[tokio::test]
+    async fn write_file_command_is_awaitable_and_writes() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+
+        write_file(repo_path, "async.txt".to_string(), "hello".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(dir.path().join("async.txt")).unwrap(),
+            "hello"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_directory_command_is_awaitable_and_creates() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+
+        create_directory(repo_path, "a/b/c".to_string()).await.unwrap();
+
+        assert!(dir.path().join("a/b/c").is_dir());
+    }
+
+    #[tokio::test]
+    async fn delete_path_command_is_awaitable_and_deletes() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+
+        delete_path(repo_path, "README.md".to_string()).await.unwrap();
+
+        assert!(!dir.path().join("README.md").exists());
+    }
+
+    #[tokio::test]
+    async fn rename_path_command_is_awaitable_and_renames() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+
+        rename_path(repo_path, "README.md".to_string(), "READ.md".to_string())
+            .await
+            .unwrap();
+
+        assert!(!dir.path().join("README.md").exists());
+        assert!(dir.path().join("READ.md").exists());
+    }
+
+    #[tokio::test]
+    async fn copy_path_command_is_awaitable_and_copies() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+
+        copy_path(repo_path, "README.md".to_string(), "COPY.md".to_string())
+            .await
+            .unwrap();
+
+        assert!(dir.path().join("README.md").exists());
+        assert!(dir.path().join("COPY.md").exists());
+    }
+
+    #[tokio::test]
+    async fn copy_path_abs_command_is_awaitable_and_copies() {
+        let dir = TempDir::new().unwrap();
+        let from = dir.path().join("a.txt");
+        let to = dir.path().join("b.txt");
+        fs::write(&from, "content").unwrap();
+
+        copy_path_abs(
+            from.to_string_lossy().to_string(),
+            to.to_string_lossy().to_string(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(fs::read_to_string(&to).unwrap(), "content");
+    }
+
+    #[tokio::test]
+    async fn move_path_abs_command_is_awaitable_and_moves() {
+        let dir = TempDir::new().unwrap();
+        let from = dir.path().join("a.txt");
+        let to = dir.path().join("b.txt");
+        fs::write(&from, "content").unwrap();
+
+        move_path_abs(
+            from.to_string_lossy().to_string(),
+            to.to_string_lossy().to_string(),
+        )
+        .await
+        .unwrap();
+
+        assert!(!from.exists());
+        assert_eq!(fs::read_to_string(&to).unwrap(), "content");
+    }
+
+    #[tokio::test]
+    async fn add_to_gitignore_command_is_awaitable_and_appends() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+
+        add_to_gitignore(repo_path, "target/".to_string())
+            .await
+            .unwrap();
+
+        let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert!(content.lines().any(|l| l == "target/"));
+    }
+
+    #[tokio::test]
+    async fn fs_read_file_command_is_awaitable_and_reads() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+        fs::write(dir.path().join("data.txt"), "payload").unwrap();
+
+        let content = fs_read_file(repo_path, "data.txt".to_string())
+            .await
+            .unwrap();
+
+        assert_eq!(content, "payload");
+    }
+
+    // A failure inside the blocking closure must surface as the closure's own
+    // error, not as an opaque join failure — the FileBrowser shows this string.
+    #[tokio::test]
+    async fn a_command_error_survives_the_blocking_hop() {
+        let dir = setup_test_repo();
+        let repo_path = dir.path().to_string_lossy().to_string();
+
+        let err = write_file(repo_path, "../escape.txt".to_string(), "bad".to_string())
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.contains("outside repository") || err.contains("Access denied"),
+            "expected the validation error, got: {err}"
+        );
     }
 }
