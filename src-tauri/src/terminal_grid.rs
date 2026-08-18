@@ -649,6 +649,19 @@ impl TerminalGrid {
         self.term.mode().contains(TermMode::ALT_SCREEN)
     }
 
+    /// Whether the app enabled DEC mouse reporting (click / drag / motion).
+    ///
+    /// Inline fullscreen TUIs (`grok --no-alt-screen`) turn this on without
+    /// entering the alternate screen. The durable log treats that the same
+    /// way as alt-screen: keep grid history for the scrollbar, don't ingest
+    /// viewport slices as shell output.
+    pub fn is_mouse_reporting(&self) -> bool {
+        let mode = self.term.mode();
+        mode.contains(TermMode::MOUSE_REPORT_CLICK)
+            || mode.contains(TermMode::MOUSE_DRAG)
+            || mode.contains(TermMode::MOUSE_MOTION)
+    }
+
     /// Whether the cursor is currently visible (DECTCEM / CSI ?25h).
     pub fn is_cursor_visible(&self) -> bool {
         self.term.mode().contains(TermMode::SHOW_CURSOR)
@@ -2382,6 +2395,20 @@ mod tests {
                 end_row: 0,
             })
         );
+    }
+
+    #[test]
+    fn mouse_reporting_combined_decset() {
+        let mut grid = TerminalGrid::new(24, 80, 1000);
+        assert!(!grid.is_mouse_reporting());
+        let _ = grid.process(b"\x1b[?1000;1002;1003;1006h");
+        assert!(
+            grid.is_mouse_reporting(),
+            "combined DECSET must enable mouse reporting"
+        );
+        assert!(!grid.is_alternate_screen());
+        let _ = grid.process(b"\x1b[?1000;1002;1003;1006l");
+        assert!(!grid.is_mouse_reporting());
     }
 
     #[test]
