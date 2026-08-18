@@ -5,7 +5,32 @@ import {
 	DUP_KEYDOWN_WINDOW_MS,
 	isPointerInsideRect,
 	keyToSequence,
+	shouldReportMouseUp,
 } from "../../components/Terminal/terminalInput";
+
+describe("shouldReportMouseUp", () => {
+	it("reports a release for a press this canvas sent, even outside its box", () => {
+		// The press goes out from a canvas mousedown; the release comes from a
+		// document mouseup that bounds-tests the canvas. Press inside, drag out,
+		// release outside: bounds-testing alone swallows the release and a TUI in
+		// normal mouse mode gets no later report, so it stays logically held.
+		expect(shouldReportMouseUp(new Set([0]), 0, false)).toBe(true);
+	});
+
+	it("still reports an ordinary release inside the box", () => {
+		expect(shouldReportMouseUp(new Set(), 0, true)).toBe(true);
+	});
+
+	it("stays silent for a release of a button pressed over another terminal", () => {
+		// This is the whole point of the bounds test: every terminal's document
+		// handler sees this event, and only the one that sent the press may answer.
+		expect(shouldReportMouseUp(new Set(), 0, false)).toBe(false);
+	});
+
+	it("does not answer for a different button than the one pressed", () => {
+		expect(shouldReportMouseUp(new Set([0]), 2, false)).toBe(false);
+	});
+});
 
 describe("keyToSequence", () => {
 	const evt = (key: string, opts: Partial<KeyboardEvent> = {}): KeyboardEvent =>

@@ -53,4 +53,27 @@ describe("CanvasTerminal mount guards", () => {
 			expect(at, event).toBeLessThan(fontAwait);
 		}
 	});
+
+	/**
+	 * `runSearchQuery` awaits a scrollback-wide regex sweep in the backend. The
+	 * query can be cleared or replaced while that await is outstanding, and
+	 * neither bumps `screenGeneration` — so the existing generation guard lets a
+	 * stale answer through, and `search.replace` resurrects highlights the user
+	 * just cleared or overwrites the newer query's matches. Cancelling the
+	 * refresh throttle does not help: it stops the timer, not a request already
+	 * in flight.
+	 *
+	 * Same reason as the guards above for scanning the source: the assertion is
+	 * that one guard exists at one point in a control flow, and reaching it in a
+	 * render test needs the whole canvas/transport mock stack.
+	 */
+	it("discards a search sweep whose query was cleared or replaced while it ran", () => {
+		const afterSearchAwait = source.slice(source.indexOf('await invokeRef("terminal_search"'));
+		expect(afterSearchAwait).not.toBe("");
+		const untilFirstUse = afterSearchAwait.slice(0, afterSearchAwait.indexOf("search.replace("));
+		expect(untilFirstUse).not.toBe("");
+		// The query captured before the await must be re-compared against the live
+		// one before any match is applied — not just the screen generation.
+		expect(untilFirstUse).toMatch(/!==\s*searchQuery/);
+	});
 });
