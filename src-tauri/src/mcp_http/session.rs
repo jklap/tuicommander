@@ -1612,7 +1612,13 @@ fn trim_screen_chrome(rows: Vec<String>) -> TrimResult {
 }
 
 // --- Terminal grid HTTP endpoints ---
-// These delegate to the same VtLogBuffer/TerminalGrid logic as the Tauri commands in pty.rs.
+//
+// The grid reads take the vt mutex, which the PTY reader holds through a whole
+// `serialize_dirty_rows`, so they go to the blocking pool through the same
+// `pty::vt_try_read` the desktop commands use. Sharing the helper rather than
+// the command is forced: the commands are `#[cfg(feature = "desktop")]` and
+// these routes also compile into the headless `tuic-remote` binary. See
+// `docs/backend/command-threading.md`.
 
 pub(super) async fn terminal_scroll(
     State(state): State<Arc<AppState>>,
@@ -1672,20 +1678,38 @@ pub(super) async fn terminal_scroll_info(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Session not found"})),
-        )
-            .into_response();
-    };
-    let vt = vt.lock();
-    let info = serde_json::json!({
-        "display_offset": vt.grid_display_offset(),
-        "total_lines": vt.grid_total_lines(),
-        "screen_lines": vt.grid_screen_lines(),
-    });
-    Json(info).into_response()
+    match crate::pty::vt_try_read(&state, session_id, |vt| {
+        serde_json::json!({
+            "display_offset": vt.grid_display_offset(),
+            "total_lines": vt.grid_total_lines(),
+            "screen_lines": vt.grid_screen_lines(),
+        })
+    })
+    .await
+    {
+        Ok(Some(info)) => Json(info).into_response(),
+        Ok(None) => not_found_response(),
+        Err(e) => read_failed_response(&e),
+    }
+}
+
+/// A grid read whose session went away between the request and the pool hop.
+fn not_found_response() -> axum::response::Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "Session not found"})),
+    )
+        .into_response()
+}
+
+/// The blocking-pool task itself failed — a panic in the read, or a runtime
+/// shutting down. Distinct from a missing session, which is routine.
+fn read_failed_response(error: &str) -> axum::response::Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"error": error})),
+    )
+        .into_response()
 }
 
 pub(super) async fn terminal_search(
@@ -1693,15 +1717,11 @@ pub(super) async fn terminal_search(
     Path(session_id): Path<String>,
     Json(body): Json<super::types::TerminalSearchRequest>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Session not found"})),
-        )
-            .into_response();
-    };
-    let matches = vt.lock().grid_search(&body.query);
-    Json(serde_json::json!({"matches": matches})).into_response()
+    match crate::pty::vt_try_read(&state, session_id, move |vt| vt.grid_search(&body.query)).await {
+        Ok(Some(matches)) => Json(serde_json::json!({"matches": matches})).into_response(),
+        Ok(None) => not_found_response(),
+        Err(e) => read_failed_response(&e),
+    }
 }
 
 pub(super) async fn terminal_search_buffer(
@@ -1709,15 +1729,15 @@ pub(super) async fn terminal_search_buffer(
     Path(session_id): Path<String>,
     Json(body): Json<super::types::TerminalSearchRequest>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Session not found"})),
-        )
-            .into_response();
-    };
-    let matches = vt.lock().grid_search_buffer(&body.query);
-    Json(serde_json::json!({"matches": matches})).into_response()
+    match crate::pty::vt_try_read(&state, session_id, move |vt| {
+        vt.grid_search_buffer(&body.query)
+    })
+    .await
+    {
+        Ok(Some(matches)) => Json(serde_json::json!({"matches": matches})).into_response(),
+        Ok(None) => not_found_response(),
+        Err(e) => read_failed_response(&e),
+    }
 }
 
 pub(super) async fn terminal_get_row_text(
@@ -1725,15 +1745,15 @@ pub(super) async fn terminal_get_row_text(
     Path(session_id): Path<String>,
     Query(query): Query<super::types::TerminalRowQuery>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Session not found"})),
-        )
-            .into_response();
-    };
-    let text = vt.lock().grid_get_row_text(query.row);
-    Json(serde_json::json!({"text": text})).into_response()
+    match crate::pty::vt_try_read(&state, session_id, move |vt| {
+        vt.grid_get_row_text(query.row)
+    })
+    .await
+    {
+        Ok(Some(text)) => Json(serde_json::json!({"text": text})).into_response(),
+        Ok(None) => not_found_response(),
+        Err(e) => read_failed_response(&e),
+    }
 }
 
 /// Extract the text of a selection span (start/end row/col) from the grid.
@@ -1742,13 +1762,15 @@ pub(super) async fn terminal_get_selection_text(
     Path(session_id): Path<String>,
     Query(q): Query<super::types::TerminalSelectionQuery>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
-        return session_not_found().into_response();
-    };
-    let text = vt
-        .lock()
-        .grid_get_selection_text(q.start_row, q.start_col, q.end_row, q.end_col);
-    Json(serde_json::json!({"text": text})).into_response()
+    match crate::pty::vt_try_read(&state, session_id, move |vt| {
+        vt.grid_get_selection_text(q.start_row, q.start_col, q.end_row, q.end_col)
+    })
+    .await
+    {
+        Ok(Some(text)) => Json(serde_json::json!({"text": text})).into_response(),
+        Ok(None) => not_found_response(),
+        Err(e) => read_failed_response(&e),
+    }
 }
 
 /// Unwrap a soft-wrapped logical line at `row` → `[logicalStartRow, text]`.
@@ -1757,11 +1779,15 @@ pub(super) async fn terminal_get_logical_line(
     Path(session_id): Path<String>,
     Query(q): Query<super::types::TerminalRowQuery>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
-        return session_not_found().into_response();
-    };
-    let (idx, text) = vt.lock().grid_get_logical_line(q.row);
-    Json(serde_json::json!([idx, text])).into_response()
+    match crate::pty::vt_try_read(&state, session_id, move |vt| {
+        vt.grid_get_logical_line(q.row)
+    })
+    .await
+    {
+        Ok(Some((idx, text))) => Json(serde_json::json!([idx, text])).into_response(),
+        Ok(None) => not_found_response(),
+        Err(e) => read_failed_response(&e),
+    }
 }
 
 /// Hyperlink span at a cell → `[startCol, endCol, url]` or null (OSC 8).
@@ -1770,11 +1796,16 @@ pub(super) async fn terminal_hyperlink_span(
     Path(session_id): Path<String>,
     Query(q): Query<super::types::TerminalCellQuery>,
 ) -> impl IntoResponse {
-    let span = state
-        .vt_log_buffers
-        .get(&session_id)
-        .and_then(|vt| vt.lock().grid_hyperlink_span(q.row, q.col));
-    Json(serde_json::json!(span))
+    // Answers null for a gone session rather than 404: a hover can outlive the
+    // tab it started on, and the frontend reads "no link here" either way.
+    let span = crate::pty::vt_read(&state, session_id, move |vt| {
+        vt.grid_hyperlink_span(q.row, q.col)
+    })
+    .await;
+    match span {
+        Ok(span) => Json(serde_json::json!(span)).into_response(),
+        Err(e) => read_failed_response(&e),
+    }
 }
 
 pub(super) async fn terminal_get_lines(
@@ -1782,15 +1813,15 @@ pub(super) async fn terminal_get_lines(
     Path(session_id): Path<String>,
     Query(query): Query<super::types::TerminalLinesQuery>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Session not found"})),
-        )
-            .into_response();
-    };
-    let lines = vt.lock().grid_get_lines(query.start, query.end);
-    Json(serde_json::json!({"lines": lines})).into_response()
+    match crate::pty::vt_try_read(&state, session_id, move |vt| {
+        vt.grid_get_lines(query.start, query.end)
+    })
+    .await
+    {
+        Ok(Some(lines)) => Json(serde_json::json!({"lines": lines})).into_response(),
+        Ok(None) => not_found_response(),
+        Err(e) => read_failed_response(&e),
+    }
 }
 
 /// Serialize the whole grid for ONE client, without taking the rows the other
@@ -1839,31 +1870,26 @@ pub(super) async fn terminal_styled_rows(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
     Query(query): Query<super::types::TerminalStyledRowsQuery>,
-) -> impl IntoResponse {
-    let bytes = state
-        .vt_log_buffers
-        .get(&session_id)
-        .map(|vt| {
-            vt.lock()
-                .grid_serialize_styled_range(query.start, query.count)
-        })
-        .unwrap_or_default();
-    styled_rows_response(bytes)
+) -> axum::response::Response {
+    match crate::pty::vt_read(&state, session_id, move |vt| {
+        vt.grid_serialize_styled_range(query.start, query.count)
+    })
+    .await
+    {
+        Ok(bytes) => styled_rows_response(bytes).into_response(),
+        Err(e) => read_failed_response(&e),
+    }
 }
 
 pub(super) async fn terminal_get_cursor_line(
     State(state): State<Arc<AppState>>,
     Path(session_id): Path<String>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Session not found"})),
-        )
-            .into_response();
-    };
-    let text = vt.lock().grid_get_cursor_line();
-    Json(serde_json::json!({"text": text})).into_response()
+    match crate::pty::vt_try_read(&state, session_id, |vt| vt.grid_get_cursor_line()).await {
+        Ok(Some(text)) => Json(serde_json::json!({"text": text})).into_response(),
+        Ok(None) => not_found_response(),
+        Err(e) => read_failed_response(&e),
+    }
 }
 
 pub(super) async fn terminal_hyperlink_at(
@@ -1871,15 +1897,15 @@ pub(super) async fn terminal_hyperlink_at(
     Path(session_id): Path<String>,
     Query(query): Query<super::types::TerminalCellQuery>,
 ) -> impl IntoResponse {
-    let Some(vt) = state.vt_log_buffers.get(&session_id) else {
-        return (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Session not found"})),
-        )
-            .into_response();
-    };
-    let url = vt.lock().grid_hyperlink_at(query.row, query.col);
-    Json(serde_json::json!({"url": url})).into_response()
+    match crate::pty::vt_try_read(&state, session_id, move |vt| {
+        vt.grid_hyperlink_at(query.row, query.col)
+    })
+    .await
+    {
+        Ok(Some(url)) => Json(serde_json::json!({"url": url})).into_response(),
+        Ok(None) => not_found_response(),
+        Err(e) => read_failed_response(&e),
+    }
 }
 
 pub(super) async fn terminal_request_frame(

@@ -4389,13 +4389,27 @@ mod tests {
         std::fs::write(dir.path().join("blob.bin"), body).unwrap();
         std::fs::write(dir.path().join("plain.txt"), "needle\n").unwrap();
 
-        let r = dispatch(&state, "s1", "search_files", &json!({ "pattern": "needle" })).await;
+        let r = dispatch(
+            &state,
+            "s1",
+            "search_files",
+            &json!({ "pattern": "needle" }),
+        )
+        .await;
 
         assert!(r.success, "{}", r.output);
         let parsed: Value = serde_json::from_str(&r.output).unwrap();
         let files = parsed["files_with_matches"].as_array().unwrap();
-        assert!(files.iter().any(|f| f.as_str().unwrap().ends_with("plain.txt")));
-        assert!(!files.iter().any(|f| f.as_str().unwrap().ends_with("blob.bin")));
+        assert!(
+            files
+                .iter()
+                .any(|f| f.as_str().unwrap().ends_with("plain.txt"))
+        );
+        assert!(
+            !files
+                .iter()
+                .any(|f| f.as_str().unwrap().ends_with("blob.bin"))
+        );
     }
 
     #[tokio::test]
@@ -4409,7 +4423,13 @@ mod tests {
         body.extend_from_slice(&[0xff, 0xfe]);
         std::fs::write(dir.path().join("late.bin"), body).unwrap();
 
-        let r = dispatch(&state, "s1", "search_files", &json!({ "pattern": "needle" })).await;
+        let r = dispatch(
+            &state,
+            "s1",
+            "search_files",
+            &json!({ "pattern": "needle" }),
+        )
+        .await;
 
         assert!(r.success, "{}", r.output);
         let parsed: Value = serde_json::from_str(&r.output).unwrap();
@@ -4423,7 +4443,13 @@ mod tests {
         body.extend_from_slice(b"\nneedle\n");
         std::fs::write(dir.path().join("huge.txt"), body).unwrap();
 
-        let r = dispatch(&state, "s1", "search_files", &json!({ "pattern": "needle" })).await;
+        let r = dispatch(
+            &state,
+            "s1",
+            "search_files",
+            &json!({ "pattern": "needle" }),
+        )
+        .await;
 
         assert!(r.success, "{}", r.output);
         let parsed: Value = serde_json::from_str(&r.output).unwrap();

@@ -238,12 +238,15 @@ pub(super) async fn plugin_pty_output(
     AxumPath(plugin_id): AxumPath<String>,
     Query(q): Query<PtyOutputQuery>,
 ) -> Response {
-    json_result(crate::plugin_pty::plugin_read_session_output_impl(
-        &state,
-        q.session_id,
-        q.max_lines,
-        plugin_id,
-    ))
+    json_result(
+        crate::plugin_pty::plugin_read_session_output_impl(
+            &state,
+            q.session_id,
+            q.max_lines,
+            plugin_id,
+        )
+        .await,
+    )
 }
 
 // ---------------------------------------------------------------------------

@@ -31,12 +31,22 @@ All commands are invoked from the frontend via `invoke(command, args)`. In brows
 | `debug_agent_detection` | `session_id: String` | `AgentDiagnostics` | Returns diagnostic breakdown of agent detection pipeline |
 | `set_session_name` | `session_id, name, is_custom?` | `()` | Set a session display name and whether it represents an explicit user rename |
 | `get_input_buffer_content` | `session_id` | `String` | Get the current content of the input line buffer (what the user is typing). Used by plugins with `pty:read` capability. |
-| `terminal_get_selection_text` | `session_id, start_row, start_col, end_row, end_col` | `String` | Read a scrollback-aware selection, join soft-wrapped rows, and remove coherent Claude visual gutter runs. Browser parity: `GET /sessions/:id/terminal/selection-text`. |
+| `terminal_get_selection_text` | `session_id, start_row, start_col, end_row, end_col` | `Result<String, String>` | Read a scrollback-aware selection, join soft-wrapped rows, and remove coherent Claude visual gutter runs. Browser parity: `GET /sessions/:id/terminal/selection-text`. |
 | `get_process_stats` | -- | `Vec<ProcessStat>` | CPU% and RSS memory for TUIC and all child process trees |
 | `subscribe_terminal_grid` | `session_id, channel: Channel<Response>` | `u64` (epoch) | Register the grid-frame channel and install a fresh delivery gate (counting from zero). Returns the subscription epoch the client must carry on `ack_terminal_frame` and `unsubscribe_terminal_grid`. Frames are **raw bytes**, not JSON. Browser parity: `WS /sessions/:id/stream?format=grid` |
 | `ack_terminal_frame` | `session_id, epoch: u64, received: u64` | `()` | Report the total number of frames this client has received. The gate opens when the echo catches up with what was sent, which is what tells a fresh ack from a late one for an abandoned frame. An ack whose epoch is not the live subscription's is dropped. Browser parity: none — the WS path uses sequence numbers instead |
 | `unsubscribe_terminal_grid` | `session_id, epoch: u64` | `()` | Tear down the grid channel, gate and pending scroll. A non-matching epoch is ignored: a remount subscribes before the outgoing instance unsubscribes, and honouring the stale call would blank a mounted terminal. Browser parity: closing the WS |
-| `terminal_styled_rows` | `session_id, start, count` | `Response` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
+| `terminal_styled_rows` | `session_id, start, count` | `Result<Response, String>` (packed bytes) | A range of styled rows by absolute index, filling the client-side scroll cache. Raw bytes for the same reason as grid frames. Browser parity: `GET /sessions/:id/terminal/styled-rows` (`application/octet-stream`) |
+
+Every terminal grid **read** — the two rows above plus `terminal_get_block_rows`,
+`terminal_scroll_info`, `terminal_search`, `terminal_search_buffer`,
+`terminal_get_row_text`, `terminal_get_logical_line`, `terminal_get_lines`,
+`terminal_get_cursor_line`, `terminal_hyperlink_at` and
+`terminal_hyperlink_span` and `read_vt_log` — is an `async fn` that runs on the blocking pool via
+`pty::vt_try_read`, so it returns `Result<T, String>` rather than a bare `T`.
+The `Err` arm means the pool task itself failed; a session that is gone is still
+the old default (or a 404 over HTTP). See
+[`docs/backend/command-threading.md`](../backend/command-threading.md).
 
 ## Generators (`generators.rs`)
 

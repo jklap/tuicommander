@@ -3467,7 +3467,9 @@ mod tests {
         let dir = setup_test_repo();
         let repo_path = dir.path().to_string_lossy().to_string();
 
-        create_directory(repo_path, "a/b/c".to_string()).await.unwrap();
+        create_directory(repo_path, "a/b/c".to_string())
+            .await
+            .unwrap();
 
         assert!(dir.path().join("a/b/c").is_dir());
     }
@@ -3477,7 +3479,9 @@ mod tests {
         let dir = setup_test_repo();
         let repo_path = dir.path().to_string_lossy().to_string();
 
-        delete_path(repo_path, "README.md".to_string()).await.unwrap();
+        delete_path(repo_path, "README.md".to_string())
+            .await
+            .unwrap();
 
         assert!(!dir.path().join("README.md").exists());
     }

@@ -37,6 +37,12 @@ calls the command**, and the command owns the `spawn_blocking`. A route that
 reaches past the command into a `*_impl` has opted out of the guarantee and needs
 a comment saying why.
 
+The terminal grid reads are the one place that cannot follow that shape. Their
+commands are `#[cfg(feature = "desktop")]` and the routes also compile into the
+headless `tuic-remote` binary, so the route physically cannot call the command.
+There the shared unit moves one level down: both call `pty::vt_try_read`, which
+owns the `spawn_blocking`. Same guarantee, one layer lower.
+
 Before story 607-f483 the two had drifted in both directions: `search_files`
 offloaded over HTTP but not over IPC, while `search_content_all` offloaded over
 IPC but not over HTTP.
@@ -62,6 +68,45 @@ table rather than six match arms precisely so a test can assert the routing.
 `list_directory` is the one that looks harmless and is not: it runs
 `git status --porcelain` as a subprocess for the requested subdir.
 
+`pty.rs`, the terminal grid reads: `terminal_styled_rows`,
+`terminal_get_block_rows`, `terminal_scroll_info`, `terminal_search`,
+`terminal_search_buffer`, `terminal_get_row_text`, `terminal_get_logical_line`,
+`terminal_get_selection_text`, `terminal_get_lines`, `terminal_get_cursor_line`,
+`terminal_hyperlink_at`, `terminal_hyperlink_span` and `read_vt_log` — all
+through `pty::vt_try_read`, and their HTTP twins in `mcp_http/session.rs` with
+them. `read_vt_log` is the one worth naming: it has no frontend caller yet, so
+it survived the first pass of the audit purely by being unused, and being
+registered in the handler is all it takes to be reachable.
+
+Every one of them moved, including the single-row reads. The cost that matters
+is not the work the closure does, it is the wait for the vt mutex, which the PTY
+reader holds through a whole `serialize_dirty_rows`. A one-cell read waits
+exactly as long as a whole-scrollback search, so a line drawn between "cheap"
+and "expensive" reads would only rot.
+
+Their return type changed from `T` to `Result<T, String>`, which is what an
+`async fn` borrowing `State<'_, _>` requires. An `invoke` that used to always
+resolve can now reject, on a failed blocking-pool task.
+
+That is not a new failure mode — `transport.ts` throws on any non-2xx, so the
+browser path has always had a rejection to handle — but three frontend callers
+turned out never to have handled it, and desktop had been hiding that:
+
+- `CanvasTerminal.tsx`, the debounced search refresh, fire-and-forget from a timer
+- `CommandOverview.tsx`, `getCommandText(...).then(setCommandText)` with no catch
+- `useTerminalContextMenus.ts`, "Copy Block Output" — it awaits, but `ContextMenu`
+  invokes the async action and discards the promise
+
+Each now catches and logs. `terminal_search_buffer` was already safe: its only
+consumer aggregates with `Promise.allSettled`.
+
+`plugin_pty.rs`: `plugin_read_session_output` went the same way. It was already
+`async`, so it was never on the IPC thread — but its body took the same vt mutex
+inline, which parks a Tokio worker instead. It is the clearest example of why
+row two of the table above is not enough on its own. Its capability check stays
+on the caller's thread deliberately: a plugin without `pty:read` should be
+refused without occupying a pool slot.
+
 ### Known gaps, with reasons
 
 | Command | Why it is still where it is |
@@ -69,7 +114,8 @@ table rather than six match arms precisely so a test can assert the routing.
 | `fs_transfer_paths` (`fs.rs`) | Still sync, so its recursive directory copy runs on the main thread. It is the backend of a drag-drop, and the D&D surface needs Boss's approval before it is touched. Conversion is mechanical when that comes — see the `DEFERRED` note at the site. |
 | `resolve_terminal_path` (`fs.rs`) | A single `canonicalize` + `is_dir`. Microseconds on a local disk; a stale network mount could stall it, which is a real but unobserved risk. |
 | `warm_content_index` (`fs.rs`) | `ensure_index` is a map entry plus a spawn — the build itself already runs in the background. |
-| Terminal grid reads (`pty.rs`) | ~14 commands (`terminal_search`, `terminal_search_buffer`, `terminal_styled_rows`, `terminal_get_lines`, `terminal_get_selection_text`, …) still take the VT mutex inline on the IPC thread. This is finding F95 and is the remaining half of story 607-f483. |
+| `set_ansi_colors` (`pty.rs`) | Locks *every* vt buffer in a loop on the IPC thread, so the stall grows with session count. Same reordering objection as the row below, and it fires once, when the user picks a theme. |
+| Terminal grid *mutations* (`pty.rs`) | `terminal_scroll`, `terminal_scroll_to`, `terminal_request_frame`, `terminal_exit_alt_screen` still take the vt lock inline. Same stall as the reads, but not the same safety: two `spawn_blocking` hops for one session can run in either order, and `terminal_scroll_to(line)` is absolute, so reordering lands the viewport on the wrong line. They need the coalescing `terminal_scroll_to_offset` already has — which is also why they are the cold path, since the wheel and the scrollbar drag go through the offset command and never touch this lock. |
 | `worktree.rs`, `tuic_cli.rs`, `tunnels/`, `dictation/`, `plugins.rs`, `agent.rs` | Sync commands running git subprocesses, keyring calls, hardware enumeration and recursive deletes. Each is a real main-thread stall; none was in this story's scope. They are listed here so the next sweep starts from a list instead of a grep. |
 
 ### Comments that asserted a cost the code did not have

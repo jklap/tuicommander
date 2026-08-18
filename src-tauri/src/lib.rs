@@ -704,10 +704,8 @@ pub(crate) fn read_external_file_with_limit(path: &str, limit: u64) -> Result<St
 /// [`MAX_EDITOR_LARGE_FILE_SIZE`] cap. The HTTP endpoint has its own repo-root check.
 #[cfg_attr(feature = "desktop", tauri::command)]
 async fn read_editor_file_external(path: String) -> Result<String, String> {
-    fs::spawn_blocking_fs(move || {
-        read_external_file_with_limit(&path, MAX_EDITOR_LARGE_FILE_SIZE)
-    })
-    .await
+    fs::spawn_blocking_fs(move || read_external_file_with_limit(&path, MAX_EDITOR_LARGE_FILE_SIZE))
+        .await
 }
 
 /// Write a file at an absolute path (used by the UI for files outside any registered repo,
