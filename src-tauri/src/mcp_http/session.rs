@@ -402,7 +402,7 @@ pub(super) async fn get_output(
         // so a client subtracting the length would land inside the window it already
         // holds and replay those lines when scrolling up.
         let window_start = offset.max(buf.oldest_offset()).min(total);
-        let trim = trim_screen_chrome(buf.screen_rows());
+        let trim = screen_chrome_cutoff(&buf);
         // Get styled screen rows, trimmed to same cutoff
         let styled = buf.screen_log_lines();
         let screen: Vec<_> = styled.into_iter().take(trim.cutoff).collect();
@@ -1114,7 +1114,11 @@ async fn handle_ws_session(
                 .await
                 .is_err()
                 {
-                    return; // Client disconnected during catch-up
+                    // Client disconnected during catch-up. It was already
+                    // registered above, so reap it here — this path never
+                    // reaches the purge at the end of the read loop.
+                    crate::state::purge_dead_ws_clients(&state.ws_clients, &session_id);
+                    return;
                 }
             }
         }
@@ -1349,26 +1353,19 @@ async fn handle_ws_log_session(
                 let Some(vt_log) = state_poll.vt_log_buffers.get(&sid_poll) else {
                     break;
                 };
-                let (lines, new_offset, screen_lines, input_line) = {
+                let (lines, new_offset, polled) = {
                     let buf = vt_log.lock();
                     let (l, o) = buf.lines_since_owned(offset, usize::MAX);
-                    let trim = trim_screen_chrome(buf.screen_rows());
-                    let styled = buf.screen_log_lines();
-                    let trimmed_styled: Vec<_> = styled.into_iter().take(trim.cutoff).collect();
-                    let il = buf.prompt_input_text();
-                    (l, o, trimmed_styled, il)
+                    (l, o, poll_screen(&buf, prev_screen_hash))
                 }; // lock released
-                // Hash screen rows to detect changes (use plain text for hashing)
-                use std::hash::{Hash, Hasher};
-                let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                for sl in &screen_lines {
-                    for span in &sl.spans {
-                        span.text.hash(&mut hasher);
-                    }
-                }
-                input_line.hash(&mut hasher);
-                let screen_hash = hasher.finish();
-                let screen_changed = screen_hash != prev_screen_hash && !screen_lines.is_empty();
+                let input_line = polled.input_line;
+                let screen_lines = polled.screen;
+                let screen_changed = screen_lines.is_some();
+                // Store the signature for every poll, not only the ones that
+                // produce a frame: a screen of nothing but blanks styles to
+                // nothing, and leaving the old hash in place made the next tick
+                // rebuild it to reach the same conclusion.
+                prev_screen_hash = polled.hash;
                 // Send frame if there are new log lines OR screen content changed
                 if !lines.is_empty() || screen_changed {
                     // total_lines = post-read monotonic cursor (== offset when no new
@@ -1377,12 +1374,11 @@ async fn handle_ws_log_session(
                     if !lines.is_empty() {
                         frame["lines"] = serde_json::json!(lines);
                     }
-                    if screen_changed {
-                        frame["screen"] = serde_json::json!(screen_lines);
+                    if let Some(ref screen) = screen_lines {
+                        frame["screen"] = serde_json::json!(screen);
                         if let Some(ref il) = input_line {
                             frame["input_line"] = serde_json::json!(il);
                         }
-                        prev_screen_hash = screen_hash;
                     }
                     if futures_util::SinkExt::send(
                         &mut ws_sender,
@@ -1614,6 +1610,15 @@ async fn handle_ws_grid_session(socket: WebSocket, session_id: String, state: Ar
     }
 
     send_task.abort();
+
+    // The send task held the only other receiver, and aborting it drops it. If
+    // that was the last one, nobody will ever read the frame still sitting in
+    // the watch slot — free it instead of pinning it for the session's life.
+    if let Some(watch_tx) = state.grid_watch.get(&session_id)
+        && watch_tx.receiver_count() == 0
+    {
+        crate::grid_gate::release_grid_frame(&watch_tx);
+    }
 }
 
 /// Remove agent TUI chrome from screen rows (status bars, prompt lines,
@@ -1633,10 +1638,91 @@ struct TrimResult {
 
 use crate::chrome::find_chrome_cutoff;
 
-fn trim_screen_chrome(rows: Vec<String>) -> TrimResult {
+/// Borrows: it reports a cutoff and reads nothing else, so taking the rows by
+/// value only forced every caller to clone a screen it already had in hand.
+fn trim_screen_chrome(rows: &[String]) -> TrimResult {
     let refs: Vec<&str> = rows.iter().map(|s| s.as_str()).collect();
     let cutoff = find_chrome_cutoff(&refs).unwrap_or(rows.len());
     TrimResult { cutoff }
+}
+
+/// Chrome cutoff for the buffer's current screen, borrowing the grid's cached
+/// rows. The owned fallback is only for a buffer whose `process()` has never
+/// run, which has no snapshot to lend.
+fn screen_chrome_cutoff(buf: &crate::state::VtLogBuffer) -> TrimResult {
+    match buf.screen_rows_ref() {
+        Some(rows) => trim_screen_chrome(rows),
+        None => trim_screen_chrome(&buf.screen_rows()),
+    }
+}
+
+/// What one log-WS poll found on the screen.
+struct ScreenPoll {
+    /// The styled rows, present ONLY when the screen changed since `prev_hash`.
+    screen: Option<Vec<crate::state::LogLine>>,
+    input_line: Option<String>,
+    /// Signature to pass back as `prev_hash` on the next poll.
+    hash: u64,
+}
+
+/// Decide whether the screen changed, and build the styled rows only if it did.
+///
+/// The signature is the plain text of the visible rows plus the input line —
+/// exactly what the old check reduced to, since it hashed `span.text` and
+/// nothing else. Building the styled `Vec<LogLine>` first and hashing it
+/// afterwards made an idle session materialize a full screen five times a
+/// second, under the buffer's mutex, only to discard it.
+///
+/// The styled build stays inside the caller's lock because it reads the grid;
+/// what changed is how often it runs, not where.
+fn poll_screen(buf: &crate::state::VtLogBuffer, prev_hash: u64) -> ScreenPoll {
+    use std::hash::{Hash, Hasher};
+
+    let trim = screen_chrome_cutoff(buf);
+    let input_line = buf.prompt_input_text();
+
+    let owned;
+    let rows: &[String] = match buf.screen_rows_ref() {
+        Some(rows) => rows,
+        None => {
+            owned = buf.screen_rows();
+            &owned
+        }
+    };
+    let visible = &rows[..trim.cutoff.min(rows.len())];
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for row in visible {
+        row.hash(&mut hasher);
+    }
+    input_line.hash(&mut hasher);
+    let hash = hasher.finish();
+
+    if hash == prev_hash {
+        return ScreenPoll {
+            screen: None,
+            input_line,
+            hash,
+        };
+    }
+
+    let styled: Vec<_> = buf
+        .screen_log_lines()
+        .into_iter()
+        .take(trim.cutoff)
+        .collect();
+    // screen_log_lines drops trailing blank rows, so a screen of nothing but
+    // blanks styles to nothing. The old path sent no frame for it either.
+    let screen = if styled.is_empty() {
+        None
+    } else {
+        Some(styled)
+    };
+    ScreenPoll {
+        screen,
+        input_line,
+        hash,
+    }
 }
 
 // --- Terminal grid HTTP endpoints ---
@@ -1956,6 +2042,148 @@ pub(super) async fn terminal_request_frame(
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    struct WriteProbe {
+        writes: Arc<parking_lot::Mutex<Vec<Vec<u8>>>>,
+        flushes: Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    #[cfg(unix)]
+    impl std::io::Write for WriteProbe {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.writes.lock().push(buf.to_vec());
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.flushes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(())
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn split_escape_then_slash_opens_slash_mode_but_concatenated_input_does_not() {
+        let state = super::super::tests::test_state();
+        let split_session_id = "split-escape-slash";
+        crate::state::tests_support::insert_dummy_session(&state, split_session_id);
+
+        write_pty_input_parts(&state, split_session_id, &["\x1b", "/"])
+            .expect("split input writes to the PTY");
+
+        let split_slash_mode = state
+            .slash_mode
+            .get(split_session_id)
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(
+            split_slash_mode,
+            "Escape and slash delivered as separate parts must open slash mode"
+        );
+
+        let concatenated_session_id = "concatenated-escape-slash";
+        crate::state::tests_support::insert_dummy_session(&state, concatenated_session_id);
+        write_pty_input(&state, concatenated_session_id, "\x1b/")
+            .expect("concatenated input writes to the PTY");
+
+        let concatenated_slash_mode = state
+            .slash_mode
+            .get(concatenated_session_id)
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(
+            !concatenated_slash_mode,
+            "the concatenated Escape/slash request must remain distinguishable from two parts"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn split_choice_key_clears_the_prompt_but_concatenated_input_does_not() {
+        fn choice_state() -> crate::state::SessionState {
+            crate::state::SessionState {
+                awaiting_input: true,
+                choice_prompt: Some(crate::output_parser::ChoicePromptPayload {
+                    title: "Choose an option".to_string(),
+                    options: vec![crate::output_parser::ChoiceOption {
+                        key: "1".to_string(),
+                        label: "Proceed".to_string(),
+                        highlighted: true,
+                        destructive: false,
+                        hint: None,
+                    }],
+                    dismiss_key: None,
+                    amend_key: None,
+                }),
+                ..Default::default()
+            }
+        }
+
+        let state = super::super::tests::test_state();
+        let concatenated_session_id = "concatenated-choice-key";
+        crate::state::tests_support::insert_dummy_session(&state, concatenated_session_id);
+        state
+            .session_states
+            .insert(concatenated_session_id.to_string(), choice_state());
+        write_pty_input(&state, concatenated_session_id, "1x")
+            .expect("concatenated input writes to the PTY");
+        assert!(
+            state
+                .session_states
+                .get(concatenated_session_id)
+                .unwrap()
+                .choice_prompt
+                .is_some(),
+            "a concatenated option key must not resolve an exact-key choice prompt"
+        );
+
+        let split_session_id = "split-choice-key";
+        crate::state::tests_support::insert_dummy_session(&state, split_session_id);
+        state
+            .session_states
+            .insert(split_session_id.to_string(), choice_state());
+        write_pty_input_parts(&state, split_session_id, &["1", "x"])
+            .expect("split input writes to the PTY");
+        assert!(
+            state
+                .session_states
+                .get(split_session_id)
+                .unwrap()
+                .choice_prompt
+                .is_none(),
+            "an exact option key delivered as its own part must resolve the choice prompt"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn n_input_parts_share_one_writer_flush_and_preserve_write_boundaries() {
+        let state = super::super::tests::test_state();
+        let session_id = "n-part-single-lock";
+        crate::state::tests_support::insert_dummy_session(&state, session_id);
+        let writes = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let flushes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let writer: crate::state::SharedPtyWriter =
+            Arc::new(parking_lot::Mutex::new(Box::new(WriteProbe {
+                writes: Arc::clone(&writes),
+                flushes: Arc::clone(&flushes),
+            })));
+        state.sessions.get(session_id).unwrap().lock().writer = writer;
+
+        write_pty_input_parts(&state, session_id, &["first", "second", "third"])
+            .expect("all parts write to the PTY");
+
+        assert_eq!(
+            flushes.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "N parts must use one write_pty_parts call, which flushes once"
+        );
+        assert_eq!(
+            *writes.lock(),
+            vec![b"first".to_vec(), b"second".to_vec(), b"third".to_vec()],
+            "the single locked write must still deliver every input as its own part"
+        );
+    }
+
     #[test]
     fn mcp_regression_input_bookkeeping_releases_guard_before_pending_delivery() {
         let state = super::super::tests::test_state();
@@ -2028,7 +2256,7 @@ mod tests {
             "  [Opus 4.6 | Max] tuicommander git:(main)".into(),
             "  ⏵⏵ bypass permissions on".into(),
         ];
-        let result = trim_screen_chrome(rows);
+        let result = trim_screen_chrome(&rows);
         assert_eq!(result.cutoff, 2);
     }
 
@@ -2041,21 +2269,106 @@ mod tests {
             "──────────────────────────────── pwa ──".into(),
             "  status bar".into(),
         ];
-        let result = trim_screen_chrome(rows);
+        let result = trim_screen_chrome(&rows);
         assert_eq!(result.cutoff, 1);
     }
 
     #[test]
     fn trim_no_chrome_keeps_all() {
         let rows: Vec<String> = vec!["line 1".into(), "line 2".into(), "line 3".into()];
-        let result = trim_screen_chrome(rows.clone());
+        let result = trim_screen_chrome(&rows);
         assert_eq!(result.cutoff, 3);
+        // The caller keeps its rows: the trim only reports a cutoff.
+        assert_eq!(rows.len(), 3);
     }
 
     #[test]
     fn trim_empty_input() {
-        let result = trim_screen_chrome(vec![]);
+        let result = trim_screen_chrome(&[]);
         assert_eq!(result.cutoff, 0);
+    }
+
+    // --- Log-WS screen polling (604-cb45 F14) ---
+    //
+    // The poll runs 5x/s per connected log client. Building the styled screen
+    // before asking whether it changed made an idle session pay for a full
+    // Vec<LogLine> — under the VtLogBuffer mutex — and throw it away.
+
+    fn vt_log_with(output: &str) -> crate::state::VtLogBuffer {
+        let mut buf = crate::state::VtLogBuffer::new(24, 80, 1000);
+        buf.process(output.as_bytes());
+        buf
+    }
+
+    #[test]
+    fn screen_poll_materializes_only_on_a_change() {
+        let buf = vt_log_with("hello world\r\n");
+
+        let first = poll_screen(&buf, 0);
+        assert!(
+            first.screen.is_some(),
+            "the first poll has nothing to compare against"
+        );
+
+        // Same buffer, same hash: nothing to send, so nothing to build.
+        let second = poll_screen(&buf, first.hash);
+        assert!(
+            second.screen.is_none(),
+            "an unchanged screen must not be materialized"
+        );
+        assert_eq!(
+            second.hash, first.hash,
+            "the signature must be stable across polls"
+        );
+    }
+
+    #[test]
+    fn screen_poll_reports_a_change_after_new_output() {
+        let mut buf = vt_log_with("first\r\n");
+        let first = poll_screen(&buf, 0);
+
+        buf.process(b"second\r\n");
+        let second = poll_screen(&buf, first.hash);
+
+        assert!(second.screen.is_some(), "new output must reach the client");
+        assert_ne!(second.hash, first.hash);
+    }
+
+    #[test]
+    fn screen_poll_returns_the_same_rows_the_old_path_built() {
+        let buf = vt_log_with("alpha\r\nbeta\r\n");
+
+        let polled = poll_screen(&buf, 0)
+            .screen
+            .expect("a fresh screen is a change");
+        let expected: Vec<_> = buf
+            .screen_log_lines()
+            .into_iter()
+            .take(screen_chrome_cutoff(&buf).cutoff)
+            .collect();
+
+        assert_eq!(polled.len(), expected.len());
+        for (got, want) in polled.iter().zip(expected.iter()) {
+            assert_eq!(
+                got.spans
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>(),
+                want.spans
+                    .iter()
+                    .map(|s| s.text.as_str())
+                    .collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    #[test]
+    fn screen_poll_treats_a_blank_screen_as_no_change() {
+        // A buffer that has run but shows nothing: the old code sent no frame
+        // because the styled screen came back empty after trailing-blank
+        // trimming, and the cheap hash must not start sending one.
+        let buf = vt_log_with("");
+        assert!(poll_screen(&buf, 0).screen.is_none());
     }
 
     // --- WebSocket catch-up/subscribe race ---

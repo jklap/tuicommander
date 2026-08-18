@@ -2958,10 +2958,7 @@ pub(crate) fn purge_dead_ws_clients(
 /// An empty `Vec` left behind is not free: it makes the reader's lookup succeed,
 /// so every chunk is copied for a session nobody is watching. Separate fn
 /// because the `RefMut` must be dropped before touching the same map again.
-fn reap_empty_ws_entry(
-    ws_clients: &DashMap<String, Vec<WsClientTx>>,
-    session_id: &str,
-) {
+fn reap_empty_ws_entry(ws_clients: &DashMap<String, Vec<WsClientTx>>, session_id: &str) {
     ws_clients.remove_if(session_id, |_, clients| clients.is_empty());
 }
 
