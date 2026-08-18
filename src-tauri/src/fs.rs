@@ -610,18 +610,31 @@ fn registered_repo_paths() -> Vec<String> {
 /// Shared by the `search_content_all` Tauri command and the
 /// `/fs/search-content-all` HTTP route.
 ///
-/// A repo whose index is not built yet cannot be searched now — but it is NOT
-/// silently dropped: the build is kicked off (`ensure_index`, serialised by the
-/// global indexer semaphore) and the repo is counted in `repos_pending` so the
-/// caller can say "not found in the 2 repos searched, 32 still indexing"
-/// instead of a flat "No results". With the default `active_and_switch`
-/// strategy only the active repo is pre-warmed at boot, so without this a
-/// cross-repo search covered almost nothing and reported a confident miss.
+/// A repo whose index is not built yet cannot be searched now, but it is counted
+/// in `repos_pending` rather than silently dropped. The configured warm strategy
+/// owns build scheduling: one cross-repo query must not enqueue every registered
+/// repo behind the single global build semaphore.
 pub(crate) fn search_content_all_impl(
     state: &Arc<crate::state::AppState>,
     query: &str,
     case_sensitive: bool,
     global_limit: usize,
+) -> ContentSearchResult {
+    search_content_all_impl_with_cancel(
+        state,
+        query,
+        case_sensitive,
+        global_limit,
+        &AtomicBool::new(false),
+    )
+}
+
+fn search_content_all_impl_with_cancel(
+    state: &Arc<crate::state::AppState>,
+    query: &str,
+    case_sensitive: bool,
+    global_limit: usize,
+    cancel: &AtomicBool,
 ) -> ContentSearchResult {
     // Union of registered repos and already-indexed ones: a repo can hold an
     // index (e.g. an agent searched it) without being registered, and must
@@ -641,17 +654,25 @@ pub(crate) fn search_content_all_impl(
     let mut repos_pending: u32 = 0;
 
     for repo_path in &repo_paths {
-        // ensure_index returns the existing index untouched when present, and
-        // otherwise inserts a placeholder + spawns the build. Calling it here is
-        // what makes a cross-repo search self-healing across invocations.
-        let index_arc = crate::content_index::ensure_index(state, repo_path);
-        let index = index_arc.read();
-        if !index.is_ready() {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
+        let Some(index_arc) = state
+            .content_indices
+            .get(repo_path)
+            .map(|entry| Arc::clone(entry.value()))
+        else {
             repos_pending += 1;
             continue;
-        }
+        };
+        let Some(plan) = prepare_index_search(&index_arc, query, 50) else {
+            repos_pending += 1;
+            continue;
+        };
         repos_searched += 1;
-        if let Ok(result) = search_via_index(&index, query, case_sensitive, Some(per_repo_limit)) {
+        if let Ok(result) =
+            search_index_plan(plan, query, case_sensitive, Some(per_repo_limit), cancel)
+        {
             files_searched += result.files_searched;
             for mut m in result.matches {
                 m.repo_path = Some(repo_path.clone());
@@ -708,7 +729,13 @@ pub async fn search_content_all(
 
     tokio::task::spawn_blocking(move || {
         let _throttle_guard = throttle_guard;
-        let result = search_content_all_impl(&app_state, &query, case_sensitive, global_limit);
+        let result = search_content_all_impl_with_cancel(
+            &app_state,
+            &query,
+            case_sensitive,
+            global_limit,
+            &cancel_token,
+        );
         // No early return on cancellation: `emit_content_batches` skips the
         // payload but still closes the search with a final batch under this
         // `search_id`, which is the only thing that stops the caller's spinner.
@@ -766,6 +793,7 @@ pub async fn search_content(
             use_regex,
             whole_word,
             limit,
+            &cancel_token,
         ) {
             Ok(result) => {
                 // Cancellation is handled inside: a superseded search still owes
@@ -790,6 +818,7 @@ pub async fn search_content(
 /// Two-phase content search: BM25 index narrows to top files, then grep for lines.
 /// Falls back to full `search_content_impl` when the index isn't ready or the query
 /// requires regex/whole-word matching.
+#[allow(clippy::too_many_arguments)]
 fn search_content_indexed(
     index_arc: &std::sync::Arc<parking_lot::RwLock<crate::content_index::ContentIndex>>,
     repo_path: String,
@@ -798,24 +827,26 @@ fn search_content_indexed(
     use_regex: bool,
     whole_word: bool,
     limit: Option<usize>,
+    cancel: &AtomicBool,
 ) -> Result<ContentSearchResult, String> {
     // Fall back to full grep for regex, whole-word, or if index isn't ready
     let can_use_index = !use_regex && !whole_word && !query.is_empty();
     if can_use_index {
         let index = index_arc.read();
         if index.is_ready() {
-            return search_via_index(&index, &query, case_sensitive, limit);
+            return search_via_index_with_cancel(&index, &query, case_sensitive, limit, cancel);
         }
     }
 
     // Index not ready or not applicable — fall back to full grep
-    search_content_impl(
+    search_content_impl_with_cancel(
         repo_path,
         query,
         case_sensitive,
         use_regex,
         whole_word,
         limit,
+        cancel,
     )
 }
 
@@ -826,17 +857,62 @@ pub(crate) fn search_via_index(
     case_sensitive: bool,
     limit: Option<usize>,
 ) -> Result<ContentSearchResult, String> {
-    use grep_matcher::Matcher;
-    use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
+    search_via_index_with_cancel(index, query, case_sensitive, limit, &AtomicBool::new(false))
+}
+
+fn search_via_index_with_cancel(
+    index: &crate::content_index::ContentIndex,
+    query: &str,
+    case_sensitive: bool,
+    limit: Option<usize>,
+    cancel: &AtomicBool,
+) -> Result<ContentSearchResult, String> {
+    let plan = index_search_plan(index, query, 50);
+    search_index_plan(plan, query, case_sensitive, limit, cancel)
+}
+
+struct IndexSearchPlan {
+    files: Vec<(String, PathBuf)>,
+}
+
+fn index_search_plan(
+    index: &crate::content_index::ContentIndex,
+    query: &str,
+    candidate_limit: usize,
+) -> IndexSearchPlan {
+    let files = index
+        .search(query, candidate_limit)
+        .into_iter()
+        .map(|ranked| {
+            let absolute = index.absolute_path(&ranked.rel_path);
+            (ranked.rel_path, absolute)
+        })
+        .collect();
+    IndexSearchPlan { files }
+}
+
+fn prepare_index_search(
+    index: &Arc<parking_lot::RwLock<crate::content_index::ContentIndex>>,
+    query: &str,
+    candidate_limit: usize,
+) -> Option<IndexSearchPlan> {
+    let index = index.read();
+    index
+        .is_ready()
+        .then(|| index_search_plan(&index, query, candidate_limit))
+}
+
+fn search_index_plan(
+    plan: IndexSearchPlan,
+    query: &str,
+    case_sensitive: bool,
+    limit: Option<usize>,
+    cancel: &AtomicBool,
+) -> Result<ContentSearchResult, String> {
+    use grep_searcher::{BinaryDetection, SearcherBuilder};
 
     let max_matches = limit.unwrap_or(1000);
-    // BM25 phase: rank the corpus and take the top 50 files. Scoring is
-    // in-memory but proportional to the index, and nothing bounds its duration —
-    // the grep phase below then OPENS each of those 50 files. Callers must treat
-    // this whole function as blocking (story 607-f483).
-    let ranked_files = index.search(query, 50);
-
-    if ranked_files.is_empty() {
+    if plan.files.is_empty() {
         return Ok(ContentSearchResult::default());
     }
 
@@ -856,48 +932,35 @@ pub(crate) fn search_via_index(
     let mut files_searched: u32 = 0;
     let mut truncated = false;
 
-    for ranked in &ranked_files {
+    for (rel_path, abs_path) in plan.files {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         if all_matches.len() >= max_matches {
             truncated = true;
             break;
         }
 
-        let abs_path = index.absolute_path(&ranked.rel_path);
         if !abs_path.is_file() {
             continue;
         }
 
         files_searched += 1;
-        let rel_path = ranked.rel_path.clone();
 
-        let _ = searcher.search_path(
+        let stopped_by_cancel = grep_file_with_cancel(
+            &mut searcher,
             &matcher,
             &abs_path,
-            UTF8(|line_number, line| {
-                if all_matches.len() >= max_matches {
-                    truncated = true;
-                    return Ok(false);
-                }
-
-                let line_trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-                let mut match_start: u32 = 0;
-                let mut match_end: u32 = 0;
-                if let Ok(Some(m)) = matcher.find(line.as_bytes()) {
-                    match_start = m.start() as u32;
-                    match_end = m.end() as u32;
-                }
-
-                all_matches.push(ContentMatch {
-                    path: rel_path.clone(),
-                    line_number: line_number as u32,
-                    line_text: line_trimmed.to_string(),
-                    match_start,
-                    match_end,
-                    repo_path: None,
-                });
-                Ok(true)
-            }),
-        );
+            &rel_path,
+            max_matches,
+            &mut all_matches,
+            &mut truncated,
+            &|| cancel.load(Ordering::Relaxed),
+        )
+        .unwrap_or(false);
+        if stopped_by_cancel {
+            break;
+        }
     }
 
     // BM25 already ranked the files by relevance — no need for post-hoc reranking
@@ -908,6 +971,57 @@ pub(crate) fn search_via_index(
         truncated,
         ..Default::default()
     })
+}
+
+/// Both indexed and fallback search use this sink so cancellation, limits, and
+/// match offsets cannot drift between the two disk-grep paths.
+#[allow(clippy::too_many_arguments)]
+fn grep_file_with_cancel(
+    searcher: &mut grep_searcher::Searcher,
+    matcher: &grep_regex::RegexMatcher,
+    path: &std::path::Path,
+    relative: &str,
+    max_matches: usize,
+    all_matches: &mut Vec<ContentMatch>,
+    truncated: &mut bool,
+    is_cancelled: &impl Fn() -> bool,
+) -> std::io::Result<bool> {
+    use grep_matcher::Matcher;
+    use grep_searcher::sinks::UTF8;
+
+    let mut stopped_by_cancel = false;
+    searcher.search_path(
+        matcher,
+        path,
+        UTF8(|line_number, line| {
+            if is_cancelled() {
+                stopped_by_cancel = true;
+                return Ok(false);
+            }
+            if all_matches.len() >= max_matches {
+                *truncated = true;
+                return Ok(false);
+            }
+
+            let line_trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+            let (match_start, match_end) = matcher
+                .find(line.as_bytes())
+                .ok()
+                .flatten()
+                .map_or((0, 0), |m| (m.start() as u32, m.end() as u32));
+
+            all_matches.push(ContentMatch {
+                path: relative.to_string(),
+                line_number: line_number as u32,
+                line_text: line_trimmed.to_string(),
+                match_start,
+                match_end,
+                repo_path: None,
+            });
+            Ok(true)
+        }),
+    )?;
+    Ok(stopped_by_cancel)
 }
 
 pub(crate) fn search_files_impl(
@@ -1010,10 +1124,29 @@ pub(crate) fn search_content_impl(
     whole_word: bool,
     limit: Option<usize>,
 ) -> Result<ContentSearchResult, String> {
-    use grep_matcher::Matcher;
-    use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
+    search_content_impl_with_cancel(
+        repo_path,
+        query,
+        case_sensitive,
+        use_regex,
+        whole_word,
+        limit,
+        &AtomicBool::new(false),
+    )
+}
 
-    if query.is_empty() {
+fn search_content_impl_with_cancel(
+    repo_path: String,
+    query: String,
+    case_sensitive: bool,
+    use_regex: bool,
+    whole_word: bool,
+    limit: Option<usize>,
+    cancel: &AtomicBool,
+) -> Result<ContentSearchResult, String> {
+    use grep_searcher::{BinaryDetection, SearcherBuilder};
+
+    if query.is_empty() || cancel.load(Ordering::Relaxed) {
         return Ok(ContentSearchResult::default());
     }
 
@@ -1057,6 +1190,9 @@ pub(crate) fn search_content_impl(
         .build();
 
     'walk: for entry in walker {
+        if cancel.load(Ordering::Relaxed) {
+            break;
+        }
         let entry = match entry {
             Ok(e) => e,
             Err(_) => continue,
@@ -1100,44 +1236,27 @@ pub(crate) fn search_content_impl(
 
         let matches_before = all_matches.len();
 
-        let _search_result = searcher.search_path(
+        let search_result = grep_file_with_cancel(
+            &mut searcher,
             &matcher,
             entry.path(),
-            UTF8(|line_number, line| {
-                if all_matches.len() >= max_matches {
-                    truncated = true;
-                    // Returning false stops the search for this file
-                    return Ok(false);
-                }
-
-                // Find match offsets within the line (strip trailing newline for display)
-                let line_trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
-
-                let mut match_start: u32 = 0;
-                let mut match_end: u32 = 0;
-                if let Ok(Some(m)) = matcher.find(line.as_bytes()) {
-                    match_start = m.start() as u32;
-                    match_end = m.end() as u32;
-                }
-
-                all_matches.push(ContentMatch {
-                    path: relative.clone(),
-                    line_number: line_number as u32,
-                    line_text: line_trimmed.to_string(),
-                    match_start,
-                    match_end,
-                    repo_path: None,
-                });
-                Ok(true)
-            }),
+            &relative,
+            max_matches,
+            &mut all_matches,
+            &mut truncated,
+            &|| cancel.load(Ordering::Relaxed),
         );
 
         // If the searcher encountered an error (e.g. non-UTF-8 that slipped past binary check),
         // roll back any partial matches for this file and count it as skipped
-        if _search_result.is_err() {
+        if search_result.is_err() {
             all_matches.truncate(matches_before);
             files_searched -= 1;
             files_skipped += 1;
+        }
+
+        if search_result.unwrap_or(false) {
+            break 'walk;
         }
 
         if truncated {
@@ -1618,7 +1737,9 @@ fn libc_cross_device() -> i32 {
 }
 
 /// Result of resolving a terminal path candidate.
-#[derive(Debug, Clone, Serialize)]
+// PartialEq so a batched resolve can be asserted equal, entry by entry, to the
+// single-candidate command it must not diverge from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ResolvedFilePath {
     pub absolute_path: String,
     pub is_directory: bool,
@@ -1727,6 +1848,32 @@ pub fn resolve_terminal_path(cwd: String, candidate: String) -> Option<ResolvedF
         }),
         Err(_) => None,
     }
+}
+
+/// Validate many path candidates from one screen in a single call.
+///
+/// The link verifier issued one `resolve_terminal_path` per candidate per row and
+/// awaited each row before starting the next: a screen with links on twenty rows
+/// cost twenty serial round trips, each carrying one string. The work per
+/// candidate is unchanged — the round trips are what is removed — so the answer
+/// at index `i` is exactly what the single-candidate command returns for
+/// `candidates[i]`. An unresolved candidate stays a `None` hole rather than
+/// dropping out, which would shift every answer after it onto the wrong span.
+#[cfg_attr(feature = "desktop", tauri::command)]
+pub async fn resolve_terminal_paths(
+    cwd: String,
+    candidates: Vec<String>,
+) -> Result<Vec<Option<ResolvedFilePath>>, String> {
+    // Every candidate canonicalizes, which hits the disk; a screenful of them has
+    // no business on the caller's thread.
+    spawn_blocking_fs(move || {
+        let resolved = candidates
+            .into_iter()
+            .map(|candidate| resolve_terminal_path(cwd.clone(), candidate))
+            .collect::<Vec<_>>();
+        Ok(resolved)
+    })
+    .await
 }
 
 /// Append a path pattern to the repo's .gitignore file.
@@ -2493,6 +2640,64 @@ mod tests {
     }
 
     #[test]
+    fn cancelled_content_walk_stops_before_searching_files() {
+        let dir = setup_test_repo();
+        let cancel = AtomicBool::new(true);
+
+        let result = search_content_impl_with_cancel(
+            dir.path().to_string_lossy().to_string(),
+            "hello".to_string(),
+            true,
+            false,
+            false,
+            None,
+            &cancel,
+        )
+        .unwrap();
+
+        assert_eq!(result.files_searched, 0);
+        assert!(result.matches.is_empty());
+    }
+
+    #[test]
+    fn grep_sink_stops_when_cancelled_between_matching_lines() {
+        use grep_searcher::{BinaryDetection, SearcherBuilder};
+
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("matches.txt");
+        fs::write(&path, "needle one\nneedle two\nneedle three\n").unwrap();
+        let matcher = grep_regex::RegexMatcherBuilder::new()
+            .build("needle")
+            .unwrap();
+        let mut searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(0))
+            .build();
+        let checks = std::cell::Cell::new(0usize);
+        let mut matches = Vec::new();
+        let mut truncated = false;
+
+        let stopped_by_cancel = grep_file_with_cancel(
+            &mut searcher,
+            &matcher,
+            &path,
+            "matches.txt",
+            100,
+            &mut matches,
+            &mut truncated,
+            &|| {
+                let current = checks.get();
+                checks.set(current + 1);
+                current > 0
+            },
+        )
+        .unwrap();
+
+        assert!(stopped_by_cancel);
+        assert_eq!(matches.len(), 1, "the second sink call must stop grep");
+        assert!(!truncated, "cancellation is not a result-limit truncation");
+    }
+
+    #[test]
     fn test_search_content_case_insensitive() {
         let dir = setup_test_repo();
         let repo_path = dir.path().to_string_lossy().to_string();
@@ -2820,6 +3025,59 @@ mod tests {
     }
 
     // --- resolve_terminal_path tests ---
+
+    /// The link verifier issued one IPC per candidate per row and awaited each
+    /// row before starting the next, so a screen with links on many rows cost one
+    /// round trip per link, serially. Batching removes the round trips, not the
+    /// work: every answer must still equal what the single-candidate command
+    /// returns, positionally.
+    #[tokio::test]
+    async fn resolving_a_batch_answers_each_candidate_in_order() {
+        let dir = TempDir::new().unwrap();
+        let cwd = dir.path().to_string_lossy().to_string();
+        fs::write(dir.path().join("first.rs"), "").unwrap();
+        fs::write(dir.path().join("third.rs"), "").unwrap();
+
+        let candidates = vec![
+            "first.rs".to_string(),
+            "missing.rs".to_string(),
+            "third.rs:12:3".to_string(),
+        ];
+        let batched = resolve_terminal_paths(cwd.clone(), candidates.clone())
+            .await
+            .expect("batched resolve failed");
+
+        assert_eq!(
+            batched.len(),
+            candidates.len(),
+            "a batch must not drop entries"
+        );
+        for (i, candidate) in candidates.iter().enumerate() {
+            assert_eq!(
+                batched[i],
+                resolve_terminal_path(cwd.clone(), candidate.clone()),
+                "batched answer for {candidate:?} differs from the single-candidate one"
+            );
+        }
+        // Pinned explicitly so the equality above cannot pass by both being wrong.
+        assert!(batched[0].is_some());
+        assert!(
+            batched[1].is_none(),
+            "an unresolved candidate must stay a hole"
+        );
+        assert!(
+            batched[2].is_some(),
+            "the :line:col suffix must still be stripped"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolving_an_empty_batch_is_not_an_error() {
+        assert_eq!(
+            resolve_terminal_paths("/tmp".to_string(), Vec::new()).await,
+            Ok(Vec::new())
+        );
+    }
 
     #[test]
     fn test_resolve_absolute_existing_file() {
@@ -3317,13 +3575,12 @@ mod tests {
         assert_eq!(result.repos_searched, 1);
     }
 
-    /// A cross-repo search must cover EVERY registered repo, not just the ones
-    /// that already hold an index entry. With the default `active_and_switch`
-    /// index strategy only the active repo is pre-warmed at boot, so iterating
-    /// `content_indices` narrowed "all repos" down to "repos visited this
-    /// session" — the query silently missed everything else.
+    /// A cross-repo search must report EVERY registered repo, but it must not
+    /// enqueue the entire registry behind the single build semaphore. The
+    /// configured warm strategy owns which repos are indexed; search reports
+    /// the remainder as pending without turning one query into hours of work.
     #[test]
-    fn search_content_all_counts_registered_repos_without_an_index() {
+    fn search_content_all_reports_unindexed_repos_without_enqueuing_builds() {
         let cfg = TempDir::new().unwrap();
         let _config_guard = crate::config::set_config_dir_override(cfg.path().to_path_buf());
 
@@ -3350,9 +3607,27 @@ mod tests {
             "the registered-but-unindexed repo must be surfaced, not dropped"
         );
         assert!(
-            state.content_indices.contains_key(&unvisited_path),
-            "a build must be kicked off so the next search covers it"
+            !state.content_indices.contains_key(&unvisited_path),
+            "cross-repo search must not enqueue a build for every registered repo"
         );
+    }
+
+    #[test]
+    fn preparing_an_index_search_releases_the_read_lock_before_grep() {
+        let repo = TempDir::new().unwrap();
+        fs::write(repo.path().join("a.txt"), "zebrafish lives here\n").unwrap();
+        let index = ready_index(repo.path());
+
+        let plan = prepare_index_search(&index, "zebrafish", 50).unwrap();
+        let writer = index.try_write().expect(
+            "the search plan must own paths and scores so disk grep does not retain the read lock",
+        );
+        drop(writer);
+
+        let result =
+            search_index_plan(plan, "zebrafish", false, Some(100), &AtomicBool::new(false))
+                .unwrap();
+        assert_eq!(result.matches.len(), 1);
     }
 
     /// A repo holding an index without being registered (an agent searched it)
