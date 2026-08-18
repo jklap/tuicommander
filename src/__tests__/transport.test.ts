@@ -1275,6 +1275,16 @@ describe("transport", () => {
 			expect(rf.method).toBe("GET");
 			expect(rf.path).toBe("/api/plugins/my-plugin/fs/read?path=%2Fhome%2Fuser%2Ff.txt");
 
+			// plugin_read_files — the batch read goes in the body: a query string
+			// cannot carry hundreds of paths.
+			const rfs = mapCommandToHttp("plugin_read_files", {
+				pluginId: "my-plugin",
+				paths: ["/home/user/a.md", "/home/user/b.md"],
+			});
+			expect(rfs.method).toBe("POST");
+			expect(rfs.path).toBe("/api/plugins/my-plugin/fs/read-batch");
+			expect(rfs.body).toEqual({ paths: ["/home/user/a.md", "/home/user/b.md"] });
+
 			// plugin_read_file_base64
 			const rfb = mapCommandToHttp("plugin_read_file_base64", { pluginId: "my-plugin", path: "/home/user/f.docx" });
 			expect(rfb.method).toBe("GET");
@@ -1569,6 +1579,66 @@ describe("transport", () => {
 				expect.stringContaining("/sessions"),
 				expect.objectContaining({ method: "GET" }),
 			);
+		});
+
+		it("coalesces keystrokes typed while a write is in flight", async () => {
+			// Browser mode posts one HTTP request per keystroke and awaits each before
+			// sending the next, so typing speed is capped at one character per RTT.
+			// Concatenating what piled up is byte-identical to sending it serially.
+			const { rpc } = await import("../transport");
+
+			const bodies: string[] = [];
+			let releaseFirst: (() => void) | undefined;
+			const firstSent = new Promise<void>((resolve) => {
+				releaseFirst = resolve;
+			});
+			globalThis.fetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
+				bodies.push(JSON.parse(init.body).data);
+				const settle = bodies.length === 1 ? firstSent : Promise.resolve();
+				return settle.then(() => ({
+					ok: true,
+					headers: new Headers({ "content-type": "application/json" }),
+					json: vi.fn().mockResolvedValue({}),
+				}));
+			});
+
+			const writes = [
+				rpc("write_pty", { sessionId: "s1", data: "h" }),
+				rpc("write_pty", { sessionId: "s1", data: "e" }),
+				rpc("write_pty", { sessionId: "s1", data: "l" }),
+				rpc("write_pty", { sessionId: "s1", data: "l" }),
+				rpc("write_pty", { sessionId: "s1", data: "o" }),
+			];
+			releaseFirst?.();
+			await Promise.all(writes);
+
+			expect(bodies.join("")).toBe("hello");
+			expect(bodies.length).toBeLessThan(5);
+			expect(bodies[0]).toBe("h");
+		});
+
+		it("keeps each session's keystrokes to itself", async () => {
+			const { rpc } = await import("../transport");
+			const seen: Array<{ url: string; data: string }> = [];
+			globalThis.fetch = vi.fn().mockImplementation((url: string, init: { body: string }) => {
+				seen.push({ url, data: JSON.parse(init.body).data });
+				return Promise.resolve({
+					ok: true,
+					headers: new Headers({ "content-type": "application/json" }),
+					json: vi.fn().mockResolvedValue({}),
+				});
+			});
+
+			await Promise.all([
+				rpc("write_pty", { sessionId: "a", data: "1" }),
+				rpc("write_pty", { sessionId: "b", data: "2" }),
+				rpc("write_pty", { sessionId: "a", data: "3" }),
+			]);
+
+			const a = seen.filter((s) => s.url.includes("/sessions/a/")).map((s) => s.data);
+			const b = seen.filter((s) => s.url.includes("/sessions/b/")).map((s) => s.data);
+			expect(a.join("")).toBe("13");
+			expect(b.join("")).toBe("2");
 		});
 
 		it("sends body for POST requests", async () => {
