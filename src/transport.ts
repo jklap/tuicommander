@@ -1729,6 +1729,13 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			path: `/api/plugins/${p("pluginId")}/fs/read?path=${p("path")}`,
 		}),
 	},
+	plugin_read_files: {
+		map: (args, p) => ({
+			method: "POST",
+			path: `/api/plugins/${p("pluginId")}/fs/read-batch`,
+			body: { paths: args.paths },
+		}),
+	},
 	plugin_read_file_base64: {
 		map: (_args, p) => ({
 			method: "GET",
@@ -2001,23 +2008,57 @@ function isIdempotentRpc(command: string, args: Record<string, unknown>): boolea
  * Per-session write queue — serializes write_pty calls in browser mode to prevent
  * letter reordering when typing fast. Parallel HTTP POSTs can arrive out of order;
  * chaining them ensures each write completes before the next is sent.
+ *
+ * Chaining alone capped typing at one character per round trip: on a slow link
+ * every keystroke waited for the previous POST. So keystrokes that arrive while a
+ * request is in flight accumulate in `pending` and leave together as one write.
+ * That is byte-identical to sending them one at a time — `write_pty` carries only
+ * `{ sessionId, data }`, and the PTY appends what it receives.
  */
-const _writeQueues = new Map<string, Promise<unknown>>();
+interface WriteQueue {
+	/** Resolves when the queue, including anything still pending, has drained. */
+	tail: Promise<unknown>;
+	/** Keystrokes that arrived during the in-flight write, in arrival order. */
+	pending: string;
+	/** Set once a flush is chained for `pending`, so it is not chained twice. */
+	flushChained: boolean;
+}
 
-function queuedWrite<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
-	const prev = _writeQueues.get(sessionId) ?? Promise.resolve();
-	const next = prev.then(fn, fn); // Always chain, even on prior failure
-	_writeQueues.set(sessionId, next);
-	// Clean up when queue drains
-	next.then(
-		() => {
-			if (_writeQueues.get(sessionId) === next) _writeQueues.delete(sessionId);
-		},
-		() => {
-			if (_writeQueues.get(sessionId) === next) _writeQueues.delete(sessionId);
-		},
-	);
-	return next;
+const _writeQueues = new Map<string, WriteQueue>();
+
+function queuedWrite(
+	queueKey: string,
+	data: string,
+	send: (data: string) => Promise<unknown>,
+): Promise<unknown> {
+	const existing = _writeQueues.get(queueKey);
+	if (existing) {
+		existing.pending += data;
+		if (!existing.flushChained) {
+			existing.flushChained = true;
+			// Chain on failure too: dropping the batch would reorder the line
+			// just as surely as a parallel POST would.
+			const flush = () => {
+				const batch = existing.pending;
+				existing.pending = "";
+				existing.flushChained = false;
+				return send(batch).finally(() => reapDrainedQueue(queueKey, existing));
+			};
+			existing.tail = existing.tail.then(flush, flush);
+		}
+		return existing.tail;
+	}
+	const queue: WriteQueue = { tail: Promise.resolve(), pending: "", flushChained: false };
+	_writeQueues.set(queueKey, queue);
+	queue.tail = send(data).finally(() => reapDrainedQueue(queueKey, queue));
+	return queue.tail;
+}
+
+/** Forget a queue once nothing is in flight and nothing is waiting behind it. */
+function reapDrainedQueue(queueKey: string, queue: WriteQueue): void {
+	if (_writeQueues.get(queueKey) === queue && !queue.flushChained) {
+		_writeQueues.delete(queueKey);
+	}
 }
 
 /**
@@ -2030,8 +2071,13 @@ export function rpc<T>(command: string, args: Record<string, unknown> = {}, conn
 	// Serialize write_pty per session in browser mode to prevent letter reordering
 	if (command === "write_pty" && (!isTauri() || connectionId)) {
 		const sessionId = (args.sessionId ?? args.id) as string;
-		if (sessionId) {
-			return queuedWrite(sessionId, () => rpcImpl<T>(command, args, connectionId));
+		if (sessionId && typeof args.data === "string") {
+			// Keyed with the connection: two connections to the same session id
+			// are two different backends, and their bytes must not merge.
+			const queueKey = connectionId ? `${connectionId}:${sessionId}` : sessionId;
+			return queuedWrite(queueKey, args.data, (data) =>
+				rpcImpl<T>(command, { ...args, data }, connectionId),
+			) as Promise<T>;
 		}
 	}
 	if (isIdempotentRpc(command, args)) {
