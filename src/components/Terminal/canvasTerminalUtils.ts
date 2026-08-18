@@ -37,6 +37,31 @@ export interface DecodedRow {
 	attrs: Uint8Array;
 }
 
+/**
+ * Text of a decoded row, built at most once per row object.
+ *
+ * A single frame asks the same row for its text several times over — the
+ * dirty-row prefilter, the suggest-overlay scan, the file-link scan — and each
+ * ask concatenated the whole row character by character. `decodeBinaryFrame`
+ * allocates a fresh row (and fresh typed arrays) for every changed row and never
+ * mutates one in place, so object identity is a sound cache key: the same object
+ * always describes the same cells. A `WeakMap` means a row that scrolls out of
+ * the frame takes its entry with it — no eviction policy to get wrong.
+ */
+const rowTextCache = new WeakMap<DecodedRow, string>();
+
+export function rowText(row: DecodedRow): string {
+	const cached = rowTextCache.get(row);
+	if (cached !== undefined) return cached;
+	let text = "";
+	for (let ci = 0; ci < row.count; ci++) {
+		const cp = row.codepoints[ci];
+		text += cp === 0 ? " " : String.fromCodePoint(cp);
+	}
+	rowTextCache.set(row, text);
+	return text;
+}
+
 export interface DecodedFrame {
 	cursorRow: number;
 	cursorCol: number;
@@ -135,6 +160,59 @@ export interface ReconcileGate {
  */
 export function shouldFireReconcile(g: ReconcileGate): boolean {
 	return g.alive && !g.hidden && !g.isScrolling && g.scrollPosF == null && g.displayOffset === 0;
+}
+
+/** Leading-edge throttle (see createLeadingThrottle). */
+export interface LeadingThrottle {
+	/** Something happened: run now, or once the current window closes. */
+	trigger(): void;
+	/** Drop a pending run (unmount, or the work stopped being wanted). */
+	cancel(): void;
+}
+
+/**
+ * Run `work` on the first trigger, then at most once per `intervalMs`.
+ *
+ * The search refresh used a trailing debounce, which reset its timer on every
+ * frame. A redrawing TUI emits frames far faster than the window, so the timer
+ * never expired and the search did not refresh at all while the screen was busy
+ * — precisely when its matches are going stale. Leading-edge inverts that: the
+ * first frame refreshes immediately, and a continuous stream still refreshes at
+ * a bounded rate instead of never.
+ *
+ * A trailing run fires only if something was triggered inside the window, so an
+ * idle terminal schedules nothing.
+ */
+export function createLeadingThrottle(work: () => void, intervalMs: number): LeadingThrottle {
+	let timer: ReturnType<typeof setTimeout> | null = null;
+	let pending = false;
+
+	const closeWindow = () => {
+		timer = null;
+		if (!pending) return;
+		pending = false;
+		openWindow();
+		work();
+	};
+	const openWindow = () => {
+		timer = setTimeout(closeWindow, intervalMs);
+	};
+
+	return {
+		trigger() {
+			if (timer != null) {
+				pending = true;
+				return;
+			}
+			openWindow();
+			work();
+		},
+		cancel() {
+			if (timer != null) clearTimeout(timer);
+			timer = null;
+			pending = false;
+		},
+	};
 }
 
 /** Trailing ack scheduler for a hidden terminal (see createHiddenAckThrottle). */

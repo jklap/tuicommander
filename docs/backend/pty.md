@@ -54,8 +54,8 @@ policy. Each site still owns its justified command/env/dimension assembly.
 
 | Command | Description |
 |---------|-------------|
-| `write_pty(session_id, data)` | Write data (user input) to the PTY. |
-| `resize_pty(session_id, rows, cols)` | Resize the PTY terminal dimensions. |
+| `write_pty(session_id, data)` | Write data (user input) to the PTY. Raises the calling thread to `QOS_CLASS_USER_INTERACTIVE` on macOS for the duration of the write and restores the previous class on the way out, so a keystroke is not scheduled behind background work on a pool thread TUIC only borrowed. |
+| `resize_pty(session_id, rows, cols)` | Resize the PTY terminal dimensions. `async`: the reflow it triggers is proportional to scrollback and runs on the blocking pool (`resize_session_off_thread`), never on the IPC thread. The HTTP route takes the same path. |
 | `pause_pty(session_id)` | Pause the reader thread (stops output emission). |
 | `resume_pty(session_id)` | Resume the reader thread. |
 | `close_pty(session_id, cleanup_worktree)` | Close PTY and optionally remove worktree. |

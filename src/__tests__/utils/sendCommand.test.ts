@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { resetPlatformCache } from "../../platform";
 import {
 	AGENT_ENTER_GAP_MS,
 	containsShellMetacharacters,
@@ -21,12 +22,18 @@ function makeRecorder() {
 /**
  * Replace navigator.platform for the duration of a test so isWindows()
  * returns the expected value. Restored via afterEach.
+ *
+ * The cache reset is not optional: `detectPlatform` answers from the UA string
+ * once and remembers, because the platform cannot change while the app runs.
+ * Swapping `navigator.platform` without clearing it leaves the answer from
+ * whichever test ran first, which makes the outcome depend on file order.
  */
 function setPlatform(value: string) {
 	Object.defineProperty(navigator, "platform", {
 		value,
 		configurable: true,
 	});
+	resetPlatformCache();
 }
 
 describe("sendCommand", () => {

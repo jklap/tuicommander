@@ -590,7 +590,10 @@ mod thread_qos {
 
     unsafe extern "C" {
         fn pthread_set_qos_class_self_np(qos_class: c_uint, relative_priority: c_int) -> c_int;
-        #[cfg(test)]
+        // NOT cfg(test): this was test-only when the only reader was a test probe,
+        // but `QosBoost` reads the class in every build to restore it afterwards.
+        // Leaving the gate on compiled fine under `cargo test` and broke clippy,
+        // the release build and the headless `tuic-remote` binary.
         fn pthread_get_qos_class_np(
             thread: libc::pthread_t,
             qos_class: *mut c_uint,
@@ -5592,7 +5595,6 @@ fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
 // Both need an owner-scoped lifetime, not a session-scoped one. Tie them to
 // ACTIVE_CONVERSATIONS and to a running residency bound respectively.
 
-
 /// Fully remove session state from all DashMaps.
 /// Called on explicit close/kill — caller has already consumed any output they need.
 pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
@@ -8248,6 +8250,43 @@ pub(crate) fn get_session_shell_family(
 /// -client — the desktop frontend already guards, others don't).
 ///
 /// Returns the post-resize full frame to flush, if the grid was resized.
+/// Which thread last ran the reflow for a session.
+///
+/// Keyed by session, not process-wide: the suite runs tests in parallel, and a
+/// single slot would report some other test's thread. Test-only — it is how a
+/// test proves the reflow left the caller's thread without reaching into tokio.
+#[cfg(test)]
+static RESIZE_THREADS: std::sync::LazyLock<dashmap::DashMap<String, std::thread::ThreadId>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+#[cfg(test)]
+pub(crate) fn resize_thread(session_id: &str) -> Option<std::thread::ThreadId> {
+    RESIZE_THREADS.get(session_id).map(|t| *t)
+}
+
+/// [`resize_session_core`] on the blocking pool.
+///
+/// The reflow is the single most expensive thing a terminal does: it rewraps the
+/// whole ring — up to 10,000 rows — and then serializes a full frame, all while
+/// holding the VT mutex the PTY reader wants. Run inline in a `#[tauri::command]`
+/// that is on macOS the main thread, a drag-resize froze the WebView for the
+/// length of every reflow it triggered.
+///
+/// Shared by both transports, like [`vt_try_read`]: the HTTP route is `async` but
+/// its await point is worthless if the body blocks a tokio worker for a whole
+/// rewrap. Neither transport can quietly go back to blocking.
+pub(crate) async fn resize_session_off_thread(
+    state: &Arc<AppState>,
+    session_id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<Option<Vec<u8>>, String> {
+    let state = Arc::clone(state);
+    tokio::task::spawn_blocking(move || resize_session_core(&state, &session_id, rows, cols))
+        .await
+        .map_err(|e| format!("resize failed: {e}"))?
+}
+
 pub(crate) fn resize_session_core(
     state: &AppState,
     session_id: &str,
@@ -8256,6 +8295,10 @@ pub(crate) fn resize_session_core(
 ) -> Result<Option<Vec<u8>>, String> {
     if rows == 0 || cols == 0 {
         return Err("Invalid dimensions: rows and cols must be > 0".to_string());
+    }
+    #[cfg(test)]
+    {
+        RESIZE_THREADS.insert(session_id.to_string(), std::thread::current().id());
     }
     // Serialize the whole grid+PTY resize for this session under one lock so two
     // concurrent differing resizes (Tauri `resize_pty` + HTTP route) cannot interleave
@@ -8347,13 +8390,14 @@ pub(crate) fn resize_session_core(
 /// Resize a PTY session
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn resize_pty(
+pub(crate) async fn resize_pty(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     rows: u16,
     cols: u16,
 ) -> Result<(), String> {
-    let resize_frame = resize_session_core(&state, &session_id, rows, cols)?;
+    let state = Arc::clone(&state);
+    let resize_frame = resize_session_off_thread(&state, session_id.clone(), rows, cols).await?;
     // Flush the post-resize frame so the viewport repaints without waiting for the
     // next PTY data event (fixes blank screen after zoom on static content).
     if let Some(frame) = resize_frame {
@@ -10398,7 +10442,10 @@ mod tests {
         .join()
         .expect("qos probe thread panicked");
         // QOS_CLASS_USER_INTERACTIVE == 0x21.
-        assert_eq!(during, 0x21, "keystroke did not run in the interactive band");
+        assert_eq!(
+            during, 0x21,
+            "keystroke did not run in the interactive band"
+        );
         assert_ne!(before, 0x21, "probe thread started already bumped");
         assert_eq!(
             after, before,
@@ -19209,6 +19256,32 @@ mod tests {
         );
     }
 
+    /// The reflow rewraps the whole ring and serializes a full frame under the VT
+    /// mutex. Run inline in the IPC handler — on macOS, the main thread — a
+    /// drag-resize froze the WebView for the length of every reflow it fired.
+    #[tokio::test]
+    async fn a_resize_reflows_off_the_calling_thread() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let sid = "resize-off-thread";
+        seed_vt_grid(&state, sid, 24, 80);
+
+        let caller = std::thread::current().id();
+        // The session has no PTY, so this ends in "Session not found" — after the
+        // grid reflow, which is precisely the work that must not run here.
+        let _ = resize_session_off_thread(&state, sid.to_string(), 40, 120).await;
+
+        assert_eq!(
+            resize_thread(sid).is_some(),
+            true,
+            "the reflow never ran at all"
+        );
+        assert_ne!(
+            resize_thread(sid),
+            Some(caller),
+            "the reflow ran on the calling thread"
+        );
+    }
+
     #[test]
     fn resize_rejects_zero_dims() {
         let state = crate::state::tests_support::make_test_app_state();
@@ -20964,9 +21037,10 @@ mod tests {
 
     /// Stamp a tombstone that is already older than the TTL.
     fn stamp_aged_tombstone(state: &crate::state::AppState, sid: &str, now_ms: u64) {
-        state
-            .last_output_ms
-            .insert(sid.to_string(), AtomicU64::new(now_ms - TOMBSTONE_TTL_MS - 1));
+        state.last_output_ms.insert(
+            sid.to_string(),
+            AtomicU64::new(now_ms - TOMBSTONE_TTL_MS - 1),
+        );
     }
 
     #[test]
