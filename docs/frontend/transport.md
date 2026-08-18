@@ -55,11 +55,31 @@ export function subscribePty(
   onData: (data: string) => void,
   onExit: () => void,
   onParsedOrOptions?: ((event: WsParsedEvent) => void) | SubscribePtyOptions
-): Unsubscribe
+): PtySubscription
 ```
 
 - **Tauri mode:** Uses `listen("pty-activity-{id}")` and `listen("pty-exit-{id}")` Tauri events
 - **Browser mode:** Opens WebSocket to `/sessions/{id}/stream`
+
+`PtySubscription` is still callable to dispose the subscription — every existing
+caller works unchanged — and carries `pause()` / `resume()` for a client that is
+not on screen (`src/mobile/utils/pageVisibility.ts` wires them to
+`visibilitychange`).
+
+`pause()` is deliberately NOT `unsubscribe()` followed by a fresh
+`subscribePty()`. Two things would break:
+
+- The close handler reads codes 1000/1001 as a real session exit, so the view
+  would print "session exited" and clear the screen on every tab switch.
+- The consumed-line cursor is closure-private, so a fresh subscription replays
+  from the **mount** offset and duplicates the whole scrollback.
+
+Instead the paused socket is closed with the cursor kept alive, `onExit` stays
+silent, pending reconnect backoff is cancelled, and `resume()` reopens from that
+cursor. A paused subscription delivers nothing, and because the cursor only
+advances on delivery, nothing is skipped either. On desktop there is no socket
+to drop, so `pause()` suppresses delivery instead — the same observable
+contract.
 
 `onData` receives PTY output in **browser/PWA mode only**. Desktop sends no output
 over IPC: the canvas renders from grid frames and plugin watcher lines are
