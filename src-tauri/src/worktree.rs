@@ -1247,15 +1247,18 @@ fn parse_orphan_worktrees(porcelain: &str) -> Vec<String> {
 /// Detect orphan worktrees: linked worktrees present on the filesystem but in detached HEAD
 /// state (i.e. their branch has been deleted). Returns a list of worktree directory paths.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<String>, String> {
-    let base_repo = PathBuf::from(&repo_path);
+pub(crate) async fn detect_orphan_worktrees(repo_path: String) -> Result<Vec<String>, String> {
+    tokio::task::spawn_blocking(move || {
+        let base_repo = PathBuf::from(&repo_path);
+        let out = git_cmd(&base_repo)
+            .args(["worktree", "list", "--porcelain"])
+            .run()
+            .map_err(|e| format!("git worktree list failed: {e}"))?;
 
-    let out = git_cmd(&base_repo)
-        .args(["worktree", "list", "--porcelain"])
-        .run()
-        .map_err(|e| format!("git worktree list failed: {e}"))?;
-
-    Ok(parse_orphan_worktrees(&out.stdout))
+        Ok(parse_orphan_worktrees(&out.stdout))
+    })
+    .await
+    .map_err(|e| format!("orphan worktree detection task failed: {e}"))?
 }
 
 /// Remove an orphan worktree by its filesystem path (detached HEAD — no branch to look up).
@@ -3418,6 +3421,23 @@ branch refs/heads/feat
 
 ";
         let orphans = super::parse_orphan_worktrees(porcelain);
+        assert!(orphans.is_empty());
+    }
+
+    #[tokio::test]
+    async fn detect_orphan_worktrees_runs_as_async_command() {
+        let repo = TempDir::new().expect("temp repo");
+        let status = Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(repo.path())
+            .status()
+            .expect("run git init");
+        assert!(status.success());
+
+        let orphans = super::detect_orphan_worktrees(repo.path().display().to_string())
+            .await
+            .expect("detect orphan worktrees");
+
         assert!(orphans.is_empty());
     }
 

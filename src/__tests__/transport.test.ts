@@ -61,7 +61,13 @@ function extractRegisteredTauriCommands(): Set<string> {
 		.filter((entry) => entry.length > 0)
 		.map((entry) => {
 			const parts = entry.split("::");
-			return parts[parts.length - 1];
+			const rustName = parts[parts.length - 1];
+			const renamedCommand = libSource.match(
+				new RegExp(
+					`#\\[tauri::command\\(rename\\s*=\\s*"([^"]+)"\\)\\]\\s*(?:pub\\(super\\)\\s+)?async\\s+fn\\s+${rustName}\\b`,
+				),
+			)?.[1];
+			return renamedCommand ?? rustName;
 		});
 
 	return new Set(commandList);
@@ -568,6 +574,18 @@ describe("transport", () => {
 				is_directory: false,
 			});
 			expect(result.transform?.(null)).toBeNull();
+		});
+
+		// POST, not GET: a screenful of candidates does not belong in a query
+		// string, and the whole point of the batch is that it can be large.
+		it("maps resolve_terminal_paths to POST with the candidates in the body", () => {
+			const result = mapCommandToHttp("resolve_terminal_paths", {
+				cwd: "/repo",
+				candidates: ["src/x.ts", "missing.ts"],
+			});
+			expect(result.method).toBe("POST");
+			expect(result.path).toBe("/fs/resolve-terminal-paths");
+			expect(result.body).toEqual({ cwd: "/repo", candidates: ["src/x.ts", "missing.ts"] });
 		});
 
 		it("maps stat_path to GET /fs/stat?path=", () => {
@@ -1483,6 +1501,13 @@ describe("transport", () => {
 	});
 
 	describe("INTENTIONALLY_UNMAPPED (native/host-only commands)", () => {
+		it("classifies renamed async wrappers by their public IPC name", () => {
+			const registeredCommands = extractRegisteredTauriCommands();
+
+			expect(registeredCommands.has("load_activity")).toBe(true);
+			expect(registeredCommands.has("load_activity_async")).toBe(false);
+		});
+
 		it("classifies every registered Tauri command as HTTP-mapped or intentionally host-only", () => {
 			const mappedCommands = extractCommandTableCommands();
 			const registeredCommands = extractRegisteredTauriCommands();
@@ -1615,6 +1640,71 @@ describe("transport", () => {
 			expect(bodies.join("")).toBe("hello");
 			expect(bodies.length).toBeLessThan(5);
 			expect(bodies[0]).toBe("h");
+		});
+
+		it("collapses a resize burst to the newest dimensions", async () => {
+			// A drag-resize fires one resize_pty per frame and never awaits the last
+			// one. The backend reflows on the blocking pool, so two resizes in flight
+			// race for the per-session lock and can be applied newest-first: the PTY
+			// is left at the OLDER size while the frontend has already recorded the
+			// newer one, and nothing corrects it until the next physical resize.
+			// Only the newest size means anything, so only the newest may follow the
+			// request already in flight — an intermediate size in flight is an
+			// intermediate size that can land last.
+			const { rpc } = await import("../transport");
+
+			const sent: Array<{ rows: number; cols: number }> = [];
+			let releaseFirst: (() => void) | undefined;
+			const firstSent = new Promise<void>((resolve) => {
+				releaseFirst = resolve;
+			});
+			globalThis.fetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
+				const { rows, cols } = JSON.parse(init.body);
+				sent.push({ rows, cols });
+				const settle = sent.length === 1 ? firstSent : Promise.resolve();
+				return settle.then(() => ({
+					ok: true,
+					headers: new Headers({ "content-type": "application/json" }),
+					json: vi.fn().mockResolvedValue({}),
+				}));
+			});
+
+			const resizes = [
+				rpc("resize_pty", { sessionId: "s1", rows: 10, cols: 40 }),
+				rpc("resize_pty", { sessionId: "s1", rows: 20, cols: 80 }),
+				rpc("resize_pty", { sessionId: "s1", rows: 30, cols: 120 }),
+				rpc("resize_pty", { sessionId: "s1", rows: 40, cols: 160 }),
+			];
+			releaseFirst?.();
+			await Promise.all(resizes);
+
+			expect(sent[0]).toEqual({ rows: 10, cols: 40 });
+			expect(sent.at(-1)).toEqual({ rows: 40, cols: 160 });
+			expect(sent).toHaveLength(2);
+		});
+
+		it("keeps one session's resize out of another's", async () => {
+			// The queue is keyed per session for the same reason the write queue is:
+			// collapsing across sessions would drop a real resize, not a stale one.
+			const { rpc } = await import("../transport");
+
+			const seen: Array<{ url: string; rows: number }> = [];
+			globalThis.fetch = vi.fn().mockImplementation((url: string, init: { body: string }) => {
+				seen.push({ url, rows: JSON.parse(init.body).rows });
+				return Promise.resolve({
+					ok: true,
+					headers: new Headers({ "content-type": "application/json" }),
+					json: vi.fn().mockResolvedValue({}),
+				});
+			});
+
+			await Promise.all([
+				rpc("resize_pty", { sessionId: "a", rows: 10, cols: 40 }),
+				rpc("resize_pty", { sessionId: "b", rows: 20, cols: 80 }),
+			]);
+
+			expect(seen.filter((s) => s.url.includes("/sessions/a/")).map((s) => s.rows)).toEqual([10]);
+			expect(seen.filter((s) => s.url.includes("/sessions/b/")).map((s) => s.rows)).toEqual([20]);
 		});
 
 		it("keeps each session's keystrokes to itself", async () => {

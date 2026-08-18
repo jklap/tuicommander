@@ -353,14 +353,13 @@ function replayActiveAgents(store: typeof terminalsStore): void {
  * Discover and load all user plugins from the plugins directory.
  * Call once at app startup after built-in plugins are registered.
  */
-export async function loadUserPlugins(): Promise<void> {
+export async function loadUserPlugins(syncDisabled = true): Promise<void> {
 	if (!isTauri()) {
 		appLogger.debug("plugin", "User plugin loading skipped in browser mode");
 		return;
 	}
 
-	// Sync disabled list from config
-	await syncDisabledList();
+	if (syncDisabled) await syncDisabledList();
 
 	// Set up hot reload listener
 	try {
@@ -378,25 +377,33 @@ export async function loadUserPlugins(): Promise<void> {
 		return;
 	}
 
-	// Load each valid plugin (register disabled ones in store but don't load)
-	for (const manifest of manifests) {
-		const error = validateManifest(manifest);
-		if (error) {
-			appLogger.error("plugin", `Skipping plugin: ${error}`);
-			continue;
-		}
+	await loadPluginsConcurrently(manifests);
+}
 
-		if (disabledPluginIds.has(manifest.id)) {
-			pluginStore.registerPlugin(manifest.id, {
-				manifest,
-				builtIn: false,
-				enabled: false,
-				loaded: false,
-			});
-			appLogger.info("plugin", `Plugin "${manifest.id}" is disabled, skipping`);
-			continue;
-		}
+export async function loadPluginsConcurrently(
+	manifests: PluginManifest[],
+	loader: (manifest: PluginManifest) => Promise<void> = loadPlugin,
+): Promise<void> {
+	await Promise.all(
+		manifests.map(async (manifest) => {
+			const error = validateManifest(manifest);
+			if (error) {
+				appLogger.error("plugin", `Skipping plugin: ${error}`);
+				return;
+			}
 
-		await loadPlugin(manifest);
-	}
+			if (disabledPluginIds.has(manifest.id)) {
+				pluginStore.registerPlugin(manifest.id, {
+					manifest,
+					builtIn: false,
+					enabled: false,
+					loaded: false,
+				});
+				appLogger.info("plugin", `Plugin "${manifest.id}" is disabled, skipping`);
+				return;
+			}
+
+			await loader(manifest);
+		}),
+	);
 }

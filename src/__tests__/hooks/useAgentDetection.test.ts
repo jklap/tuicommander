@@ -46,6 +46,20 @@ describe("useAgentDetection", () => {
 				expect(map.get("codex")?.available).toBe(true);
 			});
 		});
+
+		it("does not send the API agent's empty binary name to detection", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce(batchResponse());
+				const { detectAll, getDetection } = useAgentDetection();
+
+				await detectAll();
+
+				expect(mockInvoke).toHaveBeenCalledWith("detect_all_agent_binaries", {
+					binaries: expect.not.arrayContaining([""]),
+				});
+				expect(getDetection("api")?.available).toBe(false);
+			});
+		});
 	});
 
 	describe("detectVersion()", () => {

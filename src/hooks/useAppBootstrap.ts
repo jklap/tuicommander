@@ -45,7 +45,7 @@ export type AppBootstrapOptions = InitOptions & {
 	}) => Promise<boolean>;
 };
 
-async function hydrateStores(detectAgents: () => Promise<unknown>): Promise<void> {
+async function hydrateStores(): Promise<void> {
 	const results = await Promise.allSettled([
 		repositoriesStore.hydrate(),
 		uiStore.hydrate(),
@@ -59,7 +59,6 @@ async function hydrateStores(detectAgents: () => Promise<unknown>): Promise<void
 		keybindingsStore.hydrate(),
 		agentConfigsStore.hydrate(),
 		providerRegistryStore.hydrate(),
-		detectAgents(),
 	]);
 	const failures = results.filter((result) => result.status === "rejected");
 	if (failures.length > 0) {
@@ -132,7 +131,7 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 	await initApp({
 		...initOptions,
 		stores: {
-			hydrate: () => hydrateStores(detectAgents),
+			hydrate: hydrateStores,
 			startPolling: githubStore.startPolling,
 			stopPolling: githubStore.stopPolling,
 			startAutoFetch,
@@ -154,6 +153,8 @@ export async function runAppBootstrap(options: AppBootstrapOptions): Promise<voi
 		options.setStatusInfo("Error: App failed to initialize — check error log");
 		document.getElementById("splash")?.remove();
 	});
+
+	detectAgents().catch((error) => appLogger.debug("app", "Agent detection failed", error));
 
 	restoreDetachedPanels();
 	checkForUpdates();

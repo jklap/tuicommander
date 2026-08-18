@@ -252,13 +252,7 @@ pub(super) async fn detect_orphan_worktrees_http(Query(q): Query<OptionalRepoQue
     if let Err(e) = validate_repo_path(&repo_path) {
         return e.into_response();
     }
-    let result =
-        tokio::task::spawn_blocking(move || crate::worktree::detect_orphan_worktrees(repo_path))
-            .await;
-    match result {
-        Ok(r) => json_result(r),
-        Err(e) => err_500(&format!("task panic: {e}")),
-    }
+    json_result(crate::worktree::detect_orphan_worktrees(repo_path).await)
 }
 
 pub(super) async fn remove_orphan_worktree_http(

@@ -693,13 +693,14 @@ pub(crate) fn detect_agent_binary(binary: String) -> AgentBinaryDetection {
 /// Returns a map of binary name -> detection result.
 /// Skips version detection for speed; use detect_agent_binary for full info.
 #[cfg_attr(feature = "desktop", tauri::command)]
-pub(crate) fn detect_all_agent_binaries(
+pub(crate) async fn detect_all_agent_binaries(
     binaries: Vec<String>,
 ) -> std::collections::HashMap<String, AgentBinaryDetection> {
     let handles: Vec<_> = binaries
         .into_iter()
+        .filter(|binary| !binary.trim().is_empty())
         .map(|binary| {
-            std::thread::spawn(move || {
+            tokio::task::spawn_blocking(move || {
                 let detection = detect_binary_path_only(&binary);
                 (binary, detection)
             })
@@ -708,7 +709,7 @@ pub(crate) fn detect_all_agent_binaries(
 
     let mut results = std::collections::HashMap::new();
     for handle in handles {
-        if let Ok((binary, detection)) = handle.join() {
+        if let Ok((binary, detection)) = handle.await {
             results.insert(binary, detection);
         }
     }
@@ -1074,6 +1075,14 @@ mod tests {
                 "agents.ts declares '{binary}' but KNOWN_AGENT_BINARIES omits it, so `agent detect` will never report it"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn batch_agent_detection_uses_async_runtime_and_skips_empty_names() {
+        let detections = detect_all_agent_binaries(vec![String::new(), "git".to_string()]).await;
+
+        assert!(!detections.contains_key(""));
+        assert!(detections.contains_key("git"));
     }
 
     #[test]

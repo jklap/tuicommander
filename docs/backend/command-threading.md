@@ -107,16 +107,32 @@ row two of the table above is not enough on its own. Its capability check stays
 on the caller's thread deliberately: a plugin without `pty:read` should be
 refused without occupying a pool slot.
 
+The cold-start follow-up (`606-fe99`) moved the splash-gating config loaders to
+async wrapper commands in `lib.rs`: repositories, UI preferences, notifications,
+repo settings/defaults, prompt library, notes, activity, keybindings, agent
+config, and provider registry. The wrappers use unique Rust names and preserve
+the existing IPC names with `#[tauri::command(rename = "...")]` while running the
+file-locked loaders on the blocking pool. `load_config` is also async but reads
+the cached `AppState`, so it
+does not need a blocking hop. This makes the frontend `Promise.allSettled`
+hydration genuinely concurrent rather than a queue of synchronous IPC handlers.
+
+The same follow-up made `detect_all_agent_binaries` async with one blocking-pool
+task per non-empty binary, and moved `detect_orphan_worktrees` onto the blocking
+pool. Its HTTP route now awaits the command directly, so both transports share
+the placement. The startup CLI version probes and atomic replacement also run in
+a detached blocking task instead of inside Tauri `setup`.
+
 ### Known gaps, with reasons
 
 | Command | Why it is still where it is |
 |---|---|
 | `fs_transfer_paths` (`fs.rs`) | Still sync, so its recursive directory copy runs on the main thread. It is the backend of a drag-drop, and the D&D surface needs Boss's approval before it is touched. Conversion is mechanical when that comes — see the `DEFERRED` note at the site. |
-| `resolve_terminal_path` (`fs.rs`) | A single `canonicalize` + `is_dir`. Microseconds on a local disk; a stale network mount could stall it, which is a real but unobserved risk. |
+| `resolve_terminal_path` (`fs.rs`) | A single `canonicalize` + `is_dir`. Microseconds on a local disk; a stale network mount could stall it, which is a real but unobserved risk. Its batched sibling `resolve_terminal_paths` — the one a terminal screen actually calls, with tens of candidates — **is** on the blocking pool, so the risk that scaled with candidate count is gone. |
 | `warm_content_index` (`fs.rs`) | `ensure_index` is a map entry plus a spawn — the build itself already runs in the background. |
 | `set_ansi_colors` (`pty.rs`) | Locks *every* vt buffer in a loop on the IPC thread, so the stall grows with session count. Same reordering objection as the row below, and it fires once, when the user picks a theme. |
 | Terminal grid *mutations* (`pty.rs`) | `terminal_scroll`, `terminal_scroll_to`, `terminal_request_frame`, `terminal_exit_alt_screen` still take the vt lock inline. Same stall as the reads, but not the same safety: two `spawn_blocking` hops for one session can run in either order, and `terminal_scroll_to(line)` is absolute, so reordering lands the viewport on the wrong line. They need the coalescing `terminal_scroll_to_offset` already has — which is also why they are the cold path, since the wheel and the scrollbar drag go through the offset command and never touch this lock. |
-| `worktree.rs`, `tuic_cli.rs`, `tunnels/`, `dictation/`, `plugins.rs`, `agent.rs` | Sync commands running git subprocesses, keyring calls, hardware enumeration and recursive deletes. Each is a real main-thread stall; none was in this story's scope. They are listed here so the next sweep starts from a list instead of a grep. |
+| Remaining commands in `worktree.rs`, `tuic_cli.rs`, `tunnels/`, `dictation/`, `plugins.rs`, `agent.rs` | Sync commands still run git subprocesses, keyring calls, hardware enumeration and recursive deletes. `detect_orphan_worktrees` and `detect_all_agent_binaries` are no longer in this set; the other commands remain a starting list for the next sweep. |
 
 ### Comments that asserted a cost the code did not have
 
