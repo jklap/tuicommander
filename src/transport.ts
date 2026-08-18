@@ -2514,7 +2514,12 @@ export async function subscribePty(
 					// reconnecting on it would race the live socket.
 					if (ws !== activeWs) return;
 					if (evt.code === 1000 || evt.code === 1001) {
-						// Normal close or going away — don't reconnect
+						// Normal close or going away — don't reconnect. Terminal, like
+						// the exit frame and like retry exhaustion: the same news by a
+						// third route. Without this the consumer is told the session
+						// exited while the subscription still thinks a later resume
+						// may reopen it.
+						disposed = true;
 						onExit();
 						return;
 					}
@@ -2607,9 +2612,15 @@ export async function subscribePty(
 			// hide/show and never reach the exit the user needs to see.
 			const pending = connect(lastTotalWritten);
 			const mine = activeWs;
+			// A reconnect already announced to the consumer is finished by this
+			// connect, not abandoned by it. Without this, a pause landing between
+			// `onReconnecting` and its backoff leaves the consumer's banner up for
+			// good, even though the socket is healthy again.
+			const wasReconnecting = retryCount > 0;
 			pending
 				.then(() => {
 					retryCount = 0;
+					if (wasReconnecting) opts.onReconnected?.();
 				})
 				.catch(() => {
 					if (mine === activeWs) scheduleReconnect();

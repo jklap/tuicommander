@@ -2505,6 +2505,56 @@ describe("transport", () => {
 				vi.useRealTimers();
 			});
 
+			/**
+			 * Exit frames and retry exhaustion are terminal. A clean close is the
+			 * same news arriving by a third route, so it has to be terminal too —
+			 * otherwise the session is declared exited to the consumer while the
+			 * subscription still believes it can be reopened.
+			 */
+			it("treats a clean close as terminal, so hide/show cannot reopen it", async () => {
+				const { sub, onExit } = await mount();
+
+				instances[0].onclose?.({ code: 1000 });
+				expect(onExit).toHaveBeenCalledTimes(1);
+
+				sub.pause();
+				sub.resume();
+
+				expect(instances.length).toBe(1);
+				expect(onExit).toHaveBeenCalledTimes(1);
+			});
+
+			it("reports the reconnection that a pause interrupted", async () => {
+				const onReconnecting = vi.fn();
+				const onReconnected = vi.fn();
+				const { sub } = await mount(vi.fn(), { onReconnecting, onReconnected });
+
+				instances[0].onclose?.({ code: 1006 });
+				expect(onReconnecting).toHaveBeenCalledTimes(1);
+
+				// The user backgrounds the page mid-backoff and comes back. The
+				// socket is healthy again, so a consumer told "reconnecting" must be
+				// told it finished — otherwise its banner never comes down.
+				sub.pause();
+				sub.resume();
+				instances[1].onopen?.();
+				await Promise.resolve();
+
+				expect(onReconnected).toHaveBeenCalledTimes(1);
+			});
+
+			it("does not announce a reconnection for a resume that never lost one", async () => {
+				const onReconnected = vi.fn();
+				const { sub } = await mount(vi.fn(), { onReconnected });
+
+				sub.pause();
+				sub.resume();
+				instances[1].onopen?.();
+				await Promise.resolve();
+
+				expect(onReconnected).not.toHaveBeenCalled();
+			});
+
 			it("stays disposed when pause or resume arrive after unsubscribe", async () => {
 				const { sub } = await mount();
 
