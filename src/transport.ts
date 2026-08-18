@@ -201,6 +201,18 @@ const COMMAND_TABLE: Record<string, CommandTableEntry> = {
 			body: { data: args.data },
 		}),
 	},
+	// Not `write_pty` with the parts joined: the backend runs its per-input
+	// bookkeeping once per PART, and that bookkeeping is not a function of the
+	// concatenated bytes — a lone "/" opens slash mode, and an exact option key
+	// clears a choice prompt. Joining silently changes what the user typed into
+	// something the backend reads differently.
+	write_pty_parts: {
+		map: (args) => ({
+			method: "POST",
+			path: `/sessions/${args.sessionId ?? args.id}/write-parts`,
+			body: { parts: args.parts },
+		}),
+	},
 	enqueue_agent_command: {
 		map: (args) => ({
 			method: "POST",
@@ -2084,7 +2096,7 @@ function reapDrainedQueue<P>(
 	}
 }
 
-const _writeQueues = new Map<string, CoalescingQueue<string>>();
+const _writeQueues = new Map<string, CoalescingQueue<string[]>>();
 const _resizeQueues = new Map<string, CoalescingQueue<{ rows: number; cols: number }>>();
 
 /** Two connections to the same session id are two different backends. */
@@ -2108,9 +2120,17 @@ export function rpc<T>(command: string, args: Record<string, unknown> = {}, conn
 				// Keyed with the connection: two connections to the same session id
 				// are two different backends, and their bytes must not merge.
 				queueKeyFor(sessionId, connectionId),
-				args.data,
-				(pending, next) => (pending ?? "") + next,
-				(data) => rpcImpl<T>(command, { ...args, data }, connectionId),
+				[args.data],
+				(pending, next) => (pending ?? []).concat(next),
+				// One round trip either way, but the inputs stay SEPARATE: the
+				// backend runs its per-input bookkeeping once per part, and joining
+				// them would change what it reads (a lone "/" opens slash mode, an
+				// exact option key clears a choice prompt). A solitary keystroke has
+				// no batch to describe, so it keeps the single-input route.
+				(parts) =>
+					parts.length === 1
+						? rpcImpl<T>(command, { ...args, data: parts[0] }, connectionId)
+						: rpcImpl<T>("write_pty_parts", { sessionId, parts }, connectionId),
 			) as Promise<T>;
 		}
 	}

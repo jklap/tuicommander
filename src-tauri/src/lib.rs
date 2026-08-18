@@ -1600,6 +1600,7 @@ pub fn run() {
             pty::create_pty_with_worktree,
             pty::list_worktrees,
             pty::write_pty,
+            pty::write_pty_parts,
             pty::get_input_buffer_content,
             pty::resize_pty,
             pty::set_ansi_colors,

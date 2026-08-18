@@ -541,6 +541,13 @@ fn shared_routes() -> Router<Arc<AppState>> {
             get(session::list_sessions).post(session::create_session),
         )
         .route("/sessions/{id}/write", post(session::write_to_session))
+        // The N-ary sibling: one round trip, but the per-input bookkeeping still
+        // runs once per part. Concatenating into `/write` is NOT equivalent —
+        // `apply_input_bookkeeping` reads the whole payload as one keystroke.
+        .route(
+            "/sessions/{id}/write-parts",
+            post(session::write_parts_to_session),
+        )
         .route(
             "/sessions/{id}/queue",
             get(session::list_queued_commands)
@@ -788,6 +795,10 @@ fn shared_routes() -> Router<Arc<AppState>> {
         .route(
             "/fs/resolve-terminal-path",
             get(fs_routes::resolve_terminal_path_http),
+        )
+        .route(
+            "/fs/resolve-terminal-paths",
+            post(fs_routes::resolve_terminal_paths_http),
         )
         .route("/fs/stat", get(fs_routes::stat_path_http))
         .route("/fs/warm-index", post(fs_routes::warm_content_index_http))
