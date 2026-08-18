@@ -2555,6 +2555,32 @@ describe("transport", () => {
 				expect(onReconnected).not.toHaveBeenCalled();
 			});
 
+			/**
+			 * The reconnect callbacks sit on the same promise chain as `connect()`.
+			 * A consumer that throws inside `onReconnected` would land in the
+			 * rejection handler and be read as a failed connection — announcing a
+			 * reconnect that never broke and opening a second socket alongside the
+			 * healthy one. A consumer's bug must not become a transport failure.
+			 */
+			it("does not read a throwing onReconnected as a failed connection", async () => {
+				const onReconnecting = vi.fn();
+				const onReconnected = vi.fn(() => {
+					throw new Error("consumer blew up");
+				});
+				const { sub } = await mount(vi.fn(), { onReconnecting, onReconnected });
+
+				instances[0].onclose?.({ code: 1006 });
+				sub.pause();
+				sub.resume();
+				instances[1].onopen?.();
+				await Promise.resolve();
+				await Promise.resolve();
+
+				expect(onReconnected).toHaveBeenCalledTimes(1);
+				// One announcement, from the abnormal close that really happened.
+				expect(onReconnecting).toHaveBeenCalledTimes(1);
+			});
+
 			it("stays disposed when pause or resume arrive after unsubscribe", async () => {
 				const { sub } = await mount();
 
