@@ -2546,6 +2546,21 @@ export async function subscribePty(
 	const MAX_DELAY_MS = 30_000;
 	let retryCount = 0;
 
+	/**
+	 * Both success paths report through here so a consumer's exception can never
+	 * be mistaken for a failed connection. The callback shares a promise chain
+	 * with `connect()`, and a throw landing in that rejection handler would
+	 * announce a reconnect nothing broke and open a second socket beside the
+	 * healthy one.
+	 */
+	const announceReconnected = () => {
+		try {
+			opts.onReconnected?.();
+		} catch {
+			transportLogger().warn("network", `onReconnected callback threw: ${sessionId}`);
+		}
+	};
+
 	const scheduleReconnect = () => {
 		if (disposed || paused) return;
 		if (retryCount >= MAX_RETRIES) {
@@ -2571,7 +2586,7 @@ export async function subscribePty(
 			try {
 				await pending;
 				retryCount = 0; // Reset on success
-				opts.onReconnected?.();
+				announceReconnected();
 			} catch {
 				// connect() failed (e.g. session gone → 404 triggers immediate close)
 				if (mine !== activeWs) return;
@@ -2620,7 +2635,7 @@ export async function subscribePty(
 			pending
 				.then(() => {
 					retryCount = 0;
-					if (wasReconnecting) opts.onReconnected?.();
+					if (wasReconnecting) announceReconnected();
 				})
 				.catch(() => {
 					if (mine === activeWs) scheduleReconnect();
