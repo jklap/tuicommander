@@ -88,6 +88,7 @@ vi.mock("../../stores/repoSettings", () => ({
 	repoSettingsStore: {
 		get: vi.fn(() => undefined),
 		getEffective: vi.fn(() => undefined),
+		getEffectiveField: vi.fn(() => undefined),
 		setLabel: vi.fn(),
 	},
 }));

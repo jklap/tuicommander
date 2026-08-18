@@ -57,7 +57,7 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 
 	const mergeLabel = (pr: BranchPrStatus) => {
 		const preferred =
-			repoSettingsStore.getEffective(props.repoPath)?.prMergeStrategy ?? repoDefaultsStore.state.prMergeStrategy;
+			repoSettingsStore.getEffectiveField(props.repoPath, "prMergeStrategy") ?? repoDefaultsStore.state.prMergeStrategy;
 		const method = effectiveMergeMethod(pr, preferred);
 		if (method === "squash") return t("sidebar.mergeSquash", "Squash & Merge");
 		if (method === "rebase") return t("sidebar.mergeRebase", "Rebase & Merge");
@@ -69,7 +69,8 @@ export const PrSection: Component<PrSectionProps> = (props) => {
 		setMergeError(null);
 		try {
 			const preferred =
-				repoSettingsStore.getEffective(props.repoPath)?.prMergeStrategy ?? repoDefaultsStore.state.prMergeStrategy;
+				repoSettingsStore.getEffectiveField(props.repoPath, "prMergeStrategy") ??
+				repoDefaultsStore.state.prMergeStrategy;
 			const startMethod = effectiveMergeMethod(pr, preferred);
 			const usedMethod = await mergeWithFallback(props.repoPath, pr.number, startMethod);
 			if (usedMethod !== preferred) {

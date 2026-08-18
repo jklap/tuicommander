@@ -1010,6 +1010,59 @@ describe("repositoriesStore", () => {
 			});
 		});
 
+		/**
+		 * Every consumer of this layout renders it through a reference-keyed
+		 * `<For>`. Allocating a fresh wrapper and a fresh repos array on every
+		 * call means every group header and every repo row is torn down and
+		 * rebuilt whenever anything in the repo store moves — a branch poll, a
+		 * file save, an unrelated repo's revision bump.
+		 */
+		it("getGroupedLayout() reuses the wrapper when nothing changed", () => {
+			testInScope(() => {
+				store.add({ path: "/a", displayName: "A" });
+				store.add({ path: "/b", displayName: "B" });
+				const gid = store.createGroup("Work")!;
+				store.addRepoToGroup("/a", gid);
+
+				const first = store.getGroupedLayout();
+				const second = store.getGroupedLayout();
+				expect(second.groups[0]).toBe(first.groups[0]);
+				expect(second.groups[0].repos).toBe(first.groups[0].repos);
+				expect(second.ungrouped).toBe(first.ungrouped);
+			});
+		});
+
+		it("getGroupedLayout() builds a new wrapper when its repos change", () => {
+			testInScope(() => {
+				store.add({ path: "/a", displayName: "A" });
+				store.add({ path: "/b", displayName: "B" });
+				const gid = store.createGroup("Work")!;
+				store.addRepoToGroup("/a", gid);
+				const first = store.getGroupedLayout();
+
+				store.addRepoToGroup("/b", gid);
+				const second = store.getGroupedLayout();
+				expect(second.groups[0]).not.toBe(first.groups[0]);
+				expect(second.groups[0].repos.map((r) => r.path)).toEqual(["/a", "/b"]);
+			});
+		});
+
+		it("getGroupedLayout() leaves an untouched group alone when another one changes", () => {
+			testInScope(() => {
+				store.add({ path: "/a", displayName: "A" });
+				store.add({ path: "/b", displayName: "B" });
+				const stable = store.createGroup("Stable")!;
+				const moving = store.createGroup("Moving")!;
+				store.addRepoToGroup("/a", stable);
+				const first = store.getGroupedLayout();
+
+				store.addRepoToGroup("/b", moving);
+				const second = store.getGroupedLayout();
+				expect(second.groups[0]).toBe(first.groups[0]);
+				expect(second.groups[1]).not.toBe(first.groups[1]);
+			});
+		});
+
 		it("getGroupedLayout() respects groupOrder and per-group repoOrder", () => {
 			testInScope(() => {
 				store.add({ path: "/a", displayName: "A" });

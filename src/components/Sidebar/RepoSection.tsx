@@ -236,7 +236,7 @@ export const BranchItem: Component<{
 	const ctxMenu = createContextMenu();
 
 	const branchLabel = createMemo(
-		() => repoSettingsStore.getEffective(props.repoPath)?.branchLabels?.[props.branch.name],
+		() => repoSettingsStore.getEffectiveField(props.repoPath, "branchLabels")?.[props.branch.name],
 	);
 
 	const pr = createMemo(() => activePrStatus(props.repoPath, props.branch.name));

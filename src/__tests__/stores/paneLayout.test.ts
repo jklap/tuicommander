@@ -1025,3 +1025,65 @@ describe("paneLayoutStore", () => {
 		});
 	});
 });
+
+/**
+ * A pane tab is rendered through a reference-keyed `<For>` in PaneTree, and its
+ * subtree mounts a CanvasTerminal — imperative xterm/WebGL state that a remount
+ * destroys. So a tab object handed a new identity is not a repaint, it is a
+ * terminal torn down and rebuilt. Every store path that touches one group must
+ * leave the other tabs' identity alone.
+ */
+describe("pane tab identity", () => {
+	const tabsOf = (groupId: string) => paneLayoutStore.state.groups[groupId]?.tabs ?? [];
+
+	beforeEach(() => paneLayoutStore.reset());
+
+	it("keeps untouched tabs identical when a tab is added", () => {
+		const g = paneLayoutStore.getAllGroupIds()[0];
+		paneLayoutStore.addTab(g, { id: "t1", type: "terminal" });
+		const first = tabsOf(g)[0];
+
+		paneLayoutStore.addTab(g, { id: "t2", type: "terminal" });
+
+		expect(tabsOf(g)[0]).toBe(first);
+	});
+
+	it("keeps untouched tabs identical when the active tab changes", () => {
+		const g = paneLayoutStore.getAllGroupIds()[0];
+		paneLayoutStore.addTab(g, { id: "t1", type: "terminal" });
+		paneLayoutStore.addTab(g, { id: "t2", type: "terminal" });
+		const before = [...tabsOf(g)];
+
+		paneLayoutStore.setActiveTab(g, "t1");
+
+		expect(tabsOf(g)[0]).toBe(before[0]);
+		expect(tabsOf(g)[1]).toBe(before[1]);
+	});
+
+	it("keeps the surviving tabs identical when another is removed", () => {
+		const g = paneLayoutStore.getAllGroupIds()[0];
+		paneLayoutStore.addTab(g, { id: "t1", type: "terminal" });
+		paneLayoutStore.addTab(g, { id: "t2", type: "terminal" });
+		const survivor = tabsOf(g)[0];
+
+		paneLayoutStore.removeTab(g, "t2");
+
+		expect(tabsOf(g)[0]).toBe(survivor);
+	});
+
+	/**
+	 * `restore` receives a snapshot whose objects are always freshly parsed, so a
+	 * plain setState would hand every tab a new proxy and remount every terminal
+	 * in the layout. It reconciles instead.
+	 */
+	it("keeps tab identity across a restore of an equivalent snapshot", () => {
+		const g = paneLayoutStore.getAllGroupIds()[0];
+		paneLayoutStore.addTab(g, { id: "t1", type: "terminal" });
+		const before = tabsOf(g)[0];
+
+		const snapshot = JSON.parse(JSON.stringify(paneLayoutStore.serialize()));
+		paneLayoutStore.restore(snapshot);
+
+		expect(tabsOf(g)[0]).toBe(before);
+	});
+});

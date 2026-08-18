@@ -316,6 +316,23 @@ describe("Toolbar", () => {
 			expect(count?.textContent).toBe("3"); // 1 PR + 2 activity
 		});
 
+		it("counts the badge in one pass, without building a sorted list per section (613-00e8 F108)", () => {
+			for (const id of ["plan", "build", "review"]) {
+				activityStore.registerSection({ id, label: id.toUpperCase(), priority: 10, canDismissAll: false });
+				addTestActivityItem({ id: `${id}-1`, sectionId: id });
+				addTestActivityItem({ id: `${id}-2`, sectionId: id });
+			}
+			const forSection = vi.spyOn(activityStore, "getForSection");
+			const { container } = render(() => <Toolbar />);
+
+			expect(container.querySelector(".notifCount")?.textContent).toBe("6");
+			// The popover is closed, so nothing legitimately needs a section's list.
+			// A call here means the badge scanned and sorted the items once per section
+			// only to read a `.length` off the result.
+			expect(forSection).not.toHaveBeenCalled();
+			forSection.mockRestore();
+		});
+
 		it("clicking bell toggles popover open", () => {
 			addTestNotif();
 			const { container } = render(() => <Toolbar />);

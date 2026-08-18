@@ -177,9 +177,9 @@ export const Toolbar: Component<ToolbarProps> = (props) => {
 	/** Count only activity items visible in the popover (filtered by active repo) */
 	const visibleActivityCount = createMemo(() => {
 		const repoPath = repositoriesStore.state.activeRepoPath ?? undefined;
-		return activitySections().reduce(
-			(sum, section) => sum + activityStore.getForSection(section.id, repoPath).length,
-			0,
+		return activityStore.countActiveInSections(
+			activitySections().map((s) => s.id),
+			repoPath,
 		);
 	});
 	const totalBadgeCount = () => activeNotifs().length + visibleActivityCount() + (hasUpdate() ? 1 : 0);
