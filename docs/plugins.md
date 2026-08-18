@@ -491,6 +491,20 @@ Read a file's content as UTF-8 text. Maximum file size: 10 MB. **Requires `"fs:r
 const content = await host.readFile("/Users/me/.claude/projects/foo/conversation.jsonl");
 ```
 
+#### `host.readFiles(absolutePaths) -> Promise<(string | null)[]>`
+
+Read up to 1000 files in one round trip, in request order. An entry is `null` when that path could not be read — a file that vanished between the listing and the read does not lose the batch. **Requires `"fs:read"` capability.**
+
+Use this instead of looping over `readFile` whenever the paths are known up front: listing a directory and reading every entry costs two calls instead of one per file.
+
+```typescript
+const names = await host.listDirectory(dir, "*.md");
+const contents = await host.readFiles(names.map((name) => `${dir}/${name}`));
+const found = names
+  .map((filename, i) => ({ filename, content: contents[i] }))
+  .filter((entry) => entry.content != null);
+```
+
 #### `host.readFileBase64(absolutePath) -> Promise<string>`
 
 Read a file's raw bytes and return them as a base64 string. Maximum file size: 10 MB. Use this for binary previews such as `.docx`, images, or archives. **Requires `"fs:read"` capability.**
@@ -519,6 +533,8 @@ const activeFile = recent[0]; // most recently written
 #### `host.watchPath(path, callback, options?) -> Promise<Disposable>`
 
 Watch a path for filesystem changes. Emits batched events after a debounce period. **Requires `"fs:watch"` capability.**
+
+Each watch delivers only its own events — a plugin with several watches gets one callback per change, not one per watch.
 
 ```typescript
 const watcher = await host.watchPath(
@@ -680,10 +696,28 @@ const panel = host.openPanel({
     // Send response back
     panel.send({ type: "response", ok: true });
   },
+  onVisibilityChange(visible) {
+    // A panel stays mounted behind display:none when another tab is selected.
+    // Skip work while hidden and catch up here.
+    if (visible && stale) rebuild();
+  },
+  onClose() {
+    // The tab is gone for good, whoever closed it — the ×, a middle-click, the
+    // context menu, or your own close(). A hidden panel comes back; a closed one
+    // does not, and isVisible() reports false for both. Release what the panel
+    // owned here or it outlives the tab.
+    watch.dispose();
+    panel = null;
+  },
 });
 
-// Update content later
-panel.update("<html><body><h1>Updated</h1></body></html>");
+// …and query it at any time, e.g. before an expensive re-render
+if (!panel.isVisible()) { stale = true; return; }
+
+// Update content later. Returns false once the user has closed the tab — a
+// plugin that renders on a timer or a file event should stop, or re-open with
+// openPanel() if the render was user-requested.
+if (!panel.update("<html><body><h1>Updated</h1></body></html>")) panel = null;
 
 // Send a message to the iframe at any time
 panel.send({ type: "refresh", items: [...] });
@@ -1223,7 +1257,7 @@ Capabilities gate access to Tier 3 and Tier 4 methods. Declare them in `manifest
 | `net:http` | `host.httpFetch()` | Can make HTTP requests (scoped to `allowedUrls`) |
 | `invoke:read_file` | `host.invoke("read_file", ...)` | Can read files on disk |
 | `invoke:list_markdown_files` | `host.invoke("list_markdown_files", ...)` | Can list directory contents |
-| `fs:read` | `host.readFile()`, `host.readFileBase64()`, `host.readFileTail()` | Can read files within `$HOME` (10 MB limit) |
+| `fs:read` | `host.readFile()`, `host.readFiles()`, `host.readFileBase64()`, `host.readFileTail()` | Can read files within `$HOME` (10 MB limit) |
 | `fs:list` | `host.listDirectory()` | Can list directory contents within `$HOME` |
 | `fs:watch` | `host.watchPath()` | Can watch filesystem paths within `$HOME` for changes |
 | `fs:write` | `host.writeFile()` | Can write files within `$HOME` (10 MB limit) |

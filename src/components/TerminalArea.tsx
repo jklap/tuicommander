@@ -150,7 +150,7 @@ export const TerminalArea: Component<TerminalAreaProps> = (props) => {
 									const metaHotkeys = createMemo(() => {
 										const path = repositoriesStore.getRepoPathForTerminal(id);
 										if (!path) return undefined;
-										return repoSettingsStore.getEffective(path)?.terminalMetaHotkeys;
+										return repoSettingsStore.getEffectiveField(path, "terminalMetaHotkeys");
 									});
 
 									return (
@@ -214,7 +214,13 @@ export const TerminalArea: Component<TerminalAreaProps> = (props) => {
 											classList={{ active: shouldShow(id, mdTabsStore.state.activeId === id) }}
 											onContextMenu={(e) => e.stopPropagation()}
 										>
-											{mdTab && <MdTabContent tab={mdTab} onClose={() => props.onCloseTab(id)} />}
+											{mdTab && (
+												<MdTabContent
+													tab={mdTab}
+													onClose={() => props.onCloseTab(id)}
+													visible={() => shouldShow(id, mdTabsStore.state.activeId === id)}
+												/>
+											)}
 										</div>
 									);
 								}}

@@ -71,6 +71,31 @@ function createPluginRegistry() {
 	const panelMessageHandlers = new Map<string, (data: unknown) => void>();
 	// Panel message bridge: tabId → send function (set by PluginPanel component)
 	const panelSendChannels = new Map<string, (data: unknown) => void>();
+	// Panel visibility: tabId → is its tab the one on screen (set by PluginPanel).
+	// A plugin that rebuilds its board on a filesystem event has no other way to
+	// tell that it is rendering into a tab behind display:none.
+	const panelVisibility = new Map<string, boolean>();
+	// Panel visibility: tabId → onVisibilityChange callback from plugin
+	const panelVisibilityHandlers = new Map<string, (visible: boolean) => void>();
+	// Panel lifetime: tabId → onClose callback from plugin. A hidden panel comes
+	// back; a closed one never does, and a plugin that cannot tell them apart
+	// keeps a dead handle and whatever the panel owned — a watch, a timer.
+	const panelCloseHandlers = new Map<string, () => void>();
+
+	// A panel dies whenever its tab leaves the store — through the plugin's own
+	// close(), the × on the tab, a middle-click or the context menu. Subscribing
+	// to the store covers all of them at once, so no close path can forget.
+	mdTabsStore.onPluginPanelClosed((tabId) => {
+		// Deleted before it runs: the callback may reach back into the registry,
+		// and a second close of the same tab must be a no-op.
+		const onClose = panelCloseHandlers.get(tabId);
+		panelMessageHandlers.delete(tabId);
+		panelSendChannels.delete(tabId);
+		panelVisibility.delete(tabId);
+		panelVisibilityHandlers.delete(tabId);
+		panelCloseHandlers.delete(tabId);
+		onClose?.();
+	});
 
 	// Global watcher list — all watchers from all plugins, tagged with pluginId.
 	// `id` is the handle Rust reports matches under; `inRust` says whether the
@@ -576,6 +601,12 @@ function createPluginRegistry() {
 				return invoke<string>("plugin_read_file", { path: absolutePath, pluginId });
 			},
 
+			async readFiles(absolutePaths: string[]): Promise<(string | null)[]> {
+				requireCapability(pluginId, capabilities, "fs:read");
+				if (absolutePaths.length === 0) return [];
+				return invoke<(string | null)[]>("plugin_read_files", { paths: absolutePaths, pluginId });
+			},
+
 			async readFileBase64(absolutePath: string): Promise<string> {
 				requireCapability(pluginId, capabilities, "fs:read");
 				return invoke<string>("plugin_read_file_base64", { path: absolutePath, pluginId });
@@ -637,7 +668,10 @@ function createPluginRegistry() {
 					recursive: options?.recursive ?? false,
 					debounceMs: options?.debounceMs ?? 300,
 				});
-				const eventName = `plugin-fs-change-${pluginId}`;
+				// Keyed on the watch, not the plugin: a plugin with K watches used to
+				// get every change delivered to all K callbacks, and each one had no
+				// way to tell whose path it was.
+				const eventName = `plugin-fs-change-${watchId}`;
 				const unlisten = await listen<FsChangeEvent[]>(eventName, (event) => {
 					try {
 						callback(event.payload);
@@ -682,19 +716,33 @@ function createPluginRegistry() {
 
 			openPanel(options: OpenPanelOptions): PanelHandle {
 				requireCapability(pluginId, capabilities, "ui:panel");
-				const tabId = mdTabsStore.addPluginPanel(pluginId, options.title, options.html);
+				const tabId = mdTabsStore.addPluginPanel(pluginId, options.id, options.title, options.html);
 				// Register message handler for this panel
 				if (options.onMessage) {
 					panelMessageHandlers.set(tabId, options.onMessage);
 				}
+				if (options.onVisibilityChange) {
+					panelVisibilityHandlers.set(
+						tabId,
+						guardPluginCallback(pluginId, "panel onVisibilityChange", options.onVisibilityChange),
+					);
+				}
+				if (options.onClose) {
+					panelCloseHandlers.set(tabId, guardPluginCallback(pluginId, "panel onClose", options.onClose));
+				}
+				// addPluginPanel activates the tab, so the panel starts on screen. The
+				// component confirms it a tick later; seeding avoids a window where
+				// isVisible() lies to the plugin that just opened the panel.
+				panelVisibility.set(tabId, true);
 				return {
 					tabId,
 					update(html: string) {
-						mdTabsStore.updatePluginPanel(tabId, html);
+						return mdTabsStore.updatePluginPanel(tabId, html);
+					},
+					isVisible() {
+						return panelVisibility.get(tabId) ?? false;
 					},
 					close() {
-						panelMessageHandlers.delete(tabId);
-						panelSendChannels.delete(tabId);
 						mdTabsStore.remove(tabId);
 					},
 					send(data: unknown) {
@@ -1043,6 +1091,9 @@ function createPluginRegistry() {
 		stateChangeListeners.length = 0;
 		panelMessageHandlers.clear();
 		panelSendChannels.clear();
+		panelVisibility.clear();
+		panelVisibilityHandlers.clear();
+		panelCloseHandlers.clear();
 	}
 
 	// -------------------------------------------------------------------------
@@ -1070,6 +1121,20 @@ function createPluginRegistry() {
 	/** Unregister a send channel (called by PluginPanel component on cleanup) */
 	function unregisterPanelSendChannel(tabId: string): void {
 		panelSendChannels.delete(tabId);
+	}
+
+	/**
+	 * Record whether a panel is the tab on screen (called by PluginPanel).
+	 *
+	 * Only a real change reaches the plugin: the component re-reports on every
+	 * effect run, and a plugin that rebuilds its board on this callback must not
+	 * be woken by a repeat of what it already knows. A tab already closed is
+	 * ignored — its entry is gone and must not come back.
+	 */
+	function setPanelVisible(tabId: string, visible: boolean): void {
+		if (!panelVisibility.has(tabId) || panelVisibility.get(tabId) === visible) return;
+		panelVisibility.set(tabId, visible);
+		panelVisibilityHandlers.get(tabId)?.(visible);
 	}
 
 	/**
@@ -1106,6 +1171,7 @@ function createPluginRegistry() {
 		handlePanelMessage,
 		registerPanelSendChannel,
 		unregisterPanelSendChannel,
+		setPanelVisible,
 		invokePluginCommand,
 	};
 }

@@ -38,6 +38,13 @@ export interface PluginPanelTab extends BaseTab {
 	title: string;
 	/** The plugin that owns this panel */
 	pluginId: string;
+	/**
+	 * The panel's identity within its plugin — `OpenPanelOptions.id`. Two
+	 * openPanel calls with the same key are the same panel, whatever the title
+	 * says; a dashboard that names itself after the active repo must not spawn a
+	 * second tab. Absent on MCP `ui action=tab` panels, which key on pluginId.
+	 */
+	panelKey?: string;
 	/** HTML content rendered inside the sandboxed iframe */
 	html: string;
 	/** Optional URL to load instead of inline HTML (mutually exclusive with html) */
@@ -129,14 +136,48 @@ export function resolveRepoForCwd(cwd: string | null | undefined): string | null
 /** Imperative handles exposed by tab components (e.g. MarkdownTabHandle) */
 const handles = new Map<string, unknown>();
 
+/**
+ * Notified whenever a plugin-panel tab leaves the store.
+ *
+ * The × button, middle-click, the tab context menu and closeTerminal all call
+ * `remove` straight on the store — none of them can reach the plugin's
+ * PanelHandle. Without this the owning plugin's message handler outlives its
+ * panel, holding the plugin module alive for a tab that no longer exists.
+ */
+const pluginPanelClosedListeners = new Set<(tabId: string) => void>();
+
 function createMdTabsStore() {
 	const base = createTabManager<MdTabData>("markdown");
 
+	/** Announce a plugin-panel closure to every subscriber. */
+	function announceIfPluginPanel(tabId: string): void {
+		if (base.get(tabId)?.type !== "plugin-panel") return;
+		for (const listener of pluginPanelClosedListeners) listener(tabId);
+	}
+
 	return {
 		state: base.state,
-		remove: base.remove,
+
+		/** Remove a tab. Plugin panels announce their own death on the way out. */
+		remove(id: string): void {
+			announceIfPluginPanel(id);
+			base.remove(id);
+		},
+
 		setActive: base.setActive,
-		clearAll: base.clearAll,
+
+		clearAll(): void {
+			for (const id of base.getIds()) announceIfPluginPanel(id);
+			base.clearAll();
+		},
+
+		/** Subscribe to plugin-panel closures. Returns the unsubscribe function. */
+		onPluginPanelClosed(listener: (tabId: string) => void): () => void {
+			pluginPanelClosedListeners.add(listener);
+			return () => {
+				pluginPanelClosedListeners.delete(listener);
+			};
+		},
 		get: base.get,
 		getIds: base.getIds,
 		getVisibleIds: base.getVisibleIds,
@@ -239,23 +280,43 @@ function createMdTabsStore() {
 		},
 
 		/**
-		 * Add a plugin panel tab (or return existing if same pluginId+title already open).
+		 * Add a plugin panel tab, or reuse the one this plugin already opened under
+		 * the same `panelKey`. Reuse refreshes html and title and activates the tab
+		 * — the plugin asked for that panel, so the user must end up looking at it.
 		 * Returns the tab ID.
 		 */
-		addPluginPanel(pluginId: string, title: string, html: string): string {
+		addPluginPanel(pluginId: string, panelKey: string, title: string, html: string): string {
 			const existing = Object.values(base.state.tabs).find(
-				(tab) => tab.type === "plugin-panel" && (tab as PluginPanelTab).pluginId === pluginId && tab.title === title,
+				(tab) =>
+					tab.type === "plugin-panel" &&
+					(tab as PluginPanelTab).pluginId === pluginId &&
+					(tab as PluginPanelTab).panelKey === panelKey,
 			) as PluginPanelTab | undefined;
 			if (existing) {
 				// Refresh html so plugin updates (e.g. after hot-reload or
 				// re-open) replace stale content instead of silently keeping
 				// the previous render.
 				base._setState("tabs", existing.id, "html" as keyof MdTabData, html as MdTabData[keyof MdTabData]);
+				base._setState("tabs", existing.id, "title" as keyof MdTabData, title as MdTabData[keyof MdTabData]);
+				base.setActive(existing.id);
 				return existing.id;
 			}
 
 			const id = base._nextId("md");
-			const tabId = base._addTab({ type: "plugin-panel", id, title, pluginId, html, pinned: true } as PluginPanelTab);
+			// pinned: an SDK dashboard is global, not a per-repo view — it carries no
+			// repoPath, so evictNonPinnedPluginPanelsForOtherRepos would leave it
+			// alone either way. The flag is the honest label for a tab the user opened
+			// deliberately and expects to find again, and it is what protects the
+			// panel the day one of these does become repo-scoped.
+			const tabId = base._addTab({
+				type: "plugin-panel",
+				id,
+				title,
+				pluginId,
+				panelKey,
+				html,
+				pinned: true,
+			} as PluginPanelTab);
 
 			return tabId;
 		},
@@ -312,12 +373,18 @@ function createMdTabsStore() {
 			if (existing) base.remove(existing.id);
 		},
 
-		/** Update the HTML content of an existing plugin panel tab */
-		updatePluginPanel(tabId: string, html: string): void {
+		/**
+		 * Update the HTML content of an existing plugin panel tab.
+		 *
+		 * Returns false when the tab is gone — the user can close a panel from the
+		 * tab bar at any time, and a plugin that keeps pushing renders into nothing
+		 * has no other way to notice it should re-open.
+		 */
+		updatePluginPanel(tabId: string, html: string): boolean {
 			const tab = base.get(tabId);
-			if (tab && tab.type === "plugin-panel") {
-				base._setState("tabs", tabId, "html" as keyof MdTabData, html as MdTabData[keyof MdTabData]);
-			}
+			if (tab?.type !== "plugin-panel") return false;
+			base._setState("tabs", tabId, "html" as keyof MdTabData, html as MdTabData[keyof MdTabData]);
+			return true;
 		},
 
 		/** Add the Claude Usage Dashboard tab (singleton — reuses existing if open) */

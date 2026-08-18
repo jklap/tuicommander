@@ -31,6 +31,21 @@ pub(super) async fn plugin_fs_read(
     json_result(crate::plugin_fs::plugin_read_file_impl(&state, q.path, plugin_id).await)
 }
 
+/// Batch read. The paths travel in the body because a query string cannot carry
+/// a directory's worth of them.
+#[derive(Deserialize)]
+pub(super) struct FsReadBatchBody {
+    pub paths: Vec<String>,
+}
+
+pub(super) async fn plugin_fs_read_batch(
+    State(state): State<Arc<AppState>>,
+    AxumPath(plugin_id): AxumPath<String>,
+    Json(body): Json<FsReadBatchBody>,
+) -> Response {
+    json_result(crate::plugin_fs::plugin_read_files_impl(&state, body.paths, plugin_id).await)
+}
+
 pub(super) async fn plugin_fs_read_base64(
     State(state): State<Arc<AppState>>,
     AxumPath(plugin_id): AxumPath<String>,

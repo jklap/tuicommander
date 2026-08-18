@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { invoke } from "../../invoke";
 import { dashboardRegistry } from "../../plugins/dashboardRegistry";
 import { filePreviewRegistry } from "../../plugins/filePreviewRegistry";
 import { markdownProviderRegistry } from "../../plugins/markdownProviderRegistry";
@@ -13,10 +14,29 @@ import { repositoriesStore } from "../../stores/repositories";
 import { statusBarTicker } from "../../stores/statusBarTicker";
 import { terminalsStore } from "../../stores/terminals";
 
-// Mock invoke to avoid Tauri internals in test environment
+// Mock invoke to avoid Tauri internals in test environment.
+// `listen` records every subscription so a test can fire an event at exactly
+// one event name and see who woke up.
+const listeners = new Map<string, Array<(event: { payload: unknown }) => void>>();
 vi.mock("../../invoke", () => ({
 	invoke: vi.fn(() => Promise.resolve()),
+	listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
+		const forName = listeners.get(name) ?? [];
+		forName.push(handler);
+		listeners.set(name, forName);
+		return Promise.resolve(() => {
+			listeners.set(
+				name,
+				(listeners.get(name) ?? []).filter((h) => h !== handler),
+			);
+		});
+	}),
 }));
+
+/** Deliver a payload to everything listening on that exact event name. */
+function emitTauri(name: string, payload: unknown): void {
+	for (const handler of listeners.get(name) ?? []) handler({ payload });
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1234,6 +1254,167 @@ describe("PluginHost — Tier 3c openPanel capability gating", () => {
 		const handle2 = host!.openPanel({ id: "test", title: "Test", html: "<h1>v2</h1>" });
 		expect(handle1.tabId).toBe(handle2.tabId);
 	});
+
+	describe("OpenPanelOptions.id (613-00e8 F106)", () => {
+		function hostFor(pluginId: string): PluginHost {
+			let host: PluginHost | null = null;
+			pluginRegistry.register(
+				makePlugin(pluginId, (h) => {
+					host = h;
+				}),
+			);
+			return host!;
+		}
+
+		it("reuses the panel with the same id even when the title changed", () => {
+			const host = hostFor("builtin");
+			const first = host.openPanel({ id: "dash", title: "mdkb", html: "<h1>v1</h1>" });
+			// A dashboard that puts the repo name in its title is still the same panel.
+			const second = host.openPanel({ id: "dash", title: "mdkb — repo-b", html: "<h1>v2</h1>" });
+
+			expect(second.tabId).toBe(first.tabId);
+			expect(mdTabsStore.getCount()).toBe(1);
+			const tab = mdTabsStore.get(first.tabId) as { title: string; html: string } | undefined;
+			expect(tab?.title).toBe("mdkb — repo-b");
+			expect(tab?.html).toBe("<h1>v2</h1>");
+		});
+
+		it("activates the reused panel so the user sees what was asked for", () => {
+			const host = hostFor("builtin");
+			const first = host.openPanel({ id: "dash", title: "Dash", html: "<h1>v1</h1>" });
+			mdTabsStore.setActive(null);
+
+			host.openPanel({ id: "dash", title: "Dash", html: "<h1>v2</h1>" });
+
+			expect(mdTabsStore.state.activeId).toBe(first.tabId);
+		});
+
+		it("keeps distinct ids in distinct tabs even when the titles collide", () => {
+			const host = hostFor("builtin");
+			const a = host.openPanel({ id: "left", title: "Report", html: "<h1>a</h1>" });
+			const b = host.openPanel({ id: "right", title: "Report", html: "<h1>b</h1>" });
+
+			expect(b.tabId).not.toBe(a.tabId);
+			expect(mdTabsStore.getCount()).toBe(2);
+		});
+
+		it("scopes the id to the plugin — two plugins may both use 'dash'", () => {
+			const a = hostFor("plugin-a").openPanel({ id: "dash", title: "A", html: "<h1>a</h1>" });
+			const b = hostFor("plugin-b").openPanel({ id: "dash", title: "B", html: "<h1>b</h1>" });
+
+			expect(b.tabId).not.toBe(a.tabId);
+			expect(mdTabsStore.getCount()).toBe(2);
+		});
+	});
+
+	describe("panel visibility (613-00e8 F102)", () => {
+		function openWith(onVisibilityChange?: (visible: boolean) => void) {
+			let handle: ReturnType<PluginHost["openPanel"]> | null = null;
+			pluginRegistry.register(
+				makePlugin("builtin", (host) => {
+					handle = host.openPanel({ id: "dash", title: "Dash", html: "<h1>hi</h1>", onVisibilityChange });
+				}),
+			);
+			return handle!;
+		}
+
+		it("a freshly opened panel is visible — openPanel activates its tab", () => {
+			expect(openWith().isVisible()).toBe(true);
+		});
+
+		it("follows what the panel component reports", () => {
+			const handle = openWith();
+			pluginRegistry.setPanelVisible(handle.tabId, false);
+			expect(handle.isVisible()).toBe(false);
+			pluginRegistry.setPanelVisible(handle.tabId, true);
+			expect(handle.isVisible()).toBe(true);
+		});
+
+		it("notifies the plugin on a change, and only on a change", () => {
+			const onVisibilityChange = vi.fn();
+			const handle = openWith(onVisibilityChange);
+
+			pluginRegistry.setPanelVisible(handle.tabId, false);
+			pluginRegistry.setPanelVisible(handle.tabId, false);
+
+			expect(onVisibilityChange).toHaveBeenCalledTimes(1);
+			expect(onVisibilityChange).toHaveBeenCalledWith(false);
+		});
+
+		it("a closed panel is not visible and stops notifying", () => {
+			const onVisibilityChange = vi.fn();
+			const handle = openWith(onVisibilityChange);
+			mdTabsStore.remove(handle.tabId);
+			onVisibilityChange.mockClear();
+
+			pluginRegistry.setPanelVisible(handle.tabId, false);
+
+			expect(handle.isVisible()).toBe(false);
+			expect(onVisibilityChange).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("panel close notification (613-00e8 F101)", () => {
+		function openWith(onClose?: () => void) {
+			let handle: ReturnType<PluginHost["openPanel"]> | null = null;
+			pluginRegistry.register(
+				makePlugin("builtin", (host) => {
+					handle = host.openPanel({ id: "dash", title: "Dash", html: "<h1>hi</h1>", onClose });
+				}),
+			);
+			return handle!;
+		}
+
+		it("tells the plugin its panel is gone, whoever closed it", () => {
+			const onClose = vi.fn();
+			const handle = openWith(onClose);
+
+			// The tab bar, not the plugin: without this the plugin holds a dead
+			// handle and never releases what the panel owned.
+			mdTabsStore.remove(handle.tabId);
+
+			expect(onClose).toHaveBeenCalledTimes(1);
+		});
+
+		it("fires once, even when the plugin closes the panel itself", () => {
+			const onClose = vi.fn();
+			const handle = openWith(onClose);
+
+			handle.close();
+			mdTabsStore.remove(handle.tabId);
+
+			expect(onClose).toHaveBeenCalledTimes(1);
+		});
+
+		it("is not confused with a panel simply being hidden", () => {
+			const onClose = vi.fn();
+			const handle = openWith(onClose);
+
+			pluginRegistry.setPanelVisible(handle.tabId, false);
+
+			expect(onClose).not.toHaveBeenCalled();
+		});
+	});
+
+	describe("update() reports a dead tab (613-00e8 F106)", () => {
+		it("returns true while the panel is open and false once it is gone", () => {
+			let host: PluginHost | null = null;
+			pluginRegistry.register(
+				makePlugin("builtin", (h) => {
+					host = h;
+				}),
+			);
+			const handle = host!.openPanel({ id: "dash", title: "Dash", html: "<h1>v1</h1>" });
+
+			expect(handle.update("<h1>v2</h1>")).toBe(true);
+
+			// Closed from the tab bar, not through the handle — the plugin has no
+			// way to know unless update() tells it.
+			mdTabsStore.remove(handle.tabId);
+
+			expect(handle.update("<h1>v3</h1>")).toBe(false);
+		});
+	});
 });
 
 // ---------------------------------------------------------------------------
@@ -1539,6 +1720,59 @@ describe("PluginHost — fs:write capability gating", () => {
 	});
 });
 
+describe("PluginHost — readFiles batch read (613-00e8 F101)", () => {
+	async function hostWith(capabilities: string[]): Promise<PluginHost> {
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("ext", (h) => {
+				host = h;
+			}),
+			capabilities,
+		);
+		return host!;
+	}
+
+	it("external plugin without fs:read throws on readFiles", async () => {
+		const host = await hostWith([]);
+		await expect(host.readFiles(["/home/user/a.md"])).rejects.toThrow(PluginCapabilityError);
+	});
+
+	it("reads a whole directory in a single command", async () => {
+		const host = await hostWith(["fs:read"]);
+		const { invoke } = await import("../../invoke");
+		vi.mocked(invoke).mockClear();
+
+		const paths = Array.from({ length: 40 }, (_, i) => `/home/user/${i}.md`);
+		await host.readFiles(paths);
+
+		expect(invoke).toHaveBeenCalledTimes(1);
+		expect(invoke).toHaveBeenCalledWith("plugin_read_files", { paths, pluginId: "ext" });
+	});
+
+	it("hands back the backend's result, nulls and all", async () => {
+		const host = await hostWith(["fs:read"]);
+		const { invoke } = await import("../../invoke");
+		// The null marks a file that could not be read; collapsing or dropping it
+		// would silently misalign the result with the paths that were asked for.
+		vi.mocked(invoke).mockResolvedValueOnce(["first", null, "third"]);
+
+		await expect(host.readFiles(["/home/user/a", "/home/user/b", "/home/user/c"])).resolves.toEqual([
+			"first",
+			null,
+			"third",
+		]);
+	});
+
+	it("costs no round trip at all for an empty list", async () => {
+		const host = await hostWith(["fs:read"]);
+		const { invoke } = await import("../../invoke");
+		vi.mocked(invoke).mockClear();
+
+		await expect(host.readFiles([])).resolves.toEqual([]);
+		expect(invoke).not.toHaveBeenCalled();
+	});
+});
+
 describe("PluginHost — fs:rename capability gating", () => {
 	it("external plugin without fs:rename throws on renamePath", async () => {
 		let host: PluginHost | null = null;
@@ -1594,6 +1828,33 @@ describe("PluginHost — fs:rename capability gating", () => {
 // Panel message bridge
 // ---------------------------------------------------------------------------
 
+describe("PluginHost — watchPath fan-out (613-00e8 F104)", () => {
+	const invoked = vi.mocked(invoke);
+
+	it("delivers a watch's events to that watch's callback only", async () => {
+		invoked.mockResolvedValueOnce("watch-a").mockResolvedValueOnce("watch-b");
+		const onA = vi.fn();
+		const onB = vi.fn();
+		let host: PluginHost | null = null;
+		await pluginRegistry.register(
+			makePlugin("p1", (h) => {
+				host = h;
+			}),
+		);
+		await host!.watchPath("/a", onA);
+		await host!.watchPath("/b", onB);
+
+		emitTauri("plugin-fs-change-watch-a", [{ type: "modify", path: "/a/x" }]);
+
+		// Both watches belong to the same plugin. Keying the event on the plugin
+		// would wake every one of its callbacks for a change none of them asked
+		// about — K watches, K wake-ups, K-1 of them wrong.
+		expect(onA).toHaveBeenCalledOnce();
+		expect(onA).toHaveBeenCalledWith([{ type: "modify", path: "/a/x" }]);
+		expect(onB).not.toHaveBeenCalled();
+	});
+});
+
 describe("PluginHost — panel message bridge", () => {
 	it("onMessage callback receives messages via handlePanelMessage", () => {
 		const onMessage = vi.fn();
@@ -1629,6 +1890,23 @@ describe("PluginHost — panel message bridge", () => {
 		);
 		handle!.close();
 		pluginRegistry.handlePanelMessage(handle!.tabId, { type: "after-close" });
+		expect(onMessage).not.toHaveBeenCalled();
+	});
+
+	it("closing the tab from the tab bar cleans up the message handler (613-00e8 F105)", () => {
+		const onMessage = vi.fn();
+		let handle: ReturnType<PluginHost["openPanel"]> | null = null;
+		pluginRegistry.register(
+			makePlugin("p1", (host) => {
+				handle = host.openPanel({ id: "test", title: "Test", html: "<h1>hi</h1>", onMessage });
+			}),
+		);
+
+		// The × on the tab, the middle-click, the context menu and closeTerminal all
+		// go straight to the store — none of them can reach handle.close().
+		mdTabsStore.remove(handle!.tabId);
+		pluginRegistry.handlePanelMessage(handle!.tabId, { type: "after-close" });
+
 		expect(onMessage).not.toHaveBeenCalled();
 	});
 
