@@ -25,7 +25,6 @@ const TunnelsPanel = lazy(() => import("./components/TunnelsPanel").then((m) => 
 
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { AIChatPanel } from "./components/AIChatPanel/AIChatPanel";
 import { DictationToast } from "./components/DictationToast/DictationToast";
 import { ErrorLogPanel } from "./components/ErrorLogPanel";
 import { McpPopup } from "./components/McpPopup/McpPopup";
@@ -73,6 +72,7 @@ import { useWorktreeConsolidation } from "./hooks/useWorktreeConsolidation";
 import { useWorktreeSwitchPrompt } from "./hooks/useWorktreeSwitchPrompt";
 import { invoke, listen } from "./invoke";
 import { activityPanelAdapter } from "./panelAdapters/activity";
+import { aiChatPanelAdapter } from "./panelAdapters/aiChat";
 import { fileBrowserPanelAdapter } from "./panelAdapters/fileBrowser";
 import { gitPanelAdapter } from "./panelAdapters/git";
 import { markdownPanelAdapter } from "./panelAdapters/markdown";
@@ -84,7 +84,6 @@ import { activityStore } from "./stores/activityStore";
 import { agentConfigsStore } from "./stores/agentConfigs";
 import { appLogger } from "./stores/appLogger";
 import { contextMenuActionsStore } from "./stores/contextMenuActionsStore";
-import { conversationStore } from "./stores/conversationStore";
 import { dictationStore } from "./stores/dictation";
 import { diffTabsStore } from "./stores/diffTabs";
 import { errorLogStore } from "./stores/errorLog";
@@ -122,19 +121,7 @@ const getMaxTabNameLength = () => settingsStore.state.maxTabNameLength;
 /** Detect secondary window mode via URL query param */
 const isSecondaryWindow = () => new URLSearchParams(window.location.search).get("mode") === "secondary";
 
-registerPanel({
-	id: "ai-chat",
-	title: "AI Chat",
-	defaultSize: { width: 500, height: 700 },
-	toggle: () => uiStore.toggleAiChatPanel(),
-	detachParams: () => ({ chatId: conversationStore.chatId() }),
-	Component: (props: { params: URLSearchParams }) => {
-		const chatId = props.params.get("chatId");
-		if (chatId) conversationStore.setChatId(chatId);
-		return <AIChatPanel visible={true} onClose={() => window.close()} />;
-	},
-});
-
+registerPanel(aiChatPanelAdapter);
 registerPanel(activityPanelAdapter);
 registerPanel(gitPanelAdapter);
 registerPanel(fileBrowserPanelAdapter);
