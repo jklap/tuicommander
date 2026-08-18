@@ -143,7 +143,14 @@ export const ErrorLogPanel: Component = () => {
 		});
 	});
 
+	/** The effects above are all gated on `isOpen()`; these two memos were not,
+	 *  and a Solid memo re-runs on a dependency change whether or not anything
+	 *  observes it. Since App mounts this panel for the whole session and the
+	 *  `Show` below gates only the JSX, an unopened panel was re-filtering the
+	 *  entire log ring on every log line for the app's lifetime. Both memos read
+	 *  `isOpen()` first so a closed panel subscribes to nothing. */
 	const filteredEntries = createMemo(() => {
+		if (!isOpen()) return [];
 		const entries = appLogger.getEntries();
 		const audience = audienceFilter();
 		const level = levelFilter();
@@ -162,6 +169,7 @@ export const ErrorLogPanel: Component = () => {
 	/** Count of diagnostic entries — surfaced on the Diagnostics tab so the user
 	 *  knows telemetry exists even while the default view hides it. */
 	const diagnosticCount = createMemo(() => {
+		if (!isOpen()) return 0;
 		appLogger.entryCount(); // subscribe
 		return appLogger.getEntries().filter((e) => (e.audience ?? "user") === "diagnostic").length;
 	});

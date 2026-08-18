@@ -469,3 +469,107 @@ describe("activityStore persistence", () => {
 		});
 	});
 });
+
+// The bell badge needs one number: how many items the popover will show. It got
+// it by asking each section for its item LIST — a full scan plus a full sort per
+// section, both thrown away for a `.length`. With S sections that is S scans and
+// S sorts on every recount, and the ordering the sort produces is never read.
+describe("activityStore.countActiveInSections (613-00e8 F108)", () => {
+	beforeEach(() => {
+		activityStore.clearAll();
+	});
+
+	afterEach(() => {
+		activityStore._testCancelPendingSave();
+	});
+
+	it("counts the active items of several sections in one call", () => {
+		activityStore.addItem(makeItem({ id: "a1", sectionId: "alpha" }));
+		activityStore.addItem(makeItem({ id: "a2", sectionId: "alpha" }));
+		activityStore.addItem(makeItem({ id: "b1", sectionId: "beta" }));
+		activityStore.addItem(makeItem({ id: "c1", sectionId: "gamma" }));
+
+		expect(activityStore.countActiveInSections(["alpha", "beta"])).toBe(3);
+		expect(activityStore.countActiveInSections(["gamma"])).toBe(1);
+		expect(activityStore.countActiveInSections([])).toBe(0);
+	});
+
+	it("skips dismissed items", () => {
+		activityStore.addItem(makeItem({ id: "a1", sectionId: "alpha" }));
+		activityStore.addItem(makeItem({ id: "a2", sectionId: "alpha" }));
+		activityStore.dismissItem("a1");
+
+		expect(activityStore.countActiveInSections(["alpha"])).toBe(1);
+	});
+
+	// Same repo rule as getForSection: an item with no repoPath belongs everywhere.
+	it("applies the repo filter exactly as getForSection does", () => {
+		activityStore.addItem(makeItem({ id: "mine", sectionId: "alpha", repoPath: "/repo/a" }));
+		activityStore.addItem(makeItem({ id: "theirs", sectionId: "alpha", repoPath: "/repo/b" }));
+		activityStore.addItem(makeItem({ id: "global", sectionId: "alpha" }));
+
+		expect(activityStore.countActiveInSections(["alpha"], "/repo/a")).toBe(2);
+		expect(activityStore.countActiveInSections(["alpha"], "/repo/a")).toBe(
+			activityStore.getForSection("alpha", "/repo/a").length,
+		);
+		expect(activityStore.countActiveInSections(["alpha"])).toBe(3);
+	});
+});
+
+// `setState("items", prev => prev.filter(...))` hands the store a brand new
+// array, so every consumer of the list re-runs even when the item it reads was
+// not touched. A targeted splice keeps the untouched rows quiet.
+describe("activityStore list mutations (613-00e8 F107)", () => {
+	beforeEach(() => {
+		activityStore.clearAll();
+	});
+
+	afterEach(() => {
+		activityStore._testCancelPendingSave();
+	});
+
+	it("does not disturb a surviving item when another is removed", async () => {
+		const { createEffect, createRoot } = await import("solid-js");
+		activityStore.addItem(makeItem({ id: "keep", title: "Keep me" }));
+		activityStore.addItem(makeItem({ id: "drop", title: "Drop me" }));
+
+		let reads = 0;
+		const dispose = createRoot((disposeFn) => {
+			createEffect(() => {
+				// Read ONE surviving row by path. Iterating the list with find()
+				// would subscribe to the iteration itself and re-run either way,
+				// which is why this reads index 0 directly.
+				activityStore.state.items[0]?.title;
+				reads++;
+			});
+			return disposeFn;
+		});
+		await Promise.resolve();
+		const before = reads;
+
+		activityStore.removeItem("drop");
+		await Promise.resolve();
+
+		expect(activityStore.state.items.map((i) => i.id)).toEqual(["keep"]);
+		expect(reads).toBe(before);
+		dispose();
+	});
+
+	it("still removes the right item", () => {
+		activityStore.addItem(makeItem({ id: "a" }));
+		activityStore.addItem(makeItem({ id: "b" }));
+		activityStore.addItem(makeItem({ id: "c" }));
+
+		activityStore.removeItem("b");
+
+		expect(activityStore.state.items.map((i) => i.id)).toEqual(["a", "c"]);
+	});
+
+	it("removing an unknown id changes nothing", () => {
+		activityStore.addItem(makeItem({ id: "a" }));
+
+		activityStore.removeItem("nope");
+
+		expect(activityStore.state.items.map((i) => i.id)).toEqual(["a"]);
+	});
+});

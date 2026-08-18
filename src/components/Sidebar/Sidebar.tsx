@@ -79,8 +79,14 @@ export const Sidebar: Component<SidebarProps> = (props) => {
 	const filteredLayout = createMemo(() => {
 		const layout = groupedLayout();
 		if (!uiStore.state.repoFilterActiveOnly) return layout;
+		// Re-spreading unconditionally would throw away the wrapper identity
+		// getGroupedLayout works to preserve, rebuilding every row the filter
+		// did not actually touch.
 		const groups = layout.groups
-			.map((entry) => ({ ...entry, repos: entry.repos.filter(repoIsActive) }))
+			.map((entry) => {
+				const repos = entry.repos.filter(repoIsActive);
+				return repos.length === entry.repos.length ? entry : { ...entry, repos };
+			})
 			.filter((entry) => entry.repos.length > 0);
 		const ungrouped = layout.ungrouped.filter(repoIsActive);
 		return { groups, ungrouped };

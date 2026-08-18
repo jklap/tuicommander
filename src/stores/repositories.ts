@@ -95,6 +95,14 @@ export interface GroupedLayout {
 	ungrouped: RepositoryState[];
 }
 
+/** Same length, same element identities. Cheap enough to run per layout call,
+ *  and the only question the layout cache below has to answer. */
+function sameRefs<T>(a: readonly T[], b: readonly T[]): boolean {
+	if (a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+	return true;
+}
+
 /** Fallback check when Rust-provided is_main is not available (e.g. local rename). */
 function isMainBranch(branchName: string): boolean {
 	const mainBranches = ["main", "master", "develop", "development", "dev"];
@@ -167,6 +175,11 @@ function generateGroupId(): string {
 
 /** Create the repositories store */
 function createRepositoriesStore() {
+	/** Wrapper reuse for `getGroupedLayout`, keyed by group id. Bounded by the
+	 *  number of groups, and pruned there when a group disappears. */
+	const groupLayoutCache = new Map<string, GroupedLayout["groups"][number]>();
+	let lastLayout: GroupedLayout | null = null;
+
 	const [state, setState] = createStore<RepositoriesStoreState>({
 		repositories: {},
 		repoOrder: [],
@@ -928,15 +941,32 @@ function createRepositoriesStore() {
 			save();
 		},
 
-		/** Get the grouped layout for rendering: ordered groups with their repos, plus ungrouped repos */
+		/** Get the grouped layout for rendering: ordered groups with their repos, plus ungrouped repos.
+		 *
+		 *  Every consumer renders this through a reference-keyed `<For>`, so a
+		 *  fresh wrapper object means a torn-down and rebuilt DOM subtree. This
+		 *  ran on every repo-store change — a branch poll, a file save, an
+		 *  unrelated repo's revision bump — and rebuilt every group header and
+		 *  every repo row each time. The caches below hand back the previous
+		 *  wrapper whenever it still describes the same group and the same repo
+		 *  proxies, so an untouched group survives a change to its neighbour. */
 		getGroupedLayout(): GroupedLayout {
 			const groups = state.groupOrder
 				.map((gid) => state.groups[gid])
 				.filter(Boolean)
-				.map((group) => ({
-					group,
-					repos: group.repoOrder.map((path) => state.repositories[path]).filter((r) => r && !r.parked),
-				}));
+				.map((group) => {
+					const repos = group.repoOrder.map((path) => state.repositories[path]).filter((r) => r && !r.parked);
+					const cached = groupLayoutCache.get(group.id);
+					if (cached && cached.group === group && sameRefs(cached.repos, repos)) return cached;
+					const entry = { group, repos };
+					groupLayoutCache.set(group.id, entry);
+					return entry;
+				});
+			// Drop cache entries for groups that no longer exist.
+			if (groupLayoutCache.size > groups.length) {
+				const live = new Set(groups.map((g) => g.group.id));
+				for (const id of groupLayoutCache.keys()) if (!live.has(id)) groupLayoutCache.delete(id);
+			}
 
 			// Collect all repo paths that belong to a group
 			const groupedPaths = new Set(groups.flatMap((g) => g.group.repoOrder));
@@ -946,7 +976,13 @@ function createRepositoriesStore() {
 				.map((path) => state.repositories[path])
 				.filter((r) => r && !r.parked);
 
-			return { groups, ungrouped };
+			if (!lastLayout || !sameRefs(lastLayout.groups, groups) || !sameRefs(lastLayout.ungrouped, ungrouped)) {
+				lastLayout = {
+					groups: lastLayout && sameRefs(lastLayout.groups, groups) ? lastLayout.groups : groups,
+					ungrouped: lastLayout && sameRefs(lastLayout.ungrouped, ungrouped) ? lastLayout.ungrouped : ungrouped,
+				};
+			}
+			return lastLayout;
 		},
 
 		/** Every configured repo in display order (ungrouped first, then each
