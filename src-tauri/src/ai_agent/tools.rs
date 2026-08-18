@@ -1771,9 +1771,6 @@ fn exec_search_files(state: &AppState, session_id: &str, args: &Value) -> ToolRe
         if !canon.starts_with(&root) {
             continue;
         }
-        if FileSandbox::is_binary(&canon) {
-            continue;
-        }
         let meta = match std::fs::metadata(&canon) {
             Ok(m) => m,
             Err(_) => continue,
@@ -1781,8 +1778,19 @@ fn exec_search_files(state: &AppState, session_id: &str, args: &Value) -> ToolRe
         if meta.len() > MAX_FILE_BYTES {
             continue;
         }
-        let content = match std::fs::read_to_string(&canon) {
-            Ok(c) => c,
+        // One open per candidate. The previous form sniffed the first 8 KB with
+        // `FileSandbox::is_binary` and then opened the file again to read it —
+        // two opens and two reads of the same head bytes for every file in the
+        // walk. Decoding the bytes we already have answers the same question:
+        // non-UTF-8 is exactly what the sniff called binary, and it now covers
+        // the whole file instead of its first 8 KB.
+        // The size check moved above the read, so an oversized file is no
+        // longer opened at all.
+        let content = match std::fs::read(&canon) {
+            Ok(bytes) => match String::from_utf8(bytes) {
+                Ok(text) => text,
+                Err(_) => continue, // binary
+            },
             Err(_) => continue,
         };
         let lines: Vec<&str> = content.lines().collect();
@@ -2449,6 +2457,27 @@ pub async fn dispatch(
     dispatch_inner(state, session_id, fn_name, args, false).await
 }
 
+/// A tool that does blocking filesystem work, in the one shape the dispatcher
+/// needs. `skip_safety` is passed to every one of them so the table can hold a
+/// single function-pointer type; the read-only tools ignore it.
+type BlockingFsTool = fn(&Arc<AppState>, &str, &Value, bool) -> ToolResult;
+
+/// The filesystem tools, which must run on the blocking pool rather than on a
+/// Tokio worker. Returns `None` for everything else — terminal and session
+/// tools read in-memory state, and a pool hop would cost a thread handoff for
+/// nothing (story 607-f483).
+fn blocking_fs_tool(name: &str) -> Option<BlockingFsTool> {
+    match name {
+        "read_file" => Some(|s, sid, a, _| exec_read_file(s, sid, a)),
+        "write_file" => Some(|s, sid, a, skip| exec_write_file_inner(s, sid, a, skip)),
+        "edit_file" => Some(|s, sid, a, skip| exec_edit_file_inner(s, sid, a, skip)),
+        "list_files" => Some(|s, sid, a, _| exec_list_files(s, sid, a)),
+        "search_files" => Some(|s, sid, a, _| exec_search_files(s, sid, a)),
+        "search_code" => Some(|s, sid, a, _| exec_search_code(s, sid, a)),
+        _ => None,
+    }
+}
+
 /// Re-dispatch a tool call after the user approved it — skips safety checks.
 pub async fn dispatch_approved(
     state: &Arc<AppState>,
@@ -2493,6 +2522,18 @@ async fn dispatch_inner(
             "Permission denied: agent bound to session {session_id} cannot write to {target}. Enable unrestricted mode for cross-session control."
         ));
     }
+    // Filesystem tools are synchronous `std::fs` work — directory walks and
+    // whole-file reads. Running them inline here parks a Tokio worker for the
+    // entire traversal; on a large repo `search_files` holds one for seconds.
+    if let Some(exec) = blocking_fs_tool(fn_name) {
+        let state = Arc::clone(state);
+        let session_id = session_id.to_string();
+        let args = args.clone();
+        return tokio::task::spawn_blocking(move || exec(&state, &session_id, &args, skip_safety))
+            .await
+            .unwrap_or_else(|e| ToolResult::err(format!("tool task failed: {e}")));
+    }
+
     match fn_name {
         "read_screen" => exec_read_screen(state, args),
         "search_scrollback" => exec_search_scrollback(state, args),
@@ -4331,6 +4372,98 @@ mod tests {
                 .iter()
                 .any(|f| f.as_str().unwrap().ends_with("ignored.txt"))
         );
+    }
+
+    // `search_files` used to open every candidate twice: once for an 8 KB
+    // binary sniff, then again to read the whole file. It now reads the bytes
+    // once and lets the UTF-8 decode answer both questions. These pin the
+    // decisions that sniff used to make, so the single read cannot change them.
+
+    #[tokio::test]
+    async fn search_files_skips_a_file_that_is_not_utf8() {
+        let (dir, state) = fs_test_state("s1");
+        // "needle" in bytes, preceded by an invalid UTF-8 sequence: the regex
+        // would match the text, but a binary file must never be searched.
+        let mut body = vec![0xff, 0xfe, 0x00];
+        body.extend_from_slice(b"needle\n");
+        std::fs::write(dir.path().join("blob.bin"), body).unwrap();
+        std::fs::write(dir.path().join("plain.txt"), "needle\n").unwrap();
+
+        let r = dispatch(&state, "s1", "search_files", &json!({ "pattern": "needle" })).await;
+
+        assert!(r.success, "{}", r.output);
+        let parsed: Value = serde_json::from_str(&r.output).unwrap();
+        let files = parsed["files_with_matches"].as_array().unwrap();
+        assert!(files.iter().any(|f| f.as_str().unwrap().ends_with("plain.txt")));
+        assert!(!files.iter().any(|f| f.as_str().unwrap().ends_with("blob.bin")));
+    }
+
+    #[tokio::test]
+    async fn search_files_skips_a_file_that_turns_binary_after_the_first_8kb() {
+        let (dir, state) = fs_test_state("s1");
+        // The old sniff only read 8 KB, so this file passed it and then failed
+        // `read_to_string`. Either way it is skipped — assert the outcome, not
+        // which of the two reads rejected it.
+        let mut body = vec![b'a'; 9000];
+        body.extend_from_slice(b"\nneedle\n");
+        body.extend_from_slice(&[0xff, 0xfe]);
+        std::fs::write(dir.path().join("late.bin"), body).unwrap();
+
+        let r = dispatch(&state, "s1", "search_files", &json!({ "pattern": "needle" })).await;
+
+        assert!(r.success, "{}", r.output);
+        let parsed: Value = serde_json::from_str(&r.output).unwrap();
+        assert_eq!(parsed["total_matches"], 0);
+    }
+
+    #[tokio::test]
+    async fn search_files_skips_a_file_over_the_size_cap() {
+        let (dir, state) = fs_test_state("s1");
+        let mut body = vec![b'a'; MAX_FILE_BYTES as usize + 1];
+        body.extend_from_slice(b"\nneedle\n");
+        std::fs::write(dir.path().join("huge.txt"), body).unwrap();
+
+        let r = dispatch(&state, "s1", "search_files", &json!({ "pattern": "needle" })).await;
+
+        assert!(r.success, "{}", r.output);
+        let parsed: Value = serde_json::from_str(&r.output).unwrap();
+        assert_eq!(parsed["total_matches"], 0);
+    }
+
+    // ── blocking dispatch ──────────────────────────────────────
+    //
+    // The filesystem tools are synchronous `std::fs` work — directory walks and
+    // whole-file reads — called from an async dispatcher. Left inline they park
+    // a Tokio worker for the whole traversal, so the router sends them to the
+    // blocking pool instead. This table is that decision, made testable.
+
+    #[test]
+    fn every_filesystem_tool_is_routed_to_the_blocking_pool() {
+        for name in [
+            "read_file",
+            "write_file",
+            "edit_file",
+            "list_files",
+            "search_files",
+            "search_code",
+        ] {
+            assert!(
+                blocking_fs_tool(name).is_some(),
+                "{name} does blocking fs work and must not run on a Tokio worker"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tool_that_does_no_disk_work_stays_on_the_executor() {
+        // These read in-memory state; a pool hop would cost a thread handoff
+        // for nothing, and `run_command` already manages its own process.
+        for name in ["read_screen", "get_state", "list_sessions", "run_command"] {
+            assert!(
+                blocking_fs_tool(name).is_none(),
+                "{name} should not be sent to the blocking pool"
+            );
+        }
     }
 
     #[tokio::test]

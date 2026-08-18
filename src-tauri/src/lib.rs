@@ -657,15 +657,18 @@ pub(crate) fn read_file_impl(path: String, file: String) -> Result<String, Strin
 }
 
 #[cfg_attr(feature = "desktop", tauri::command)]
-fn read_file(path: String, file: String) -> Result<String, String> {
-    read_file_impl(path, file)
+async fn read_file(path: String, file: String) -> Result<String, String> {
+    fs::spawn_blocking_fs(move || read_file_impl(path, file)).await
 }
 
 /// Read a repo file for the CodeMirror editor, at the larger
 /// [`MAX_EDITOR_LARGE_FILE_SIZE`] cap. Same repo-containment check as `read_file`.
 #[cfg_attr(feature = "desktop", tauri::command)]
-fn read_editor_file(repo_path: String, file: String) -> Result<String, String> {
-    read_file_impl_with_limit(repo_path, file, MAX_EDITOR_LARGE_FILE_SIZE)
+async fn read_editor_file(repo_path: String, file: String) -> Result<String, String> {
+    fs::spawn_blocking_fs(move || {
+        read_file_impl_with_limit(repo_path, file, MAX_EDITOR_LARGE_FILE_SIZE)
+    })
+    .await
 }
 
 /// Read a file by absolute path (read-only, no repo constraint).
@@ -675,8 +678,12 @@ fn read_editor_file(repo_path: String, file: String) -> Result<String, String> {
 /// trigger macOS permission dialogs (TCC guards directory enumeration, not
 /// individual reads). The HTTP endpoint has its own repo-root check.
 #[cfg_attr(feature = "desktop", tauri::command)]
-fn read_external_file(path: String) -> Result<String, String> {
-    let p = std::path::Path::new(&path);
+async fn read_external_file(path: String) -> Result<String, String> {
+    fs::spawn_blocking_fs(move || read_external_file_impl(&path)).await
+}
+
+pub(crate) fn read_external_file_impl(path: &str) -> Result<String, String> {
+    let p = std::path::Path::new(path);
     if !p.is_absolute() {
         return Err("read_external_file requires an absolute path".to_string());
     }
@@ -696,8 +703,11 @@ pub(crate) fn read_external_file_with_limit(path: &str, limit: u64) -> Result<St
 /// Read an absolute-path file for the CodeMirror editor, at the larger
 /// [`MAX_EDITOR_LARGE_FILE_SIZE`] cap. The HTTP endpoint has its own repo-root check.
 #[cfg_attr(feature = "desktop", tauri::command)]
-fn read_editor_file_external(path: String) -> Result<String, String> {
-    read_external_file_with_limit(&path, MAX_EDITOR_LARGE_FILE_SIZE)
+async fn read_editor_file_external(path: String) -> Result<String, String> {
+    fs::spawn_blocking_fs(move || {
+        read_external_file_with_limit(&path, MAX_EDITOR_LARGE_FILE_SIZE)
+    })
+    .await
 }
 
 /// Write a file at an absolute path (used by the UI for files outside any registered repo,
@@ -706,7 +716,11 @@ fn read_editor_file_external(path: String) -> Result<String, String> {
 /// Target must be inside the user's home directory — see
 /// [`crate::fs::validate_external_write_path`] for the full rationale (story 1273-c95e).
 #[cfg_attr(feature = "desktop", tauri::command)]
-fn write_external_file(path: String, content: String) -> Result<(), String> {
+async fn write_external_file(path: String, content: String) -> Result<(), String> {
+    fs::spawn_blocking_fs(move || write_external_file_impl(path, content)).await
+}
+
+pub(crate) fn write_external_file_impl(path: String, content: String) -> Result<(), String> {
     let p = std::path::Path::new(&path);
     let home =
         dirs::home_dir().ok_or_else(|| "Could not resolve user home directory".to_string())?;
