@@ -318,7 +318,7 @@ Replaced by the Git Panel's Changes tab (section 3.8). `Cmd+Shift+D` now opens t
   - **View / edit / delete**: commented passages are highlighted (`.tweak-highlight`); hovering one shows the comment in a tooltip, clicking it reopens the popover to edit or delete
   - **Storage**: comments live *inside* the `.md` source as HTML-comment markers — `<!--tweak:begin:ID-->highlighted text<!--tweak:end:ID @<ISO-timestamp>` + body + `-->`. They are invisible to any standard markdown renderer, survive round-trips, and are committed with the file. The only escaped sequence is `-->` (→ `--&gt;`)
   - **LLM-friendly**: the first comment added to a file prepends a one-time convention header explaining the format, so an AI agent reading the file understands it without external context — the intended workflow is "human highlights + comments → agent applies the feedback to the highlighted text → agent removes the markers"
-  - **Rendering**: highlights are wrapped in the DOM *after* markdown parsing, so a selection that straddles inline formatting (`**bold**`, `` `code` ``) stays intact and the highlight spans contiguously. Shared across the Markdown panel and the PR detail popover via `ContentRenderer`
+  - **Rendering**: highlights are wrapped in the DOM *after* markdown parsing, so a selection that straddles inline formatting (`**bold**`, `` `code` ``) stays intact and the highlight spans contiguously. Implemented in `ContentRenderer`, whose only consumers are the Markdown panel and the AI Chat panel
 
 ### 3.4 File Browser Panel (`Cmd+E`)
 - Directory tree of active repository
