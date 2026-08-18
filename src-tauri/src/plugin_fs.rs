@@ -16,6 +16,16 @@ use tauri::{AppHandle, Emitter, State};
 /// Maximum file size readable via plugin_read_file (10 MB).
 const MAX_FILE_SIZE: u64 = 10 * 1024 * 1024;
 
+/// Maximum number of files one plugin_read_files request may ask for. Bounds how
+/// long a single batch can hold a blocking thread; a directory larger than this
+/// is a paging problem, not a batching one.
+const MAX_BATCH_FILES: usize = 1000;
+
+/// Total bytes one plugin_read_files request may return (64 MB). `MAX_FILE_SIZE`
+/// alone does not bound a batch — `MAX_BATCH_FILES` files just under it would
+/// retain ~10 GB before the response is even serialized.
+const MAX_BATCH_BYTES: u64 = 64 * 1024 * 1024;
+
 // ---------------------------------------------------------------------------
 // Path validation
 // ---------------------------------------------------------------------------
@@ -98,6 +108,18 @@ pub async fn plugin_read_file(
     plugin_read_file_impl(&state, path, plugin_id).await
 }
 
+/// Read several files as UTF-8 text in one call, in request order.
+/// Each entry is the file's content, or `null` when that path could not be read.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub async fn plugin_read_files(
+    paths: Vec<String>,
+    plugin_id: String,
+    state: tauri::State<'_, std::sync::Arc<crate::AppState>>,
+) -> Result<Vec<Option<String>>, String> {
+    plugin_read_files_impl(&state, paths, plugin_id).await
+}
+
 /// Read a file's raw bytes as base64.
 /// Validates the path is within $HOME, enforces the same 10 MB size limit as
 /// plugin_read_file.
@@ -124,34 +146,86 @@ where
         .map_err(|e| format!("fs task failed: {e}"))?
 }
 
+/// Read one file as UTF-8 text, confined to $HOME and capped at `max_bytes`.
+/// Blocking: call it from inside `spawn_blocking_fs`.
+fn read_text_capped(path: &str, max_bytes: u64) -> Result<String, String> {
+    let canonical = validate_within_home(path)?;
+
+    // Check file size before reading
+    let metadata =
+        std::fs::metadata(&canonical).map_err(|e| format!("Failed to stat file: {e}"))?;
+
+    if !metadata.is_file() {
+        return Err("Path is not a file".into());
+    }
+
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "File exceeds maximum size ({} bytes > {} bytes)",
+            metadata.len(),
+            max_bytes
+        ));
+    }
+
+    std::fs::read_to_string(&canonical).map_err(|e| format!("Failed to read file: {e}"))
+}
+
+/// Read one file as UTF-8 text, confined to $HOME and capped at `MAX_FILE_SIZE`.
+/// Blocking: call it from inside `spawn_blocking_fs`.
+fn read_text_within_home(path: &str) -> Result<String, String> {
+    read_text_capped(path, MAX_FILE_SIZE)
+}
+
+/// Read many files against a shared byte budget. An entry is `None` when that
+/// path could not be read: a plugin listing a directory and reading every entry
+/// must not lose the whole batch to one file that vanished between the list and
+/// the read, or to one file too big to fit.
+///
+/// The budget is what bounds a batch — the per-file cap does not: `MAX_BATCH_FILES`
+/// files just under it would retain three orders of magnitude more than any single
+/// read is allowed to. Spending it file by file, rather than refusing the request,
+/// keeps one oversized file from poisoning the ones after it.
+/// Blocking: call it from inside `spawn_blocking_fs`.
+fn read_files_within_budget(
+    paths: Vec<String>,
+    mut budget: u64,
+) -> Result<Vec<Option<String>>, String> {
+    if paths.len() > MAX_BATCH_FILES {
+        return Err(format!(
+            "Too many files in one batch ({} > {MAX_BATCH_FILES})",
+            paths.len()
+        ));
+    }
+    Ok(paths
+        .iter()
+        .map(|path| {
+            let text = read_text_capped(path, budget.min(MAX_FILE_SIZE)).ok()?;
+            budget = budget.saturating_sub(text.len() as u64);
+            Some(text)
+        })
+        .collect())
+}
+
+fn read_files_within_home(paths: Vec<String>) -> Result<Vec<Option<String>>, String> {
+    read_files_within_budget(paths, MAX_BATCH_BYTES)
+}
+
 pub(crate) async fn plugin_read_file_impl(
     state: &std::sync::Arc<crate::AppState>,
     path: String,
     plugin_id: String,
 ) -> Result<String, String> {
     crate::plugins::check_plugin_capability(state, &plugin_id, "fs:read")?;
-    spawn_blocking_fs(move || {
-        let canonical = validate_within_home(&path)?;
+    spawn_blocking_fs(move || read_text_within_home(&path)).await
+}
 
-        // Check file size before reading
-        let metadata =
-            std::fs::metadata(&canonical).map_err(|e| format!("Failed to stat file: {e}"))?;
-
-        if !metadata.is_file() {
-            return Err("Path is not a file".into());
-        }
-
-        if metadata.len() > MAX_FILE_SIZE {
-            return Err(format!(
-                "File exceeds maximum size ({} bytes > {} bytes)",
-                metadata.len(),
-                MAX_FILE_SIZE
-            ));
-        }
-
-        std::fs::read_to_string(&canonical).map_err(|e| format!("Failed to read file: {e}"))
-    })
-    .await
+pub(crate) async fn plugin_read_files_impl(
+    state: &std::sync::Arc<crate::AppState>,
+    paths: Vec<String>,
+    plugin_id: String,
+) -> Result<Vec<Option<String>>, String> {
+    crate::plugins::check_plugin_capability(state, &plugin_id, "fs:read")?;
+    spawn_blocking_fs(move || read_files_within_home(paths)).await
 }
 
 pub(crate) async fn plugin_read_file_base64_impl(
@@ -365,7 +439,9 @@ fn check_watcher_cap(state: &AppState, plugin_id: &str) -> Result<(), String> {
 
 /// Start watching a path for filesystem changes.
 /// Returns a watch_id (UUID) that can be used with plugin_unwatch.
-/// Emits `plugin-fs-change-{plugin_id}` Tauri events on changes.
+/// Emits `plugin-fs-change-{watch_id}` Tauri events on changes. The name is
+/// keyed on the watch, not the plugin: a plugin with K watches would otherwise
+/// have every change delivered to all K of its callbacks.
 // DESKTOP-ONLY (HTTP parity): event delivery to plugins needs AppHandle/WS — out of scope
 #[cfg(feature = "desktop")]
 #[tauri::command]
@@ -382,7 +458,7 @@ pub async fn plugin_watch_path(
     let canonical = validate_within_home(&path)?;
 
     let watch_id = uuid::Uuid::new_v4().to_string();
-    let event_name = format!("plugin-fs-change-{plugin_id}");
+    let event_name = format!("plugin-fs-change-{watch_id}");
     let debounce = std::time::Duration::from_millis(debounce_ms.unwrap_or(300));
     let mode = if recursive.unwrap_or(false) {
         RecursiveMode::Recursive
@@ -1675,6 +1751,116 @@ mod tests {
     #[test]
     fn validate_rejects_empty_path() {
         assert!(validate_within_home("").is_err());
+    }
+
+    /// A directory under $HOME, because every plugin read is confined to it.
+    fn temp_dir_in_home() -> tempfile::TempDir {
+        tempfile::tempdir_in(dirs::home_dir().unwrap()).unwrap()
+    }
+
+    #[test]
+    fn batch_read_returns_contents_in_request_order() {
+        let _guard = FS_TEST_LOCK.lock().unwrap();
+        let dir = temp_dir_in_home();
+        let paths: Vec<String> = (0..3)
+            .map(|i| {
+                let p = dir.path().join(format!("{i}.md"));
+                std::fs::write(&p, format!("body {i}")).unwrap();
+                p.to_str().unwrap().to_string()
+            })
+            .collect();
+
+        let read = read_files_within_home(paths).unwrap();
+
+        assert_eq!(
+            read,
+            vec![
+                Some("body 0".to_string()),
+                Some("body 1".to_string()),
+                Some("body 2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn batch_read_reports_unreadable_entries_as_none() {
+        let _guard = FS_TEST_LOCK.lock().unwrap();
+        let dir = temp_dir_in_home();
+        let good = dir.path().join("good.md");
+        std::fs::write(&good, "here").unwrap();
+
+        // A missing file, a directory, and a path outside $HOME must each cost
+        // the caller one None — not the whole batch.
+        let read = read_files_within_home(vec![
+            good.to_str().unwrap().to_string(),
+            dir.path().join("missing.md").to_str().unwrap().to_string(),
+            dir.path().to_str().unwrap().to_string(),
+            "/etc/hosts".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(read, vec![Some("here".to_string()), None, None, None]);
+    }
+
+    #[test]
+    fn batch_read_rejects_an_oversized_request() {
+        let paths = vec!["/unused".to_string(); MAX_BATCH_FILES + 1];
+        assert!(read_files_within_home(paths).is_err());
+    }
+
+    #[test]
+    fn batch_read_accepts_exactly_the_limit() {
+        // The boundary, not just past it: an off-by-one here would refuse a
+        // request the plugin was told it may make.
+        let paths = vec!["/unused".to_string(); MAX_BATCH_FILES];
+        assert_eq!(
+            read_files_within_home(paths).unwrap().len(),
+            MAX_BATCH_FILES
+        );
+    }
+
+    #[test]
+    fn batch_read_still_enforces_the_per_file_cap() {
+        let _guard = FS_TEST_LOCK.lock().unwrap();
+        let dir = temp_dir_in_home();
+        let big = dir.path().join("big.md");
+        std::fs::write(&big, vec![b'x'; MAX_FILE_SIZE as usize + 1]).unwrap();
+
+        // A generous budget must not let a single file past the 10 MB cap the
+        // one-file read enforces — the two limits compose, they do not replace
+        // each other.
+        let read =
+            read_files_within_budget(vec![big.to_str().unwrap().to_string()], u64::MAX).unwrap();
+
+        assert_eq!(read, vec![None]);
+    }
+
+    #[test]
+    fn batch_read_stops_spending_at_the_byte_budget() {
+        let _guard = FS_TEST_LOCK.lock().unwrap();
+        let dir = temp_dir_in_home();
+
+        // The per-file cap cannot bound a batch: MAX_BATCH_FILES files just
+        // under it would retain three orders of magnitude more than any single
+        // read is allowed to. A budget is spent across the whole request.
+        let write = |name: &str, body: &str| {
+            let p = dir.path().join(name);
+            std::fs::write(&p, body).unwrap();
+            p.to_str().unwrap().to_string()
+        };
+        let paths = vec![
+            write("a.md", "aaaaaa"), // 6 bytes — fits
+            write("b.md", "bbbbbb"), // 6 bytes — does not fit in the 4 left
+            write("c.md", "c"),      // 1 byte  — still fits, so one big file
+                                     //           does not poison the rest
+        ];
+
+        let read = read_files_within_budget(paths, 10).unwrap();
+
+        assert_eq!(
+            read,
+            vec![Some("aaaaaa".to_string()), None, Some("c".to_string())]
+        );
     }
 
     #[test]

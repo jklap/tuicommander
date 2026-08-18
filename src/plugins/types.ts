@@ -397,6 +397,25 @@ export interface OpenPanelOptions {
 	html: string;
 	/** Callback for messages received from the iframe via postMessage */
 	onMessage?: (data: unknown) => void;
+	/**
+	 * Called when the panel becomes the tab on screen, or stops being it.
+	 *
+	 * A panel stays mounted behind `display:none` when another tab is selected,
+	 * so a plugin that re-renders on a timer or a filesystem event is otherwise
+	 * doing that work for nobody. Skip the render while hidden and do it here
+	 * when the panel comes back.
+	 */
+	onVisibilityChange?: (visible: boolean) => void;
+
+	/**
+	 * Called once when the panel's tab is closed, by whoever closed it — the ×,
+	 * a middle-click, the context menu, or the plugin's own `close()`.
+	 *
+	 * A hidden panel comes back; a closed one never does. Release what the panel
+	 * owned here (filesystem watches, timers, the handle itself) — nothing else
+	 * will tell you, and `isVisible()` reports false for both cases.
+	 */
+	onClose?: () => void;
 }
 
 /** Options for host.registerDashboard() */
@@ -425,8 +444,14 @@ export interface CommandOptions {
 export interface PanelHandle {
 	/** The tab ID in the mdTabs store */
 	tabId: string;
-	/** Update the iframe HTML content */
-	update(html: string): void;
+	/**
+	 * Update the iframe HTML content. Returns false when the panel is no longer
+	 * open — the user can close it from the tab bar at any time, so a plugin that
+	 * renders on a timer or a file event must check this and re-open.
+	 */
+	update(html: string): boolean;
+	/** Whether the panel is the tab currently on screen. */
+	isVisible(): boolean;
 	/** Close the panel tab */
 	close(): void;
 	/** Send a message to the iframe via postMessage */
@@ -653,6 +678,17 @@ export interface PluginHost {
 
 	/** Read a file as UTF-8 text. Path must be absolute and within $HOME. Requires "fs:read". */
 	readFile(absolutePath: string): Promise<string>;
+
+	/**
+	 * Read many files in one round trip, in request order. Requires "fs:read".
+	 *
+	 * Prefer this over a loop of `readFile` whenever the paths are known up front
+	 * — listing a directory and reading every entry costs one call instead of one
+	 * per file. An entry is `null` when that path could not be read, so a file
+	 * that vanished between the listing and the read does not lose the batch.
+	 * At most 1000 paths per call.
+	 */
+	readFiles(absolutePaths: string[]): Promise<(string | null)[]>;
 
 	/** Read a file as base64-encoded bytes. Path must be absolute and within $HOME. Requires "fs:read". */
 	readFileBase64(absolutePath: string): Promise<string>;

@@ -1332,6 +1332,10 @@ pub fn build_router(state: Arc<AppState>, remote_auth: bool, mcp_enabled: bool) 
             get(plugin_routes::plugin_fs_read),
         )
         .route(
+            "/api/plugins/{plugin_id}/fs/read-batch",
+            post(plugin_routes::plugin_fs_read_batch),
+        )
+        .route(
             "/api/plugins/{plugin_id}/fs/read-base64",
             get(plugin_routes::plugin_fs_read_base64),
         )
