@@ -702,19 +702,32 @@ pub fn flush_dirty(state: &crate::state::AppState) {
         .map(|e| e.key().clone())
         .collect();
     for sid in dirty {
-        // Clear the flag FIRST. A concurrent record_outcome between this
-        // line and the read below will re-insert the flag and be picked
-        // up by the next tick (or by the failure path below).
-        state.knowledge_dirty.remove(&sid);
-        let Some(entry) = state.session_knowledge.get(&sid) else {
-            continue;
-        };
-        let knowledge = entry.lock();
-        if let Err(e) = persist(&sid, &knowledge) {
-            tracing::warn!(session_id = %sid, error = %e, "knowledge persist failed, will retry");
-            drop(knowledge);
-            state.knowledge_dirty.insert(sid, ());
-        }
+        flush_session(state, &sid);
+    }
+}
+
+/// Persist one session if it is still flagged dirty. Whoever takes the flag owns
+/// the write, so a flush that finds it already taken returns without duplicating
+/// the work — see [`flush_dirty`] for the ordering this preserves.
+///
+/// Session teardown calls this before dropping `session_knowledge`: the periodic
+/// flush skips a session whose entry is already gone, so reaping first loses
+/// whatever was recorded inside the 2s window.
+pub fn flush_session(state: &crate::state::AppState, session_id: &str) {
+    // Clear the flag FIRST. A concurrent record_outcome between this line and
+    // the read below will re-insert the flag and be picked up by the next tick
+    // (or by the failure path below).
+    if state.knowledge_dirty.remove(session_id).is_none() {
+        return;
+    }
+    let Some(entry) = state.session_knowledge.get(session_id) else {
+        return;
+    };
+    let knowledge = entry.lock();
+    if let Err(e) = persist(session_id, &knowledge) {
+        tracing::warn!(session_id, error = %e, "knowledge persist failed, will retry");
+        drop(knowledge);
+        state.knowledge_dirty.insert(session_id.to_string(), ());
     }
 }
 
@@ -759,6 +772,30 @@ mod persist_tests {
         assert!(state.knowledge_dirty.contains_key("s1"));
         let k = state.session_knowledge.get("s1").unwrap();
         assert_eq!(k.lock().commands.len(), 1);
+    }
+
+    #[test]
+    fn closing_a_session_keeps_its_knowledge_resident_for_the_next_one() {
+        // Cross-session memory reads the live map, never the files: summarize_for_repo
+        // and the agent prompt builder both iterate session_knowledge. Reaping a
+        // closed session there would delete exactly what the next session in that
+        // repo is meant to inherit.
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let _g = crate::config::set_config_dir_override(dir.path().to_path_buf());
+        let state = make_test_app_state();
+        state.record_outcome("s1", sample_outcome());
+
+        crate::pty::cleanup_session("s1", &state);
+
+        assert!(
+            state.session_knowledge.contains_key("s1"),
+            "a closed session's knowledge must stay readable to the next session"
+        );
+        assert!(
+            state.knowledge_dirty.contains_key("s1"),
+            "the pending flush must survive the close, or the outcome never lands"
+        );
     }
 
     #[test]

@@ -135,7 +135,12 @@ tauri-build = { version = "2", features = [], optional = true }
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"], optional = true }
 tauri-plugin-opener = { version = "2", optional = true }
-serde = { version = "1", features = ["derive"] }
+# `rc` (Serialize for Arc<T>) is required by AppEvent::PtyParsed, which carries its
+# payload behind an Arc so the three broadcast lanes share it instead of deep-cloning
+# per subscriber. Tauri/genai/alacritty already turn it on, and feature unification
+# would hide the requirement — declared here so dropping one of them does not break
+# an unrelated build.
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 # Goose stores its MCP extensions in YAML. Deprecated upstream, but already in
 # the tree via gh-token, so the direct dependency adds nothing to the build.

@@ -2528,15 +2528,27 @@ pub(crate) fn enrich_with_numstat(repo_path: &Path, entries: &mut [StatusEntry],
 /// Test-only counter of how many times the porcelain read actually forked git.
 /// Proves the single-flight in `get_working_tree_status` collapses callers
 /// instead of merely returning the same value.
+///
+/// Keyed by repo path, not process-wide: the suite runs tests in parallel, and a
+/// single counter let any other git test's compute land between the reset and the
+/// assertion — the test failed on load, not on a regression.
 #[cfg(test)]
-pub(crate) static WT_STATUS_COMPUTES: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
+static WT_STATUS_COMPUTES: std::sync::LazyLock<dashmap::DashMap<String, usize>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+/// How many times `path` was actually read. See [`WT_STATUS_COMPUTES`].
+#[cfg(test)]
+pub(crate) fn wt_status_computes(path: &str) -> usize {
+    WT_STATUS_COMPUTES.get(path).map(|n| *n).unwrap_or(0)
+}
 
 /// Read the working tree status: one `git status --porcelain=v2` plus one
 /// `git diff --numstat` per side. Three subprocesses.
 async fn compute_working_tree_status(path: String) -> Result<WorkingTreeStatus, String> {
     #[cfg(test)]
-    WT_STATUS_COMPUTES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    {
+        *WT_STATUS_COMPUTES.entry(path.clone()).or_insert(0) += 1;
+    }
     tokio::task::spawn_blocking(move || {
         let repo_path = PathBuf::from(&path);
         let out = git_cmd(&repo_path)
@@ -4212,12 +4224,9 @@ mod tests {
     /// concurrent callers must collapse onto one computation.
     #[tokio::test]
     async fn concurrent_working_tree_status_calls_share_one_computation() {
-        use std::sync::atomic::Ordering;
         let (_dir, path) = setup_test_repo_with_commit();
         std::fs::write(path.join("dirty.txt"), "edited").expect("write");
         let repo = path.to_string_lossy().to_string();
-
-        WT_STATUS_COMPUTES.store(0, Ordering::Relaxed);
 
         let mut set = tokio::task::JoinSet::new();
         for _ in 0..4 {
@@ -4234,7 +4243,7 @@ mod tests {
             assert_eq!(*r, results[0], "every caller must get the same answer");
         }
         assert_eq!(
-            WT_STATUS_COMPUTES.load(Ordering::Relaxed),
+            wt_status_computes(&repo),
             1,
             "four concurrent callers must fork git once, not four times"
         );
@@ -4242,9 +4251,9 @@ mod tests {
         // Single-flight, NOT a cache: a later call must re-read, otherwise a
         // refetch right after a stage/unstage would answer with pre-mutation
         // state.
-        let _ = get_working_tree_status(repo).await.expect("status");
+        let _ = get_working_tree_status(repo.clone()).await.expect("status");
         assert_eq!(
-            WT_STATUS_COMPUTES.load(Ordering::Relaxed),
+            wt_status_computes(&repo),
             2,
             "a sequential call must recompute — no value may be retained"
         );

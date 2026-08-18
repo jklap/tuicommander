@@ -602,22 +602,58 @@ mod thread_qos {
     /// leaves the thread at its current QoS (degraded latency, not broken), so
     /// the non-zero return is intentionally ignored.
     pub(super) fn raise_self_to_user_interactive() {
+        set_self_qos(QOS_CLASS_USER_INTERACTIVE, 0);
+    }
+
+    fn set_self_qos(class: c_uint, relative_priority: c_int) {
         // SAFETY: extern "C" call with scalar args; affects only the calling thread.
         unsafe {
-            pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+            pthread_set_qos_class_self_np(class, relative_priority);
         }
     }
 
-    /// Read back the calling thread's QoS class. Test-only verification helper.
-    #[cfg(test)]
-    pub(super) fn current_qos_class() -> c_uint {
+    /// Read back the calling thread's QoS class and relative priority.
+    fn current_qos() -> (c_uint, c_int) {
         let mut class: c_uint = 0;
         let mut rel: c_int = 0;
         // SAFETY: out-params point to valid stack locals; pthread_self is always valid.
         unsafe {
             pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut rel);
         }
-        class
+        (class, rel)
+    }
+
+    #[cfg(test)]
+    pub(super) fn current_qos_class() -> c_uint {
+        current_qos().0
+    }
+
+    /// Raises the calling thread to USER_INTERACTIVE for as long as it lives, then
+    /// puts the thread back exactly where it was found.
+    ///
+    /// For a thread the process owns end to end — the PTY reader, the frame ticker
+    /// — the plain raise is right and this is unnecessary. It exists for work that
+    /// runs on a *borrowed* thread: a keystroke served by the tokio blocking pool
+    /// hands its thread back when it is done, and an unrestored bump leaves that
+    /// thread in the interactive band for whatever unrelated blocking work lands on
+    /// it next. A few keystrokes and the pool the terminal competes against is the
+    /// pool the terminal promoted.
+    pub(super) struct QosBoost {
+        previous: (c_uint, c_int),
+    }
+
+    impl QosBoost {
+        pub(super) fn user_interactive() -> Self {
+            let previous = current_qos();
+            raise_self_to_user_interactive();
+            Self { previous }
+        }
+    }
+
+    impl Drop for QosBoost {
+        fn drop(&mut self) {
+            set_self_qos(self.previous.0, self.previous.1);
+        }
     }
 }
 
@@ -630,6 +666,19 @@ fn raise_thread_for_interactive_io() {
 
 #[cfg(not(target_os = "macos"))]
 fn raise_thread_for_interactive_io() {}
+
+/// Raise the calling thread for the duration of the returned guard, then put it
+/// back. Use this — never the bare raise — on a thread the caller does not own,
+/// such as one borrowed from the tokio blocking pool. See [`thread_qos::QosBoost`].
+#[cfg(target_os = "macos")]
+#[must_use = "the QoS is restored when the guard drops; dropping it immediately bumps nothing"]
+fn interactive_io_boost() -> thread_qos::QosBoost {
+    thread_qos::QosBoost::user_interactive()
+}
+
+#[cfg(not(target_os = "macos"))]
+#[must_use = "the QoS is restored when the guard drops; dropping it immediately bumps nothing"]
+fn interactive_io_boost() {}
 
 /// Resolve the shell to use: explicit override > env default > platform default.
 pub(crate) fn resolve_shell(override_shell: Option<String>) -> String {
@@ -2347,7 +2396,7 @@ fn emit_suggest_event(state: &AppState, session_id: &str, turn_epoch: u64, items
         }
         state.emit_pty_event(crate::state::AppEvent::PtyParsed {
             session_id: session_id.to_string(),
-            parsed: json,
+            parsed: json.into(),
         });
     }
 }
@@ -3083,7 +3132,7 @@ fn emit_shell_state(state: &crate::state::AppState, session_id: &str, shell_stat
         Ok(json) => {
             state.emit_pty_event(crate::state::AppEvent::PtyParsed {
                 session_id: session_id.to_string(),
-                parsed: json,
+                parsed: json.into(),
             });
         }
         Err(e) => tracing::error!(session_id, "Failed to serialize ShellState event: {e}"),
@@ -3202,7 +3251,7 @@ fn emit_active_subtasks(
         Ok(json) => {
             state.emit_pty_event(crate::state::AppEvent::PtyParsed {
                 session_id: session_id.to_string(),
-                parsed: json,
+                parsed: json.into(),
             });
         }
         Err(e) => tracing::error!(session_id, "Failed to serialize ActiveSubtasks event: {e}"),
@@ -3662,7 +3711,7 @@ fn spawn_silence_timer(
                     }
                     state.emit_pty_event(crate::state::AppEvent::PtyParsed {
                         session_id: session_id.clone(),
-                        parsed: json,
+                        parsed: json.into(),
                     });
                 }
             }
@@ -3814,7 +3863,7 @@ fn spawn_silence_timer(
                 }
                 state.emit_pty_event(crate::state::AppEvent::PtyParsed {
                     session_id: session_id.clone(),
-                    parsed: json,
+                    parsed: json.into(),
                 });
             }
         }
@@ -3858,7 +3907,7 @@ fn emit_question_cleared_if_stale(state: &Arc<AppState>, session_id: &str) {
         }
         state.emit_pty_event(crate::state::AppEvent::PtyParsed {
             session_id: session_id.to_string(),
-            parsed: json,
+            parsed: json.into(),
         });
     }
 }
@@ -4266,6 +4315,36 @@ impl ChunkProcessor {
         }
     }
 
+    /// Classify an inline TUI (mouse reporting on the primary screen) the same
+    /// way `transform_xterm` classifies `1049h`. Alt-screen nesting still owns
+    /// `terminal_mode` once `1049h` has been seen; this only covers the
+    /// `grok --no-alt-screen` case that never sends it.
+    fn apply_inline_tui_mode(
+        &mut self,
+        alt_screen: bool,
+        mouse_reporting: bool,
+        agent_type: Option<&str>,
+    ) {
+        if alt_screen || self.in_alt_buffer {
+            return;
+        }
+        if mouse_reporting {
+            if !self.terminal_mode.is_fullscreen() {
+                self.terminal_mode = crate::ai_agent::tui_detect::TerminalMode::FullscreenTui {
+                    app_hint: agent_type.map(str::to_string),
+                    depth: 1,
+                };
+            }
+            return;
+        }
+        if matches!(
+            self.terminal_mode,
+            crate::ai_agent::tui_detect::TerminalMode::FullscreenTui { depth: 1, .. }
+        ) {
+            self.terminal_mode = crate::ai_agent::tui_detect::TerminalMode::Shell;
+        }
+    }
+
     /// Colorize `intent:` tokens and apply alternate-buffer fixes on the xterm
     /// stream. Suggest tokens are NOT concealed here — the frontend's
     /// `eraseSuggestFromBuffer()` handles that via rAF after xterm renders.
@@ -4398,10 +4477,10 @@ impl ChunkProcessor {
                 tracing::info!("[plan-file] Retry succeeded: {path}");
                 self.emitted_planfiles.insert(path.clone());
                 let evt = ParsedEvent::PlanFile { path };
-                if let Ok(json) = serde_json::to_value(&evt) {
+                if let Ok(json) = serde_json::to_value(&evt).map(std::sync::Arc::new) {
                     state.emit_pty_event(crate::state::AppEvent::PtyParsed {
                         session_id: session_id.to_string(),
-                        parsed: json.clone(),
+                        parsed: std::sync::Arc::clone(&json),
                     });
                     #[cfg(feature = "desktop")]
                     if let Some(a) = state.app_handle.read().as_ref() {
@@ -4409,7 +4488,7 @@ impl ChunkProcessor {
                             "pty-parsed",
                             serde_json::json!({
                                 "session_id": session_id,
-                                "parsed": json,
+                                "parsed": &*json,
                             }),
                         );
                     }
@@ -4473,6 +4552,13 @@ impl ChunkProcessor {
             }
             let total = vt.total_lines();
             let hist = vt.grid_history_size();
+            // Grid is the source of truth for mouse DECSET (including combined
+            // `?1000;1002;1006h`). String-matching the chunk would miss grok.
+            self.apply_inline_tui_mode(
+                vt.is_alternate_screen(),
+                vt.is_mouse_reporting(),
+                agent_type.as_deref(),
+            );
             let tevts = vt.grid_drain_events();
             // Did ANYTHING on screen move? Taken before the chrome filter below,
             // because that filter drops rows under the input-area border and a
@@ -4766,10 +4852,7 @@ impl ChunkProcessor {
         if let Some(ring) = state.output_buffers.get(session_id) {
             let mut ring_guard = ring.lock();
             ring_guard.write(data.as_bytes());
-            if let Some(mut clients) = state.ws_clients.get_mut(session_id) {
-                let owned = data.to_owned();
-                clients.retain(|tx| tx.send(owned.clone()).is_ok());
-            }
+            crate::state::broadcast_to_ws_clients(&state.ws_clients, session_id, data);
             drop(ring_guard);
         }
 
@@ -5122,7 +5205,7 @@ impl ChunkProcessor {
                 }
                 state.emit_pty_event(crate::state::AppEvent::PtyParsed {
                     session_id: session_id.to_string(),
-                    parsed: json,
+                    parsed: json.into(),
                 });
             }
         }
@@ -5394,62 +5477,24 @@ fn flush_eof(
     {
         let mut ring_guard = ring.lock();
         ring_guard.write(esc_remaining.as_bytes());
-        if let Some(mut clients) = state.ws_clients.get_mut(session_id) {
-            clients.retain(|tx| tx.send(esc_remaining.clone()).is_ok());
-        }
+        crate::state::broadcast_to_ws_clients(&state.ws_clients, session_id, &esc_remaining);
         drop(ring_guard);
     }
     esc_remaining
 }
 
-/// Fully remove session state from all DashMaps.
-/// Called on explicit close/kill — caller has already consumed any output they need.
-pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
-    if state.sessions.remove(session_id).is_some() {
-        state
-            .metrics
-            .active_sessions
-            .fetch_sub(1, Ordering::Relaxed);
-    }
-    state.output_buffers.remove(session_id);
-    state.vt_log_buffers.remove(session_id);
-    state.pty_raw_rings.remove(session_id);
-    #[cfg(feature = "desktop")]
-    state.grid_channels.remove(session_id);
-    state.grid_watch.remove(session_id);
-    state.grid_gates.remove(session_id);
-    state.pending_scroll.remove(session_id);
-    state.ws_clients.remove(session_id);
-    // Drop the per-session PTY event channel alongside ws_clients. Any final
-    // SessionClosed already emitted stays buffered for live subscribers (broadcast
-    // drains buffered messages before signalling Closed), so no close frame is lost.
-    state.pty_event_channels.remove(session_id);
-    state.kitty_states.remove(session_id);
-    state.input_buffers.remove(session_id);
-    state.silence_states.remove(session_id);
-    state.shell_states.remove(session_id);
-    state.last_output_ms.remove(session_id);
-    state.last_prompts.remove(session_id);
-    state.pty_descriptions.remove(session_id);
-    state.terminal_rows.remove(session_id);
-    state.resize_locks.remove(session_id);
-    state.exit_codes.remove(session_id);
-    state.term_aliases.remove(session_id);
-}
-
-/// Reap transient per-session state that has no post-mortem value, and stamp
-/// `last_output_ms` so the tombstone sweeper can age the entry out.
-/// Intentionally keeps: `output_buffers`, `vt_log_buffers`, `last_output_ms`, `exit_codes`.
-fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
-    state
-        .last_output_ms
-        .entry(session_id.to_string())
-        .or_insert_with(|| AtomicU64::new(0))
-        .store(now_ms, Ordering::Relaxed);
+/// Per-session state owned by the running process: streams, input, shell status,
+/// and the swarm identities the PTY was backing. Reaped the moment the process
+/// dies, whether or not a readable tombstone outlives it.
+///
+/// This and [`remove_post_mortem_session_state`] are the *only* two enumerations
+/// of per-session maps. Three call sites compose them — `cleanup_session` runs
+/// both, `tombstone_transient_cleanup` runs this one, `spawn_tombstone_sweeper`
+/// runs the other. Each used to keep its own hand-written list, and the three had
+/// drifted: an explicit close left every peer identity behind, and a session that
+/// exited normally leaked its terminal alias for the life of the process.
+/// **A new per-session map belongs in one of these two functions and nowhere else.**
+fn remove_live_session_state(session_id: &str, state: &AppState) {
     state.ws_clients.remove(session_id);
     // Drop the per-session PTY event channel alongside ws_clients. Any final
     // SessionClosed already emitted stays buffered for live subscribers (broadcast
@@ -5468,6 +5513,10 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     state.pty_descriptions.remove(session_id);
     state.terminal_rows.remove(session_id);
     state.resize_locks.remove(session_id);
+    // Input mode and shell integration describe the process that just died.
+    state.slash_mode.remove(session_id);
+    state.last_input_ms.remove(session_id);
+    state.has_osc133_integration.remove(session_id);
     // Swarm maps — inserted at spawn/register time, must be cleaned on exit.
     state.shell_state_since_ms.remove(session_id);
     // A peer that announced its own `$TUIC_SESSION` is filed under that identity,
@@ -5479,6 +5528,7 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
         state.orchestrator_peers.remove(&orphaned);
         state.agent_inbox.remove(&orphaned);
         state.agent_inbox_evictions.remove(&orphaned);
+        state.agent_read_cursor.remove(&orphaned);
         state.active_agent_waiters.remove(&orphaned);
         state.pending_injections.remove(&orphaned);
         let _ = state
@@ -5494,6 +5544,8 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
     state.orchestrator_peers.remove(session_id);
     state.agent_inbox.remove(session_id);
     state.agent_inbox_evictions.remove(session_id);
+    // The inbox read position is meaningless once the inbox is gone.
+    state.agent_read_cursor.remove(session_id);
     #[cfg(unix)]
     state.standby_sessions.remove(session_id);
     state.session_parent.remove(session_id);
@@ -5505,6 +5557,69 @@ fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
             state.mcp_to_session.remove(sid);
         }
     }
+}
+
+/// Per-session state a tombstone keeps readable after the process is gone: the
+/// buffers, the exit code, the alias the tab still shows, and the accumulated
+/// knowledge a background task has yet to flush. Reaped when the tombstone ages
+/// out — or immediately, when the session is closed outright.
+///
+/// See [`remove_live_session_state`] for why these are the only two lists.
+fn remove_post_mortem_session_state(session_id: &str, state: &AppState) {
+    state.output_buffers.remove(session_id);
+    state.vt_log_buffers.remove(session_id);
+    state.pty_raw_rings.remove(session_id);
+    state.last_output_ms.remove(session_id);
+    state.exit_codes.remove(session_id);
+    state.term_aliases.remove(session_id);
+    state.marker_stats.remove(session_id);
+    state.session_visibility.remove(session_id);
+    state.ai_suggestions_enabled.remove(session_id);
+}
+
+// DEFERRED (2026-08-18) — four session-keyed maps are deliberately NOT reaped by
+// either half, because the session is not what owns them:
+//   * `file_sandboxes` / `unrestricted_sessions` belong to the L2 conversation,
+//     which registers in ACTIVE_CONVERSATIONS and removes both when its task
+//     exits (`ai_agent::conversation_engine`). A conversation outlives its PTY —
+//     it can sit in an approval wait with no deadline — so a session-lifetime
+//     reap pulls the sandbox out from under a running file tool.
+//   * `session_knowledge` / `knowledge_dirty` ARE the cross-session memory:
+//     `knowledge::summarize_for_repo` and the agent prompt builder read the live
+//     map, never the files, so reaping a closed session removes knowledge the
+//     next session in that repo is supposed to inherit. Residency is bounded at
+//     startup (40 newest), not during a run.
+// Both need an owner-scoped lifetime, not a session-scoped one. Tie them to
+// ACTIVE_CONVERSATIONS and to a running residency bound respectively.
+
+
+/// Fully remove session state from all DashMaps.
+/// Called on explicit close/kill — caller has already consumed any output they need.
+pub(crate) fn cleanup_session(session_id: &str, state: &AppState) {
+    if state.sessions.remove(session_id).is_some() {
+        state
+            .metrics
+            .active_sessions
+            .fetch_sub(1, Ordering::Relaxed);
+    }
+    remove_live_session_state(session_id, state);
+    remove_post_mortem_session_state(session_id, state);
+}
+
+/// Reap the state the dead process owned, and stamp `last_output_ms` so the
+/// tombstone sweeper can age the entry out. What a post-mortem read needs stays —
+/// see [`remove_post_mortem_session_state`].
+fn tombstone_transient_cleanup(session_id: &str, state: &AppState) {
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    state
+        .last_output_ms
+        .entry(session_id.to_string())
+        .or_insert_with(|| AtomicU64::new(0))
+        .store(now_ms, Ordering::Relaxed);
+    remove_live_session_state(session_id, state);
 }
 
 struct ParentLifecycleDispatch {
@@ -6664,6 +6779,52 @@ pub(crate) fn mark_session_exited(session_id: &str, state: &AppState) {
 /// Time a tombstoned session's buffers remain readable after process exit.
 pub(crate) const TOMBSTONE_TTL_MS: u64 = 5 * 60 * 1000; // 5 minutes
 
+/// Session ids whose tombstone has aged past the TTL.
+///
+/// Discovery walks `last_output_ms`, not `output_buffers`: an explicit close runs
+/// the full cleanup, and the reader thread can afterwards reach EOF and re-stamp
+/// the timestamp through the tombstone path. That leaves a lone entry with no
+/// buffers — invisible to a buffer-driven walk, and so never reaped at all. The
+/// stamp is the one thing every tombstone has.
+fn aged_out_tombstones(state: &AppState, now_ms: u64) -> Vec<String> {
+    // A tombstone is: a stamp present, session entry absent, aged past TTL.
+    state
+        .last_output_ms
+        .iter()
+        .filter_map(|entry| {
+            let id = entry.key();
+            if state.sessions.contains_key(id) {
+                return None;
+            }
+            let last_ms = entry.value().load(Ordering::Relaxed);
+            if last_ms == 0 || now_ms.saturating_sub(last_ms) < TOMBSTONE_TTL_MS {
+                return None;
+            }
+            Some(id.clone())
+        })
+        .collect()
+}
+
+/// Reap each candidate's post-mortem state.
+///
+/// Liveness is re-checked here, not only at selection: the HTTP spawn path accepts
+/// a caller-supplied id, so an aged id can be reclaimed by a live session between
+/// the two. Reaping it then would delete that session's buffers and alias.
+///
+/// DEFERRED (2026-08-18) — the re-check narrows the window, it does not close it:
+/// a reclaim landing between this load and the removal still loses. Closing it
+/// needs a per-id generation stamped at insert and compared at removal, which is
+/// a `sessions` API change; not worth it while ids are random UUIDs in practice.
+fn reap_tombstones(state: &AppState, candidates: &[String]) {
+    for id in candidates {
+        if state.sessions.contains_key(id) {
+            continue;
+        }
+        remove_post_mortem_session_state(id, state);
+        tracing::debug!(source = "pty", session_id = %id, "Tombstone reaped");
+    }
+}
+
 /// Background sweeper that reaps tombstoned session buffers once they age out.
 /// Started once at boot from the HTTP server runtime.
 pub(crate) fn spawn_tombstone_sweeper(state: Arc<AppState>) {
@@ -6674,34 +6835,7 @@ pub(crate) fn spawn_tombstone_sweeper(state: Arc<AppState>) {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_millis() as u64;
-            // A tombstone is: buffer entry present, session entry absent, aged past TTL.
-            let candidates: Vec<String> = state
-                .output_buffers
-                .iter()
-                .filter_map(|entry| {
-                    let id = entry.key();
-                    if state.sessions.contains_key(id) {
-                        return None;
-                    }
-                    let last_ms = state
-                        .last_output_ms
-                        .get(id)
-                        .map(|m| m.load(Ordering::Relaxed))
-                        .unwrap_or(0);
-                    if last_ms == 0 || now_ms.saturating_sub(last_ms) < TOMBSTONE_TTL_MS {
-                        return None;
-                    }
-                    Some(id.clone())
-                })
-                .collect();
-            for id in candidates {
-                state.output_buffers.remove(&id);
-                state.vt_log_buffers.remove(&id);
-                state.pty_raw_rings.remove(&id);
-                state.last_output_ms.remove(&id);
-                state.exit_codes.remove(&id);
-                tracing::debug!(source = "pty", session_id = %id, "Tombstone reaped");
-            }
+            reap_tombstones(&state, &aged_out_tombstones(&state, now_ms));
         }
     });
 }
@@ -6977,14 +7111,14 @@ pub(crate) fn record_submitted_line(
             .insert(session_id.to_string(), content.clone());
     }
     let parsed = ParsedEvent::UserInput { content, line };
-    if let Ok(json) = serde_json::to_value(&parsed) {
+    if let Ok(json) = serde_json::to_value(&parsed).map(std::sync::Arc::new) {
         state.emit_pty_event(crate::state::AppEvent::PtyParsed {
             session_id: session_id.to_string(),
-            parsed: json.clone(),
+            parsed: std::sync::Arc::clone(&json),
         });
         #[cfg(feature = "desktop")]
         if let Some(app) = state.app_handle.read().as_ref() {
-            let _ = app.emit(&format!("pty-parsed-{session_id}"), &json);
+            let _ = app.emit(&format!("pty-parsed-{session_id}"), &*json);
         }
     }
     if let Some(ss) = state.silence_states.get(session_id) {
@@ -7905,9 +8039,11 @@ pub(crate) async fn write_pty(
     let state = Arc::clone(&state);
     tokio::task::spawn_blocking(move || {
     // Keystroke delivery to the PTY: run on the high QoS band so the write (and
-    // thus the echo round-trip) isn't starved by a saturating build. Idempotent
-    // per call; bumps whichever blocking-pool thread serves this keystroke.
-    raise_thread_for_interactive_io();
+    // thus the echo round-trip) isn't starved by a saturating build. Scoped, not
+    // a bare raise: this thread comes from the shared blocking pool and goes back
+    // into it, so an unrestored bump would promote the pool the terminal is
+    // trying to out-schedule.
+    let _qos = interactive_io_boost();
     // Restore cursor if hidden — Ink-based agents send DECTCEM hide for
     // spinners but may not send CNORM when returning to the prompt.
     // Best-effort try_lock: this is cosmetic (touches the local grid, not the PTY)
@@ -7958,15 +8094,16 @@ pub(crate) async fn write_pty(
         // below. In particular, flush_pending_injections -> should_inject_now
         // reads input_buffers again; retaining input_entry there self-deadlocks
         // this shard and can park the entire IPC Tokio runtime under load.
-        let (actions, buffer_content) = {
+        let (actions, buffer_empty, buffer_is_slash) = {
             let input_entry = state
                 .input_buffers
                 .entry(session_id.clone())
                 .or_insert_with(|| parking_lot::Mutex::new(InputLineBuffer::new()));
             let mut buf = input_entry.lock();
             let actions = buf.feed(&data);
-            let buffer_content = buf.content();
-            (actions, buffer_content)
+            // Two bits, not the line: `content()` here collected the whole typed
+            // line into a fresh String on every keystroke, to be dropped below.
+            (actions, buf.is_empty(), buf.starts_with('/'))
         };
         let mut line_submitted = false;
         for action in actions {
@@ -8014,15 +8151,22 @@ pub(crate) async fn write_pty(
         let in_slash = if line_submitted {
             false
         } else {
-            buffer_content.starts_with('/') || (buffer_content.is_empty() && data == "/")
+            buffer_is_slash || (buffer_empty && data == "/")
         };
-        state
-            .slash_mode
-            .entry(session_id.clone())
-            .or_insert_with(|| std::sync::atomic::AtomicBool::new(false))
-            .store(in_slash, std::sync::atomic::Ordering::Relaxed);
+        // Look up before inserting: `entry` needs an owned key, so the clone was
+        // paid on every keystroke to create a map entry that exists after the first.
+        match state.slash_mode.get(&session_id) {
+            Some(flag) => flag.store(in_slash, std::sync::atomic::Ordering::Relaxed),
+            None => {
+                state
+                    .slash_mode
+                    .entry(session_id.clone())
+                    .or_insert_with(|| std::sync::atomic::AtomicBool::new(false))
+                    .store(in_slash, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
 
-        if buffer_content.is_empty() {
+        if buffer_empty {
             flush_pending_injections(&state, &session_id);
         }
 
@@ -9710,14 +9854,27 @@ pub(crate) fn send_grid_frame(state: &AppState, session_id: &str, frame: Vec<u8>
     if frame.is_empty() {
         return;
     }
-    let needs_watch = state
-        .grid_watch
-        .get(session_id)
-        .is_some_and(|tx| tx.receiver_count() > 0);
+    // Clone only when both consumers want the frame. A browser-only session has
+    // no desktop channel, so the watch can take the original; cloning first and
+    // then finding nothing to hand the original to was pure copy.
+    #[cfg(feature = "desktop")]
+    let desktop_wants_it = state.grid_channels.contains_key(session_id);
+    #[cfg(not(feature = "desktop"))]
+    let desktop_wants_it = false;
 
-    if needs_watch && let Some(watch_tx) = state.grid_watch.get(session_id) {
-        crate::grid_gate::publish_grid_frame(&watch_tx, frame.clone());
-    }
+    let frame = match state.grid_watch.get(session_id) {
+        Some(watch_tx) if watch_tx.receiver_count() > 0 => {
+            if desktop_wants_it {
+                crate::grid_gate::publish_grid_frame(&watch_tx, frame.clone());
+                frame
+            } else {
+                crate::grid_gate::publish_grid_frame(&watch_tx, frame);
+                return;
+            }
+        }
+        _ => frame,
+    };
+
     #[cfg(feature = "desktop")]
     if let Some(ch) = state.grid_channels.get(session_id) {
         let gate = state.grid_gates.get(session_id);
@@ -10219,6 +10376,33 @@ mod tests {
         assert_eq!(
             observed, 0x21,
             "thread QoS was not raised to USER_INTERACTIVE"
+        );
+    }
+
+    /// A keystroke borrows a thread from the shared tokio blocking pool and gives
+    /// it back. Bumping that thread's QoS without putting it back promotes the
+    /// pool itself: the next git walk, content-index build, or config write to
+    /// land on that thread runs in the interactive band forever after — the one
+    /// band the keystroke path needs kept clear.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_keystroke_gives_the_shared_blocking_thread_back_at_its_original_qos() {
+        let (before, during, after) = std::thread::spawn(|| {
+            let before = thread_qos::current_qos_class();
+            let during = {
+                let _boost = interactive_io_boost();
+                thread_qos::current_qos_class()
+            };
+            (before, during, thread_qos::current_qos_class())
+        })
+        .join()
+        .expect("qos probe thread panicked");
+        // QOS_CLASS_USER_INTERACTIVE == 0x21.
+        assert_eq!(during, 0x21, "keystroke did not run in the interactive band");
+        assert_ne!(before, 0x21, "probe thread started already bumped");
+        assert_eq!(
+            after, before,
+            "the blocking-pool thread stayed promoted after the keystroke"
         );
     }
 
@@ -16076,6 +16260,35 @@ mod tests {
     }
 
     #[test]
+    fn test_inline_tui_mouse_mode_sets_fullscreen_without_1049() {
+        let mut cp = ChunkProcessor::new(None, None);
+        cp.apply_inline_tui_mode(false, true, Some("grok"));
+        assert!(cp.terminal_mode.is_fullscreen());
+        match &cp.terminal_mode {
+            crate::ai_agent::tui_detect::TerminalMode::FullscreenTui { app_hint, depth } => {
+                assert_eq!(app_hint.as_deref(), Some("grok"));
+                assert_eq!(*depth, 1);
+            }
+            other => panic!("expected FullscreenTui, got {other:?}"),
+        }
+        cp.apply_inline_tui_mode(false, false, Some("grok"));
+        assert!(!cp.terminal_mode.is_fullscreen());
+    }
+
+    #[test]
+    fn test_inline_tui_does_not_override_alt_screen_mode() {
+        let mut cp = ChunkProcessor::new(None, None);
+        cp.transform_xterm("\x1b[?1049h".to_string());
+        cp.apply_inline_tui_mode(true, true, Some("grok"));
+        match &cp.terminal_mode {
+            crate::ai_agent::tui_detect::TerminalMode::FullscreenTui { depth, .. } => {
+                assert_eq!(*depth, 1, "must not nest on top of 1049");
+            }
+            other => panic!("expected FullscreenTui, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_transform_xterm_normal_buffer_no_inject() {
         let mut cp = ChunkProcessor::new(None, None);
         // NOT in alt buffer — no injection
@@ -19947,7 +20160,8 @@ mod tests {
                 "type": "question",
                 "prompt_text": prompt,
                 "confident": false,
-            }),
+            })
+            .into(),
         }
     }
 
@@ -20020,7 +20234,7 @@ mod tests {
             let state = accumulating_state("s1");
             state.emit_pty_event(crate::state::AppEvent::PtyParsed {
                 session_id: "s1".to_string(),
-                parsed: serde_json::to_value(&notify).expect("serialisable"),
+                parsed: serde_json::to_value(&notify).expect("serialisable").into(),
             });
             assert!(
                 await_session(&state, "s1", |s| s.awaiting_input).await,
@@ -20049,7 +20263,8 @@ mod tests {
                 "type": "question",
                 "prompt_text": "Run echo x",
                 "confident": true,
-            }),
+            })
+            .into(),
         });
         assert!(await_session(&state, "s1", |s| s.awaiting_input).await);
 
@@ -20580,6 +20795,221 @@ mod tests {
         assert!(!state.last_output_ms.contains_key(sid));
         assert!(!state.term_aliases.contains_key(sid));
         assert!(!state.exit_codes.contains_key(sid));
+    }
+
+    /// Populate the per-session maps that no teardown phase used to own, plus the
+    /// two the post-mortem read needs. Deliberately independent of the production
+    /// enumeration: a teardown test that reuses the list it verifies proves nothing.
+    fn populate_unowned_session_maps(state: &crate::state::AppState, sid: &str) {
+        use std::sync::atomic::{AtomicBool, AtomicU64};
+        state
+            .slash_mode
+            .insert(sid.to_string(), AtomicBool::new(true));
+        state
+            .last_input_ms
+            .insert(sid.to_string(), AtomicU64::new(7));
+        state.has_osc133_integration.insert(sid.to_string(), ());
+        state.agent_read_cursor.insert(sid.to_string(), 3);
+        state
+            .marker_stats
+            .insert(sid.to_string(), crate::state::MarkerStats::default());
+        state.session_knowledge.insert(
+            sid.to_string(),
+            Mutex::new(crate::ai_agent::knowledge::SessionKnowledge::new()),
+        );
+        state.session_visibility.insert(sid.to_string(), true);
+        state.ai_suggestions_enabled.insert(sid.to_string(), true);
+        state.file_sandboxes.insert(
+            sid.to_string(),
+            crate::ai_agent::sandbox::FileSandbox::new(std::env::temp_dir()).expect("sandbox"),
+        );
+        state.unrestricted_sessions.insert(sid.to_string(), ());
+        state
+            .term_aliases
+            .insert(sid.to_string(), "tc-9".to_string());
+    }
+
+    /// The swarm/identity maps. `tombstone_transient_cleanup` has always reaped
+    /// these; `cleanup_session` never did, which is the divergence F8 removes.
+    fn populate_swarm_session_maps(state: &crate::state::AppState, sid: &str, mcp_sid: &str) {
+        state
+            .session_parent
+            .insert(sid.to_string(), "parent-sess".to_string());
+        state
+            .shell_state_since_ms
+            .insert(sid.to_string(), std::sync::atomic::AtomicU64::new(42));
+        state
+            .mcp_to_session
+            .insert(mcp_sid.to_string(), sid.to_string());
+        state
+            .session_to_mcp
+            .insert(sid.to_string(), vec![mcp_sid.to_string()]);
+        state.peer_agents.insert(
+            sid.to_string(),
+            crate::state::PeerAgent {
+                tuic_session: sid.to_string(),
+                mcp_session_id: mcp_sid.to_string(),
+                name: "worker".to_string(),
+                project: None,
+                registered_at: 1,
+            },
+        );
+        state.agent_inbox.entry(sid.to_string()).or_default();
+        state.agent_inbox_evictions.insert(sid.to_string(), 2);
+    }
+
+    #[test]
+    fn closing_a_session_reaps_the_swarm_maps_too() {
+        // The two teardowns were enumerated by hand and drifted: an explicit close
+        // over HTTP DELETE goes straight to cleanup_session, which left every peer
+        // identity, inbox and mcp mapping behind for the life of the process.
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "close-swarm";
+        let mcp_sid = "mcp-close-swarm";
+        populate_swarm_session_maps(&state, sid, mcp_sid);
+
+        cleanup_session(sid, &state);
+
+        assert!(!state.session_parent.contains_key(sid));
+        assert!(!state.shell_state_since_ms.contains_key(sid));
+        assert!(!state.mcp_to_session.contains_key(mcp_sid));
+        assert!(!state.session_to_mcp.contains_key(sid));
+        assert!(!state.peer_agents.contains_key(sid));
+        assert!(!state.agent_inbox.contains_key(sid));
+        assert!(!state.agent_inbox_evictions.contains_key(sid));
+    }
+
+    #[test]
+    fn closing_a_session_reaps_the_maps_no_phase_owned() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "close-unowned";
+        populate_unowned_session_maps(&state, sid);
+
+        cleanup_session(sid, &state);
+
+        assert!(!state.slash_mode.contains_key(sid));
+        assert!(!state.last_input_ms.contains_key(sid));
+        assert!(!state.has_osc133_integration.contains_key(sid));
+        assert!(!state.agent_read_cursor.contains_key(sid));
+        assert!(!state.marker_stats.contains_key(sid));
+        assert!(!state.session_visibility.contains_key(sid));
+        assert!(!state.ai_suggestions_enabled.contains_key(sid));
+        assert!(!state.term_aliases.contains_key(sid));
+
+        // Owned elsewhere, deliberately untouched — see the DEFERRED note on
+        // remove_post_mortem_session_state. A sandbox belongs to a conversation
+        // that outlives the PTY; knowledge is what the next session inherits.
+        assert!(state.file_sandboxes.contains_key(sid));
+        assert!(state.unrestricted_sessions.contains_key(sid));
+        assert!(state.session_knowledge.contains_key(sid));
+    }
+
+    #[test]
+    fn a_tombstone_drops_live_process_state_and_keeps_the_post_mortem_maps() {
+        // A tombstone is still readable for TOMBSTONE_TTL_MS, so the split is not
+        // "reap everything": what the dead process owned goes, what a post-mortem
+        // read needs stays.
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "tombstone-split";
+        populate_unowned_session_maps(&state, sid);
+
+        tombstone_transient_cleanup(sid, &state);
+
+        assert!(
+            !state.slash_mode.contains_key(sid),
+            "input mode belongs to the dead process"
+        );
+        assert!(!state.last_input_ms.contains_key(sid));
+        assert!(
+            !state.has_osc133_integration.contains_key(sid),
+            "shell integration belongs to the dead shell"
+        );
+        assert!(!state.agent_read_cursor.contains_key(sid));
+
+        assert!(
+            state.marker_stats.contains_key(sid),
+            "marker tallies are exactly what a post-mortem question asks for"
+        );
+        assert!(
+            state.session_knowledge.contains_key(sid),
+            "knowledge is flushed to disk by a 2s task — reaping it here loses it"
+        );
+        assert!(state.term_aliases.contains_key(sid), "the tab still shows");
+        assert!(state.session_visibility.contains_key(sid));
+        assert!(state.ai_suggestions_enabled.contains_key(sid));
+    }
+
+    #[test]
+    fn reaping_a_tombstone_leaves_no_session_state_behind() {
+        // The normal exit path is tombstone → sweeper, and cleanup_session is never
+        // called on it. Anything the sweeper's list forgot therefore leaked for the
+        // life of the process, not for TOMBSTONE_TTL_MS — which is what happened to
+        // the terminal alias.
+        let state = crate::state::tests_support::make_test_app_state();
+        let sid = "tombstone-reaped";
+        populate_unowned_session_maps(&state, sid);
+        populate_swarm_session_maps(&state, sid, "mcp-tombstone-reaped");
+
+        tombstone_transient_cleanup(sid, &state);
+        remove_post_mortem_session_state(sid, &state);
+
+        assert!(!state.term_aliases.contains_key(sid));
+        assert!(!state.marker_stats.contains_key(sid));
+        assert!(!state.session_visibility.contains_key(sid));
+        assert!(!state.ai_suggestions_enabled.contains_key(sid));
+        assert!(!state.last_output_ms.contains_key(sid));
+        assert!(!state.slash_mode.contains_key(sid));
+        assert!(!state.peer_agents.contains_key(sid));
+    }
+
+    /// Stamp a tombstone that is already older than the TTL.
+    fn stamp_aged_tombstone(state: &crate::state::AppState, sid: &str, now_ms: u64) {
+        state
+            .last_output_ms
+            .insert(sid.to_string(), AtomicU64::new(now_ms - TOMBSTONE_TTL_MS - 1));
+    }
+
+    #[test]
+    fn a_timestamp_left_without_buffers_is_still_reaped() {
+        // An explicit DELETE runs the full cleanup, and the reader thread can then
+        // reach EOF and re-stamp last_output_ms through the tombstone path. The
+        // buffers are already gone, so a sweeper that discovers candidates by
+        // walking output_buffers never sees that lone entry again.
+        let state = crate::state::tests_support::make_test_app_state();
+        let now_ms = 10 * TOMBSTONE_TTL_MS;
+        stamp_aged_tombstone(&state, "orphan-stamp", now_ms);
+
+        assert_eq!(
+            aged_out_tombstones(&state, now_ms),
+            vec!["orphan-stamp".to_string()],
+            "a stamp with no buffers is still session state to reap"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_session_id_reused_before_the_sweep_is_not_reaped() {
+        // The HTTP spawn path accepts a caller-supplied id, so an aged tombstone's
+        // id can come back to life between candidate selection and removal. Reaping
+        // it then deletes the LIVE session's buffers, alias and visibility.
+        let state = crate::state::tests_support::make_test_app_state();
+        let now_ms = 10 * TOMBSTONE_TTL_MS;
+        let sid = "reused-id";
+        stamp_aged_tombstone(&state, sid, now_ms);
+        state
+            .term_aliases
+            .insert(sid.to_string(), "tc-1".to_string());
+        let candidates = aged_out_tombstones(&state, now_ms);
+        assert_eq!(candidates, vec![sid.to_string()]);
+
+        // The race: a client recreates the id after selection, before removal.
+        crate::state::tests_support::insert_dummy_session(&state, sid);
+        reap_tombstones(&state, &candidates);
+
+        assert!(
+            state.term_aliases.contains_key(sid),
+            "the live session that reclaimed this id must keep its state"
+        );
     }
 
     #[cfg(unix)]
