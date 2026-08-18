@@ -484,4 +484,178 @@ describe("build-cleaner pure helpers", () => {
 			}
 		});
 	});
+
+	describe("demand-gated poll", () => {
+		/** Mock host that records the panel callbacks the plugin registers. */
+		function makeHost() {
+			const panel = { update: vi.fn() };
+			const captured: {
+				openDashboard?: () => Promise<void>;
+				onVisibilityChange?: (visible: boolean) => void;
+				onClose?: () => void;
+				onMessage?: (message: unknown) => Promise<void>;
+			} = {};
+			const host = {
+				getRepos: vi.fn(() => [{ path: "/repo" }]),
+				scanBuildArtifacts: vi.fn(async () => []),
+				invoke: vi.fn(async () => null),
+				registerSection: vi.fn(),
+				registerDashboard: vi.fn((dashboard: { open: () => Promise<void> }) => {
+					captured.openDashboard = dashboard.open;
+				}),
+				openPanel: vi.fn(
+					(options: {
+						onMessage?: (message: unknown) => Promise<void>;
+						onVisibilityChange?: (visible: boolean) => void;
+						onClose?: () => void;
+					}) => {
+						captured.onMessage = options.onMessage;
+						captured.onVisibilityChange = options.onVisibilityChange;
+						captured.onClose = options.onClose;
+						return panel;
+					},
+				),
+				clearTicker: vi.fn(),
+				removeItem: vi.fn(),
+				addItem: vi.fn(),
+				setTicker: vi.fn(),
+				log: vi.fn(),
+			};
+			return { host, panel, captured };
+		}
+
+		const CADENCE = CFG.pollIntervalMs;
+
+		it("never walks the filesystem again when nobody opens the panel", async () => {
+			vi.useFakeTimers();
+			const { host } = makeHost();
+			try {
+				await buildCleanerPlugin.onload(host);
+				await vi.advanceTimersByTimeAsync(0);
+				// The single startup scan seeds the bell/ticker for a user who never
+				// opens the dashboard.
+				expect(host.scanBuildArtifacts).toHaveBeenCalledOnce();
+
+				await vi.advanceTimersByTimeAsync(24 * CADENCE);
+				expect(host.scanBuildArtifacts).toHaveBeenCalledOnce();
+			} finally {
+				buildCleanerPlugin.onunload();
+				vi.useRealTimers();
+			}
+		});
+
+		it("polls on the configured cadence while the panel is open, and the panel consumes it", async () => {
+			vi.useFakeTimers();
+			const { host, panel, captured } = makeHost();
+			try {
+				await buildCleanerPlugin.onload(host);
+				await vi.advanceTimersByTimeAsync(0);
+				await captured.openDashboard?.();
+				host.scanBuildArtifacts.mockClear();
+				panel.update.mockClear();
+
+				await vi.advanceTimersByTimeAsync(2 * CADENCE);
+				expect(host.scanBuildArtifacts).toHaveBeenCalledTimes(2);
+				// A walk nobody renders is the bug this story is about: each poll
+				// must reach the open panel, not just the bell and ticker.
+				expect(panel.update).toHaveBeenCalledTimes(2);
+			} finally {
+				buildCleanerPlugin.onunload();
+				vi.useRealTimers();
+			}
+		});
+
+		it("stops polling when the panel is hidden and resumes when it is shown", async () => {
+			vi.useFakeTimers();
+			const { host, captured } = makeHost();
+			try {
+				await buildCleanerPlugin.onload(host);
+				await vi.advanceTimersByTimeAsync(0);
+				await captured.openDashboard?.();
+
+				captured.onVisibilityChange?.(false);
+				host.scanBuildArtifacts.mockClear();
+				await vi.advanceTimersByTimeAsync(3 * CADENCE);
+				expect(host.scanBuildArtifacts).not.toHaveBeenCalled();
+
+				captured.onVisibilityChange?.(true);
+				await vi.advanceTimersByTimeAsync(CADENCE);
+				expect(host.scanBuildArtifacts).toHaveBeenCalledOnce();
+			} finally {
+				buildCleanerPlugin.onunload();
+				vi.useRealTimers();
+			}
+		});
+
+		it("stops polling when the panel is closed", async () => {
+			vi.useFakeTimers();
+			const { host, captured } = makeHost();
+			try {
+				await buildCleanerPlugin.onload(host);
+				await vi.advanceTimersByTimeAsync(0);
+				await captured.openDashboard?.();
+
+				captured.onClose?.();
+				host.scanBuildArtifacts.mockClear();
+				await vi.advanceTimersByTimeAsync(3 * CADENCE);
+				expect(host.scanBuildArtifacts).not.toHaveBeenCalled();
+			} finally {
+				buildCleanerPlugin.onunload();
+				vi.useRealTimers();
+			}
+		});
+
+		it("does not resurrect the poll when the panel closes mid-save", async () => {
+			vi.useFakeTimers();
+			const { host, captured } = makeHost();
+			// The real race: saveConfig is awaiting its write when the user closes
+			// the tab. The host drops the message handler before firing onClose, so
+			// the close lands inside the await, not before the message.
+			let finishWrite: (() => void) | undefined;
+			host.invoke.mockImplementation(async (command: string) => {
+				if (command !== "write_plugin_data") return null;
+				await new Promise<void>((resolve) => {
+					finishWrite = resolve;
+				});
+				return null;
+			});
+			try {
+				await buildCleanerPlugin.onload(host);
+				await vi.advanceTimersByTimeAsync(0);
+				await captured.openDashboard?.();
+
+				const saving = captured.onMessage?.({ action: "saveConfig", config: configToForm(CFG) });
+				await vi.advanceTimersByTimeAsync(0);
+				captured.onClose?.();
+				finishWrite?.();
+				await saving;
+
+				host.scanBuildArtifacts.mockClear();
+				await vi.advanceTimersByTimeAsync(3 * CADENCE);
+				expect(host.scanBuildArtifacts).not.toHaveBeenCalled();
+			} finally {
+				buildCleanerPlugin.onunload();
+				vi.useRealTimers();
+			}
+		});
+
+		it("leaves no timer running after onunload", async () => {
+			vi.useFakeTimers();
+			const { host, captured } = makeHost();
+			try {
+				await buildCleanerPlugin.onload(host);
+				await vi.advanceTimersByTimeAsync(0);
+				await captured.openDashboard?.();
+
+				buildCleanerPlugin.onunload();
+				host.scanBuildArtifacts.mockClear();
+				await vi.advanceTimersByTimeAsync(5 * CADENCE);
+				expect(host.scanBuildArtifacts).not.toHaveBeenCalled();
+				expect(vi.getTimerCount()).toBe(0);
+			} finally {
+				buildCleanerPlugin.onunload();
+				vi.useRealTimers();
+			}
+		});
+	});
 });
