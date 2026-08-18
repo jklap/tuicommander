@@ -1606,40 +1606,73 @@ describe("transport", () => {
 			);
 		});
 
-		it("coalesces keystrokes typed while a write is in flight", async () => {
-			// Browser mode posts one HTTP request per keystroke and awaits each before
-			// sending the next, so typing speed is capped at one character per RTT.
-			// Concatenating what piled up is byte-identical to sending it serially.
-			const { rpc } = await import("../transport");
-
-			const bodies: string[] = [];
+		/** Drives a burst of writes with the first request held open, and reports
+		 *  each request as the list of inputs it carried. */
+		async function burstWrites(
+			rpc: (c: string, a: Record<string, unknown>) => Promise<unknown>,
+			datas: string[],
+		): Promise<{ url: string; parts: string[] }[]> {
+			const requests: { url: string; parts: string[] }[] = [];
 			let releaseFirst: (() => void) | undefined;
 			const firstSent = new Promise<void>((resolve) => {
 				releaseFirst = resolve;
 			});
-			globalThis.fetch = vi.fn().mockImplementation((_url: string, init: { body: string }) => {
-				bodies.push(JSON.parse(init.body).data);
-				const settle = bodies.length === 1 ? firstSent : Promise.resolve();
+			globalThis.fetch = vi.fn().mockImplementation((url: string, init: { body: string }) => {
+				const body = JSON.parse(init.body);
+				requests.push({ url, parts: body.parts ?? [body.data] });
+				const settle = requests.length === 1 ? firstSent : Promise.resolve();
 				return settle.then(() => ({
 					ok: true,
 					headers: new Headers({ "content-type": "application/json" }),
 					json: vi.fn().mockResolvedValue({}),
 				}));
 			});
-
-			const writes = [
-				rpc("write_pty", { sessionId: "s1", data: "h" }),
-				rpc("write_pty", { sessionId: "s1", data: "e" }),
-				rpc("write_pty", { sessionId: "s1", data: "l" }),
-				rpc("write_pty", { sessionId: "s1", data: "l" }),
-				rpc("write_pty", { sessionId: "s1", data: "o" }),
-			];
+			const writes = datas.map((data) => rpc("write_pty", { sessionId: "s1", data }));
 			releaseFirst?.();
 			await Promise.all(writes);
+			return requests;
+		}
 
-			expect(bodies.join("")).toBe("hello");
-			expect(bodies.length).toBeLessThan(5);
-			expect(bodies[0]).toBe("h");
+		it("coalesces keystrokes typed while a write is in flight", async () => {
+			// Browser mode posts one HTTP request per keystroke and awaits each before
+			// sending the next, so typing speed is capped at one character per RTT.
+			const { rpc } = await import("../transport");
+
+			const requests = await burstWrites(rpc, ["h", "e", "l", "l", "o"]);
+
+			expect(requests.flatMap((r) => r.parts).join("")).toBe("hello");
+			expect(requests.length).toBeLessThan(5);
+			expect(requests[0].parts).toEqual(["h"]);
+		});
+
+		it("keeps coalesced keystrokes separate instead of joining them", async () => {
+			// The bytes reaching the PTY are the same either way, but `write_pty` is
+			// not a byte pipe: the backend runs its per-input bookkeeping once per
+			// REQUEST, and that is not a function of the concatenated bytes. A lone
+			// "/" opens slash mode; an Escape dismisses it. Joined into "\x1b/" the
+			// backend reads a dismissal and the slash menu never opens — so what
+			// piles up must travel as parts, not as one string.
+			const { rpc } = await import("../transport");
+
+			const requests = await burstWrites(rpc, ["\x1b", "/", "h"]);
+
+			const coalesced = requests.slice(1);
+			expect(coalesced.length).toBeGreaterThan(0);
+			for (const request of coalesced) {
+				expect(request.url).toContain("/write-parts");
+			}
+			expect(coalesced.flatMap((r) => r.parts)).toEqual(["/", "h"]);
+		});
+
+		it("sends a solitary keystroke on the single-input route", async () => {
+			// Nothing piled up behind it, so there is no batch — and routing it
+			// through the N-ary path would change nothing except the shape.
+			const { rpc } = await import("../transport");
+			const requests = await burstWrites(rpc, ["x"]);
+			expect(requests).toHaveLength(1);
+			expect(requests[0].url).toContain("/write");
+			expect(requests[0].url).not.toContain("/write-parts");
+			expect(requests[0].parts).toEqual(["x"]);
 		});
 
 		it("collapses a resize burst to the newest dimensions", async () => {

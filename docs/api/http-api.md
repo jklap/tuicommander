@@ -79,6 +79,23 @@ Content-Type: application/json
 { "data": "ls -la\n" }
 ```
 
+### Write Several Inputs at Once
+
+```
+POST /sessions/:id/write-parts
+Content-Type: application/json
+
+{ "parts": ["/", "help", "\r"] }
+```
+
+One round trip and one PTY writer lock for the whole batch, but the parts stay
+separate: the backend applies its post-write bookkeeping once per part. This is
+**not** the same as joining them into `/write` — that bookkeeping reads each part
+as one keystroke, so a lone `/` opens slash mode and an exact option key answers
+a choice prompt, and a joined payload matches neither. The transport uses this
+route when keystrokes arrive while an earlier write is still in flight; a
+solitary keystroke keeps the plain `/write` route.
+
 ### Queue a Command for the Next Idle Window
 
 ```

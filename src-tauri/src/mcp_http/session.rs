@@ -103,6 +103,25 @@ pub(super) async fn write_to_session(
     (StatusCode::OK, Json(serde_json::json!({"ok": true})))
 }
 
+pub(super) async fn write_parts_to_session(
+    State(state): State<Arc<AppState>>,
+    Path(session_id): Path<String>,
+    Json(body): Json<WritePartsRequest>,
+) -> impl IntoResponse {
+    let parts: Vec<&str> = body.parts.iter().map(String::as_str).collect();
+    if let Err(e) = write_pty_input_parts(&state, &session_id, &parts) {
+        if e == "Session not found" {
+            return session_not_found();
+        }
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e})),
+        );
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({"ok": true})))
+}
+
 /// Browser/PWA counterpart of the `enqueue_agent_command` Tauri command.
 pub(super) async fn enqueue_command(
     State(state): State<Arc<AppState>>,
@@ -154,10 +173,23 @@ pub(crate) fn write_pty_input(
     session_id: &str,
     data: &str,
 ) -> Result<(), String> {
-    state.write_pty_parts(session_id, &[data.as_bytes()])?;
-    crate::pty_capture::record_input(session_id, data.as_bytes());
+    write_pty_input_parts(state, session_id, &[data])
+}
 
-    apply_input_bookkeeping(state, session_id, data);
+/// Write all input parts to the PTY under one writer lock, then apply capture
+/// and input bookkeeping once per original request, in order.
+pub(crate) fn write_pty_input_parts(
+    state: &Arc<AppState>,
+    session_id: &str,
+    parts: &[&str],
+) -> Result<(), String> {
+    let byte_parts: Vec<&[u8]> = parts.iter().map(|part| part.as_bytes()).collect();
+    state.write_pty_parts(session_id, &byte_parts)?;
+
+    for part in parts {
+        crate::pty_capture::record_input(session_id, part.as_bytes());
+        apply_input_bookkeeping(state, session_id, part);
+    }
 
     Ok(())
 }
@@ -175,14 +207,7 @@ pub(crate) fn write_pty_input_pair(
     text: &str,
     key: &str,
 ) -> Result<(), String> {
-    state.write_pty_parts(session_id, &[text.as_bytes(), key.as_bytes()])?;
-    crate::pty_capture::record_input(session_id, text.as_bytes());
-    crate::pty_capture::record_input(session_id, key.as_bytes());
-
-    apply_input_bookkeeping(state, session_id, text);
-    apply_input_bookkeeping(state, session_id, key);
-
-    Ok(())
+    write_pty_input_parts(state, session_id, &[text, key])
 }
 
 fn write_pty_input_bytes(
@@ -198,10 +223,10 @@ fn write_pty_input_bytes(
     Ok(())
 }
 
-/// Post-write bookkeeping shared by `write_pty_input` and
-/// `write_pty_input_pair`: stamps last-input time and feeds the
+/// Post-write bookkeeping shared by all UTF-8 PTY input helpers: stamps
+/// last-input time and feeds the
 /// InputLineBuffer FSM to track slash_mode accurately. Runs once per input
-/// part, after the PTY lock for that part's write has already been released.
+/// part, after the single PTY lock for the complete write has been released.
 pub(crate) fn apply_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) {
     // Stamp last-input time (same as desktop write_pty) so the grid ticker
     // throttles frames for remote/PWA typing under CPU saturation too.
@@ -309,8 +334,11 @@ pub(super) async fn resize_session(
             Json(serde_json::json!({"error": msg})),
         );
     }
-    // Shared core: grid-before-SIGWINCH ordering + same-dims no-op (056-7545).
-    match crate::pty::resize_session_core(&state, &session_id, body.rows, body.cols) {
+    // Shared core: grid-before-SIGWINCH ordering + same-dims no-op (056-7545),
+    // on the blocking pool — a whole-ring rewrap must not sit on a tokio worker.
+    match crate::pty::resize_session_off_thread(&state, session_id.clone(), body.rows, body.cols)
+        .await
+    {
         Ok(Some(frame)) => {
             crate::pty::send_grid_frame(&state, &session_id, frame);
             (StatusCode::OK, Json(serde_json::json!({"ok": true})))

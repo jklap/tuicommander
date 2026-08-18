@@ -631,6 +631,13 @@ mod thread_qos {
         current_qos().0
     }
 
+    /// The full pair, so a test can prove the restore is exact rather than
+    /// merely landing back in the same band.
+    #[cfg(test)]
+    pub(super) fn current_qos_pair() -> (c_uint, c_int) {
+        current_qos()
+    }
+
     /// Raises the calling thread to USER_INTERACTIVE for as long as it lives, then
     /// puts the thread back exactly where it was found.
     ///
@@ -8029,7 +8036,7 @@ pub(crate) fn list_worktrees(state: State<'_, Arc<AppState>>) -> Vec<serde_json:
         .collect()
 }
 
-/// Write data to a PTY session
+/// Write data to a PTY session.
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) async fn write_pty(
@@ -8038,8 +8045,39 @@ pub(crate) async fn write_pty(
     session_id: String,
     data: String,
 ) -> Result<(), String> {
-    let state = Arc::clone(&state);
-    tokio::task::spawn_blocking(move || {
+    write_pty_parts_off_thread(Arc::clone(&state), session_id, vec![data]).await
+}
+
+/// Write multiple input requests atomically while preserving their bookkeeping
+/// boundaries.
+#[cfg(feature = "desktop")]
+#[tauri::command]
+pub(crate) async fn write_pty_parts(
+    _app: AppHandle,
+    state: State<'_, Arc<AppState>>,
+    session_id: String,
+    parts: Vec<String>,
+) -> Result<(), String> {
+    write_pty_parts_off_thread(Arc::clone(&state), session_id, parts).await
+}
+
+#[cfg(feature = "desktop")]
+async fn write_pty_parts_off_thread(
+    state: Arc<AppState>,
+    session_id: String,
+    parts: Vec<String>,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || write_pty_parts_blocking(&state, &session_id, &parts))
+        .await
+        .map_err(|e| format!("Task join error: {e}"))?
+}
+
+#[cfg(feature = "desktop")]
+fn write_pty_parts_blocking(
+    state: &Arc<AppState>,
+    session_id: &str,
+    parts: &[String],
+) -> Result<(), String> {
     // Keystroke delivery to the PTY: run on the high QoS band so the write (and
     // thus the echo round-trip) isn't starved by a saturating build. Scoped, not
     // a bare raise: this thread comes from the shared blocking pool and goes back
@@ -8053,132 +8091,130 @@ pub(crate) async fn write_pty(
     // (serialize_dirty_rows) and reader thrash this same vt lock; a blocking lock
     // here would starve input. If contended, skip — the next frame restores the
     // cursor anyway.
-    if let Some(vt) = state.vt_log_buffers.get(&session_id)
+    if let Some(vt) = state.vt_log_buffers.get(session_id)
         && let Some(mut vt) = vt.try_lock()
         && !vt.is_cursor_visible()
     {
         vt.process(b"\x1b[?25h");
     }
 
-    if let Some(writer) = state.pty_writer(&session_id) {
-        tracing::trace!(session_id = %session_id, data_len = data.len(), "write_pty");
-        if data.contains("\x1b[?1049") || data.contains("\x1b[?1047") || data.contains("\x1b[?47l") || data.contains("\x1b[?25h") {
+    let data_len: usize = parts.iter().map(String::len).sum();
+    tracing::trace!(session_id = %session_id, data_len, part_count = parts.len(), "write_pty");
+    for data in parts {
+        if data.contains("\x1b[?1049")
+            || data.contains("\x1b[?1047")
+            || data.contains("\x1b[?47l")
+            || data.contains("\x1b[?25h")
+        {
             tracing::error!(source = "terminal", session_id = %session_id,
                 "write_pty received DEC private mode sequences! data({} bytes)={:?}",
                 data.len(), data.as_bytes().iter().take(200).collect::<Vec<_>>());
         }
-        let t0 = std::time::Instant::now();
-        {
-            let mut writer = writer.lock();
-            let lock_ms = t0.elapsed().as_millis();
-            writer
-                .write_all(data.as_bytes())
-                .map_err(|e| format!("Failed to write to PTY: {e}"))?;
-            writer
-                .flush()
-                .map_err(|e| format!("Failed to flush PTY: {e}"))?;
-            let total_ms = t0.elapsed().as_millis();
-            if total_ms > 100 {
-                tracing::warn!(session_id = %session_id, lock_ms = %lock_ms, total_ms = %total_ms,
-                    data_len = %data.len(), "write_pty SLOW — lock or write blocked");
-            }
-        }
-        crate::pty_capture::record_input(&session_id, data.as_bytes());
-
-        // Stamp last-input time so the grid ticker can throttle frame sends while
-        // the user types under CPU saturation (keeps the WebView thread free for
-        // keystroke dispatch + echo).
-        stamp_input_ms(&state, &session_id);
-        crate::state::resolve_choice_prompt_input(&state, &session_id, &data);
-
-        // Feed input through the line buffer to reconstruct user-typed lines
-        // Release both the inner mutex and DashMap entry guard before callbacks
-        // below. In particular, flush_pending_injections -> should_inject_now
-        // reads input_buffers again; retaining input_entry there self-deadlocks
-        // this shard and can park the entire IPC Tokio runtime under load.
-        let (actions, buffer_empty, buffer_is_slash) = {
-            let input_entry = state
-                .input_buffers
-                .entry(session_id.clone())
-                .or_insert_with(|| parking_lot::Mutex::new(InputLineBuffer::new()));
-            let mut buf = input_entry.lock();
-            let actions = buf.feed(&data);
-            // Two bits, not the line: `content()` here collected the whole typed
-            // line into a fresh String on every keystroke, to be dropped below.
-            (actions, buf.is_empty(), buf.starts_with('/'))
-        };
-        let mut line_submitted = false;
-        for action in actions {
-            match action {
-                InputAction::Line(content) => {
-                    line_submitted = true;
-                    // Keystroke-reconstructed: no grid context, so no prompt row
-                    // (line = -1). The OSC 7770 busy path supplies an absolute
-                    // scrollbar marker when available.
-                    record_submitted_line(&state, &session_id, content, -1);
-                }
-                InputAction::Interrupt => {
-                    line_submitted = true;
-                    if let Some(ss) = state.silence_states.get(&session_id) {
-                        ss.lock().note_interrupt_requested();
-                    }
-                }
-            }
-        }
-        // Codex advertises Escape as its normal interrupt key. A bare Escape is
-        // only intent evidence; it never flips idle until the agent redraws an
-        // interrupted/ready prompt. CSI-prefixed navigation keys are excluded.
-        if data == "\x1b"
-            && let Some(ss) = state.silence_states.get(&session_id)
-        {
-            ss.lock().note_interrupt_requested();
-        }
-
-        // On any line submit (Enter or Ctrl+C) reset the tool-error dedup
-        // memory: the user is explicitly engaging again, so a recurrence of
-        // the same failure in a later turn must be allowed to notify.
-        // Mirrors `OutputParser`'s reset of `last_api_error_match` on UserInput.
-        if line_submitted
-            && let Some(ss) = state.silence_states.get(&session_id)
-        {
-            let mut sl = ss.lock();
-            sl.reset_tool_error_memory();
-            sl.reset_suggest_memory();
-        }
-
-        // Track slash command mode: true when the input buffer starts with /
-        // Fallback: when ESC is sent before "/" (TerminalKeybar's handleSlash),
-        // the InputLineBuffer consumes "/" as an unknown escape-sequence suffix
-        // and never inserts it. Detect bare "/" writes that the buffer missed.
-        let in_slash = if line_submitted {
-            false
-        } else {
-            buffer_is_slash || (buffer_empty && data == "/")
-        };
-        // Look up before inserting: `entry` needs an owned key, so the clone was
-        // paid on every keystroke to create a map entry that exists after the first.
-        match state.slash_mode.get(&session_id) {
-            Some(flag) => flag.store(in_slash, std::sync::atomic::Ordering::Relaxed),
-            None => {
-                state
-                    .slash_mode
-                    .entry(session_id.clone())
-                    .or_insert_with(|| std::sync::atomic::AtomicBool::new(false))
-                    .store(in_slash, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-
-        if buffer_empty {
-            flush_pending_injections(&state, &session_id);
-        }
-
-        Ok(())
-    } else {
-        Err("Session not found".to_string())
     }
-    })
-    .await
-    .map_err(|e| format!("Task join error: {e}"))?
+
+    let byte_parts: Vec<&[u8]> = parts.iter().map(|part| part.as_bytes()).collect();
+    let t0 = std::time::Instant::now();
+    state.write_pty_parts(session_id, &byte_parts)?;
+    let total_ms = t0.elapsed().as_millis();
+    if total_ms > 100 {
+        tracing::warn!(session_id = %session_id, total_ms = %total_ms,
+            data_len, part_count = parts.len(), "write_pty SLOW — lock or write blocked");
+    }
+
+    for data in parts {
+        crate::pty_capture::record_input(session_id, data.as_bytes());
+        apply_desktop_input_bookkeeping(state, session_id, data);
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "desktop")]
+fn apply_desktop_input_bookkeeping(state: &Arc<AppState>, session_id: &str, data: &str) {
+    // Stamp last-input time so the grid ticker can throttle frame sends while
+    // the user types under CPU saturation (keeps the WebView thread free for
+    // keystroke dispatch + echo).
+    stamp_input_ms(state, session_id);
+    crate::state::resolve_choice_prompt_input(state, session_id, data);
+
+    // Feed input through the line buffer to reconstruct user-typed lines.
+    // Release both the inner mutex and DashMap entry guard before callbacks
+    // below. In particular, flush_pending_injections -> should_inject_now
+    // reads input_buffers again; retaining input_entry there self-deadlocks
+    // this shard and can park the entire IPC Tokio runtime under load.
+    let (actions, buffer_empty, buffer_is_slash) = {
+        let input_entry = state
+            .input_buffers
+            .entry(session_id.to_string())
+            .or_insert_with(|| parking_lot::Mutex::new(InputLineBuffer::new()));
+        let mut buf = input_entry.lock();
+        let actions = buf.feed(data);
+        // Two bits, not the line: `content()` here collected the whole typed
+        // line into a fresh String on every keystroke, to be dropped below.
+        (actions, buf.is_empty(), buf.starts_with('/'))
+    };
+    let mut line_submitted = false;
+    for action in actions {
+        match action {
+            InputAction::Line(content) => {
+                line_submitted = true;
+                // Keystroke-reconstructed: no grid context, so no prompt row
+                // (line = -1). The OSC 7770 busy path supplies an absolute
+                // scrollbar marker when available.
+                record_submitted_line(state, session_id, content, -1);
+            }
+            InputAction::Interrupt => {
+                line_submitted = true;
+                if let Some(ss) = state.silence_states.get(session_id) {
+                    ss.lock().note_interrupt_requested();
+                }
+            }
+        }
+    }
+    // Codex advertises Escape as its normal interrupt key. A bare Escape is
+    // only intent evidence; it never flips idle until the agent redraws an
+    // interrupted/ready prompt. CSI-prefixed navigation keys are excluded.
+    if data == "\x1b"
+        && let Some(ss) = state.silence_states.get(session_id)
+    {
+        ss.lock().note_interrupt_requested();
+    }
+
+    // On any line submit (Enter or Ctrl+C) reset the tool-error dedup
+    // memory: the user is explicitly engaging again, so a recurrence of
+    // the same failure in a later turn must be allowed to notify.
+    // Mirrors `OutputParser`'s reset of `last_api_error_match` on UserInput.
+    if line_submitted && let Some(ss) = state.silence_states.get(session_id) {
+        let mut sl = ss.lock();
+        sl.reset_tool_error_memory();
+        sl.reset_suggest_memory();
+    }
+
+    // Track slash command mode: true when the input buffer starts with /
+    // Fallback: when ESC is sent before "/" (TerminalKeybar's handleSlash),
+    // the InputLineBuffer consumes "/" as an unknown escape-sequence suffix
+    // and never inserts it. Detect bare "/" writes that the buffer missed.
+    let in_slash = if line_submitted {
+        false
+    } else {
+        buffer_is_slash || (buffer_empty && data == "/")
+    };
+    // Look up before inserting: `entry` needs an owned key, so the allocation is
+    // paid only when the map entry does not already exist.
+    match state.slash_mode.get(session_id) {
+        Some(flag) => flag.store(in_slash, std::sync::atomic::Ordering::Relaxed),
+        None => {
+            state
+                .slash_mode
+                .entry(session_id.to_string())
+                .or_insert_with(|| std::sync::atomic::AtomicBool::new(false))
+                .store(in_slash, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    if buffer_empty {
+        flush_pending_injections(state, session_id);
+    }
 }
 
 /// Return the current content of the input line buffer for a PTY session.
@@ -10431,25 +10467,54 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn a_keystroke_gives_the_shared_blocking_thread_back_at_its_original_qos() {
+        // The whole pair, not just the class: restoring the band while dropping
+        // the relative priority is still handing back a thread that is not the
+        // one we borrowed, and a class-only assertion cannot see it.
         let (before, during, after) = std::thread::spawn(|| {
-            let before = thread_qos::current_qos_class();
+            let before = thread_qos::current_qos_pair();
             let during = {
                 let _boost = interactive_io_boost();
-                thread_qos::current_qos_class()
+                thread_qos::current_qos_pair()
             };
-            (before, during, thread_qos::current_qos_class())
+            (before, during, thread_qos::current_qos_pair())
         })
         .join()
         .expect("qos probe thread panicked");
         // QOS_CLASS_USER_INTERACTIVE == 0x21.
         assert_eq!(
-            during, 0x21,
+            during.0, 0x21,
             "keystroke did not run in the interactive band"
         );
-        assert_ne!(before, 0x21, "probe thread started already bumped");
+        assert_ne!(before.0, 0x21, "probe thread started already bumped");
         assert_eq!(
             after, before,
             "the blocking-pool thread stayed promoted after the keystroke"
+        );
+    }
+
+    /// The restore is a `Drop`, so the path that matters most is the one nobody
+    /// writes on purpose: a panic inside the write. `spawn_blocking` catches it
+    /// and returns the thread to the pool either way, so a boost that only
+    /// unwound on the happy path would promote the pool exactly when something
+    /// is already going wrong.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_panicking_keystroke_still_gives_the_thread_back_at_its_original_qos() {
+        let (before, after) = std::thread::spawn(|| {
+            let before = thread_qos::current_qos_pair();
+            let panicked = std::panic::catch_unwind(|| {
+                let _boost = interactive_io_boost();
+                panic!("write failed mid-keystroke");
+            });
+            assert!(panicked.is_err(), "the probe did not actually panic");
+            (before, thread_qos::current_qos_pair())
+        })
+        .join()
+        .expect("qos probe thread panicked");
+        assert_ne!(before.0, 0x21, "probe thread started already bumped");
+        assert_eq!(
+            after, before,
+            "a panicking keystroke left the blocking-pool thread promoted"
         );
     }
 
@@ -19270,11 +19335,7 @@ mod tests {
         // grid reflow, which is precisely the work that must not run here.
         let _ = resize_session_off_thread(&state, sid.to_string(), 40, 120).await;
 
-        assert_eq!(
-            resize_thread(sid).is_some(),
-            true,
-            "the reflow never ran at all"
-        );
+        assert!(resize_thread(sid).is_some(), "the reflow never ran at all");
         assert_ne!(
             resize_thread(sid),
             Some(caller),

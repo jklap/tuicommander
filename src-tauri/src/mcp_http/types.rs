@@ -55,6 +55,11 @@ pub(super) struct WriteRequest {
 }
 
 #[derive(Deserialize)]
+pub(super) struct WritePartsRequest {
+    pub parts: Vec<String>,
+}
+
+#[derive(Deserialize)]
 pub(super) struct SetNameRequest {
     pub name: Option<String>,
     #[serde(default, rename = "isCustom")]
