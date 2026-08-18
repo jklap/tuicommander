@@ -6,8 +6,9 @@ import AnsiToHtml from "ansi-to-html";
 import DOMPurify from "dompurify";
 import { marked, type Tokens } from "marked";
 import "./markdown-content.css";
-import { type Component, createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { type Component, createEffect, createMemo, Index, onCleanup, Show } from "solid-js";
 import { appLogger } from "../../stores/appLogger";
+import { type MarkdownSegment, type StreamSplit, splitStream } from "../../utils/incrementalMarkdown";
 import { stripAnsi } from "../../utils/stripAnsi";
 import { injectTweakSentinels, parseTweakComments } from "../../utils/tweakComments";
 import { applyTweakDomHighlights } from "../../utils/tweakDomHighlight";
@@ -38,6 +39,14 @@ export interface ContentRendererProps {
 	contentRef?: (el: HTMLDivElement) => void;
 	/** Override the root font size in pixels (children use em, so everything scales). */
 	fontSize?: number;
+	/**
+	 * Render a growing answer as a committed prefix plus a live tail, so a tick
+	 * only re-parses the block still being written instead of the whole
+	 * document. Opt-in, and only sound for append-only content: a streaming
+	 * answer. Leave it off everywhere else — a static document gains nothing
+	 * and would pay for the split.
+	 */
+	incremental?: boolean;
 }
 
 /** Strip event handler attributes (on*) as defense-in-depth before DOMPurify */
@@ -168,60 +177,117 @@ async function renderMermaidBlocks(container: HTMLElement): Promise<void> {
 	}
 }
 
-export const ContentRenderer: Component<ContentRendererProps> = (props) => {
-	// Memoize processed markdown to avoid re-parsing on every render
-	const processedContent = createMemo(() => {
-		const raw = stripAnsiOutsideCodeBlocks(props.content ?? "");
-		try {
-			// 1. Convert [~] to [ ] so marked renders them as standard GFM task-list items.
-			//    Track which source lines had tilde for indeterminate styling later.
-			const { cleaned, tildeLines } = preprocessTildeCheckboxes(raw);
+/**
+ * Source → sanitized HTML for ONE parse unit.
+ *
+ * `lineOffset` is the absolute source line the unit starts on. It is added to
+ * every line number this function derives, which is what lets a document be
+ * rendered in pieces without the checkbox `data-source-line` values drifting:
+ * a segment maps its own lines, then shifts them into document coordinates.
+ * At offset 0 — the whole-document path — every step below is exactly what it
+ * has always been.
+ */
+function renderMarkdownSegment(source: string, opts: { baseDir?: string; lineOffset: number }): string {
+	const raw = stripAnsiOutsideCodeBlocks(source);
+	try {
+		// 1. Convert [~] to [ ] so marked renders them as standard GFM task-list items.
+		//    Track which source lines had tilde for indeterminate styling later.
+		const { cleaned, tildeLines } = preprocessTildeCheckboxes(raw);
 
-			// 2. Build source-line map BEFORE any transforms: domIndex → sourceLine.
-			//    This must use the tilde-cleaned source (same checkbox count as marked sees).
-			const lineMap = buildCheckboxLineMap(cleaned);
+		// 2. Build source-line map BEFORE any transforms: domIndex → sourceLine.
+		//    This must use the tilde-cleaned source (same checkbox count as marked sees).
+		const lineMap = buildCheckboxLineMap(cleaned);
 
-			// 3. Replace tweak markers with sentinel delimiters (highlight spans are
-			//    applied to the rendered DOM afterwards), then parse markdown.
-			const withSentinels = injectTweakSentinels(cleaned);
-			let html = marked.parse(withSentinels, { async: false }) as string;
+		// 3. Replace tweak markers with sentinel delimiters (highlight spans are
+		//    applied to the rendered DOM afterwards), then parse markdown.
+		const withSentinels = injectTweakSentinels(cleaned);
+		let html = marked.parse(withSentinels, { async: false }) as string;
 
-			// 4. Rewrite relative image src attributes to loadable asset:// URLs.
-			const baseDir = props.baseDir;
-			if (baseDir) {
-				html = html.replace(
-					/(<img\b[^>]*\ssrc=")(?!https?:\/\/|data:|asset:\/\/)([^"]+)"/gi,
-					(_, prefix, relativePath) => `${prefix}${convertFileSrc(`${baseDir}/${relativePath}`)}"`,
-				);
-			}
-
-			// 5. Make GFM task-list checkboxes interactive and inject source-line metadata.
-			//    Sequential checkbox index in the HTML maps to lineMap[domIndex].
-			let cbIndex = 0;
-			html = html.replace(/<input\b[^>]*type="checkbox"[^>]*>/gi, (match) => {
-				const idx = cbIndex++;
-				const sourceLine = lineMap[idx];
-				// Remove disabled attribute
-				let out = match.includes("disabled") ? match.replace(/\s*disabled(?:="")?/i, "") : match;
-				// Inject data-source-line for the click handler
-				if (sourceLine !== undefined) {
-					out = out.replace(/>$/, ` data-source-line="${sourceLine}">`);
-					// Mark tilde checkboxes for indeterminate styling
-					if (tildeLines.has(sourceLine)) {
-						out = out.replace(/>$/, ` ${TILDE_SENTINEL}>`);
-					}
-				}
-				return out;
-			});
-
-			return DOMPurify.sanitize(stripEventHandlers(html), {
-				ADD_ATTR: ["data-tweak-id", "data-tweak-at", "data-tweak-comment", "data-source-line", TILDE_SENTINEL, "style"],
-				ALLOWED_URI_REGEXP,
-			});
-		} catch (err) {
-			appLogger.error("app", "Markdown parsing error", err);
-			return `<pre>${raw}</pre>`;
+		// 4. Rewrite relative image src attributes to loadable asset:// URLs.
+		const baseDir = opts.baseDir;
+		if (baseDir) {
+			html = html.replace(
+				/(<img\b[^>]*\ssrc=")(?!https?:\/\/|data:|asset:\/\/)([^"]+)"/gi,
+				(_, prefix, relativePath) => `${prefix}${convertFileSrc(`${baseDir}/${relativePath}`)}"`,
+			);
 		}
+
+		// 5. Make GFM task-list checkboxes interactive and inject source-line metadata.
+		//    Sequential checkbox index in the HTML maps to lineMap[domIndex]. Both
+		//    are segment-relative; only what reaches the DOM is shifted into
+		//    document coordinates, so `tildeLines` is still keyed the way it was
+		//    built.
+		let cbIndex = 0;
+		html = html.replace(/<input\b[^>]*type="checkbox"[^>]*>/gi, (match) => {
+			const idx = cbIndex++;
+			const localLine = lineMap[idx];
+			// Remove disabled attribute
+			let out = match.includes("disabled") ? match.replace(/\s*disabled(?:="")?/i, "") : match;
+			// Inject data-source-line for the click handler
+			if (localLine !== undefined) {
+				out = out.replace(/>$/, ` data-source-line="${opts.lineOffset + localLine}">`);
+				// Mark tilde checkboxes for indeterminate styling
+				if (tildeLines.has(localLine)) {
+					out = out.replace(/>$/, ` ${TILDE_SENTINEL}>`);
+				}
+			}
+			return out;
+		});
+
+		return DOMPurify.sanitize(stripEventHandlers(html), {
+			ADD_ATTR: ["data-tweak-id", "data-tweak-at", "data-tweak-comment", "data-source-line", TILDE_SENTINEL, "style"],
+			ALLOWED_URI_REGEXP,
+		});
+	} catch (err) {
+		appLogger.error("app", "Markdown parsing error", err);
+		return `<pre>${raw}</pre>`;
+	}
+}
+
+export const ContentRenderer: Component<ContentRendererProps> = (props) => {
+	// Whole-document path: one parse of everything, exactly as before.
+	const processedContent = createMemo(() =>
+		props.incremental ? "" : renderMarkdownSegment(props.content ?? "", { baseDir: props.baseDir, lineOffset: 0 }),
+	);
+
+	/**
+	 * Incremental path. `renderedHtml` holds the HTML of segments already
+	 * committed; each is parsed once and then never again, so a tick costs the
+	 * tail alone. `renderedFor` is the segment list those strings were produced
+	 * from — comparing its last entry by identity proves the prefix did not move
+	 * under us, which is how a conversation switch (a replacement, not an
+	 * append) is caught and forces a clean re-render.
+	 */
+	let split: StreamSplit | undefined;
+	let renderedHtml: string[] = [];
+	let renderedFor: MarkdownSegment[] = [];
+	let renderedBaseDir: string | undefined;
+	const incrementalContent = createMemo(() => {
+		if (!props.incremental) return { committed: [] as string[], tail: "" };
+		split = splitStream(props.content ?? "", split);
+		const committed = split.committed;
+		const n = renderedFor.length;
+		// Segment identity is not the whole cache key: `baseDir` rewrites image
+		// src values, so cached HTML from another directory points at the wrong
+		// files.
+		if (props.baseDir !== renderedBaseDir) {
+			renderedBaseDir = props.baseDir;
+			renderedHtml = [];
+			renderedFor = [];
+		} else if (n > committed.length || (n > 0 && committed[n - 1] !== renderedFor[n - 1])) {
+			renderedHtml = [];
+			renderedFor = [];
+		}
+		for (let i = renderedFor.length; i < committed.length; i++) {
+			renderedHtml.push(
+				renderMarkdownSegment(committed[i].text, { baseDir: props.baseDir, lineOffset: committed[i].lineOffset }),
+			);
+			renderedFor.push(committed[i]);
+		}
+		return {
+			committed: renderedHtml.slice(),
+			tail: renderMarkdownSegment(split.tail.text, { baseDir: props.baseDir, lineOffset: split.tail.lineOffset }),
+		};
 	});
 
 	const isEmpty = createMemo(() => (props.content ?? "").trim() === "");
@@ -272,7 +338,12 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 	// After render, set indeterminate property on [~] checkboxes (not settable via HTML attribute)
 	// and render Mermaid diagrams from ```mermaid code blocks.
 	createEffect(() => {
-		processedContent(); // subscribe to re-renders
+		// Subscribe to whichever path is live. Both passes below are idempotent
+		// over already-processed DOM — the sentinels are consumed, and a rendered
+		// mermaid block no longer matches its selector — so committed segments
+		// that survive a tick are simply skipped.
+		processedContent();
+		incrementalContent();
 		if (!containerRef) return;
 		const raf = requestAnimationFrame(() => {
 			if (!containerRef) return;
@@ -298,8 +369,26 @@ export const ContentRenderer: Component<ContentRendererProps> = (props) => {
 			style={props.fontSize !== undefined ? { "font-size": `${props.fontSize}px` } : undefined}
 		>
 			<Show when={!isEmpty()} fallback={<p>{props.emptyMessage || "No content"}</p>}>
-				{/* eslint-disable-next-line solid/no-innerhtml */}
-				<div innerHTML={processedContent()} />
+				<Show
+					when={props.incremental}
+					fallback={
+						/* eslint-disable-next-line solid/no-innerhtml */
+						<div innerHTML={processedContent()} />
+					}
+				>
+					{/* Index, not For: it keys by position, so a committed segment's
+					    string never moves and its DOM is never rebuilt. */}
+					{/* `md-segment` is not decoration: each segment's last paragraph is
+					    `p:last-child` of its own wrapper, and a stylesheet that zeroes
+					    that margin would collapse the gap between segments. The class
+					    lets it exclude every wrapper but the last. */}
+					<Index each={incrementalContent().committed}>
+						{/* eslint-disable-next-line solid/no-innerhtml */}
+						{(html) => <div class="md-segment" innerHTML={html()} />}
+					</Index>
+					{/* eslint-disable-next-line solid/no-innerhtml */}
+					<div class="md-segment" innerHTML={incrementalContent().tail} />
+				</Show>
 			</Show>
 		</div>
 	);

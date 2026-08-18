@@ -351,7 +351,7 @@ When modifying the tweak-comment format, the selection/popover UI, or the DOM hi
 | `src/utils/tweakDomHighlight.ts` | DOM-side sentinel→`.tweak-highlight` span wrapping |
 | `src/components/MarkdownTab/CommentOverlay.tsx` | Floating Comment button + inline popover + hover tooltip |
 | `src/components/MarkdownTab/MarkdownTab.tsx` | Save/delete wiring, write-back to disk |
-| `src/components/ui/ContentRenderer.tsx` | Sentinel injection + `applyTweakDomHighlights` on render (shared by PR detail) |
+| `src/components/ui/ContentRenderer.tsx` | Sentinel injection + `applyTweakDomHighlights` on render (shared with the AI Chat panel) |
 | `docs/FEATURES.md` | Section 3.3 (Markdown Panel) — Inline review comments |
 
 ### TUIC SDK & iframe Integration
