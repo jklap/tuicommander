@@ -584,7 +584,13 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		clearTimeout(searchRefreshTimer);
 		searchRefreshTimer = setTimeout(() => {
 			searchRefreshTimer = undefined;
-			void runSearchQuery(false);
+			// Nobody awaits this one, so it needs its own catch: the backend read
+			// can reject (a closed session over HTTP, a failed blocking-pool task),
+			// and an unhandled rejection from a timer is invisible until it isn't.
+			// The matches simply stay as they were until the next frame retriggers.
+			runSearchQuery(false).catch((e) => {
+				appLogger.warn("terminal", "search refresh failed", { error: String(e) });
+			});
 		}, SEARCH_REFRESH_DEBOUNCE_MS);
 	}
 

@@ -8508,6 +8508,98 @@ fn emit_standby_event(state: &AppState, session_id: &str, standby: bool) {
     }
 }
 
+#[cfg(test)]
+mod vt_read_tests {
+    use super::*;
+
+    // Grid reads take the VT mutex, and the PTY reader holds that same mutex
+    // through a whole `serialize_dirty_rows`. Waiting for it inline in the IPC
+    // handler — the macOS main thread — freezes the WebView for the length of
+    // someone else's serialize. `vt_read` is the one door they all go through.
+
+    #[tokio::test]
+    async fn a_read_against_a_live_session_returns_the_buffers_answer() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.vt_log_buffers.insert(
+            "s1".to_string(),
+            parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+
+        let lines = vt_read(&state, "s1".to_string(), |vt| vt.grid_screen_lines())
+            .await
+            .unwrap();
+
+        assert_eq!(lines, 24);
+    }
+
+    // A tab can be closed while a hover or a selection read is in flight. That
+    // is not an error to surface — the caller gets the empty answer it would
+    // have got from an empty grid.
+    #[tokio::test]
+    async fn a_read_against_a_session_that_is_gone_is_the_default() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let text: String = vt_read(&state, "nope".to_string(), |vt| vt.grid_get_cursor_line())
+            .await
+            .unwrap();
+
+        assert!(text.is_empty());
+    }
+
+    // The lock is taken inside the closure, on the pool thread. If it were taken
+    // before the hop, the caller would wait for it on the thread it is trying to
+    // keep free — so two reads must be able to overlap without deadlocking.
+    #[tokio::test]
+    async fn two_reads_on_the_same_session_do_not_deadlock() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.vt_log_buffers.insert(
+            "s1".to_string(),
+            parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+
+        let (a, b) = tokio::join!(
+            vt_read(&state, "s1".to_string(), |vt| vt.grid_total_lines()),
+            vt_read(&state, "s1".to_string(), |vt| vt.grid_total_lines()),
+        );
+
+        assert_eq!(a.unwrap(), b.unwrap());
+    }
+
+    // The point of the whole change: the closure — and therefore the wait for
+    // the vt mutex — must not run on the thread that called the command. This
+    // is the assertion that fails if someone "simplifies" the helper back into
+    // a direct lock.
+    #[tokio::test]
+    async fn the_read_does_not_run_on_the_calling_thread() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        state.vt_log_buffers.insert(
+            "s1".to_string(),
+            parking_lot::Mutex::new(crate::state::VtLogBuffer::new(24, 80, 1000)),
+        );
+        let caller = std::thread::current().id();
+
+        let worker = vt_try_read(&state, "s1".to_string(), |_| std::thread::current().id())
+            .await
+            .unwrap();
+
+        assert_ne!(worker, Some(caller));
+        assert!(worker.is_some());
+    }
+
+    // `vt_try_read` keeps the distinction the HTTP routes answer 404 with;
+    // `vt_read` is the same call with the miss folded into the default.
+    #[tokio::test]
+    async fn a_missing_session_is_none_rather_than_an_error() {
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+
+        let seen = vt_try_read(&state, "nope".to_string(), |vt| vt.grid_screen_lines())
+            .await
+            .unwrap();
+
+        assert_eq!(seen, None);
+    }
+}
+
 #[cfg(all(test, unix))]
 mod standby_tests {
     use super::*;
@@ -9570,42 +9662,46 @@ pub struct VtLogChunk {
 /// Desktop IPC equivalent of PWA WebSocket format=log — no frontend caller yet.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn read_vt_log(
+pub(crate) async fn read_vt_log(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     offset: Option<usize>,
     limit: Option<usize>,
-) -> VtLogChunk {
+) -> Result<VtLogChunk, String> {
     let limit = limit.unwrap_or(200);
-    let Some(vt_log) = state.vt_log_buffers.get(&session_id) else {
-        return VtLogChunk {
+    // Everything that needs the lock is gathered in one pass on the pool
+    // thread; the chrome trim below works on the copies it hands back.
+    let gathered = vt_try_read(&state, session_id, move |buf| {
+        let off = offset.unwrap_or_else(|| buf.total_lines().saturating_sub(limit));
+        let (lines, _) = buf.lines_since_owned(off, limit);
+        (
+            lines,
+            buf.screen_rows(),
+            buf.screen_log_lines(),
+            buf.total_lines(),
+            buf.oldest_offset(),
+        )
+    })
+    .await?;
+    let Some((lines, raw_rows, screen_log, total_lines, oldest)) = gathered else {
+        return Ok(VtLogChunk {
             lines: vec![],
             screen: vec![],
             total_lines: 0,
             oldest: 0,
-        };
-    };
-    let (lines, raw_rows, screen_log, total_lines, oldest) = {
-        let buf = vt_log.lock();
-        let off = offset.unwrap_or_else(|| buf.total_lines().saturating_sub(limit));
-        let (lines, _) = buf.lines_since_owned(off, limit);
-        let raw_rows = buf.screen_rows();
-        let screen_log = buf.screen_log_lines();
-        let total_lines = buf.total_lines();
-        let oldest = buf.oldest_offset();
-        (lines, raw_rows, screen_log, total_lines, oldest)
+        });
     };
     // Chrome cutoff runs outside the lock — no contention with PTY reader.
     let refs: Vec<&str> = raw_rows.iter().map(|s| s.as_str()).collect();
     let cutoff = crate::chrome::find_chrome_cutoff(&refs).unwrap_or(raw_rows.len());
     let screen: Vec<crate::state::LogLine> = screen_log.into_iter().take(cutoff).collect();
 
-    VtLogChunk {
+    Ok(VtLogChunk {
         lines,
         screen,
         total_lines,
         oldest,
-    }
+    })
 }
 
 /// Send a grid frame through the session's channel and close the delivery gate.
@@ -9771,6 +9867,22 @@ pub(crate) fn terminal_exit_alt_screen(
 
 // --- Scroll commands ---
 
+// DEFERRED (2026-08-18) — `set_ansi_colors` (above) is the fifth: it locks EVERY
+// vt buffer in a loop on the IPC thread, so its stall grows with session count.
+// Same reordering objection as below — two concurrent calls could leave some
+// buffers on the old palette — and it fires once, when the user picks a theme.
+
+// DEFERRED (2026-08-18) — the four grid commands that *mutate* before serializing
+// (`terminal_scroll`, `terminal_scroll_to`, `terminal_request_frame`,
+// `terminal_exit_alt_screen`) still take the vt lock inline on the IPC thread.
+// They carry the same stall as the reads, but not the same safety: two
+// `spawn_blocking` hops for the same session can run in either order, and
+// `terminal_scroll_to(line)` is absolute — reordering two of them lands the
+// viewport on the wrong line. The reads are idempotent, so they moved (F95);
+// these need the coalescing `terminal_scroll_to_offset` already has, which is
+// also why they are the low-frequency path: the wheel and the scrollbar drag go
+// through the offset command and never touch this lock.
+
 #[cfg(feature = "desktop")]
 #[tauri::command]
 pub(crate) fn terminal_scroll(state: State<'_, Arc<AppState>>, session_id: String, delta: i32) {
@@ -9782,6 +9894,68 @@ pub(crate) fn terminal_scroll(state: State<'_, Arc<AppState>>, session_id: Strin
         };
         send_grid_frame(&state, &session_id, frame);
     }
+}
+
+/// Run a read against a session's VT buffer on the blocking pool.
+///
+/// Every grid read takes the VT mutex, and the PTY reader holds that same mutex
+/// through a full `serialize_dirty_rows`. A command that waits for it inline in
+/// the IPC handler — on macOS, the main thread — freezes the WebView for the
+/// length of someone else's serialize.
+///
+/// All of them go through here, including the ones that only read a single row.
+/// The cost that matters is not the work the closure does, it is the wait for
+/// the lock, and a one-cell read waits exactly as long as a whole-scrollback
+/// search. A line drawn between "cheap" and "expensive" reads would only rot.
+///
+/// The lock is taken *inside* the closure, on the pool thread. Taking it before
+/// the hop would put the wait straight back on the thread this exists to keep
+/// free, which is the whole bug.
+///
+/// This is the shared unit between the two transports rather than the command:
+/// the grid commands are `#[cfg(feature = "desktop")]`, so the HTTP routes —
+/// which also compile into the headless `tuic-remote` binary — cannot call them.
+/// Both call this instead, so neither transport can quietly go back to blocking.
+///
+/// `None` means the session is gone, which the desktop commands read as a
+/// default and the HTTP routes as a 404.
+pub(crate) async fn vt_try_read<T, F>(
+    state: &Arc<AppState>,
+    session_id: String,
+    f: F,
+) -> Result<Option<T>, String>
+where
+    F: FnOnce(&mut crate::state::VtLogBuffer) -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let state = Arc::clone(state);
+    tokio::task::spawn_blocking(move || {
+        state
+            .vt_log_buffers
+            .get(&session_id)
+            .map(|vt| f(&mut vt.lock()))
+    })
+    .await
+    .map_err(|e| format!("terminal read failed: {e}"))
+}
+
+/// [`vt_try_read`] for the callers that answer a closed session with a default.
+///
+/// A tab can be closed while a hover, a selection or a row-cache fill is still
+/// in flight; that is a race the frontend already tolerates, not an error worth
+/// surfacing.
+pub(crate) async fn vt_read<T, F>(
+    state: &Arc<AppState>,
+    session_id: String,
+    f: F,
+) -> Result<T, String>
+where
+    F: FnOnce(&mut crate::state::VtLogBuffer) -> T + Send + 'static,
+    T: Default + Send + 'static,
+{
+    vt_try_read(state, session_id, f)
+        .await
+        .map(Option::unwrap_or_default)
 }
 
 /// Coalesced scroll: record the target absolute display offset and mark the grid
@@ -9813,18 +9987,17 @@ pub(crate) fn terminal_scroll_to_offset(
 /// webview receives the bytes as an ArrayBuffer.
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_styled_rows(
+pub(crate) async fn terminal_styled_rows(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     start: usize,
     count: usize,
-) -> tauri::ipc::Response {
-    let bytes = state
-        .vt_log_buffers
-        .get(&session_id)
-        .map(|vt| vt.lock().grid_serialize_styled_range(start, count))
-        .unwrap_or_default();
-    tauri::ipc::Response::new(bytes)
+) -> Result<tauri::ipc::Response, String> {
+    let bytes = vt_read(&state, session_id, move |vt| {
+        vt.grid_serialize_styled_range(start, count)
+    })
+    .await?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[cfg(feature = "desktop")]
@@ -9842,189 +10015,163 @@ pub(crate) fn terminal_scroll_to(state: State<'_, Arc<AppState>>, session_id: St
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_get_block_rows(
+pub(crate) async fn terminal_get_block_rows(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     start_line: usize,
     end_line: usize,
-) -> Vec<String> {
-    state
-        .vt_log_buffers
-        .get(&session_id)
-        .map(|vt| vt.lock().read_rows_in_range(start_line, end_line))
-        .unwrap_or_default()
+) -> Result<Vec<String>, String> {
+    vt_read(&state, session_id, move |vt| {
+        vt.read_rows_in_range(start_line, end_line)
+    })
+    .await
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_scroll_info(
+pub(crate) async fn terminal_scroll_info(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> (usize, usize, usize) {
-    state
-        .vt_log_buffers
-        .get(&session_id)
-        .map(|vt| {
-            let vt = vt.lock();
-            (
-                vt.grid_display_offset(),
-                vt.grid_total_lines(),
-                vt.grid_screen_lines(),
-            )
-        })
-        .unwrap_or((0, 0, 0))
+) -> Result<(usize, usize, usize), String> {
+    vt_read(&state, session_id, |vt| {
+        (
+            vt.grid_display_offset(),
+            vt.grid_total_lines(),
+            vt.grid_screen_lines(),
+        )
+    })
+    .await
 }
 
 // --- Search command ---
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_search(
+pub(crate) async fn terminal_search(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     query: String,
-) -> Vec<crate::terminal_grid::SearchMatch> {
-    match state.vt_log_buffers.get(&session_id) {
-        Some(vt) => {
-            let buf = vt.lock();
-            let is_alt = buf.is_alternate_screen();
-            let results = buf.grid_search(&query);
-            tracing::info!(
-                session_id = %session_id,
-                query = %query,
-                is_alt_screen = is_alt,
-                result_count = results.len(),
-                history_size = buf.grid_history_size(),
-                screen_lines = buf.grid_screen_lines(),
-                "terminal_search"
-            );
-            results
-        }
-        None => {
-            tracing::warn!(session_id = %session_id, query = %query, "terminal_search: session not found in vt_log_buffers");
-            Vec::new()
-        }
-    }
+) -> Result<Vec<crate::terminal_grid::SearchMatch>, String> {
+    let sid = session_id.clone();
+    let q = query.clone();
+    let found = vt_try_read(&state, session_id.clone(), move |buf| {
+        let is_alt = buf.is_alternate_screen();
+        let results = buf.grid_search(&q);
+        tracing::info!(
+            session_id = %sid,
+            query = %q,
+            is_alt_screen = is_alt,
+            result_count = results.len(),
+            history_size = buf.grid_history_size(),
+            screen_lines = buf.grid_screen_lines(),
+            "terminal_search"
+        );
+        results
+    })
+    .await?;
+    Ok(found.unwrap_or_else(|| {
+        tracing::warn!(session_id = %session_id, query = %query, "terminal_search: session not found in vt_log_buffers");
+        Vec::new()
+    }))
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_search_buffer(
+pub(crate) async fn terminal_search_buffer(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     query: String,
-) -> Vec<crate::terminal_grid::BufferSearchMatch> {
-    state
-        .vt_log_buffers
-        .get(&session_id)
-        .map(|vt| vt.lock().grid_search_buffer(&query))
-        .unwrap_or_default()
+) -> Result<Vec<crate::terminal_grid::BufferSearchMatch>, String> {
+    vt_read(&state, session_id, move |vt| vt.grid_search_buffer(&query)).await
 }
 
 // --- Row text command ---
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_get_row_text(
+pub(crate) async fn terminal_get_row_text(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     row: usize,
-) -> String {
-    state
-        .vt_log_buffers
-        .get(&session_id)
-        .map(|vt| vt.lock().grid_get_row_text(row))
-        .unwrap_or_default()
+) -> Result<String, String> {
+    vt_read(&state, session_id, move |vt| vt.grid_get_row_text(row)).await
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_get_logical_line(
+pub(crate) async fn terminal_get_logical_line(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     row: usize,
-) -> (usize, String) {
-    state
-        .vt_log_buffers
-        .get(&session_id)
-        .map(|vt| vt.lock().grid_get_logical_line(row))
-        .unwrap_or((row, String::new()))
+) -> Result<(usize, String), String> {
+    // Not `vt_read`: the fallback for a gone session is the requested row with
+    // no text, not row zero.
+    Ok(
+        vt_try_read(&state, session_id, move |vt| vt.grid_get_logical_line(row))
+            .await?
+            .unwrap_or((row, String::new())),
+    )
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_get_selection_text(
+pub(crate) async fn terminal_get_selection_text(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     start_row: usize,
     start_col: usize,
     end_row: usize,
     end_col: usize,
-) -> String {
-    state
-        .vt_log_buffers
-        .get(&session_id)
-        .map(|vt| {
-            vt.lock()
-                .grid_get_selection_text(start_row, start_col, end_row, end_col)
-        })
-        .unwrap_or_default()
+) -> Result<String, String> {
+    vt_read(&state, session_id, move |vt| {
+        vt.grid_get_selection_text(start_row, start_col, end_row, end_col)
+    })
+    .await
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_get_lines(
+pub(crate) async fn terminal_get_lines(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     start: usize,
     end: usize,
-) -> Vec<String> {
-    state
-        .vt_log_buffers
-        .get(&session_id)
-        .map(|vt| vt.lock().grid_get_lines(start, end))
-        .unwrap_or_default()
+) -> Result<Vec<String>, String> {
+    vt_read(&state, session_id, move |vt| vt.grid_get_lines(start, end)).await
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_get_cursor_line(
+pub(crate) async fn terminal_get_cursor_line(
     state: State<'_, Arc<AppState>>,
     session_id: String,
-) -> String {
-    state
-        .vt_log_buffers
-        .get(&session_id)
-        .map(|vt| vt.lock().grid_get_cursor_line())
-        .unwrap_or_default()
+) -> Result<String, String> {
+    vt_read(&state, session_id, |vt| vt.grid_get_cursor_line()).await
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_hyperlink_at(
+pub(crate) async fn terminal_hyperlink_at(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     row: usize,
     col: usize,
-) -> Option<String> {
-    state
-        .vt_log_buffers
-        .get(&session_id)
-        .and_then(|vt| vt.lock().grid_hyperlink_at(row, col))
+) -> Result<Option<String>, String> {
+    vt_read(&state, session_id, move |vt| vt.grid_hyperlink_at(row, col)).await
 }
 
 #[cfg(feature = "desktop")]
 #[tauri::command]
-pub(crate) fn terminal_hyperlink_span(
+pub(crate) async fn terminal_hyperlink_span(
     state: State<'_, Arc<AppState>>,
     session_id: String,
     row: usize,
     col: usize,
-) -> Option<(usize, usize, String)> {
-    state
-        .vt_log_buffers
-        .get(&session_id)
-        .and_then(|vt| vt.lock().grid_hyperlink_span(row, col))
+) -> Result<Option<(usize, usize, String)>, String> {
+    vt_read(&state, session_id, move |vt| {
+        vt.grid_hyperlink_span(row, col)
+    })
+    .await
 }
 
 #[cfg(feature = "desktop")]
