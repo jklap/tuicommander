@@ -285,10 +285,36 @@ impl CategoryEmitter {
     }
 }
 
+/// What kind of change a `repo-changed` reports.
+///
+/// The watcher already knows this — it debounces `.git/` writes and working-tree
+/// writes as separate categories — it just used to throw the answer away, so
+/// every consumer had to assume the worst. On a live repo the two are not close
+/// to balanced: a 4000-line log sample held 360 working-tree emits against 3
+/// git-state ones, so a panel that only reads committed history was re-running
+/// `git log` on ~99% of events that could not possibly have changed its answer.
+///
+/// A `GitState` emit cancels the pending `WorkingTree` one (`git add`, `git
+/// commit` and `git checkout` all write both), so `GitState` is not "only .git
+/// changed" — it is "at least .git changed". That asymmetry is why the coarse
+/// revision counter must keep bumping on both, and only the narrow one is
+/// git-state-gated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RepoChangeKind {
+    /// `.git/` changed: HEAD, refs, the index, worktree admin. Committed
+    /// history, branches and stashes may all differ.
+    GitState,
+    /// Only files in the working tree changed. Nothing that `git log` reads can
+    /// have moved.
+    WorkingTree,
+}
+
 /// Payload emitted when a repo's `.git/` directory changes in a meaningful way.
 #[derive(Clone, serde::Serialize)]
 pub(crate) struct RepoChangedPayload {
     pub repo_path: String,
+    pub kind: RepoChangeKind,
 }
 
 /// Payload emitted when a repo's HEAD changes (branch switch).
@@ -949,14 +975,22 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                     // the main checkout's fingerprint identical and the pending
                     // working-tree emit is then the ONLY one that will report it.
                     em.cancel(&EventCategory::WorkingTree);
+                    // GitState, not "only .git changed": the cancel above means a
+                    // `git add` or `git commit` that also touched the working tree
+                    // reports here and nowhere else. Consumers that need
+                    // working-tree news must therefore react to this kind too.
                     let _ = bus.send(AppEvent::RepoChanged {
                         repo_path: repo_path.clone(),
+                        kind: RepoChangeKind::GitState,
                     });
                     #[cfg(feature = "desktop")]
                     if let Some(ref handle) = h {
                         let _ = handle.emit(
                             "repo-changed",
-                            RepoChangedPayload { repo_path },
+                            RepoChangedPayload {
+                                repo_path,
+                                kind: RepoChangeKind::GitState,
+                            },
                         );
                     }
                 });
@@ -978,12 +1012,16 @@ pub(crate) fn start_watching(repo_path: &str, state: &Arc<AppState>) -> Result<(
                     st.invalidate_repo_caches(&repo_path);
                     let _ = bus.send(AppEvent::RepoChanged {
                         repo_path: repo_path.clone(),
+                        kind: RepoChangeKind::WorkingTree,
                     });
                     #[cfg(feature = "desktop")]
                     if let Some(ref handle) = h {
                         let _ = handle.emit(
                             "repo-changed",
-                            RepoChangedPayload { repo_path },
+                            RepoChangedPayload {
+                                repo_path,
+                                kind: RepoChangeKind::WorkingTree,
+                            },
                         );
                     }
                 });
@@ -1647,10 +1685,43 @@ mod tests {
     fn test_payload_serialization() {
         let payload = RepoChangedPayload {
             repo_path: "/home/user/my-repo".to_string(),
+            kind: RepoChangeKind::GitState,
         };
         let json = serde_json::to_string(&payload).expect("should serialize");
         assert!(json.contains("repo_path"));
         assert!(json.contains("/home/user/my-repo"));
+    }
+
+    /// The wire spelling is the contract the frontend narrows on, so it is
+    /// asserted rather than left to whatever `rename_all` happens to produce.
+    #[test]
+    fn a_change_kind_spells_itself_in_kebab_case() {
+        let git = serde_json::to_value(RepoChangeKind::GitState).unwrap();
+        let work = serde_json::to_value(RepoChangeKind::WorkingTree).unwrap();
+        assert_eq!(git, serde_json::json!("git-state"));
+        assert_eq!(work, serde_json::json!("working-tree"));
+    }
+
+    /// The desktop Tauri payload and the SSE payload are the SAME object for
+    /// the same event — the frontend store reads one field name on both
+    /// transports. A field added to one and not the other is the failure this
+    /// catches.
+    #[test]
+    fn the_tauri_payload_and_the_sse_payload_agree() {
+        for kind in [RepoChangeKind::GitState, RepoChangeKind::WorkingTree] {
+            let tauri = serde_json::to_value(RepoChangedPayload {
+                repo_path: "/repo".to_string(),
+                kind,
+            })
+            .unwrap();
+            let sse = crate::mcp_http::sse_routes::event_payload_for_test(
+                &crate::state::AppEvent::RepoChanged {
+                    repo_path: "/repo".to_string(),
+                    kind,
+                },
+            );
+            assert_eq!(tauri, sse, "transports disagree for {kind:?}");
+        }
     }
 
     // --- CategoryEmitter tests ---
@@ -2014,7 +2085,9 @@ mod tests {
         let waited = tokio::time::timeout(Duration::from_secs(20), async {
             loop {
                 match rx.recv().await {
-                    Ok(AppEvent::RepoChanged { repo_path: p }) if p == repo_path => return,
+                    Ok(AppEvent::RepoChanged { repo_path: p, kind }) if p == repo_path => {
+                        return kind;
+                    }
                     Ok(_) => continue,
                     Err(e) => panic!("event bus closed: {e}"),
                 }
@@ -2025,6 +2098,81 @@ mod tests {
             waited.is_ok(),
             "an edit inside the linked worktree must emit repo-changed for {repo_path}"
         );
+        // And it must say so. Reporting this as GitState would put the panels
+        // that only read committed history straight back to re-running `git log`
+        // for a file nobody committed, which is the whole finding.
+        assert_eq!(waited.unwrap(), RepoChangeKind::WorkingTree);
+
+        stop_watching(&repo_path, &state);
+    }
+
+    /// The other half of the same contract, and the one the narrowing depends on
+    /// being right: a commit writes `.git`, so it must report GitState. If this
+    /// ever came through as WorkingTree, the history panels would stop
+    /// refreshing on the one event that actually changes their answer — a
+    /// silent staleness far worse than the redundant fetch being removed.
+    ///
+    /// Note the commit also rewrites the working tree (git updates the index and
+    /// stat cache), which is exactly why the git-state emit cancels the pending
+    /// working-tree one: one logical change, one event, and it is this one.
+    #[tokio::test]
+    async fn a_commit_reports_git_state_not_working_tree() {
+        use std::process::Command;
+        let dir = tempfile::tempdir().unwrap();
+        // Canonicalize: on macOS the temp dir is `/var/...`, a symlink to
+        // `/private/var/...`, and FSEvents reports the resolved path. Watching
+        // the unresolved one makes `classify_path` strip_prefix fail for every
+        // event, so the whole repo reads as noise and nothing is ever emitted.
+        let repo = dir.path().canonicalize().unwrap().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        git(&["init", "-b", "main"]);
+        git(&["config", "user.email", "t@t.com"]);
+        git(&["config", "user.name", "T"]);
+        std::fs::write(repo.join("a.txt"), "hi\n").unwrap();
+        git(&["add", "a.txt"]);
+        git(&["commit", "-m", "init"]);
+
+        let state = Arc::new(crate::state::tests_support::make_test_app_state());
+        let repo_path = repo.to_string_lossy().to_string();
+        state.hot_repo_paths.write().insert(repo_path.clone());
+        let mut rx = state.event_bus.subscribe();
+        start_watching(&repo_path, &state).unwrap();
+        // Let the platform watcher arm before touching anything: FSEvents drops
+        // writes that land between the registration call and the stream opening,
+        // and this test makes exactly one burst of them.
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        std::fs::write(repo.join("b.txt"), "second\n").unwrap();
+        git(&["add", "b.txt"]);
+        git(&["commit", "-m", "second"]);
+
+        let kind = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                match rx.recv().await {
+                    Ok(AppEvent::RepoChanged { repo_path: p, kind }) if p == repo_path => {
+                        return kind;
+                    }
+                    Ok(_) => continue,
+                    Err(e) => panic!("event bus closed: {e}"),
+                }
+            }
+        })
+        .await
+        .expect("a commit must emit repo-changed");
+
+        assert_eq!(kind, RepoChangeKind::GitState);
 
         stop_watching(&repo_path, &state);
     }

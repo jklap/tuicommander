@@ -68,7 +68,21 @@ pub enum AppEvent {
     #[serde(rename = "head-changed")]
     HeadChanged { repo_path: String, branch: String },
     #[serde(rename = "repo-changed")]
-    RepoChanged { repo_path: String },
+    /// A repo changed on disk.
+    ///
+    /// CONTRACT for any new producer: call `invalidate_repo_caches` BEFORE
+    /// sending. The frontend no longer invokes `clear_repo_caches` on this
+    /// event (story 619-0685) precisely because every producer already does —
+    /// a producer that forgets ships stale panels with nothing red.
+    ///
+    /// DEFERRED (2026-08-18) — not enforced by a test. Enforcing it needs
+    /// either a single choke-point emit helper or a compile-time wrapper type;
+    /// with three producers, all audited, the indirection costs more than it
+    /// buys. Revisit when a fourth appears.
+    RepoChanged {
+        repo_path: String,
+        kind: crate::repo_watcher::RepoChangeKind,
+    },
     #[serde(rename = "session-created")]
     SessionCreated {
         session_id: String,

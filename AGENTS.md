@@ -82,6 +82,8 @@ Targets macOS, Windows, Linux. Use Cmd/Ctrl abstractions, Tauri cross-platform p
 
 Panels with repo-dependent data MUST use `repositoriesStore.getRevision(repoPath)` in `createEffect` — not file watchers or polling. `repo_watcher` emits `"repo-changed"` → `bumpRevision()`.
 
+**A panel that renders ONLY committed history** (commit log, file history, stashes) uses `getGitRevision(repoPath)` instead, so a plain file save no longer re-runs its git processes. The two counters are nested, not parallel: `bumpGitRevision` bumps **both**, and `getRevision` still moves on every event. `getRevision` is therefore always the safe default — a panel left on it cannot go stale, while a panel wrongly moved to `getGitRevision` silently misses working-tree changes. Move a panel only after checking every command it calls ignores uncommitted state.
+
 ## Architecture
 
 All business logic in Rust. Frontend only renders and handles interaction — no data reshaping, computation, or process orchestration.

@@ -592,6 +592,7 @@ mod tests {
             },
             AppEvent::RepoChanged {
                 repo_path: "/repo".to_string(),
+                kind: crate::repo_watcher::RepoChangeKind::WorkingTree,
             },
             AppEvent::PtyParsed {
                 session_id: "s1".to_string(),

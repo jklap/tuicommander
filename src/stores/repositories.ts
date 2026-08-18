@@ -75,6 +75,14 @@ interface RepositoriesStoreState {
 	activeRepoPath: string | null;
 	/** Per-repo monotonic revision counter, bumped by repo-changed events */
 	revisions: Record<string, number>;
+	/**
+	 * Narrower counter, bumped only by the `git-state` half of repo-changed
+	 * (`.git/` writes: commits, refs, index). Panels that read committed history
+	 * subscribe to this one so a plain file save no longer re-runs their git
+	 * processes. A strict subset of `revisions`, which still bumps on every
+	 * event — a panel left on `getRevision` therefore cannot go stale.
+	 */
+	gitRevisions: Record<string, number>;
 	groups: Record<string, RepoGroup>;
 	groupOrder: string[]; // display order of group IDs
 	/** True while a branch switch is in progress — TabBar holds previous tabs */
@@ -164,6 +172,7 @@ function createRepositoriesStore() {
 		repoOrder: [],
 		activeRepoPath: null,
 		revisions: {},
+		gitRevisions: {},
 		groups: {},
 		groupOrder: [],
 		branchSwitching: false,
@@ -302,6 +311,7 @@ function createRepositoriesStore() {
 				produce((s) => {
 					delete s.repositories[path];
 					delete s.revisions[path];
+					delete s.gitRevisions[path];
 					s.repoOrder = s.repoOrder.filter((p) => p !== path);
 					// Clean up group membership
 					for (const group of Object.values(s.groups)) {
@@ -751,6 +761,25 @@ function createRepositoriesStore() {
 		/** Get the current revision counter for a repo (reactive — tracks in effects) */
 		getRevision(repoPath: string): number {
 			return state.revisions[repoPath] ?? 0;
+		},
+
+		/**
+		 * Bump both counters for a git-state change. Never bump `gitRevisions`
+		 * alone: a commit changes what every panel shows, not just the ones
+		 * reading committed history.
+		 */
+		bumpGitRevision(repoPath: string): void {
+			setState(
+				produce((s) => {
+					s.revisions[repoPath] = (s.revisions[repoPath] ?? 0) + 1;
+					s.gitRevisions[repoPath] = (s.gitRevisions[repoPath] ?? 0) + 1;
+				}),
+			);
+		},
+
+		/** Get the current git-state revision counter for a repo (reactive) */
+		getGitRevision(repoPath: string): number {
+			return state.gitRevisions[repoPath] ?? 0;
 		},
 
 		/** Check if empty */

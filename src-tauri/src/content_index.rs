@@ -544,7 +544,10 @@ pub fn spawn_content_index_updater(state: Arc<crate::state::AppState>) {
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(crate::state::AppEvent::RepoChanged { repo_path }) => {
+                // Both kinds, deliberately: a `git checkout` is git-state and
+                // rewrites indexable files wholesale, so narrowing this to
+                // working-tree would leave the index describing the old branch.
+                Ok(crate::state::AppEvent::RepoChanged { repo_path, .. }) => {
                     // The in-memory cache, NOT `load_app_config()`: that holds the
                     // config mutex and a cross-process *file* lock across the whole
                     // read, and this arm runs on every RepoChanged — hundreds an
@@ -893,6 +896,7 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         let _ = state.event_bus.send(crate::state::AppEvent::RepoChanged {
             repo_path: repo_path.clone(),
+            kind: crate::repo_watcher::RepoChangeKind::WorkingTree,
         });
         tokio::time::sleep(Duration::from_millis(500)).await;
 

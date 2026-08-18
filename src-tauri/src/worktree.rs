@@ -701,10 +701,14 @@ pub(crate) async fn create_worktree(
                 let emit_repo_changed = || {
                     state_arc.invalidate_repo_caches(&config_bg.base_repo);
                     // Dual-emit: bus (SSE/PWA/remote) + Tauri window (desktop).
+                    // A new worktree is `.git/worktrees` admin plus a ref, so it is
+                    // git-state: the branch list and every panel reading committed
+                    // history has to re-read.
                     let _ = state_arc
                         .event_bus
                         .send(crate::state::AppEvent::RepoChanged {
                             repo_path: config_bg.base_repo.clone(),
+                            kind: crate::repo_watcher::RepoChangeKind::GitState,
                         });
                     // Clone the handle out of the lock so we don't hold the read
                     // guard across the (potentially blocking) emit call.
@@ -715,6 +719,7 @@ pub(crate) async fn create_worktree(
                             "repo-changed",
                             crate::repo_watcher::RepoChangedPayload {
                                 repo_path: config_bg.base_repo.clone(),
+                                kind: crate::repo_watcher::RepoChangeKind::GitState,
                             },
                         );
                     }

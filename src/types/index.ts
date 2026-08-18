@@ -241,3 +241,14 @@ export interface OrchestratorStats {
 	max_sessions: number;
 	available_slots: number;
 }
+
+/**
+ * Which half of a repo changed, as reported by `repo-changed`.
+ *
+ * `git-state` means `.git/` was written (commit, refs, index) — and, because
+ * the backend's git-state emit cancels the pending working-tree one, it also
+ * covers any working-tree write in the same change. `working-tree` therefore
+ * means "files changed and `.git` did not", which is what lets the committed-
+ * history panels skip the refresh.
+ */
+export type RepoChangeKind = "git-state" | "working-tree";
