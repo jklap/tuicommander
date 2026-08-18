@@ -596,7 +596,7 @@ mod tests {
             },
             AppEvent::PtyParsed {
                 session_id: "s1".to_string(),
-                parsed: serde_json::json!({ "type": "question" }),
+                parsed: serde_json::json!({ "type": "question" }).into(),
             },
         ] {
             assert!(

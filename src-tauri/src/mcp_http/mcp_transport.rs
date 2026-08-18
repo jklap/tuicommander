@@ -8858,7 +8858,7 @@ mod tests {
             .store(crate::pty::SHELL_IDLE, Ordering::Release);
         state.emit_pty_event(crate::state::AppEvent::PtyParsed {
             session_id: "event-session".to_string(),
-            parsed: serde_json::json!({"type": "shell-state", "state": "idle"}),
+            parsed: serde_json::json!({"type": "shell-state", "state": "idle"}).into(),
         });
 
         let response = waiter.await.unwrap();
