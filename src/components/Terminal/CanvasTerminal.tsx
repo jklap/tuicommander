@@ -12,6 +12,7 @@ import { ensureKeyboardViewportTracking, keyboardOcclusion } from "../../utils/k
 import { handleOpenUrl } from "../../utils/openUrl";
 import { isPerfDebug } from "../../utils/perfDebug";
 import { markPerf, noteFrameRequest } from "../../utils/perfTrace";
+import { applyPinchFontDelta } from "../../utils/terminalZoom";
 import { ContextMenu, createContextMenu } from "../ContextMenu/ContextMenu";
 import { createCanvasTerminalBindings } from "./canvasTerminalBindings";
 import { createCanvasLinkController } from "./canvasTerminalLinks";
@@ -2971,9 +2972,11 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				props.onFocus?.();
 			},
 			onFontSizeChange: (delta) => {
-				const cur = settingsStore.state.defaultFontSize;
-				const next = Math.round(cur + delta);
-				if (next !== cur) settingsStore.setDefaultFontSize(next);
+				// Per-terminal, like every keyboard/menu/palette zoom: the global
+				// default is persisted config, and the renderer reads the terminal's
+				// own size first, so writing the default changed everything except
+				// the terminal being pinched.
+				applyPinchFontDelta(props.terminalId, delta, settingsStore.state.defaultFontSize);
 			},
 			onSelectionMode: () => {
 				/* future: enter selection UI */

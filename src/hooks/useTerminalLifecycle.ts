@@ -15,10 +15,7 @@ import { getFocusedFrameSelection } from "../utils/focusedSelection";
 import { navigateToTerminal } from "../utils/navigateToTerminal";
 import { assignTabToActiveGroup } from "../utils/paneTabAssign";
 import { filterValidTerminals } from "../utils/terminalFilter";
-
-const MIN_FONT_SIZE = 8;
-const MAX_FONT_SIZE = 32;
-const FONT_STEP = 2;
+import { clampFontSize, FONT_STEP } from "../utils/terminalZoom";
 
 /** Dependencies injected into useTerminalLifecycle */
 export interface TerminalLifecycleDeps {
@@ -53,7 +50,7 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 	const setZoom = (fontSize: number) => {
 		const activeId = terminalsStore.state.activeId;
 		if (!activeId) return;
-		const clamped = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, fontSize));
+		const clamped = clampFontSize(fontSize);
 		terminalsStore.setFontSize(activeId, clamped);
 	};
 
@@ -64,7 +61,7 @@ export function useTerminalLifecycle(deps: TerminalLifecycleDeps) {
 	const setZoomAll = (getFontSize: (current: number) => number) => {
 		for (const id of terminalsStore.getIds()) {
 			const current = terminalsStore.state.terminals[id]?.fontSize ?? deps.getDefaultFontSize();
-			const clamped = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, getFontSize(current)));
+			const clamped = clampFontSize(getFontSize(current));
 			terminalsStore.setFontSize(id, clamped);
 		}
 	};
