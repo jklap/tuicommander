@@ -4482,8 +4482,8 @@ mod tests {
     fn test_ws_clients_cleanup() {
         // Verify the ws_clients DashMap operations work correctly
         let state = test_state();
-        let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let (tx2, _rx2) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (tx1, _rx1) = crate::state::new_ws_client_channel();
+        let (tx2, _rx2) = crate::state::new_ws_client_channel();
 
         // Add clients
         state
@@ -4507,8 +4507,8 @@ mod tests {
     fn test_ws_clients_retain_disconnected() {
         // Verify that retain removes closed channels
         let state = test_state();
-        let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let (tx2, rx2) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (tx1, _rx1) = crate::state::new_ws_client_channel();
+        let (tx2, rx2) = crate::state::new_ws_client_channel();
 
         state
             .ws_clients
@@ -4524,10 +4524,9 @@ mod tests {
         // Drop rx2 so tx2 is closed
         drop(rx2);
 
-        // Retain should remove the closed channel
-        if let Some(mut clients) = state.ws_clients.get_mut("sess") {
-            clients.retain(|tx| tx.send("test".to_string()).is_ok());
-        }
+        // Through the production fan-out, not a hand-rolled copy of it: the
+        // retain lives in one place now and this is what exercises it.
+        crate::state::broadcast_to_ws_clients(&state.ws_clients, "sess", "test");
 
         // Only tx1 should remain (its rx1 is still alive)
         assert_eq!(state.ws_clients.get("sess").unwrap().len(), 1);
@@ -4543,7 +4542,7 @@ mod tests {
 
         // Simulate 10 connect/disconnect cycles (mobile reconnects)
         for _ in 0..10 {
-            let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+            let (tx, rx) = crate::state::new_ws_client_channel();
             state
                 .ws_clients
                 .entry(session_id.clone())
@@ -4576,8 +4575,8 @@ mod tests {
         let state = test_state();
         let session_id = "mixed-session".to_string();
 
-        let (tx_live, _rx_live) = tokio::sync::mpsc::unbounded_channel::<String>();
-        let (tx_dead, rx_dead) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let (tx_live, _rx_live) = crate::state::new_ws_client_channel();
+        let (tx_dead, rx_dead) = crate::state::new_ws_client_channel();
 
         state
             .ws_clients

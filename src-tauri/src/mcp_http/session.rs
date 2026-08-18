@@ -1080,7 +1080,7 @@ async fn handle_ws_session(
     // lock when appending + broadcasting to ws_clients, so serializing the
     // two sides guarantees every byte is delivered either via catch-up or
     // via the live channel — never both (duplicate) nor neither (gap).
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let (tx, mut rx) = crate::state::new_ws_client_channel();
     let snapshot = state.output_buffers.get(&session_id).map(|ring| {
         let r = ring.lock();
         let snap = if let Some(off) = initial_offset {
