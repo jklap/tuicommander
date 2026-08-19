@@ -463,3 +463,10 @@ Backend change, so it needs a rebuilt binary: `make dev` does not hot-reload
 `src-tauri/**`. Everything else in the story is verified by test.
 
 - [ ] **[HUMAN]** From a rebuilt desktop app, have an agent call `ui action=toast` and click the toast — it must switch to that agent's tab. _(verified by test at the seams: the Rust bus event carries `origin_session_id` and the click focuses the matching terminal, `src/__tests__/components/ToastContainer.test.tsx`. What no test covers is the real IPC round trip through a live `AppHandle`, plus that the tab is genuinely the one on screen afterwards)_
+
+### Story `631-e618` — browser mode renders (closed as an artefact)
+
+Browser mode was verified working: a real headed browser at `:9877` sized every
+canvas to its container and painted a live PTY. One comparison was not possible.
+
+- [ ] **[VISUAL]** In browser mode, with a shell that has OSC 133 integration, check the gutter marks render at the same size as the desktop app. _(the probe shell had no shell integration, so there were no gutter marks on screen to compare. Rows, cursor, status bar and cwd all render — screenshot `/tmp/631-browser-mode.png`)_
