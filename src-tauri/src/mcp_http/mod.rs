@@ -2792,8 +2792,45 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(json["jsonrpc"], "2.0");
         assert_eq!(json["id"], 1);
-        assert_eq!(json["result"]["protocolVersion"], "2025-03-26");
+        assert_eq!(json["result"]["protocolVersion"], "2025-11-25");
         assert!(json["result"]["serverInfo"]["name"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_mcp_initialize_accepts_missing_and_present_protocol_header() {
+        let cases = [(None, "2025-03-26"), (Some("2025-11-25"), "2025-11-25")];
+        for (header_value, offered_version) in cases {
+            let state = test_state();
+            let app = build_router(state, false, true);
+            let body = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": offered_version,
+                    "capabilities": {},
+                    "clientInfo": { "name": "fx", "version": "0.0.3" }
+                }
+            });
+            let mut request = mcp_post("/mcp", &body);
+            if let Some(value) = header_value {
+                request.headers_mut().insert(
+                    "MCP-Protocol-Version",
+                    value.parse().expect("valid protocol header"),
+                );
+            }
+
+            let response = app.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK, "header={header_value:?}");
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(
+                json["result"]["protocolVersion"], "2025-11-25",
+                "header={header_value:?}"
+            );
+        }
     }
 
     #[tokio::test]

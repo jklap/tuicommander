@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use crate::cli::expand_tilde;
 
 const MIN_RESPAWN_INTERVAL: Duration = Duration::from_secs(5);
+const PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// How many stdout lines the reader may hold ahead of the caller, and how many
 /// bytes those lines may weigh in total.
@@ -495,7 +496,7 @@ impl StdioMcpClient {
         let init_resp = self.rpc(
             "initialize",
             serde_json::json!({
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {
                     "name": "tuicommander",
@@ -849,6 +850,38 @@ while IFS= read -r line; do
     esac
 done
 "#.to_string()
+    }
+
+    fn protocol_offer_probe_script() -> String {
+        r#"#!/bin/sh
+offered=wrong
+while IFS= read -r line; do
+    method=$(echo "$line" | sed 's/.*"method":"\([^\"]*\)".*/\1/')
+    id=$(echo "$line" | sed 's/.*"id":\([0-9]*\).*/\1/')
+    case "$method" in
+        initialize)
+            if echo "$line" | grep -q '"protocolVersion":"2025-11-25"'; then
+                offered=legacy
+            fi
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1.0"}}}\n' "$id"
+            ;;
+        notifications/initialized) ;;
+        tools/list)
+            printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"%s","description":"Protocol offer probe","inputSchema":{"type":"object"}}]}}\n' "$id" "$offered"
+            ;;
+    esac
+done
+"#.to_string()
+    }
+
+    #[test]
+    fn initialize_offers_legacy_protocol_revision_over_stdio() {
+        let config = make_config_for_echo_server(&protocol_offer_probe_script());
+        let mut client = StdioMcpClient::new(config);
+
+        let tools = client.spawn_and_initialize().unwrap();
+        assert_eq!(tools[0].original_name, "legacy");
+        client.shutdown();
     }
 
     #[test]

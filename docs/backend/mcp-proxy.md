@@ -14,7 +14,10 @@ VS Code ──────┘   (TUIC server)  ├──▶ Filesystem MCP (stdi
                                   └──▶ Custom MCP     (HTTP/stdio)
 ```
 
-The entry point for all MCP traffic is `POST /mcp` (Streamable HTTP transport, spec 2025-03-26). When a `tools/call` request arrives with a name containing `__`, the transport layer routes it to the upstream registry instead of the native tool handler.
+The entry point for all MCP traffic is `POST /mcp` (legacy Streamable HTTP
+transport, revision 2025-11-25). When a `tools/call` request arrives with a name
+containing `__`, the transport layer routes it to the upstream registry instead
+of the native tool handler.
 
 ## Module Layout
 
@@ -113,7 +116,7 @@ A background task (`spawn_health_checker`) runs every 60 seconds and probes all 
 
 ## HTTP Client (`http_client.rs`)
 
-Implements the MCP Streamable HTTP transport (spec 2025-03-26):
+Implements the legacy MCP Streamable HTTP transport (revision 2025-11-25):
 
 1. **`initialize()`** — Reads Bearer token from OS keyring (if any), sends `initialize` request, caches `mcp-session-id` header, sends `notifications/initialized` (fire-and-forget), fetches `tools/list`.
 2. **`call_tool(name, args)`** — Sends `tools/call` with the cached session ID and auth token.
@@ -121,7 +124,9 @@ Implements the MCP Streamable HTTP transport (spec 2025-03-26):
 4. **`health_check()`** — Pings via `tools/list`. Used by the background health checker.
 5. **`shutdown()`** — Sends `DELETE /mcp` with the session ID to cleanly terminate the upstream session.
 
-The User-Agent header is set to `tuicommander-mcp-proxy/{version}`.
+The User-Agent header is set to `tuicommander-mcp-proxy/{version}`. Every POST
+also carries `MCP-Protocol-Version: 2025-11-25`; the stdio client offers the
+same revision during initialization.
 
 ### OAuth Refresh Failure → Re-Authorization
 

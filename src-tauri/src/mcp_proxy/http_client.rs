@@ -1,6 +1,6 @@
 //! HTTP MCP client — connects to an upstream MCP server via Streamable HTTP.
 //!
-//! Implements the MCP client side of the Streamable HTTP transport (spec 2025-03-26):
+//! Implements the MCP client side of the legacy Streamable HTTP transport (spec 2025-11-25):
 //! - initialize handshake → caches session_id and tool list
 //! - tools/call forwarding with session_id header
 //! - auto-reconnect on session expiry (400) or connection error
@@ -20,7 +20,8 @@ use std::time::Duration;
 use tokio::sync::OnceCell;
 
 const MCP_SESSION_HEADER: &str = "mcp-session-id";
-const PROTOCOL_VERSION: &str = "2025-03-26";
+const MCP_PROTOCOL_VERSION_HEADER: &str = "MCP-Protocol-Version";
+const PROTOCOL_VERSION: &str = "2025-11-25";
 
 // ---------------------------------------------------------------------------
 // UpstreamError — typed errors so the registry can distinguish OAuth failures
@@ -519,6 +520,7 @@ impl HttpMcpClient {
                 reqwest::header::ACCEPT,
                 "application/json, text/event-stream",
             )
+            .header(MCP_PROTOCOL_VERSION_HEADER, PROTOCOL_VERSION)
             .json(body);
         if let Some(sid) = session_id {
             req = req.header(MCP_SESSION_HEADER, sid);
@@ -675,6 +677,8 @@ mod tests {
         /// Bearer token seen on the most recent request, so a test can assert
         /// *which* credential the client actually put on the wire.
         seen_bearer: Arc<std::sync::Mutex<Option<String>>>,
+        /// MCP protocol revision seen on the most recent request.
+        seen_protocol_version: Arc<std::sync::Mutex<Option<String>>>,
         /// When set, any bearer other than this one is answered with a 401 +
         /// challenge — models a server that has expired the old access token.
         only_accept_bearer: Arc<std::sync::Mutex<Option<String>>>,
@@ -715,6 +719,10 @@ mod tests {
             .and_then(|v| v.strip_prefix("Bearer "))
             .map(str::to_string);
         *state.seen_bearer.lock().unwrap() = bearer.clone();
+        *state.seen_protocol_version.lock().unwrap() = headers
+            .get(MCP_PROTOCOL_VERSION_HEADER)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
 
         let expected = state.only_accept_bearer.lock().unwrap().clone();
         if let Some(expected) = expected
@@ -859,6 +867,20 @@ mod tests {
         assert!(client.is_connected());
         assert_eq!(client.session_id.as_deref(), Some("test-session-id-123"));
         assert_eq!(tools.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn initialize_sends_legacy_protocol_version_header() {
+        let state = MockState::default();
+        let url = spawn_mock_server(state.clone()).await;
+
+        let mut client = HttpMcpClient::new("test".to_string(), url, 10, false);
+        client.initialize().await.unwrap();
+
+        assert_eq!(
+            state.seen_protocol_version.lock().unwrap().as_deref(),
+            Some(PROTOCOL_VERSION)
+        );
     }
 
     #[tokio::test]

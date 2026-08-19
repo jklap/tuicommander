@@ -21,6 +21,7 @@ static TUIC_SESSION_ENV: LazyLock<Option<String>> =
     LazyLock::new(|| std::env::var("TUIC_SESSION").ok().filter(|s| !s.is_empty()));
 
 const MCP_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const LEGACY_PROTOCOL_VERSION: &str = "2025-11-25";
 const MCP_WAIT_DEFAULT_MS: u64 = 60_000;
 const MCP_WAIT_MAX_MS: u64 = 300_000;
 /// Bounded transport overhead beyond the server-side wait. This covers HTTP
@@ -243,6 +244,34 @@ fn tuic_session_header_line(tuic_session: Option<&str>) -> String {
     }
 }
 
+/// Project the protocol version carried by a stdio request into the HTTP
+/// transport header. Only the MCP date-revision grammar is reflected so an
+/// untrusted downstream string can never inject another header.
+fn request_protocol_version(body: &str) -> String {
+    let parsed = serde_json::from_str::<Value>(body).ok();
+    let candidate = parsed
+        .as_ref()
+        .and_then(|request| {
+            request
+                .pointer("/params/_meta/io.modelcontextprotocol~1protocolVersion")
+                .or_else(|| request.pointer("/params/protocolVersion"))
+        })
+        .and_then(Value::as_str);
+    candidate
+        .filter(|version| {
+            version.len() == 10
+                && version.bytes().enumerate().all(|(index, byte)| {
+                    if matches!(index, 4 | 7) {
+                        byte == b'-'
+                    } else {
+                        byte.is_ascii_digit()
+                    }
+                })
+        })
+        .unwrap_or(LEGACY_PROTOCOL_VERSION)
+        .to_string()
+}
+
 // ---------------------------------------------------------------------------
 // JSON-RPC helpers
 // ---------------------------------------------------------------------------
@@ -284,7 +313,8 @@ async fn post_mcp(
     let mut stream = connect_ipc().await?;
 
     let mut headers = format!(
-        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+        "POST /mcp HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\nMCP-Protocol-Version: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
+        request_protocol_version(body),
         body.len()
     );
     if let Some(sid) = session_id {
@@ -372,7 +402,7 @@ async fn server_initialize() -> Result<(String, String), String> {
     let init_body = serde_json::json!({
         "jsonrpc": "2.0", "id": 0,
         "method": "initialize",
-        "params": { "protocolVersion": "2025-03-26", "capabilities": {}, "clientInfo": { "name": "tuic-bridge", "version": env!("CARGO_PKG_VERSION") } }
+        "params": { "protocolVersion": LEGACY_PROTOCOL_VERSION, "capabilities": {}, "clientInfo": { "name": "tuic-bridge", "version": env!("CARGO_PKG_VERSION") } }
     });
     let (body, sid) = post_mcp(&serde_json::to_string(&init_body).unwrap(), None).await?;
     let sid = sid.ok_or_else(|| "server did not return mcp-session-id".to_string())?;
@@ -656,7 +686,7 @@ async fn handle_initialize(state: &Arc<BridgeState>, line: String, id: Value) {
         serde_json::json!({
             "jsonrpc": "2.0", "id": id,
             "result": {
-                "protocolVersion": "2025-03-26",
+                "protocolVersion": LEGACY_PROTOCOL_VERSION,
                 "capabilities": { "tools": { "listChanged": true } },
                 "serverInfo": { "name": "tuicommander", "version": env!("CARGO_PKG_VERSION") }
             }
@@ -804,7 +834,8 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::{
-        BridgeState, dispatch_loop, read_http_response, response_timeout, tuic_session_header_line,
+        BridgeState, dispatch_loop, read_http_response, request_protocol_version, response_timeout,
+        tuic_session_header_line,
     };
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1070,6 +1101,29 @@ mod tests {
     fn header_absent_without_session() {
         assert_eq!(tuic_session_header_line(None), "");
         assert_eq!(tuic_session_header_line(Some("")), "");
+    }
+
+    #[test]
+    fn request_protocol_version_projects_modern_meta_legacy_and_fallback() {
+        let modern =
+            r#"{"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}"#;
+        assert_eq!(request_protocol_version(modern), "2026-07-28");
+
+        let legacy = r#"{"params":{"protocolVersion":"2025-11-25"}}"#;
+        assert_eq!(request_protocol_version(legacy), "2025-11-25");
+        assert_eq!(request_protocol_version("{}"), "2025-11-25");
+        assert_eq!(request_protocol_version("not json"), "2025-11-25");
+    }
+
+    #[test]
+    fn request_protocol_version_rejects_header_injection_and_bad_revisions() {
+        let injected = r#"{"params":{"protocolVersion":"2025-11-25\r\nX-Evil: true"}}"#;
+        let result = request_protocol_version(injected);
+        assert_eq!(result, "2025-11-25");
+        assert!(!result.contains(['\r', '\n', ':']));
+
+        let bad = r#"{"params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"latest"},"protocolVersion":"also-not-a-date"}}"#;
+        assert_eq!(request_protocol_version(bad), "2025-11-25");
     }
 
     #[test]

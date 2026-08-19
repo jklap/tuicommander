@@ -4981,11 +4981,13 @@ fn handle_notify(
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// Streamable HTTP transport (MCP spec 2025-03-26)
+// Streamable HTTP transport (legacy MCP spec 2025-11-25)
 // Single /mcp endpoint — POST for JSON-RPC, GET for SSE notifications, DELETE ends session
 // ---------------------------------------------------------------------------
 
 const MCP_SESSION_HEADER: &str = "mcp-session-id";
+const SUPPORTED_PROTOCOL_VERSIONS: [&str; 3] = ["2026-07-28", "2025-11-25", "2025-03-26"];
+const LEGACY_PROTOCOL_VERSION: &str = SUPPORTED_PROTOCOL_VERSIONS[1];
 
 /// Resolve a filesystem path to one of the known repo roots, picking the longest
 /// matching prefix that respects path-component boundaries (so `/foo/bar` does
@@ -5072,7 +5074,7 @@ pub(super) async fn mcp_post(
                 "jsonrpc": "2.0",
                 "id": id,
                 "result": {
-                    "protocolVersion": "2025-03-26",
+                    "protocolVersion": LEGACY_PROTOCOL_VERSION,
                     "capabilities": {
                         "tools": {},
                         "experimental": { "claude/channel": {} }
