@@ -660,22 +660,44 @@ instance so nothing was perturbed.
 
 | Quantity | Original scan | Now | How |
 |---|---|---|---|
-| Sessions | 9 | **25** | `GET :9876/sessions`, counted; it read 20 twenty minutes earlier, so this number moves during a working day |
-| Registered repos | — | **39** (1 path no longer on disk) | `repos` array in `repositories.json` |
+| Sessions | 9 (F30/F28), 12 (F131) | **25** | `GET :9876/sessions`; it read 20 twenty minutes earlier and 26 later, so this number moves during a working day |
+| Registered repos | 29 (F85/F86), 38 (F129) | **39** registered, 38 on disk, **30 watchers actually started** | `repos` and `repoOrder` in `repositories.json`, both 39; the missing path matches a `Failed to watch working tree` warning |
 | Tracked files across those repos | — | **21 145** | `git ls-files` per repo, summed; largest are `itview` 5 448, `wiz-agents` 3 826, `agent2` 2 036, `tuicommander` 1 832 |
-| App-log rate, idle | — | **0.13 lines/s** | 180 entries spanning 1 413.7 s on `:9877` with one session |
-| Cold start → HTTP listening | — | **594 ms** | `/tmp/tuic9877.log`: credential store 0 ms → bridge configs 105 ms → knowledge cap 394 ms → Tailscale 411 ms → repo watcher 559 ms → HTTP lifecycle 592 ms → unix socket 592.5 ms → **TCP bind 593.6 ms** → upstream auto-connect 622.6 ms |
-| Watcher emit suppression | — | **0** | `head_emits_suppressed=0` in all 46 `HEALTH` snapshots over ~23 min — no filesystem-event storm (issue #82 quiet) |
-| Idle process cost | — | **cpu 0.4-0.5%, 83-84 threads, 37-40 fds** | `HEALTH` snapshots, one session. The 97.4% seen once was the startup content-index build, gone within a minute |
-| Build-artifact scan | — | **44.65 s, 228.86 GiB over 39 repos** | timed `POST /api/plugins/build-cleaner/build-artifacts/scan` with `forceRefresh:true` |
-| Knowledge corpus | — | **1 802 sessions skipped at a cap of 40**; newest 500 hold 1 469 commands / 45 errors | `/tmp/tuic9877.log` startup line; `POST /ai/knowledge/sessions {"limit":500}` |
+| App-log rate | — | **10.36 lines/s during boot, 0.082 lines/s at steady idle** | `GET :9877/logs?limit=5000`, split at `content index pre-warm complete`; rate = (n-1)/span from `timestamp_ms` |
+| Cold start → HTTP listening | — | **593.6 ms** | `/tmp/tuic9877.log`: credential store 0 → agent-MCP scan 105.4 → knowledge load 393.9 → Tailscale 410.9 → first repo watcher 559.1 → TLS 590.7 → **TCP bind 593.6** → upstream dispatch 626.2 |
+| Cold start → fully warm | — | **7 436 ms** | same log: last repo watcher 1 566 ms, last upstream ready 1 852 ms, **content-index pre-warm 7 436 ms**. The content-index tail alone is 5 584 ms — 75 % of warm time; everything else finishes inside 1.9 s |
+| Watcher emit suppression | — | **0/min, under quiescence only** | `head_emits_suppressed` delta 0 over 240.6 s (9 `HEALTH` snapshots). Read this as a floor, not an all-clear — see the caveat below |
+| Idle process cost | — | **cpu 0.4-0.5 %, 83-84 threads, 37-40 fds**; `git_cache_ttl_fallbacks` 23.9/min | `HEALTH` snapshots. The 97.4 % seen once was the startup content-index build, gone within a minute |
+| Bridge traffic | 19 bridges, 6.3 connects/s | **27 bridges, 9.0 connects/s** (+42 %) | `pgrep -af tuic-bridge` = 27 live, 24 distinct parents; the 3 s reconnect loop is unchanged at `tuic-bridge/src/main.rs:773`, still a fresh `connect_ipc()` per tick, so 27 ÷ 3 = 9.0/s. F60's mechanism is intact |
+| Mobile polling | — | **20 polls/min per client, 14 619 B/poll at 25 sessions ≈ 4.9 KB/s** | `POLL_INTERVAL_MS = 3_000` (`src/mobile/useSessions.ts:64`, used `:132`); `curl :9876/sessions \| wc -c` = 14 619 at 25 sessions, 587 at 2. Per-session cost is flat (~585 B) — the payload grew only because the session count did |
+| Stored-outcome composition | 94.0 % inferred of 8 093 across 1 918 files | **92.94 % inferred** — 6 278 inferred / 310 success / 167 error = 6 755 across 1 847 files (9.6 MB) | parsed on `classification.kind` in `ai-sessions`. Magnitude holds |
+| Build-artifact scan | 164 512 files (F129) | **44.65 s wall, 228.86 GiB, 39 entries**; **406 567 files across 38 repos (+147 %)** | the timing is a real `POST /api/plugins/build-cleaner/build-artifacts/scan` with `forceRefresh:true`; the file count is a Python replication of `walk_artifacts` (`plugin_fs.rs:881-945`). Top: `tuicommander` 195 372 (was 61 764), `LS/agent2` 84 671 (absent from the old list), `SpeechMaster` 42 000 |
+| Knowledge corpus | 1 904-file load (F6) | **1 802 sessions skipped at a cap of 40**; newest 500 hold 1 469 commands / 45 errors | `/tmp/tuic9877.log` startup line; `POST /ai/knowledge/sessions {"limit":500}`. F6's unbounded startup load is gone |
 
-The artifact-scan number is the one worth keeping: **44.65 s of filesystem walk**
-is what the Build Cleaner poll used to spend every hour whether or not anyone was
-looking, which is what story 617-fa7d gated on panel visibility.
+The artifact-scan number is the one worth keeping: **44.65 s of filesystem walk
+over 406 567 candidate files** is what the Build Cleaner poll used to spend every
+hour whether or not anyone was looking, which is what story 617-fa7d gated on
+panel visibility. Note the two artifact figures measure different things — 44.65 s
+is the real Rust scan through HTTP, the 406 567 is a Python replication of the
+same walk rules and its own 16 s runtime is Python cost, not `walk_artifacts`
+cost. Do not compare it to chunk-9's "5.5 s warm", which never records what tool
+produced it.
 
-Not measured: **bridge traffic**, because `tuic-bridge` traffic only exists while
-an agent MCP session is live and the test instance deliberately ran no agent.
+Three caveats that limit these numbers, stated because each one could be misread
+as stronger than it is:
+
+- **The watcher figure is a floor, not an all-clear.** Zero suppressed emits was
+  measured on an idle instance with no repo mutation in the window. It proves the
+  suppressor is quiet under quiescence; it does **not** re-measure the
+  `repeat_count: 12` storm behind issue #82, which needs real repo churn.
+- **39 repos registered but only 30 watchers started** is a 9-repo gap this pass
+  surfaced and did not chase. One repo is explained (its path is gone); the other
+  eight are not.
+- **F119's wording is wrong in a way that would break a fix.** It ties the empty
+  `command` field to *inferred* outcomes. On disk **6 755 of 6 755 (100 %)** have
+  an empty command — including all 310 success and all 167 error records. A fix
+  that filters on `kind == inferred` would leave 477 equally-empty records behind.
+  Whether that is a schema-v2 property or a wider defect was not chased.
 
 ### Estimates: retired or measured
 
@@ -691,9 +713,12 @@ gone — a retired estimate is a *zero*, not an unknown.
 | **F10** 4 MB / 400 ticks re-parsed | **retired** | `ContentRenderer` has an incremental path: committed segments are parsed once and cached, a tick costs the tail alone (`ContentRenderer.tsx:249-275`) |
 | **F20** 7-9 MB/s of decimal-array JSON | **retired** | The channel is `Channel<tauri::ipc::Response>` (`pty.rs:10030`), the raw-bytes path. The `Vec<u8>` → `serde_json::to_string` blanket impl is no longer reached |
 | **F22** 260 KB/s into an unbounded `rowCache` | **retired → bounded** | `ROW_CACHE_MAX = 6000` with eviction (`canvasTerminalScroll.ts:9`, `:109-113`). Growth is capped, not merely slower |
-| **F28** ticker wakeups | **measured, still open** | The thread is unchanged: an unconditional `sleep(TICK)` with `TICK = 16 ms` per session (`pty.rs:7220`, `:7245`), no condvar and no subscriber check. At the 25 sessions now live that is **≈1 560 wakeups/s at complete idle**, up from the ~560/s the original scan derived at 9 sessions. This is one of the five parked under 602-11ce |
+| **F28** ticker wakeups | **split verdict, still open** | The thread is unchanged: an unconditional `sleep(TICK)` with `TICK = 16 ms` per session (`pty.rs:7220`, `:7245`), no condvar and no subscriber check. The scan's "~560 wakeups/s" was never a measurement — it is 9 × 62.5, arithmetic from the constant. The same arithmetic today gives ≈1 560/s at 25 sessions. What *was* measured is process-wide context switches, the closest observable proxy: 282.3 csw/s on an idle 2-session instance, 3 632 csw/s on the 25-session live one, a slope of ≈147 csw/s per session — above the 62.5 ticker floor, consistent with the finding's own note that reader and silence-timer threads add on top. A discrete ticker-attributed wakeup count is **not** obtainable: macOS exposes no unprivileged per-thread wakeup counter (`powermetrics --show-process-wakeups` needs root) and `top`'s IDLEW is the wrong counter — it moved 0.2/s, because a thread in a tight 16 ms sleep never re-enters deep idle. One of the five parked under 602-11ce |
 
-Mobile polling was also retired rather than measured: there is no `setInterval`
-left in `src/mobile/`, the stream is gated on page visibility
-(`src/mobile/utils/pageVisibility.ts`) and two regression tests cover it
-(`visibilityInterval.test.ts`, `outputViewVisibility.test.tsx`).
+**Correction — mobile polling was NOT retired.** An earlier pass of this document
+claimed there was no `setInterval` left in `src/mobile/`. That was wrong: the grep
+behind it did not recurse, and missed `src/mobile/utils/visibilityInterval.ts:18`.
+The poll is alive at `POLL_INTERVAL_MS = 3_000` (`useSessions.ts:64`, used `:132`).
+What the visibility gate does is **pause it while the page is hidden**, not
+eliminate it — a visible client still costs 20 polls/min. The measured figures are
+in the table above.
