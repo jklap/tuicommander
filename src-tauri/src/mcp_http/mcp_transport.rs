@@ -4697,12 +4697,21 @@ fn handle_workspace(state: &Arc<AppState>, args: &serde_json::Value) -> serde_js
     }
 }
 
+/// The TUIC session behind an MCP call, when the caller is bound to a PTY.
+/// `None` for an unbound caller — never guess one, a wrong id would send a
+/// toast click to somebody else's terminal.
+fn resolve_mcp_origin_session(
+    state: &Arc<AppState>,
+    mcp_session_id: Option<&str>,
+) -> Option<String> {
+    mcp_session_id.and_then(|mcp_sid| state.mcp_to_session.get(mcp_sid).map(|s| s.value().clone()))
+}
+
 fn resolve_mcp_origin_repo_path(
     state: &Arc<AppState>,
     mcp_session_id: Option<&str>,
 ) -> Option<String> {
-    let caller_tuic = mcp_session_id
-        .and_then(|mcp_sid| state.mcp_to_session.get(mcp_sid).map(|s| s.value().clone()));
+    let caller_tuic = resolve_mcp_origin_session(state, mcp_session_id);
     caller_tuic
         .as_ref()
         .and_then(|tuic| {
@@ -4894,6 +4903,7 @@ fn handle_notify(
                 Err(e) => return e,
             };
             let origin_repo_path = resolve_mcp_origin_repo_path(state, mcp_session_id);
+            let origin_session_id = resolve_mcp_origin_session(state, mcp_session_id);
             // Dual-emit. The bus only reaches SSE clients (browser/PWA); the
             // desktop WebView listens on the Tauri bridge and there is no
             // bus→window forwarder, so a bus-only send made this tool a no-op on
@@ -4909,6 +4919,7 @@ fn handle_notify(
                         "level": level,
                         "sound": sound,
                         "origin_repo_path": origin_repo_path,
+                        "origin_session_id": origin_session_id,
                     }),
                 );
             }
@@ -4918,6 +4929,7 @@ fn handle_notify(
                 level,
                 sound,
                 origin_repo_path,
+                origin_session_id,
             });
             serde_json::json!({"ok": true})
         }
@@ -11094,6 +11106,73 @@ mod tests {
                 origin_repo_path.as_deref(),
                 Some("/Gits/personal/tuicommander")
             ),
+            other => panic!("expected McpToast, got {other:?}"),
+        }
+    }
+
+    /// The repo path alone cannot navigate: several tabs share a repo. Clicking
+    /// the toast has to land on the exact terminal that raised it, so the event
+    /// carries the caller's TUIC session id too.
+    #[tokio::test]
+    async fn ui_toast_includes_origin_session_id_from_peer_agent() {
+        use crate::state::PeerAgent;
+        let state = test_state();
+        let mcp_sid = "mcp-toast-origin-session".to_string();
+        let tuic = "00000000-0000-0000-0000-000000000004".to_string();
+        state.mcp_to_session.insert(mcp_sid.clone(), tuic.clone());
+        state.peer_agents.insert(
+            tuic.clone(),
+            PeerAgent {
+                tuic_session: tuic.clone(),
+                mcp_session_id: mcp_sid.clone(),
+                name: "codex".to_string(),
+                project: Some("/Gits/personal/tuicommander".to_string()),
+                registered_at: 0,
+            },
+        );
+
+        let mut rx = state.event_bus.subscribe();
+        let result = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "ui",
+            &serde_json::json!({
+                "action": "toast",
+                "title": "done",
+            }),
+            Some(&mcp_sid),
+        )
+        .await;
+        assert_eq!(result["ok"], true);
+
+        match rx.try_recv().expect("McpToast on the bus") {
+            crate::state::AppEvent::McpToast {
+                origin_session_id, ..
+            } => assert_eq!(origin_session_id.as_deref(), Some(tuic.as_str())),
+            other => panic!("expected McpToast, got {other:?}"),
+        }
+    }
+
+    /// An unbound caller (no PTY behind the MCP session) must not invent one:
+    /// a wrong id would send the click to somebody else's terminal.
+    #[tokio::test]
+    async fn ui_toast_omits_origin_session_id_for_unbound_caller() {
+        let state = test_state();
+        let mut rx = state.event_bus.subscribe();
+        let result = handle_mcp_tool_call(
+            &state,
+            loopback_addr(),
+            "ui",
+            &serde_json::json!({ "action": "toast", "title": "done" }),
+            Some("mcp-toast-unbound"),
+        )
+        .await;
+        assert_eq!(result["ok"], true);
+
+        match rx.try_recv().expect("McpToast on the bus") {
+            crate::state::AppEvent::McpToast {
+                origin_session_id, ..
+            } => assert_eq!(origin_session_id, None),
             other => panic!("expected McpToast, got {other:?}"),
         }
     }

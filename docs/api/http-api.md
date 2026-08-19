@@ -357,7 +357,7 @@ the server is back to the filter the connection was opened with.
 | `plugin-watcher-lines` | `{session_id, lines}` | A batch of assembled PTY lines for the plugin OutputWatchers; each line is `{text, matched_ids}`, where `text` is the cleaned text the match was made on |
 | `plugin-changed` | `{plugin_ids}` | Plugin(s) installed/removed/updated |
 | `upstream-status-changed` | `{name, status}` | MCP upstream server status change |
-| `mcp-toast` | `{title, message, level, sound, origin_repo_path?}` | Toast notification from MCP layer, including the caller repository/cwd when known |
+| `mcp-toast` | `{title, message, level, sound, origin_repo_path?, origin_session_id?}` | Toast notification from MCP layer, including the caller repository/cwd and the caller's TUIC session when known. Clients use the session id to focus the terminal that raised the toast |
 | `triage-progress` | `{repo_path, summary, files, phase, done, llm_used, llm_model}` | Diff-triage classification progress (browser parity for the desktop window event) |
 | `lagged` | `{missed}` | Client fell behind; N events were dropped |
 

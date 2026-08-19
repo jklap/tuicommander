@@ -1356,6 +1356,7 @@ describe("initApp", () => {
 			level: string;
 			sound: string | null;
 			origin_repo_path?: string;
+			origin_session_id?: string;
 		};
 
 		function captureMcpToast() {
@@ -1384,7 +1385,16 @@ describe("initApp", () => {
 			expect(play).toHaveBeenCalledWith("attention");
 			// The toast store's own level-keyed tone would play a second, different
 			// sound over the buzzer and would ignore the user's volume/device/mutes.
-			expect(addToast).toHaveBeenCalledWith("need you", "which branch?", "warn", false);
+			expect(addToast).toHaveBeenCalledWith(
+				"need you",
+				"which branch?",
+				"warn",
+				false,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+			);
 			play.mockRestore();
 			addToast.mockRestore();
 		});
@@ -1416,9 +1426,12 @@ describe("initApp", () => {
 					level: "info",
 					sound: null,
 					origin_repo_path: "/Gits/personal/tuicommander/src-tauri",
+					origin_session_id: "sess-abc",
 				},
 			});
 
+			// The session id rides along with the repo path: the repo scopes the
+			// toast, the session is what a click on it navigates to.
 			expect(addToast).toHaveBeenCalledWith(
 				"Release published",
 				"tuicommander · v1.7.4",
@@ -1427,6 +1440,7 @@ describe("initApp", () => {
 				undefined,
 				undefined,
 				"/Gits/personal/tuicommander",
+				"sess-abc",
 			);
 			addToast.mockRestore();
 		});
