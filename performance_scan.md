@@ -630,3 +630,70 @@ oversight.
 - F129 is verdicted FIXED against the build-cleaner poll gate from story
   617-fa7d, which currently lives **uncommitted** in the `plugins` submodule.
   Re-check it once that submodule is committed.
+
+## Owed reproductions, performed (2026-08-19)
+
+Run against a **post-fix debug build** (binary 2026-08-19 01:48, later than every
+Perf 1-17 commit) started as a second instance on `:9877`, so Boss's live app was
+never touched. This discharges the "reproductions still owed" list above.
+
+| Finding | Verdict | Evidence |
+|---|---|---|
+| **F11** | no longer holds | The dead registry still returns an empty snapshot, but the frontend consumer that applied it after `loadConversation` is gone — `AIChatPanel.tsx:302-314` awaits `loadConversation` only and carries an explicit "No registry subscription here". Driven end to end on a self-created throwaway conversation: 9 conversations / 24 messages before, registry snapshot `messages:0`, 8 / 22 after wipe, `leftover_controls:0`. The empty snapshot can no longer wipe loaded history. |
+| **F4** | retired by the fix | The second desktop listener is gone; `Terminal.tsx:678-684` documents why none may be added back. Guarded by `src/__tests__/components/Terminal/osc133SingleConsumer.test.ts`, a source scan that fails if any second `pty-osc133` subscription appears anywhere in `src/`. The "~50% phantom blocks" estimate is retired rather than measured — with one consumer the phantom block cannot be produced. |
+| **F90** | P1 claim no longer holds | `onMouseMove` now early-returns on `hidden` (`CanvasTerminal.tsx:2740`) and then tests `isPointerInsideRect` before any `writePtyNoScroll`, so no SGR report reaches a PTY the pointer never touched. Residual, unfixed: the four `document`-level listeners per instance (`:2812-2813`, `:2938-2939`) still bind, so N terminals still run 2N early-returning handlers per `mousemove`. Cheap, bounded, no IPC. |
+| **F120** | narrowed, one real residual | Blanket claim false: `fs_read_file`/write/create/delete/copy/move and both editor reads are `async fn` + `spawn_blocking_fs` (`fs.rs:20-27`, `lib.rs:744-748`, `:783-785`). **Still true for `fs_transfer_paths`** (`fs.rs:1624`) — a sync command running `copy_dir_recursive` on the macOS main thread; already carrying a `DEFERRED (2026-08-18)` note because it is the drag-drop backend and D&D needs Boss's approval. Thread evidence on the live pid: `ps -M` = 86 threads, diagnostics `threads=85` at the adjacent instant; `sample` recorded 99 thread blocks and ties WebKit IPC to the app main thread (`com.apple.main-thread` → `WebProcessProxy::didReceiveMessage` → `wry::wkwebview::…url_scheme_handler::start_task` → `tauri::webview::Webview::on_message`), plus `JavaScriptCore libpas scavenger`, `WebCore: Scrolling`, two `CVDisplayLink` threads. |
+| **F129** | no longer holds | The unconditional hourly walk is gone: `plugins/build-cleaner/main.js:662-665` stops any prior timer, returns when `!panelVisible`, and only then installs the interval; `setPanelVisible` (`:669-671`) is the sole demand signal; `onload` (`:736-740`) does one seeding scan and starts no timer. Verified the *loaded* plugin is that source, not a stale copy: the installed path is a symlink into this working tree and both `main.js` files hash to `6530af6b137c9cc4e1b194f4b52ba168fbdb68ecc0f80f9628cbd88aceff920e`. Still uncommitted in the submodule — the caveat above stands. |
+
+Honest limits of this pass: F120's drag-drop path was not exercised, because HTTP
+cannot drive the trusted Tauri drag-drop surface, so the residual is established
+from source plus thread evidence rather than from a freeze reproduction. F129 has
+no scan counter to read and the instance had been up under an hour, so the
+absence of an hourly firing is proved from the loaded timer gate, not from
+runtime observation.
+
+## Live counts, re-measured (2026-08-19)
+
+Same post-fix build and second instance as above. Live counts come from Boss's
+running app on `:9876` (read-only `GET`), idle/cost figures from the `:9877`
+instance so nothing was perturbed.
+
+| Quantity | Original scan | Now | How |
+|---|---|---|---|
+| Sessions | 9 | **25** | `GET :9876/sessions`, counted; it read 20 twenty minutes earlier, so this number moves during a working day |
+| Registered repos | — | **39** (1 path no longer on disk) | `repos` array in `repositories.json` |
+| Tracked files across those repos | — | **21 145** | `git ls-files` per repo, summed; largest are `itview` 5 448, `wiz-agents` 3 826, `agent2` 2 036, `tuicommander` 1 832 |
+| App-log rate, idle | — | **0.13 lines/s** | 180 entries spanning 1 413.7 s on `:9877` with one session |
+| Cold start → HTTP listening | — | **594 ms** | `/tmp/tuic9877.log`: credential store 0 ms → bridge configs 105 ms → knowledge cap 394 ms → Tailscale 411 ms → repo watcher 559 ms → HTTP lifecycle 592 ms → unix socket 592.5 ms → **TCP bind 593.6 ms** → upstream auto-connect 622.6 ms |
+| Watcher emit suppression | — | **0** | `head_emits_suppressed=0` in all 46 `HEALTH` snapshots over ~23 min — no filesystem-event storm (issue #82 quiet) |
+| Idle process cost | — | **cpu 0.4-0.5%, 83-84 threads, 37-40 fds** | `HEALTH` snapshots, one session. The 97.4% seen once was the startup content-index build, gone within a minute |
+| Build-artifact scan | — | **44.65 s, 228.86 GiB over 39 repos** | timed `POST /api/plugins/build-cleaner/build-artifacts/scan` with `forceRefresh:true` |
+| Knowledge corpus | — | **1 802 sessions skipped at a cap of 40**; newest 500 hold 1 469 commands / 45 errors | `/tmp/tuic9877.log` startup line; `POST /ai/knowledge/sessions {"limit":500}` |
+
+The artifact-scan number is the one worth keeping: **44.65 s of filesystem walk**
+is what the Build Cleaner poll used to spend every hour whether or not anyone was
+looking, which is what story 617-fa7d gated on panel visibility.
+
+Not measured: **bridge traffic**, because `tuic-bridge` traffic only exists while
+an agent MCP session is live and the test instance deliberately ran no agent.
+
+### Estimates: retired or measured
+
+Criterion 3 asked for each code-derived estimate to be replaced by a measurement
+or explicitly retired. Six are retired because the code that produced them is
+gone — a retired estimate is a *zero*, not an unknown.
+
+| Estimate | Outcome | Basis |
+|---|---|---|
+| **F2** 640 KB/s of `pty-output` JSON | **retired → 0** | The Rust emit is deleted and no listener remains; `transport.ts:2341` documents it and `__tests__/transport.test.ts:2056` asserts no `pty-output` handler exists. No payload, no cost |
+| **F4** ~50 % phantom blocks | **retired** | One consumer only; `osc133SingleConsumer.test.ts` fails if a second subscription reappears. The duplicate that produced the 50 % cannot occur |
+| **F8** few hundred bytes per closed session | **retired → 0** | All six `DashMap`s now have a removal site: `slash_mode`, `last_input_ms`, `marker_stats`, `has_osc133_integration`, `session_visibility`, `ai_suggestions_enabled` |
+| **F10** 4 MB / 400 ticks re-parsed | **retired** | `ContentRenderer` has an incremental path: committed segments are parsed once and cached, a tick costs the tail alone (`ContentRenderer.tsx:249-275`) |
+| **F20** 7-9 MB/s of decimal-array JSON | **retired** | The channel is `Channel<tauri::ipc::Response>` (`pty.rs:10030`), the raw-bytes path. The `Vec<u8>` → `serde_json::to_string` blanket impl is no longer reached |
+| **F22** 260 KB/s into an unbounded `rowCache` | **retired → bounded** | `ROW_CACHE_MAX = 6000` with eviction (`canvasTerminalScroll.ts:9`, `:109-113`). Growth is capped, not merely slower |
+| **F28** ticker wakeups | **measured, still open** | The thread is unchanged: an unconditional `sleep(TICK)` with `TICK = 16 ms` per session (`pty.rs:7220`, `:7245`), no condvar and no subscriber check. At the 25 sessions now live that is **≈1 560 wakeups/s at complete idle**, up from the ~560/s the original scan derived at 9 sessions. This is one of the five parked under 602-11ce |
+
+Mobile polling was also retired rather than measured: there is no `setInterval`
+left in `src/mobile/`, the stream is gated on page visibility
+(`src/mobile/utils/pageVisibility.ts`) and two regression tests cover it
+(`visibilityInterval.test.ts`, `outputViewVisibility.test.tsx`).
