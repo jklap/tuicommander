@@ -57,4 +57,36 @@ describe("plugin fs-change event name", () => {
 		// biome-ignore lint/suspicious/noTemplateCurlyInString: the literal source text is the assertion
 		expect(tsSource).not.toContain("`plugin-fs-change-${pluginId}`");
 	});
+
+	/**
+	 * The assertions above only prove a correctly-built name exists *somewhere* in
+	 * each file. That still passes if the correct construction is dead and the
+	 * live emit/listen uses a different one, so these pin the name to the call
+	 * site that consumes it, and pin the id it interpolates to a fresh uuid.
+	 *
+	 * A source scan cannot prove dataflow; it can only make drift loud. What is
+	 * left uncovered is a deliberate alias (`let watch_id = plugin_id;`), which no
+	 * regex short of a parser will catch.
+	 */
+	describe("the name that is built is the name that is used", () => {
+		it("binds the watch id to a fresh uuid, once", () => {
+			expect(rustSource).toContain("let watch_id = uuid::Uuid::new_v4().to_string();");
+			expect(rustSource.match(/let watch_id\s*=/g)).toHaveLength(1);
+			expect(tsSource.match(/const watchId\s*=/g)).toHaveLength(1);
+			expect(tsSource).toContain('const watchId = await invoke<string>("plugin_watch_path"');
+		});
+
+		it("carries the built name through to the Rust emit", () => {
+			// One binding, handed to the debounce loop, emitted verbatim — so the
+			// format! above is the string a listener actually receives.
+			expect(rustSource.match(/let event_name\s*=/g)).toHaveLength(1);
+			expect(rustSource).toContain("debounce_loop(rx, debounce, &event_name, &app_handle)");
+			expect(rustSource).toContain("app.emit(event_name, changes)");
+		});
+
+		it("carries the built name through to the TypeScript listen", () => {
+			expect(tsSource.match(/const eventName\s*=/g)).toHaveLength(1);
+			expect(tsSource).toContain("listen<FsChangeEvent[]>(eventName,");
+		});
+	});
 });

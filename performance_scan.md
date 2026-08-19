@@ -637,13 +637,20 @@ Run against a **post-fix debug build** (binary 2026-08-19 01:48, later than ever
 Perf 1-17 commit) started as a second instance on `:9877`, so Boss's live app was
 never touched. This discharges the "reproductions still owed" list above.
 
+**Line numbers in the 2026-08-19 sections cite the working tree as it stood when
+each measurement was taken, not clean `HEAD`.** The tree carried unrelated
+in-flight work at the time, so several citations sit a few lines off a clean
+checkout — `pty.rs`, `state.rs`, `mcp_transport.rs`, `tuic-bridge/src/main.rs`
+and `src/mobile/useSessions.ts` are each shifted. Trust the symbol names over the
+numbers; re-resolve before quoting a line elsewhere.
+
 | Finding | Verdict | Evidence |
 |---|---|---|
 | **F11** | no longer holds | The dead registry still returns an empty snapshot, but the frontend consumer that applied it after `loadConversation` is gone — `AIChatPanel.tsx:302-314` awaits `loadConversation` only and carries an explicit "No registry subscription here". Driven end to end on a self-created throwaway conversation: 9 conversations / 24 messages before, registry snapshot `messages:0`, 8 / 22 after wipe, `leftover_controls:0`. The empty snapshot can no longer wipe loaded history. |
 | **F4** | retired by the fix | The second desktop listener is gone; `Terminal.tsx:678-684` documents why none may be added back. Guarded by `src/__tests__/components/Terminal/osc133SingleConsumer.test.ts`, a source scan that fails if any second `pty-osc133` subscription appears anywhere in `src/`. The "~50% phantom blocks" estimate is retired rather than measured — with one consumer the phantom block cannot be produced. |
 | **F90** | P1 claim no longer holds | `onMouseMove` now early-returns on `hidden` (`CanvasTerminal.tsx:2740`) and then tests `isPointerInsideRect` before any `writePtyNoScroll`, so no SGR report reaches a PTY the pointer never touched. Residual, unfixed: the four `document`-level listeners per instance (`:2812-2813`, `:2938-2939`) still bind, so N terminals still run 2N early-returning handlers per `mousemove`. Cheap, bounded, no IPC. |
-| **F120** | narrowed, one real residual | Blanket claim false: `fs_read_file`/write/create/delete/copy/move and both editor reads are `async fn` + `spawn_blocking_fs` (`fs.rs:20-27`, `lib.rs:744-748`, `:783-785`). **Still true for `fs_transfer_paths`** (`fs.rs:1624`) — a sync command running `copy_dir_recursive` on the macOS main thread; already carrying a `DEFERRED (2026-08-18)` note because it is the drag-drop backend and D&D needs Boss's approval. Thread evidence on the live pid: `ps -M` = 86 threads, diagnostics `threads=85` at the adjacent instant; `sample` recorded 99 thread blocks and ties WebKit IPC to the app main thread (`com.apple.main-thread` → `WebProcessProxy::didReceiveMessage` → `wry::wkwebview::…url_scheme_handler::start_task` → `tauri::webview::Webview::on_message`), plus `JavaScriptCore libpas scavenger`, `WebCore: Scrolling`, two `CVDisplayLink` threads. |
-| **F129** | no longer holds | The unconditional hourly walk is gone: `plugins/build-cleaner/main.js:662-665` stops any prior timer, returns when `!panelVisible`, and only then installs the interval; `setPanelVisible` (`:669-671`) is the sole demand signal; `onload` (`:736-740`) does one seeding scan and starts no timer. Verified the *loaded* plugin is that source, not a stale copy: the installed path is a symlink into this working tree and both `main.js` files hash to `6530af6b137c9cc4e1b194f4b52ba168fbdb68ecc0f80f9628cbd88aceff920e`. Still uncommitted in the submodule — the caveat above stands. |
+| **F120** | narrowed, one real residual | Blanket claim false: `fs_read_file`/write/create/delete/copy/move and both editor reads are `async fn` + `spawn_blocking_fs` (the shared `spawn_blocking_fs` helper is `fs.rs:20-27`; the commands themselves are `fs.rs:1334` onward, `lib.rs:744-748`, `:783-785`). **Still true for `fs_transfer_paths`** (`fs.rs:1624`) — a sync command running `copy_dir_recursive` on the macOS main thread; already carrying a `DEFERRED (2026-08-18)` note because it is the drag-drop backend and D&D needs Boss's approval. Thread evidence on the live pid: `ps -M` = 86 threads, diagnostics `threads=85` at the adjacent instant; `sample` recorded 99 thread blocks and ties WebKit IPC to the app main thread (`com.apple.main-thread` → `WebProcessProxy::didReceiveMessage` → `wry::wkwebview::…url_scheme_handler::start_task` → `tauri::webview::Webview::on_message`), plus `JavaScriptCore libpas scavenger`, `WebCore: Scrolling`, two `CVDisplayLink` threads. |
+| **F129** | narrowed in the loaded build; **unfixed at committed HEAD** | The *recurring closed-panel* walk is gone from the build that is running: `plugins/build-cleaner/main.js:662-665` stops any prior timer, returns when `!panelVisible`, and only then installs the interval; `setPanelVisible` (`:669-671`) is the sole demand signal. Verified the loaded plugin is that source, not a stale copy: the installed path is a symlink into this working tree and both `main.js` files hash to `6530af6b137c9cc4e1b194f4b52ba168fbdb68ecc0f80f9628cbd88aceff920e`. **Three things the verdict must not be read to cover.** (1) `onload` still runs one `poll()` at startup (`:740`) and `openDashboard` still runs a full `scan` on every open (`:541`), so the 44.65 s walk is merely demand-driven, not eliminated. (2) The no-ignore traversal is untouched. (3) The fix exists **only in the dirty submodule working tree**: HEAD records gitlink `d09540f7`, where `startPollTimer` is an unconditional `setInterval(poll, config.pollIntervalMs)` with no visibility check. Anyone building from a clean checkout still gets the original finding. The submodule is Boss's to commit. |
 
 Honest limits of this pass: F120's drag-drop path was not exercised, because HTTP
 cannot drive the trusted Tauri drag-drop surface, so the residual is established
@@ -667,21 +674,35 @@ instance so nothing was perturbed.
 | Cold start → HTTP listening | — | **593.6 ms** | `/tmp/tuic9877.log`: credential store 0 → agent-MCP scan 105.4 → knowledge load 393.9 → Tailscale 410.9 → first repo watcher 559.1 → TLS 590.7 → **TCP bind 593.6** → upstream dispatch 626.2 |
 | Cold start → fully warm | — | **7 436 ms** | same log: last repo watcher 1 566 ms, last upstream ready 1 852 ms, **content-index pre-warm 7 436 ms**. The content-index tail alone is 5 584 ms — 75 % of warm time; everything else finishes inside 1.9 s |
 | Watcher emit suppression | — | **0/min, under quiescence only** | `head_emits_suppressed` delta 0 over 240.6 s (9 `HEALTH` snapshots). Read this as a floor, not an all-clear — see the caveat below |
-| Idle process cost | — | **cpu 0.4-0.5 %, 83-84 threads, 37-40 fds**; `git_cache_ttl_fallbacks` 23.9/min | `HEALTH` snapshots. The 97.4 % seen once was the startup content-index build, gone within a minute |
+| Idle process cost | — | **cpu 0.4-0.5 %, 83-84 threads, 37-40 fds**; `git_cache_ttl_fallbacks` 23.9/min **over the first nine snapshots only** | `HEALTH` snapshots. The fallback rate is not steady: 0→96 across 240.6 s gives 23.9/min, but the same counter over the whole capture gives 17.4/min, and over a second capture 7.2/min. Quote it with its window or not at all. The 97.4 % seen once was the startup content-index build, gone within a minute |
 | Bridge traffic | 19 bridges, 6.3 connects/s | **27 bridges, 9.0 connects/s** (+42 %) | `pgrep -af tuic-bridge` = 27 live, 24 distinct parents; the 3 s reconnect loop is unchanged at `tuic-bridge/src/main.rs:773`, still a fresh `connect_ipc()` per tick, so 27 ÷ 3 = 9.0/s. F60's mechanism is intact |
-| Mobile polling | — | **20 polls/min per client, 14 619 B/poll at 25 sessions ≈ 4.9 KB/s** | `POLL_INTERVAL_MS = 3_000` (`src/mobile/useSessions.ts:64`, used `:132`); `curl :9876/sessions \| wc -c` = 14 619 at 25 sessions, 587 at 2. Per-session cost is flat (~585 B) — the payload grew only because the session count did |
+| Mobile polling | — | **20 polls/min per client, 14 619 B/poll at 25 sessions ≈ 4.9 KB/s** | `POLL_INTERVAL_MS = 3_000` (`src/mobile/useSessions.ts:64`, used `:132`); `curl :9876/sessions \| wc -c` = 14 619 at 25 sessions, 587 at 2. Per-session cost is **not** flat: 584.8 B at 25 sessions against 293.5 B at 2, so the payload grows faster than the session count |
 | Stored-outcome composition | 94.0 % inferred of 8 093 across 1 918 files | **92.94 % inferred** — 6 278 inferred / 310 success / 167 error = 6 755 across 1 847 files (9.6 MB) | parsed on `classification.kind` in `ai-sessions`. Magnitude holds |
-| Build-artifact scan | 164 512 files (F129) | **44.65 s wall, 228.86 GiB, 39 entries**; **406 567 files across 38 repos (+147 %)** | the timing is a real `POST /api/plugins/build-cleaner/build-artifacts/scan` with `forceRefresh:true`; the file count is a Python replication of `walk_artifacts` (`plugin_fs.rs:881-945`). Top: `tuicommander` 195 372 (was 61 764), `LS/agent2` 84 671 (absent from the old list), `SpeechMaster` 42 000 |
+| Build-artifact scan | 164 512 files (F129) | **44.65 s wall, 228.86 GiB, 39 entries**; **406 567 files across 38 repos (+147 %)** | the timing is a real `POST /api/plugins/build-cleaner/build-artifacts/scan` with `forceRefresh:true`. The file count is **not** a replication of the Rust walk — it is a broader name-only census (see the caveat below). Top: `tuicommander` 195 372 (was 61 764), `LS/agent2` 84 671 (absent from the old list), `SpeechMaster` 42 000 |
 | Knowledge corpus | 1 904-file load (F6) | **1 802 sessions skipped at a cap of 40**; newest 500 hold 1 469 commands / 45 errors | `/tmp/tuic9877.log` startup line; `POST /ai/knowledge/sessions {"limit":500}`. F6's unbounded startup load is gone |
 
-The artifact-scan number is the one worth keeping: **44.65 s of filesystem walk
-over 406 567 candidate files** is what the Build Cleaner poll used to spend every
-hour whether or not anyone was looking, which is what story 617-fa7d gated on
-panel visibility. Note the two artifact figures measure different things — 44.65 s
-is the real Rust scan through HTTP, the 406 567 is a Python replication of the
-same walk rules and its own 16 s runtime is Python cost, not `walk_artifacts`
-cost. Do not compare it to chunk-9's "5.5 s warm", which never records what tool
-produced it.
+The artifact-scan number worth keeping is the timing: **44.65 s of filesystem
+walk** is what the Build Cleaner poll used to spend every hour whether or not
+anyone was looking, which is what story 617-fa7d gated on panel visibility. Do
+not compare it to chunk-9's "5.5 s warm", which never records what tool produced
+it.
+
+**Do not read "44.65 s over 406 567 candidate files" as one measurement.** The
+two figures come from different walks and are not composable:
+
+- 44.65 s is the real Rust scan driven through HTTP.
+- 406 567 is a *separate* Python census that matches on **directory name alone**.
+  `walk_artifacts` (`plugin_fs.rs:1393-1420`) additionally requires a sibling
+  marker before it accepts `target`/`bin`/`obj`/`build`/`cmake-build`/`.build`/
+  `Pods`/`vendor`, and descends through unmarked candidates; it counts through
+  `measure_sizes`, which caps at depth 64 and takes regular files only
+  (`:1306-1350`). The Python has no such cap, uses the opposite depth convention
+  (so it admits one level more), and picks roots differently. It is therefore an
+  **upper bound on a looser rule**, not the Rust walk's file count. Its own 16 s
+  runtime is Python cost, unrelated to `walk_artifacts`.
+
+The rule table cited elsewhere as `plugin_fs.rs:881-945` is `ARTIFACT_RULES`, not
+the walker.
 
 Three caveats that limit these numbers, stated because each one could be misread
 as stronger than it is:
@@ -709,11 +730,11 @@ gone — a retired estimate is a *zero*, not an unknown.
 |---|---|---|
 | **F2** 640 KB/s of `pty-output` JSON | **retired → 0** | The Rust emit is deleted and no listener remains; `transport.ts:2341` documents it and `__tests__/transport.test.ts:2056` asserts no `pty-output` handler exists. No payload, no cost |
 | **F4** ~50 % phantom blocks | **retired** | One consumer only; `osc133SingleConsumer.test.ts` fails if a second subscription reappears. The duplicate that produced the 50 % cannot occur |
-| **F8** few hundred bytes per closed session | **retired → 0** | All six `DashMap`s now have a removal site: `slash_mode`, `last_input_ms`, `marker_stats`, `has_osc133_integration`, `session_visibility`, `ai_suggestions_enabled` |
-| **F10** 4 MB / 400 ticks re-parsed | **retired** | `ContentRenderer` has an incremental path: committed segments are parsed once and cached, a tick costs the tail alone (`ContentRenderer.tsx:249-275`) |
+| **F8** few hundred bytes per closed session | **unbounded leak retired → eventually 0** | All six `DashMap`s now have a removal site. Not literally zero at close, though: `slash_mode`/`last_input_ms`/`has_osc133` go immediately (`pty.rs:5557-5559`), but `marker_stats`/`session_visibility`/`ai_suggestions_enabled` are post-mortem state (`:5615-5617`) that a *normal* exit tombstones (`:6815`) for `TOMBSTONE_TTL_MS` = 5 min before the 30 s sweeper reaps it (`:6857-6877`). An explicit close full-cleans (`:5637-5646`). Bounded by a TTL, not retained |
+| **F10** 4 MB / 400 ticks re-parsed | **narrowed, not retired — still unmeasured** | The incremental path exists, but it disables itself: `splitStream` returns `committed: []` and `tail = whole source` for any document containing a reference definition (`incrementalMarkdown.ts:228-234`), so `ContentRenderer` re-renders the full document every tick (`ContentRenderer.tsx:287-289`). `hasReferenceDefinition` (`:136-148`) is a cheap regex first, so the fast path holds for the common document — but the finding's worst case is exactly the document that has one. `parseTweakComments` also runs over the full source on every content change (`ContentRenderer.tsx:296`). No tick cost was measured either way |
 | **F20** 7-9 MB/s of decimal-array JSON | **retired** | The channel is `Channel<tauri::ipc::Response>` (`pty.rs:10030`), the raw-bytes path. The `Vec<u8>` → `serde_json::to_string` blanket impl is no longer reached |
 | **F22** 260 KB/s into an unbounded `rowCache` | **retired → bounded** | `ROW_CACHE_MAX = 6000` with eviction (`canvasTerminalScroll.ts:9`, `:109-113`). Growth is capped, not merely slower |
-| **F28** ticker wakeups | **split verdict, still open** | The thread is unchanged: an unconditional `sleep(TICK)` with `TICK = 16 ms` per session (`pty.rs:7220`, `:7245`), no condvar and no subscriber check. The scan's "~560 wakeups/s" was never a measurement — it is 9 × 62.5, arithmetic from the constant. The same arithmetic today gives ≈1 560/s at 25 sessions. What *was* measured is process-wide context switches, the closest observable proxy: 282.3 csw/s on an idle 2-session instance, 3 632 csw/s on the 25-session live one, a slope of ≈147 csw/s per session — above the 62.5 ticker floor, consistent with the finding's own note that reader and silence-timer threads add on top. A discrete ticker-attributed wakeup count is **not** obtainable: macOS exposes no unprivileged per-thread wakeup counter (`powermetrics --show-process-wakeups` needs root) and `top`'s IDLEW is the wrong counter — it moved 0.2/s, because a thread in a tight 16 ms sleep never re-enters deep idle. One of the five parked under 602-11ce |
+| **F28** ticker wakeups | **split verdict, still open** | The thread is unchanged: an unconditional `sleep(TICK)` with `TICK = 16 ms` per session (`pty.rs:7220`, sleep at `:7246`), no condvar and no subscriber check. The scan's "~560 wakeups/s" was never a measurement — it is 9 × 62.5, arithmetic from the constant. The same arithmetic today gives ≈1 560/s at 25 sessions. What *was* measured is process-wide context switches, the closest observable proxy: 282.3 csw/s on an idle 2-session instance, 3 632 csw/s on the 25-session live one, a slope of ≈146 csw/s per session — above the 62.5 ticker floor, consistent with the finding's own note that reader and silence-timer threads add on top. A discrete ticker-attributed wakeup count is **not** obtainable: macOS exposes no unprivileged per-thread wakeup counter (`powermetrics --show-process-wakeups` needs root) and `top`'s IDLEW is the wrong counter — it moved 0.2/s, because a thread in a tight 16 ms sleep never re-enters deep idle. One of the five parked under 602-11ce |
 
 **Correction — mobile polling was NOT retired.** An earlier pass of this document
 claimed there was no `setInterval` left in `src/mobile/`. That was wrong: the grep
