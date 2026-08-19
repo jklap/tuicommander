@@ -155,13 +155,20 @@ These events are available on the SSE `/events` stream used by the mobile PWA an
 
 ### Streamable HTTP (`POST /mcp`)
 
-MCP Streamable HTTP transport (spec 2025-03-26):
+MCP Streamable HTTP transport using the legacy 2025-11-25 revision:
 
 ```
 Client ──POST──> /mcp   (JSON-RPC request, response in body)
 Client ──GET───> /mcp   (SSE stream for server notifications, requires Mcp-Session-Id header)
 Client ──DELETE─> /mcp  (end session, pass Mcp-Session-Id header)
 ```
+
+`initialize` returns `2025-11-25`. A missing `MCP-Protocol-Version` request
+header remains accepted for older clients; `tuic-bridge` supplies the version
+carried by each proxied stdio request and falls back to `2025-11-25` when the
+request carries none. Modern `2026-07-28` `server/discover` remains outside
+this legacy endpoint and returns JSON-RPC method-not-found as documented in the
+dual-era migration plan.
 
 **`tools/call` does not require `Mcp-Session-Id`.** Identity is resolved per call
 rather than demanded up front. A caller that sends the header gets its protocol
