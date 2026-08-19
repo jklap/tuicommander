@@ -5,7 +5,7 @@
 
 ## Overview
 
-TUICommander is a multi-agent terminal orchestrator designed to manage multiple AI coding agents (Claude Code, Gemini CLI, OpenCode, Aider, Codex) in parallel. It provides per-pane zoom, git worktree isolation, and GitHub integration.
+TUICommander is a multi-agent terminal orchestrator designed to manage supported AI coding agents, including Claude Code, Gemini CLI, OpenCode, Aider, Codex, and fx, in parallel. It provides per-pane zoom, git worktree isolation, and GitHub integration.
 
 ## Goals
 
@@ -185,7 +185,7 @@ See `src/hooks/` for full signatures — the above is a representative summary.
 ## Agent Types
 
 ```typescript
-type AgentType = "claude" | "gemini" | "opencode" | "aider" | "codex" | "amp" | "cursor" | "goose" | "droid" | "git" | "api";
+type AgentType = "claude" | "gemini" | "opencode" | "aider" | "codex" | "amp" | "cursor" | "goose" | "grok" | "droid" | "pi" | "fx" | "git" | "api";
 ```
 
 Full agent configuration (binary, resume command, session discovery, detection patterns) lives in `src/agents.ts`.
@@ -293,7 +293,7 @@ Some frontend-only stores persist to localStorage:
 ## Feature Status
 
 ### Completed (P1)
-- [x] Multi-agent support (Claude, Gemini, OpenCode, Aider, Codex)
+- [x] Multi-agent support through the canonical `AgentType` registry
 - [x] Git worktree management per task
 - [x] Agent spawning integration
 - [x] SolidJS migration
@@ -349,7 +349,7 @@ Some frontend-only stores persist to localStorage:
 - [x] Claude Usage Dashboard (native SolidJS component with API polling, session analytics, usage timeline)
 - [x] ConfirmDialog component (in-app dark-themed replacement for native OS dialogs)
 - [x] Status bar unified agent badge with priority cascade (rate limit > usage API > PTY usage > name)
-- [x] Movement-based PTY agent activity detection ("text above the input area moves = active") with explicit-hook precedence, prompt-based Ready screens, Codex presence-based Working policy, Grok spinner/composer disambiguation, interrupt confirmation, and confirmed-idle safety gates
+- [x] Movement-based PTY agent activity detection ("text above the input area moves = active") with explicit-hook precedence, prompt-based Ready screens, Codex presence-based Working policy, Grok and fx activity/composer disambiguation, interrupt confirmation, and confirmed-idle safety gates
 - [x] PR lifecycle filtering (CLOSED hidden, MERGED hidden after 5min user activity)
 - [x] Notes/Ideas: mark as used, badge count in status bar
 - [x] Notes/Ideas: image paste support (Ctrl+V), thumbnails, send absolute paths to terminal
@@ -392,7 +392,7 @@ Some frontend-only stores persist to localStorage:
 
 ### Agent Configuration (Done)
 - [x] Settings > Agents tab with per-agent run configurations
-- [x] MCP bridge install/remove for supported agents (Claude, Cursor, Windsurf, VS Code, Zed, Amp, Gemini)
+- [x] MCP bridge install/remove for every MCP-capable agent in the canonical registry
 - [x] Terminal context menu > Agents submenu with run configs
 - [x] Agent binary detection and version display
 - [x] agents.json persistence for run configurations

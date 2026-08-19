@@ -12,6 +12,7 @@
 //! | gemini | `~/.gemini/tmp/<hash>/chats/session-*.json` | JSON `sessionId` field |
 //! | codex  | `~/.codex/sessions/YYYY/MM/DD/rollout-*-<UUID>.jsonl` | UUID in filename |
 //! | goose  | SQLite `~/Library/Application Support/Block/goose/sessions/sessions.db` | name field (TUIC_SESSION) |
+//! | fx     | `~/.fx/sessions/<id>/session.json`        | directory name    |
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -29,11 +30,11 @@ const SESSION_MAX_AGE: Duration = Duration::from_secs(300);
 /// unclaimed session, or `None` if none can be found.
 ///
 /// # Parameters
-/// - `agent_type`: one of `"claude"`, `"gemini"`, `"codex"`, `"goose"`, `"grok"`
+/// - `agent_type`: one of `"claude"`, `"gemini"`, `"codex"`, `"goose"`, `"grok"`, `"fx"`
 /// - `cwd`: the terminal's working directory (used to compute project-scoped paths)
 /// - `claimed_ids`: session IDs already assigned to other terminals — excluded from results
 /// - `agent_pid`: PID of the running agent process. When provided, env vars that affect
-///   session storage paths (`CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME`, `CODEX_HOME`) are read
+///   session storage paths (`CLAUDE_CONFIG_DIR`, `GEMINI_CLI_HOME`, `CODEX_HOME`, `HOME`) are read
 ///   directly from the process's initial environment — the ground-truth source.
 /// - `env_overrides`: fallback env overrides from the TUIC run config. Only used for keys
 ///   NOT found in the process env (i.e. process env takes precedence).
@@ -66,6 +67,7 @@ pub(crate) fn discover_agent_session(
         // Shell wrapper injects --name $TUIC_SESSION for deterministic binding.
         "goose" => None,
         "grok" => discover_grok_session(&cwd, &claimed_ids),
+        "fx" => discover_fx_session(&cwd, &claimed_ids, env.get("HOME").map(String::as_str)),
         _ => None,
     }
 }
@@ -94,6 +96,7 @@ const AGENT_ENV_VARS: &[(&str, &[&str])] = &[
     ("gemini", &["GEMINI_CLI_HOME"]),
     ("codex", &["CODEX_HOME"]),
     ("opencode", &["OPENCODE_DATA_DIR"]),
+    ("fx", &["HOME"]),
 ];
 
 /// Read session-relevant env vars from a running agent process.
@@ -477,6 +480,7 @@ pub(crate) fn verify_agent_session(
         "codex" => verify_codex_session(&session_id, env.get("CODEX_HOME").map(|s| s.as_str())),
         "goose" => verify_goose_session(),
         "grok" => verify_grok_session(&session_id, &cwd),
+        "fx" => verify_fx_session(&session_id, &cwd, env.get("HOME").map(String::as_str)),
         _ => false,
     }
 }
@@ -634,6 +638,116 @@ fn verify_grok_session(session_id: &str, cwd: &str) -> bool {
     dir.join(session_id).is_dir()
 }
 
+// ─── fx ──────────────────────────────────────────────────────────────────────
+
+/// fx stores every native session in `~/.fx/sessions/<id>/`. `HOME` is the
+/// only profile-root override read by fx 0.0.3, so discovery follows the live
+/// process environment when available.
+fn fx_sessions_dir(home_override: Option<&str>) -> Option<PathBuf> {
+    home_override
+        .map(PathBuf::from)
+        .or_else(dirs::home_dir)
+        .map(|home| home.join(".fx").join("sessions"))
+}
+
+/// Match fx's public session-id grammar from `session_layout.zig` before using
+/// an on-disk directory name as a resume operand.
+fn is_fx_session_id(session_id: &str) -> bool {
+    !session_id.is_empty()
+        && session_id.len() <= 255
+        && session_id != "."
+        && session_id != ".."
+        && session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+/// Read the bounded v0.0.3 session manifest. New fx sessions use schema v3 and
+/// cap `session.json` at 64 KiB; rejecting larger or incomplete files avoids an
+/// unbounded read on a lifecycle path that runs every agent turn.
+fn read_fx_session_identity(path: &Path) -> Option<(String, PathBuf)> {
+    use std::io::Read;
+
+    const FX_MANIFEST_MAX_BYTES: u64 = 64 * 1024;
+
+    let file = std::fs::File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > FX_MANIFEST_MAX_BYTES {
+        return None;
+    }
+    let mut contents = String::new();
+    file.take(FX_MANIFEST_MAX_BYTES + 1)
+        .read_to_string(&mut contents)
+        .ok()?;
+    if contents.len() as u64 > FX_MANIFEST_MAX_BYTES {
+        return None;
+    }
+    let manifest: serde_json::Value = serde_json::from_str(&contents).ok()?;
+    let id = manifest.get("id")?.as_str()?;
+    let workspace_root = manifest.get("workspace_root")?.as_str()?;
+    if !is_fx_session_id(id) {
+        return None;
+    }
+    Some((id.to_string(), normalize_cwd(workspace_root)))
+}
+
+fn discover_fx_session(
+    cwd: &str,
+    claimed_ids: &[String],
+    home_override: Option<&str>,
+) -> Option<String> {
+    let sessions_dir = fx_sessions_dir(home_override)?;
+    let wanted_cwd = normalize_cwd(cwd);
+    let now = SystemTime::now();
+    let mut candidates: Vec<(SystemTime, String)> = std::fs::read_dir(&sessions_dir)
+        .ok()?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let id = entry.file_name().to_string_lossy().to_string();
+            if !is_fx_session_id(&id) {
+                return None;
+            }
+            if !entry.file_type().ok()?.is_dir() {
+                return None;
+            }
+            let metadata = entry.metadata().ok()?;
+            let recency = entry_recency(&entry.path(), &metadata);
+            if now.duration_since(recency).unwrap_or_default() > SESSION_MAX_AGE {
+                return None;
+            }
+            let (manifest_id, manifest_cwd) =
+                read_fx_session_identity(&entry.path().join("session.json"))?;
+            if manifest_id != id || manifest_cwd != wanted_cwd {
+                return None;
+            }
+            Some((recency, id))
+        })
+        .collect();
+
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
+    candidates
+        .into_iter()
+        .find(|(_, id)| !claimed_ids.contains(id))
+        .map(|(_, id)| id)
+}
+
+fn verify_fx_session(session_id: &str, cwd: &str, home_override: Option<&str>) -> bool {
+    if !is_fx_session_id(session_id) {
+        return false;
+    }
+    let Some(session_dir) = fx_sessions_dir(home_override).map(|root| root.join(session_id)) else {
+        return false;
+    };
+    if !std::fs::symlink_metadata(&session_dir)
+        .ok()
+        .is_some_and(|metadata| metadata.is_dir())
+    {
+        return false;
+    }
+    read_fx_session_identity(&session_dir.join("session.json"))
+        .is_some_and(|(id, workspace)| id == session_id && workspace == normalize_cwd(cwd))
+}
+
 // ─── Shared helpers ──────────────────────────────────────────────────────────
 
 /// Return true if `s` matches the UUID format: 8-4-4-4-12 lowercase hex with dashes.
@@ -726,7 +840,7 @@ where
 mod tests {
     use super::*;
     use std::fs;
-    use std::time::Duration;
+    use std::time::{Duration, SystemTime};
     use tempfile::TempDir;
 
     fn make_file(dir: &std::path::Path, name: &str) -> PathBuf {
@@ -746,6 +860,42 @@ mod tests {
         });
         fs::write(&path, format!("{head}\n{{\"type\":\"event_msg\"}}\n")).unwrap();
         path
+    }
+
+    fn make_fx_session(home: &std::path::Path, id: &str, cwd: &str) -> PathBuf {
+        let session_dir = home.join(".fx").join("sessions").join(id);
+        fs::create_dir_all(&session_dir).unwrap();
+        fs::write(
+            session_dir.join("session.json"),
+            serde_json::json!({
+                "schema_version": 3,
+                "id": id,
+                "workspace_root": cwd,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        session_dir
+    }
+
+    fn backdate_fx_session(session_dir: &std::path::Path, modified: SystemTime) {
+        let manifest = session_dir.join("session.json");
+        for path in [session_dir, manifest.as_path()] {
+            fs::File::open(path)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(modified))
+                .unwrap();
+        }
+    }
+
+    #[cfg(unix)]
+    fn symlink_dir(target: &std::path::Path, link: &std::path::Path) {
+        std::os::unix::fs::symlink(target, link).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn symlink_dir(target: &std::path::Path, link: &std::path::Path) {
+        std::os::windows::fs::symlink_dir(target, link).unwrap();
     }
 
     // ── is_uuid ──
@@ -786,6 +936,205 @@ mod tests {
     #[test]
     fn test_verify_grok_session_rejects_non_uuid() {
         assert!(!verify_grok_session("not-a-uuid", "/tmp/x"));
+    }
+
+    // ── fx ──
+
+    #[test]
+    fn test_fx_session_id_matches_upstream_grammar() {
+        assert!(is_fx_session_id(
+            "1770000000000-1770000000000000000-a1b2c3d4e5f60708"
+        ));
+        assert!(is_fx_session_id("session.v3"));
+        for invalid in [
+            "",
+            ".",
+            "..",
+            "../outside",
+            "nested/session",
+            "nested\\session",
+            "session with spaces",
+        ] {
+            assert!(!is_fx_session_id(invalid), "{invalid} must be rejected");
+        }
+        assert!(
+            !is_fx_session_id(&"a".repeat(256)),
+            "too-long IDs must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_discover_fx_session_filters_workspace_and_claimed_ids() {
+        let home = TempDir::new().unwrap();
+        let wrong = "1770000000000-1770000000000000000-aaaaaaaaaaaaaaaa";
+        let wanted = "1770000000001-1770000000000000001-bbbbbbbbbbbbbbbb";
+        make_fx_session(home.path(), wrong, "/other/project");
+        make_fx_session(home.path(), wanted, "/wanted/project");
+
+        assert_eq!(
+            discover_fx_session("/wanted/project", &[], Some(home.path().to_str().unwrap()),),
+            Some(wanted.to_string())
+        );
+        assert!(
+            discover_fx_session(
+                "/wanted/project",
+                &[wanted.to_string()],
+                Some(home.path().to_str().unwrap()),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn test_verify_fx_session_checks_manifest_identity_and_workspace() {
+        let home = TempDir::new().unwrap();
+        let id = "1770000000001-1770000000000000001-bbbbbbbbbbbbbbbb";
+        make_fx_session(home.path(), id, "/wanted/project");
+        let home_path = home.path().to_str().unwrap();
+
+        assert!(verify_fx_session(id, "/wanted/project", Some(home_path)));
+        assert!(!verify_fx_session(id, "/other/project", Some(home_path)));
+        assert!(!verify_fx_session(
+            "../outside",
+            "/wanted/project",
+            Some(home_path)
+        ));
+    }
+
+    #[test]
+    fn test_discover_and_verify_fx_session_reject_symlinked_session_dir() {
+        let home = TempDir::new().unwrap();
+        let sessions = home.path().join(".fx").join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let target = home.path().join("real-session");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(
+            target.join("session.json"),
+            serde_json::json!({
+                "schema_version": 3,
+                "id": "1770000000002-1770000000000000002-cccccccccccccccc",
+                "workspace_root": "/wanted/project",
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let symlink_id = "1770000000003-1770000000000000003-dddddddddddddddd";
+        let symlink = sessions.join(symlink_id);
+        symlink_dir(&target, &symlink);
+
+        let home_path = home.path().to_str().unwrap();
+        assert!(
+            discover_fx_session("/wanted/project", &[], Some(home_path)).is_none(),
+            "symlinked session directories must not be discovered"
+        );
+        assert!(
+            !verify_fx_session(symlink_id, "/wanted/project", Some(home_path)),
+            "symlinked session directories must not be verified"
+        );
+    }
+
+    #[test]
+    fn test_discover_and_verify_fx_session_reject_malformed_or_oversized_manifest() {
+        let home = TempDir::new().unwrap();
+        let malformed_id = "1770000000004-1770000000000000004-eeeeeeeeeeeeeeee";
+        let malformed = make_fx_session(home.path(), malformed_id, "/wanted/project");
+        fs::write(malformed.join("session.json"), b"not-json").unwrap();
+
+        let oversized_id = "1770000000005-1770000000000000005-ffffffffffffffff";
+        let oversized = make_fx_session(home.path(), oversized_id, "/wanted/project");
+        fs::write(oversized.join("session.json"), vec![b'x'; 64 * 1024 + 1]).unwrap();
+
+        let home_path = home.path().to_str().unwrap();
+        assert!(
+            discover_fx_session("/wanted/project", &[], Some(home_path)).is_none(),
+            "malformed and oversized manifests must not be discovered"
+        );
+        assert!(!verify_fx_session(
+            malformed_id,
+            "/wanted/project",
+            Some(home_path)
+        ));
+        assert!(!verify_fx_session(
+            oversized_id,
+            "/wanted/project",
+            Some(home_path)
+        ));
+    }
+
+    #[test]
+    fn test_discover_and_verify_fx_session_reject_manifest_directory_id_mismatch() {
+        let home = TempDir::new().unwrap();
+        let directory_id = "1770000000006-1770000000000000006-1111111111111111";
+        let manifest_id = "1770000000007-1770000000000000007-2222222222222222";
+        let session_dir = make_fx_session(home.path(), directory_id, "/wanted/project");
+        fs::write(
+            session_dir.join("session.json"),
+            serde_json::json!({
+                "schema_version": 3,
+                "id": manifest_id,
+                "workspace_root": "/wanted/project",
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let home_path = home.path().to_str().unwrap();
+        assert!(discover_fx_session("/wanted/project", &[], Some(home_path)).is_none());
+        assert!(!verify_fx_session(
+            directory_id,
+            "/wanted/project",
+            Some(home_path)
+        ));
+    }
+
+    #[test]
+    fn test_discover_fx_session_rejects_stale_entry() {
+        let home = TempDir::new().unwrap();
+        let id = "1770000000008-1770000000000000008-3333333333333333";
+        let session_dir = make_fx_session(home.path(), id, "/wanted/project");
+        backdate_fx_session(
+            &session_dir,
+            SystemTime::now() - Duration::from_secs(SESSION_MAX_AGE.as_secs() + 60),
+        );
+
+        assert!(
+            discover_fx_session("/wanted/project", &[], Some(home.path().to_str().unwrap()))
+                .is_none(),
+            "stale fx sessions must not be discovered"
+        );
+    }
+
+    #[test]
+    fn test_discover_fx_session_excludes_claimed_id() {
+        let home = TempDir::new().unwrap();
+        let id = "1770000000009-1770000000000000009-4444444444444444";
+        make_fx_session(home.path(), id, "/wanted/project");
+
+        assert_eq!(
+            discover_fx_session(
+                "/wanted/project",
+                &[id.to_string()],
+                Some(home.path().to_str().unwrap())
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn test_discover_fx_session_selects_newest_valid_candidate() {
+        let home = TempDir::new().unwrap();
+        let older_id = "1770000000010-1770000000000000010-5555555555555555";
+        let newer_id = "1770000000011-1770000000000000011-6666666666666666";
+        let older = make_fx_session(home.path(), older_id, "/wanted/project");
+        let newer = make_fx_session(home.path(), newer_id, "/wanted/project");
+        let now = SystemTime::now();
+        backdate_fx_session(&older, now - Duration::from_secs(120));
+        backdate_fx_session(&newer, now - Duration::from_secs(60));
+
+        assert_eq!(
+            discover_fx_session("/wanted/project", &[], Some(home.path().to_str().unwrap())),
+            Some(newer_id.to_string())
+        );
     }
 
     // ── path_to_claude_slug ──

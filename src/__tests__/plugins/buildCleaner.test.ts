@@ -361,7 +361,7 @@ describe("build-cleaner pure helpers", () => {
 				scanBuildArtifacts: vi.fn(async () => [entry]),
 				trimBuildArtifact: vi.fn(async () => 29.5 * GIB),
 				deleteBuildArtifact: vi.fn(async () => undefined),
-				invoke: vi.fn(async () => null),
+				invoke: vi.fn(async (_command: string) => null),
 				registerSection: vi.fn(),
 				registerDashboard: vi.fn(),
 				openPanel: vi.fn((options: { onMessage: (message: unknown) => Promise<void> }) => {
@@ -402,7 +402,7 @@ describe("build-cleaner pure helpers", () => {
 			const host = {
 				getRepos: vi.fn(() => [{ path: "/repo" }]),
 				scanBuildArtifacts: vi.fn(async () => []),
-				invoke: vi.fn(async () => null),
+				invoke: vi.fn(async (_command: string) => null),
 				registerSection: vi.fn(),
 				registerDashboard: vi.fn((dashboard: { open: () => Promise<void> }) => {
 					openDashboard = dashboard.open;
@@ -498,7 +498,7 @@ describe("build-cleaner pure helpers", () => {
 			const host = {
 				getRepos: vi.fn(() => [{ path: "/repo" }]),
 				scanBuildArtifacts: vi.fn(async () => []),
-				invoke: vi.fn(async () => null),
+				invoke: vi.fn(async (_command: string) => null),
 				registerSection: vi.fn(),
 				registerDashboard: vi.fn((dashboard: { open: () => Promise<void> }) => {
 					captured.openDashboard = dashboard.open;

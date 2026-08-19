@@ -12,7 +12,21 @@ describe("useAgentDetection", () => {
 
 	/** Helper: build a batch detection response */
 	function batchResponse(available: Record<string, string | null> = {}) {
-		const allBinaries = ["claude", "gemini", "opencode", "aider", "codex", "amp", "cursor-agent", "oz", "droid", "git"];
+		const allBinaries = [
+			"claude",
+			"gemini",
+			"opencode",
+			"aider",
+			"codex",
+			"amp",
+			"cursor-agent",
+			"oz",
+			"droid",
+			"git",
+			"grok",
+			"pi",
+			"fx",
+		];
 		const result: Record<string, { path: string | null; version: string | null }> = {};
 		for (const bin of allBinaries) {
 			result[bin] = { path: available[bin] ?? null, version: null };
@@ -44,6 +58,26 @@ describe("useAgentDetection", () => {
 				expect(map.get("opencode")?.available).toBe(true);
 				expect(map.get("aider")?.available).toBe(false);
 				expect(map.get("codex")?.available).toBe(true);
+				expect(map.get("fx")?.available).toBe(false);
+				expect(map.get("grok")?.available).toBe(false);
+				expect(map.get("pi")?.available).toBe(false);
+			});
+		});
+
+		it("detects fx from the batch response", async () => {
+			await testInScopeAsync(async () => {
+				mockInvoke.mockResolvedValueOnce(batchResponse({ fx: "/opt/homebrew/bin/fx" }));
+
+				const { detectAll, getDetection } = useAgentDetection();
+				await detectAll();
+
+				expect(mockInvoke).toHaveBeenCalledWith("detect_all_agent_binaries", {
+					binaries: expect.arrayContaining(["fx"]),
+				});
+				expect(getDetection("fx")).toMatchObject({
+					available: true,
+					path: "/opt/homebrew/bin/fx",
+				});
 			});
 		});
 

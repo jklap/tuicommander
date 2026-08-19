@@ -196,6 +196,7 @@ sidecar moves. Each target is written in the format its tool reads:
 | Grok | `~/.grok/config.toml` | TOML `[mcp_servers]` |
 | goose | `~/.config/goose/config.yaml` | YAML `extensions` (`ExtensionEntry`) |
 | pi | `~/.pi/agent/mcp.json` | JSON `mcpServers` (pi-mcp-adapter extension) |
+| fx | `~/.fx/mcp.json` | JSON `mcp`, `{type:"local", command:[…], enabled:true, required:false}` |
 
 Aider is absent because it has no MCP client.
 

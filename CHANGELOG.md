@@ -38,6 +38,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **fx is a first-class coding-agent harness** — TUICommander now detects the native `fx` binary, launches its persistent TUI with safe deferred prompt submission, exposes `fx ask --no-save` for headless prompts, discovers and verifies workspace-scoped sessions under `~/.fx/sessions`, resumes exact session IDs, and installs the TUIC bridge using fx's native `~/.fx/mcp.json` schema. fx has no TUIC-managed lifecycle-hook installer; terminal-state handling remains evidence-driven.
+- **Legacy MCP negotiation advances to 2025-11-25** — the server, HTTP and stdio proxy clients, and `tuic-bridge` now agree on the legacy revision required by fx's documented fallback; HTTP requests carry `MCP-Protocol-Version`, while older clients that omit it remain accepted.
+- **Patched HTTP/2 denial-of-service dependency** — `h2` is updated to 0.4.16 for RUSTSEC-2026-0258.
 - **Orchestrated PTYs show task descriptions** — MCP `agent action=spawn` and `session action=input` accept an optional `pty_description`, shown above the terminal alongside the last submitted user prompt and updated through the existing event transports.
 
 ## [1.7.4] - 2026-08-12

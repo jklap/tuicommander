@@ -183,10 +183,9 @@ export function CommandInput(props: CommandInputProps) {
 		try {
 			const write = (data: string) => rpc<void>("write_pty", { sessionId: props.sessionId, data });
 			await sendPtyKey(write, key);
-			// Raw-mode prompts (edit-confirm, bash-confirm) have a footer with
-			// dismiss_key — a single key press suffices. Line-mode prompts (LSP
-			// install, etc.) lack the footer and need Enter to submit.
-			if (!props.choicePrompt?.dismiss_key) {
+			// Most raw-mode prompts submit on the numeric key. fx ask-mode moves
+			// the selection first and explicitly requires Enter to confirm.
+			if (props.choicePrompt?.requires_confirmation || !props.choicePrompt?.dismiss_key) {
 				await write("\r");
 			}
 		} catch (err) {

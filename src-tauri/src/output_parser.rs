@@ -112,6 +112,10 @@ pub enum ParsedEvent {
         dismiss_key: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         amend_key: Option<String>,
+        /// True when choosing an option only moves the cursor and Enter is
+        /// required to submit it. Omitted for existing immediate-submit agents.
+        #[serde(default, skip_serializing_if = "bool_is_false")]
+        requires_confirmation: bool,
     },
     /// A previously detected numbered choice dialog is no longer active.
     #[serde(rename = "choice-cleared")]
@@ -166,6 +170,12 @@ pub struct ChoicePromptPayload {
     pub dismiss_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub amend_key: Option<String>,
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    pub requires_confirmation: bool,
+}
+
+fn bool_is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// A single option in a numbered choice dialog (edit-confirm, bash-confirm, etc.).
@@ -1274,7 +1284,7 @@ fn parse_question(clean: &str) -> Option<ParsedEvent> {
 /// Returns true if a line looks like diff output, code context, or documentation
 /// rather than a genuine interactive prompt. Applied to ALL question regex matches
 /// to prevent false positives from diff hunks containing question-like patterns.
-fn line_is_diff_or_code_context(line: &str) -> bool {
+pub(crate) fn line_is_diff_or_code_context(line: &str) -> bool {
     let trimmed = line.trim();
 
     // Line-number prefix from code listings: "462 -...", "75 +-...", "465 //...", "1226    assert!(..."
@@ -1848,6 +1858,12 @@ pub fn parse_slash_menu(screen_rows: &[String]) -> Option<ParsedEvent> {
 /// Esc to cancel · Tab to amend
 /// ```
 ///
+/// fx uses the same numbered-choice contract with a different, capture-backed
+/// frame: `1–3 Choose now … Tab Amend … Enter Confirm … Esc Cancel`. Its
+/// command preview sits between the question and the options, so that variant
+/// is recognized only when the exact fx footer and permission header are both
+/// present.
+///
 /// Strategy — scan bottom-up:
 ///   1. Skip trailing empty rows and optional footer hints (`Esc to .* · Tab .*`).
 ///   2. Collect contiguous numbered option rows (`  1. label`, `❯ 2. label`, etc.).
@@ -1872,6 +1888,8 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         // Footer: `Esc to cancel · Tab to amend` style.
         static ref FOOTER_RE: regex::Regex =
             regex::Regex::new(r"^\s*(?:Esc|esc|ESC)\s+to\s+(\S+).*?(?:·|\||•)\s*(?:Tab|tab|TAB)\s+to\s+(\S+)").unwrap();
+        static ref FX_FOOTER_RE: regex::Regex =
+            regex::Regex::new(r"(?i)^\s*\d+[–-]\d+\s+Choose now\b.*\bTab\s+Amend\b.*\bEnter\s+Confirm\b.*\bEsc\s+Cancel\b").unwrap();
         // Title sentinel: question mark OR imperative verb. Keeps us off markdown lists.
         static ref TITLE_VERB_RE: regex::Regex =
             regex::Regex::new(r"(?i)^\s*(?:do you want|proceed with|continue|should i|confirm|apply|allow)\b").unwrap();
@@ -1887,6 +1905,7 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
     let mut idx = screen_rows.len();
     let mut dismiss_key: Option<String> = None;
     let mut amend_key: Option<String> = None;
+    let mut fx_permission_prompt = false;
 
     // Step 1: skip trailing blanks + optional footer.
     while idx > 0 {
@@ -1898,6 +1917,17 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         if let Some(caps) = FOOTER_RE.captures(&screen_rows[idx - 1]) {
             dismiss_key = Some(caps[1].to_string());
             amend_key = Some(caps[2].to_string());
+            idx -= 1;
+            continue;
+        }
+        if FX_FOOTER_RE.is_match(&screen_rows[idx - 1]) {
+            dismiss_key = Some("cancel".to_string());
+            amend_key = Some("amend".to_string());
+            fx_permission_prompt = true;
+            idx -= 1;
+            continue;
+        }
+        if fx_permission_prompt && crate::chrome::is_separator_line(row) {
             idx -= 1;
             continue;
         }
@@ -1949,14 +1979,32 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         return None;
     }
 
-    // Step 3: walk past blank rows, find title row.
+    // Step 3: walk past blank rows, find title row. fx renders a command
+    // preview between its question and options, so scan that bounded overlay
+    // only after its exact footer has established the native permission frame.
     while idx > 0 && screen_rows[idx - 1].trim().is_empty() {
         idx -= 1;
     }
     if idx == 0 {
         return None;
     }
-    let title_row = screen_rows[idx - 1].trim();
+    let title_row = if fx_permission_prompt {
+        let header_seen = screen_rows[..idx].iter().rev().take(12).any(|row| {
+            row.trim_start()
+                .starts_with("Permission needed · Choose one")
+        });
+        if !header_seen {
+            return None;
+        }
+        screen_rows[..idx]
+            .iter()
+            .rev()
+            .take(12)
+            .map(|row| row.trim())
+            .find(|row| row.ends_with('?') && !line_is_diff_or_code_context(row))?
+    } else {
+        screen_rows[idx - 1].trim()
+    };
     let title_qualifies = title_row.ends_with('?') || TITLE_VERB_RE.is_match(title_row);
     if !title_qualifies {
         return None;
@@ -1979,6 +2027,7 @@ pub fn parse_choice_prompt(screen_rows: &[String]) -> Option<ParsedEvent> {
         options,
         dismiss_key,
         amend_key,
+        requires_confirmation: fx_permission_prompt,
     })
 }
 
@@ -5752,6 +5801,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             options,
             dismiss_key,
             amend_key,
+            requires_confirmation,
         } = actual
         else {
             panic!(
@@ -5822,6 +5872,15 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             fixture_name
         );
         assert_eq!(amend_key, &want_amend, "fixture {} amend_key", fixture_name);
+        assert_eq!(
+            *requires_confirmation,
+            expected
+                .get("requires_confirmation")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            "fixture {} requires_confirmation",
+            fixture_name
+        );
     }
 
     #[test]
@@ -5942,15 +6001,65 @@ Enter to select · ↑/↓ to navigate · Esc to cancel";
             ],
             dismiss_key: Some("cancel".into()),
             amend_key: Some("amend".into()),
+            requires_confirmation: false,
         };
         let json = serde_json::to_value(&evt).expect("serialize");
         assert_eq!(json["type"], "choice-prompt");
+        assert!(
+            json.get("requires_confirmation").is_none(),
+            "legacy choice prompts must keep the optional field omitted on the wire"
+        );
         let payload: ChoicePromptPayload = serde_json::from_value(json)
             .expect("state.rs-style round-trip through ChoicePromptPayload");
         assert_eq!(payload.title, "Do you want to proceed?");
         assert_eq!(payload.options.len(), 2);
         assert_eq!(payload.dismiss_key.as_deref(), Some("cancel"));
         assert_eq!(payload.amend_key.as_deref(), Some("amend"));
+        assert!(!payload.requires_confirmation);
+    }
+
+    #[test]
+    fn fx_permission_fixture_is_a_confident_choice_prompt() {
+        let dir = fixtures_dir();
+        let rows = load_rows(&dir.join("fx-0.0.3_permission-review.txt"));
+        let event = parse_choice_prompt(&rows).expect("fx approval grid must parse");
+        let ParsedEvent::ChoicePrompt {
+            title,
+            options,
+            dismiss_key,
+            amend_key,
+            requires_confirmation,
+        } = event
+        else {
+            panic!("fx approval grid must emit ChoicePrompt");
+        };
+        assert_eq!(title, "Would you like to run the following command?");
+        assert_eq!(
+            options
+                .iter()
+                .map(|option| (option.key.as_str(), option.label.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("1", "Yes"),
+                ("2", "Yes, and don't ask again for this exact command"),
+                ("3", "No"),
+            ]
+        );
+        assert_eq!(dismiss_key.as_deref(), Some("cancel"));
+        assert_eq!(amend_key.as_deref(), Some("amend"));
+        assert!(requires_confirmation);
+    }
+
+    #[test]
+    fn fx_permission_footer_without_header_is_not_a_choice_prompt() {
+        let path = fixtures_dir()
+            .join("negative")
+            .join("fx-permission-footer-without-header.txt");
+        let rows = load_rows(&path);
+        assert!(
+            parse_choice_prompt(&rows).is_none(),
+            "an fx-like numbered list without the permission header must remain prose"
+        );
     }
 
     #[test]

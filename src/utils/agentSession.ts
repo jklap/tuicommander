@@ -34,10 +34,22 @@ function applyDefaultRunConfig(agentType: AgentType, command: string, launchComm
 	if (launchParts) {
 		// Use the original launch binary + its args, with resume flags in between
 		const [launchBinary, ...launchArgs] = launchParts;
-		return [launchBinary, ...resumeFlags, ...launchArgs].join(" ");
+		// fx persists model selection in the session and rejects launch-only
+		// options such as --model in its resume grammar.
+		return [launchBinary, ...resumeFlags, ...(agentType === "fx" ? [] : launchArgs)].join(" ");
 	}
 	// eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-	return [runConfig!.command, ...resumeFlags, ...runConfig!.args].join(" ");
+	return [runConfig!.command, ...resumeFlags, ...(agentType === "fx" ? [] : runConfig!.args)].join(" ");
+}
+
+/** Resolve the environment of the run config that produced a persisted launch command. */
+function resolveLaunchEnv(agentType: AgentType, launchCommand?: string | null): Record<string, string> {
+	const config = launchCommand
+		? agentConfigsStore
+				.getRunConfigs(agentType)
+				.find((candidate) => [candidate.command, ...candidate.args].join(" ") === launchCommand)
+		: agentConfigsStore.getDefaultConfig(agentType);
+	return config?.env ?? {};
 }
 
 /**
@@ -91,11 +103,12 @@ export function buildResumeCommand(
 }
 
 /**
- * Verify a session UUID against the agent's local session storage, then
+ * Verify a discovered session ID against the agent's local session storage, then
  * build the appropriate resume command.
  *
- * For Claude: uses agentSessionId (discovered from disk during the session).
- * For other agents: tries tuicSession first, then agentSessionId.
+ * Discovery-backed agents use agentSessionId, which is the ID the agent wrote
+ * to disk. TUIC's tab UUID is not a valid substitute unless an agent explicitly
+ * supports forced binding (those agents do not expose sessionDiscovery).
  * Falls back gracefully when verify_agent_session is unavailable (browser mode).
  */
 export async function verifyAndBuildResumeCommand(
@@ -107,20 +120,18 @@ export async function verifyAndBuildResumeCommand(
 ): Promise<string | null> {
 	const disc = AGENTS[agentType].sessionDiscovery;
 
-	// For Claude, agentSessionId is the source of truth (discovered from newest session file).
-	// For other agents, tuicSession is preferred (injected at launch via shell wrapper).
-	const sessionId = agentType === "claude" ? agentSessionId : (tuicSession ?? agentSessionId);
+	const sessionId = disc ? agentSessionId : (tuicSession ?? agentSessionId);
 
 	if (sessionId && cwd && disc) {
 		try {
 			// At restore time the agent process has exited, so agentPid is null.
-			// The backend falls back to default paths (or run-config env if provided).
+			// Preserve profile-root overrides such as CODEX_HOME or fx's HOME.
 			const exists = await rpc<boolean>("verify_agent_session", {
 				agentType,
 				sessionId,
 				cwd,
 				agentPid: null,
-				envOverrides: {},
+				envOverrides: resolveLaunchEnv(agentType, launchCommand),
 			});
 			if (exists) {
 				const cmd = disc.resumeWithId(sessionId);

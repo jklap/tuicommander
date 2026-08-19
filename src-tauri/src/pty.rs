@@ -907,6 +907,9 @@ pub(crate) fn extract_question_line(changed_rows: &[ChangedRow]) -> Option<Strin
 /// markdown headers, prompt-echoed user input, and lines containing code-specific syntax.
 fn is_plausible_question(line: &str) -> bool {
     let trimmed = line.trim_start();
+    if crate::output_parser::line_is_diff_or_code_context(line) {
+        return false;
+    }
     // Prompt-prefixed lines are user input echoed in the conversation, not agent questions.
     if is_prompt_line(trimmed) {
         return false;
@@ -2896,6 +2899,32 @@ fn detect_pi_screen_activity(rows: &[String]) -> AgentScreenActivity {
     }
 }
 
+/// fx 0.0.3 keeps its `┃` composer on screen throughout a turn. The live
+/// activity row is the stronger signal: a native PTY capture at 100×32 showed
+/// `• Thinking (Ns)` before model output, throughout a running tool, and until
+/// the final response settled. Requiring an exactly empty composer for Ready
+/// keeps permission dialogs and partially typed input conservative (`Unknown`).
+fn detect_fx_screen_activity(rows: &[String]) -> AgentScreenActivity {
+    let content_end = rows
+        .iter()
+        .rposition(|row| !row.trim().is_empty())
+        .map_or(0, |idx| idx + 1);
+    let chrome_start = content_end.saturating_sub(crate::chrome::CHROME_SCAN_ROWS);
+    let footer = &rows[chrome_start..content_end];
+
+    if footer.iter().any(|row| {
+        let trimmed = row.trim_start();
+        trimmed == "\u{2022} Thinking" || trimmed.starts_with("\u{2022} Thinking (")
+    }) {
+        return AgentScreenActivity::Working;
+    }
+    if footer.iter().any(|row| row.trim() == "\u{2503}") {
+        AgentScreenActivity::Ready
+    } else {
+        AgentScreenActivity::Unknown
+    }
+}
+
 /// True for a row of OpenCode's composer frame: the heavy vertical `┃` (U+2503)
 /// running down the left edge of the prompt box.
 fn is_opencode_frame_row(row: &str) -> bool {
@@ -2959,6 +2988,7 @@ fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> Ag
         Some("aider") => detect_aider_screen_activity(rows),
         Some("grok") => detect_grok_screen_activity(rows),
         Some("pi") => detect_pi_screen_activity(rows),
+        Some("fx") => detect_fx_screen_activity(rows),
         Some("opencode") => detect_opencode_screen_activity(rows),
         _ => AgentScreenActivity::Unknown,
     }
@@ -2977,7 +3007,7 @@ fn detect_agent_screen_activity(agent_type: Option<&str>, rows: &[String]) -> Ag
 pub(crate) fn has_ready_screen_adapter(agent_type: Option<&str>) -> bool {
     matches!(
         agent_type,
-        Some("claude" | "codex" | "gemini" | "aider" | "grok" | "pi" | "opencode")
+        Some("claude" | "codex" | "gemini" | "aider" | "grok" | "pi" | "fx" | "opencode")
     )
 }
 
@@ -9359,6 +9389,7 @@ pub(crate) fn classify_agent(process_name: &str) -> Option<&'static str> {
         "grok" => Some("grok"),
         "droid" => Some("droid"),
         "pi" => Some("pi"),
+        "fx" => Some("fx"),
         _ => None,
     }
 }
@@ -10732,6 +10763,11 @@ mod tests {
     #[test]
     fn test_classify_agent_droid() {
         assert_eq!(classify_agent("droid"), Some("droid"));
+    }
+
+    #[test]
+    fn test_classify_agent_fx() {
+        assert_eq!(classify_agent("fx"), Some("fx"));
     }
 
     #[test]
@@ -12569,6 +12605,54 @@ mod tests {
         // A percentage that is not the context gauge must not qualify.
         assert!(!is_pi_status_row("coverage 88.5% • done"));
         assert!(!is_pi_status_row(""));
+    }
+
+    #[test]
+    fn test_fx_screen_activity_uses_thinking_and_keeps_permission_overlay_unknown() {
+        let ready = vec![
+            "  FX_COMPLETED_RESPONSE".to_string(),
+            String::new(),
+            "┃".to_string(),
+            "YOLO · sonnet 4.5".to_string(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("fx"), &ready),
+            AgentScreenActivity::Ready
+        );
+
+        let working = vec![
+            "  FX_WORKING_RESPONSE".to_string(),
+            "• Thinking (1s)".to_string(),
+            "┃".to_string(),
+            "YOLO · sonnet 4.5".to_string(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("fx"), &working),
+            AgentScreenActivity::Working
+        );
+
+        let tool_running = vec![
+            "● 1 tool call · 1 command".to_string(),
+            "└ Running sleep 3; printf FX_TOOL_DONE".to_string(),
+            "• Thinking (1s)".to_string(),
+            "┃".to_string(),
+            "YOLO · sonnet 4.5".to_string(),
+        ];
+        assert_eq!(
+            detect_agent_screen_activity(Some("fx"), &tool_running),
+            AgentScreenActivity::Working
+        );
+
+        let permission_overlay =
+            include_str!("fixtures/choice_prompts/fx-0.0.3_permission-review.txt")
+                .lines()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+        assert_eq!(
+            detect_agent_screen_activity(Some("fx"), &permission_overlay),
+            AgentScreenActivity::Unknown,
+            "the alternate-screen permission dialog must not look ready"
+        );
     }
 
     #[test]
@@ -14750,6 +14834,15 @@ mod tests {
         assert_eq!(extract_question_line(&make_rows(&["+  if x?"])), None);
         assert_eq!(extract_question_line(&make_rows(&["-  if x?"])), None);
         assert_eq!(extract_question_line(&make_rows(&[">  quoted?"])), None);
+    }
+
+    #[test]
+    fn test_extract_question_line_rejects_numbered_diff_context() {
+        assert_eq!(
+            extract_question_line(&make_rows(&["1 +Run the following release checklist?"])),
+            None,
+            "a numbered diff row must not seed awaiting-question silence detection"
+        );
     }
 
     #[test]
@@ -20346,6 +20439,42 @@ mod tests {
         }
     }
 
+    /// Captured from official fx 0.0.3 at 62 columns with permission mode `ask`.
+    /// The framed input record proves the isolated launch configuration, while
+    /// replay proves the narrow startup screen does not manufacture an awaiting
+    /// question from its composer glyph or status bar.
+    #[test]
+    fn fx_narrow_ask_capture_replays_without_false_question() {
+        let bytes = agent_prompt_fixture("fx-0.0.3-narrow-ask.tcap");
+        let records = crate::pty_capture::decode(&bytes).expect("valid framed fx capture");
+        assert!(
+            records.iter().any(|record| {
+                record.direction == crate::pty_capture::CaptureDirection::Input
+                    && String::from_utf8_lossy(&record.data).contains("FX_PERMISSION_MODE=ask")
+            }),
+            "capture must retain the ask-mode launch input"
+        );
+        assert!(
+            records.iter().any(|record| {
+                record.direction == crate::pty_capture::CaptureDirection::Output
+                    && String::from_utf8_lossy(&record.data).contains("┃")
+            }),
+            "capture must retain fx's narrow composer output"
+        );
+
+        let events = replay_capture(&bytes, false);
+        assert!(
+            events.iter().any(|event| {
+                matches!(event, ParsedEvent::UserInput { content, .. } if content.contains("FX_PERMISSION_MODE=ask"))
+            }),
+            "framed input must replay through the production input pipeline"
+        );
+        assert!(
+            awaiting_prompts_any_confidence(&events).is_empty(),
+            "narrow ask-mode startup must not become a question: {events:?}"
+        );
+    }
+
     // --- Awaiting RETRACTION -----------------------------------------------
     //
     // Why the fixtures above could not catch the stuck "question" badge: they
@@ -20523,6 +20652,7 @@ mod tests {
             options: vec![],
             dismiss_key: None,
             amend_key: None,
+            requires_confirmation: false,
         });
         state.session_states.insert("s1".to_string(), session);
 
