@@ -21,12 +21,13 @@ describe("ErrorLogPanel memo gating", () => {
 	});
 
 	it("does not filter the log ring while the panel is closed", () => {
-		render(() => <ErrorLogPanel />);
+		const view = render(() => <ErrorLogPanel />);
 		const getEntries = vi.spyOn(appLogger, "getEntries");
 
 		for (let i = 0; i < 10; i++) appLogger.error("app", `boom ${i}`);
 
 		expect(getEntries).not.toHaveBeenCalled();
+		view.unmount();
 	});
 
 	/**
@@ -34,7 +35,8 @@ describe("ErrorLogPanel memo gating", () => {
 	 * same entries must be filtered and rendered.
 	 */
 	it("filters the log ring once the panel is opened", () => {
-		const { container } = render(() => <ErrorLogPanel />);
+		const view = render(() => <ErrorLogPanel />);
+		const { container } = view;
 		appLogger.error("app", "visible failure");
 
 		const getEntries = vi.spyOn(appLogger, "getEntries");
@@ -42,10 +44,11 @@ describe("ErrorLogPanel memo gating", () => {
 
 		expect(getEntries).toHaveBeenCalled();
 		expect(container.textContent).toContain("visible failure");
+		view.unmount();
 	});
 
 	it("stops filtering again after the panel is closed", () => {
-		render(() => <ErrorLogPanel />);
+		const view = render(() => <ErrorLogPanel />);
 		errorLogStore.open();
 		errorLogStore.close();
 
@@ -53,5 +56,32 @@ describe("ErrorLogPanel memo gating", () => {
 		for (let i = 0; i < 5; i++) appLogger.warn("app", `later ${i}`);
 
 		expect(getEntries).not.toHaveBeenCalled();
+		view.unmount();
+	});
+
+	it("cancels focus and auto-scroll frames when the panel closes", () => {
+		const pending = new Set<number>();
+		let nextFrame = 1;
+		const request = vi.fn((_callback: FrameRequestCallback) => {
+			const id = nextFrame++;
+			pending.add(id);
+			return id;
+		});
+		const cancel = vi.fn((id: number) => {
+			pending.delete(id);
+		});
+		vi.stubGlobal("requestAnimationFrame", request);
+		vi.stubGlobal("cancelAnimationFrame", cancel);
+
+		const view = render(() => <ErrorLogPanel />);
+		errorLogStore.open();
+		expect(request).toHaveBeenCalledTimes(2);
+
+		errorLogStore.close();
+		expect(cancel).toHaveBeenCalledTimes(2);
+		expect(pending.size).toBe(0);
+
+		view.unmount();
+		vi.unstubAllGlobals();
 	});
 });

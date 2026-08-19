@@ -112,7 +112,8 @@ export const ErrorLogPanel: Component = () => {
 	// Focus search input when panel opens
 	createEffect(() => {
 		if (isOpen()) {
-			requestAnimationFrame(() => searchRef?.focus());
+			const frame = requestAnimationFrame(() => searchRef?.focus());
+			onCleanup(() => cancelAnimationFrame(frame));
 		}
 	});
 
@@ -136,11 +137,12 @@ export const ErrorLogPanel: Component = () => {
 	createEffect(() => {
 		if (!isOpen()) return;
 		appLogger.entryCount(); // subscribe to changes
-		requestAnimationFrame(() => {
+		const frame = requestAnimationFrame(() => {
 			if (listRef) {
 				listRef.scrollTop = listRef.scrollHeight;
 			}
 		});
+		onCleanup(() => cancelAnimationFrame(frame));
 	});
 
 	/** The effects above are all gated on `isOpen()`; these two memos were not,
