@@ -456,3 +456,10 @@ obtainable, kept here so nobody re-derives them from scratch.
 
 - [ ] **[HUMAN]** Reproduce the F120 drag-drop freeze by dropping a large folder from Finder, and time it. _(the residual is real and narrowed to one command, `fs_transfer_paths` at `fs.rs:1624`, sync on the macOS main thread while every sibling moved to `spawn_blocking_fs`. Thread evidence was measured — `ps -M` 86 threads, `sample` ties WebKit IPC to `com.apple.main-thread` — but the freeze itself was not reproduced)_
 - [ ] **[HUMAN]** Re-measure watcher emit suppression under real repo churn. _(`head_emits_suppressed` measured 0/min, but only on an idle instance with no repo mutation in the window. That is a floor: it proves quiescence, it does not re-measure the `repeat_count: 12` storm behind issue #82)_
+
+### Story `632-8d67` — clicking an MCP toast jumps to its terminal
+
+Backend change, so it needs a rebuilt binary: `make dev` does not hot-reload
+`src-tauri/**`. Everything else in the story is verified by test.
+
+- [ ] **[HUMAN]** From a rebuilt desktop app, have an agent call `ui action=toast` and click the toast — it must switch to that agent's tab. _(verified by test at the seams: the Rust bus event carries `origin_session_id` and the click focuses the matching terminal, `src/__tests__/components/ToastContainer.test.tsx`. What no test covers is the real IPC round trip through a live `AppHandle`, plus that the tab is genuinely the one on screen afterwards)_
