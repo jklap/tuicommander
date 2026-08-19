@@ -19,6 +19,8 @@ Agent-specific documents:
 - [Gemini CLI](agents/gemini-cli.md) — Ink-like, relative positioning + prompt box
 - [Aider](agents/aider.md) — Sequential CLI, no TUI framework
 - [OpenCode](agents/opencode.md) — Bubble Tea full-screen TUI
+- [pi](agents/pi.md) — full-frame snapshot adapter around a stable footer
+- [fx](agents/fx.md) — native TUI with explicit thinking and composer markers
 
 ## Detection Strategy Per Agent
 
@@ -31,13 +33,15 @@ Each agent class requires a different parsing strategy:
 | OpenCode | Full-screen TUI (Bubble Tea) | Screen snapshot analysis | No (all rows are "chrome") |
 | Gemini CLI | CLI inline | Changed-rows delta analysis | Yes |
 | Aider | CLI sequential | Changed-rows delta analysis | Yes |
+| pi | Full-screen TUI | Screen snapshot analysis | No (footer adapter) |
+| fx | Full-screen TUI | Screen snapshot analysis | No (bottom-zone adapter) |
 
 **CLI inline agents** (CC, Codex, Gemini, Aider) render output into the
 terminal sequentially, with chrome at specific positions. `chrome.rs`
 functions work for these — `is_separator_line`, `is_prompt_line`,
 `is_chrome_row` classify individual rows.
 
-**Full-screen TUI agents** (OpenCode) take over the entire screen. Every
+**Full-screen TUI agents** (OpenCode, pi, fx) take over the entire screen. Every
 row changes on every update, making delta analysis useless. These need
 screen-snapshot-based parsing: identify panels by position, extract text
 from known regions, detect state changes by content comparison.

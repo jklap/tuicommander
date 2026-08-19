@@ -446,7 +446,8 @@ pub(crate) fn resolve_choice_prompt_input(state: &AppState, session_id: &str, da
         let Some(prompt) = session.choice_prompt.as_ref() else {
             return false;
         };
-        let resolves = prompt.options.iter().any(|option| option.key == data)
+        let resolves = (!prompt.requires_confirmation
+            && prompt.options.iter().any(|option| option.key == data))
             || matches!(data, "\r" | "\n")
             || (data == "\x1b" && prompt.dismiss_key.is_some())
             || (data == "\t" && prompt.amend_key.is_some());
@@ -7133,6 +7134,41 @@ mod tests {
         let session = state.session_states.get("s1").unwrap();
         assert!(session.choice_prompt.is_none());
         assert!(!session.awaiting_input);
+    }
+
+    #[test]
+    fn fx_confirmation_prompt_waits_for_enter_and_clears_on_enter_escape_or_tab() {
+        for reply in ["\r", "\x1b", "\t"] {
+            let state = fresh_state();
+            let choice = make_parsed(
+                "choice-prompt",
+                serde_json::json!({
+                    "title": "Would you like to run the following command?",
+                    "options": [
+                        { "key": "1", "label": "Yes", "highlighted": true, "destructive": false },
+                        { "key": "2", "label": "Yes, and don't ask again for this exact command", "highlighted": false, "destructive": false },
+                        { "key": "3", "label": "No", "highlighted": false, "destructive": true }
+                    ],
+                    "dismiss_key": "cancel",
+                    "amend_key": "amend",
+                    "requires_confirmation": true
+                }),
+            );
+            apply(&state, &choice);
+
+            assert!(
+                !resolve_choice_prompt_input(&state, "s1", "1"),
+                "fx option navigation must not submit before Enter"
+            );
+            assert!(
+                state.session_states.get("s1").unwrap().awaiting_input,
+                "fx option navigation must keep awaiting_input set"
+            );
+            assert!(resolve_choice_prompt_input(&state, "s1", reply));
+            let session = state.session_states.get("s1").unwrap();
+            assert!(!session.awaiting_input);
+            assert!(session.choice_prompt.is_none());
+        }
     }
 
     #[test]

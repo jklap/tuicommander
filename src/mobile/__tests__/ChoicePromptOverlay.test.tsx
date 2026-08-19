@@ -25,6 +25,23 @@ const CLAUDE_EDIT_CONFIRM: ChoicePrompt = {
 	amend_key: "amend",
 };
 
+const FX_PERMISSION_CONFIRM: ChoicePrompt = {
+	title: "Would you like to run the following command?",
+	options: [
+		{ key: "1", label: "Yes", highlighted: true, destructive: false },
+		{
+			key: "2",
+			label: "Yes, and don't ask again for this exact command",
+			highlighted: false,
+			destructive: false,
+		},
+		{ key: "3", label: "No", highlighted: false, destructive: true },
+	],
+	dismiss_key: "cancel",
+	amend_key: "amend",
+	requires_confirmation: true,
+};
+
 describe("ChoicePromptOverlay", () => {
 	it("renders the prompt title", () => {
 		const { container } = render(() => <ChoicePromptOverlay prompt={CLAUDE_EDIT_CONFIRM} onSelect={() => {}} />);
@@ -75,5 +92,11 @@ describe("ChoicePromptOverlay", () => {
 		// Destructive option ("No") must carry a class identifier for styling.
 		expect(buttons[2].className).toContain("Destructive");
 		expect(buttons[0].className).not.toContain("Destructive");
+	});
+
+	it("renders the fx confirmation grid with its optional wire flag", () => {
+		const { container } = render(() => <ChoicePromptOverlay prompt={FX_PERMISSION_CONFIRM} onSelect={() => {}} />);
+		expect(container.textContent).toContain("Would you like to run the following command?");
+		expect(container.querySelectorAll("button").length).toBe(3);
 	});
 });
