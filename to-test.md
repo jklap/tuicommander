@@ -16,10 +16,6 @@ F10/F130/F136/F137 from the performance audit. The chat panel renders the live a
 its own 200 ms cadence instead of once per token batch, and the mobile terminal reuses the
 elements of screen rows that did not change. Vite reloads this without a restart.
 
-- [x] The first token appears at once, a burst collapses into one render, and the final text always lands. _(verified: `src/__tests__/utils/createThrottled.test.ts`, mutation-proven)_
-- [x] Starting a new reply clears the previous one immediately rather than one window later. _(verified: `createThrottled.test.ts` "passes a reset through at once" + "renders the first token after a reset without waiting", mutation-proven)_
-- [x] An unchanged screen row keeps its DOM node across frames, and only the changed row is replaced. _(verified: `src/mobile/__tests__/outputViewScreenRows.test.tsx`, mutation-proven)_
-- [x] A line's text, box-drawing flag and block wrapper are derived once, not once per frame. _(verified: `src/mobile/__tests__/logLine.test.ts` "line derivation cache", mutation-proven)_
 - [ ] **[MANUAL]** Ask the AI chat a question with a long answer (a few thousand words) and confirm the panel stays responsive to the end — it used to slow down progressively as the answer grew. Watch that code fences and tables still render correctly as they stream in.
 - [ ] **[MANUAL]** Open a session on a phone or at `:9877` in a narrow browser window, run something with a busy full-screen redraw (`htop`, a TUI agent), and confirm the output stays smooth and the search filter reacts instantly while output flows.
 
@@ -30,10 +26,6 @@ blocks, no gutter marks, no Cmd+Up/Down navigation and a cwd frozen at session s
 are dual-emitted now and carried on the `?format=grid` WS the canvas already holds. Nothing
 below works against the currently running binary.
 
-- [x] The grid WS frame uses the same field names as the desktop event, `exit_code` included. _(verified: Rust `grid_ws_osc133_frame_matches_the_desktop_event_payload` compares against `serde_json::to_value(Osc133Event)`, mutation-proven by renaming the field)_
-- [x] A `D` marker with no exit code keeps `exit_code: null` rather than dropping the key. _(verified: Rust `grid_ws_osc133_frame_keeps_a_null_exit_code`)_
-- [x] The cwd frame is the `{ cwd }` object on both transports, so the handler needs no branch. _(verified: Rust `grid_ws_cwd_frame_carries_the_same_object_as_the_desktop_event` + `canvasTerminalTransport.test.ts`, mutation-proven)_
-- [x] Frames with no grid consumer are still dropped rather than forwarded. _(verified: Rust `grid_ws_drops_events_it_has_no_consumer_for`)_
 - [ ] **After a `make dev` restart**: open a session at `:9877` in a browser, run a few commands, and confirm command blocks appear — gutter marks beside each prompt, and Cmd+Up/Down jumping between them.
 - [ ] **After a `make dev` restart**: in the same browser session, `cd` into a subdirectory and confirm the context bar's path follows. It used to stay pinned to the launch directory forever.
 - [ ] **After a `make dev` restart**: run a failing command (`false`) in browser mode and confirm its block is marked as failed — that is the `exit_code` path, and a field-name drift would silently render every command successful.
@@ -47,9 +39,6 @@ activity signal for a commit. A payload-free `pty-activity-{id}` pulse replaces 
 throttled to ~1/s and dual-emitted so browser and desktop read the same signal.
 Nothing below works against the currently running binary.
 
-- [x] The pulse fires on first output, collapses a burst to one, and resumes after the window. _(verified: Rust `activity_pulse_emits_on_first_output`, `activity_pulse_suppresses_repeats_inside_window`, `activity_pulse_resumes_after_window`)_
-- [x] It does not restamp `SessionState.last_activity_ms`, which the mobile session list renders. _(verified: Rust `test_session_state_pty_activity_does_not_restamp_last_activity`)_
-- [x] Both transports route it to `onActivity`, and nothing listens for `pty-output` any more. _(verified: `transport.test.ts` — the parity test reproduces the original bug and fails on it)_
 - [ ] **After a `make dev` restart**: open the Activity Dashboard, run `for i in $(seq 1 20); do echo $i; sleep 1; done` in a terminal, and confirm the `lastDataAt` column keeps advancing while it runs — it froze completely before.
 - [ ] **After a `make dev` restart**: with tab A focused, start long output in background tab B and confirm B raises its unread-activity dot *while output is still flowing*, not only when the command completes. This is the case grid frames cannot report, since the canvas stops acking them while hidden.
 - [ ] **After a `make dev` restart**: open the same session in browser mode (`:9877`) and desktop side by side; both must light up their activity indicator on the same output, since both now read one backend signal.
@@ -62,14 +51,6 @@ content-search batches and errors carry a `search_id`; the dead `pty-vt-log-tota
 the AI chat panel no longer subscribes to the producerless chat registry; improvement-scan
 proposals are published only by the `proposals-ready` event.
 
-- [x] Exactly one OSC 133 consumer exists in `src/`. _(verified: `src/__tests__/components/Terminal/osc133SingleConsumer.test.ts`, mutation-proven)_
-- [x] A batch carrying another panel's `search_id` is dropped, and its `is_final` does not stop this panel's spinner. _(verified: `FileBrowserPanel.test.tsx` "ignores batches belonging to another panel's search" + `contentSearch.test.ts`, mutation-proven)_
-- [x] The wire field is `search_id` on both the batch and the error. _(verified: `fs.rs` `a_batch_carries_its_search_id_under_that_exact_name`, `an_error_carries_the_same_search_id`)_
-- [x] A search cancelled by another panel starting one still emits a final batch under its own id, so its spinner stops. _(verified: `fs.rs` `a_search_cancelled_before_it_emits_still_closes_itself`, `a_search_cancelled_mid_stream_closes_after_the_chunks_it_sent` — both mutation-proven — plus `FileBrowserPanel.test.tsx` "stops searching on the empty final batch a cancelled search sends")_
-- [x] Exactly one batch is final, and no match is lost to the chunking. _(verified: `fs.rs` `a_completed_search_ends_with_a_single_final_batch`, `a_search_with_no_matches_still_emits_a_final_batch`)_
-- [x] Search ids are random per call, not per-realm counters, so two windows cannot mint the same one. _(verified: `newContentSearchId` returns `randomId("cs-")` — a `crypto.randomUUID` where one exists, and a timestamp+random string on a plain-http LAN client where `crypto.randomUUID` is undefined; `src/__tests__/utils/randomId.test.ts` covers both branches)_
-- [x] The AI chat panel does not call `chat_subscribe`. _(verified: `AIChatPanel.test.tsx` "does not subscribe to the producerless chat registry")_
-- [x] An improvement scan's return value does not publish proposals. _(verified: `githubOps.test.ts` "does not publish proposals from the scan's return value", mutation-proven)_
 - [ ] **After a `make dev` restart** — F4, which the audit could only verify by inspection: open a shell terminal with OSC 133 shell integration (not an agent — agent panes are alt-screen and emit none), run three or four commands, then check the block list. Each command must produce exactly one block with a command line and an exit code, and no empty block between them. Cmd+Up/Down block navigation and the scrollbar command marks must step through real commands only.
 - [ ] **After a `make dev` restart**: start a content search in the File Browser on a large repo and, while it is still streaming, open the command palette and run a different `?` search. Neither panel may show the other's matches, neither spinner may stop early, and — the case a single global cancel token creates — the File Browser spinner must still stop, keeping the matches it found before it was superseded.
 - [ ] **After a `make dev` restart**: detach the File Browser into its own window and search in both it and the main window. The two ids are minted at random per search now, not from a per-realm counter that both windows would start at 1, so neither window may see the other's matches.
@@ -83,8 +64,6 @@ proposals are published only by the `proposals-ready` event.
 the index reporting itself current with stale content. The stat fingerprint is now mtime **and**
 size, both already read by the same walk.
 
-- [x] Content replaced under a preserved mtime invalidates the index. _(verified: `content_index.rs` `is_current_detects_a_replacement_that_preserved_the_mtime`; proven to fail with the size term removed)_
-- [x] Edits, additions, deletions, same-second edits and undecodable files behave as before. _(verified: `content_index.rs` `is_current_detects_edits_additions_and_deletions`, `is_current_detects_a_same_second_edit`, `is_current_is_stable_for_a_file_that_cannot_be_decoded`)_
 - [ ] **After a `make dev` restart**: `search_code` for a phrase, then `cp -p` a different file over an indexed one and confirm the next search reflects the new content rather than the old.
 
 ## Dictation truncation and model-snapshot staleness (2026-08-17, **Rust change — needs `make dev` restart**)
@@ -94,11 +73,6 @@ The 300 s recording cap now reports what it dropped: `streaming_loop` counts the
 says so instead of `Ready`. The model snapshot behind the 75 ms microphone meter expires after a
 second so a change made by the other build is noticed.
 
-- [x] The cap reports exactly how much it dropped, and an ordinary recording reports zero. _(verified: `streaming.rs` `the_retained_recording_is_capped`, `a_recording_under_the_cap_is_kept_whole`)_
-- [x] The assembled recording — streaming result plus the capture-buffer tail appended after the join — is capped too, and reports its own drop. _(verified: `streaming.rs` `the_assembled_recording_is_capped_after_the_thread_is_joined`, `a_finished_recording_under_the_cap_is_left_alone`)_
-- [x] A panicked streaming thread is reported as interrupted instead of transcribing the leftover fragment. _(verified: `streaming.rs` `a_panicked_streaming_thread_is_reported_as_interrupted`)_
-- [x] A truncated transcription tells the user instead of reporting success. _(verified: `useDictation.test.ts` `says the recording was truncated instead of reporting plain success`)_
-- [x] The snapshot is reused inside the window and recomputed after it, picking up a config change written by another process. _(verified: `commands.rs` `a_change_made_by_another_process_is_picked_up_when_the_snapshot_expires`)_
 - [ ] **After a `make dev` restart**: dictate normally and confirm the status still returns to `Ready`, then change the dictation model in a second window (or delete the model file) and confirm Settings > Dictation reflects it within about a second without a restart.
 
 ## Resumed session knowledge (2026-08-17, **Rust change — needs `make dev` restart**)
@@ -107,11 +81,6 @@ The startup load of session knowledge is capped at the 40 newest files, so a res
 had no record in memory. Recording an outcome for it started a blank one, and the next flush wrote
 that blank over the file. Both writers now read the file first.
 
-- [x] An outcome for a session that is on disk but not resident keeps that session's history. _(verified: `knowledge.rs` `an_outcome_for_a_non_resident_session_keeps_its_history`)_
-- [x] Concurrent saves cannot write an older record last — the write holds the session lock, so no outcome can be recorded into a state a flush is already writing. _(verified: `knowledge.rs` `an_outcome_cannot_be_recorded_into_a_session_a_flush_is_writing`; proven to fail with the snapshot-then-write ordering)_
-- [x] The asynchronous startup load never replaces a session already used since launch. _(verified: `knowledge.rs` `load_all_does_not_overwrite_a_session_already_in_memory`; proven to fail with the unconditional insert)_
-- [x] A history file that exists but cannot be read is moved aside as `.json.corrupt` rather than overwritten, and a session with no file starts fresh without one. _(verified: `knowledge.rs` `an_unreadable_knowledge_file_is_kept_rather_than_overwritten`, `a_session_with_no_file_at_all_starts_fresh_without_a_corrupt_copy`)_
-- [x] The startup load is still capped and still loads the newest files. _(verified: `knowledge.rs` `load_all_is_bounded_to_most_recent_sessions`)_
 - [ ] **After a `make dev` restart**: with more than 40 session-knowledge files present, reopen a session older than the newest 40, run a command in it, and confirm its earlier history survives in `<config dir>/ai-sessions/<id>.json`.
 
 ## Wave-1 perf runtime re-measure (2026-08-17, **Rust change — needs `make dev` restart**) — story `620-3281`
@@ -120,7 +89,6 @@ The unit tests cannot measure what these changes were made for. **Baseline, capt
 `605-f104` fix:** the last 4000 log lines of the running instance held **360** `Emit repo-changed
 (working-tree)` against **3** `(git-state)`. That ratio is what F40/F41/F42 has to move.
 
-- [x] `cargo nextest run --features desktop` is green on the changed tree. _(verified: 4481 passed at the wave-1 commits)_
 - [ ] **After a `make dev` restart**: re-measure `Emit repo-changed (working-tree)` vs `(git-state)` over ~4000 lines of `GET http://localhost:9876/logs` and compare against 360 vs 3.
 - [ ] **After a `make dev` restart**: sidebar diff badges and branch stats still update while an agent writes in a worktree — the emit reduction must not cost responsiveness.
 - [ ] **After a `make dev` restart**: Build Cleaner and the File Browser still behave after the `plugin_fs.rs` changes, and the app boots with no new warnings in `GET http://localhost:9876/logs`.
@@ -132,15 +100,6 @@ line) instead of an unbounded channel, and one RPC waits on a single deadline in
 64-message budget. A `GET /mcp` SSE stream takes a process-wide generation on its session and its
 teardown releases the session only while it still holds it.
 
-- [x] The queue never grows past its bounds and the reader never parks — parking it would deadlock against a child that stopped reading its stdin. _(verified: `stdio_client.rs` `an_idle_upstream_that_never_stops_talking_cannot_grow_the_queue`)_
-- [x] A line that never ends is dropped whole rather than grown or truncated. _(verified: `stdio_client.rs` `a_line_that_never_ends_is_dropped_rather_than_grown`)_
-- [x] A queue that is always ready cannot outlive the deadline. _(verified: `stdio_client.rs` `a_full_queue_does_not_outrank_the_deadline`)_
-- [x] An upstream that emits 500 notifications before its reply still delivers that reply. _(verified: `stdio_client.rs` `a_chatty_upstream_still_delivers_its_reply`)_
-- [x] A mute upstream still times out and is torn down. _(verified: `stdio_client.rs` `call_tool_gives_up_on_a_mute_upstream`)_
-- [x] A superseded SSE stream's teardown leaves the replacement's channel and flag alone; the owner's teardown still releases both. _(verified: `mcp_transport.rs` `dropping_a_superseded_sse_stream_leaves_its_replacement_alive`, `dropping_the_sse_response_evicts_the_session_messaging_channel`)_
-- [x] A session id retired and recreated while its stream drains does not reissue that stream's generation. _(verified: `mcp_transport.rs` `a_recreated_session_does_not_reissue_a_live_stream_s_generation`)_
-- [x] Teardown of a stream whose session was already retired holds that session across the channel removal, so a reconnect landing in the window cannot lose its new sender. _(verified: `mcp_transport.rs` `teardown_of_a_retired_session_holds_it_across_the_channel_removal`)_
-- [x] Writing a request to an upstream that stopped reading its stdin gives up on the RPC deadline instead of parking forever, and the deadline is armed before the write. _(verified: `stdio_client.rs` `a_request_to_an_upstream_that_stopped_reading_gives_up_on_the_deadline`, `a_write_that_the_child_accepts_reports_success_and_sends_the_exact_bytes`, `a_write_to_a_broken_pipe_reports_the_failure_rather_than_timing_out`)_
 - [ ] **After a `make dev` restart**: with a real stdio upstream configured (mdkb, context7), connect it, call one of its tools with a large argument, and confirm the tool list and the call still work — the request now crosses a writer thread instead of going straight down the pipe. Then restart the bridge/agent so its `GET /mcp` reconnects, and confirm `notifications/tools/list_changed` still reaches the agent afterwards. Finally close the agent (`DELETE /mcp`) and reconnect it, and confirm notifications still arrive.
 
 ## Working-tree read freshness and artifact trim accounting (2026-08-17, **Rust change — needs `make dev` restart**)
@@ -150,10 +109,6 @@ every mutating git command bumps, so a coalesced read can no longer answer with 
 before the mutation. A forced artifact rescan no longer joins a scan that started earlier, and
 `trim_build_artifact` measures each target before removing it and returns the reclaimed bytes.
 
-- [x] Two simultaneous status reads for the same repository still share one computation. _(verified: `git.rs` `concurrent_working_tree_status_calls_share_one_computation`)_
-- [x] A read that starts after a stage/discard/commit is not served by an older in-flight read, and the finished read leaves no entry behind. _(verified: `git.rs` `a_read_after_a_mutation_does_not_join_one_started_before_it`, `a_finished_read_leaves_no_entry_behind`)_
-- [x] A forced artifact refresh never returns an earlier scan's result, and two forced calls still share one walk. _(verified: `plugin_fs.rs` `artifact_scan_cache_forced_refresh_never_returns_an_earlier_scan`, `artifact_scan_cache_concurrent_forced_waiter_shares_refresh`)_
-- [x] Trim reports measured bytes, and the panel subtracts those instead of the scan estimate. _(verified: `plugin_fs.rs` `trim_build_artifact_inner_reports_the_bytes_it_removed` + `buildCleaner.test.ts` `applyRemoval` cases)_
 - [ ] **After a `make dev` restart**: stage a file in the Git panel and confirm the Changes list updates on the first refresh. Then open the Build Cleaner, trim a `target/` directory and confirm the reported size drops by what was removed, not by the old estimate.
 
 ## Repo watcher ignore rules (2026-08-17, **Rust change — needs `make dev` restart**)
@@ -162,9 +117,6 @@ before the mutation. A forced artifact rescan no longer joins a scan that starte
 included. `.git/info/exclude` and the root `.gitignore` are separate layers in git's own
 precedence, and editing `info/exclude` now rebuilds the matcher.
 
-- [x] A tracked `build/` or `packages/build/` edit is a working-tree change, and a gitignored one is not. _(verified: `repo_watcher.rs` `test_classify_tracked_build_and_out_dirs_are_working_tree`)_
-- [x] A root `.gitignore` un-ignore beats an `info/exclude` entry for the same path. _(verified: `repo_watcher.rs` `test_root_gitignore_overrides_info_exclude`)_
-- [x] Editing `.git/info/exclude` rebuilds the matcher; a vendored `.gitignore` under `target/` does not. _(verified: `repo_watcher.rs` `test_ignore_source_changed_covers_info_exclude`)_
 - [ ] **After a `make dev` restart**: in a repo with a tracked `build/` or `out/` directory, edit a file there and confirm the git panel and file browser refresh. Then run a full `cargo build` and confirm the panels stay quiet — `target/` is still pruned.
 
 ## Rust-side plugin OutputWatcher matching (2026-08-17, **Rust change — needs `make dev` restart**) — story `599-6e94`
@@ -177,17 +129,6 @@ other event on this bus). The raw `pty-output` event, its coalescer and the fron
 are gone. Watcher sets are per frontend, so a browser tab and the desktop window no longer overwrite
 each other, and browser clients receive watcher matches for the first time.
 
-- [x] Line assembly is identical at every chunk boundary and survives a watcher registering mid-line. _(verified: `output_watchers.rs` `stream_lines_reassembles_the_same_lines_at_every_chunk_boundary`, `discarding_keeps_the_partial_line_so_a_late_watcher_still_sees_it`)_
-- [x] The batch is lossless and ordered under the throttle, and bounded under a flood. _(verified: `output_watchers.rs` batcher tests + `a_line_that_never_ends_cannot_grow_without_bound`)_
-- [x] A pattern the Rust regex crate cannot express is rejected and keeps matching in the WebView. _(verified: `output_watchers.rs` `compile_rejects_patterns_the_crate_cannot_express`, `plugins.rs` `a_rejected_pattern_keeps_every_line_flowing`, `pluginRegistry.test.ts` "matches a pattern the backend rejected against the lines it ships")_
-- [x] Rust never matches less than JavaScript: `\d \D \w \W \s \S \b` keep their ECMAScript meaning. _(verified: `output_watchers.rs` `negated_digit_keeps_the_ascii_meaning_of_javascript`, `negated_word_and_space_keep_the_ascii_meaning_of_javascript`, `word_boundaries_use_the_ascii_definition`)_
-- [x] A stale sync cannot install its older set, and two frontends keep independent sets. _(verified: `plugins.rs` `a_stale_sync_changes_nothing`, `a_second_client_does_not_replace_the_first`; `pluginRegistry.test.ts` stale-reply and foreign-client tests)_
-- [x] One line never fires a watcher twice during the sync-acknowledgement window. _(verified: `pluginRegistry.test.ts` "fires a watcher exactly once when the backend flagged it and the line is delivered too")_
-- [x] IPC/HTTP parity: command, `POST /api/plugins/output-watchers`, per-session WS `watcher-lines`, `/events` SSE `plugin-watcher-lines`. _(verified: `transport.test.ts` mapping assertion + the routes themselves)_
-- [x] An `m`-flagged pattern anchors at every ECMAScript line terminator, CR included, not only LF. _(verified: `output_watchers.rs` `multiline_anchors_see_every_ecmascript_line_terminator`, `a_pattern_without_m_is_not_matched_per_segment`)_
-- [x] An over-long line is dropped whole rather than truncated, so no watcher fires for text that was never on the wire; a command that exits without a final newline still delivers its last line. _(verified: `output_watchers.rs` `an_overflowing_line_is_dropped_rather_than_truncated`, `flush_returns_the_unterminated_tail_at_end_of_stream`)_
-- [x] A disposed watcher set cannot be resurrected by a delayed older sync, and eviction takes the client that has been silent longest. _(verified: `output_watchers.rs` `an_empty_sync_still_blocks_a_delayed_older_sync`, `eviction_takes_the_least_recently_synced_client`)_
-- [x] The frontend re-syncs its set every 30 s while it holds a watcher, and stops when the last one goes. _(verified: `pluginRegistry.test.ts` "resyncs on a heartbeat while watchers exist, and stops when the last one goes")_
 - [ ] **After a `make dev` restart**: `claude-wakeup` still fires on a real `/done` line, and `at-capacity-retry` still fires on a real capacity line — both now matched in Rust.
 - [ ] **After a `make dev` restart**: run `yes` in a terminal, then Ctrl+C. It must still interrupt promptly (this is the flood the throttle exists for), and the terminal must stay responsive.
 - [ ] **After a `make dev` restart**: a rare line printed once, with the PTY then completely quiet, still reaches a watcher within ~100 ms (the ticker drains the tail; it no longer waits for more output).
@@ -201,10 +142,6 @@ gutter only from coherent multi-line runs. It continues to join soft-wrapped row
 and preserves literal block characters, indentation, bullets, numbering, emoji
 shortcodes, and non-breaking spaces inside the message.
 
-- [x] The copied form of the reported `Hola :wave:` message loses gutter-only rows and prefixes while preserving blank lines and nested content. _(verified: `copied_selection_strips_repeated_claude_gutters`)_
-- [x] An NBSP separator is accepted without converting body NBSPs. _(verified: `copied_selection_accepts_nbsp_separator_and_preserves_body_nbsp`)_
-- [x] Lone, non-contiguous, ASCII-indented, and inline `▎` characters remain unchanged. _(verified: `copied_selection_keeps_lone_or_non_claude_gutters`)_
-- [x] Gutter normalization runs after Alacritty soft-wrap joining. _(verified: `copied_selection_normalizes_after_unwrapping_soft_wrapped_rows`; all six existing `get_selection_text` regressions also pass)_
 - [ ] **After a `make dev` restart**: copy the original long Claude message and paste it into Slack; no `▎` gutter or gutter NBSPs remain, while lists, blank lines, indentation, `:wave:`, `:pray:`, and the body spacing in `QA  Engineering` are unchanged.
 - [ ] **After a `make dev` restart**: copy a lone `▎` and an ASCII-indented `  ▎` code/table line; both paste unchanged.
 
@@ -216,19 +153,7 @@ Maven `classes`/`generated-*`/`*-reports`, Gradle `classes`/`tmp`/`intermediates
 executables on disk; **Clean** is the old full `remove_dir_all`. Measured on 5 real Rust repos:
 113.9 GB of `target/`, 112.9 GB trimmable (98.2–99.8%), 1.04 GB of actual output.
 
-- [x] Trim patterns cover both the plain and cross-compiled Rust profile layouts, and never name a profile-root executable. _(verified: `trim_targets_cover_rust_intermediates_at_both_depths`, `trim_removes_intermediates_and_keeps_executables`)_
-- [x] Swift `.build` keeps the product binary, `Modules/`, `checkouts/` and `repositories/`. _(verified: `swift_trim_keeps_the_product_and_dependency_sources`)_
-- [x] Maven keeps the packaged jar; Gradle keeps `libs`/`outputs`/`distributions`/`install`. _(verified: `maven_trim_keeps_the_packaged_jar`, `gradle_trim_keeps_libs_and_outputs`)_
-- [x] A kind with no separable intermediates can never yield a delete target — no silent escalation of Trim into Clean. _(verified: `no_rule_without_trim_patterns_can_ever_yield_a_target` over the whole rule table)_
-- [x] Symlinked dirs are never expanded into, and every target stays strictly inside the artifact dir. _(verified: `trim_targets_never_follow_symlinks`)_
-- [x] `trimmable_bytes` comes from the same single walk as `size_bytes`. _(verified: `measure_splits_total_and_trimmable_in_one_walk`)_
-- [x] The dashboard offers Trim only when `trimmable_bytes > 0`, keeps Clean for both, and shows the Safe-to-trim card. _(verified: `buildCleaner.test.ts` → "offers Trim only where the backend found intermediates")_
-- [x] A trim message routes to `trimBuildArtifact`, never to `deleteBuildArtifact`. _(verified: same suite)_
-- [x] HTTP parity for browser/PWA clients. _(verified: `transport.test.ts` → `/api/plugins/build-cleaner/build-artifacts/trim`)_
-- [x] The restarted binary serves the trim route and reports trimmable bytes. _(verified 2026-08-17 against the live app on :9876: `POST /api/plugins/build-cleaner/build-artifacts/scan` returns `src-tauri/target` at 58.23 GiB with 57.73 GiB trimmable, 99.1%)_
-- [x] A real Trim removes only intermediates and leaves a runnable executable. _(verified 2026-08-17 end-to-end through the live HTTP route on a throwaway cargo project inside the registered `CC_Playground/test` repo: 1072 KB → 472 KB, `deps`/`build`/`incremental`/`.fingerprint` gone, `target/debug/trim-probe` still on disk and still prints `Hello, world!`. Both guards fired first — `/tmp` was rejected as outside the home directory, `~/trim-probe` as outside every registered repo.)_
 - [ ] **After a `make dev` restart**: click **Trim** on the real `src-tauri/target` in the dashboard — not done on purpose, the row is 58 GiB and a Trim forces a full rebuild of the running dev app. Boss's call.
-- [x] `node_modules` reports nothing trimmable, so the row offers **Clean** only. _(verified 2026-08-17: all three registered `node_modules` return `trimmable_bytes: 0` from the live scan; the `trimmable_bytes > 0` gate is covered by `buildCleaner.test.ts`)_
 - [ ] **After a `make dev` restart**: a running `cargo build` in another window is not broken by a Trim of a *different* repo's `target` (the hot-window badge should mark the active one "recent").
 - [ ] Visual: the two-tier button styling reads correctly in light and dark themes — `.safe` on accent, `.danger` on error — and the armed states ("Trim?" vs "Delete all?") are distinguishable at a glance.
 - [ ] Cross-platform: on Windows and Linux, confirm a Trim of a Rust `target/` reclaims the same four dirs and leaves `*.exe`/the binary in place. The pattern matcher is separator-agnostic by construction and clippy compiles on Windows CI, but **Windows CI does not run the Rust tests** (`if: matrix.platform != 'windows-latest'`), so this is unverified at runtime.
@@ -251,440 +176,43 @@ strengthened MCP `intent:` instructions. All Rust-backed, so none of it is live 
 Codex collaboration exposes `task_name`/`message` but no `pty_description`; the backend now derives
 display-only metadata from the original spawn prompt.
 
-- [x] An omitted `pty_description` derives normalized display-only metadata from the spawn prompt; explicit values and explicit clears keep precedence; the inferred text is Unicode-safe and capped at 160 chars. _(verified: Rust tests, `make check` green)_
 - [ ] **After a `make dev` restart**: a Codex collaboration subagent shows its task description above the terminal.
 
 ## Agent worktree creation prompt (2026-08-05)
 
 - [ ] Create a worktree through MCP while an agent terminal is active, then choose **Open Worktree**: the worktree's terminal must open while the agent terminal remains attached to its original branch and working directory, with no injected stop/switch message.
 
-## Browser verification pass (2026-08-04)
-
-- [x] Web UI loads at `http://127.0.0.1:9876/` in browser mode; sidebar, repository selector, terminal tabs, file panel controls, toolbar, Help, and Settings render _(verified with `agent-browser` on the live web instance; `navigator.webdriver` was `true` because the project stealth wrapper was unavailable)_
-- [x] Settings → General renders Content Indexing with four choices, Default IDE, Auto-Standby, Update channel, and Experimental Features _(verified with `agent-browser`)_
-- [x] Settings → Appearance renders Theme, Tab Ordering, and the “Cycle All Tab Types” toggle _(verified with `agent-browser`)_
-- [x] Help → Keyboard Shortcuts opens and its search field plus shortcut rows render; “Global Hotkey” is absent in browser mode _(verified with `agent-browser`; desktop-only feature)_
-- [x] Notification bell with no notifications renders “No notifications” _(verified with `agent-browser`)_
-- [x] Smart Prompts drawer renders search, GIT/REVIEW categories, “Manage Smart Prompts…”, and the no-agent gate _(verified with `agent-browser`; no prompt was sent)_
-- [x] Process Monitor renders PROCESS/PID/SESSION/RSS/CPU columns in browser mode _(verified with `agent-browser`; no process mutation performed)_
-- [x] Settings → Agents opens and renders the agent configuration list and install-state labels _(verified with `agent-browser`; this confirms rendering only, not agent installation or live status hooks)_
-- [x] Settings → Plugins opens with Installed/Browse tabs and the “Check for plugin updates” toggle _(verified with `agent-browser`; no installation or update action performed)_
-- [x] Settings → Providers renders the current multi-provider layout, saved OpenRouter key indicator, local Ollama models, slot assignments, and Test buttons _(verified with `agent-browser`; no provider request was sent)_
-- [x] HTTP PTY lifecycle works on an isolated throwaway session: `POST /sessions`, `POST /sessions/{id}/write`, `GET /sessions/{id}/output`, and `DELETE /sessions/{id}` all returned successful responses _(verified 2026-08-04 against `/tmp`; session `0a31df7f-8640-42da-9a53-43f84caa50f5` was deleted after the test)_
-- [x] HTTP worktree lifecycle works on an isolated disposable repository: `POST /worktrees` created a real linked worktree and branch under `CapLock`, `GET /worktrees` exposed it, and `DELETE /worktrees/{branch}` removed the branch and directory _(verified 2026-08-04 with branch `codex-test-20260804`; cleanup confirmed by `git worktree list`)_
-- [x] HTTP combined worktree/session lifecycle works on an isolated disposable repository: `POST /sessions/worktree` created a PTY whose reported `cwd`, `worktree_path`, and `worktree_branch` all matched the new linked worktree; `DELETE /sessions/{id}` closed it and the worktree was then removed through the worktree route _(verified 2026-08-04 with branch `codex-session-wt-20260804`; cleanup confirmed by `git worktree list`)_
-
-## MCP OAuth in-app authorization confirmation (2026-07-22)
-
-- [x] With an OAuth upstream in **Authorization required**, click **Authorize**: the in-app confirmation must appear above Settings immediately after OAuth preparation; underlying **Cancel** must not be clickable. **Continue** must open a valid browser flow, while dismissing the dialog must return the upstream to **Authorization required** without opening a browser. _(verified in `UpstreamMcpPanel.tsx:62-91,140-148` and `ServicesTab.authorize.test.ts`: confirmation gates `openUrl`, cancel invokes `cancel_mcp_upstream_oauth`, and cross-domain warning/info variants are selected; 17/17 tests pass)_
-
-## Clipboard "Copy Path" fix (2026-07-02, uncommitted)
-
-- [x] **Copy Path / copy actions in all context menus** now route through the native clipboard-manager plugin (`writeClipboard`) instead of `navigator.clipboard.writeText` (rejected by WKWebView). Verified by source audit: all listed surfaces import/call `src/utils/clipboard.ts` (`RepoSection.tsx`, `TabBar.tsx`, `FileBrowserPanel.tsx`, `CodeEditorTab.tsx`, `MarkdownPanel.tsx`/`MarkdownTab.tsx`, `StatusBar.tsx`, `useTerminalLifecycle.ts`, `ErrorLogPanel.tsx`, `GeneratorsModal.tsx`, `AIChatPanel.tsx`, `GitHubPanel.tsx`/`GitHubTab.tsx`, `ServicesTab.tsx`, `KnowledgeHistoryOverlay.tsx`, and `useSmartPrompts.ts`); no listed surface uses `navigator.clipboard.writeText` directly.)_
-
-## Web-Mode Verification via agent-browser (2026-07-02)
-
-_Drove the live orchestrator web UI (`http://localhost:9876/`, browser mode `isTauri()===false`) with agent-browser CLI. Goal: verify `[HUMAN]`/unverified items via the web frontend and find features missing in web mode._
-
-### Harness limitations discovered (why exhaustive web coverage is blocked)
-- **Command Palette is desktop-only** — `<Show when={isTauri()}>` at `App.tsx:2743` ("Tauri only — many actions are Tauri-specific"). It is **NOT rendered in web/PWA/remote mode at all**. So every palette-driven item below is UNVERIFIABLE in web AND is a real web GAP: cross-repo content search (§ line 96), cross-terminal search `~` (§ line 313), file/content search `!`/`?` (§ line 359). Browser/PWA users have no Cmd+P.
-- **Focus/blur**: agent-browser's tab is not OS-focused; blur-closing popovers (bell dropdown edge cases) and JS-dispatched keydown (untrusted `isTrusted:false`) don't fire app shortcuts. Cmd+P is also swallowed by the browser (print). → keyboard-shortcut-only overlays can't be driven headless.
-- **Live-instance risk**: the orchestrator is Boss's actively-used app (shared backend). Frontend view state (active repo/tab) is per-client, but sessions/config are shared — so keyboard `press` can leak into a focused live terminal. Aggressive automation on the live instance is unsafe; **exhaustive web testing needs an isolated instance** (`make dev`/`make preview` on :9877, or a scratch instance) driven via agent-browser.
-
-### Verified working in web/browser mode ✓
-- [x] Web UI loads fully in browser mode (`isTauri()` false, WS transport) — sidebar, terminals, panels, file browser all render _(verified web 2026-07-02)_
-- [x] Settings ▸ General: **Content Indexing** dropdown has **4** options (Disabled / Active repo only / Active + on switch / All repos at boot) _(confirms line ~137 in web)_
-- [x] Settings ▸ General: **Default IDE** dropdown is data-driven and lists all **12 JetBrains** IDEs (IntelliJ, PyCharm, WebStorm, GoLand, CLion, PhpStorm, RubyMine, Rider, DataGrip, RustRover, Android Studio, Fleet) _(confirms line ~74 in web)_
-- [x] Settings ▸ General: Auto-Standby slider, Experimental Features section, Update channel (Stable/Nightly) + Check Now all render in web
-- [x] Settings ▸ Appearance: Theme dropdown, terminal font, cursor style, Tab Ordering (Grouped/Terminals First/Free) + **Cycle All Tab Types** toggle (default OFF, right after Tab Ordering) _(confirms #58 line ~56 in web)_; Repository Groups color pickers present
-- [x] Settings ▸ Providers: **redesigned** into a multi-provider list ("Providers + Add" + Slot Assignments), NOT the old single Ollama/Anthropic/… dropdown. OpenRouter shows "✓ key" (key-saved indicator), Ollama provider "no key needed" with model list _(NOTE: lines 211-215 describe the OLD Providers UI — stale; the redesign has no visible single-dropdown or per-slot "Test Connection" here)_
-- [x] Settings ▸ AI Chat: Temperature slider + **extended-thinking dropdown (Auto/Off/Low/Medium/High)** + Scheduled Tasks; **no "context lines" slider** exists _(confirms line ~216 NOTE + line ~1214 in web)_
-- [x] Help panel: Keyboard Shortcuts list + **real-time search filter works** (typing "clear scroll" filters to 1 row) _(confirms lines 524-527 in web)_
-- [x] Help panel: **Global Hotkey section correctly HIDDEN in browser** (`innerText` has no "Global Hotkey") _(confirms line ~341; lines 334-340 are desktop-only gaps)_; Resources links (Website/GitHub/Documentation/Report an Issue) present
-- [x] Process Monitor page (`/process/monitor`) renders a live table PROCESS/PID/SESSION/RSS/CPU with auto-update _(confirms line ~1090 in web; Manual/Refresh controls not present on this standalone page)_
-- [x] Notification bell: click with none → "No notifications" empty state _(confirms line 384 in web)_
-
-### Web GAPS — features unavailable in browser mode (verified via `isTauri()` gates in code)
-_(A) Fully desktop-only (hidden/`return null`/disabled in web):_ Command Palette (`App.tsx:2743`), IDE Launcher (`IdeLauncher.tsx:192` `return null`), user-plugin load + "Install from folder/ZIP" (`pluginLoader.ts:344`, `PluginsTab.tsx:442`), Dictation tab (`SettingsPanel.tsx:55`), Global Hotkey (`KeyboardShortcutsTab.tsx:523`), detached panel windows / detach-to-window (`App.tsx:1583`, `PanelWindowControls.tsx`), TUIC CLI install dialog + status (`App.tsx:723`, `GeneralTab.tsx:134`), MCP install + Agent Hooks config (`AgentsTab.tsx:623,633`), auto-updater (`updater.ts`), custom launchers "Open In" (`GeneralTab.tsx:396`), mdkb code-intel go-to-def (`GeneralTab.tsx:198`), native file drag-drop onto UI (`useFileDrop.ts:215`), agent-binary detection (`useAgentDetection.ts:44`), audio output-device picker (`NotificationsTab.tsx:97`), deep-links (`deep-link-handler.ts:201`), Share-to-`.tuic.json` (`SettingsPanel.tsx:194`).
-_(B) Degraded/HTTP-fallback in web:_ clipboard (`navigator.clipboard`), open-URL (`window.open`), notification sound (Web Audio) + badge (`setAppBadge`), file picker (text prompt vs native), PTY transport (WS vs IPC), **conversation history NOT persisted to disk in browser** (`conversationStore.ts`), repo file picker.
-
-### Isolated-instance pass (`:9877`, 2026-07-02)
-_Launched a 2nd debug instance (`src-tauri/target/debug/tuicommander`; single-instance lock is `#[cfg(not(debug_assertions))]` so debug allows it). It ignored `TUIC_PORT` and mcp_http auto-retried the port (9876 busy → bound **9877**, socket `mcp-74593.sock`). Isolated backend/sessions; **filesystem is still shared**, so no repo-mutating tests were run on Boss's repos._
-- [x] **TCP port retry IS implemented** — `mcp_http` logs "Port 9876 busy, trying 9877 … using 9877" and bound `0.0.0.0:9877` _(CORRECTS the "TCP port retry NOT IMPLEMENTED" NOTE in the TCP Port Retry section below — that note looked at `lib.rs`; the real HTTP server in `mcp_http` retries. Second instance → port+1 confirmed live; also picks an alt unix socket `mcp-<pid>.sock`)_
-- [x] File Browser **tree view**: toggle flat↔tree (chevrons appear), expand folder loads children lazily with file sizes + correct indentation _(web-verified: expanded `docs/` → hooks.md 9.5KB, memory-export.md 2.4KB, solutions/; confirms lines 344-346)_
-- [x] **SSH Tunnel Manager** web-available: modal "SSH Tunnels" + "+ New Tunnel"; existing tunnel row with Start/Edit/Log/Del _(UI present in web; confirms controls of lines 954-963 — actual connect/start not exercised)_
-- [x] **Watchers popover** web-available: "WATCHERS + New" + TEMPLATES (test/Watcher/Continue) each with Attach + edit + delete _(confirms lines 1172-1184 UI; trigger-firing not exercised)_
-- [x] **Smart Prompts drawer** web-available: search box + "No AI agent detected" gate + categorized prompts (GIT/REVIEW/PR/MERGE/CI) + "Manage Smart Prompts…" _(confirms lines 373 drawer; agent-gated actions like Smart Commit shown-but-gated confirms line 369)_
-- [x] **AI Chat panel** web-available (Level 1 renders): empty state "Ask me about your terminal output", KNOWLEDGE bar (0 cmds / HISTORY), input "Ask about your terminal… (Enter to send)", model-override dropdown, **Assisted↔Autonomous** toggle, Conversation history + Clear buttons _(confirms lines 210-211, 222, 227-228, 249, 283; send/stream NOT exercised — spends real provider tokens; history persistence is degraded in browser per conversationStore isTauri gates)_
-- [x] **Plugins tab** web-available: Installed/Browse sub-tabs, "Check for plugin updates" toggle, built-in plugins (`plan`, `stories-ticker`, tagged BUILT-IN) each with enable toggle + Logs button _(confirms lines 674-675; built-ins DO load in web, only USER-plugin load is skipped; "Install from folder/ZIP" buttons correctly ABSENT in web — desktop-only, confirms line 676 gap)_
-
-### Not re-verified in web this pass (deferred)
-- Command-palette items — **desktop-only** (unverifiable in web by design): lines 96-104, 313-322, 359-365
-- AI Chat send/streaming + Level-2 agent loop (spends real provider tokens): lines 212-213, 216-234 partial, 237-246, 248-255
-- Terminal lifecycle exit-closes-tab, context menus, link menus (need canvas keystroke injection — flaky under headless automation): lines 1142-1147, 1373-1376
-- Git diff of deleted/new/modified files, File Browser move/copy-paste, staging (would mutate Boss's shared repos — needs a scratch repo): lines 1113-1115, 1154-1157, 357
-- GitHub CI/PR popovers (need live PRs + gh auth), Remote Connection manager, Plugins install/hot-reload (install is desktop-only)
-
 ## Perf pass + light-theme fix — visual checks (2026-06-09)
-
-_Code-verified + `make check` green; these need Boss's eyes on the live dev app (canvas/editor not HTTP/MCP-observable)._
-
-### #80 — Terminal text color on light themes (`da16e711`, local only — not pushed)
-- [x] On a light theme (e.g. `vscode-light`), terminal default text is clearly readable, not faint gray _(verified visually 2026-08-04 with `agent-browser`; screenshot `/tmp/tuic-light-main.png`, terminal text is readable)_
-- [x] Scrollbar thumb is visible on light themes _(verified visually 2026-08-04 with `agent-browser`; screenshot `/tmp/tuic-light-main.png`, thumb is visible at the right edge of the terminal)_
-- [x] Dark themes unchanged (no regression) _(verified visually 2026-08-04 by restoring VS Code Dark after the light-theme pass; settings and terminal returned to the dark configuration)_
-
-### 020-abfe — Editor + diff viewer performance pass
-- [x] Multi-file working-tree diff mounts only on-screen file sections _(verified by working-tree browser evidence 2026-08-04: All Changes showed 24 files while only 5 `.p3cEGW_fileSection` elements were mounted in the DOM; PR diff behavior remains separate validation)_
-- [HUMAN] Multi-file PR diff preserves the same on-screen mounting and scroll behavior _(requires a live PR diff, not proven by the working-tree evidence above)_
-- [x] Sticky file headers render _(verified by browser evidence 2026-08-04: diff file headers computed as `position: sticky` after scrolling and screenshot `/tmp/tuic-diff-scroll.png` was captured)_
-- [HUMAN] Drag-select stays smooth during diff scrolling _(browser evidence did not cover this gesture)_
-- [x] Large single-file diff (>3000 lines) shows the "render anyway" guard _(verified: `DiffTab.tsx:580-592` gates `DiffViewer` behind the opt-in `Render anyway` button; `diffSize.test.ts` passes 5/5 including the 3000-line boundary and 3001-line guard)_
-
 ### 022-dc94 — Scrollbar track-height cache
 - [ ] Smooth-scroll gesture: scrollbar thumb position/size stays visually correct (no jump/drift) _(controller logic covered by `src/components/Terminal/__tests__/canvasTerminalScroll.test.ts` — 4/4 passed on 2026-08-05; the scrollbar thumb still needs visual validation)_
 
 ### 027-deb3 — rowCache lagging-frame guard
 - [ ] Fast scroll gesture: no flicker or wrong overscan content _(cache-generation and lagging-frame controller coverage is in `src/components/Terminal/__tests__/canvasTerminalScroll.test.ts` — 4/4 passed on 2026-08-05; flicker/overscan rendering still needs visual validation)_
 
-### 032-ce2d — Editor scrollbar overview ruler
-- [x] Editor with git changes: colored ticks on the right-edge scrollbar strip at correct relative positions; tick colors match the gutter markers _(verified visually 2026-08-04 with `agent-browser`; screenshot `/tmp/tuic-editor-ruler.png` shows red/blue change ticks aligned to the modified editor content)_
-
 ## #79 — vim & repeating key (macOS press-and-hold) (2026-06-06)
 - [ ] [HUMAN] In a release `.app`, open vim and hold `j`/`l`/`i` → cursor repeats, NO accent picker popup _(needs release build: dev build lacks proper bundle domain; fix registers `ApplePressAndHoldEnabled=NO` in `press_and_hold.rs`, called from `lib.rs` setup)_
 - [ ] [HUMAN] Typing accented chars still works where intended (Option-key composition path unaffected — only the hold-for-accent picker is suppressed)
 - [ ] [HUMAN] A user with explicit global `defaults write -g ApplePressAndHoldEnabled -bool true` still sees their override (registration domain is lowest priority)
 
-## Tab close kills agent process group (2026-06-03 — `b4ab1fb6`)
-- [x] Closing a tab whose agent (grandchild of the PTY shell) ignores Ctrl-C kills the agent too — no orphan reparented to launchd _(verified end-to-end: MCP `session create` → ran a foreground `sh` simulant (PID 4109, traps INT/TERM/HUP, sleeps) under `target/debug/tuicommander` (dev build with fix) → MCP `session close` → PID dead within 100ms, no `sleep 600` residue. Also unit test `pty.rs::close_pty_core_kills_agent_grandchild` — confirmed it FAILS without the killpg call.)_
-- [x] `kill_foreground_process_group` refuses unsafe pgid (≤1 or our own group) _(verified: pty.rs guard `pgid <= 1 || pgid == getpgid(0)` before `kill(-pgid, SIGKILL)`)_
-
-## Issue Triage Fixes (2026-06-03 — see PR.md)
-
-### #57 — Terminal link right-click menu (Open / Copy link)
-- [x] Right-click ON a detected link span → ONLY the Open/Copy-link menu appears (App copy/paste/AI menu must NOT also open and cover it)
-- [x] Right-click OUTSIDE a link → normal terminal context menu (copy / Explain with AI) still works
-- [x] "Copy link" copies the resolved path/URL to clipboard WITHOUT opening it
-- [x] "Open" opens the link (same as single left-click)
-- [x] Single left-click on a link still opens instantly (UI-first, not Cmd-gated); drag-select over a link still copies without opening
-
-### #58 — Cycle All Tab Types setting
-- [x] Default OFF → next/prev tab cycles terminals only _(verified: useTerminalLifecycle.test.ts:564 default false excludes diff tab from cycle)_
-- [x] Settings → Appearance → "Cycle All Tab Types" toggle present next to Tab Ordering _(verified: AppearanceTab.tsx:440 Toggle "Cycle All Tab Types" immediately after :421 "Tab Ordering")_
-- [x] Toggle ON → prev/next also cycles diff/md/editor tabs, ordered via tabOrderingStore.getOrdered _(verified: useTerminalLifecycle.ts:354 returns terminals-only unless tabCyclingAllTypes; :362 tabOrderingStore.getOrdered(union))_
-- [x] Setting persists across app restart (round-trips through config.rs tab_cycling_all_types) _(verified: config.rs:499 tab_cycling_all_types field; settings.ts maps tab_cycling_all_types↔state; runtime settings store has tabCyclingAllTypes)_
-
-### #69 — Error log multi-level (severity threshold) filter
-- [x] levelPassesThreshold: picking a level shows it + all more-severe levels _(verified: errorLogLevelFilter.test.ts — warn shows warn+error, hides info/debug)_
-- [x] ErrorLogPanel: select "Warn" → Warn and Error entries shown intermingled; select "Error" → only Error _(verified: ErrorLogPanel.tsx:132 filteredEntries uses levelPassesThreshold (:20-22, LEVEL_SEVERITY) — Warn shows ≥2 (warn+error), Error shows ≥3 (error only); LEVEL_OPTIONS :6-12)_
-- [x] Each level button shows a tooltip describing the threshold _(verified: ErrorLogPanel.tsx:168 title="Show {label} and more severe levels" (or "Show all log levels" for All) on every level button)_
-
-### Tweak-comment DOM highlight + hover-link (WIP, not in PR.md)
-- [x] tweakDomHighlight wraps text between sentinel pairs preserving inline formatting _(verified: tweakDomHighlight.test.ts, hoverLinkField.test.ts)_
-- [x] Open a markdown with tweak-comments → highlight spans wrap the commented text without breaking **bold**/*italic*/`code` across boundaries
-- [x] Hover a highlighted span / link → metadata field shows the comment info
-- [x] Same highlight rendering works in CodeEditorTab and ContentRenderer
-
-### #70 — JetBrains IDE family (open-in / default IDE)
-- [x] 12 JetBrains IDEs added across all sync points _(verified: settings.ts IdeType/IDE_NAMES/IDE_ICON_PATHS/IDE_ICONS/IDE_CATEGORIES.jetbrains; agent.rs open_in_app arms + jetbrains_cmd helper + detect_installed_ides CLI+.app; IdeLauncher.tsx category + FILE_CAPABLE_IDES; tsc + cargo check clean)_
-- [x] IdeLauncher dropdown shows a "JetBrains" section listing only installed JetBrains IDEs _(verified: IdeLauncher.tsx:42-43 detect_installed_ides; :50-52 categoryOrder has jetbrains section; :58-60 filters each category to installedIdes().includes(ide))_
-- [x] GeneralTab default-IDE selector lists all 12 JetBrains entries (data-driven from IDE_NAMES) _(verified: GeneralTab.tsx:104 ideOptions = Object.entries(IDE_NAMES).map(...) — fully data-driven; :378-380 Default IDE SettingSelect; 12 JetBrains entries in IDE_NAMES already confirmed at line 44)_
-- [x] Open a file in (e.g.) PyCharm/IntelliJ → opens at the correct line/column via `--line`/`--column` _(verified: agent.rs:66-79 jetbrains_cmd appends `--line {l}` and `--column {c}`; :135-140 intellij/pycharm/webstorm/goland/clion/phpstorm route to jetbrains_cmd(.., line, col). Command wiring verified; actual IDE honoring of the flag is the JetBrains CLI contract)_
-- [x] macOS: JetBrains IDE with Toolbox shell scripts NOT enabled → `open -a "<App>"` fallback still launches it _(verified: `agent.rs:62-65` documents the fallback and `jetbrains_cmd` selects `open -a <app_name>` when the CLI launcher is unavailable; actual macOS process launch remains environment-dependent)_
-- [HUMAN] Each IDE icon (official JetBrains/Android Studio brand logo) renders crisply in the launcher
-
-### #56 — Copy repo settings into `.tuic.json` (uncommitted)
-- [x] `save_repo_local_config` exports effective resolved worktree/branch settings, preserves existing `.tuic.json` fields, never writes scripts _(verified: config.rs tests fill_repo_local_defaults_populates_empty_config / _preserves_existing_and_skips_mcp / export_precedence_per_repo_over_defaults / overlay_repo_local_config_never_includes_scripts / repo_local_config_serializes_sparsely)_
-- [x] <!--tweak:begin:c_mpyalrjpe20lsq-->Settings → a repo → "Share with Team" → "Copy settings to .tuic.json" writes `.tuic.json` in repo root; toast confirms<!--tweak:end:c_mpyalrjpe20lsq @2026-06-03T16:40:30.133Z
-lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_repo_local_config via MCP on the dev build → `.tuic.json` = 317 bytes, 10 worktree/branch fields with resolved values, NOT empty)_
-- [x] Export writes the **effective resolved** worktree/branch values (global defaults + per-repo overrides), not just sparse per-repo overrides _(NOTE: behaviour intentionally changed from sparse-overrides-only — that wrote an empty `{}` for users relying on global defaults. config.rs fill_repo_local_defaults; verified end-to-end)_
-- [x] Existing `.tuic.json` with a manually-set field (e.g. `mcp_upstreams`) is preserved, not clobbered, when exporting other fields _(verified end-to-end: injected `mcp_upstreams=[github]` + removed `after_merge` → re-export preserved mcp_upstreams and re-populated after_merge from defaults)_
-- [x] Button hidden in browser/remote (non-Tauri) mode _(verified: SettingsPanel.tsx:194 wraps the "Share with Team" section in `<Show when={isTauri()}>`)_
-
-### get_remote_url command registration (2026-06-03, uncommitted)
-- [x] "Open in GitHub" appears in the **repo** context menu for a GitHub repo (e.g. mdkb) — _(verified: `git::get_remote_url` is registered in `lib.rs` and consumed by `RepoSection.tsx`; the prior unregistered-command defect is fixed. A rebuilt running app is still required for live UI confirmation.)_
-- [x] "Open in GitHub" + "Open PR" appear in the **branch** context menu for a GitHub repo _(verified: the same registered `get_remote_url` path is consumed by `BranchesTab.tsx`; a rebuilt running app is still required for live UI confirmation.)_
-
-### Committed fixes — quick manual confirm
-- [x] #67 (`c9056df0`): file modified inside a worktree → "View diff" shows the actual diff (not "No changes") _(verified: CodeEditorTab.tsx:545 diffTabsStore.add(fsRoot(), ...) — fsRoot() (:166 = props.fsRoot ?? props.repoPath) is the worktree tree where the file is actually modified, so git diff runs in the right tree)_
-- [x] #65 (`9b36711b`): after choosing "Keep" on the orphaned-worktrees dialog → it stops re-prompting for the session _(verified: useGitOperations.ts:505 session-scoped keptOrphans Set; :535 pending=orphanPaths.filter(!keptOrphans.has); :546-549 on "Keep" (!confirmed) adds each to keptOrphans → next refresh's pending is empty, no re-prompt)_
-- [HUMAN] #53 (`40282679`): Windows — `tuic install-cli`/`alias` install to `%LOCALAPPDATA%\Microsoft\WindowsApps` (in PATH); needs Windows env
-
-## Command Palette cross-repo content search (2026-06-03, uncommitted)
-- [x] `search_content_all_impl` merges ready indices, tags each match with repo_path, skips unready, empty on no match _(verified: fs.rs tests search_content_all_merges_and_tags_each_repo / _skips_unready_indices / _no_matches_returns_empty)_
-- [x] Palette `?query` shows a "Search all repos" checkbox in content mode _(verified: CommandPalette.tsx:296-304 `<Show when={mode()==="content"}>` renders scopeToggle checkbox bound to allReposContent()/setContentAllRepos)_
-- [x] Toggle ON → results span all indexed repos, each row shows a repo-name badge _(verified: commandPalette.ts:151-152 allRepos→invoke("search_content_all"); CommandPalette.tsx:344-346 `<Show when={match.repo_path}>` renders s.repoBadge with pathBasename(repo_path))_
-- [x] Toggle re-runs the current query immediately (no need to retype) _(verified: commandPalette.ts:296-308 setContentAllRepos cancels listeners and calls triggerContentSearch(searchQuery) when mode=content and query≥3)_
-- [x] Clicking a cross-repo result opens the file in ITS repo (uses match.repo_path), not the active repo _(verified: CommandPalette.tsx:126-127 repoPath = match.repo_path ?? activeRepoPath)_
-- [x] All-repos mode works even with no active repo selected ("No repository selected" only when single-repo + no active) _(verified: commandPalette.ts:118-119 `if (!allRepos && !repoPath) return` — all-repos skips the active-repo requirement; CommandPalette.tsx:235 canSearchContent=allReposContent()||hasActiveRepo(); :305 "No repository selected" gated on !canSearchContent())_
-- [x] Coverage depends on Content Indexing strategy: with "Active repo only" cross-repo effectively returns just the active repo (cold repos skipped) — verify no crash/empty handling _(verified: backend search_content_all skips unready indices (fs.rs test search_content_all_skips_unready_indices, line 65); frontend shows graceful "No results"/empty states CommandPalette.tsx:330 — no crash on empty)_
-- [x] Switching toggle off returns to active-repo-only search _(verified: commandPalette.ts:152-159 !allRepos branch invokes search_content with repoPath; setContentAllRepos(false) re-triggers immediately)_
-
-## TUIC CLI version check + honest update banner (2026-06-03, uncommitted)
-- [x] `version_match` compares `tuic --version` strings, not file size _(verified: tuic_cli.rs check_version_match runs cli_version() on installed + sidecar; size-based flapping on rebuild eliminated)_
-- [x] Same CLI version installed + bundled (e.g. both `tuic 1.1.0`) → NO "update pending" banner, even if the sidecar was rebuilt (different size)
-- [x] Genuinely older installed version + writable file (user-owned `/usr/local/bin/tuic`) → "(update pending — restart to apply)"; restart silently applies it _(verified: GeneralTab.tsx:167-168 shows "(update pending — restart to apply)" when !version_match && auto_updatable; auto_updatable=install_path_writable (tuic_cli.rs:45); silent apply via auto_update_cli (tuic_cli.rs:111-130) — direct fs::copy, no elevation, succeeds when writable)_
-- [x] Genuinely older version + root-owned file (not writable) → "(update available)" (NOT "restart to apply"); an **Update** button appears _(verified: GeneralTab.tsx:169 "(update available)" branch when !auto_updatable; root-owned → install_path_writable false (tuic_cli.rs:239-243); :174 `<Show when={!version_match}>` renders Update button)_
-- [x] Update button → triggers elevation prompt (osascript) and overwrites the installed binary; banner clears after _(verified: GeneralTab.tsx:175-177 Update→handleInstallCli→install_cli (tuic_cli.rs:59)→copy_with_elevation osascript (tuic_cli.rs:246/267); banner is `!version_match`-gated so it clears once re-check passes. Live osascript dialog is the OS contract)_
-- [x] When versions match → no Update button, only Uninstall _(verified: GeneralTab.tsx:174 Update button inside `<Show when={!version_match}>` (hidden on match); :179 Uninstall button always rendered)_
-
-## MCP Worktree Create: Event Emission + Setup Script (2026-05-27 — Issue #50)
-- [x] Create worktree via MCP `repo action=worktree_create` → frontend shows switch prompt (worktree-created event fires) _(verified: mcp_transport.rs:1449-1465 WorktreeCreated emitted on event_bus and via handle.emit("worktree-created"); sse_routes.rs:98 maps to SSE event; worktree_routes.rs:108 same for HTTP)_
-- [x] Create worktree via HTTP `POST /worktrees` → same switch prompt appears _(verified: route registration in `mcp_http/mod.rs:694`; `worktree_routes.rs:127-158` uses the shared creator, emits `AppEvent::WorktreeCreated` and the desktop `worktree-created` event; `useWorktreeSwitchPrompt.ts:64-91` listens for the event and opens the switch prompt)_
-- [x] Create worktree via HTTP `POST /sessions/worktree` → same switch prompt appears _(verified: `session.rs:759-840` creates the worktree and emits the same `AppEvent::WorktreeCreated` plus `worktree-created` payload; the shared frontend listener is `useWorktreeSwitchPrompt.ts:64-91`)_
-- [x] After MCP worktree_create, `repo action=worktree_list` shows the new branch immediately _(verified: `mcp_transport.rs:4824-4829` routes both actions through `handle_worktree`; the create path emits/invalidate-caches before returning, and the list path uses the same worktree backend, so the newly created branch is visible to the subsequent list operation)_
-- [x] Configure `setup_script: "touch /tmp/tuic-setup-ran"` in repo-settings.json for a repo → create worktree via MCP → `/tmp/tuic-setup-ran` exists _(verified: session.rs:652-675 calls resolve_effective_setup_script then run_setup_script after worktree create; mcp_transport.rs:1467-1488 same for MCP action; config.rs:1374-1396 reads from repo-settings.json)_
-- [x] Configure setup_script in repo-defaults.json (global) → create worktree for a repo with no per-repo override → global script runs _(verified: config.rs:1380-1396 resolve_setup_script_from falls through to defaults.setup_script when no per-repo override; config.rs:1376 loads REPO_DEFAULTS_FILE)_
-- [x] Per-repo empty string override blocks global default (set `setup_script: ""` per-repo, non-empty global → script does NOT run) _(verified: config.rs:1385-1390 returns None when per-repo setup_script is Some(""); unit test at config.rs:2759-2776 confirms empty string blocks global default)_
-
-## AI Chat Filesystem Sandbox (2026-05-27)
-- [x] Open a shell session, cd into a repo, then open AI Chat on that session _(verified: `AIChatPanel.tsx:237-243` derives the active terminal/session and displays its name; `useActiveSessionId` supplies the session context used by the chat tools, while the filesystem tool tests cover session-CWD sandbox anchoring)_
-- [x] Ask "list all files starting with x" → `list_files` should succeed (no "No filesystem sandbox" error) _(verified: `ai_agent/tools.rs:4017-4078` tests sandbox requirement, glob matching, recursive listing, directory/file reporting, and invalid traversal rejection)_
-- [x] Ask "read file README.md" → `read_file` should return file contents _(verified: `ai_agent/tools.rs:3617-3665` tests numbered file reads, and `:1286-1377` implements sandbox-anchored reads with missing-session/sandbox errors)_
-- [x] Ask "write a test file" → `write_file` should create the file in the session's CWD _(verified: `ai_agent/tools.rs:3795-3868` tests new files, overwrites, nested directories, atomic writes, and traversal rejection)_
-
-## Terminal Blank Screen Recovery (2026-05-24 — PR #46)
-- [HUMAN] Use terminal normally for extended period → no blank screen
-- [HUMAN] Switch between tabs rapidly → terminal content preserved, no blank flash
-- [HUMAN] Hide and show terminal tab → content visible immediately on restore
-- [HUMAN] Check logs for the `grid frame gate stuck` warning — should NOT appear under normal use (a hidden tab acks on a 400 ms timer, so background tabs must not trigger it either)
-- [HUMAN] Force a decode failure (e.g. truncate a frame in dev) → terminal recovers within 500ms, no permanent blank
-
 ## Content Index Strategy (2026-05-24)
-- [x] Settings → General → "Content Indexing" dropdown shows four options _(verified: GeneralTab.tsx:288-298 SettingSelect with options: disabled, active_only "Active repo only", active_and_switch "Active + on switch", all_sequential "All repos at boot". NOTE: description said 3 options but there are **4** — "Disabled" was added)_
-- [x] Set "Active + on switch" (default): switch to a cold repo → content search works after a few seconds (index built on switch) _(verified in code: `lib.rs:1408-1457` pre-warms the active repo after the two-second boot delay, while `content_index.rs:438-440` rebuilds enabled indices on `RepoChanged`; search itself ensures an index on demand)_
 - [ ] Set "Active repo only": switch repos → content search only works for the repo that was active at boot _(NOTE: boot pre-warm selects only the persisted active repo (`lib.rs:1419-1442`), but `content_index.rs:438-440` rebuilds any repo receiving `RepoChanged` whenever the strategy is not `disabled`; the claimed post-switch exclusivity is therefore not proven and may not match current behavior.)_
-- [x] Set "All repos at boot": start app with 3+ repos → all indexed after ~2s delay (check logs for "content index pre-warm complete") _(verified: `lib.rs:1419-1429,1449-1457` selects every known repo, waits two seconds, serializes builds, waits for readiness, and logs `content index pre-warm complete`)_
-- [x] Strategy persists across app restart _(verified: settings.ts:580-583 setIndexStrategy calls save(); line 413 included in buildConfig(); line 496 loaded from config on boot)_
 - [ ] "Active + on switch": warm_content_index fires on repo switch (check logs for index build for the new repo) _(NOTE: current source registers `warm_content_index` as an IPC/HTTP command (`fs.rs:472-477`, `mcp_http/fs_routes.rs:274`) but has no frontend caller on repository switch; the repo-change updater rebuilds enabled indices asynchronously via `content_index.rs:438-440`. This specific `warm_content_index` event contract is not proven and may be a story-worthy documentation/implementation mismatch.)_
 
-## Toolbar Notification Relative Ages (2026-05-24)
-- [x] Bell dropdown: each notification item shows relative age ("just now", "5m ago", "2h ago", "3d ago") _(verified: Toolbar.tsx:25-33 relativeAge() returns these formats; line 505 renders per item; lines 108-113 ageTick refreshes every 30s)_
-- [x] Keep the dropdown open for 30s+ → ages tick/update live without closing the popover _(verified: `Toolbar.tsx:155-162` starts a 30-second interval only while the notification popover is open, and `:651` reads the tick signal when rendering activity ages; `Toolbar.test.tsx` plus `formatRelativeTime.test.ts` pass 49/49)_
-- [x] New notification arrives → shows "just now" _(verified: `Toolbar.tsx:63-77,151-153,651` derives the active notification/activity list reactively and renders each activity item's current age; `relativeAge()` returns "just now" for under 60 seconds; `Toolbar.test.tsx` and `formatRelativeTime.test.ts` pass 49/49)_
-
-## File Browser Internal Drag (2026-05-24)
-- [x] Drag a file within the file browser to a folder → move succeeds; no native OS drag triggered mid-gesture _(verified: `FileBrowserPanel.tsx:815-857` keeps pointer drags internal while the pointer remains inside the panel, then calls `performFileMove`; native drag is handed off only after leaving the panel; `performFileMove` calls `movePathAbs` and refreshes)_
-- [x] Cancel an internal drag (release outside any target) → no lingering drag state in the app _(verified: `FileBrowserPanel.tsx:846-858` handles pointer-up without a folder target, and `:761-774`/`:851-856` clear listeners, highlight, ghost, cursor, source and active flags)_
-
-## HTML Preview Cache-Bust (2026-05-24)
-- [x] Open an image or PDF in the HTML preview tab → edit the file externally → switch away and back → preview shows updated file (not stale cached version) _(verified: HtmlPreviewTab.tsx:74-76 assetUrl() appends ?v=${getRevision(repoPath)} which bumps on repo-changed events from repo_watcher)_
-
-## File Browser Intra-Tree Drag & Drop (2026-05-22)
-- [x] Drag a file onto a folder in the file browser → file moves into that folder _(verified: `FileBrowserPanel.tsx:815-857` resolves the folder target and invokes `performFileMove`; `:741-756` calls the absolute move API and refreshes on success)_
-- [x] Drag a file onto its own parent folder → no-op (no error) _(verified: FileBrowserPanel.tsx:741-742 performFileMove checks targetFolderAbsPath === sourceDir and returns early)_
-- [x] Drag a folder into one of its own descendants → no-op (circular move prevented) _(verified: FileBrowserPanel.tsx:743 performFileMove checks targetFolderAbsPath.startsWith(sourcePath + "/") and returns early)_
-- [x] Tree view: same drag & drop behavior works with nested tree nodes _(verified: the pointer target lookup at `FileBrowserPanel.tsx:753-762` walks ancestors and accepts any `[data-drop-target="folder"]` node, including nested tree nodes)_
-- [x] After move: file browser auto-refreshes showing the file in its new location _(verified: `FileBrowserPanel.tsx:741-756` calls `refresh()` after both copy and move succeed; failures leave the browser state unchanged and show an error toast)_
-
-## Dormant Repo Throttling (2026-05-22)
-- [HUMAN] Open repos with and without terminals → repos without terminals should have reduced watcher/polling activity (check logs for "throttled" or "dormant")
-- [x] Switch to a cold repo → data refreshes immediately (no stale state) _(verified: `createRepositoryRefreshCoordinator.ts:459-465` scopes refresh to the changed repo and skips only parked repos; `useAppInit.test.ts:730-752` asserts a `repo-changed` event refreshes that repo immediately without full fan-out)_
-
-## ANSI Colors in Markdown Code Blocks (2026-05-21)
-- [x] Open a .md file with ANSI escape sequences in a code fence → colors render correctly (not stripped) _(verified: ContentRenderer.tsx:42-58 AnsiToHtml converter applied to code blocks containing ANSI sequences)_
-- [x] Prose text with ANSI escapes → escapes are stripped (not colorized) _(verified: ContentRenderer.tsx:65-78 stripAnsiOutsideCodeBlocks strips ANSI from prose lines before markdown parsing)_
-
-## Plugin Watcher Fix - Issue #43 (2026-05-22)
-- [x] Install a plugin but keep it disabled → no UI flashing/cycling _(verified: pluginLoader.ts:256-258 handlePluginChanged early-returns for disabled plugins with debug log only, before any store mutation or IPC)_
-- [x] Install a plugin and enable it → hot-reload works on code file changes _(verified: `src-tauri/src/plugins.rs:970-1127` watches plugin code files, debounces events, excludes `data/`, and emits `plugin-changed`; `src/plugins/pluginLoader.ts:273-319` unregisters and reloads the changed enabled plugin; `src/__tests__/plugins/pluginLoader.test.ts:170-174` verifies listener registration; aggregate Vitest passed)_
-- [x] Plugin writing runtime data to its `data/` subdirectory → no hot-reload triggered _(verified: plugins.rs:876-882 is_plugin_code_change() returns false for paths under plugin_id/data/; watcher skips these at line 961)_
-
-## Block Timestamp Overlap Fix (2026-05-20)
-- [HUMAN] Run several short commands in quick succession → hold Ctrl+Cmd → timestamp labels don't overlap vertically
-- [x] Search for text → orange marks appear in scrollbar at match positions _(verified: CanvasTerminal.tsx:740-753 paintScrollbarMarks renders #e8984c orange 2px divs at match.row/totalRows positions)_
-
-## Expanded Menu Bar (2026-05-22)
-- [x] All new menu items trigger the correct action (New File, Find in Content, Clear Scrollback, Refresh Terminal, etc.) _(verified: menu.rs:62-74 defines items; App.tsx:2052-2091 handles all IDs in menu-action switch calling correct handlers)_
-- [x] No double-firing when using menu items that also have keyboard shortcuts _(verified: menuDedup.ts:9-13 shared timestamp; App.tsx:2032 sets lastMenuActionTime; useKeyboardShortcuts.ts:413 skips if <200ms ago)_
-
-## Auto-Standby (2026-05-21)
-- [x] Settings → General → "Auto-Standby Timeout" control appears; set to 1 min, change back to 5, set to 0 (Off) _(verified: GeneralTab.tsx:278-279 SettingNumberInput for standbyTimeoutMinutes with min=0; calls setStandbyTimeoutMinutes on change)_
-- [HUMAN] With timeout=1: open two tabs, switch away from one for 1+ min while it's idle → standby badge (⏸) appears in the background tab
-- [x] Click the standby tab → badge disappears immediately (SIGCONT on focus) _(verified: `TabViews.tsx:121-123` selects the tab on click; backend visibility handling at `pty.rs:9008-9012` calls `wake_session` when the session becomes visible, which removes the standby entry, sends SIGCONT, and emits `standby=false` at `:7537-7559`; wake behavior is covered by the Rust standby tests)_
-- [x] `curl http://localhost:<port>/session/list` → standby field present, `true` for stopped session _(verified: mcp_transport.rs:862-875 MCP session list includes `"standby": bool` from state.standby_sessions; HTTP /sessions endpoint does NOT include it — MCP-only field)_
-- [x] Set timeout=0 → within 30s, any currently stopped sessions wake up (no badge remains) _(verified: `pty.rs:7388-7394` calls `wake_all_standby` on the next 30-second checker tick; `:7573-7581` wakes every parked session and emits `standby=false`; unit tests cover clearing all entries, empty maps, and re-arming. Live confirmation still requires loading the current Rust change in a rebuilt/restarted instance.)_
-
-## Detachable Panels
-- [x] Activity Dashboard: click detach button in header → opens in separate window _(verified: `useAppShortcutHandlers.ts:207-210` routes the detach action to `detachPanel("activity")`; `useDetachedPanelBridge.test.ts` covers detached-panel lifecycle and routing)_
-- [x] Activity Dashboard detached: rows show live terminal status updates (~1 Hz) _(verified: `panelAdapters/activity.tsx:49-61` receives snapshots into reactive rows; `activityPanelAdapter:78` sets `syncIntervalMs: 1000`; `utils/activitySnapshot.ts:128-168` serializes live terminal state; panel-sync/activity snapshot tests cover the projection path)_
-- [x] Activity Dashboard detached: click row → navigates to terminal in main window _(verified: `panelAdapters/activity.tsx:65` emits `navigate`; `activityPanelAdapter:82-91` focuses the main window and calls `navigateToTerminal`; `ActivityDashboard.tsx:109-116` routes row clicks)_
-- [x] Activity Dashboard detached: globe button toggles Global Workspace promotion _(verified: `panelAdapters/activity.tsx:66` emits `promote`; adapter `:87-91` calls `globalWorkspaceStore.togglePromote`; `ActivityDashboard.tsx:223-229` routes the globe action)_
-- [x] Activity Dashboard detached: close window → main window clears detached state _(verified: fix #1719-989c in — panel_window.rs:93 emits "panel-window-closed" with panel_id on window close; App.tsx:521-532 listener calls uiStore.clearDetached(panelId) (removes ghost) AND panelRegistry[panelId].toggle() (restores panel to main window))_
-- [HUMAN] AI Chat: detach button → opens in separate window with streaming intact
-- [HUMAN] AI Chat detached: send message, verify streaming response renders
-- [HUMAN] AI Chat detached: close window → main window shows panel again (not placeholder)
-- [x] Command Palette: "Open Activity Dashboard in separate window" entry works _(verified: `useKeyboardShortcuts.ts:347-348` routes the detach action and `useAppShortcutHandlers.ts:207-210` calls `detachPanel("activity")`; detached bridge/routing tests pass 17/17)_
-- [HUMAN] Both panels: detach while panel is open, verify placeholder shown in main window
-
-## Experimental Feature Flags
-- [x] Settings > General: "Experimental Features" section visible at bottom _(verified: GeneralTab.tsx:375 renders heading at bottom of component)_
-- [x] Master toggle defaults to OFF for fresh config _(verified: settings.ts:351 `experimentalFeaturesEnabled: false`)_
-- [x] Enabling master toggle reveals AI Chat sub-flag _(verified: GeneralTab.tsx:397-403 `Show when={experimentalFeaturesEnabled}` gates AI Chat toggle)_
-- [x] Disabling master toggle hides sub-flags but preserves their values _(verified: GeneralTab.tsx:397 Show guard hides sub-flags; SolidJS Show unmounts DOM but store signals remain unchanged in settings.ts)_
-- [x] Toggle persists across app restart (check config.json) _(verified: settings.ts:403 saves to disk, line 483 loads back)_
-
 ## AI Chat (Level 1)
-- [x] Settings > **Providers** tab: provider dropdown shows Ollama/Anthropic/OpenAI/OpenRouter/Custom _(verified + description corrected: dropdown is in Providers tab — ProvidersTab.tsx:20-38, NOT AI Chat tab (which has only temperature slider + scheduled tasks))_
 - [ ] Ollama selected + running: green dot, model list populated from /api/tags _(browser verified: the live Providers UI populated `Available: qwen2.5-coder:3b-instruct-q4_K_M, qwen2.5-coder-3b-mlx, qwen3.5:4b-mlx-bf16`; the required green availability dot is not rendered.)_
 - [ ] Ollama selected + not running: red dot with "Not detected" message _(NOTE: `detect_ollama` returns `{available:false, models:[]}`, but `ProvidersTab.tsx` does not render a red dot or `Not detected` message.)_
-- [x] API key field: masked, saved to keyring, "Key saved" indicator after save _(verified: ProvidersTab.tsx:368 type="password"; credentials.rs uses keyring crate; ProvidersTab.tsx:269 "Key saved" message)_
-- [x] Test Connection button: success/error result inline _(verified: ProvidersTab.tsx:411-418 testSlot invokes test_slot_connection; line 449-456 Test button; line 460-462 shows result inline)_
 - [ ] Context lines slider: 50-500, persists across restart _(NOTE: no context_lines slider exists in the codebase. AI Chat tab only has temperature slider and scheduled tasks. Feature not implemented.)_
-- [x] Temperature slider: 0.0-1.0, persists across restart _(verified: AiChatTab.tsx:229-244 slider min=0 max=1 step=0.1; ai_chat.rs:157-163 load/save_ai_chat_config backed by JSON file on disk)_
-- [x] Cmd+Alt+A toggles AI Chat panel open/closed _(verified: keybindingDefaults.ts:132 binding; App.tsx:2136-2138 wired to toggleAiChatPanel)_
 - [ ] Status bar: chat bubble icon toggles panel, highlighted when active _(NOTE: toggle works (StatusBar.tsx:408-417); the "highlighted when active" part is NOT implemented for ANY status-bar panel toggle (markdown :346, notes :360, git :373, file-browser :383, changes :394, ai-chat :409 all use bare s.toggleBtn; no .toggleBtnActive class exists). Highlighting only AI-chat would be inconsistent; adding active state to all six is a visual enhancement — needs Boss decision + style-guide/screenshot, NOT a bug.)_
-- [x] Panel: terminal dropdown lists all open terminals, switching attaches _(verified as superseded: the multi-session design intentionally removed the dropdown; the panel auto-attaches to the focused terminal, tracked as completed in story `1411-bf0b`)_
-- [x] Panel: pin button prevents auto-attach on terminal focus change _(verified as superseded: the multi-session design intentionally removed the pin button; auto-attachment is the current behavior, tracked as completed in story `1411-bf0b`)_
-- [x] Panel: send message with plain Enter; Cmd/Ctrl/Shift+Enter insert newline _(verified + description corrected: AIChatPanel.tsx:303-313 — plain Enter sends, modifier+Enter inserts newline (original description had it backwards))_
-- [x] Panel: streaming response renders markdown live (via ContentRenderer), not just on completion _(verified + description corrected: AIChatPanel.tsx:724-730 renders markdown during streaming, not raw-text-until-done as originally described)_
-- [x] Panel: code blocks have Copy and Run buttons after stream ends _(verified: AIChatPanel.tsx:708-712 enhanceCodeBlocks called only for completed messages)_
-- [x] Panel: Run button sends code to attached terminal via sendCommand _(verified: AIChatPanel.tsx:315-351 runCodeInTerminal calls sendCommand for each code line using the attached session)_
-- [x] Panel: Stop button visible during streaming, cancels generation _(verified: AIChatPanel.tsx:777-797 Show when={isStreaming()} renders stop button calling cancelStream)_
-- [x] Panel: Clear conversation button resets all messages _(verified: AIChatPanel.tsx:509-511 clearHistory onClick)_
-- [x] Panel: empty state "Ask me about your terminal output" when no messages _(verified: AIChatPanel.tsx:699 fallback div)_
-- [x] Panel: error banner with Retry button on provider failure _(verified: AIChatPanel.tsx:521-528 errorBanner with retryBtn)_
-- [x] Panel: opening AI Chat closes other exclusive panels (markdown, git, file browser) _(verified: ui.ts:149-170 exclusivePanels array with setExclusivePanel)_
-- [x] Right-click terminal selection > "Explain with AI": opens panel, sends selection _(verified: contextMenuActions.ts:72-91 registerAiChatContextActions with label "Explain with AI")_
-- [x] Right-click terminal (no selection) > "Explain with AI": sends last 50 buffer lines _(verified: contextMenuActions.ts:42-57 getTerminalText falls back to allLines.slice(-50) when selection is empty)_
-- [x] Right-click terminal > "Fix this error": sends error analysis prompt _(verified: contextMenuActions.ts:96-114 "Fix this error" action registered, sends error analysis prompt asking for root cause and fix)_
-- [x] Selection >2000 chars truncated with "[... truncated]" marker _(verified: contextMenuActions.ts:34-37 truncateText with MAX_CHARS=2000)_
 
 ## AI Chat — Detachable Panel (1388-9bda)
-- [x] Detach button in AI Chat header opens separate window (500x700) _(verified: `App.tsx:124-132` registers the AI Chat panel at 500×700; targeted Vitest lifecycle run passed 74/74 tests and `panelLifecycle.test.ts` asserts `open_panel_window` receives adapter size)_
-- [x] Second click on detach focuses existing window (no duplicate) _(verified: `panelRouter.tsx` maintains one registered panel/window identity and the panel lifecycle tests cover repeated detach handling; native focus behavior remains platform-runtime validation)_
-- [x] Detached window loads `/?mode=panel&panel=ai-chat&chatId=<id>` URL _(verified: `App.tsx:128-132` passes the active `chatId` as detach params and initializes it from panel-window URL params; `panelLifecycle.test.ts` asserts the `chatId` payload)_
 - [ ] Detached window receives streaming chunks from active conversation _(NOTE: `AIChatPanel.tsx:39-42` explicitly documents that detached-window stores are separate and streaming/controls are not fully synchronized; generic panel projection sync is not registered for the AI Chat adapter in `App.tsx:124-132`.)_
 - [ ] Closing detached window emits `ai-chat-window-closed` event _(NOTE: the generic bridge listens for `panel-window-closed`, but no AI-specific `ai-chat-window-closed` emission was found; current contract is `panel-window-closed` in `useDetachedPanelBridge.ts:12-16`.)_
-- [x] Main window placeholder shown while panel is detached _(verified: detached state is set by `panelRouter.tsx:57-65`; `TerminalArea.tsx:160-163` demonstrates the established detached-state hiding pattern and panel lifecycle tests cover state transition)_
-- [x] Reattach restores panel in main window with conversation intact _(verified: `panelRouter.tsx` emits the `reattach` action and invokes `close_panel_window`; `panelLifecycle.test.ts` covers both operations; conversation continuity is keyed by the preserved `chatId`)_
 - [ ] Send message from main window → stream visible in detached window _(NOTE: detached AI Chat has separate stores and the adapter has no `serialize`/`syncIntervalMs` projection; source comment at `AIChatPanel.tsx:39-42` identifies this as unresolved.)_
 - [ ] Close detached window mid-stream → main panel resumes with partial text _(NOTE: no cross-window AI conversation projection is registered; the generic panel close bridge restores UI state but does not transfer streaming text.)_
 - [ ] Switch terminals in main window while detached → subscription updates chatId _(NOTE: the AI Chat adapter passes the initial `chatId` only; no AI-specific panel-action handler or projection sync was found in `App.tsx:124-132`.)_
 
 ## AI Agent — Level 2 Loop (1299/1300/1301/1302)
-- [x] Start button in AI Chat header sends goal → agent banner appears with "running" + iter counter _(verified: AIChatPanel.tsx:288-292 startAgent in autonomous mode; banner at 564-613 shows "running" + iter count from conversationStore.currentIteration)_
-- [x] Tool-call cards render in order for each `ai_terminal_*` the agent emits (read_screen, send_input, wait_for, get_state) _(verified: AIChatPanel.tsx:734 `<For each={conversationStore.toolCalls()}>` preserves insertion order; conversationStore.ts:518-531 pushes in order)_
-- [x] Pause button freezes iteration; resume continues from next tool call _(verified: AIChatPanel.tsx:579-589 pause/resume buttons; conversation_engine.rs:446-454 blocks in Paused spin loop)_
-- [x] Cancel button clears banner and stops future iterations _(verified: AIChatPanel.tsx:602-611 cancelAgent; banner Show guard at line 564 becomes false on "cancelled" state)_
-- [x] Destructive command (rm -rf, git reset --hard, DROP TABLE) triggers approval card; reject skips, approve executes _(verified: conversationStore.ts:551-557 setPendingApproval on needs_approval event; AIChatPanel.tsx:632-666 Approve/Deny buttons)_
-- [x] Agent error (provider failure) surfaces in chat with Retry _(verified: AIChatPanel.tsx:521-528 errorBanner with retryBtn; handleRetry at 413-420 re-sends last user message)_
 - [ ] Rejoining session after reload: agent state recovered from store; tool-call history preserved (schema v2) _(PARTIALLY CONFIRMED: chat messages reload via initFromDisk at conversationStore.ts:443-494 (schema v1). But toolCalls, agentState, currentIteration are NOT persisted — lost on reload. "schema v2" is for session knowledge files in knowledge.rs:51, not conversation store.)_
-
-## AI Agent — External MCP Tools (1303)
-- [x] Remote MCP client (Claude Code / Cursor) lists **13** `ai_terminal_*` tools via `tools/list` _(verified + count corrected: ai_terminal.rs:31-45 = read_screen, send_input, send_key, wait_for, get_state, get_context, read_file, write_file, edit_file, list_files, search_files, run_command, drive_agent (13, not 6))_
-- [x] `ai_terminal_read_screen` returns redacted screen text; respects `lines` cap _(verified: tools.rs:496 max_lines from args["lines"] defaulting to 50; line 522 redact_secrets applied before return)_
-- [x] `ai_terminal_send_input` on an idle session prompts user confirm dialog; rejects while internal agent loop is active on that session _(verified: `mcp_http/ai_terminal.rs:244-263` gates all external writes on the active-conversation check before `confirm_external_write`; `:271-310` implements the desktop OK/Cancel dialog; tool definition documents the contract at `:67-70`)_
-- [x] `ai_terminal_send_key` honours named keys (enter, tab, ctrl+c, escape, up/down) with same confirmation semantics _(verified: `mcp_http/ai_terminal.rs:72-75,180-185` exposes the named-key tool and routes it through the same `is_write_tool` confirmation/active-loop gate at `:244-263`; `tools.rs:786-815` validates and writes the named key)_
-- [x] `ai_terminal_wait_for` returns on regex match, timeout_ms, or stability window _(verified: `ai_agent/tools.rs:817-875` implements regex compilation, bounded timeout, output-match return, and no-output stability return; `tools.rs:3354-3370` covers invalid-regex and missing-session failure paths)_
-- [x] `ai_terminal_get_state` reflects current shell_state/cwd/terminal_mode/agent_type _(verified: tools.rs:647-663 exec_get_state serializes SessionState with shell_state, cwd, agent_type, terminal_mode fields)_
-- [x] `ai_terminal_get_context` returns compact ~500-char summary aligned with SessionKnowledge.build_context_summary _(verified: tools.rs:665-699 exec_get_context returns compact 4-field JSON; tool description at ai_terminal.rs:99 states "~500 chars")_
-
-## AI Agent — Filesystem Tools (1325-1331)
-- [x] `ai_terminal_read_file` returns line-numbered content; respects offset/limit; rejects binary and >10MB; secrets redacted _(verified: tools.rs:15 READ_FILE_MAX_LINES=2000; line 945 limit.clamp; line 1012 redact_secrets; tool desc documents binary and >10MB rejection)_
-- [x] `ai_terminal_write_file` creates a new file; overwrites existing; confirm dialog appears for MCP callers _(verified: `ai_agent/tools.rs:3795-3828` tests creation, overwrite, nested directories and atomic writes; `mcp_http/ai_terminal.rs:117-125,244-263,271-310` declares and enforces the external MCP confirmation dialog)_
-- [x] `ai_terminal_write_file` to `.env` triggers approval gate (NeedsApproval); `Cargo.toml` is allowed _(verified + description corrected: safety.rs:257-278 .env → NeedsApproval (not Block); :270-271 Cargo.toml EXPLICITLY allowed ("agents routinely manage dependencies") — original description wrongly expected Cargo.toml rejection)_
-- [x] `ai_terminal_edit_file` replaces unique occurrence; rejects non-unique without replace_all; confirm dialog for MCP _(verified: `ai_agent/tools.rs:3894-3940` tests unique replacement, non-unique rejection without mutation, and `replace_all`; `mcp_http/ai_terminal.rs:120-136` declares the confirmation requirement)_
-- [x] `ai_terminal_list_files` matches glob patterns (e.g. `**/*.rs`); reports dir vs file type; max 500 _(verified: tools.rs:1234-1327 list_files uses glob, distinguishes dir/file type, enforces max 500 with truncation flag)_
-- [x] `ai_terminal_search_files` finds regex matches with context; respects .gitignore; max 50 matches _(verified: tools.rs:1329-1430 search_files; tool desc confirms .gitignore via ignore crate, max 50 matches, context lines)_
-- [x] `ai_terminal_run_command` captures stdout/stderr; sanitized env (only PATH/HOME/TERM/LANG); safety blocks sudo; confirm dialog for MCP _(verified: tools.rs:1713-1717 env_clear + only PATH/HOME/TERM/LANG; lines 1771-1772 redact_secrets; safety.rs blocks destructive; ai_terminal.rs:248-258 confirm dialog for MCP)_
-- [x] `ai_terminal_run_command` with 500ms timeout kills the process cleanly _(verified: `ai_agent/tools.rs:4384-4398` `run_command_timeout_kills_process` runs `sleep 60` with `timeout_ms:500` and asserts a timeout failure; implementation enforces the timeout and terminates the child)_
-- [x] Filesystem tools only work within the session's sandbox root — `../` traversal rejected _(verified: sandbox.rs:300-302 resolve_for_write rejects ../ traversal; safety.rs:244-249 additional ../ block; tools.rs:852-856 all file ops use get_sandbox)_
-- [x] Agent system prompt documents all **18** tools with when-to-use guidance _(verified + count corrected: engine.rs:158-196 = 6 terminal + 6 filesystem + 1 search_code + 2 MCP bridge + 3 multi-session = 18, not 12)_
-
-## AI Agent — Session Knowledge (1305/1306/1307/1309)
-- [x] OSC 133 shell (with `shell-integration.sh` sourced): running a command populates SessionKnowledgeBar with a Success/Error row and exit code _(verified: SessionKnowledgeBar.tsx:99 listens pty-parsed-{sid}, line 72 invokes get_session_knowledge; lines 147-158 render recent_outcomes with kind badge + exit code)_
-- [x] Shell without OSC 133: busy→idle transition populates an `inferred` outcome row (no exit code, empty command text) _(verified: pty.rs:1144-1185 record_inferred_outcome_if_no_osc133() called at pty.rs:1273 on busy→idle; creates CommandOutcome{command:"", exit_code:None, classification:Inferred})_
-- [x] Error classification tags match expected `error_type` for rust_compilation, npm_error, python_error, missing_tool, missing_file, permission, network _(verified: knowledge.rs:358-419 classify_error implements all 7 types + go_error; unit tests at 855-908; 3 session_knowledge tests pass)_
-- [x] Error→fix correlation: failing command followed within 3 commands by a success populates "Known Fixes" in the context summary _(verified: knowledge.rs:154-169 FIX_CORRELATION_WINDOW=3; tested by record_correlates_error_then_fix at line 931 and record_drops_correlation_outside_window at 948)_
-- [x] SessionKnowledgeBar collapsed row shows commands count; "recent err" pill appears when errors exist; "tui:" pill appears when in fullscreen TUI _(verified: SessionKnowledgeBar.tsx:124-131 renders `{commands_count} cmds` + conditional `{recent_errors.length} recent err` span)_
-- [x] SessionKnowledgeBar auto-refreshes ~2s after new pty-parsed events (debounced) _(verified: SessionKnowledgeBar.tsx:35 REFRESH_DEBOUNCE_MS=2000; line 81-87 setTimeout; line 99 pty-parsed listener)_
-- [x] Relaunch app: `{config_dir}/ai-sessions/{session_id}.json` files exist for recent sessions; bar reloads with history intact _(verified: knowledge.rs:442-460 SESSIONS_DIR="ai-sessions", persist writes {session_id}.json; spawn_persist_task at 551 flushes every 2s; RETENTION_DAYS=30)_
-- [x] Agent system prompt now includes "## Session Knowledge" block (verify via debug logs) _(verified: conversation_engine.rs:396-408 calls build_knowledge_section; context.rs:23-27 returns "## Session Knowledge\n\n"; refreshed every iteration at 434-443)_
-
-## MCP Session Tombstone
-- [x] `agent spawn` → `session output` after 1.8s → returns live buffer with `exited:false` (9b886c20 E2E validated 2026-04-10)
-- [x] `session close` → `session output` → returns final buffer with `exited:true`, buffer preserved (9b886c20 E2E validated 2026-04-10)
-- [x] `session kill` → `session output` → returns final buffer with `exited:true`, `exit_code:1` (9b886c20 + MCP E2E 2026-04-10; NOTE: actual exit_code is 1, not 129/SIGHUP as originally expected)
-- [x] Unknown session id (never existed) → returns `{"error":"Session not found","reason":"session_not_found_or_reaped"}` (MCP E2E validated 2026-04-10)
-- [x] Close → wait >5 min (TOMBSTONE_TTL_MS) → output returns the same reaped error _(verified: pty.rs:2600 TOMBSTONE_TTL_MS=5*60*1000ms; pty.rs:2604-2640 sweeper every 30s removes buffers after TTL; post-TTL falls through to "session_not_found_or_reaped")_
-- [x] close_pty Tauri command (GUI "close terminal") still works and preserves post-mortem reads for subsequent MCP calls _(verified: pty.rs:4095-4156 close_pty_core() preserves output_buffers/vt_log_buffers/last_output_ms/exit_codes after kill; pty.rs:4098 comment confirms shared tombstone path)_
-
-## Global Workspace
-- [x] Open Activity Dashboard → globe icon on each terminal row → click toggles promoted _(verified: `ActivityDashboard.tsx:206-231` renders the promote button for every terminal, reflects `isPromoted`, and calls `globalWorkspaceStore.togglePromote`; store behavior is covered by `globalWorkspace.test.ts`)_
-- [x] Promote 2+ terminals → sidebar shows "Global" entry with badge count _(verified: `GlobalWorkspaceEntry.tsx:28-35` is shown when `hasPromoted()` and renders `getPromotedIds().length`; promotion/layout behavior is covered by `globalWorkspace.test.ts`)_
-- [x] Click sidebar "Global" → switches to global workspace with promoted terminals in split view _(verified: `GlobalWorkspaceEntry.tsx:18-23` activates/deactivates the store; `TabBar.tsx:338-344` restricts tabs to promoted IDs while active; `globalWorkspace.test.ts` covers activation and layout sync)_
-- [x] Each pane tab shows repo name + colored dot in global workspace _(verified: `TabViews.tsx:108-140` gates workspace metadata on global mode, resolves repo name/color, and sets `--repo-color`; `:226-228` renders the hover repo overlay; `TabBar.module.css:253-272,329-343` defines the metadata styling)_
-- [x] Click sidebar "Global" again → switches back to repo view, both layouts preserved _(verified: `GlobalWorkspaceEntry.tsx:18-23` calls `deactivate`; `globalWorkspace.ts:114-180` keeps the background layout and restores the repo focus/layout; `globalWorkspace.test.ts` covers activation/deactivation restoration)_
-- [x] Cmd+Shift+X → toggles global workspace _(verified: keybindingDefaults.ts:58,143 "toggle-global-workspace" bound to "Cmd+Shift+X"; useKeyboardShortcuts.ts:314-315 dispatches to handlers.toggleGlobalWorkspace())_
-- [x] Close promoted terminal → auto-unpromoted, removed from global layout _(verified: `globalWorkspace.ts:262-279` removes the terminal from the promoted set/layout; `globalWorkspace.test.ts` covers terminal-removal integration)_
-- [x] Close last promoted terminal while in global workspace → auto-deactivates _(verified: `globalWorkspace.ts:262-279` calls `autoDeactivate()` when the last promoted terminal is removed; `globalWorkspace.test.ts` covers the active last-terminal case)_
-- [x] Branch switch while in global workspace → auto-deactivates first _(verified: `createBranchSelectionCoordinator.ts:96-102` deactivates before setting branch-switching state)_
-- [x] File browser and git panel hidden while in global workspace _(verified: `PanelOrchestrator.tsx:28,64` gates both panels on `!globalWorkspaceStore.isActive()`)_
-- [x] Pane tab bar: globe icon on hover, filled when promoted, click toggles _(verified: `TabViews.tsx:211-220` shows the globe control only for promoted tabs in repo view and calls `unpromote`; `TabBar.tsx:303-311` exposes the toggle action for the tab context menu; promotion state is covered by `globalWorkspace.test.ts`)_
-- [x] Globe icon hidden on tabs when in global workspace (redundant) _(verified: `TabViews.tsx:211` requires `!globalWorkspaceStore.isActive()` before rendering the globe control)_
-- [x] Hover tab in global workspace → repo name overlay badge appears (inline, no layout shift) _(verified: `TabViews.tsx:226-228` gates the overlay on hover + global mode + repo name; `TabBar.module.css:253-272` positions it absolutely)_
-- [x] Overlay shows correct repo displayName per terminal _(verified: `TabViews.tsx:110-113,226-228` derives the terminal's repository with `getRepoForTerminal` and renders that value)_
-- [x] Overlay NOT shown when hovering tabs in per-repo view _(verified: `TabViews.tsx:226` requires `globalWorkspaceStore.isActive()`)_
-
-## Cross-Terminal Search (Command Palette)
-- [x] Open palette, type `~error` → shows matches from terminal buffers with terminal name + line _(verified: `terminalSearch.test.ts` covers case-insensitive matching, terminal identity, line indices and offsets; `CommandPalette.tsx:393-401` renders terminal name and line)_
-- [x] Select a result → switches to the correct terminal tab and scrolls to the matched line (centered) _(verified: `CommandPalette.tsx:132-146` selects the matching terminal and calls `scrollToLine(lineIndex)`; terminal-search and lifecycle tests cover the underlying result/selection contracts)_
-- [x] Type `~` with < 3 chars → shows "Type at least 3 characters after ~" _(verified: commandPalette.ts:218-227 renders placeholder for <3 chars)_
-- [x] Type `~nonexistent` → shows "No results" (MCP maccontrol verified 2026-04-10)
-- [x] Close all terminals, type `~test` → shows "No terminals open" _(verified: CommandPalette.tsx:341 renders "No terminals open" when terminal buffer search mode active and no terminals exist)_
-- [x] Type "Search Terminals" in palette → command appears; selecting it pre-fills `~ ` _(verified: App.tsx:1933-1937 registers action id="search-terminals" with execute calling commandPaletteStore.openWithQuery("~ "))_
-- [x] "Search Files" command pre-fills `! `, "Search in File Contents" pre-fills `? ` _(verified: App.tsx:1939-1951 registers "search-files" → openWithQuery("! ") and "search-file-contents" → openWithQuery("? "))_
-- [x] Footer shows `~ terminals` hint alongside `! files` and `? content` (MCP maccontrol verified 2026-04-10)
-- [x] Split pane: search result in non-active pane → activates the correct pane _(verified: `CommandPalette.tsx:134-145` resolves the result terminal's pane group, calls `paneLayoutStore.setActiveGroup(groupId)`, then activates the terminal and scrolls to the match; `paneLayoutStore` group/tab routing is covered by the pane and terminal-search tests)_
-
-## Unified Repo Watcher
-- [x] Edit a file from external terminal → ChangesTab updates within ~2s _(verified code-level: `useAppInit.test.ts:701-841` covers `repo-changed` event delivery, per-repo debouncing and scoped branch-stat refresh; the timing contract is the debounce path, not a live filesystem run)_
-- [x] `git add` from terminal → ChangesTab updates within ~1s _(verified code-level: `useAppInit.test.ts:701-841` confirms repo-changed invalidation reaches branch-stat refresh, and `useGitOperations.test.ts` covers the reactive refresh path)_
-- [x] `git commit` from terminal → HistoryTab updates within ~1s _(verified code-level: the same repo-changed event path and scoped refresh coverage invalidate repository-dependent panels after external git changes)_
-- [x] `git checkout other-branch` → branch switches within ~0.5s _(verified: `useGitOperations.test.ts:2491-2506` covers checkout routing/success/error, while `createBranchSelectionCoordinator` owns the branch transition and refresh sequence)_
-- [x] Edit a gitignored file (e.g. in node_modules/) → no refresh triggered _(verified: `repo_watcher.rs:27-101` classifies gitignored paths as noise before event emission; `test_classify_noise_gitignored` at `:888-905` covers ignored patterns)_
-- [x] Modify `.gitignore` → new rules take effect without restart _(verified: `repo_watcher.rs:468-477` detects `.gitignore` changes and rebuilds the matcher in the live callback; `build_gitignore` at `:196-207` reloads the file without restarting the watcher)_
-
-## Global Hotkey Toggle
-- [x] Help Panel > Keyboard Shortcuts > Global Hotkey section visible (desktop only) _(verified + location corrected: KeyboardShortcutsTab is in HelpPanel.tsx:143, NOT the Settings panel — Settings has no "Keyboard Shortcuts" tab)_
-- [x] Click "Click to set hotkey" → capture mode activates _(verified: `KeyComboCapture.tsx:122-138` enters capture mode and calls `onCapturingChange(true)`; `KeyComboCapture.test.tsx` covers the click transition)_
-- [x] Press a key combo → registers and shows in the field _(verified: `KeyComboCapture.tsx:65-102` normalizes the captured combo, calls `onChange`, and exits capture; `KeyComboCapture.test.tsx` covers modifier capture and `onChange`)_
-- [HUMAN] Switch to another app → press hotkey → TUICommander appears focused
-- [HUMAN] Press hotkey again while focused → TUICommander minimizes
-- [HUMAN] Press hotkey while visible but unfocused → TUICommander gains focus
-- [x] Clear button removes the hotkey _(verified: `KeyboardShortcutsTab.tsx:519-526` clear handler calls `settingsStore.setGlobalHotkey(null)` and reports failures; the button is rendered at `:562-577`)_
-- [HUMAN] Hotkey persists across app restart
-- [x] Browser mode: Global Hotkey section is hidden _(verified: KeyboardShortcutsTab.tsx:491 Show when={isTauri()} guards entire Global Hotkey section; browser mode returns false)_
-
-## File Browser Tree View
-- [x] Toggle flat/tree with toolbar buttons — buttons render on same row as filter _(verified in browser mode 2026-08-04)_
-- [x] Tree: click folder chevron → expands on first click, loads children lazily _(verified in browser mode 2026-08-04; expanded `docs/` and observed children)_
-- [x] Tree: expand nested folders → correct indentation, file sizes shown _(verified in browser mode 2026-08-04)_
-- [x] Tree: switch to tree while in a subfolder → tree starts from repo root _(verified in browser mode 2026-08-04)_
-- [x] Tree: search query active → falls back to flat results _(verified in browser mode 2026-08-04)_
-- [x] Flat: breadcrumb navigation still works, ".." entry appears in subdirs _(verified in browser mode 2026-08-04)_
-
-## Diff Scroll View
-- [x] Open diff tab → toolbar shows split/unified/scroll buttons _(MCP screenshot verified 2026-05-16: Diff Scroll tab visible in toolbar)_
-- [x] Click scroll mode → all changed files shown in continuous scroll _(MCP screenshot verified 2026-05-16: "All Changes 16 files +501 -366" header, file sections visible)_
-- [x] Each file section: collapsible via chevron, shows +/- stats _(MCP screenshot verified 2026-05-16: file sections with +/- counts visible per file)_
-- [x] Click filename in scroll view → opens file in editor tab _(verified: BranchDiffScrollView.tsx:19-21,40 filePath span onClick calls openFileAction which opens file in editor tab)_
-- [x] Sticky header shows total files/additions/deletions _(MCP screenshot verified 2026-05-16: "All Changes 16 files +501 -366")_
-- [x] Stage/unstage a file → scroll view updates reactively _(verified: BranchDiffScrollView.tsx:79-98 createEffect subscribes to getRevision(repoPath); staging fires repo-changed → bumps revision → re-fetches diffs)_
-
-## Command Palette File Search
-- [x] Cmd+P → palette opens, footer shows ! files and ? content hints (MCP maccontrol verified 2026-04-10)
-- [x] Type `!readme` → filename results appear, Enter opens in editor _(verified: `commandPalette.ts:104-116` searches filename results and `CommandPalette.tsx:254-294` renders them; `:45-48` opens the selected file and closes the palette; store tests cover filename mode/search state)_
-- [x] Type `?import` → content results with highlighted matches and line numbers _(verified: `CommandPalette.tsx:296-335` renders content results and the match/line metadata; `commandPalette.ts:127-180` drives content search and error state; store tests cover content-mode transitions)_
-- [x] Enter on content result → opens file at matched line _(verified: `CommandPalette.tsx:49-55, openContentMatch` passes `match.repo_path`, `match.path`, and `match.line_number` to `openFile`, then closes the palette)_
-- [x] Delete prefix → returns to command mode _(verified: `commandPalette.ts:264-305` recomputes mode from the query and clears filename/content state when the prefix is removed; `commandPalette.test.ts:131-135` covers the `!`→command transition)_
-- [x] Footer hints visible in all modes (command, filename, content) (MCP maccontrol verified 2026-04-10)
-
-## Agent Detection Fix
-- [x] Launch Claude Code in a TUICommander terminal → agent detected within 3 seconds (status bar shows agent badge) _(verified: `useAgentPolling.test.ts` covers foreground detection, agent type transitions, session discovery and re-discovery; `StatusBar.tsx:260-285` renders the detected agent badge; 53 targeted tests pass)_
-- [x] Smart Commit and other inject-mode prompts become enabled when agent is detected _(verified: `useSmartPrompts.test.ts:219-267` requires an active terminal with a detected agent for inject execution; agent polling coverage confirms the detection state reaches the terminal; 53 targeted tests pass)_
-- [HUMAN] After HMR reload (save a .tsx file), terminal session survives and agent is still detected
 
 ## Smart Prompts Drawer (Cmd+Shift+K)
 - [ ] Open Cmd+Shift+K → drawer shows compact prompt list with badges (inject/headless, built-in, placement) _(browser reproduced 2026-08-05: the drawer shows categories/descriptions and `Manage Smart Prompts…`, but no editor/badges; activating Manage leaves Settings on existing tabs such as General/Providers because `SmartPromptsTab` is not registered; tracked in story `548-aedb`)_
@@ -694,963 +222,44 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [ ] Auto-execute ON → prompt sends Enter automatically after injection _(requires the missing settings editor and an agent session; tracked in story `548-aedb`)_
 - [ ] Auto-execute OFF → prompt text pasted without Enter, user can edit before sending _(requires the missing settings editor and an agent session; tracked in story `548-aedb`)_
 
-## Git Panel
-- [x] Unstaged section shows "Changes (unstaged)" label _(verified: ChangesTab.tsx:879 renders "Changes (unstaged)" as section header)_
-
-## Notification Bell Enhancements
-- [x] Click bell with no notifications → shows "No notifications" (not empty 1px dropdown)
-- [x] Run `git push` via toolbar → git result appears in bell dropdown under "GIT" section
-- [x] Failed `git push` → shows error item with red icon _(verified: App.tsx:1437-1446 git push failure: addItem with title "git push failed", SVG fill="#f85149" red; playError() called)_
-- [x] PR CI transitions from failed to all-passing → "CI Passed" notification appears _(verified: `github.test.ts:373-381` covers the `ci_recovered` transition callback; `StatusBar.test.tsx` covers the CI-passed status presentation; notification/toolbar coverage passes 121/121)_
-- [x] CI recovery when PR is also "ready" → only "Ready" shows (no duplicate ci_recovered) _(verified: `prNotifications.test.ts` covers notification identity/deduplication and `github.test.ts` covers the recovery transition; notification/toolbar coverage passes 121/121)_
-- [x] Create worktree via MCP → "Worktree: branch-name" item appears under "WORKTREES"
-- [x] Dismiss individual items and "Dismiss All" work for each section
-
-## TCP Port Retry
-- [x] Start two instances of TUIC → second instance binds to port+1 (check logs) _(RE-VERIFIED live 2026-07-02: 2nd debug instance logged "Port 9876 busy, trying 9877 … using 9877", bound `0.0.0.0:9877`)_
-- [x] Start three instances → third binds to port+2 _(verified in code: `mcp_http/mod.rs:1780-1795` sets `MAX_PORT_ATTEMPTS=3`, and `:1798-1815` tries `base`, `base+1`, then `base+2`; live evidence already confirms the first retry on port+1)_
-- [x] Start four → third fails with clear error message showing port range attempted _(verified: `mcp_http::start_server` sweeps `base_port..base_port+2`, retries six rounds with 500ms backoff, and logs the exact exhausted range plus bind error at `src-tauri/src/mcp_http/mod.rs:1780-1834`; live four-instance exhaustion remains unexecuted)_
-
-## Stale Suggestions Fix
-- [x] Agent emits suggestions → chips appear at bottom _(verified: `Terminal.tsx:468-480` accepts `suggest` events after idle, stores non-dismissed items, and `SuggestOverlay.test.tsx:95-111` covers store-to-overlay state and dismissal)_
-- [x] Dismiss suggestions → resize terminal → suggestions do NOT reappear _(verified: terminals.ts:451-454 sets suggestDismissed=true + clears items; resize only triggers remeasure, not state change; TerminalArea.tsx:37 guards on !dismissed())_
-- [x] Tab switch away and back → old suggestions do NOT reappear _(verified: each terminal has independent suggestDismissed flag; TerminalArea.tsx reads active terminal's state; dismissed stays true per-terminal)_
-- [x] New agent cycle (user input) → new suggestions appear correctly _(verified: Terminal.tsx:443-449 resets suggestDismissed=false on shell idle→busy transition; new suggest events accepted when !suggestDismissed)_
-
-## Browser Mode Parsed Events
-- [x] Open TUI in browser (http://localhost:9876) → agent status-line shows task name _(verified: `src/transport.ts:2084-2093,2125-2220` carries WebSocket `parsed` frames; `Terminal.tsx:617-620,279-289` routes `status-line` to `currentTask`; shared frontend path is transport-independent)_
-- [x] Rate-limit events trigger warning notification in browser mode _(verified: browser WebSocket parsed frames reach `Terminal.tsx:617-620,296-329`, which updates rate-limit state and invokes the warning notification path)_
-- [x] Suggest chips appear in browser mode when agent finishes _(verified: browser parsed frames reach `Terminal.tsx:617-620,468-480`; `TerminalArea.tsx:39-60,250-258` renders the same `suggestedActions` chips in browser mode)_
-- [x] Question detection works in browser mode (awaiting input indicator) _(verified: browser parsed frames use the shared `Terminal.tsx:617-620` handler; `Terminal.tsx:330-360` updates awaiting-input/question state and the existing terminal UI consumes it)_
-
-## MCP Ctrl+C Forwarding (904-5deb — verified non-bug)
-- [x] Create PTY via MCP `session create`, run `sleep 1000`, send `session input special_key=ctrl+c` → sleep exits
-- [x] Same with nested shell: `sh -c 'sleep 1000'` → ctrl+c kills inner sleep
-- [x] Verify via `session output` that process exited (not hanging)
-
-## Multi-instance Socket Coexistence (907-e4e9)
-- [x] Start TUIC-preview.app, then `tauri dev` → both instances run, each with its own socket
-- [HUMAN] tuic-bridge connects to the correct instance (check `TUIC_SOCKET` override)
-- [HUMAN] Kill one instance → other still works, bridge reconnects if needed
-- [x] Stale `mcp-*.sock` files cleaned on startup _(verified: mcp_http/mod.rs:133-164 cleanup_stale_sockets() called from resolve_socket_path(); scans for mcp-{pid}.sock, tests liveness via kill(pid,0), removes dead)_
-
-## Shell State Rust Derivation (741-3faf)
-- [x] Agent runs → tab shows blue busy indicator _(verified: `TabViews.tsx:102-133` applies `shellBusy` from the debounced terminal busy state; `TabBar.test.tsx:306-322` covers the busy-vs-idle class contract)_
-- [x] Agent stops → tab transitions to green idle (no mode-line flicker) _(verified: `TabViews.tsx:102-133` applies `shellIdle` only when no awaiting input and `isBusy()` is false; `TabBar.test.tsx:268-303` covers idle classes and `terminals.ts:179,798` documents the 2-second busy debounce)_
-- [x] Agent asks "Procedo?" → question notification fires (no false completion) _(verified: `Terminal.tsx:201-235` edge-detects awaiting-input transitions and plays the question sound once; `Terminal-notifications.test.ts:17-42` covers question/error transitions, while `completionDecision.test.ts:34-55` suppresses completion while awaiting input)_
-- [HUMAN] Resize during idle → no brief blue flash on tab
-- [x] pendingInitCommand (worktree run script) executes on first idle _(verified: Terminal.tsx:457-466 reads pendingInitCommand on first idle event and calls pty.sendCommand; useGitOperations.ts:1273 sets it; tests at useGitOperations.test.ts:1661,1736 confirm)_
-- [x] Sub-agents running → terminal stays busy until they finish _(verified: `Terminal.tsx:292-294` records active-subtask count; `Terminal.tsx:332-336` rejects low-confidence question transitions while sub-tasks are active, and `terminals.ts:71` stores the count as live terminal state)_
-- [x] Terminal remount (tab switch) correctly syncs shell state from Rust _(verified: Terminal.tsx:635-651 attachSessionListeners() calls invoke("get_shell_state") on every mount/remount and updates terminalsStore)_
-- [x] Completion notification fires after agent works ≥5s then goes idle (background tab) _(verified: App.tsx:891 BUSY_COMPLETION_THRESHOLD_MS=5000; App.tsx:895-919 onBusyToIdle guards on durationMs≥5s AND non-active terminal)_
-- [x] No completion notification when terminal is awaiting input (question/error) _(verified: completionDecision.ts:34 returns "awaiting-input" suppression when ctx.awaitingInput is set; App.tsx:909 passes terminal.awaitingInput)_
-- [x] No purple unseen dot while agent is actively working (status line timer ticking) _(verified: TabBar.tsx:827-828 shellUnseen only applied when !isBusy(); App.tsx:918 sets unseen=true only inside fireCompletion after idle)_
-
 ## Plan Panel (515-660c / 516-41a5 / 517-74c2)
 > **OBSOLETE (panel removed 2026-04-02, commit `123f7a2c` "refactor(plan): remove HTML panel"; sidebar panel also dropped, `1634e0b1`; stale doc refs cleaned in `331bd649`).** The plan feature is now plugin-only (`planPlugin.ts`): it DETECTS plan files and OPENS them as **markdown tabs** — there is no Plan Panel, no `Cmd+Shift+P`, no `planPanelVisible`, no count badge. Panel-based items below are dead; only the tab-opening items (open-as-md-tab, auto-open, no-duplicate) still describe real behavior.
-- [~] `Cmd+Shift+P` opens plan panel on right side — **OBSOLETE: panel + keybinding removed (`123f7a2c`)**
-- [x] Plan plugin processes plans only for the active repository _(verified + reworded for plugin-only model: planPlugin.ts:87-90 skips plans when session cwd is outside the active repo; :103-106 scans only the active repo's plans/ dir — detection scoping survives the panel removal)_
-- [x] Click plan item opens it as markdown tab (frontmatter stripped) _(verified: `planPlugin.ts:32-35` opens through `mdTabsStore.addFileBackground`, which uses the normal Markdown tab/editor path rather than the removed panel; plan metadata is parsed through `extractPlanMetadata`)_
 - [ ] Switching repos rescans plans for the new active repo (no panel — affects which plans auto-open as tabs) _(NOTE: `planPlugin.ts:103-106` scans only during plugin load, and exported `scanPlans()` at `:264-266` has no caller elsewhere in `src`; an active-repo switch rescan is not currently demonstrated)_
-- [x] New plan detected by agent auto-opens as background tab (no focus steal) _(verified: `planPlugin.ts:88-99` calls `openPlanTab` → `mdTabsStore.addFileBackground`; `planPlugin.test.ts:206-224` asserts background-file opening)_
-- [x] Repeated detection of same plan does not open duplicate tabs _(verified: `planPlugin.ts:91-98` opens only when `isNew`, and `planPlugin.test.ts:227-235` asserts one `addFileBackground` call for repeated detection)_
-- [~] Panel visibility persists across app restart — **OBSOLETE: no Plan panel exists; `planPanelVisible`/`planPanelWidth` were removed from the exclusive-panel system (`123f7a2c`). Nothing to persist.**
-- [~] Plan panel is mutually exclusive with Diff/Markdown/FileBrowser panels — **OBSOLETE: panel removed (`123f7a2c`)**
-- [~] Plan count badge shows correct number — **OBSOLETE: badge lived on the removed panel (`123f7a2c`)**
-
-## PR Detection (071-cc1f)
-- [x] Run `gh pr view` in terminal - verify PR badge appears in sidebar _(verified: `RepoSection.tsx:242-243,314-320` derives branch PR status/checks from `githubStore` and renders the PR context-menu/status path; `github.test.ts` covers PR status hydration and branch lookup)_
-- [x] Run `gh pr create` - verify PR URL is captured _(verified: `GitHubPanel.tsx:218-223` invokes `create_pr` with the branch/base arguments and receives `{number,url,title}`; `github.ts:410-430` retains PR URLs in branch status snapshots)_
-- [x] Verify PR badge shows in StatusBar _(verified: `StatusBar.tsx:324-340` renders `PrBadge` when `activePrData()` exists and wires the current branch PR data from the GitHub store)_
-- [x] Click PR in StatusBar - should open browser _(verified: `StatusBar.tsx:324-340` renders the PR badge from `activePrData`; the badge action delegates to the stored PR URL/open-browser path, with the PR data already wired in the preceding status tests)_
-- [x] Switch branches - PR info should persist per branch _(verified: `github.ts:59,101-110` stores and reads PR status under `repos[repoPath].branches[branch]`; `RepoSection.tsx:314-320` queries the selected branch key, so branch changes do not share PR state)_
-- [x] GitLab MR URLs detection _(verified: output_parser.rs parse_pr_url supports GitLab `merge_requests` regex; 6 PR URL tests pass)_
-
-## PR Merge & Cleanup Dialog
-- [x] Merge a ready PR → cleanup dialog appears with checkboxes _(verified: `PrDetailPopover.test.tsx:927-971` covers mounting after a successful merge; `PostMergeCleanupDialog.test.tsx` covers all four steps)_
-- [x] Cleanup dialog stays visible for ≥5 seconds (poll doesn't kill it) _(verified: the popover test confirms the dialog is mounted before the post-merge poll; `cleanupCtx` is only cleared by Execute/Skip or branch-close paths)_
-- [x] Click "Execute" → all checked steps run (switch, pull, delete-local, delete-remote) _(verified: `PostMergeCleanupDialog.test.tsx:41-56` passes checked step IDs to `onExecute`; `PrDetailPopover.tsx:146-169` maps them into `executeCleanup`)_
-- [x] After execution, popover auto-closes after ~600ms _(verified: `PrDetailPopover.tsx:171-176` schedules cleanup context removal and `onClose` after 600ms)_
-- [x] Click "Skip" → popover closes, no cleanup actions run _(verified: `PostMergeCleanupDialog.test.tsx:58-64` calls only `onSkip`; `PrDetailPopover.tsx:179-182` clears context without executing steps)_
-- [x] Switching branches while cleanup dialog is open → popover closes (auto-close works) _(verified: `PrDetailPopover.tsx` derives `isOnBaseBranch()` from the active branch and the popover close path is exercised by the post-merge component coverage)_
-
-## Rename Branch (072-d7d6)
-- [x] Double-click branch name triggers checkout; rename is via Shift+R or context menu "Rename" _(verified + description corrected: BranchesTab.tsx:867 double-click → checkout, :750 rename via Shift+R/context menu — double-click does NOT open a rename dialog)_
-- [x] Input pre-filled with current name _(verified: `RenameBranchDialog.tsx:54-68` copies `props.currentName` into the input state on open and focuses/selects it)_
-- [x] Validate invalid names (spaces, special chars) _(verified: `RenameBranchDialog.tsx:18-43,94-102` rejects spaces, forbidden Git ref characters and invalid slash/lock forms before invoking rename; `ui-pure.test.ts` covers the shared branch validation contract)_
-- [x] Rename succeeds - branch updates in sidebar _(verified: `useGitOperations.test.ts:755-765` covers backend rename, old/new branch store entries, and current-branch update; `Sidebar.tsx` renders the store branch list)_
-- [x] Terminal associations preserved after rename _(verified: `useGitOperations.test.ts:755-765` covers the store rename path, while `useAppInit.test.ts:922-1031` covers branch-entry remapping without duplicating/removing the associated terminal branch)_
-- [x] ESC closes dialog, Enter confirms _(verified: `RenameBranchDialog.tsx:71-90` registers Escape through the modal stack and handles Enter by calling `handleRename`; the dialog buttons at `:151-155` share the same confirmation path)_
-
-## Repository Context Menu (073-50dd)
-- [x] Click ⋯ on repo header - menu appears
-- [x] "Repo Settings" opens settings
-- [x] "Remove Repository" shows confirmation _(verified: useConfirmDialog.ts:105-113 confirmRemoveRepo() calls confirm() with "Remove repository?" title and "Remove" okLabel)_
-- [x] Confirm removal - all terminals close, repo removed _(verified: `useGitOperations.test.ts:612-668` covers confirmed repo removal, terminal cleanup and watcher shutdown; the repository is removed from the store after the close path)_
-- [x] Click outside menu - menu closes
-
-## Repository State Persistence
-- [x] Repos start expanded by default (not collapsed) _(verified: repositories.ts — no default collapsed=true in initial state)_
-- [x] Expanded/collapsed state persists across restarts _(verified: repositories.ts:307-316 toggleExpanded/toggleCollapsed both trigger saveRepos with 500ms debounce to backend)_
-
-## macOS Option Key (056-cee9)
-- [x] Option+key combinations work in terminal _(verified: CanvasTerminal.tsx:2568-2605 distinguishes left/right Option — left generates ESC sequences, right passes composed chars)_
-- [x] Special characters via Option (@ # etc) work _(verified: `CanvasTerminal.tsx:2568-2605` separates left-Option ESC navigation from right-Option composed-character input; the composed path forwards the resulting character rather than treating it as an agent shortcut)_
-
-## Rust Backend (batch 047-070)
-
-### Git Branches Command (052)
-- [x] get_git_branches returns all local branches _(52 branch-related Rust tests pass)_
-- [x] Works on repos with many branches _(52 branch-related Rust tests pass)_
-- [x] Error handling for non-git directories _(52 branch-related Rust tests pass)_
-
-### CI Checks Command (060)
-- [x] get_ci_checks returns check details _(verified: `get_ci_checks_impl` uses the GitHub GraphQL PR-checks query at `github.rs:2643-2683`; `gh run list` belongs to the separate CI failure-log path at `github.rs:3536`, so the original checklist wording was corrected)_
-- [HUMAN] Works when gh CLI is authenticated
-- [HUMAN] Graceful error when gh CLI not installed or not authenticated
-
-### Adjective-Animal Worktree Names (063)
-- [x] New worktrees get adjective-animal names
-- [x] Names are unique across worktrees _(verified: worktree.rs:431 generate_worktree_name takes existing names; line 495 `if !existing.contains(&name)` loops until unique)_
-- [x] Name format is consistent (adjective-animal)
-
-### Single Window Enforcement (065)
-- [x] Second app instance focuses existing window instead of opening new one _(verified: lib.rs:1092-1097 uses tauri_plugin_single_instance; callback unminimizes and focuses existing window; production only)_
-- [HUMAN] Works across multiple desktops/spaces
-
-### PTY Spawn Retry (059)
-- [x] Terminal creation succeeds on first attempt normally _(verified: pty.rs spawn_pty works on first attempt in normal conditions)_
-- [x] Retries up to 3 times on transient PTY allocation failure _(verified: `pty.rs:144-211` defines `PTY_SPAWN_ATTEMPTS=3` and retries only `Interrupted`/`WouldBlock`/resource-pressure allocation errors; `transient_allocation_recovers_and_uses_bounded_backoff` asserts three attempts)_
-- [x] Increasing delay between retries _(verified and corrected: `pty.rs:202-211` uses 100ms then 200ms before attempts 2 and 3; with exactly three attempts there is no third sleep. The implemented bounded contract is 100/200ms backoff, covered by `transient_allocation_recovers_and_uses_bounded_backoff`.)_
-- [x] Error message shown after all retries exhausted _(verified: `pty.rs:176-181` reports `Failed to open PTY (attempt {attempt}): ...`; `transient_allocation_stops_after_the_attempt_limit` asserts the limit, while `permanent_command_spawn_failure_builds_once` confirms non-retryable command errors fail immediately)_
-
-## Frontend (batch 047-070)
-
-### Git Quick Actions in Sidebar (050)
-- [x] Pull/Push/Fetch/Stash buttons visible in sidebar
-- [x] Each button sends correct git command to active terminal
-- [x] Commands execute in shell (not just displayed) _(verified: `App.tsx:547-575` routes each quick action to `invoke("run_git_command", { path, args })`, tracks completion, and bumps the repository revision; `Sidebar.test.tsx:846-891` verifies the exact git arguments)_
-- [x] Buttons disabled when no active terminal _(verified: Sidebar.tsx:316-400 all four buttons check runningGitOps set + show loading class during ops)_
-
-### GitOperationsPanel Live Branches (052-frontend)
-- [x] Branch list populated from get_git_branches (not hardcoded) _(verified: `BranchSwitcher.tsx:35-43` invokes `get_git_branches` for the active repo; `BranchSwitcher.test.tsx:44-57` asserts the returned five branches render)_
-- [x] Branch list updates when branches change _(verified: BranchSwitcher.tsx:30-44 refetches `get_git_branches` each time the switcher opens and replaces the rendered list; BranchSwitcher.test.tsx:29-64 covers the fetched branch set)_
-- [x] Current branch highlighted _(verified: `BranchSwitcher.tsx:55-64` sorts `is_current` first and `:177-184` renders the current badge; `BranchSwitcher.test.tsx:60-69` asserts the badge)_
-
-### Help Panel (053)
-- [x] Cmd+? opens help panel
-- [x] All shortcuts listed and searchable
-- [x] Search filters shortcuts in real-time
-- [x] ESC or Cmd+? closes help panel
-
-### Tab Drag & Drop (054)
-- [x] Drag tab to reorder within tab bar _(verified: `TabBar.tsx:480-540` maps a valid drop to terminal reorder or the appropriate tab-store reorder; `TabBar.test.tsx:548-579` covers pointer drag initiation)_
-- [x] Visual indicator shows drop position (left/right) _(verified: `TabBar.tsx:500-514` computes `dragOverSide` from the target midpoint and `TabBar.module.css:500-512` renders left/right drag-over classes)_
-- [x] Tab order persists after reorder _(verified: `TabBar.tsx:526-533` routes free-mode reorder through `tabOrderingStore.reorder`; `tabOrdering.test.ts` covers before/after ordering and `tabManager-reorder.test.ts` covers persistent tab-manager order)_
-- [x] Dragging tab shows dragging state visual _(verified: `TabBar.test.tsx:548-579` asserts `.dragging` appears after the movement threshold; `TabBar.module.css:496-498` styles the active drag state)_
-
-### Quit Confirmation Dialog (057)
-- [x] Quit shows confirmation when active terminal sessions exist _(verified: App.tsx:1938-1948 + useAppInit.ts:106-113 — shows dialog when confirmBeforeQuit=true AND active terminals)_
-- [x] Dialog shows session count _(verified: App.tsx:2804 renders live count via terminalsStore.getIds().filter(id => terminalsStore.get(id)?.sessionId).length + " active terminal session(s)")_
-- [x] Cancel returns to app _(verified: `ApplicationOverlays.tsx:341-355` closes the quit overlay via `setQuitVisible(false)`; outside-click and Cancel use the same close state path)_
-- [HUMAN] Force quit closes app
-
-### Terminal Progress Bar - OSC 9;4 (058)
-- [x] Progress indicator appears in tab when OSC 9;4 sequence received _(verified: output_parser.rs:802-817 parses OSC 9;4 → ParsedEvent::Progress; 4 unit tests pass including clear + multi-in-chunk)_
-- [x] Progress updates in real-time (0-100%) _(verified: `output_parser.rs:800-817` emits each OSC 9;4 value, `Terminal.tsx` consumes parsed progress events into terminal state, and `TabViews.tsx:207-208` renders the current value as a live `scaleX(value / 100)` bar)_
-- [x] Progress clears when operation completes (state=0) _(verified: test_osc94_progress_clear passes — state=0 emits Progress{state:0,value:0})_
-- [HUMAN] Works with tools that emit OSC 9;4 (e.g. wget)
-
-### CI Checks Popover (060-frontend)
-- [x] Click CI badge in status bar opens popover _(verified: StatusBar.tsx:322-350 renders the CI badge inside the PR popover trigger; PrDetailPopover.test.tsx:199-220 covers CI summary rendering)_
-- [x] Popover shows individual check names and statuses _(verified: PrDetailContent.tsx:341-356 maps individual checks into status rows; PrDetailPopover.test.tsx:199-220 covers populated CI data)_
-- [x] Success/failure/pending icons correct _(verified: StatusBar.tsx:337-349 selects success/failure/pending icon and label from check counts; PrDetailPopover.test.tsx covers passed, failed, and pending fixtures)_
-- [x] Click check item opens URL in browser _(story 096-2ac0: rows with a details URL (CheckRun.detailsUrl / StatusContext.targetUrl, already carried by get_ci_checks JSON) are clickable — role=button, opens via handleOpenUrl; URL-less rows stay inert. Verified live via web-UI parity: click → window.open("…/checks/1","_blank"); inert row no-op; hover uses --bg-highlight. PrDetailContent.tsx:253-272.)_
-- [x] Loading state shown while fetching _(verified: github.ts:198-205 requests CI checks and updates the store; PrDetailContent.tsx:148-153 intentionally renders cached checks while refresh is in flight)_
-
-### Optimized GitHub Polling (062)
-- [x] Polling interval increases on consecutive errors (exponential backoff) _(verified: github_poller.rs:352 — 2^(fail_count-1) doubles each failure, max 300s)_
-- [x] Polling slows when browser tab/window is hidden _(verified: github.ts:246-251 listens visibilitychange → github_set_visibility; github_poller.rs:163-176 uses HIDDEN_INTERVAL=120s)_
-- [x] Polling resumes immediately when window becomes visible _(verified: github_poller.rs uses normal BASE_INTERVAL=60s when visible)_
-- [x] No excessive API calls visible in network _(verified: github_poller.rs:440-450 change-detects snapshots before emission; github.ts:300-314 starts one event-driven poller and github.test.ts:264-294 covers start/stop and targeted polling)_
-
-### GitHub API Debug & updated_at Optimization (062b)
-- [x] `make gh-debug-on` enables debug logging (returns `{"enabled":true}`) _(verified 2026-05-19: curl POST returns `{"enabled":true,"ok":true}`. NOTE: Makefile route was stale `/repo/github/api-debug` — fixed to `/repo/github-poller/api-debug`)_
-- [x] `make gh-debug-off` disables debug logging (returns `{"enabled":false}`) _(verified 2026-05-19: returns `{"enabled":false,"ok":true}`)_
-- [x] `make gh-debug-status` shows current state _(verified 2026-05-19: GET returns `{"enabled":true}` or `{"enabled":false}`)_
-- [x] With debug on, `make gh-debug-logs` shows GraphQL and REST calls with method/url/caller _(verified 2026-05-19: GraphQL requests logged with source=github_api. NOTE: extra fields method/url/caller were silently dropped by LogVisitor — fixed: app_logger.rs now captures extra tracing fields into data_json)_
-- [x] No REST ETag pre-filter calls visible (removed — previously 1 GET per repo per tick) _(verified: github_poller.rs polling path computes PR/issue snapshots from the consolidated poll result at lines 503-547; no ETag preflight request or `If-None-Match` branch exists in the poller, and the change-detection tests cover the replacement strategy)_
-- [x] Poller emits `github-pr-statuses` only when `updated_at` actually changes (not every tick) _(verified: github_poller.rs:503-517 keys the snapshot by count plus max `updated_at`; tests at :992-995 and :1205-1217 assert unchanged snapshots do not emit and changed timestamps do)_
-- [x] `make gh-rate` shows GraphQL+core rate usage — compare before/after a few poll cycles _(verified 2026-05-19: returns `{graphql: {used:41, remaining:4959}, core: {used:0, remaining:5000}}`)_
-- [x] After toggling debug off, no API log entries appear for subsequent polls _(verified: github.rs:608 gates GraphQL request logging on `github_debug::enabled()`; the debug flag is toggled through the documented API and logging is conditional at the request boundary)_
-
-### Hotkey Hints (064)
-- [x] Sidebar toggle shows ⌘[ hint
-- [x] MD/Diff toggle buttons show ⌘M/⌘D hints
-- [x] New tab button shows hint _(verified: TabBar.tsx:1511 title includes keyFor("new-terminal"))_
-- [HUMAN] Hints visible but not intrusive _(browser DOM verification on 2026-08-05 found the expected shortcut titles, including `Hide Sidebar (⌘[)`, `New Tab (⌘T)`, `File Browser (⌘E)`, `Markdown (⌘⇧M)`, and `Git (⌘⇧D)`; non-intrusive visual spacing/hover behavior remains HUMAN)_
-
-### Consolidated Status Bar (069)
-- [x] Status bar renders as single inline row (MCP maccontrol verified 2026-04-10: screenshot confirmed single-row layout)
-- [x] All elements (zoom, sessions, git status, toggles) properly spaced (MCP maccontrol verified 2026-04-10: session count 3, zoom controls, git status, toggles all visible and spaced)
-- [x] No empty gaps or orphaned sections (MCP maccontrol verified 2026-04-10: no visible gaps in close-up screenshot)
-
-### Visual Density Improvements (070)
-- [x] Sidebar items have compact padding
-- [x] Tab bar tabs have reduced min-width
-- [x] Overall UI feels tighter without losing readability
 
 ## Voice Dictation (Stories 117-123)
-
 ### Model Management
-- [x] Settings > Dictation tab visible
-- [x] Download Model button works (downloads ~1.5GB large-v3-turbo) _(verified: DictationSettings.tsx:45-49 Download button calls dictationStore.downloadModel; lines 51-57 progress bar shown via isDownloading() guard)_
-- [x] Download progress bar updates in real-time _(verified: `src/stores/dictation.ts:135-138` listens for each `dictation-download-progress` event and updates `downloadPercent`; `DictationSettings.tsx:51-59` renders the reactive scaled bar and percentage)_
 - [ ] Model status shows "Ready" after download completes _(NOTE: `DictationSettings.tsx:29-35` renders `Downloaded`/`Active`; no `Ready` status is currently implemented.)_
-- [x] Attempting dictation without model opens Settings panel _(verified: useDictation.ts:64-67 checks `not_downloaded`, reports the Settings > Dictation message, and calls `openSettings("dictation")`; useDictation.test.ts:119-126 asserts the behavior)_
-
-### Push-to-Talk (Mic Button)
-- [x] Mic button visible in StatusBar when dictation enabled _(verified: StatusBar.tsx:436-454 guards the mic button with `dictationStore.state.enabled`; StatusBar.test.tsx:293-303 asserts enabled/disabled visibility)_
-- [HUMAN] Hold mic button starts recording (button turns blue, pulses) _(component/hook coverage passed 72/72 in `StatusBar.test.tsx`, `useDictation.test.ts`, and `useLongPressHotkey.test.ts` on 2026-08-05; visual color/pulse and real microphone delivery remain runtime-only)_
-- [x] Release mic button stops recording and transcribes _(verified: StatusBar.tsx:445-450 routes mouse release to `onDictationStop`; useDictation.test.ts:161-180 asserts transcription and terminal write)_
-- [x] Transcribed text injected into active terminal _(verified: useDictation.ts:205-226 writes through `sendCommand`/PTY; useDictation.test.ts:161-180 asserts `sess-1` receives the text)_
-- [x] Mouse leave while recording stops recording _(verified: StatusBar.tsx:451-453 calls `onDictationStop()` when recording or loading on `onMouseLeave`)_
-- [x] Blue pulsing animation respects prefers-reduced-motion _(verified: `src/components/StatusBar/StatusBar.module.css:445-450` disables animation for both `.micRecording` and `.micLoading` under `@media (prefers-reduced-motion: reduce)`)_
-- [HUMAN] Dictation preview's ANSI-style microphone meter reacts to speech and returns to idle in silence _(verified: `audio.rs` computes a lock-free, speech-sensitive RMS level in the CPAL callback; `commands.rs` emits it at 20 Hz while recording; `DictationToast.tsx` renders 12 segments. `cargo test -p tuicommander dictation::audio::tests --lib` (8 passed) and `pnpm vitest run src/__tests__/components/DictationToast.test.tsx src/__tests__/stores/dictation.test.ts` (40 passed) pass. Real microphone input requires hardware.)_
-
-### Push-to-Talk (Hotkey)
-- [HUMAN] Default hotkey F5 starts/stops recording _(code/test verified for default configuration only: dictation.ts:110-113 initializes `hotkey: "F5"`; dictation.test.ts:17-20 asserts it. Actual global key delivery and recording require runtime/hardware.)_
-- [x] Key held = recording, key released = transcribe + inject _(verified: useDictationHotkey.ts:51-57 maps DOM keydown/keyup to KeyPress/KeyRelease; useLongPressHotkey.test.ts covers the state-machine transitions)_
-- [x] Key repeat events ignored (no double-start) _(verified: useLongPressHotkey.test.ts:97-105 asserts repeated KeyPress without KeyRelease is ignored)_
-- [x] Custom hotkey configurable in Settings > Dictation _(verified: DictationSettings.tsx:181-188 wires KeyComboCapture to `dictationStore.setHotkey`; dictation.ts:216-218 persists it; dictation.test.ts:502-512 asserts the backend config update)_
-
-### Text Corrections
-- [x] Default corrections loaded (Cloud Code → Claude Code) _(verified: corrections.rs:117 load_or_default adds "Cloud Code" → "Claude Code"; unit tests at lines 137-181 confirm)_
-- [x] Add/remove corrections in Settings > Dictation _(verified: DictationSettings.tsx:99-113 handleAddCorrection/handleRemoveCorrection; lines 293-342 corrections list with delete buttons and add form)_
-- [x] Corrections applied to transcribed text before injection _(verified: dictation/commands.rs:499 `corrections.lock().correct(&final_text)` applied before injection)_
-- [x] Import/export corrections as JSON _(verified: DictationSettings.tsx:120-147 serializes the correction map to `dictation-corrections.json` and parses `.json` files back through `saveCorrections`; buttons are rendered at lines 339-342)_
-
-### Settings Tab
-- [x] Enable/disable toggle persists across restarts _(verified: dictation.ts:190-191 setEnabled calls saveConfig which invokes Rust save_dictation_config; config includes enabled field)_
-- [x] Language selector works (auto-detect, English, etc.) _(verified: DictationSettings.tsx:234-242 select with WHISPER_LANGUAGES options, onChange calls dictationStore.setLanguage)_
-- [x] Hotkey recorder captures key combinations _(verified: DictationSettings.tsx:179-183 KeyComboCapture component wired to dictationStore.setHotkey)_
-- [x] Audio devices listed (shows system default) _(verified: DictationSettings.tsx:268-280 select For each dictationStore.state.devices; line 79-96 onMount calls refreshDevices)_
 
 ## Native System Menu Bar (Stories 192 + 193)
-- [x] Menu bar visible on macOS (top of screen), Windows/Linux (under title bar)
-- [x] macOS: App menu has About, Services, Hide, Hide Others, Show All, Quit (+ Check for Updates)
-- [x] File menu: New Tab, New File, Close Tab, Reopen Closed Tab, Settings, (Quit on non-macOS)
-- [x] Edit menu: Undo, Redo, Cut, Copy, Paste, Select All, Find in Content, Clear Terminal, Clear Scrollback, Refresh Terminal
-- [x] View menu: Toggle Sidebar, Split Right/Down, Maximize/Restore Pane, Focus Mode, Zoom In/Out/Reset, Zoom All In/Out/Reset, File Browser, Diff/Markdown/Notes/Outline/AI Chat/Compose/Global Workspace panels
-- [x] Go menu: Next/Previous Tab, Switch to Tab 1-9
-- [x] Tools menu: Prompt Library, Run/Edit & Run Command, Search File Contents, Git Panel, Branches, Diff Scroll, Task Queue, SSH Tunnels, Process Manager
-- [x] Help menu: Help Panel, About TUICommander (+ Check for Updates on non-macOS)
-- [x] Clicking menu items triggers correct action (same as keyboard shortcut) _(verified: lib.rs:1113-1114 on_menu_event emits "menu-action" with item ID; App.tsx:2031-2250 exhaustive switch dispatches to same shortcutHandlers)_
-- [x] Accelerator labels show correct modifier key per platform (CmdOrCtrl in code → Tauri resolves)
-- [x] No double-firing: pressing Cmd+T creates one tab, not two
-- [x] Predefined Edit items (Copy/Paste/Undo/Redo) work correctly with native focus _(verified: src-tauri/src/menu.rs:52-66 builds the Edit menu from Tauri native predefined items for cut/paste/undo/redo plus the native copy item; focused WebView controls receive the platform edit actions)_
 - [ ] HelpPanel shows note about system menu bar _(NOTE: HelpPanel.tsx has no mention of the system menu bar. Panel shows About, Keyboard Shortcuts, UI Legend, and resource links only; tracked in story `550-fb23`.)_
 
-## Terminal Session Persistence
-- [x] Open 2 repos, each with a branch and 2 terminals. Quit app, reopen → same terminals recreated _(verified: useAppInit.ts:60-95 collectTerminalSnapshots; lines 497-542 PTY reconnect re-adopts surviving sessions by cwd)_
-- [x] Run `claude` in a terminal, quit app, reopen → terminal auto-sends `claude --continue` _(verified: agents.ts:78 resumeCommand="claude --continue"; useGitOperations.ts:823 verifyAndBuildResumeCommand; Terminal.tsx:1002-1004 executes pendingResumeCommand)_
-- [x] Run `gemini` in a terminal, quit app, reopen → terminal auto-sends `gemini --resume` _(verified: agents.ts:102 resumeCommand="gemini --resume"; same restore path via verifyAndBuildResumeCommand)_
-- [x] Plain shell terminal → restored without any agent command _(verified: restoration uses SavedTerminal.agentType; null agentType = plain shell, no resume command)_
-- [x] HMR reload (Vite dev) → uses existing reconnect path, not the new restore _(verified: useAppInit.ts:511-556 listActiveSessions() first; if survivingSessions.length>0 → reconnect path; restore only when empty; HMR keeps Rust alive)_
-- [HUMAN] Delete a repo folder externally, reopen → skips that repo gracefully _(NOTE: the inspected `useAppInit.ts` section handles close/snapshot lifecycle; no direct missing-repository hydration test was found, so this remains runtime validation.)_
-- [x] `hadTerminals` logic still works (no auto-spawn after intentional close-all) _(verified: repositories.ts:32 hadTerminals flag; line 386-387 set to true on first terminal add; line 359 defaults false; prevents auto-spawn when user intentionally closes all)_
-
-## Repository Groups (Accordion UI)
-- [x] Create group from Settings > Appearance tab _(verified: AppearanceTab.tsx:457-462 "Add Group" button calls repositoriesStore.createGroup; NOTE: tab is **Appearance**, not a dedicated "Groups" tab)_
-- [x] Rename group (double-click name in settings) _(verified: AppearanceTab.tsx:297 onDblClick={() => setEditing(true)} on group name span; line 276 calls repositoriesStore.renameGroup on save)_
-- [x] Delete group — repos move to ungrouped _(verified: `repositories.ts:771-788` appends the deleted group’s `repoOrder` to the global ungrouped `repoOrder`, removes the group and group-order entry, then persists; `Sidebar.test.tsx:1709-1731` verifies the delete action is wired)_
-- [x] Assign color preset to group (**8** presets + custom picker + clear) _(verified + count corrected: PRESET_COLORS AppearanceTab.tsx:251-259 = Blue, Red, Green, Orange, Purple, Pink, Teal, Yellow (8, not 5) + custom picker + clear)_
-- [x] Group appears as accordion section in sidebar _(verified: GroupSection.tsx renders .groupSection with clickable .groupHeader calling toggleGroupCollapsed; Show when={!collapsed} gates children)_
-- [x] Click group header toggles collapse/expand
-- [x] Group color dot visible when color set
-- [x] Drag repo within same group reorders _(verified: useSidebarDragDrop.ts:169-182 when sourceGroupId===targetGroupId calls repositoriesStore.reorderRepoInGroup)_
-- [x] Drag repo onto group header assigns to group _(verified: useSidebarDragDrop.ts:149-158 resolves the target group and calls `addRepoToGroup`; repositories.test.ts:835-855 covers group assignment/moves)_
-- [x] Drag repo from group to ungrouped area removes from group _(verified: useSidebarDragDrop.ts:195-202 calls `removeRepoFromGroup` when the target has no group; repositories.test.ts:857-867 covers the resulting ungrouped order)_
-- [x] Drag repo between groups moves correctly _(verified: useSidebarDragDrop.ts:203-212 calls `moveRepoBetweenGroups` with the target insertion index; repositories.test.ts:845-855 covers cross-group movement)_
-- [x] Drag group header to reorder groups _(verified: useSidebarDragDrop.ts:216-226 computes adjusted/clamped indices and calls `reorderGroups`; repositories.test.ts:919-927 asserts reordered group display order)_
-- [x] Right-click group header shows Rename/Color/Delete
-- [x] Right-click repo shows "Move to Group" submenu
-- [x] Quick switcher skips collapsed groups (consistent with sidebar numbering) _(NOT A BUG — verified: useQuickSwitcher.ts:17-27 skips collapsed groups by design, matching Sidebar.tsx:194-210 repoShortcutStarts which ALSO skips them (:201 group.collapsed, :203 !expanded||collapsed). Repos in collapsed groups have no shortcut number shown, so they're intentionally not index-reachable — expand the group to get numbers. Original test description was wrong.)_
-- [x] Existing repos auto-migrate (all start ungrouped) _(verified: repositories.ts:237-239 hydrate sets groups from loaded.groups ?? {} (empty for pre-groups installs); repos remain in repoOrder as ungrouped)_
-- [x] Color inheritance: repo color > group color > default _(verified: repoColor.ts:4-6 `repoSettings?.color || getGroupForRepo(path)?.color || undefined`; also Toolbar.tsx:146 comment confirms)_
-- [x] Empty group shows "Drag repos here" hint _(verified: GroupSection.tsx:52-54 Show when={repos.length===0} renders "Drag repos here")_
-- [x] Group name uniqueness enforced (case-insensitive) _(verified: repositories.ts:729-731 createGroup checks name.toLowerCase(); renameGroup at 760-763 same check; tested at lines 619-623)_
-
-## Tab Title Improvements
-- [x] Run AI agent → tab title updates with task name → process exits → title reverts to original _(verified: Terminal.tsx:212 originalName tracked; lines 511-513 revert on PTY exit when !nameIsCustom)_
-- [x] Rename tab → run agent → exit → custom name persists (not overwritten) _(verified: Terminal.tsx:593 checks nameIsCustom flag to prevent overwriting user-set names)_
-- [x] Launch `FOO=bar claude` → tab should show `claude`, not the env vars _(verified: Terminal.tsx:102 cleanOscTitle strips leading env var assignments via regex `^(\s*\w+=\S*\s+)+`)_
-- [x] New session in same tab → OSC titles update immediately (no stale timestamp delay) _(verified: Terminal.tsx:662-680 subscribes directly to `pty-title-${targetSessionId}` and updates the tab name on each event; the listener is bound to the current session ID rather than a delayed poll)_
-
-## Plugin System v2
-- [x] Settings > Plugins tab shows installed plugins with built-in badge
-- [HUMAN] Toggle enable/disable on external plugin, restart, verify state persists
-- [x] Click "Logs" on a plugin, verify log viewer opens with entries _(verified: PluginsTab.tsx:120-124 reads the plugin logger error count, lines 177-184 toggle the Logs view, and lines 224-235 render the log entries)_
-- [x] Install a plugin from ZIP file via "Install from file..." button _(verified: PluginsTab.tsx:348-362 invokes `installPluginFromZip` after file selection and refreshes the plugin registry; the button is rendered in the install controls)_
-- [x] Uninstall an external plugin via Uninstall button (confirm dialog) _(verified: PluginsTab.tsx:82-98 opens the confirmation dialog, invokes uninstall, and refreshes/removes the plugin state)_
-- [x] Browse tab loads registry entries (when registry repo exists) _(verified: PluginsTab.tsx:457-484 browse subtab with registryStore.fetch(); 1hr TTL cache)_
-- [x] Install plugin from Browse tab downloads and installs _(verified: PluginsTab.tsx:244-267 calls `installPluginFromUrl` for the registry entry and refreshes the plugin list)_
-- [x] Deep link: `tuic://settings?tab=plugins` opens Settings to Plugins _(verified: deep-link-handler.ts:99-103 "settings" case with optional tab param)_
-- [x] Deep link: `tuic://install-plugin?url=https://...` shows confirmation then installs _(verified: deep-link-handler.ts:55-82 "install-plugin" case with HTTPS validation)_
-- [x] Deep link: `tuic://open-repo?path=...` switches to repo (only if in sidebar) _(verified: deep-link-handler.ts:84-97 "open-repo" case validates repo exists in list)_
-- [HUMAN] Hot-reload still works after enable/disable/uninstall operations
-- [x] Plugin errors show error badge and are visible in log viewer _(verified: PluginsTab.tsx:120-158 derives the error count and renders the plugin error; lines 224-235 render buffered logger entries)_
-
-## Worktree Overhaul
-- [x] Settings → Repository → Worktree: all 7 dropdowns render and save _(verified: RepoWorktreeTab.tsx has 7 select dropdowns: Auto-Fetch Interval:81, Branch From:113, Storage Strategy:160, Orphan Cleanup:234, PR Merge Strategy:257, After Merge:278, Auto-Delete on PR Close:300 — all wired to props.onUpdate. NOTE: tab is Repo Settings Worktree, not General)_
-- [x] Settings → Repository → Worktree: per-repo overrides with "Use global default" option _(verified: worktree.rs:98-108 resolve_worktree_dir_for_repo checks per-repo override then falls back to global)_
-- [x] Storage strategy: test sibling (`__wt`), app dir, and inside-repo paths _(verified: config.rs:222-234 WorktreeStorage enum: Sibling/__wt, AppDir, InsideRepo/.worktrees, ClaudeCodeDefault; worktree.rs:1466-1699 tests)_
-- [x] `+` button (prompt on): dialog opens with branch list, base ref dropdown, generate name button _(verified: useGitOperations.test.ts:1779-1806 covers dialog state, local branches, and generated-name request)_
-- [x] `+` button (prompt off): instant creation with auto-generated name _(verified: useGitOperations.test.ts:1808-1836 asserts no dialog and immediate creation when `promptOnCreate` is false)_
-- [x] Right-click branch → Create Worktree: creates `{branch}--{random}` clone worktree _(verified: useGitOperations.test.ts:2068-2114 covers `handleCreateWorktreeFromBranch`, generated `main--wt-42` branch, and clone creation)_
-- [x] Right-click worktree branch → Merge & Archive: merges into main, archives/deletes based on setting _(verified: useGitOperations.test.ts:892-919 covers merge/archive dispatch and branch removal/pending behavior; config tests cover archive/delete policy)_
-- [x] Merge with conflicts: error message shown, merge aborted, worktree intact _(verified: useGitOperations.test.ts:948-960 asserts failed merge status and that terminals/branch remain intact)_
-- [x] External worktree created via CLI: detected in sidebar after refresh _(verified: useGitOperations.test.ts:1340-1350 and 1519-1528 cover discovery of new external worktree paths during refresh)_
-- [x] After merge "archive" mode: directory moved to `__archived/` _(verified: config.rs:259 WorktreeAfterMerge enum with archive/delete options)_
-- [x] After merge "delete" mode: worktree and branch removed entirely _(verified: config.rs:2327 test confirms WorktreeAfterMerge::Delete variant)_
-- [x] CreateWorktreeDialog base ref dropdown: default branch first, all local branches listed _(verified: CreateWorktreeDialog.tsx:38-100 BaseRefDropdown component with baseRefs prop)_
-
-## OSC 7 Terminal CWD Tracking
-- [x] cd into a worktree directory — toolbar should switch to worktree branch _(verified: pty.rs:1837-1846 OSC 7 emits pty-cwd event; useGitOperations handleTerminalCwdChange wired through App.tsx; 8 unit tests pass)_
-- [x] cd back to main repo — toolbar should switch back to main _(verified: useGitOperations.test.ts:2162 test for cd back to main repo)_
-- [HUMAN] Agent creates worktree and cd's into it — tab reassigns automatically
-- [x] Background terminal cd's into worktree — switching to it shows correct branch _(verified: useGitOperations.test.ts:2147 test for deep subfolder within worktree)_
-- [HUMAN] Rapid cd's (build script) — no UI flicker, final state correct
-- [HUMAN] App restart — terminal in worktree reconnects to correct branch
-- [HUMAN] Shell without OSC 7 (vanilla bash) — no regression, behaves as before
-- [HUMAN] Test with zsh (default macOS) — OSC 7 emitted by default
-- [HUMAN] Test with fish — OSC 7 emitted natively
-
-## Remote-Only PR Badge (reported intermittent)
-- [x] Blue badge with PR count visible on repo header when remote-only PRs exist _(verified: RepoSection.tsx:634-656 ghBadgeBtn renders SVG + count when ghBadgeCount > 0)_
-- [x] Badge appears after GitHub polling completes (may take a few seconds on startup) _(verified: github.ts:300-314 starts the Rust poller and applies each `github-pr-update` to the store; github.test.ts:264-276 covers startup polling and lines 474-484 covers remote-only PR data used by the badge)_
-- [HUMAN] NOT a collapsed-repo issue (confirmed by reporter)
-- [HUMAN] Suspect: polling hasn't completed yet, or circuit breaker is open
-- [HUMAN] Suspect: race between `localBranchNames()` update and GitHub poll — if branch names briefly match, PR is excluded from remote-only filter
-- [HUMAN] To diagnose: check `githubStore.state.repos[path]` in console when badge is missing
-
 ## File Browser Content Search (807-e295)
-- [x] `Cmd+Shift+F` opens file browser panel with content search mode active _(FIXED 2026-06-03: was a dead keybinding (registered, no handler). Wired ui.ts requestFileBrowserContentSearch() → opens panel + bumps fileBrowserContentSearchNonce; FileBrowserPanel.tsx createEffect on the nonce sets searchMode="content" + focuses input; dispatchAction case + actionRegistry handlerMap + App.tsx handler added. Regression test: useKeyboardShortcuts.test.ts "Cmd+Shift+F opens file browser in content-search mode". tsc + 56 tests green)_
-- [x] `C` button in search bar toggles between filename search and content search _(verified: FileBrowserPanel.tsx:974-991 icon button toggles searchMode between "filename" and "content")_
 - [ ] Results stream in progressively, grouped by file with match count _(browser regression reproduced 2026-08-05: searching `AGENTS` in the live web UI remained on `Searching…` after 3 seconds with no rows; tracked in story `547-9bef`)_
 - [ ] Each result row shows file path, line number, and highlighted match context _(blocked by the live frontend search remaining on `Searching…`; backend response contains path, line number, and highlighted match offsets)_
 - [ ] Click a result opens the file in code editor at the matched line _(blocked because the live browser rendered no result rows during the reproduction)_
-- [x] Case-sensitive toggle works (uppercase vs lowercase match) _(verified: FileBrowserPanel.tsx:1013-1033 toggle button for caseSensitive rendered in content mode; signal passed to content search)_
-- [x] Regex toggle works (e.g. `foo.*bar`) _(verified: FileBrowserPanel.tsx:1013-1033 toggle button for useRegex rendered in content mode; signal passed to content search)_
-- [x] Whole-word toggle works (e.g. `foo` does not match `foobar`) _(verified: FileBrowserPanel.tsx:1013-1033 toggle button for wholeWord rendered in content mode; signal passed to content search)_
-- [x] Binary files are silently skipped (no error, not shown in results) _(verified: `fs.rs:1007-1019` detects NUL bytes before walking matches; `test_search_content_skips_binary` at `fs.rs:2332-2350` asserts no binary match and increments `files_skipped`)_
-- [x] Files larger than 1 MB are silently skipped _(verified: `fs.rs:948` defines the 1 MiB limit and `fs.rs:997-1001` skips oversized files; `test_search_content_skips_large_file` at `fs.rs:2352-2371` asserts no match and increments `files_skipped`)_
-- [x] Starting a new search cancels any in-progress search _(verified: `fs.rs:626-634` and `fs.rs:667-676` atomically replace the cancellation token and mark the previous search cancelled; `FileBrowserPanel.tsx:514-519` also tears down the prior listeners/timer on reactive search cleanup)_
-- [x] Empty query shows no results (no crash) _(verified: `fs.rs:2458-2468` `test_search_content_empty_query` asserts an empty result; `FileBrowserPanel.tsx:451-456` clears matches/stats and returns before starting a request)_
-
-## Branch Panel (855-e86b)
-- [x] `Cmd+G` opens Git Panel on the Branches tab
-- [x] Clicking the "GIT" vertical label in the sidebar opens on Branches tab
-- [x] Branch list shows local and remote sections (collapsible)
-- [x] Each branch row shows ahead/behind counts, relative date, merged badge
-- [x] Stale branches (>30 days) are visually dimmed _(verified: BranchesTab.tsx:58 isStale=30 days; line 859 applies `s.stale` class)_
-- [x] Recent branches section is populated from reflog _(verified: BranchesTab.tsx:186 invoke("get_recent_branches"); line 1049 renders recentBranches())_
-- [x] Inline search/filter narrows the branch list in real time
-- [x] Prefix folding groups branches by `/` prefix (feature/, bugfix/, etc.) (MCP maccontrol verified 2026-04-10: POC-00168/, POC-00170/, POC-00171/ groups visible)
-- [x] Prefix folding toggle in panel header enables/disables grouping _(verified: BranchesTab.tsx:972-974 toggle button with foldingEnabled signal)_
-- [x] Checkout via `Enter` or double-click switches branch _(verified: BranchesTab.tsx:735-738 Enter calls handleCheckout; line 867 onDblClick calls handleCheckout; doCheckout invokes "checkout_branch")_
-- [x] Checkout with dirty worktree shows stash/force/cancel dialog _(verified: BranchesTab.tsx:126 DirtyCheckoutState; line 1077-1078 dialog rendered)_
-- [x] `n` key opens inline create-branch form _(verified: BranchesTab.tsx:727,740 'n' key handler)_
-- [x] Create branch with "Checkout after create" creates and switches _(verified: BranchesTab.tsx:166 createState defaults checkout:true; doCreateBranch:349-353 passes checkout to invoke("create_branch"); git.rs:308-315 runs checkout when true)_
-- [x] `d` key deletes branch with confirmation (safe delete refuses unmerged) _(verified: BranchesTab.tsx:745 'd' key handler)_
-- [x] Force delete option available in confirmation _(verified: BranchesTab.tsx:1121 "Force Delete" button in delete dialog; calls doDeleteBranch(true) which passes force=true to invoke("delete_branch"))_
-- [x] Deleting current branch or default branch is blocked _(verified: BranchesTab.tsx:371-377 startDelete guards on is_current "Cannot delete the currently checked-out branch" and is_main "Cannot delete the main branch")_
-- [x] `R` key opens inline rename form pre-filled with current name _(verified: BranchesTab.tsx:750 'R' key handler)_
-- [x] `M` key merges selected branch into current _(verified: BranchesTab.tsx:755 'M' key handler)_
-- [x] `r` key rebases current onto selected _(verified: BranchesTab.tsx:760 'r' key handler)_
-- [x] `P` key pushes branch; auto-sets upstream if missing _(verified: BranchesTab.tsx:765 'P' key handler)_
-- [x] `p` key pulls current branch _(verified: BranchesTab.tsx:770 'p' key handler)_
-- [x] `f` key fetches all remotes _(verified: BranchesTab.tsx:775 'f' key handler)_
-- [x] Context menu (right-click) shows all branch actions
-- [x] "Compare" context menu action shows diff --name-status _(verified: BranchesTab.tsx:541 doCompare uses "diff --name-status")_
-- [x] `Ctrl/Cmd+4` switches to Branches tab from within Git Panel
-- [x] `Ctrl/Cmd+1/2/3` switches back to Changes/Log/Stashes tabs
-
-## PWA / Mobile Output View
-- [x] Normal text wraps on narrow screens (no horizontal scroll) _(verified: `src/mobile/components/OutputView.module.css:5-18` uses `overflow-x:hidden`, `white-space:pre-wrap`, and `overflow-wrap:break-word` for ordinary text)_
-- [x] Box-drawing table output preserves alignment (│ ┌ ─ etc.) _(verified: `src/mobile/utils/logLine.ts:118-151` detects/groups box-drawing lines; `OutputView.module.css:21-30` renders table blocks with `white-space:pre` and horizontal overflow; `src/mobile/__tests__/logLine.test.ts` covers grouping)_
-- [x] Tree view output preserves alignment (├── └──) _(verified: the same U+2500–U+257F grouping in `src/mobile/utils/logLine.ts:118-151` classifies tree glyphs as table blocks, rendered with `white-space:pre` in `OutputView.module.css:21-30`)_
-- [x] No page-level horizontal scroll when viewing plain text _(verified: `src/mobile/components/OutputView.module.css:5-6` constrains the output container with `overflow-x:hidden`; only detected table blocks receive an inner horizontal scroller)_
-- [x] Long lines without box-drawing characters wrap correctly _(verified: `OutputView.module.css:17-18` applies `white-space:pre-wrap` and `overflow-wrap:break-word` to non-table text)_
-- [x] Unicode emoji renders as text glyphs (font-variant-emoji: text) _(verified: `OutputView.module.css:20` sets `font-variant-emoji:text`; `src/mobile/utils/logLine.ts:161-203` appends VS15 to terminal indicator glyphs; `src/mobile/__tests__/logLine.test.ts` covers emoji normalization)_
-
-## Smart Prompts Library (949-253b)
-- [x] Cmd+Shift+K opens Smart Prompts Library drawer with search, categories, keyboard nav (MCP maccontrol verified 2026-04-10)
-- [x] Arrow keys navigate, Enter executes, Ctrl+N new, Ctrl+E edit, Ctrl+F favorite _(verified: PromptDrawer.tsx:89-130 handles ArrowDown/Up (navigate), Enter (inject), Ctrl+N (create), Ctrl+E (edit), Ctrl+F (favorite))_
-- [x] New prompt editor has placement checkboxes, auto-execute, shortcut fields _(verified: SmartPromptsTab.tsx:342-359 placement checkboxes; lines 388-397 auto-execute; lines 482-488 keyboard shortcut capture)_
-- [x] Built-in prompts: name disabled, "Reset to Default" button, "built-in" badge, no delete _(verified: SmartPromptsTab.tsx:228 isBuiltIn(); line 313 name disabled; line 564 "builtin" badge)_
-- [x] Enable/disable toggle (circle SVG icon) works per prompt _(verified: SmartPromptsTab.tsx:523-541 toggle handler + checkbox)_
-- [x] Variable dialog shows {varName} + description for unresolved variables _(verified: VariableInputDialog.tsx:58-75 renders per-variable input with descriptions)_
-- [x] All **29** built-in prompts show descriptions in list _(verified + count corrected: smartPromptsBuiltIn.ts has 29 builtin() calls (not 24), all with non-empty descriptions)_
-- [x] Settings panel no longer has "Smart Prompts" tab _(verified: SettingsPanel.tsx:40-58 BASE_GLOBAL_TABS has no "smart-prompts" entry; SmartPromptsTab only used in HelpPanel.tsx)_
-- [x] Cmd+Shift+K opens SmartPromptsDropdown with status banner when disabled (MCP maccontrol verified 2026-04-10)
-- [x] SmartButtonStrip in Changes tab always visible (grayed out without agent) _(verified: ChangesTab.tsx:803-808 SmartButtonStrip with placement="git-changes")_
-- [x] All icons in drawer are SVG (no emoji) _(verified: PromptDrawer.tsx:296,331,346,357,373 all UI action icons use inline svg fill="currentColor"; no emoji in the drawer component)_
-
-## Tailscale HTTPS
-- [x] With Tailscale running + HTTPS enabled: app serves HTTPS on same port _(verified: tailscale.rs ~500 lines: provision_cert(), cert_renewal_loop(), rustls TLS provisioning)_
-- [x] QR code shows https:// URL with Tailscale FQDN _(verified: lib.rs:840-855 selects HTTPS + the Tailscale FQDN for a running TLS-enabled Tailscale IP; lib.rs:2340-2343 asserts the resulting `https://myhost.tail-abc.ts.net:9876` URL, and RemoteQrDialog.tsx:51-53 consumes `get_connect_url`)_
-- [x] Without Tailscale: HTTP works as before (no TLS) _(verified: tailscale.rs:10-19 TailscaleState enum with NotInstalled/NotRunning variants; graceful fallback)_
-- [x] Settings > Services shows Tailscale status section _(verified: get_tailscale_status() command exposed to frontend via lib.rs)_
-- [x] Cookie gets Secure flag when accessed over HTTPS _(verified: mcp_http/auth.rs:115-123 appends `Secure` only when TLS is active; auth.rs:243-260 passes the detected TLS state into Set-Cookie; auth.rs:486-488 asserts the Secure flag)_
-
-## Base Branch Tracking
-- [x] Create branch with base ref selector → base stored in git config _(verified: config.rs:867 after_merge field; CreateWorktreeDialog has BaseRefDropdown; base_branch in repo config)_
-- [x] Sidebar shows yellow ⇣N badge when branch is behind base _(verified: BranchesTab.tsx:886 base_behind count; BranchesTab.module.css:152-155 .baseBehind with --warning yellow color)_
-- [x] Badge tooltip shows base branch name _(verified: BranchesTab.tsx:886 baseBehind span title="${base_behind} behind ${base_branch ?? 'base'}" uses base_branch name)_
-- [x] Right-click branch → "Update from base (rebase)" fetches and rebases _(verified: BranchesTab.tsx:583-589 doUpdateFromBase invokes "update_from_base" with strategy "rebase")_
-- [x] Remote base ref auto-fetched before branch creation _(verified: worktree.rs:238-242 calls `fetch_if_remote` before passing a remote start point to worktree creation; worktree.rs:1390-1415 implements remote-only fetch and tests at :3404-3428 cover local/no-op discrimination)_
-
-## UI Lock — Thundering Herd Fix (b59c659b)
-- [HUMAN] Switch repo with 5+ existing terminals → no UI freeze (was 1-3s)
-- [HUMAN] Open new terminal on a different repo → instant, no jank
-- [HUMAN] Agent running + repo switch → no freeze
-- [x] `git commit` in terminal → ChangesTab/BranchesTab update within 1s (bumpRevision deferred) _(verified: repositories.ts:688 bumpRevision() triggers re-fetch; used in ChangesTab + BranchesTab)_
-- [x] Switch to repo with open PR → popover appears without UI jank (deferred via queueMicrotask) _(verified: Sidebar.tsx:78-97 setPrDetailTarget deferred via queueMicrotask)_
-- [x] Activity dashboard dots still appear for active terminals (lastDataAt non-reactive Map) _(verified: terminals.ts:237-260 lastDataAtMap non-reactive + deferred interval flush)_
-
-## PTY Input Border Filter (f54ad157)
-- [x] Agent shows quota/budget line below input → silence timer NOT reset by it _(verified: pty.rs:1707-1731 filters changed rows below input area border using find_chrome_cutoff())_
-- [x] Question detection unaffected by status bar content below input border _(verified: chrome.rs:156-210 find_chrome_cutoff() detects separators/prompt to exclude chrome from state transitions)_
-- [x] Completion notification not falsely triggered by post-input status updates _(verified: pty.rs:1799-1815 chrome cutoff filters changed_rows to exclude rows below input border before output_parser; suppresses spurious busy→idle transitions)_
-
-## Terminal Spawn Speed (696082ac)
-- [x] New terminal appears instantly when container has dimensions (check `spawnDelay` in logs — should be <50ms) _(verified: Terminal.tsx:661-664 logs spawnDelay in ms)_
-- [x] Split-pane scenario where flex layout settles late → still works (falls back to ResizeObserver) _(verified: CanvasTerminal.tsx:2303 ResizeObserver with 100ms debounce)_
-
-## PR Popover Load (36a1ba00)
-- [x] PR popover opens instantly with cached data, CI checks load after first paint _(verified: PrDetailContent.tsx:84-100 queueMicrotask defers githubStore.loadCheckDetails after first paint)_
-- [HUMAN] Large PR (100+ commits) → popover doesn't freeze UI
-
-## Smart Prompts Shell Script Mode (f60642c5)
-- [x] Create prompt with "Shell script" mode → runs `sh -c` with content directly _(verified: smart_prompt.rs:149-158 execute_shell_script uses sh -c on Unix, cmd /C on Windows)_
-- [x] Shell script with `{branch}` variable → resolves correctly _(verified: promptLibrary.ts:400 process_prompt_content_shell_safe shell-quotes variables like {branch})_
-- [x] Script timeout (>60s) → shows timeout error _(verified: smart_prompt.rs:147 timeout_ms.min(60_000) caps at 60s)_
-- [x] Script with non-zero exit → shows stderr in error _(verified: smart_prompt.rs execute_shell_script returns stderr on non-zero exit)_
-
-## Run Config Name Validation (9e02fbb4)
-- [x] Settings → Agents → Add Config → type existing name → red border + "already exists" error _(verified: AgentsTab.tsx:157 displays "Name already exists" error)_
-- [x] Save button disabled while name is duplicate _(verified: AgentsTab.tsx:113-116 isDuplicate() check gates save)_
-- [x] Case-insensitive: "Claude" matches existing "claude" _(verified: AgentsTab.tsx:37-55 collectRunConfigNames uses lowercased comparison)_
-- [x] Cross-agent: name from claude configs rejected when adding to gemini _(verified: collectRunConfigNames checks duplicates across all agent types)_
-
-## Env Vars Editing per Run Config (e917dfdc)
-- [x] Settings → Agents → Add Config → "Environment Variables" section with + Add button _(verified: AgentsTab.tsx:178-203 EnvVarRow component with add button)_
-- [x] Add KEY=value row, save config → env persists on reload _(verified: AgentsTab.tsx:131-148 builds the env map into the new run config; agentConfigs.ts:154-177 persists the updated config; agentConfigs.test.ts:165-205 covers successful save and invalid-index handling)_
-- [x] Run config row shows "N env" badge when env vars are set _(verified: AgentsTab.tsx:312 renders `{envCount()} env` badge)_
-- [x] Click "Env" button on saved config → inline edit panel opens _(verified: AgentsTab.tsx:322-323 "Env" button calls startEnvEdit; lines 246-249 sets editingEnv(true); lines 400-427 Show guard renders inline panel)_
-- [x] Edit/remove env vars in saved config → changes persist _(verified: AgentsTab.tsx:299-312 updates/removes entries and calls `updateRunConfigEnv`; agentConfigs.test.ts:165-205 asserts the persisted `save_agents_config` payload)_
-
-## Headless Agent Grouped Dropdown (e917dfdc)
-- [x] Settings → Agents → Headless Agent dropdown: agents with run configs show optgroup _(verified: SmartPromptsTab.tsx:676 uses `<optgroup label={...}>`)_
-- [x] Agents without run configs show as single option _(verified: SmartPromptsTab.tsx:660-692 dropdown structure)_
-- [x] Selecting a run config stores "type:name" in headless_agent field _(verified: SmartPromptsTab.tsx:680 "type:configName" format)_
-- [x] Same grouped dropdown in Smart Prompts tab _(verified: ProvidersTab.tsx:495 optgroup label={AGENTS[type]?.name}; same grouped dropdown pattern as SmartPromptsTab.tsx:676)_
-
-## Settings Nav Scroll (e27fae6c)
-- [x] Settings panel with 10+ repos → nav sidebar scrolls instead of compressing items _(verified: Settings.module.css:74 `.nav { overflow-y: auto; }` enables scrolling)_
-
-## Performance
-- [x] High-throughput output (e.g. `find /`) → terminal stays responsive (rAF coalescing) _(verified: CanvasTerminal.tsx:93,182-184 rafId-gated requestAnimationFrame coalescing)_
-- [x] Edit a file in repo → git panel updates immediately (watcher-driven cache, not 5s delay) _(verified: repo_watcher emits "repo-changed" events; see AGENTS.md Panel Refresh rule)_
-- [HUMAN] 5+ terminals open → no visible lag from process name polling (syscall, not ps fork)
-- [x] Multiple concurrent MCP tool calls → no serialization bottleneck (RwLock) _(verified: mcp_http uses parking_lot::RwLock for shared state, not Mutex)_
-
-## Diff Tab Toolbar
-- [x] "Edit file" button opens file in default editor _(verified: DiffTab.tsx:493-494 onClick calls editorTabsStore.add with repoPath+filePath; title="Edit file")_
-
-## OSC 8 File Links
-- [x] Terminal file:// URIs from hyperlinks open in system file opener _(verified: CanvasTerminal.tsx:2136-2147 OSC 8 hyperlink click handler; strips file:// prefix and opens path)_
 
 ## Smart Prompts API Mode
-- [x] Settings > Agents: LLM API section visible when API-mode prompt exists _(verified: llm_api.rs has LlmApiConfig struct with provider/model/base_url fields)_
 - [ ] Select provider (OpenAI/Anthropic/etc.) → model placeholder updates _(browser verified: the Add Model form keeps the static placeholder `e.g. claude-sonnet-4-5-20241022`; current `ProvidersTab.tsx` has no dynamic provider-specific placeholder.)_
-- [x] Enter API key → shows "Stored" indicator after save _(verified: ProvidersTab.tsx ProviderCard renders `✓ key` when providerRegistryStore.state.keyStatus is true; providerRegistry.ts:101-104 sets that state after saveKey)_
-- [x] OpenRouter/Ollama/Custom → Base URL field appears with default _(verified: ProvidersTab.tsx:139-153 conditionally renders Base URL for non-Anthropic/OpenAI/Gemini providers; the current placeholder is "Leave blank to use default")_
-- [x] Test Connection → returns model response or error message _(verified: ProvidersTab.tsx:413-418 invokes `test_slot_connection`, stores the returned response, and renders the slot test result/error state)_
-- [x] Create prompt with "API (LLM direct)" mode → system prompt textarea appears _(verified: PromptDrawer.tsx:786-798 system prompt textarea shown for API mode)_
-- [x] Execute API-mode prompt → LLM responds, output routed to target (clipboard/commit-msg/toast) _(verified: llm_api.rs:85-120 execute_api_prompt with 120s timeout)_
 - [ ] No API key configured → canExecute returns error with Settings link _(NOTE: `useSmartPrompts.ts:109-125` returns the plain reason `Headless provider not configured — add a provider and assign the Headless slot in Settings → Providers`; no clickable Settings link is produced.)_
 - [ ] PWA/browser → API mode shows "requires desktop app" message _(NOTE: browser transport maps `execute_api_prompt` through HTTP, and no `requires desktop app` guard/message exists in the API execution path.)_
 - [HUMAN] Wrong API key → toast shows "Authentication failed" with Settings hint
 
-## PWA Push Notifications
-- [x] Mobile Settings shows "Push notifications" toggle _(verified: SettingsScreen.tsx:11-127 push notification UI with enable/disable)_
-- [x] Enable push → browser prompts for permission → subscription stored _(verified: SettingsScreen.tsx:97 calls Notification.requestPermission(); lines 108-127 subscribe via pushManager)_
-- [HUMAN] Agent question → phone receives push notification **BUG: arrives late, often after question already answered. Fix: #1720-9661** _(code path exists: push.rs:163 send_push_batch called from state.rs:1638 + mcp_http/mod.rs:438; but fix #1720-9661 not confirmed as landed (no matching commit) and the latency assertion — arrives before the question is answered — requires a real phone + live agent timing that logs/invokeJS cannot capture)_
-- [x] Tap notification → PWA opens/focuses _(verified: public/sw.js:81-95 handles `notificationclick`, focuses an existing window whose URL matches the notification target or opens the target URL with `clients.openWindow`)_
-- [x] Disable push → unsubscribes and removes server-side subscription _(verified: SettingsScreen.tsx:66-88 unsubscribe handler)_
-- [x] On HTTP (no HTTPS): shows "Push requires HTTPS" message _(verified: SettingsScreen.tsx:33-61 detectPushState checks for HTTPS)_
-- [x] On iOS in browser (not home screen): shows "Add to Home Screen" message _(verified: detectPushState checks iOS standalone mode)_
-
-## Keepalive + Agent Detection Fix
-- [x] Launch Claude Code, wait at prompt >5min idle → keepalive fires (check Activity Center stats)
-- [x] After 3 keepalives with no real user input → keepalives STOP (counter stays at 3/3) _(verified: cache-keepalive/main.js:33 maxKeepalives:3; line 607 guards `keepaliveCount >= config.maxKeepalives`)_
-- [HUMAN] Phantom busy→idle after 3/3 → logs show "No real user message in JSONL → counter stays at 3/3"
-- [x] Real user sends message → logs show "Real user message in JSONL → counter reset" → next idle stretch gets fresh keepalives _(verified: cache-keepalive/main.js:906-910 filters noop messages; real input resets counter)_
-- [x] Overnight idle → max 3 pings total, then permanent stop (no infinite loop) _(verified: maxKeepalives:3 cap with counter increment at line 628)_
-- [x] Trigger "out of extra usage" → plugin shows "Rate limited" ticker, keepalives stop _(verified: cache-keepalive/main.js:920-933 sets keepaliveCount=maxKeepalives on rate limit, shows persistent ticker)_
-- [x] Resume manually (type in terminal) → rate limit cleared, keepalives resume _(verified: cache-keepalive/main.js:854-858 clears rate limit state on busy state)_
-- [x] Agent detection responds within ~1s of launch (not 3s) _(verified: docs/backend/pty.md:303 "replaces 3s polling"; detectAgentForTerminal fires on shell-state transitions with 500ms debounce)_
-- [HUMAN] Run git/npm inside Claude Code → no agent type flicker in tab bar
-- [HUMAN] Status line ticking at idle prompt → shell-state transitions to idle within 3-4s
-- [x] Reverse-map sync (commit 26688881): launch claude in a fresh terminal → `window.__TUIC__.agentTypeForSession(sessionId)` returns `"claude"` (not null) within 2s of the claude process starting
-- [x] Plugin receives events (commit 26688881): `window.__TUIC__.pluginLogs("cache-keepalive")` shows `Stats: N sent, N hits` after idle period (verified 2026-04-10: 11 sent, 73% hit — $4.12 saved)
-- [x] Restore pigro preserves agent identity: close app with claude running → reopen → select branch → before the polling detector runs, verify terminal store has `agentType: "claude"` from savedTerminals _(verified: types/index.ts:179 SavedTerminal persists agentType; repositories.ts:655 snapshotTerminals saves it)_
-
-## Interactive GFM Checkboxes
-- [x] Open a `.md` file with `- [ ] task` items → checkboxes render as clickable inputs (not disabled) _(verified visually/DOM 2026-08-04 with `agent-browser` on `docs/plugins-style.md`; 5 inputs had `disabled=false` and `data-source-line` attributes; screenshot `/tmp/tuic-gfm-checkboxes.png`)_
-- [x] Click unchecked `[ ]` → toggles to `[x]`, file on disk updated _(verified: ContentRenderer.tsx:230-255 maps the source line and emits `x`; MarkdownTab.tsx:339-342 applies `toggleCheckbox` and persists through `writeTweakedSource`; tweakComments.test.ts:476-479 asserts the source mutation)_
-- [x] Click checked `[x]` → toggles to `[~]` (indeterminate/in-progress) _(verified: ContentRenderer.tsx:179 tri-state cycle `[ ] → [x] → [~] → [ ]`, unit tests confirm)_
-- [x] Click in-progress `[~]` → toggles to `[ ]` (unchecked) _(verified: tweakComments.test.ts:299 `toggleCheckbox(src, 3, " ")` unchecks tilde box)_
-- [x] Nested checkboxes (`  - [ ]`) toggle the correct line _(verified: tweakComments.test.ts:311 "handles nested indentation" test passes)_
-- [x] Checkbox inside fenced code block is NOT rendered as interactive checkbox _(verified: ContentRenderer.tsx:68-74 `inFence` flag skips checkboxes in fenced blocks)_
-- [x] File with mixed content (headings, code blocks, checkboxes) → correct checkbox-to-line mapping _(verified: buildCheckboxLineMap() scans source, skips fences, maps sequential DOM index → source line)_
-- [HUMAN] Multiple rapid clicks → no race condition, each click writes correct state _(the underlying tri-state/source-line logic is covered by `src/__tests__/utils/tweakComments.test.ts` — 49/49 passed on 2026-08-05; rapid real DOM clicks and persistence ordering remain HUMAN)_
-- [x] Tweak comments + checkboxes in same file → both features work independently _(verified: MarkdownTab.tsx uses separate `handleCheckboxToggle` and tweak-comment handlers; tweakComments.test.ts covers checkbox source-line edits while the same utility suite covers comment insertion/update/removal)_
-
-## GitHub Issues Panel
-- [x] Badge in repo header shows GitHub icon + combined count (PRs + issues) _(verified: RepoSection.tsx:531 ghBadgeCount = myPrsCount + otherCount; GitHub SVG icon + count displayed in badge button)_
-- [x] Click badge → unified panel opens with two collapsible sections _(verified: RepoSection.tsx:639 toggles remoteOnlyPopoverVisible; GitHubPanel renders PrSection + Issues section)_
-- [x] PR section: all existing actions work (checkout, worktree, approve, merge, diff, post-merge cleanup) _(verified: PrSection component imported and rendered; PostMergeCleanupDialog wired at lines 50-62)_
-- [x] Issues section: shows issues filtered by assignee (default) _(verified: settings.ts:334 issueFilter defaults to "assigned"; github store passes filter to poller)_
-- [x] Issue accordion: labels, assignees, milestone, timestamps, comment count _(verified: IssueDetailContent.tsx component renders these fields)_
-- [x] Issue actions: Open in GitHub, Close/Reopen, Copy #number _(verified: GitHubPanel.tsx:161-170 handleCloseReopenIssue invokes close_issue/reopen_issue; Open in GitHub + Copy # in actions)_
-- [x] Filter dropdown (Assigned/Created/Mentioned/All) changes issue list _(verified: GitHubPanel.tsx:24-30 FILTER_OPTIONS with disabled/assigned/created/mentioned/all; github store setIssueFilter calls backend)_
-- [x] Section collapse state persists _(implemented in story `549-c0c3`: not localStorage — `uiStore.githubSectionCollapsed` keyed by section id, persisted through `save_ui_prefs` like every other panel pref. NOTE: needs a `make dev` restart, the `UIPrefsConfig` field is a Rust change)_
-- [x] Escape key: closes expanded item first, then panel _(verified: GitHubPanel.tsx:151-158 Escape checks expandedIssue() first, then calls onClose)_
-- [x] Arrow keys navigate items, Enter expands/collapses _(implemented in story `549-c0c3`; verified by `GitHubPanel.keyboard.test.tsx`, 12 tests: cross-section walk, clamping at both ends, collapsed sections skipped, Enter toggling PR and issue rows, DOM focus never leaving the panel)_
-- [x] Rate limit: banner appears when circuit breaker trips, Retry button works _(verified: GitHubPanel.tsx:211-220 Show when={circuitOpen()} renders banner with Retry button)_
-- [x] Loading: skeleton rows shown during first issues fetch _(verified: GitHubPanel.tsx:278-293 skeleton rows shown when issuesLoading && issues.length === 0)_
-- [x] Empty state: "No remote-only PRs" / "No issues found" messages _(verified: GitHubPanel.tsx:298 fallback renders "No issues found" via i18n key)_
-- [x] MCP: `curl localhost:PORT/repo/issues?path=...` returns issues JSON _(verified: mcp_http/mod.rs:613 route "/repo/issues" → github_routes::repo_issues handler)_
-- [x] MCP: `curl -X POST localhost:PORT/repo/issues/close` with JSON body closes issue _(verified: mcp_http/mod.rs:614 route "/repo/issues/close" → github_routes::repo_close_issue)_
-- [x] MCP tool: `github` action `issues` returns issues for repo _(verified: mcp_transport.rs:1258 "issues" action calls get_all_issues_impl)_
-- [x] Compact mode (`[data-compact]`): issue items render with reduced padding _(verified: GitHubPanel.tsx:322 data-compact attribute on ghItemDetail div)_
-- [HUMAN] SmartButtonStrip: margin-left removal doesn't misalign across different placements (changes-tab, sidebar, prompt-drawer) _(source inspection 2026-08-05: all three placements use the same `SmartButtonStrip` component; its shared flex layout is defined in `SmartButtonStrip.module.css` without placement-specific `margin-left`; cross-placement alignment remains visual HUMAN)_
-
-## Focus Mode (Cmd+Alt+Enter)
-- [x] Cmd+Alt+Enter hides sidebar, tab bar, and any open side panel (AI chat, git, markdown, notes, file browser) _(verified: fix #1718-e07c is in — styles.css:17-27 `#app.focus-mode` sets `display:none !important` on #sidebar/#tab-bar/#ai-chat-panel/#git-panel/#markdown-panel/#notes-panel/#file-browser-panel/#outline-panel/#references-panel; ids present at OutlinePanel.tsx:84 + ReferencesPanel.tsx:18; class applied App.tsx:2372)_
-- [x] Toolbar (title bar) and StatusBar remain visible and functional _(MCP maccontrol verified 2026-05-16: both visible in focus mode screenshot)_
-- [x] Cmd+Alt+Enter again restores the previous layout (panel state preserved — the same panel that was open reappears) _(MCP maccontrol verified 2026-05-16: second press restored full layout)_
-- [x] Setting `toggle-focus-mode` combo via KeyboardShortcuts tab changes the active hotkey _(verified: KeyboardShortcutsTab.tsx:204-205 action listed; keybindings.ts:165-177 setOverride persists combo and rebuilds lookup maps)_
-- [x] Focus mode does NOT persist across restart (session-only) _(verified: ui.ts:417 comment "session-only, not persisted", initial state `focusMode: false`)_
-- [x] Does not collide with Cmd+Shift+Enter (zoom-pane) — both work independently _(verified: keybindingDefaults.ts:134-135 separate bindings: zoom-pane=Cmd+Shift+Enter, toggle-focus-mode=Cmd+Alt+Enter)_
-
-## Mobile iPad Fixes
-- [x] iPad: OutputView scrolls with touch drag (finger swipe up/down) _(verified: `src/mobile/components/OutputView.module.css:5-7` enables touch scrolling with `touch-action:pan-y`; `OutputView.tsx:114-124,144-148` tracks touchstart/touchend and prevents auto-scroll from fighting the gesture)_
-- [HUMAN] iPad: Sidebar repo/branch selection works on first tap (no double-tap needed)
-- [HUMAN] iPad: Hover-revealed action buttons (⋯, +) not visible on touch devices
-
 ## ChoicePrompt (story 1296-ce3e)
-- [x] Claude Code edit-confirm dialog → PWA ChoicePromptOverlay appears with title + tappable buttons (1/2/3) _(verified: ChoicePromptOverlay.tsx renders the prompt title and one button per option; ChoicePromptOverlay.test.tsx covers the Claude edit-confirm fixture, labels, keys, and highlighted/destructive styling)_
-- [x] Tap option key "1" → PTY receives single digit, Claude Code accepts and proceeds (no extra Enter, no Ctrl-U prefix) _(verified: CommandInput.tsx:182-191 sends the selected key through `sendPtyKey` and adds Enter only for prompts without `dismiss_key`; Claude edit-confirm prompts have `dismiss_key`, so the raw-mode path sends the single digit only)_
-- [x] Repaint while dialog is open → overlay does not flicker/duplicate (dedup via `last_choice_prompt_sig`) _(verified: pty.rs:2054 compares sig and skips re-emit if unchanged)_
-- [x] Dialog dismissed by typing in terminal → `user-input` event clears `choice_prompt` and overlay disappears _(verified: state.rs:305-320 resolves matching choice input and clears the prompt; state.rs test `test_non_hook_choice_prompt_clears_on_single_key_reply` asserts key `1` clears it)_
 - [ ] Agent resumes work (status-line emits) → `choice_prompt` cleared, overlay disappears _(NOTE: current test `test_session_state_status_line_keeps_choice_prompt` explicitly preserves the prompt during status-line repaint; the checklist expectation does not match current behavior.)_
-- [x] Slash menu suppressed while ChoicePromptOverlay is visible (only one overlay at a time) _(verified: CommandInput.tsx:201 `showDropup() && !showChoicePrompt()` gates SlashMenuOverlay)_
-- [x] Bash-confirm variant (Claude Code "Do you want to run this command?") surfaces identically _(verified: fixture `claude-code_bash-confirm.txt` exists and 8 parser golden tests pass)_
-- [x] Desktop: background tab with active dialog → warning sound plays via `notificationsStore.playWarning()` _(verified: Terminal.tsx:488 checks isActive; line 493-495 if (!isActive) notificationsStore.playWarning() on "choice-prompt" event)_
-- [x] Desktop: active-tab dialog → no sound (user can see it) _(verified: Terminal.tsx:493 playWarning() is inside if (!isActive) — active tab skips the sound branch)_
-- [x] Highlighted option (`❯` glyph) renders with `.itemHighlighted` background in overlay _(verified: unit test `marks the highlighted option` asserts className contains "Highlighted")_
-- [x] Destructive option ("No"/"Cancel"/"Abort") renders with `.itemDestructive` color _(verified: unit test `marks destructive options distinctly` asserts className contains "Destructive")_
-- [x] Option hint in parens (e.g. "Yes, and don't ask again (shift+tab)") renders as separate `.hint` span _(verified: unit test `displays optional hint when present` checks button textContent contains "shift+tab")_
 - [ ] Codex numbered-choice dialog (if/when encountered) captured by parser — add fixture if not _(NOTE: `output_parser.rs:93-95,1754-1782` documents and implements the shared numbered-choice shape for Codex, but no Codex screen capture/fixture exists in the current corpus; do not invent one.)_
 - [ ] Aider confirmation dialog — add fixture if layout differs _(NOTE: the parser documents the same cross-agent layout, but no Aider capture/fixture exists in the current corpus; a live Aider prompt is required before adding evidence.)_
 
-## SSH Tunnel Manager
-- [HUMAN] Create SSH tunnel profile via UI → verify TOML file saved in `<config_dir>/tunnels/`
-- [HUMAN] Start tunnel → status badge transitions Starting → Connected
-- [HUMAN] Kill ssh process externally (`kill <pid>`) → verify auto-reconnect with Reconnecting status and increasing attempt count
-- [HUMAN] Stop tunnel via UI → verify ssh process terminated (SIGTERM), status shows Stopped
-- [HUMAN] Start tunnel with local port already in use → Error status shown before ssh spawn
-- [x] Auth failure (wrong key/user) → Stopped immediately, no reconnect attempts _(verified: classifier.rs:29 classify_exit returns ExitReason::AuthFailed for "Permission denied"; supervisor.rs:463-489 test auth_failure_no_retry confirms no Reconnecting state, final StopReason::AuthFailed)_
-- [x] Host key mismatch → Stopped immediately with HostKeyMismatch reason _(verified: classifier.rs:34 returns ExitReason::HostKeyMismatch for host key warnings; ExitReason::is_retriable returns false for HostKeyMismatch)_
-- [x] Network failure → Reconnecting with exponential backoff (check audit log for retry events) _(verified: supervisor.rs:12 uses BackoffCalculator; lines 208-253 retryable exits call backoff_delay; test at 512-524 confirms at least 2 reconnect attempts with backoff)_
-- [HUMAN] Audit log: query events for a tunnel → shows Started, Connected, Disconnected, etc.
-- [HUMAN] Edit tunnel profile → save → verify TOML updated, tunnel restarts with new config
-
-## Remote Connection Manager
-- [HUMAN] Add SSH remote connection → verify tunnel profile auto-created for daemon port forwarding
-- [HUMAN] Add Direct remote connection → verify health polling starts (check for periodic HTTP requests)
-- [HUMAN] Disable remote connection → verify tunnel/polling stops
-- [HUMAN] Add remote repo (select connection) → repo appears in sidebar with remote badge
-- [HUMAN] Open terminal on remote repo → WebSocket connects via remote base URL, I/O works
-- [HUMAN] Kill remote daemon → health check detects disconnection, warning badge shown
-- [HUMAN] Restart remote daemon → connection recovers automatically
-- [HUMAN] SSE event bridge: remote repo file change → local store updated via event bridge
-
-## AgentSessionConflict auto-reset
-- [HUMAN] In a zsh PTY tab, `claude --session-id <known-stale-uuid>` to force "Session ID already in use" — confirm warn toast fires and `TUIC_SESSION` is reset (check via `echo $TUIC_SESSION`)
-- [HUMAN] Repeat with `claude --resume <missing-uuid>` to trigger "No conversation found with session ID" path (kind="not-found")
-- [HUMAN] Subsequent `claude` (plain) in same tab spawns cleanly — wrapper now injects the NEW uuid, no retry wedge
-- [x] Cooldown: pasting the error text twice in quick succession fires only one toast (3s cooldown) _(verified: pty.rs:1600 `COOLDOWN = 3s`, dedup via `last_session_conflict_mark` instant comparison)_
-- [HUMAN] Fish shell (`chsh` or spawn explicitly): conflict triggers flag-file mechanism (no-session-inject.{uuid}), shell wrapper stops injecting `--session-id`
-- [x] False-positive guard: an agent pasting the source of `output_parser.rs` (regex line) does NOT trigger a reset — indented string literals rejected by `line_is_code_or_diff` _(verified: 7 unit tests pass including `ignores_source_code`, `ignores_diff_hunk`, `ignores_markdown_fence`, `ignores_not_found_in_code`)_
-
-## CanvasTerminal lastFg Color Cache Fix (2026-05-11)
-- [HUMAN] Powerline prompt (Starship/P10k/Agnoster): wrapped lines preserve correct foreground colors — no color bleeding from powerline arrow glyphs into subsequent text _(font/symbol coverage passed 68/68 in `nerdFontSymbols.test.ts` and `ui-pure.test.ts` on 2026-08-05; wrapped prompt color continuity still requires a rendered terminal)_
-- [HUMAN] Box drawing characters (borders, frames) followed by regular text → text has correct fg, not the box drawing color
-- [HUMAN] Braille patterns (e.g. from `spark` or progress indicators) followed by text → text fg correct _(parser suite passed 258/258 on 2026-08-05, including Braille/spinner fixtures; foreground-color continuity still requires canvas rendering)_
-- [HUMAN] Block elements (▄▀█ etc.) followed by text → text fg correct _(parser suite passed 258/258 on 2026-08-05, including block/spinner classification; foreground-color continuity still requires canvas rendering)_
-- [HUMAN] Theme switch → powerline prompt re-renders with correct colors on all segments
-- [HUMAN] Bold text after a powerline separator → bold + correct fg (not the arrow's fg)
-
-## Reflow: WRAPLINE Stale Flag Clearing (2026-05-11)
-- [x] Type a long command that wraps, press Enter, widen the terminal → wrapped line unwraps into a single line (correct merge) **FIXED: #1721-8895 — grow_columns cursor-at-Line(0) clamping bypass**
-- [x] Type a long command that wraps, press Enter, new prompt appears below, widen terminal → old wrapped line unwraps correctly, new prompt stays on its own line (no merge corruption) **FIXED: same root cause**
-- [x] Type a long command that wraps, press Enter, command produces output, widen terminal → wrapped command unwraps, output lines remain independent _(verified: `terminal_grid.rs:3405-3528` covers WRAPLINE/history-screen boundary cases, including grow/shrink reflow without absorbing the top screen row; `reflow_all_shrink_grow_cursor_row_roundtrip` covers the active row merge path)_
-- [HUMAN] Shell sends `\r` to redraw current line (e.g. bash prompt redraw) → stale WRAPLINE cleared, no phantom merges on resize
-- [x] Alternate screen app (vim, less) → `ReflowMode::None` applies, no reflow on alt screen _(verified: alacritty_terminal/src/term/mod.rs:732-735 resize_reflow sets primary_mode=ReflowMode::None when ALT_SCREEN active)_
-- [HUMAN] `clear` command (CSI 2J) → previously wrapped lines in scrollback unwrap correctly
-- [HUMAN] Rapid resize (drag terminal edge) → no corruption, final state correct
-- [x] History-only reflow (experimental flag off) → only scrollback rows reflow, screen rows padded/truncated _(verified: `terminal_grid.rs:3380-3398` `reflow_history_disabled_truncates_scrollback` and `:3405-3528` boundary tests assert scrollback behavior does not spill into screen rows; `state.rs:3073-3093` selects `HistoryOnly`/`None` based on the flag and alternate-screen state)_
-
-## File Browser: Native Drag to External Apps (2026-05-13)
-- [HUMAN] Flat view: drag a file from file browser to Finder → file is copied to the Finder location
-- [HUMAN] Flat view: drag a file from file browser to Mail.app compose → file is attached
-- [HUMAN] Tree view: drag a file from tree node to an external app → same behavior as flat view
-- [HUMAN] Drag a directory to Finder → directory is copied
-- [x] Internal drag still works: drag a file to a folder within the file browser → file moves/copies _(verified: `useFileDrop.ts:163-181` routes folder targets to `executeFolderDrop`, carrying the selected move/copy modifier)_
-- [x] Internal drag still works: drag a file to a terminal → path is pasted _(verified: `Terminal.tsx:1095-1108` and `CanvasTerminal.tsx:3046-3060` accept the internal `application/x-tuic-path` payload and write the shell-quoted path)_
-- [x] Drag icon shows the app's 32x32 icon during native drag _(verified: `dragDrop.ts:274-292` resolves `icons/drag-file.png` and passes it to `start_native_drag`; the repository asset is confirmed `PNG 32 x 32` and `native_drag.rs` supplies it to the OS drag API)_
-
-## File Browser: Finder → FileBrowser Drop Coordinate Fix (2026-05-29)
-- [x] Retina display: drag a file from Finder onto a folder row in the file browser → file transfers into that folder (was: path written to terminal) _(verified live by Boss; root cause: Tauri drop position is logical px on macOS, tauriPhysicalToCss no longer divides by DPR on mac)_
-- [x] Retina display: drop a file on the file browser empty area → transfers into the current directory _(panel root carries data-drop-target="folder" + data-abs-path=current dir)_
-- [x] External non-Retina monitor (DPR=1): same drops still work (divide-by-1 no-op) _(verified: `tauriPhysicalToCss` in `stores/dragDrop.ts` applies the platform/DPR conversion; DPR=1 is an identity transform, while folder routing remains unchanged)_
-- [x] Drop a file onto a terminal pane → path still pasted (regression check, terminal hit-test now precise) _(verified: both terminal renderers handle `application/x-tuic-path` drops in `Terminal.tsx:1095-1108` and `CanvasTerminal.tsx:3046-3060`)_
-- [x] Drop a file onto the tab bar → opens as a viewer tab (regression check) _(verified: `TabBar.tsx:717-728` declares the tab-bar drop target and calls `openPathsAsTabs` for the internal path payload)_
-- [x] Internal tab/pane reorder still works (uses pointer events, unaffected by external-drop coordinate fix) _(verified: `TabBar.tsx:472-489` and `PaneTree.tsx:285-301` route reordering through `initMouseDrag`; targeted Vitest run passed 74/74 tests across `useMouseDrag.test.ts`, `TabBar.test.tsx`, `panelLifecycle.test.ts`, and `useDetachedPanelBridge.test.ts`, including `useMouseDrag.test.ts:71-116` and `TabBar.test.tsx:547-578`)_
-
-## Compose Panel: Text Persistence (2026-05-13)
-- [x] Open compose (Cmd+I) → type text → close (Esc) → reopen (Cmd+I) → text is preserved (MCP maccontrol verified 2026-05-16)
-- [x] Cmd+I when compose is open → closes it (proper toggle) (MCP maccontrol verified 2026-05-16)
-- [x] Send a command (Ctrl+Enter) → compose closes → reopen → editor is empty (reset after send) _(verified: Terminal.tsx:1132 setPendingComposeText("") + setComposeOpen(false) on send; ComposePanel reinitialises from empty initialText on reopen)_
-- [HUMAN] Open compose with no prior text → cursor line is pre-populated (first open behavior)
-- [x] Open compose, type something, close, open again → typed text preserved, NOT overwritten by cursor line (MCP maccontrol verified 2026-05-16)
-
-## Status Bar: Pulse on Status Change (2026-05-13)
-- [x] Copy text in terminal (Cmd+C on selection) → "Copied to clipboard" flashes accent color then fades _(verified: fix #1717-44d9 in — copy sets statusInfo "Copied to clipboard" (CanvasTerminal.tsx:3499, useTerminalLifecycle.ts:428); StatusBar.tsx:133-142 pulses infoPulse for 600ms on each statusInfo≠"Ready"; :214 toggles s.infoPulse; CSS .info :54 transition + .infoPulse :57-59 accent — single transition-based pulse, no @keyframes)_
-- [x] Git operation → status message pulses once in accent color _(verified: same mechanism — git ops call deps.setStatusInfo throughout useGitOperations.ts → StatusBar pulse at StatusBar.tsx:133-142/214)_
-- [x] "Ready" status does not pulse (only non-Ready messages trigger it) _(verified: StatusBar.tsx:138 `if (text && text !== "Ready")` guards setInfoPulse(true))_
-- [x] Pulse is a single flash (accent → normal), not repeating _(verified: StatusBar.tsx:139-140 setInfoPulse(true) then setTimeout 600ms → setInfoPulse(false); single shot, not animation loop)_
-
-## Group Park/Unpark (2026-05-13)
-- [x] Right-click group header → "Park Group" option visible _(verified: GroupSection.tsx context menu includes park/unpark label)_
-- [x] Park Group → all repos in group disappear from sidebar _(verified: command palette shows "Park Group: Progetti", "Park Group: IOS")_
-- [x] Command palette → "Unpark Group: <name>" → all repos reappear _(verified: command palette integration confirmed)_
-- [x] Right-click on fully-parked group header → shows "Unpark Group" instead _(verified: GroupSection.tsx:28 uses `allParked ? "Unpark Group" : "Park Group"`)_
-- [x] Partially parked group (some repos parked individually) → "Park Group" parks the rest _(verified: `repositoriesStore.setParkGroup` iterates every path in `group.repoOrder` and calls `setPark(path, parked)` at `repositories.ts:636-643`, independent of each repo's prior parked state)_
-- [x] Park Group stops file watchers for all repos in the group _(verified: each `setPark` call persists the state, updates active GitHub paths, and invokes `stop_repo_watcher` when parking at `repositories.ts:622-634`; group parking delegates all members through that path)_
-
-## Markdown Tab: Mermaid Diagram Rendering (2026-05-13)
-- [x] Open a .md file with a ```mermaid code block → diagram renders as SVG (not raw text) _(verified: screenshot shows SVG diagrams rendered)_
-- [x] Flowchart (graph TD/LR) renders correctly with dark theme _(verified: screenshot confirms dark-themed flowchart)_
-- [x] Sequence diagram renders correctly _(verified: screenshot shows sequence diagram rendered)_
-- [x] Multiple mermaid blocks in one file all render _(verified: test file with 2 mermaid blocks both rendered)_
-- [x] Non-mermaid code blocks still render as syntax-highlighted code (no regression) _(verified: typescript block rendered as code, not as diagram)_
-- [x] Invalid mermaid syntax → shows the raw code block (graceful fallback) _(verified: ContentRenderer.tsx catches render errors and leaves original code block)_
-- [x] Mermaid library loads lazily (only when a mermaid block is present) _(verified: dynamic import in ContentRenderer.tsx onMount, only when `.language-mermaid` elements exist)_
-
-## Sidebar: External API Hidden from Agent Menu (2026-05-13)
-- [x] Right-click branch → Add Agent submenu → "External API" is NOT listed _(verified: buildSidebarAgentMenuItems filters `a.type !== "api"`)_
-- [x] Tab bar Add Agent menu → "External API" is NOT listed (was already filtered) _(verified: buildAgentMenuItems filters `a.type !== "api"`)_
-
-## AST Navigation via mdkb (2026-05-15)
-- [x] Outline panel: open a file in editor → toggle outline → symbols listed with kind badges and line numbers _(verified: screenshot shows Outline panel with kind badges fn/c/etc and line numbers for App.tsx)_
-- [HUMAN] Outline panel: click a symbol → editor scrolls to that line _(requires precise click targeting on outline row)_
-- [x] Outline panel: empty file or non-indexed language → shows "No symbols found" _(verified: OutlinePanel.tsx:101 fallback renders "No symbols found" when symbols empty + file active)_
-- [x] Go-to-definition: Cmd+Click on a symbol name in editor → opens definition file at correct line _(verified: CodeEditorTab.tsx:336-356 Cmd+Click handler calls mdkb_goto_definition)_
-- [x] Go-to-definition: Cmd+Click on unknown symbol → nothing happens (no error) _(verified: CodeEditorTab.tsx:348 returns null for unknown symbols, catch logs debug)_
-- [x] Find references: Shift+F12 on a symbol → References panel opens with callers list _(verified: CodeEditorTab.tsx:362-366 Shift-F12 keybinding triggers mdkb_references)_
-- [x] Find references: right-click → "Find References" context menu item works _(verified: CodeEditorTab.tsx:589 context menu "Find References (Shift+F12)" entry)_
-- [HUMAN] mdkb_status: DevTools `await __TAURI__.core.invoke("mdkb_status")` → `{available: true, connected: true}` _(requires DevTools console access)_
-
 ## Command Block System (2026-05-20)
-- [x] Run a few commands → scrollbar shows color-coded marks at block boundaries _(verified: `CanvasTerminal.tsx:736-770` paints blue block ticks, red non-zero-exit ticks, green prompt ticks, and orange search marks from command-block state)_
-- [x] Hold Ctrl+Cmd → timestamp overlay appears showing relative time for each block _(verified: `CanvasTerminal.tsx:591-610` renders `formatRelativeTime(Date.now() - block.startedAt)`; `:2106-2110` activates the overlay while Ctrl+Cmd is held and `:2378-2382` clears it on release)_
-- [x] Click in the gutter area → selects the entire block output _(verified: `CanvasTerminal.tsx:2434-2460` resolves the block containing the clicked row and assigns the full output range to the selection before repainting)_
-- [x] Cmd+Shift+. → toggles fold on the current block (collapses/expands) _(verified: keybindingDefaults.ts:157 "block-fold-toggle": "Cmd+Shift+."; App.tsx:2166-2167 dispatches to blockFoldToggle())_
-- [x] Cmd+Shift+Up/Down → jumps between block boundaries _(verified: keybindingDefaults.ts:158-159 "block-prev": "Cmd+Shift+ArrowUp", "block-next": "Cmd+Shift+ArrowDown")_
-- [x] Cmd+Shift+B → toggles block-scoped search (search restricted to current block) _(verified: keybindingDefaults.ts:160 "block-search-toggle": "Cmd+Shift+B"; App.tsx:2169 dispatches handler)_
 - [HUMAN] Cmd+F with block-scoped toggle ON → only matches within current block shown
 - [ ] Settings > Terminal > Blocks → toggle timestamps and folding on/off _(NOTE: the current settings state persists `show_block_timestamps` and `block_folding_enabled`, but no matching Settings-panel controls were found; the only current controls are the runtime modifier/shortcut paths in `CanvasTerminal.tsx:2106-2110,2165-2183`.)_
 - [HUMAN] Run 500+ commands → oldest blocks evicted, no crash or memory growth
 - [HUMAN] Claude Code session: tool calls show as blocks without OSC 7770 (heuristic detection)
 
-## Generators Modal (2026-05-20)
-- [x] Command palette → type "generator" → "Open generators" action appears in Generators category _(verified: actionRegistry.ts:93 "open-generators" registered with label "Open generators" and category "Generators")_
-- [x] Modal opens — left sidebar shows 10 generators: Password, UUID v4, UUID v7, ULID, CUID2, JWT Secret, TOTP Secret, Nano ID, Slug, Ed25519 Key _(verified: GeneratorsModal.tsx:26-38 GENERATORS array with exactly these 10 entries in this order)_
-- [x] Selecting each generator auto-generates a value immediately (no manual click needed) _(verified: GeneratorsModal.tsx:122-126 createEffect tracks active() signal; calls generate() on every change including initial mount)_
-- [x] Password: length slider (4–128) and charset checkboxes (A–Z, a–z, 0–9, !@#…) work _(verified: GeneratorsModal.tsx:57-65 pwLen signal with slider; charset checkboxes for upper/lower/digits/symbols; hasOptions:true on password)_
-- [x] Nano ID: length number input (4–64) works; changing length regenerates _(verified: GeneratorsModal.tsx:64-65 nanoLen signal default 21; lines 204-214 number input with min=4 max=64)_
-- [x] Ed25519 Key: shows two textareas (Private key PKCS#8 / Public key SPKI) + "Copy Private" + "Copy Public" buttons _(verified: GeneratorsModal.tsx:228-236 isKeypair() guard renders two outputGroup divs with textareas for value() and extra())_
-- [x] Copy button → clipboard contains the generated value; button shows "Copied!" for 2s then resets _(verified: GeneratorsModal.tsx:104-109 copy() sets copied=true then setTimeout 2000ms resets; button label renders copied() ? "Copied!" : "Copy")_
-- [x] Regenerate button produces a new value each click _(verified: GeneratorsModal.tsx:268-270 Regenerate button calls generate() which clears value/extra, invokes "generate_value" with fresh request)_
-- [x] Escape key closes modal; clicking overlay closes modal _(verified: GeneratorsModal.tsx:112-120 keydown handler on document captures Escape, calls props.onClose(); onCleanup removes listener)_
-- [x] No generated value appears in app logs (`curl http://localhost:9876/logs | grep -i "password\|secret\|key"` returns nothing) _(verified: GeneratorsModal.tsx:95 and generators.rs:37 explicit SECURITY comments; no appLogger/tracing calls on generated values)_
-
 ## Process Monitor
-- [x] HTTP endpoint: `curl http://localhost:<port>/process/stats` returns JSON array of `{session_id, name, pid, rss_kb, cpu_pct}` _(verified via curl 2026-05-28: with 1 terminal open returns 2 entries — TUIC main process + child session process, both with correct fields)_
-- [x] HTTP panel: `curl http://localhost:<port>/process/monitor` returns HTML dashboard _(verified via curl 2026-05-28: returns HTML with `<title>Process Monitor</title>`)_
-- [x] MCP tool: `session action=process_stats` returns `{processes: [...]}` with TUIC + child stats _(verified via MCP session list earlier this session; process_stats endpoint confirmed via HTTP)_
-- [x] Panel: open `/process/monitor` in TUIC tab — shows summary stats + process tree table _(browser verified live on `:9876`: rendered PROCESS/PID/SESSION/RSS/CPU table with 32 processes and an updated timestamp)_
-- [x] Panel: auto-refresh at **3s** interval shows live CPU/memory updates _(verified + interval corrected: process_monitor.html:47 setInterval(refresh, 3000) — 3s, not 5s)_
 - [ ] Panel: changing refresh interval to Manual stops auto-polling _(NOTE: live `/process/monitor` HTML has no refresh-interval selector or Manual mode; it only auto-refreshes on the fixed 3-second timer.)_
 - [ ] Panel: Refresh button triggers immediate data fetch _(NOTE: live `/process/monitor` HTML has no Refresh button; only the fixed timer is implemented.)_
 
-## IME Candidate Window Positioning — Issue #42 Bug 1 (2026-05-25)
-- [HUMAN] Windows + Chinese Pinyin IME: type in a plain shell terminal → IME candidate window appears near the cursor (not at top-left corner of screen)
-- [HUMAN] Windows + Chinese Pinyin IME: type in Claude Code terminal → same behavior, candidate window near cursor
-- [HUMAN] macOS + Japanese IME: type in terminal → candidate window appears near cursor
-- [HUMAN] macOS + dead-key composition (accents: `, ´, ^, ¨) → still works correctly (no regression from IME repositioning)
-- [HUMAN] Scroll terminal while IME is not composing → cursor position updates (input element follows cursor on next paint)
-- [HUMAN] Resize terminal window during typing → IME input position adjusts to new cursor coordinates
-- [HUMAN] Split pane: IME candidate window appears in the correct pane (not in the other pane)
-- [HUMAN] macOS Option+key sequences (Alt+B word back, Alt+F word forward) → still work correctly (no regression)
-
-## Worktree Fixes — PR #47 (2026-05-25)
-- [HUMAN] Create a worktree, delete its directory externally (rm -rf), then view it in sidebar → branch name shows the actual HEAD (or error), not the originally requested branch
-- [x] Click "Remove" on a worktree → button shows "…" and is disabled during removal → re-enables after completion _(verified: createWorktreeRemovalCoordinator.ts:37-45 locks the branch synchronously and clears it in completion paths; RepoSection renders the `isRemoving` state as the disabled/removing action)_
-- [x] Double-click "Remove" on a worktree rapidly → only one removal operation runs (no concurrent remove errors) _(verified: createWorktreeRemovalCoordinator.ts:39-45 rejects a second call for the same repo/branch key before awaits; useGitOperations tests cover removal concurrency guards)_
-- [x] Remove a worktree that has already been partially cleaned up → error message is clear, no crash _(verified: createWorktreeRemovalCoordinator.ts:142-166 handles force/remove errors, reports status, resets `isRemoving`, and releases the lock)_
-- [x] Remove a worktree while another removal is in flight (different branch) → both complete independently _(verified: createWorktreeRemovalCoordinator.ts:39-45 keys locks by `${repoPath}::${branchName}`, allowing distinct branches to proceed independently)_
-
-## Git Diff: Deleted File Fix (2026-05-25, uncommitted)
-- [x] Delete a tracked file (`git rm foo.txt`), open its diff → diff shows deletion (red lines), no crash _(verified: `get_file_diff` falls through to regular `git diff` when the tracked file is absent, preserving the index deletion; `parse_porcelain_v2_deleted_file` covers deleted status in `src-tauri/src/git.rs:3950-3955`)_
-- [x] Untracked new file → diff shows addition (green lines) as before (no regression) _(verified: `get_file_diff` uses `git diff --no-index` against the null device for untracked files, returning an all-added patch; `gutter_new_untracked_file_all_added` covers added lines in `src-tauri/src/git.rs:3844-3847`)_
-- [x] Modified file → diff shows changes as before (no regression) _(verified: tracked files use the regular scoped `git diff` path in `src-tauri/src/git.rs:1073-1080`; `getFileDiff` passes the file status through the frontend invoke at `src/hooks/useRepository.ts:144-146`)_
-
-## PTY Debug Logging Cleanup (2026-05-25, uncommitted)
-- No user-visible behavior change — removed shell-spike debug logging from BUSY↔IDLE transitions
-
-## Remote Settings Context (2026-05-27)
-- [x] Open Settings → Agents tab with a local repo selected → verify agent list loads normally (no banner) _(browser verified live 2026-08-05 on `:9876`: local `tuicommander` selected; Agents tab rendered its configuration and agent list with no `Configuring remote` banner)_
-- [HUMAN] Switch to a remote repo in Settings nav → Agents tab shows "Configuring remote: <name>" banner
-- [HUMAN] With remote repo active, add/edit/delete a run config → verify changes persist on remote daemon (not local)
-- [HUMAN] Disconnect remote daemon, open Agents tab with remote repo → verify error state "Remote config unavailable"
-- [HUMAN] Switch from remote repo back to local (or global) → verify banner disappears, local config loads correctly
-- [VISUAL] Remote banner styling: accent border, icon color, spacing
-
-## PWA log-mode reconnect dedup + shell typing (2026-05-31)
-- [x] WS log reconnect resumes from tracked cursor, not mount offset _(verified: transport.test.ts "log mode reconnect resumes from the tracked cursor"; server total_lines in session.rs catch-up + poll frames)_
-- [x] computeInputDelta sends minimal end-anchored delta (no full-line storm) _(verified: CommandInput.test.ts "REGRESSION: mid-line fix sends a minimal delta")_
-- [HUMAN] Mobile PWA: background/foreground or lock/unlock the phone during an active session → scrollback is NOT duplicated on reconnect (the original bug)
-- [x] Mobile PWA shell: type a command, tap mid-line and fix a typo (no arrows) → terminal shows correct line, no flicker/garbage burst _(verified: `src/mobile/__tests__/CommandInput.test.ts:33-38` covers the mid-line minimal end-anchored delta, while `syncGuards.ts` applies the same delta to PTY synchronization)_
-- [x] Mobile PWA shell: use the new ← / → keybar keys to move the readline cursor mid-line and insert/delete → readline edits at the right position (textarea may show a stale tail; screen is authoritative) _(verified: `src/mobile/components/TerminalKeybar.tsx:84-115` sends the arrow/edit sequences through the PTY key path; `CommandInput.test.ts` covers the shared delta synchronization and mid-line edit contract)_
-- [x] Mobile PWA agent (Claude/Codex): typing + slash menu + tab completion still work (no regression from the delta change) _(verified: `src/mobile/__tests__/CommandInput.test.ts:29-31,135-143` covers slash-menu selection and PTY-driven tab completion; `SlashMenuOverlay.test.tsx:61-70` covers arrow navigation sent to the agent)_
-
-## File browser per-repo directory memory (#72, 2026-06-03)
-- [x] FileBrowser remembers current subdir per root: switch away to another repo and back restores the subdir, not the root _(verified: FileBrowserPanel.tsx rootToSubdir map saved on root-change in the load effect, restored via setCurrentSubdir(rootToSubdir.get(fsRoot) ?? "."))_
-- [HUMAN] Browse into a subdir in repo A, switch to repo B, switch back to A → file browser is still in that subdir
-- [HUMAN] Browse into a subdir in repo A, switch to B, delete that subdir externally, switch back to A → falls back to root without an error screen
-
-## Terminal link context menu (#57, 2026-06-03)
-- [HUMAN] In a shell, `ls` a dir → right-click on an underlined filename/URL → context menu shows "Open" and "Copy link"
-- [HUMAN] Right-click NOT on a link → no link menu appears (default behavior preserved)
-- [HUMAN] Context menu "Open" → opens the file (md preview / editor) or URL, same as left-click
-- [HUMAN] Context menu "Copy link" → clipboard contains the resolved path / URL, file is NOT opened
-- [HUMAN] Left single-click on a link still opens immediately (UI-first: open is primary, not Cmd-gated)
-- [HUMAN] Drag-select across a filename still selects text without opening (copyOnSelect copies)
-
-## FileBrowser copy & paste: cross-repo + focus fix (2026-06-04)
-- [x] Same-repo `copy_path` works at backend level _(verified live via debug invoke_js: copy_path(tuic,"PR.md","src/...") → OK)_
-- [x] Cross-repo paste fails on old code path _(verified live: copy_path(MCPublisher,"PR.md",...) → "Failed to resolve path: No such file or directory")_
-- [x] `copy_path_abs`/`move_path_abs` copy/move a file across two different repos by absolute path _(verified: fs.rs test_copy_path_abs_cross_repo + test_move_path_abs_cross_repo)_
-- [x] `copy_path_abs` rejects directories; same-path is a no-op _(verified: fs.rs test_copy_path_abs_rejects_directory + test_copy_path_abs_same_path_is_noop)_
-- [x] Copy a file in repo A, switch FileBrowser to repo B, navigate into a dir, paste → file appears in B _(verified: `FileBrowserPanel.tsx:692-716` resolves the source from `clip.sourceRoot` and destination from the active `destRoot`, then calls `copyPathAbs`; backend cross-repo coverage is in `fs.rs` `test_copy_path_abs_cross_repo`)_
-- [x] Cut a file in repo A, switch to repo B, paste → file moves to B and is gone from A _(verified: the same absolute-path branch at `FileBrowserPanel.tsx:704-711` calls `movePathAbs` and clears the clipboard; `fs.rs` has `test_move_path_abs_cross_repo`)_
-- [x] Same-repo: copy a file, double-click into a subdir, Cmd+V → file appears in the subdir _(verified: `FileBrowserPanel.tsx:692-716` computes the destination from the current root/subdirectory and the keyboard paste path uses the same `pasteClipboard` flow; absolute-path copy is covered by `fs.rs` tests)_
-- [x] Paste a file that no longer exists (delete source externally first) → an error toast "Copy failed"/"Move failed" appears instead of silent nothing _(verified: `FileBrowserPanel.tsx:712-722` catches copy/move errors and emits the corresponding localized failure toast)_
-
-## Watcher PR-pushed worktree provisioning (2026-06-04)
-- [x] Reuse existing worktree session for (repo, branch) _(verified: watcher.rs find_session_for_branch_reuse_and_miss unit test + find_existing_pr_session adapter)_
-- [HUMAN] New commit on another author's open PR → watcher provisions a worktree (appears in TUIC) + spawns a live PTY session (real GitHub PR + push required)
-- [HUMAN] Second push to the same PR branch → reuses the same worktree session, no duplicate worktree
-
-## Watcher-fire frontend handoff (2026-06-04)
-- [x] handleWatcherFire dispatch logic _(verified: src/__tests__/watcherFire.test.ts — 5 cases: prompt→execute, instructions→startAgent, PR→assisted, PR-instructions→assisted, missing-prompt→warn)_
-- [HUMAN] End-to-end: a real watcher-fire event triggers the smart prompt in the target terminal session
-- [HUMAN] PR-review fire: agent's `gh pr review/approve/comment` surfaces a pendingApproval (ui:confirm) dialog before hitting GitHub
-
-## WatcherManager: PR-pushed trigger + repo + prompt picker (2026-06-04)
-- [x] pr_pushed in trigger dropdown; repo selector + authored-by-others toggle gated by isGitTrigger _(verified: WatcherManager.tsx <Show when={isGitTrigger(formTrigger())}> + watcherManager.test.ts)_
-- [x] Smart-prompt picker sets prompt_id; instructions is advanced fallback _(verified: formPromptId signal + showAdvanced toggle; watcherFormReady test covers prompt-or-instructions)_
-- [VISUAL] Open Watchers popover, select "PR pushed": repo dropdown + "authored by others" checkbox appear, terminal-only instruction textarea collapses to advanced; layout matches STYLE_GUIDE — screenshot after rebuild
-
-## WatcherManager: PR-opened trigger + Advanced removal + tooltip (2026-06-05)
-- [x] `pr_opened` trigger end-to-end: WatcherTrigger::PrOpened, PrTransition::Opened, on_pr_opened, pr_rule_matches PrEventKind gating _(verified: watcher.rs tests pr_opened_rule_matches_only_opened_kind / pr_pushed_rule_inert_for_opened_kind; 104 cargo tests pass)_
-- [x] PrOpened fires at most once per PR (first-poll seed suppressed) _(verified: github_poller.rs process_repo_update `first_poll_for_repo` guard)_
-- [x] Advanced toggle removed from form; instructions textarea shows when no smart prompt _(verified: WatcherManager.tsx <Show when={!formPromptId() && !isGitTrigger(...)}>; tsc+biome+vitest green)_
-- [HUMAN] Real PR-opened e2e: open a new PR (by another author) on a repo with an active PrOpened watcher → worktree session provisioned + smart prompt fires (needs live GitHub + poll cycle)
-- [VISUAL] Watchers popover: "PR opened" option in trigger dropdown; selecting it shows repo + authored-by-others fields (same as PR pushed) — screenshot after rebuild
-- [VISUAL] Cooldown `?` shows a CSS tooltip on hover (native `title` is a no-op in WKWebView); bubble not clipped at the panel's right edge — screenshot after rebuild
-
-## PrDetailPopover: footer buttons aligned to PR panel (2026-06-05)
-- [x] View Diff / GitHub / Merge buttons restyled to `.ghActionBtn` language: compact (font-xs, 4px/12px, radius-sm), transparent bg, wrap layout, accent border-glow on hover _(verified: PrDetailPopover.module.css; PrDetailPopover.test.tsx 39 tests pass)_
-- [VISUAL] Open PR detail popover: footer buttons match the GitHub PR panel buttons in size/border/hover; no always-on filled background — screenshot after rebuild
-
-## CanvasTerminal: right-click link menu under mouse-reporting (2026-06-05)
-- [x] mousedown no longer preventDefaults a right-click that lands on a detected link while an app has mouse reporting on (mouseMode>0) — lets the contextmenu (Open/Copy link) fire _(verified: CanvasTerminal.tsx mousedown `e.button === 2 && detectedLinks.get(pos.row)?.some(...)` early-return before forward/preventDefault; tsc+biome green)_
-- [HUMAN] Rebuild, run Claude Code (or any TUI with mouse reporting) in a pane, right-click a URL/file link in its output → Open / Copy link menu appears. Root cause was WKWebView suppressing `contextmenu` after a preventDefault'd right-button mousedown; needs a live macOS WKWebView run to confirm (debug server was off, no static repro).
-- [HUMAN] Regression check: right-click OUTSIDE a link (still under mouse reporting) keeps prior behavior; left-click/drag forwarding to the app unchanged.
-
-## Global Workspace: terminal hidden after repo round-trip (2026-06-05)
-- [x] activate() restores focus to a promoted terminal after restoring the layout — TerminalArea gates pane visibility on terminalsStore.activeId, which a repo switch reset to a repo terminal _(verified: globalWorkspace.ts activate() setActive(target); regression test "activate restores focus to a promoted terminal" fails without fix, passes with it; 40/40 globalWorkspace tests)_
-- [HUMAN] Live: activate Global Workspace, configure (promote terminals), switch to another repo, switch back, click Global Workspace → the workspace terminal/split appears immediately (no need to click a tab first).
-
-## BranchesTab: focus-steal fix + mouse-first (remove letter hotkeys) (2026-06-05)
-- [x] Auto-focus now fires once (`didAutoFocus` guard) instead of on every branch reload — the reactive `createEffect` tracked `loading()/branches()`, so each `repo-changed` refresh re-stole focus from the terminal, hijacking keystrokes (`n`/`d`/…) and image paste while the Git panel was open _(verified: BranchesTab.tsx createEffect guard; tsc+biome green)_
-- [x] Letter action shortcuts removed (`n` `d` `r` `R` `M` `p` `P` `f` + `Enter`-checkout); navigation kept (`↑`/`↓`, `/`, `Esc`) _(verified: handleKeyDown now only handles ArrowUp/Down/Escape/"/"; no actionRegistry duplicates)_
-- [x] `+` New-branch button added to the search bar header to preserve mouse-create (was the only `startCreate()` entry point) _(verified: PlusIcon button onClick=startCreate, reuses .foldToggle style)_
-- [VISUAL] Open Git panel → Branches: a `+` button sits left of the folder-fold toggle in the search bar; clicking it opens the inline create form; layout matches STYLE_GUIDE — screenshot after rebuild
-- [HUMAN] With Git panel open, click into a terminal and type (including after the letter "n") + paste an image → all input reaches the terminal; trigger a git refresh (commit/fetch) while typing → focus stays in the terminal (no re-steal)
-
-## useMouseDrag: stuck drag fixed via pointer capture (2026-06-05)
-- [x] initMouseDrag converted from mouse-events to pointer-events; setPointerCapture(pointerId) fires only after the movement threshold is crossed (real drag, not a click) so child onClick semantics are unchanged; listeners stay on document (captured events bubble); pointercancel cleanup added _(verified: src/hooks/useMouseDrag.ts; tsc+biome green)_
-- [x] Call sites onMouseDown→onPointerDown + param MouseEvent→PointerEvent: RepoSection, GroupSection, TabBar (8 bindings), PaneTree _(verified: grep initMouseDrag callers all converted; tsc green)_
-- [HUMAN] Live macOS WKWebView: drag a repo in the Sidebar, a tab in the TabBar, and a pane in a split → the ghost releases on mouseup and the drop-line clears (previously the ghost stayed glued to the cursor). Root cause was native NSDragging swallowing mouseup; needs a real pointer gesture to confirm.
-- [HUMAN] Regression: plain click on a repo header (toggle expand), on inner repo buttons (GitHub badge, menu, collapse initials), and on a tab (activate) still works — capture only engages past the drag threshold.
-
-## genai extended thinking (Opus 4.7+) + worker renderer freeze fix (2026-06-06)
-- [x] Backend: `ConversationConfig.reasoning` (ReasoningLevel Auto/Off/Low/Medium/High), `supports_extended_thinking` gates Opus 4.7+, `resolve_reasoning` maps to genai `ReasoningEffort`; ChatOptions rebuilt per-iteration with `with_reasoning_effort`+`with_capture_reasoning_content` _(verified: conversation_engine.rs; 26 module tests pass incl resolve_reasoning/supports_extended_thinking)_
-- [x] Backend: streaming handles `ReasoningChunk` → `ConversationEvent::ReasoningChunk`; assistant turn appended from full `captured_content` to preserve thinking block + ThoughtSignature for the tool-use continuation (Anthropic requirement) _(verified: conversation_engine.rs append path; reasoning_chunk serialization test)_
-- [x] Backend: `commands.rs` threads `reasoning_effort` param, falls back to persisted `AiChatConfig.reasoning_effort`; 50ms bridge batches ReasoningChunk like TextChunk _(verified: cargo build green; ai_chat 56 tests pass)_
-- [x] Frontend: `conversationStore` accumulates `reasoning_chunk` into `reasoningChunks()`, reset on new turn + reset() _(verified: aiAgentStore.test.ts reasoning_chunk accumulation + reset)_
-- [VISUAL] AIChatPanel shows a collapsible "Thinking" disclosure above the answer; auto-open while thinking; muted styling per STYLE_GUIDE — screenshot after rebuild
-- [VISUAL] SettingsPanel → AI Chat: "Extended thinking" dropdown (Auto/Off/Low/Medium/High) below Temperature — screenshot
-- [HUMAN] Live with Claude Opus 4.7+: send a chat message → reasoning streams into the Thinking disclosure; a multi-tool autonomous run continues without an Anthropic thinking/signature rejection; setting Off disables it
-- [x] Worker renderer freeze: `createRepaintScheduler` now races rAF with a 100ms setTimeout fallback (WebKit suspends worker rAF under CPU pressure → glyphs froze while input worked) _(verified: workerGridState.test.ts 17 tests incl timer-fallback/race/stop)_
-- [HUMAN] Live: under heavy CPU load (e.g. a Rust release build at 100%), the terminal keeps painting Ink animations and typed glyphs appear within ~100ms (previously froze "completely immobile" with cursor moving but characters delayed 1s+)
-
-## worktree switch prompt auto-cancel countdown (2026-06-06)
-- [x] `ConfirmDialog` gains opt-in `autoCancelMs`: a per-second countdown signal appended to the cancel-button label that auto-clicks cancel (onClose) at 0; interval cleaned up on hide/interaction _(verified: ConfirmDialog.tsx:23-42; tsc green)_
-- [x] `autoCancelMs` threaded through `ConfirmOptions`→`ConfirmDialogState`→App.tsx ConfirmDialog binding; absent on all other confirm dialogs (remove worktree, folder-drop) _(verified: useConfirmDialog.test.ts 11 pass incl threads/undefined cases)_
-- [x] Worktree-created switch prompt sets `autoCancelMs: 10_000` so "Stay" shows a 10s countdown and is auto-clicked if untouched _(verified: useWorktreeSwitchPrompt.ts:64)_
-- [VISUAL] Create a worktree via TUIC/MCP → switch prompt shows "Stay (10)" counting down; left untouched for 10s it auto-dismisses (stays put); clicking Switch/Stay or pressing Enter/Esc before 0 still works
-
-## focus-last-terminal — return to last terminal (#77) (2026-06-06)
-- [x] `terminalsStore.previousActiveId` tracks the terminal left behind on `setActive`; `getPreviousActiveId()` returns it only if still alive; cleared on `remove` _(verified: terminals.test.ts "previousActiveId (return to last terminal)" 5 cases — toggle, no-op on re-activate, cleared on removal)_
-- [x] Action `focus-last-terminal` wired: ACTION_NAMES + unbound default, ACTION_META (Navigation), keyboard dispatch case, App.tsx handler calls `navigateToTerminal(prevId)` (switches repo/branch/tab/pane + focus) _(verified: tsc green; actionRegistry + useKeyboardShortcuts mocks updated and passing)_
-- [HUMAN] Live: bind `focus-last-terminal` in Settings → Keyboard, open terminals across 2+ repos, switch to a terminal in another repo, press the hotkey → jumps back to the prior terminal (and its repo/branch); press again → toggles forward. Closing the previous terminal makes the hotkey a no-op.
-
-## Jump to waiting terminal (#78) + Cmd+? help binding fix (2026-06-06)
-- [x] New action `jump-waiting-terminal` (Cmd+U): cycles to the next terminal with `awaitingInput != null` across all repos/branches in tab order, skips detached, no-op when none waiting; uses `navigateToTerminal` for full repo/branch/pane context switch _(verified: App.tsx jumpWaitingTerminal + utils/nextWaitingTerminal.ts; nextWaitingTerminal.test.ts 6 cases incl wrap/empty/active-not-waiting; useKeyboardShortcuts.test.ts "Cmd+U" dispatch)_
-- [x] Wired through canonical path: ACTION_NAMES + DEFAULT_BINDINGS (Cmd+U), ShortcutHandlers + dispatch case, ACTION_META + handlerMap (shows in Command Palette + Settings→Keyboard Shortcuts) _(verified: tsc + biome green; actionRegistry.test.ts passes with new mock)_
-- [x] Bug fix: `toggle-help` default was `"Cmd+?"` which normalizes to `cmd+?` but a real `?` keypress holds Shift → event combo `cmd+shift+/`, so Help (Cmd+?) was dead. Changed default to `Cmd+Shift+/` (JS) + native menu `CmdOrCtrl+Shift+/` (menu.rs). Test that hid the bug fixed to fire a realistic shifted `?` _(verified: useKeyboardShortcuts.test.ts "Cmd+? toggles help" now fires shiftKey:true; cargo check green)_
-- [HUMAN] Live: with 2+ agent terminals in different branches awaiting input, press Cmd+U repeatedly → focus jumps to each waiting terminal in turn (switching branch/repo), wraps around; does nothing when none waiting. Press Cmd+? → Help panel toggles (was dead before).
-
-## Fix: "Investigate" toast button did nothing (2026-06-06)
-- [x] Root cause: `ai-suggestion` toast (Command failed/timed out) fires for any agent terminal (state.rs:1337, gated on ai_suggestions_enabled default=agent present). Its Investigate onClick only called `startAgent(session_id, goal)` — which runs on `activeConversation()` (the focused terminal, not the failed session) and never opened the AI Chat panel, so nothing visible happened (and silently no-op'd if the active conv's agent was already running) _(verified: App.tsx:559-575; conversationStore.startAgent uses activeConversation/activeKey)_
-- [x] Fix: onClick now mirrors the working "Fix this error" action — `setAiChatPanelVisible(true)` + `switchToTerminalBySession(session_id)` + `startAgent`. Extracted `switchToTerminalBySession` from contextMenuActions.ts to `src/utils/switchToTerminalBySession.ts` (DRY) _(verified: tsc + biome green; AIChatPanel/contextMenu tests 22 pass)_
-- [x] Guard: if AI Chat is disabled, Investigate shows "Enable AI Chat in Settings to investigate" instead of invoking an invisible agent _(verified: App.tsx onClick isAiChatEnabled gate)_
-- [HUMAN] Live: run an agent terminal, make a command fail (e.g. `false` or a bad git cmd) → "Command failed" toast appears → click Investigate → AI Chat panel opens, switches to that terminal's conversation, and an autonomous investigation starts on the correct session
-
-## D&D pointer-migration tests + engine audit (2026-06-06)
-- [x] Fixed 4 failing D&D tests: Sidebar.test.tsx + TabBar.test.tsx dispatched mouse* events while production migrated to pointer* — converted to fireEvent.pointerDown/pointerMove/pointerUp with explicit pointerId (handlers filter ev.pointerId); renamed "(mouse-based)" describe → "(pointer-based)" _(verified: 135/135 in both files; full suite 4135/4135 green)_
-- [x] useMouseDrag engine audit (Boss: "è efficace?"): sound overall (pointer capture + threshold + ghost + cleanup + pointercancel/Escape). I initially "optimized" two things then REVERTED both — Boss flagged that the early preventDefault was the stuck-ghost fix: (1) deferring getBoundingClientRect and (2) deferring preventDefault past the threshold. The `ev.preventDefault()` at the TOP of handleMove (every move, incl sub-threshold) is LOAD-BEARING on WKWebView — it stops native NSDragging from starting and swallowing pointerup (ghost glued to cursor). Reverted to baseline + added an inline warning comment + mdkb entry usemousedrag-preventdefault-load-bearing _(verified: useMouseDrag.ts:47-53 preventDefault at top; tsc green; 135 drag tests green)_
-- [HUMAN] Live macOS WKWebView: drag a tab, a repo, a group, a split-pane → ghost follows + releases on pointerup; plain click still selects text / activates; Escape and native-drag-cancel both abort cleanly
-
-## Editor + diff viewer performance pass (#020-abfe) (2026-06-07)
-- [x] `stat_path` extended with `modified_at` (ms) + `size`; editor 5s poll stat-gates before reading file content via `diskStatUnchanged` _(verified: fs.rs cargo test stat_path 5 pass + editorDiskStat.test.ts 4 cases incl truncate-rewrite same-mtime)_
-- [x] Shared `DiffFileList` virtualizes multi-file diffs with @tanstack/solid-virtual; FileSection/sectionToRawDiff duplication removed from BranchDiffScrollView + PrDiffTab _(verified: tsc + biome + DiffFileList.test.tsx 3 + PrDiffTab/DiffViewer 19 pass; full suite 4157 green)_
-- [x] DiffTab: extractHunks memoized; row→hunk/line cache built once per diff (no querySelectorAll per mousemove); HunkRevertOverlay positions memoized on diff+ResizeObserver (not hover) _(verified: code DiffTab.tsx getRowCache/findLineInfo/applyLineSelectionStyles; diffPatch 47 pass)_
-- [VISUAL] Open a PR diff or working-tree scroll-mode diff with MANY files (50+) → only on-screen file sections are in the DOM; scroll is smooth; sticky per-file headers still stick; file paths still open on click (working-tree)
-- [HUMAN] Single-file diff: hover a hunk → revert button appears at the correct row; drag-select lines across a hunk → correct lines highlight; Discard/Unstage selected still applies the right git patch (git-patch path unchanged)
-- [VISUAL] Open a >3000-line single-file diff → "This diff is large (N lines) / Render anyway" guard shows; clicking Render anyway renders it
-- [NOTE] DEFERRED: Cmd+F in virtualized scroll-mode only matches mounted (on-screen) sections — see DiffFileList.tsx DEFERRED comment. Needs data-level search for full coverage.
-
-## Fix: MCP worktree create now refreshes the sidebar immediately (2026-06-08)
-- [x] Root cause: MCP `worktree_create` emits the `worktree-created` Tauri event but never registers the branch in `repositoriesStore`; the listener (`useWorktreeSwitchPrompt.ts:28`) only added it via `handleBranchSelect` IF the user accepted the switch prompt. Dismiss → sidebar stale until the debounced file-watcher refresh. In-app create registers immediately via `setupNewWorktree`→`setBranch` (`useGitOperations.ts:1292`) _(verified: code inspection mcp_transport.rs:1449-1466 emits event only; RepoSection.tsx:554 renders Object.values(repo.branches))_
-- [x] Fix: `worktree-created` listener now calls `repositoriesStore.setBranch(repo_path, branch, {worktreePath})` on arrival, guarded on repo existence, so the sidebar shows the new worktree instantly regardless of the switch prompt _(verified: tsc clean; useWorktreeSwitchPrompt.ts:30-38)_
-- [HUMAN] Live (needs rebuild): from an MCP client run `repo action=worktree_create path=<open-repo>` → the new branch row appears in the sidebar under that repo IMMEDIATELY, before/without accepting the switch prompt
-
-## Remove off-main-thread terminal renderer (2026-06-08)
-- [x] Deleted worker-only modules: `renderer.worker.ts`, `workerProtocol.ts`, `fontAssets.ts` + their tests. `gridRenderer.ts` (the canvas2d renderer) stays — it was never worker-exclusive. `decideFrameGrid` (+ `FrameGridPrev`/`FrameGridDecision`) relocated from `workerGridState.ts` into `canvasTerminalUtils.ts` (still used by main `onFrame`); coverage preserved in `__tests__/decideFrameGrid.test.ts` _(verified: vitest 4112 pass; tsc + biome clean)_
-- [x] `CanvasTerminal.tsx`: removed `rendererMode`/`renderWorker`/`workerRenderer`, the `chooseRenderer` mount branch, worker `postResize`/`postFrame`/`postFonts`, worker teardown, and the worker-only guards in `remeasure`/`paintFrame`/hidden-resize. `onFrame` now inlines ack→decode (was `receiveFrame`) _(verified: rg CLEAN — no stray worker refs; cargo check + clippy -D warnings clean)_
-- [x] Removed `offscreenRenderer` setting end-to-end: `settings.ts` (state/default/save/hydrate/setter), `config.rs` (`offscreen_renderer` field + 2 defaults), AppearanceTab toggle, settings.test.ts block; dropped the stale `plans/terminal-worker-renderer.md` row from `docs/sync-matrix.md` _(verified: settings.test.ts pass; config.rs cargo check clean)_
-- [VISUAL] Live (needs rebuild): open several terminals, type/scroll, resize panes, hide/show tabs, switch themes/fonts → glyphs render correctly, cursor/selection/links/scrollbar work, no blank canvas. (Off-thread path is gone; main-thread canvas2d is now the only renderer, as it was by default.)
-
-## Crash fix: github-transition pushed/opened → undefined.cls (2026-06-08)
-- [x] Root cause: Rust poller emits `github-transition` for ALL `PrTransition` variants incl. watcher-only `pushed`/`opened` (PR-opened/commit-pushed triggers carrying author/head_ref_oid). Frontend `handleTransition` blindly added every type as a PR notification; the popover render then did `NOTIFICATION_LABELS["pushed"]` → undefined → `info.cls` → `undefined is not an object (evaluating 't.cls')` whole-app crash _(verified: github_poller.rs:587/608 emit, github.ts handleTransition, Toolbar.tsx:545-548)_
-- [x] Fix: `PrNotificationType` now derives from runtime `PR_NOTIFICATION_TYPES` allowlist + `isNotificationType()` guard; `handleTransition` skips any transition not in the allowlist (pushed/opened and any future watcher-only variant ignored by default, no crash) _(verified: prNotifications.test.ts isNotificationType 3 cases; 23 file tests + tsc + biome green)_
-- [HUMAN] Live: open a brand-new PR on a watched branch (fires `opened`) and push a commit to an open PR (fires `pushed`) → app does NOT crash, no bogus popover notification appears for those
-
-## Fix: agent intent title no longer overwrites a renamed tab (2026-06-10)
-- [x] Root cause: `intent` event handler (`Terminal.tsx:417`) overwrote tab `name` from `parsed.title` whenever `intentTabTitle`/per-agent allowed — without the `nameIsCustom` guard the OSC 0/2 path already has. After "Rename Tab" set `nameIsCustom:true`, the next prompt's `intent:` token clobbered the custom name with the agent's intent title _(verified: code inspection Terminal.tsx:607 OSC guard vs 417 missing guard)_
-- [x] Fix: extracted pure `shouldApplyIntentTitle()` (`intentTitle.ts`) that also checks `!nameIsCustom`; intent handler now routes through it _(verified: tsc clean; intentTitle.test.ts 5 pass)_
-- [HUMAN] Live (needs rebuild): rename a terminal tab via "Rename Tab" → run a prompt that emits an `intent:` token → tab keeps the custom name (does NOT revert to the agent's intent title)
-
-## #71 Phase 1: custom launcher cursor + base placeholder tokens (2026-06-09)
-- [x] Rust `expand_placeholders` resolves `{path}`/`{file}` (focused file, else repo), `{repo}`, `{fileDir}` (file parent, else repo), `{cwd}` (else repo), `{home}` (dirs::home_dir), `{line}`/`{column}` (cursor, default 1); `open_in_custom` takes `LaunchContext` _(verified: agent.rs expand_placeholders/open_in_custom; 8 cargo tests green incl. no-file & cwd fallbacks)_
-- [x] Cursor surfaced: `editorTabsStore.setCursor` + `cursorLine/cursorCol`; `CodeEditorTab` separate ungated updateListener pushes `(line.number, head-line.from+1)`; `Toolbar` passes cwd (`terminalsStore.getActive().cwd`) + cursor (`editorTabsStore.getActive()`) to `IdeLauncher`; `handleOpenCustom` sends real `ctx` (was `line/col=null`) _(verified: editorTabs setCursor tests + Toolbar cursor-wiring test green; make check exit 0)_
-- [HUMAN] Live (needs rebuild): add a custom launcher with args `--file {file} --pos {line}:{column} --repo {repo} --cwd {cwd} --home {home} --dir {fileDir}` (exec e.g. `echo` into a logging wrapper), open a code file, move the cursor to a known line/col, focus a terminal in a known cwd → launch it → the spawned process receives the EXPANDED values (real cursor line/col, not 1), correct file/repo/cwd/home/fileDir
-
-## Notification fixes: mic-prompt on settings open + Test rate-limit masking volume (2026-06-09)
-- [x] Root cause (mic prompt): `NotificationsTab` enumerated audio devices eagerly via `createResource` at tab mount → `list_audio_output_devices` → cpal CoreAudio output scan, which triggers the macOS microphone TCC prompt (app declares `NSMicrophoneUsageDescription` + `audio-input` entitlement for dictation) _(verified: code inspection NotificationsTab.tsx old createResource:89; notification_sound.rs:253 list_output_devices uses rodio::cpal::default_host().output_devices(); live invoke returned 3 devices)_
-- [x] Fix (mic prompt): enumeration is now LAZY — `null` until the user clicks **Choose output device…**. Opening the tab no longer touches cpal, so no mic prompt. Added a hint explaining the prompt + that notifications never record _(verified: tsc + biome clean; NotificationsTab.tsx:92-105,135-193)_
-- [x] Root cause (volume "nothing changes"): the volume chain is correct end-to-end — slider→`setVolume`→manager+disk (`load_notification_config`=0.17 confirmed persistence), Rust scales amplitude linearly (`notification_sound.rs:217`), Boss confirmed audible 1.0-vs-0.1 difference. The masking was the Test button: `NotificationManager.play` rate-limits to 1/500ms per sound, silently dropping rapid A/B clicks _(verified: notifications.ts:56-58 rate limit; Boss A/B ear test = clear difference)_
-- [x] Fix (volume): `play(sound, {force})` bypasses enabled/per-sound/backoff/rate-limit; `testSound` uses `force:true` (removed the old enabled-toggle hack). Agent notifications stay rate-limited _(verified: vitest 75 pass incl. 4 new force scenarios + rewritten testSound contract)_
-- [VISUAL] Live (needs rebuild): open Settings > Notifications → NO microphone prompt appears. Click "Choose output device…" → device dropdown loads (prompt may appear here, once). Section renders cleanly per STYLE_GUIDE.
-- [x] Preview on Master Volume: `SettingSlider` gained optional `onCommit` (DOM `change`/release); Master Volume wires it to `testSound("info")` so releasing the slider plays a short preview at the committed volume _(verified: SettingFields.tsx onChange→onCommit; NotificationsTab.tsx:129; tsc + biome clean)_
-- [HUMAN] Live (needs rebuild): set Master Volume low, click a Test button repeatedly while changing volume → each click plays at the current volume (no dropped/identical-sounding plays). Drag the Master Volume slider and release → hear a short "info" preview at the new level each time.
-
-## Help menu links + What's New star CTA (2026-06-11)
-- [x] Help menu (`menu.rs:223`) gained **Online Guide** + **Changelog** items; `menu-action` handler routes them via `handleOpenUrl` to `https://tuicommander.com/docs/` and the CHANGELOG on GitHub _(verified: tsc + cargo check clean; App.tsx:2289 cases, menu.rs items)_
-- [x] `WhatsNewDialog` gained a discreet star CTA (inline star SVG per STYLE_GUIDE, links to repo) below "View full changelog" — one-shot since the dialog is already per-version _(verified: tsc clean)_
-- [VISUAL] Live (needs rebuild): native Help menu shows Online Guide + Changelog → each opens the right URL in the browser. After an update, the What's New dialog shows the "Star us on GitHub" row with a star icon, rendering cleanly per STYLE_GUIDE.
-
-## Fix: PluginPanel same-origin guard no longer loops on its own about:blank reset (2026-06-11)
-- [x] Root cause: `guardSameOriginNav` reset an app-origin iframe to `about:blank`, which is itself same-origin → the guard re-fired on the reset's own load event → infinite log spam ("navigated to app origin — blocked" every 1-2s) _(verified: code inspection PluginPanel.tsx:213; observed live spam from md-21 panel)_
-- [x] Fix: early-return when `contentDocument.location.href === "about:blank"` (our own reset target, not an escape) _(verified: tsc clean)_
-- [HUMAN] Live (needs rebuild): open a plugin panel whose URL reaches the app origin → exactly ONE "blocked" log, no repeating spam; the panel resets to blank and stays quiet.
-
-## OAuth upstream re-auth prompt on expired token (2026-06-09)
-- [x] `classify_refresh_error` maps fatal refresh failures (`invalid_grant` / no refresh token / HTTP 400 / HTTP 401) to `UpstreamError::AuthFailed`; transient/5xx/network errors stay `Other` (retryable) _(verified: 2 unit tests in http_client.rs green; `refresh_token_if_needed` now routes through it)_
-- [x] `initialize_entry_with_oauth` adds an `AuthFailed` + OAuth-config arm → deletes the dead keyring token + `mark_entry_needs_auth` (→ `NeedsAuth`, "Authorize") instead of red `Failed`/`CircuitOpen`; non-OAuth upstreams with a bad static token still go red (guard `matches! OAuth2`). Health-check skips `NeedsAuth` (registry.rs:1150) so no delete/init loop _(verified: code inspection; 146 mcp_proxy+mcp_oauth tests green)_
-- [HUMAN] Live (needs rebuild): with an OAuth upstream (e.g. publishwith-ai) whose access AND refresh tokens are expired/revoked → on connect/refresh the upstream goes to **NeedsAuth (yellow + "Authorize")**, NOT silent red. Clicking Authorize opens the browser and re-authorizes to fresh tokens → green/ready. (Auto-test impossible: needs real keyring-seeded expired token; codebase marks keyring write tests `#[ignore]`.)
-
-## tools/list upstream-readiness race (bridge serves before upstreams connect) (2026-06-09)
-- [x] `await_initial_settle(timeout)` + `mark_initial_connect_complete()` on the registry: the first `tools/list` blocks (≤3s) until boot auto-connect registered every upstream AND none is still `Connecting`, then serves; a global latch makes later calls no-ops; timeout serves a partial list rather than hanging _(verified: 2 unit tests — fast-path + timeout-then-latch — green; 402 mcp_http+mcp_proxy tests green)_
-- [x] Wired: `auto_connect_saved_upstreams` marks complete at both exits (incl. empty-config); `tools/list` handler awaits before `merged_tool_definitions` _(verified: code inspection mcp_transport.rs tools/list arm; mcp_upstream_config.rs)_
-- [HUMAN] Live (needs rebuild): cold-start the app with quill enabled → quill's proxied tools (`quill__*`) are present in Claude Code's tool list WITHOUT a manual refresh/reconnect (root cause was CC fetching tools/list before async upstream init finished + ignoring tools/list_changed).
-
-## Smart Prompts: inject Target (Compose vs Terminal) + idle gate fix (2026-06-10)
-- [x] New per-prompt `injectTarget: "terminal" | "compose"` (defaults to "compose"); `canExecuteInject` only applies the idle gate when target=="terminal" (so a busy agent no longer disables compose-bound prompts like Review Issue) _(verified: useSmartPrompts.ts:148-156; 5 new vitest cases in useSmartPrompts.test.ts green — compose-not-gated, terminal-busy-blocked, terminal-idle-allowed, requiresIdle=false, no-active-terminal)_
-- [x] `executeInject` routes by target on ALL platforms (removed the 2026-04-23 desktop-always-compose hack + isTauri gate): compose→`openComposeWithText` (fallback write-without-Enter when no compose panel), terminal→`sendCommand` (autoExecute) or write-without-Enter for review _(verified: useSmartPrompts.ts executeInject; tsc + biome clean)_
-- [x] User's per-prompt target survives relaunch (added `injectTarget` to the built-in merge preserve list) + invalid values reset on hydrate _(verified: promptLibrary.ts merge + validation)_
-- [x] PromptDrawer.doInject honors injectTarget for consistency _(verified: PromptDrawer.tsx doInject)_
-- [VISUAL] Live (needs rebuild): expand an issue while the active terminal's agent is BUSY → the "Review Issue" button is ENABLED (not greyed) and clicking it fills the Compose box (does not send).
-- [VISUAL] Live (needs rebuild): Settings → Smart Prompts → edit an inject prompt → a "Target" dropdown shows (Compose box / Terminal). Selecting "Terminal" reveals the "Auto-execute" checkbox; "Compose box" hides it.
-- [HUMAN] Live (needs rebuild): set a prompt's Target=Terminal, make the agent busy → its SmartButtonStrip button is disabled ("Agent is busy"); when idle it sends straight to the agent (Auto-execute on = immediate Enter, off = text awaiting review).
-
-## grok onboarding: storm fix + first-class agent + no-alt-screen wheel scroll (2026-06-11)
-- [x] Notification storm: grok's decorative `◆` timeline bullets ("Thought for 1.3s", "user_prompt_submit") no longer fire confident Question events — cliclack `◆` match now requires the text to end with `?` (Goose prompts do, grok labels don't) _(verified: output_parser.rs:1131-1140; test_grok_decorative_bullet_not_a_question + 3 cliclack tests green)_
-- [x] grok registered as first-class agent: agents.ts (AgentType/AGENTS/MCP_SUPPORT/AGENT_DISPLAY), useAgentDetection binary map, classify_agent (pty.rs), discover_grok_session/verify_grok_session (agent_session.rs, `~/.grok/sessions/<%-encoded-cwd>/<UUIDv7>/`) _(verified: tsc clean; 33 agent_session + 4 grok/cliclack rust tests green; grok_path_encode matches live on-disk layout)_
-- [HUMAN] Live (needs rebuild): launch grok by typing `grok` in a shell tab (not via spawn) → TUIC detects agent_type=grok (icon/badge), and after app restart the session resumes via `grok --resume <id>` (discovery picks the newest UUIDv7 dir).
-- [VISUAL] Live (needs rebuild): run `grok --no-alt-screen`, produce enough conversation for grok's own scroll, then **two-finger trackpad / wheel scroll** → grok's conversation scrolls (wheel is forwarded because grok enables mouse mode `?1000h/?1002h/?1003h/?1006h` without alt-screen). **Shift+wheel** and the scrollbar thumb scroll TUIC history. Confirm vim/lazygit (real alt-screen) wheel still reaches the app.
-
 ## Search/UI consistency: unified SearchBar + scrollbar overview + file-browser tracking (2026-06-11)
-- [x] Shared `SearchBar` gains optional VS Code-style expandable Replace (chevron) — only shown when the consumer passes `onReplace`/`onReplaceAll` (editor yes; terminal/diff no) _(verified: code inspection SearchBar.tsx; tsc clean)_
-- [x] Match counter ("1 of N"/"No results") moved INSIDE the input (absolute, masking bg) instead of a fixed-width flex slot → no dead space / layout shift _(verified: SearchBar.module.css .inputWrap/.counter; tsc clean)_
-- [x] Code editor uses the shared `SearchBar` overlay instead of CodeMirror's built-in panel (Cmd+F / Cmd+Alt+F / Esc); `EditorSearch` drives `@codemirror/search` _(verified: 6 vitest cases editorSearchEngine.test.ts; searchOverview 5; tsc clean)_
-- [x] Editor scrollbar search ticks: full-width 12px marks (`--attention`) that cover the scrollbar; git-change overview hidden while searching (`.cm-searching`) → only orange marks, like the terminal _(verified: searchOverview.ts; tsc clean)_
-- [x] Git-change overview ruler coalesces contiguous same-type runs → a whole-new file shows ONE tick, not a solid bar _(verified: 5 vitest cases gitGutterRuns.test.ts)_
-- [x] Diff panel search ticks on the scrollbar via `DomSearchEngine.matchFractions` + shared `DomSearchOverview` _(verified: code inspection; tsc clean)_
-- [x] Active search match no longer bright yellow: `.cm-selectionMatch` themed to a subtle accent tint _(verified: theme.ts; tsc clean)_
-- [x] File browser highlights the file open in the active editor (accent bar + tint), flat + tree, worktree-aware _(verified: FileBrowserPanel/TreeNode entryActive; tsc clean)_
-- [x] File browser reveals the active file: tree auto-expands ancestor dirs then scrolls the row into view _(verified: FileBrowserPanel.revealActiveFile + effect; tsc clean; full suite 4167 green)_
 - [VISUAL] Live (needs rebuild): open Cmd+F in the code editor → compact SearchBar pill (counter inside input); typing shows orange full-width ticks covering the scrollbar and hides the green git ticks; closing search brings the git overview back. Replace row expands via the chevron.
 - [VISUAL] Live (needs rebuild): open a brand-new (untracked) file → the git-change overview shows a SINGLE tick at the top, not a solid green bar.
 - [VISUAL] Live (needs rebuild): search inside a diff tab → orange match ticks appear on the diff scrollbar and track scroll.
@@ -1660,92 +269,6 @@ lo scrive ma non contiene nulla--> _(fixed + verified end-to-end: invoked save_r
 - [ ] DEFERRED (story 041-cd15): HTML Preview search → shared SearchBar (in-iframe search needs a postMessage bridge); shared sidebar-filter component for Error Log / Knowledge History / Branch Switcher etc. ("consistency of a different kind" for narrow sidebars).
 - [VISUAL] Live (story 040-29e1): open a tracked file in the code editor → a dim italic annotation "Author · relative time · summary" appears at the end of the active line and follows the cursor (no flicker, no fetch per keystroke). Edit a line → it shows "You · Uncommitted changes". Toggle `settingsStore.setInlineBlameEnabled(false)` → annotation disappears. External (absolute-path) files show no annotation.
 
-## Native Agent Hooks — adapter live verification (Phase 1)
-
-- [HUMAN] Grok hooks: enable "Use native agent hooks for status" for Grok in Settings → Agents, launch a `grok` session, confirm the badge flips busy on prompt-submit / tool-use and idle on Stop (hooks at `~/.grok/hooks/tuic.json`). Verify a co-existing user hook file in `~/.grok/hooks/` is untouched, and disabling deletes only `tuic.json`. (Event names verified against `~/.grok/docs/user-guide/10-hooks.md`; the install/uninstall/file-isolation is covered by `agent_hook_grok` unit tests — this confirms the events actually fire live.)
-- [HUMAN] Grok awaiting: Grok has no dedicated "awaiting approval" hook event, so approval prompts still rely on the OSC-0 title heuristic (not suppressed under instrumentation). Trigger a permission prompt in an instrumented Grok session and confirm the awaiting badge still appears.
-- [HUMAN] Codex hooks: enable instrumentation for Codex in Settings → Agents. Confirm `~/.codex/config.toml` gains `[features] hooks = true` (preserving other config) and `~/.codex/hooks.json` gains our SessionStart/UserPromptSubmit→busy, Stop→idle hooks (preserving any user Codex hook). Launch `codex`, submit a prompt → badge busy; on turn end → idle. Disable → both the flag AND our hooks removed, user config/hooks intact. (Merge/flag/state covered by `agent_hook_codex` unit tests — this confirms live event firing + that Codex actually honors the flag.)
-- [HUMAN] OpenCode plugin: with OpenCode installed, enable instrumentation for OpenCode in Settings → Agents. Confirm `~/.config/opencode/plugin/tuic.ts` is written (carrying the `/* tuic-managed */` marker) and that a pre-existing UNmarked user plugin at that path is never overwritten. **Verify the plugin API shape against the installed OpenCode version** — the generated callbacks (`tool.execute.before`/`after`→busy, `permission.asked`→awaiting, `event` `session.idle`→idle) and the `/dev/tty` write must match OpenCode's actual plugin contract; adjust `opencode_plugin_source()` if the API differs. Launch OpenCode → badge busy/idle/awaiting flips. Disable → the marked file is deleted (unmarked files left). (File-management — clobber-guard, delete-only-marked, marker/OSC/guard in source — is covered by `agent_hook_opencode` unit tests; the runtime plugin contract is the open item.)
-
-## Terminal scroll: duplication / disappearing / zoom-black (2026-06-18)
-
-- [VISUAL] Live (needs rebuild): zoom a terminal (Cmd +/-) while an idle agent's static output fills the screen → it must repaint immediately, NOT go black until you scroll. (`resize_pty` now flushes a full frame after resizing the grid; backend covered by serialize tests.)
-- [VISUAL] Live (needs rebuild): scroll a terminal up a little so it rests at a fractional (sub-line) scroll position, then resize the pane (close the file browser / MD sidebar, Cmd+E). The terminal MUST repaint — it must NOT go black until you click. Root cause: `scheduleRepaint()` bails while `scrollPosF != null` (fractional rest), and `remeasure` never reset it, so after the resize blanked the canvas every incoming frame refilled rowMap but never painted (stuck black; a click healed it only because mousedown exits the fractional rest). `remeasure` now calls `resetSmoothScroll()` first. This is the FRONTEND half of the resize-black bug — the `resize_pty` flush above was necessary but not sufficient.
-- [VISUAL] Live (needs rebuild): after a smooth-scroll gesture comes to rest, there must be NO ghost/duplicate line peeking below the viewport (below the prompt/status). (`clearOverscan()` now wipes the overscan canvas on every return to rest.)
-- [VISUAL] Live (needs rebuild): in a session that has streamed well over 10 000 lines (GRID_SCROLLBACK cap), scroll up through old output → no line is duplicated or shows the wrong content as the scrollback cap evicts. (Row cache now keyed by the eviction-stable absolute index `historyBase + grid-relative`; invariant covered by `styled_abs_is_eviction_stable_and_never_aliases`.)
-
-## v1.5.0 manual verification items
-
-- [VISUAL] Green scrollbar user-prompt marker: run an agent, submit a few prompts, then scroll up — a distinct green tick should appear on the scrollbar at each prompt-submission row (separate from the command-block marks). Verify each tick disappears if you clear scrollback.
-- [HUMAN] Cmd+C dedup + soft-wrap unwrap: in a terminal with long wrapped lines, select across a wrap boundary and press Cmd+C → the copied text must join the physical line (no extra newline at the soft-wrap point). Also verify the "Copied to clipboard" status-bar confirmation appears.
-- [VISUAL] Awaiting-input badge clear on agent exit: start an agent, let it emit a question (badge shows `?`), then kill the agent process (not just Ctrl+C inside the shell — kill the PTY process). Verify the `?` badge on the tab clears and reverts to idle, not stuck.
-- [VISUAL] Themes Deep Black and Minimal Kiwi: open Settings → Appearance → Terminal theme → confirm both "Deep Black" and "Minimal Kiwi" appear in the picker and produce visually distinct terminal backgrounds when selected.
-- [HUMAN] Cmd+R web/preview reload: with a Preview tab (HTML/Markdown/image) open, press Cmd+R — the preview must reload its content. Confirm the shortcut does not fire when focus is inside the terminal.
-- [HUMAN] Dock-icon reopen (macOS): quit the app via Cmd+Q so it hides to the dock (or close the last window). Click the dock icon → the main window re-opens. Verify no duplicate windows appear.
-- [VISUAL] Context-menu shortcut chord: right-click a tab to open its context menu, then press the shortcut chord shown for one of the items (e.g. Cmd+W for "Close Tab"). The menu must close and the action must fire without a mouse click. Verify modifier-only keys (Cmd, Shift) do not close the menu prematurely.
-- [x] Context menus near the bottom/right viewport edge stay fully visible; oversized menus/submenus scroll instead of opening off-screen. _(verified: `src/components/ContextMenu/ContextMenu.tsx:58` clamps submenu position, `src/components/ContextMenu/ContextMenu.tsx:218` clamps the root menu, `src/components/ContextMenu/ContextMenu.module.css:9` makes oversized root menus scroll, `src/__tests__/components/ContextMenu.test.tsx:173` and `src/__tests__/components/ContextMenu.test.tsx:292` cover oversized menu/submenu; visual screenshot captured with Vite harness on 2026-07-10.)_
-
-## Soft-keyboard lift: cursor-anchored (browser-desktop on iPad)
-
-- [HUMAN] On iPad Safari (browser-desktop mode, NOT PWA), open a terminal and start a fresh agent (Claude Code etc.) with little/no context so its input row sits near the TOP of the grid. Focus the terminal → virtual keyboard appears. The input/cursor row MUST stay visible (lifted only enough to clear the keyboard) — it must NOT be pushed off-screen above the viewport. Then let the agent fill the screen so the input moves to the BOTTOM and refocus: the cursor must again sit just above the keyboard. Requires a real virtual keyboard (touch) — not observable over HTTP. (`CanvasTerminal.tsx` `updateKeyboardLift()`: lift = `max(0, cursorBottomY − keyboardTop)`, anchored to the cursor row, pure transform on `kbLiftRef`, no PTY resize.)
-
-## Shell exit closes the tab (2026-06-28)
-
-- [VISUAL] In a plain shell tab (no agent), type `exit` (or Ctrl-D) → the tab must DISAPPEAR, not turn into a grey "exited" dot. (`Terminal.tsx` pty-exit handler routes plain shells to `terminalsStore.notifyShellExit`; `App.tsx` `onShellExit` → `closeTerminal`.) Not observable over HTTP — tab removal is frontend store state.
-- [VISUAL] Exit the LAST remaining terminal → the tab closes and is NOT auto-replaced (no shell instantly reappears). Workspace may show zero terminals; the TabBar "+" reopens one. (`App.tsx` `onShellExit` deliberately does not call `createNewTerminal`.)
-- [VISUAL] An AGENT session ending (e.g. Claude exits, or kill its PTY) still KEEPS its tab with the grey "exited" dot + completion chime if backgrounded — agents are NOT auto-closed. (`Terminal.tsx`: `hadAgent` branch unchanged.)
-- [VISUAL] Exit a background (non-active) plain shell tab → it closes silently, no completion chime. (`Terminal.tsx`: chime gated on `hadAgent`.)
-
-## GitHub Ops Suite — review engine, changelog, conflict-assist (2026-07-06)
-
-_Rust backend changes — require a `make dev` rebuild to load (no hot-reload). Test against the
-worktree build's HTTP API on :9877 or the desktop app._
-
-- [VISUAL] PR AI review findings: open a PR detail popover → click "AI Review" → the multi-turn
-  engine (Main slot) should return line-level findings grouped by file with monochrome severity
-  icons (bug/risk/nit). Select findings → "Post review" is enabled only when a line-anchored finding
-  is selected → confirm dialog → posts inline comments to GitHub. (Backend: `run_pr_review`; needs a
-  configured Main provider slot + a real PR.)
-- [VISUAL] Working-tree triage now shows line-level findings under each file row in the AI Triage
-  panel (severity icon + clickable line + message), in addition to the relevance grouping.
-- [VISUAL] Changelog: GitHub panel header → document icon ("Changelog") → modal generates a changelog
-  from merged PRs (Headless slot) → renders markdown → Copy (clipboard) and Save (downloads
-  `CHANGELOG-ai.md`) both work. Empty range shows the "no merged PRs" message without an LLM call.
-- [VISUAL] Ops Dashboard proposals: open a GitHub Ops dashboard tab → the Proposals column shows
-  `refactor` / `testing` / `perf` scan buttons without wrapping/overlap; after a scan, proposal
-  cards show title, impact, summary, effort/labels, and a compact "Create issue" button. Requires
-  a configured Headless provider slot and a real repo. Automated screenshot was not possible in
-  this session because the browser plugin exposed no available browser instances.
-- [x] Changelog `sinceTag`: pass a tag → only PRs merged at/after that tag's commit date appear. _(verified: `github.rs:2174-2204` resolves the tag committer date with `TZ=UTC` and `format-local`; `get_merged_prs_impl` retains only non-empty `merged_at >= since` at `github.rs:2221-2227`; transport coverage is in `src/__tests__/transport.test.ts:768-783`)_
-- [HUMAN] Conflict assist (backend only; no UI yet — drive via HTTP `POST /repo/conflict-assist`):
-  on a PR whose head cleanly rebases onto base → `status:"clean"`; on a conflicting PR →
-  `status:"conflicts"` with `conflicted_files` populated and a non-empty agent `prompt`. A fork-head
-  PR returns a clear "not supported" error. A worktree is created on the PR head under the repo's
-  worktree dir — clean it up after.
-
-## Ink banner duplication — amplificatori TUIC fixati (2026-07-06, frontend-only, attivo via HMR)
-
-- [VISUAL] Doppio-SIGWINCH riconnessione: apri una sessione Claude, switcha su un altro tab e torna indietro più volte — NON devono comparire nuove copie del banner/frame nello scrollback a ogni rientro (prima: 2 SIGWINCH con larghezze diverse per rientro → 2 clear+reprint Ink). Vale anche con terminale zoomato (fontSize per-terminale ora onorato nel calcolo di riconnessione).
-- [VISUAL] Reconcile max-wait: durante output continuo di un agente, eventuali righe stantie sul canvas devono auto-guarire entro ~1s (prima: mai, finché il burst non si fermava per 250ms). Osservare che non ci siano blocchi "congelati" che persistono per minuti durante il lavoro dell'agente.
-- NOTA: la duplicazione residua da frame-più-alto-del-viewport è comportamento di Claude Code/Ink (issue #106, da segnalare upstream) — ogni terminale la registra; verificare solo che la FREQUENZA cali drasticamente senza resize/switch.
-
-## Selection-drag rAF-coalesce (#9b13, 2026-07-09, frontend-only, active via HMR)
-
-- [VISUAL] Fast text-selection drag in a terminal: press-drag rapidly across many rows (and past the top/bottom edge to trigger autoscroll). The selection highlight must track the cursor smoothly with NO lag, tearing, or stuck highlight, and autoscroll-at-edge must still work. Behavior-neutral change (mousemove repaint now coalesced to 1/frame + canvas rect cached per drag) — verify no visual regression vs before. tsc clean, vitest 112/112.
-
-## AI Review proof-of-work meta line (2026-07-10, frontend-only, active via HMR)
-
-- [VISUAL] Open a PR detail popover and hit AI Review "Run": below the header you must now see the model's summary plus "N files reviewed · <model>" (or "· heuristics only" for boilerplate-only diffs), followed by the findings list or "No findings". Previously a clean review showed only a bare "No findings" with no evidence the review ran. Vitest 4/4 (PrDetailContent.test.tsx).
-
-## MCP upstream authentication recovery (2026-07-12)
-
-- [x] Bearer → OAuth with blank client ID persists DCR mode instead of retaining Bearer; changing methods clears the incompatible keychain credential and reconnects. The editor also exposes “Clear saved token”. _(verified: `ServicesTab.authorize.test.ts` covers DCR/explicit auth construction; `saveEdit` performs credential deletion + reconnect after a successful config save.)_
-
-## CI auto-heal with a partially completed workflow (2026-07-13)
-
-- [x] A failed job is selected and its log is downloadable while a sibling job leaves the workflow `in_progress`; failed log retrieval or PTY delivery leaves the attempt count unchanged. _(verified: GitHub CLI probe against a private repo's run `29193902748` returned failed job `86653322376` logs while sibling job `86653322370` was still running; Rust parser tests and `useCiHeal.hook.test.ts` cover job selection and attempt accounting.)_
-
-
 ## Markdown preview: inline comments anchor + highlight correctly (2026-07-15)
 
 - [ ] [VISUAL] Commenting a word that repeats many times in the doc (e.g. "reason" ×18) highlights the ACTUAL selected occurrence, not the first one. _(root cause: `findSourceMatch` used first-occurrence `indexOf`; fixed with DOM occurrence-ordinal → Nth source occurrence. Logic verified in `tweakComments.test.ts` incl. real-file offsets; visual anchor position needs an eye.)_
@@ -1754,8 +277,6 @@ worktree build's HTTP API on :9877 or the desktop app._
 ## Native key monitor: F13-F20 + Ctrl+Tab (#495-ec28, 2026-07-28, Rust — needs `make dev` restart)
 
 - [ ] Help > Keyboard Shortcuts > pencil on any action, press **F13** (or F16-F20): the combo is recorded and persists. Repeat with a modifier (Cmd+F13) — the recorded string must match what a normal key produces. Same for the Global Hotkey field at the top of the tab.
-- [x] **Ctrl+Tab / Ctrl+Shift+Tab still cycle tabs** — the Ctrl+Tab monitor moved from `tab_shortcut.rs` into the same `native_keys.rs` monitor, so this is the regression to watch. _(verified: `useKeyboardShortcuts.test.ts:187-195` dispatches Ctrl+Tab to `navigateTab("next")` and Ctrl+Shift+Tab to `navigateTab("prev")`; native key combo tests pass)_
-- [x] F13-F20 keep their normal behaviour when NO recorder is open (the listener is only attached while capturing). _(verified: `useNativeKeyCombo.ts:35-60` installs the `native-key-down` listener only while the shortcut recorder is active and disposes it on cancellation/cleanup; the native monitor emits the event independently)_
 - [ ] If **F14/F15** record nothing: check `curl 'http://localhost:9876/logs?source=native-keys'`. A "extended function key observed" line means AppKit delivered it and the gap is downstream; no line means macOS consumed the key system-wide for keyboard illumination — remap it in System Settings, not a bug here.
 
 ## Claude/Codex stay busy with a LIVE agent (#497-4e67, 2026-07-29, Rust — needs `make dev` restart)
@@ -1780,25 +301,6 @@ HEAD build, with zero `slash_menu` log records. What is left needs REAL agents:
 - [ ] While it is waiting, confirm the session is NOT put into standby (auto-standby SIGSTOPs an idle session — a false idle here would suspend Codex mid-work).
 - [ ] After it finishes, the transcript line `• Waited for background terminal · <cmd>` (past tense, no `esc to interrupt`) must NOT hold the tab busy — it should go idle normally.
 
-## Config partial saves (2026-07-28, Rust — needs `make dev` restart)
-
-- [x] With remote access ON, `PUT /config` preserves `services.server.enabled` across settings persistence and restart _(verified in current code: `src/stores/settings.ts:515-525` uses load-modify-save via `updateAppConfig`, applying only owned fields to the fresh Rust config; `ServicesTab.tsx:256-270` uses the same merge helper. This supersedes the 2026-08-01 stale note describing whole-object clobbering; a live restart still needs a rebuilt desktop instance.)_
-
-## Copy from a plugin-panel iframe (2026-08-01, TS only — Vite HMR)
-
-- [x] Open the Build Artifacts Cleaner tab, select some text in the dashboard, press Cmd+C, paste elsewhere: the selected text must land on the clipboard _(verified in code/tests: `useTerminalLifecycle.ts:418-430` prioritizes `getFocusedFrameSelection()` and writes through `writeClipboard`; `focusedSelection.test.ts:33-75` covers focused same-origin, nested, empty, and cross-origin frames; `writeClipboard` uses the native clipboard-manager plugin in Tauri)_
-- [x] Same in another iframe panel (csv-preview, an HTML preview) — the fix is generic, not build-cleaner specific _(verified: `focusedSelection.ts:1-48` walks any focused same-origin iframe, and the same utility tests cover the generic frame behavior; `HtmlPreviewTab.tsx` uses the same iframe focus path)_
-- [x] Regression: with text selected in a **terminal** (canvas selection) and a plugin tab NOT focused, Cmd+C must still copy the terminal selection, not "". _(verified: `useTerminalLifecycle.ts:416-426` prioritizes the active terminal ref selection when no focused iframe exists; the copy lifecycle test covers native clipboard routing)_
-- [x] Regression: select text in a code editor / diff tab (host DOM selection) — Cmd+C must still work. _(verified: `useTerminalLifecycle.ts:424` falls back to `window.getSelection()` after iframe and terminal selections; `useTerminalLifecycle.test.ts` covers the host-selection fallback and clipboard write)_
-
-## Silence completion chimes from MCP-spawned sessions (2026-08-01, Rust — needs `make dev` restart)
-
-- [x] Settings > Notifications > Orchestration: the "Silence completions from MCP sessions" toggle persists across an app restart (it is a new `silence_remote_completions` field in the Rust `NotificationConfig`). _(verified 2026-08-01: toggled through the web UI, value landed in `notifications.json` and is served by `GET /config/notifications`)_
-- [x] With the toggle ON, spawn several agents via MCP (`agent spawn` / `session create`) and let them finish in background tabs: no completion chime for any of them. _(verified: `useTerminalCompletionNotifications.ts:68-78` routes remote completions through `shouldPlayCompletionSound`; targeted notification/AI-chat Vitest batch passed 65/65, including `Terminal-completionDecision.test.ts:133-136`)_
-- [x] With the toggle ON, those same finished sessions MUST still show up in Activity, mark the tab unseen, and bump the dock badge — only the audio is dropped. _(verified: completion handling updates `{ activity: true, unseen: true }` before the audio branch and always calls `activityStore.addItem` at `useTerminalCompletionNotifications.ts:68-93`; notification config documents audio-only suppression in `config.rs:840-845`)_
-- [x] With the toggle ON, a terminal you opened yourself in the UI that runs something long and finishes in the background MUST still chime. _(verified: `shouldPlayCompletionSound` returns true for non-remote sessions with suppression enabled; targeted batch passed 65/65 and covers `Terminal-completionDecision.test.ts:138-141`)_
-- [x] With the toggle OFF (default), behaviour is unchanged: MCP-spawned sessions chime as before. _(verified: remote sessions return true when `silence_remote_completions` is false; targeted batch passed 65/65 and covers `Terminal-completionDecision.test.ts:143-148`)_
-
 ## Off-domain OAuth authorization servers no longer blocked (2026-08-01, Rust — needs `make dev` restart)
 
 - [ ] Authorize an MCP upstream served through a gateway whose AS metadata carries a different `issuer` (e.g. a `*.mcp-s.com` tenant): the flow must reach the consent dialog instead of failing with "Issuer mismatch … mix-up attack".
@@ -1809,32 +311,18 @@ HEAD build, with zero `slash_menu` log records. What is left needs REAL agents:
 
 ## Worktree mid-rebase stays alive (2026-08-01, Rust — needs `make dev` restart)
 
-- [x] Start a conflicting `git rebase` inside a TUIC worktree: the sidebar row must stay, its terminals must not close, and no archive/delete prompt may appear. _(verified 2026-08-01: drove a real conflicted rebase; porcelain reported `detached` with no branch line, `/worktrees/paths` still mapped the branch and `/repo/orphan-worktrees` returned `[]`)_
 - [ ] Finish the rebase (`--continue` through the conflicts): the row must survive the whole way and settle back on its branch.
 - [ ] `git rebase --abort` from the worktree: row still there, branch restored, no prompt.
 - [ ] Regression: delete a worktree's branch with `git branch -D` while the worktree exists and no operation is running — the archive/delete prompt MUST still appear.
 
 ## Grok returns to idle after a long turn (2026-08-01, Rust — needs `make dev` restart)
 
-- [x] Ask Grok for output long enough to scroll (e.g. "list 1 to 60, one per line"): after the turn finishes the tab must go idle. _(verified 2026-08-01: idle in 3.0s; before the fix the same screen sat at `shell_state=busy` for 132s+)_
 - [ ] Watch the tab dot during the turn: it must stay busy while the `⠋ Waiting for response…` row is animating, and only then go green.
 - [ ] Regression: Aider — its Knight Rider `█░` spinner must still hold the tab busy (the fix only excludes a row trimmed to a *single* block glyph).
 - [ ] Regression: a short Grok turn whose output fits the viewport (no scrollbar column) still goes idle as before.
 
-## `agent detect` reports every supported agent (2026-08-01, Rust — needs `make dev` restart)
-
-- [x] MCP `agent detect` lists all 10 agents, not just claude/codex/aider/goose. _(verified 2026-08-01: grok and opencode now report their install paths; previously they were absent entirely)_
-- [x] Settings > Agents still shows the same install states as before (that panel uses `detect_all_agent_binaries` with its own list, so it should be unaffected). _(verified: `useAgentDetection.ts:51-60` still invokes the aggregate detector with `AGENT_BINARIES` and maps each result into the existing availability state; `useAgentDetection.test.ts:32-36` covers the request shape)_
-
-## Notes survive a failed hydrate (2026-08-01, Rust + TS — needs `make dev` restart)
-
-- [x] Corrupt `notes.json` by hand (write `{ broken`), start the app, then add a note. The original file must be preserved as `notes.json.corrupt-<uuid>`, the new note must NOT be written, and `GET :9876/logs?level=error` must carry the hydrate failure. _(verified in `config.rs:171-203,2387-2407`: strict load renames corrupt files aside and returns an error; `notes.test.ts` confirms failed hydrate prevents `save_notes`; 56/56 tests pass)_
-- [x] Delete `notes.json` entirely, start the app, add a note: it must persist normally (a missing file is legitimately empty, not an error). _(verified in `config.rs:182-187` and `notes.test.ts` missing/empty hydrate persistence guard; 56/56 tests pass)_
-- [x] Normal path: existing notes load, edits and deletes still persist. _(verified in `notes.test.ts`: hydrate, add, remove, and save assertions; 56/56 tests pass)_
-
 ## OpenCode returns to idle after a finished turn (2026-08-02, Rust — needs `make dev` restart)
 
-- [x] `detect_agent_screen_activity(Some("opencode"), …)` reads a finished-turn screen as Ready and a mid-turn screen as Working. _(verified: `src-tauri/src/pty.rs` `detect_opencode_screen_activity`, fixtures transcribed from live opencode v1.18.5 captures — see `test_opencode_finished_turn_is_ready_and_interrupt_hint_wins`)_
 - [ ] Run an OpenCode turn: the tab dot must go green within seconds of the composer coming back, instead of sitting busy for the whole process.
 - [ ] Watch the dot DURING the turn (including a tool phase such as a long `bash` call): it must stay busy while the footer shows `⬝⬝⬝■■■  esc interrupt`.
 - [ ] Auto-standby must not SIGSTOP an OpenCode session mid-turn.
@@ -1861,16 +349,6 @@ iTerm2's save-to-scrollback option but a different internal architecture. Backen
 tests replaying a real `gh run watch` PTY capture
 (`src-tauri/src/fixtures/alt_screen/gh-run-watch.raw`); canvas rendering is not observable over HTTP.
 
-- [x] Alt-screen scrollback accumulates and holds the lines that scrolled off. _(verified: `terminal_grid.rs` `gh_run_watch_builds_alt_screen_scrollback` + `gh_run_watch_scrollback_holds_the_lines_that_scrolled_off`, replaying the real capture)_
-- [x] Alt history is wiped on enter and on exit, and never leaks into the shell's scrollback. _(verified: `alt_screen_history_is_wiped_between_sessions`, `alt_screen_scrollback_never_leaks_into_primary`, fork `alt_screen_history_era_resets_on_enter_and_exit`)_
-- [x] In-place redraws (`ESC[H` + `ESC[J`) create no scrollback, so vim/htop don't flood it. _(verified: `alt_screen_redraw_without_scrolling_creates_no_history`)_
-- [x] Repeated oversized refresh frames are retained byte-for-byte rather than deduplicated. _(verified: the captured fixture contains 13 home+erase refreshes and 1,268 CRLF line advances; the real-capture tests retain the resulting history)_
-- [x] Durable log extraction stays primary-only while alternate `ChangedRow` events remain available to lifecycle parsers. _(verified: `state.rs` `test_vt_log_real_pty_gh_run_watch_builds_alt_scrollback` and existing alternate-screen parser tests)_
-- [x] A resize during a long alternate-screen watch does not suppress primary log capture after exit. _(verified: red→green `test_vt_log_alt_resize_keeps_primary_capture_cursor`)_
-- [x] Renderer screen transitions invalidate partial frames and stale scroll/link caches. _(verified: `decideFrameGrid`, `canvasTerminalScroll`, `canvasTerminalLinks`, and `frameAltScreen` Vitest regressions)_
-- [x] Scrollback and both scroll paths work on a live alt-screen app. _(verified 2026-08-03 against the running app over :9876 — replayed the `gh run watch` capture in a throwaway session: `scroll-info` went from 24 total lines to 1018 (994 alt history), `terminal/scroll {delta:300}` and `scroll-to-offset` moved `display_offset` and clamped at 994, `terminal/lines?start=0` returned the scrolled-off "Refreshing run status…" banner. Canvas pixels — thumb size, smooth-scroll — still unseen.)_
-- [x] Leaving the alternate screen restores the primary screen and its history exactly. _(verified 2026-08-03: `tput rmcup` after the alt session returned `total_lines` to its pre-alt value of 44 with `seq` output back on screen; searching the primary grid for "Refreshing run status" returns no matches, and the pre-alt command line is still in history.)_
-- [x] A real pager enters and leaves the alternate screen cleanly. _(verified 2026-08-03: `less /etc/services` → alt, `q` → primary restored (44→47→45 lines); the primary grid contains no `less` content afterwards.)_
 - [ ] [VISUAL] Open `vim`/`htop`/`lazygit`: wheel still goes to the app; `Shift+wheel` scrolls TUIC history; quitting restores the shell scrollback unchanged. _(only the mouse-reporting forwarding is left unverified — the enter/exit half is covered above.)_
 
 ## tuic CLI: repo opening + command ergonomics (2026-08-03)
@@ -1879,23 +357,8 @@ The `tuic` sidecar was rebuilt (`node src-tauri/build-sidecar.mjs`), so the CLI 
 immediately. The app half — the `open-repo` deep link adding an unknown folder — is frontend
 code and needs the WebView to have reloaded.
 
-- [x] `tuic .` no longer creates a stray terminal session and no longer registers the repo as `/path/.`. _(verified 2026-08-03 against the running app: session count unchanged 4 → 4, printed path canonicalized)_
-- [x] `tuic ls` shows short IDs, `tuic status` lists sessions awaiting input. _(verified live: agent `b7cd7501` reported as awaiting)_
-- [x] `tuic send` treats key names as whole tokens. _(verified: `send_leaves_text_that_merely_contains_a_key_name_alone` and 3 sibling tests)_
 - [ ] [HUMAN] `tuic <dir>` on a folder NOT in the sidebar: one confirmation appears, then the repo is added and activated exactly like the "Add Repository" button (branch selected, terminal opened, watcher started).
 - [ ] [HUMAN] `tuic run pnpm dev` in a repo: a session appears and the command is running in it.
-
-## Whisper hallucination filter (2026-08-03, Rust — needs `make dev` restart / `make build`)
-
-Quiet audio made Whisper emit a subtitle credit in whatever language it guessed the silence was, and
-the filter behind the RMS gate only knew English phrases — an Italian bare `Grazie.` was typed into
-the terminal. Matching is now split: a short thanks is dropped only when it is the whole transcript,
-channel boilerplate is dropped anywhere. Covered by `dictation::transcribe` unit tests; the audio
-path itself needs a real microphone.
-
-- [x] Short thanks dropped only as a whole transcript; boilerplate dropped anywhere; all 11 offered languages covered. _(verified: `dictation` transcribe tests, 8 passing)_
-- [x] Hold the dictation key with no speech: nothing is typed, no bare "Grazie." _(verified: `transcribe.rs:104-116` returns empty text below the RMS threshold before Whisper runs; `bare_thanks_in_any_language_is_a_hallucination` also rejects `Grazie.` at `transcribe.rs:290-306`; real microphone capture remains unexecuted)_
-- [x] Dictate a sentence that contains the word *grazie*: the whole sentence is typed. _(verified: `a_real_sentence_containing_thanks_survives` asserts ordinary sentences containing `grazie` are not filtered at `transcribe.rs:331-337`; actual microphone/injection remains runtime-only)_
 
 ## Docs site: Pagefind search + coverage (2026-08-05, docs only — no app rebuild needed)
 
@@ -1905,10 +368,6 @@ Pagefind: same magnifier button in the menu bar, plus a big hero search box on t
 release-checklist and audit docs were never rendered, so they were never searchable either.
 Build with `make docs-serve` (needs `mdbook` + `npx`); CI runs the same `scripts/build-docs.sh`.
 
-- [x] Hero search returns live results with heading sub-results. _(verified via CDP against the built site: "agent" → 57 results, 10 rendered, titles Agent UI Analysis / AI Agents / Agent Detection Matrix)_
-- [x] Menu-bar magnifier opens a panel and searches. _(verified via CDP: panel opens, "worktree" → 8 results)_
-- [x] Result titles are the chapter titles, not "TUICommander". _(verified: `data-pagefind-body` on `<main>` + demoting `h1.menu-title` to a div in `scripts/build-docs.sh`)_
-- [x] Dark themes render the menu bar and hero correctly. _(verified: coal-theme screenshot; the hardcoded white `#mdbook-menu-bar` background is now `var(--bg)`)_
 - [ ] [HUMAN] Deployed site (tuicommander.com/docs) after the next `main` push: search works over GitHub Pages, and the first query feels fast.
 - [ ] [HUMAN] Mobile/narrow viewport: the menu-bar search panel and the hero box stay usable.
 
@@ -1919,9 +378,6 @@ Build with `make docs-serve` (needs `mdbook` + `npx`); CI runs the same `scripts
 drawer opens it directly. Separately, HelpPanel gained the missing note pointing at the native
 system menu bar (desktop only — browser mode has no native menu).
 
-- [x] Settings nav lists "Smart Prompts" and the tab renders the prompt list + editor. _(verified: `SmartPromptsNav.test.tsx`, 4 tests)_
-- [x] "Manage Smart Prompts..." opens Settings on that tab. _(verified: `App.tsx:821` passes `openSettings("smart-prompts")` into the Toolbar's `SmartPromptsDropdown`)_
-- [x] HelpPanel shows the system-menu note on desktop and hides it in browser mode. _(verified: `HelpPanel.systemMenu.test.tsx`, 4 tests)_
 - [ ] Visual pass: the Smart Prompts tab layout (category groups, expanded editor) and the HelpPanel note spacing under Quick Actions. No dev instance was running (9876/1420 refused), so nothing was screenshotted.
 
 ## File Browser content search in browser mode (2026-08-05, frontend only — Vite HMR is enough)
@@ -1932,10 +388,6 @@ client stayed on "Searching…" forever. `startContentSearch()` now republishes 
 one final batch, locally — not over the `/events` SSE bus, which is global and would leak one
 client's hits into every other client's panel.
 
-- [x] A valid query renders result rows instead of spinning. _(verified: `contentSearch.test.ts` asserts a final batch carrying the HTTP matches; `FileBrowserPanel.tsx:487` clears `contentSearching` on `is_final`)_
-- [x] Empty results reach a completed empty state. _(verified: final empty batch test + `FileBrowserPanel.tsx:1302` empty-state guard)_
-- [x] Rows show path, line number, and match context. _(verified: `FileBrowserPanel.tsx:1331-1337`)_
-- [x] Clicking a result opens the file at the matched line. _(verified: `FileBrowserPanel.tsx:1312,1327` → `onFileOpen(root, path, line_number)`)_
 - [ ] End-to-end in a real browser against a running instance: type a query in File Browser content search and confirm rows appear and a click opens the editor at the line. No instance was running during this work.
 
 ## GitHub panel keyboard UX + persisted collapse (2026-08-05, **Rust change — needs `make dev` restart**)
@@ -1944,11 +396,6 @@ Arrow/Enter navigation across the three GitHub panel sections, plus collapse sta
 `save_ui_prefs`. PrSection is now fully controlled by GitHubPanel (collapse, expansion, dismissed
 PRs lifted) so the navigable row list and the rendered rows cannot drift apart.
 
-- [x] ArrowUp/ArrowDown walk rows across sections and clamp at both ends. _(verified: `GitHubPanel.keyboard.test.tsx`)_
-- [x] Enter toggles the highlighted PR or issue row. _(verified: same suite)_
-- [x] Rows of a collapsed section are skipped. _(verified: same suite)_
-- [x] Escape keeps its old behaviour — expanded issue first, then close. _(verified: same suite)_
-- [x] Collapse writes to `uiStore.githubSectionCollapsed` and hydrates back. _(verified: `stores/ui.test.ts`, 4 tests + Rust `ui_prefs_round_trip`)_
 - [ ] **After a `make dev` restart**: collapse a section, quit, relaunch — the section is still collapsed. Without the restart the Rust `UIPrefsConfig` field is absent and serde silently drops it, so it only persists in-session.
 - [ ] Visual: the `.ghItemRowActive` highlight (inset accent bar) reads clearly in light and dark themes, and the active row scrolls into view on long lists.
 
@@ -1958,12 +405,8 @@ Compose panel gained a second submit that queues instead of steering, and the `u
 can now raise a named notification sound (new `attention` callback). Both are Rust-backed, so
 nothing below works against the currently running binary.
 
-- [x] `Ctrl+Enter` sends now, `Shift+Ctrl+Enter` queues. _(verified: `ComposePanel.test.tsx` drives the real CodeMirror keymap)_
-- [x] Queueing is hidden/refused for a plain shell. _(verified: same suite + Rust `enqueue_refuses_shells_and_dead_sessions`)_
-- [x] An idle agent gets the text typed immediately; a busy one gets it parked. _(verified: Rust `enqueue_types_immediately_when_agent_is_idle`, `enqueue_parks_command_while_agent_is_busy` — real PTY + recorded bytes)_
 - [ ] Luna: prove a user command never overtakes an earlier peer message and that one idle window submits only the shared FIFO head (`enqueue_never_overtakes_a_command_already_waiting`).
 - [ ] Luna: prove Compose count/clear select only user commands and preserve every peer entry (`clear_queued_commands_preserves_peer_deliveries`).
-- [x] The badge count survives a reload / reaches remote clients. _(verified: `state.queued_commands` in the session snapshot + `useAgentPolling.test.ts`)_
 - [ ] **After a `make dev` restart**: with an agent mid-turn, `Shift+Ctrl+Enter` a prompt, watch the badge show `1 queued`, and confirm the prompt is typed the moment the agent finishes — not before.
 - [ ] **After a `make dev` restart**: queue two prompts, confirm they arrive in order across two idle windows, and that clicking the badge discards them.
 - [ ] **After a `make dev` restart**: confirm a generic OSC 777 `Claude Code needs your attention` completion notice does not leave the tab awaiting, while plan/skill pickers still do.
@@ -1975,10 +418,41 @@ nothing below works against the currently running binary.
 The detached chat now loads the conversation it was detached from and can send to the
 terminal it was detached from. Vite reloads this without a restart.
 
-- [x] The window opens on the conversation, not empty. _(verified: `src/__tests__/panelAdapters/aiChat.test.tsx` "adopts the chat id and loads that conversation from disk on mount")_
-- [x] An id with nothing saved under it opens empty and quiet. _(verified: `aiChatStore.persist.test.ts` "resolves and leaves the conversation empty when the backend read fails" — real store, rejecting backend)_
-- [x] Reattach brings the panel back, once. _(verified: `useDetachedPanelBridge.test.ts` "comes home once when reattach is followed by the window closing" — the paired events the real click sends)_
 - [ ] Detach the chat, type a message in the separate window, confirm it sends and the reply streams there (it was read-only before — the textarea said "Focus a terminal first").
 - [ ] Close the detached window, reopen the panel in the main window, confirm the exchange is there.
 - [ ] Detach from terminal A, switch the main window to terminal B, send from the detached window, close it, then switch back to A and confirm A shows the new messages.
 - [ ] Detach with a non-terminal tab focused and confirm the window is read-only, with the "No terminal focused" banner rather than a broken send.
+
+## Post-fix verification leftovers (2026-08-19) — stories `627-4571`, `628-7148`, `616-71e1`
+### `627-4571` — needs the desktop app
+
+- [ ] **[HUMAN]** A browser/PWA client shows command blocks, OSC 133 gutter marks, Cmd+Up/Down navigation and a tracked cwd. _(transport and cwd proved on :9877 — OSC133 A/C/D frames captured including `D exit_code=1` and `D exit_code=0`, cwd `/private/tmp` then `/` — but the gutter never rendered because no canvas ever sized. That specific question is now story `631-e618`; this item is the human confirmation once it is settled)_
+- [ ] **[HUMAN]** Desktop still gets both events after the payload change: `pty-cwd` now carries `{cwd}` instead of a bare string. _(code confirms the desktop emits at `pty.rs:4777-4787` and `:4806-4811` with bus emits following; no desktop runtime observation is possible from a second instance)_
+- [ ] **[HUMAN]** Frame bytes/s before and after on a busy session, confirming the ~3x drop the binary format predicts. _(post-fix side measured: 596 720 B over 16 frames. The "before" is unobtainable — no pre-fix binary exists any more, and a post-fix process cannot yield an honest baseline. Either accept the post-fix number alone or rebuild a pre-fix commit deliberately)_
+- [ ] **[HUMAN]** A background tab still rings its bell, and switching back repaints immediately with no stale rows. _(needs audible delivery and row freshness by eye; hidden frames are decoded and ring at `CanvasTerminal.tsx:1358-1393`, show requests a full repaint at `:2121-2158`)_
+- [ ] **[HUMAN]** A browser client and the desktop app streaming the same session both keep painting — neither steals the other's dirty rows. _(needs the desktop WebView alongside a browser; per-client gate rationale at `grid_gate.rs:1-21`, WS recovery at `mcp_http/session.rs:1481-1492`)_
+- [ ] **[HUMAN]** A plain file save logs `Emit repo-changed (working-tree)` and the Git panel's Log/History/Stashes do NOT re-run their git processes; a `git commit` logs `(git-state)` and they DO refresh. _(requires mutating a real repo. Tabs depend on `getGitRevision` — `LogTab.tsx:207-224`, `HistoryTab.tsx:88-99`, `StashesTab.tsx:57-69`; `bumpGitRevision` moves both counters at `repositories.ts:779-795`)_
+- [ ] **[HUMAN]** FileBrowser still creates, renames, copies, moves and deletes files, and the editor still opens and saves. _(every one of those commands changed sync → async; entry points at `fs.rs:370, 504, 1379, 1396, 1434, 1451, 1468, 1505, 1530`. Exercising it necessarily mutates a repo)_
+- [ ] **[HUMAN]** Dropping a large folder still freezes the UI. **This confirms a deliberate gap, it is not a regression** — `fs_transfer_paths` was intentionally left synchronous because it is the drag-drop backend and D&D needs Boss's approval. _(the gap is intact and documented at `fs.rs:1615-1629`; the native Finder→Tauri drop cannot be driven from browser mode)_
+- [ ] **[HUMAN]** AI agent `read_file` / `write_file` / `edit_file` / `list_files` / `search_files` / `search_code` still work on the blocking pool. _(all six mapped in `ai_agent/tools.rs:2460-2477`, dispatched through `spawn_blocking` at `:2525-2534`; write/edit need the desktop confirmation UI)_
+- [ ] **[HUMAN]** Terminal search, Cmd+F next/previous, click-to-open file links, OSC 8 hyperlink hover, selection copy and scrolled-back history all still work. _(every one of those grid reads changed sync → async and now returns a `Result`; reads use `vt_read`/`vt_try_read` on the blocking pool at `pty.rs:10167-10227`, search/selection/lines/hyperlinks async at `:10318-10442`. Needs trusted keys, hover and clipboard inspection)_
+- [ ] **[HUMAN]** With a session producing heavy output, dragging a selection or typing in the search box no longer stalls the WebView. _(this is the freeze the finding is about; offload mechanism at `pty.rs:10167-10227`. Needs a visible live canvas and timed main-thread observation)_
+- [ ] **[HUMAN]** Wheel, scrollbar drag, Cmd+Up/Down and Home/End still land where expected. **The four scroll/frame mutations were deliberately NOT converted**, so this confirms they still behave. _(`terminal/scroll-to` probed clean over HTTP — 200, `display_offset=120` — but that proves the endpoint, not the four UI input routes. Rationale at `pty.rs:10143-10164` and `:10271-10281`, wheel/drag coalescing at `:10229-10245`)_
+
+### `628-7148` — copy normalisation, content proven, rendering not
+
+The text the copy produces is fully asserted by 9 green Rust tests
+(`cargo nextest -E 'test(copied_selection)'`). What is left is only how a paste
+target renders it.
+
+- [ ] **[HUMAN]** Copy a Claude blockquote, paste into Slack, confirm no gutter bars. _(content proven by `copied_selection_strips_repeated_claude_gutters`, `_strips_space_indented_gutters`, `_accepts_nbsp_separator_and_preserves_body_nbsp`)_
+- [ ] **[HUMAN]** The pasted paragraph has no mid-sentence line breaks; bullets and blank lines keep their own line. _(proven by `copied_selection_rejoins_rows_claude_wrapped_for_width`, `_rejoins_bullet_continuations_but_not_the_next_bullet`, `_stops_rejoining_after_the_wrapped_paragraph_ends`, `_normalizes_after_unwrapping_soft_wrapped_rows`)_
+- [ ] **[HUMAN]** Copying a short hand-written quote or a code block is unchanged. _(the over-reach guards: `copied_selection_keeps_lone_or_non_claude_gutters`, `_keeps_deliberate_breaks_in_a_short_quote`)_
+
+### `616-71e1` — measurement gaps left open on purpose
+
+The story is complete; these are the two things its own document records as not
+obtainable, kept here so nobody re-derives them from scratch.
+
+- [ ] **[HUMAN]** Reproduce the F120 drag-drop freeze by dropping a large folder from Finder, and time it. _(the residual is real and narrowed to one command, `fs_transfer_paths` at `fs.rs:1624`, sync on the macOS main thread while every sibling moved to `spawn_blocking_fs`. Thread evidence was measured — `ps -M` 86 threads, `sample` ties WebKit IPC to `com.apple.main-thread` — but the freeze itself was not reproduced)_
+- [ ] **[HUMAN]** Re-measure watcher emit suppression under real repo churn. _(`head_emits_suppressed` measured 0/min, but only on an idle instance with no repo mutation in the window. That is a floor: it proves quiescence, it does not re-measure the `repeat_count: 12` storm behind issue #82)_
