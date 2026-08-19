@@ -9,6 +9,10 @@ export interface Toast {
 	level: "info" | "warn" | "error";
 	createdAt: number;
 	repoPath?: string;
+	/** Backend session that raised this toast. Set for MCP `ui action=toast`,
+	 *  where it is what makes the toast clickable: a repo holds many tabs, so
+	 *  only the session id can name the terminal that actually spoke. */
+	sessionId?: string;
 	action?: { label: string; onClick: () => void };
 }
 
@@ -142,12 +146,13 @@ function createToastsStore() {
 			action?: { label: string; onClick: () => void },
 			durationMs?: number,
 			repoPath?: string,
+			sessionId?: string,
 		) {
 			if (this.hasVisible(title, message, level, repoPath)) {
 				return -1;
 			}
 			const id = nextId++;
-			const toast: Toast = { id, title, message, level, createdAt: Date.now(), action, repoPath };
+			const toast: Toast = { id, title, message, level, createdAt: Date.now(), action, repoPath, sessionId };
 			setState("toasts", (prev) => [...prev, toast]);
 			mirrorToBell(toast);
 			if (sound) playSound(level);

@@ -811,6 +811,13 @@ function createTerminalsStore() {
 			return Object.keys(state.terminals);
 		},
 
+		/** The terminal tab driving a backend PTY session, or undefined once it
+		 *  is closed. Backend events carry session ids, tabs are keyed by their
+		 *  own id, so every "the backend means this tab" lookup goes through here. */
+		findBySessionId(sessionId: string): string | undefined {
+			return Object.keys(state.terminals).find((id) => state.terminals[id]?.sessionId === sessionId);
+		},
+
 		/** Get terminal count */
 		getCount(): number {
 			return Object.keys(state.terminals).length;

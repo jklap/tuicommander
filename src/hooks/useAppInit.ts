@@ -46,6 +46,7 @@ interface McpToastPayload {
 	level: string;
 	sound: string | null;
 	origin_repo_path?: string;
+	origin_session_id?: string;
 }
 
 const MCP_TOAST_LISTENER_KEY = "__tuic_mcp_toast_listener__";
@@ -424,18 +425,17 @@ export async function initApp(deps: AppInitDeps) {
 
 	// Listen for MCP toast notifications from the Rust backend
 	replaceMcpToastListener((event) => {
-		const { title, message, level, sound, origin_repo_path } = event.payload;
+		const { title, message, level, sound, origin_repo_path, origin_session_id } = event.payload;
 		const safeLevel = level === "warn" || level === "error" ? level : "info";
 		const repoPath = resolveRepoForCwd(origin_repo_path) ?? undefined;
 		const repoName = origin_repo_path ? pathBasename(repoPath ?? origin_repo_path) : null;
 		const contextualMessage = [repoName, message].filter(Boolean).join(" · ");
 		const visibleMessage = origin_repo_path ? contextualMessage : (message ?? "");
 		const duplicate = toastsStore.hasVisible(title, visibleMessage, safeLevel, repoPath);
-		if (origin_repo_path) {
-			toastsStore.add(title, visibleMessage, safeLevel, false, undefined, undefined, repoPath);
-		} else {
-			toastsStore.add(title, visibleMessage, safeLevel, false);
-		}
+		// repoPath is already undefined without an origin, and the session id is
+		// independent of it — an agent can be bound to a PTY whose cwd resolves to
+		// no registered repo — so both ride along on one call.
+		toastsStore.add(title, visibleMessage, safeLevel, false, undefined, undefined, repoPath, origin_session_id);
 		if (!duplicate && isNotificationSound(sound)) void notificationsStore.play(sound);
 	});
 

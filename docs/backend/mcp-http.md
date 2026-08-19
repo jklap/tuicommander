@@ -296,6 +296,13 @@ session repository metadata (in that order). The resulting `origin_repo_path` is
 dual-emitted with the toast so clients can show its source and scope retained
 bell history to the repository that raised it. Callers do not provide this field.
 
+Alongside it the toast carries `origin_session_id`, the caller's TUIC session,
+taken from the same lookup. A repo holds many tabs, so the path alone cannot
+navigate: this is what lets a client focus the terminal that actually raised the
+toast when the user clicks it. It is absent for a caller that is not bound to a
+PTY — an unbound caller gets no id rather than a guessed one, because a wrong id
+would send the click to somebody else's terminal.
+
 Native responses omit optional values when they are unavailable. In particular,
 `session action=output` includes `exit_code` only after an exit status is known, and
 blocking wait timeouts return only the condition state without a repeated follow-up hint.

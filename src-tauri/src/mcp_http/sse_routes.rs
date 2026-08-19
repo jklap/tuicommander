@@ -370,6 +370,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
             level,
             sound,
             origin_repo_path,
+            origin_session_id,
         } => {
             serde_json::json!({
                 "title": title,
@@ -377,6 +378,7 @@ fn event_payload(event: &AppEvent) -> serde_json::Value {
                 "level": level,
                 "sound": sound,
                 "origin_repo_path": origin_repo_path,
+                "origin_session_id": origin_session_id,
             })
         }
         AppEvent::DirChanged { dir_path } => {

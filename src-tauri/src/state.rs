@@ -163,6 +163,11 @@ pub enum AppEvent {
         sound: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         origin_repo_path: Option<String>,
+        /// The TUIC session that raised the toast, when the caller is bound to
+        /// one. A repo holds many tabs, so the path alone cannot navigate:
+        /// clicking the toast uses this to land on the terminal that spoke.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        origin_session_id: Option<String>,
     },
     /// Directory contents changed (non-git filesystem watcher)
     #[serde(rename = "dir-changed")]
