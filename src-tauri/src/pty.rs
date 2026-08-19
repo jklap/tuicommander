@@ -7259,6 +7259,26 @@ pub(crate) fn spawn_reader_thread(
                 dirty_run = 0;
                 continue;
             }
+            // F28: nobody is looking. Everything below — the vt lock and a full
+            // serialize_dirty_rows — would produce bytes that send_grid_frame
+            // drops on the floor, which is what a PTY still running behind a
+            // closed tab used to pay on every dirty tick.
+            //
+            // Nothing is lost by skipping. The damage stays on the vt because
+            // serialize_dirty_rows is what would have cleared it, and both
+            // subscribe paths repaint from scratch anyway: terminal_request_frame
+            // forces full damage before serializing, and the WS path
+            // (mcp_http/session.rs full_frame_for_single_client) forces it twice
+            // and re-arms this ticker.
+            //
+            // No pending scroll can be stranded either: pending_scroll is only
+            // ever inserted alongside a desktop channel (subscribe_terminal_grid)
+            // and removed with it (unsubscribe_terminal_grid, cleanup_session), so
+            // no subscriber means no entry for terminal_scroll_to_offset to write.
+            if !grid_has_subscriber(&ticker_state, &ticker_sid) {
+                dirty_run = 0;
+                continue;
+            }
             dirty_run = dirty_run.saturating_add(1);
             // Clone the Arc out: the guard below would otherwise hold a DashMap
             // shard read lock across the stuck back-off sleep, blocking every
@@ -8733,6 +8753,64 @@ fn emit_standby_event(state: &AppState, session_id: &str, standby: bool) {
 }
 
 #[cfg(test)]
+mod grid_subscriber_tests {
+    use super::*;
+
+    /// F28. The frame ticker used to take the vt lock and run a full
+    /// `serialize_dirty_rows` on every dirty tick, and only then discover in
+    /// `send_grid_frame` that there was no channel and no watch receiver to hand
+    /// the bytes to. A session whose tab is closed but whose PTY still runs — an
+    /// agent working in an unmounted pane — paid a whole encode per tick for
+    /// nothing. This is the check that now runs first, so it has to agree
+    /// exactly with what `send_grid_frame` treats as a consumer.
+
+    #[test]
+    fn nobody_is_subscribed_to_a_session_with_neither_channel_nor_watch() {
+        let state = crate::state::tests_support::make_test_app_state();
+        assert!(!grid_has_subscriber(&state, "s1"));
+    }
+
+    #[test]
+    fn a_watch_whose_receivers_have_all_gone_is_not_a_subscriber() {
+        let state = crate::state::tests_support::make_test_app_state();
+        // The sender outlives its clients: a browser tab that closed leaves the
+        // entry behind. Counting the entry rather than its receivers would keep
+        // every such session serializing forever.
+        state
+            .grid_watch
+            .insert("s1".to_string(), crate::grid_gate::new_grid_watch());
+        assert!(!grid_has_subscriber(&state, "s1"));
+    }
+
+    #[test]
+    fn a_live_watch_receiver_is_a_subscriber() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let tx = crate::grid_gate::new_grid_watch();
+        let rx = tx.subscribe();
+        state.grid_watch.insert("s1".to_string(), tx);
+
+        assert!(grid_has_subscriber(&state, "s1"));
+
+        drop(rx);
+        assert!(
+            !grid_has_subscriber(&state, "s1"),
+            "the last receiver going away must close the session again"
+        );
+    }
+
+    #[test]
+    fn one_session_having_a_subscriber_says_nothing_about_another() {
+        let state = crate::state::tests_support::make_test_app_state();
+        let tx = crate::grid_gate::new_grid_watch();
+        let _rx = tx.subscribe();
+        state.grid_watch.insert("watched".to_string(), tx);
+
+        assert!(grid_has_subscriber(&state, "watched"));
+        assert!(!grid_has_subscriber(&state, "unwatched"));
+    }
+}
+
+#[cfg(test)]
 mod vt_read_tests {
     use super::*;
 
@@ -9926,6 +10004,26 @@ pub(crate) async fn read_vt_log(
         total_lines,
         oldest,
     })
+}
+
+/// Is anyone waiting for this session's grid frames?
+///
+/// The two consumers `send_grid_frame` knows about: the desktop IPC channel, and
+/// the watch that feeds browser/PWA clients. A watch *entry* is not a consumer —
+/// the sender outlives its receivers, so the count is what decides.
+///
+/// Used by the frame ticker to skip the encode entirely rather than serialize a
+/// frame `send_grid_frame` would drop. It must stay in step with that function:
+/// a consumer this misses is a client that stops repainting.
+pub(crate) fn grid_has_subscriber(state: &AppState, session_id: &str) -> bool {
+    #[cfg(feature = "desktop")]
+    if state.grid_channels.contains_key(session_id) {
+        return true;
+    }
+    state
+        .grid_watch
+        .get(session_id)
+        .is_some_and(|tx| tx.receiver_count() > 0)
 }
 
 /// Send a grid frame through the session's channel and close the delivery gate.
