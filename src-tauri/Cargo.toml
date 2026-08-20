@@ -159,6 +159,7 @@ lazy_static = "1"
 uuid = { version = "1", features = ["v4", "v7"] }
 ulid = "3"
 cuid2 = "0.1"
+unicode-width = "0.2"
 base32 = "0.5.1"
 zeroize = { version = "1", features = ["alloc"] }
 hex = "0.4"

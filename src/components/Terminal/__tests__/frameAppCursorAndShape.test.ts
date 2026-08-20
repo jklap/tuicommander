@@ -56,6 +56,24 @@ describe("decodeBinaryFrame — DECCKM (application cursor keys)", () => {
 	});
 });
 
+describe("decodeBinaryFrame — cursor steady (DECSCUSR blinking bit)", () => {
+	it("reports cursorSteady=false by default (today's always-blink behavior)", () => {
+		expect(decodeBinaryFrame(header({}))?.cursorSteady).toBe(false);
+	});
+
+	it("reports cursorSteady=true when keyboard_flags bit7 is set", () => {
+		expect(decodeBinaryFrame(header({ keyboardFlags: 0x80 }))?.cursorSteady).toBe(true);
+	});
+
+	it("keeps all four ridealong bits (alt-screen/app-cursor/steady) independent of each other and of the real keyboard bits", () => {
+		const frame = decodeBinaryFrame(header({ keyboardFlags: 0xff }));
+		expect(frame?.keyboardFlags).toBe(0x1f);
+		expect(frame?.altScreen).toBe(true);
+		expect(frame?.appCursor).toBe(true);
+		expect(frame?.cursorSteady).toBe(true);
+	});
+});
+
 describe("decodeBinaryFrame — cursor shape", () => {
 	it("decodes shape bits 0-2 as block/underline/beam", () => {
 		expect(decodeBinaryFrame(header({ frameFlags: 0x00 }))?.cursorShape).toBe("block");

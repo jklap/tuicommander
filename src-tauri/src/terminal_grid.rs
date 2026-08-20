@@ -1562,7 +1562,7 @@ impl TerminalGrid {
     /// keyboard_flags: bit0=disambiguate_esc_codes, bit1=report_event_types,
     ///                 bit2=report_alternate_keys, bit3=report_all_keys_as_esc,
     ///                 bit4=report_associated_text, bit5=alternate_screen,
-    ///                 bit6=app_cursor
+    ///                 bit6=app_cursor, bit7=cursor_steady
     /// frame_flags: bit0=bell, bits1-2=cursor_shape (0=block,1=underline,2=beam,
     ///              3=app-default), bits3-4=mouse_mode (0=none,1=click,2=drag,3=motion),
     ///              bit5=sgr_mouse, bit6=focus_reporting, bit7=bracketed_paste
@@ -1583,6 +1583,7 @@ impl TerminalGrid {
             .saturating_sub(history_size);
         let has_selection = self.term.selection.is_some();
         let mode = *self.term.mode();
+        let cursor_style = self.term.cursor_style();
         let mut keyboard_flags: u8 = 0;
         if mode.contains(TermMode::DISAMBIGUATE_ESC_CODES) {
             keyboard_flags |= 0x01;
@@ -1616,6 +1617,17 @@ impl TerminalGrid {
         // land an unbound sequence's leading ESC on `vi-cmd-mode` under `bindkey -v`.
         if mode.contains(TermMode::APP_CURSOR) {
             keyboard_flags |= 0x40;
+        }
+        // bit 7: cursor is steady (not blinking). DECSCUSR distinguishes blinking
+        // vs. steady variants of each shape (`\x1b[1 q` blink block vs `\x1b[2 q`
+        // steady block, etc.) — see the `q` handler in `patches/vte/src/ansi.rs`.
+        // The frontend always blinks a focused cursor today; this lets an app that
+        // explicitly asked for a steady cursor override that, the same "app wins"
+        // precedent as the cursor-shape sentinel above. `default_cursor_style`
+        // below sets `blinking: true`, so "no DECSCUSR seen" also means "blink" —
+        // i.e. today's behavior is unchanged when no app has said otherwise.
+        if !cursor_style.blinking {
+            keyboard_flags |= 0x80;
         }
 
         let viewport_changed = self.last_frame_display_offset != Some(display_offset)
@@ -1651,7 +1663,7 @@ impl TerminalGrid {
         let mut buf = Vec::with_capacity(estimated);
 
         let bell = self.drain_bell();
-        let cursor_shape = self.term.cursor_style().shape;
+        let cursor_shape = cursor_style.shape;
         let mut frame_flags: u8 = 0;
         if bell {
             frame_flags |= 0x01;
@@ -2894,6 +2906,54 @@ mod tests {
             (buf[TEST_FRAME_FLAGS_OFFSET] >> 1) & 0x03,
             2,
             "back to viins -> beam"
+        );
+    }
+
+    // --- Cursor blink (DECSCUSR steady/blinking) tests ---
+
+    #[test]
+    fn cursor_steady_bit_unset_by_default() {
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"X");
+        let buf = grid.serialize_dirty_rows();
+        assert_eq!(
+            buf[TEST_KEYBOARD_FLAGS_OFFSET] & 0x80,
+            0,
+            "no DECSCUSR seen yet -> blink (today's default behavior)"
+        );
+    }
+
+    #[test]
+    fn cursor_steady_bit_tracks_decscusr_blinking_flag() {
+        let cases: &[(&[u8], bool)] = &[
+            (b"\x1b[1 q", false), // blink block
+            (b"\x1b[2 q", true),  // steady block
+            (b"\x1b[3 q", false), // blink underline
+            (b"\x1b[4 q", true),  // steady underline
+            (b"\x1b[5 q", false), // blink beam
+            (b"\x1b[6 q", true),  // steady beam
+        ];
+        for (seq, expect_steady) in cases {
+            let mut grid = TerminalGrid::new(5, 10, 0);
+            let _ = grid.process(seq);
+            let _ = grid.process(b"X");
+            let buf = grid.serialize_dirty_rows();
+            let steady = (buf[TEST_KEYBOARD_FLAGS_OFFSET] & 0x80) != 0;
+            assert_eq!(steady, *expect_steady, "DECSCUSR {:?} -> steady={}", seq, expect_steady);
+        }
+    }
+
+    #[test]
+    fn cursor_steady_bit_resets_to_blink_on_decscusr_reset() {
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"\x1b[2 q"); // steady block
+        let _ = grid.process(b"\x1b[0 q"); // reset
+        let _ = grid.process(b"X");
+        let buf = grid.serialize_dirty_rows();
+        assert_eq!(
+            buf[TEST_KEYBOARD_FLAGS_OFFSET] & 0x80,
+            0,
+            "reset falls back to the blinking default sentinel"
         );
     }
 
