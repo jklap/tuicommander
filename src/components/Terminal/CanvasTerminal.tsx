@@ -31,6 +31,7 @@ import {
 	GUTTER_PX,
 	gridDimsForBox,
 	reconcileDelay,
+	resolveCursorShape,
 	shouldFireReconcile,
 	snapLineHeight,
 } from "./canvasTerminalUtils";
@@ -745,7 +746,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 				: settingsStore.state.cursorStyle === "underline"
 					? "underline"
 					: "beam";
-		const shape: CursorShape = frame.cursorShape !== "block" ? frame.cursorShape : settingShape;
+		const shape: CursorShape = resolveCursorShape(frame.cursorShape, settingShape);
 		const rect = computeCursorRect(shape, frame.cursorRow, frame.cursorCol, m);
 
 		octx.fillStyle = cachedFgDefault;
@@ -2323,7 +2324,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					if (isMacOS() && e.altKey && !leftOptionHeld) {
 						writePty(e.key);
 					} else {
-						const seq = keyToSequence(e);
+						const seq = keyToSequence(e, currentFrame?.appCursor ?? false);
 						if (seq !== null) writePty(seq);
 					}
 				} else if (e.key === "Escape" || e.key === "Backspace" || e.key === "Delete" || e.key === "Tab") {
@@ -2454,7 +2455,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 			if (!e.altKey) leftOptionHeld = false;
 
 			// Default: legacy VT100 encoding
-			const seq = keyToSequence(e);
+			const seq = keyToSequence(e, currentFrame?.appCursor ?? false);
 			if (seq !== null) {
 				e.preventDefault();
 				e.stopPropagation();

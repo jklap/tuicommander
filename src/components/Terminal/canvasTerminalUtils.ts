@@ -41,7 +41,9 @@ export interface DecodedFrame {
 	cursorRow: number;
 	cursorCol: number;
 	cursorVisible: boolean;
-	cursorShape: "block" | "underline" | "beam";
+	/** "default" means the app has not requested a shape via DECSCUSR — the
+	 *  caller should fall back to the user's cursor-style setting. */
+	cursorShape: "block" | "underline" | "beam" | "default";
 	displayOffset: number;
 	historySize: number;
 	/** Lines evicted from the history top so far (monotonic within a resize era).
@@ -54,6 +56,10 @@ export interface DecodedFrame {
 	 *  enter/exit, so the absolute-row cache MUST be dropped when this flips —
 	 *  otherwise a primary-screen row can alias onto an alt row at the same key. */
 	altScreen: boolean;
+	/** DECCKM (application cursor keys) active. When true, unmodified
+	 *  arrows/Home/End must be sent as SS3 (`\x1bO{A,B,C,D,H,F}`) instead of
+	 *  CSI (`\x1b[{A,B,C,D,H,F}`). */
+	appCursor: boolean;
 	bell: boolean;
 	mouseMode: 0 | 1 | 2 | 3;
 	sgrMouse: boolean;
@@ -216,14 +222,22 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 	offset += 2;
 	const historyBase = view.getUint32(offset, true);
 	offset += 4;
-	// bit5 of keyboard_flags is the alt-screen state, not a keyboard flag — it
-	// rides there because frame_flags is full (see serialize_dirty_rows).
+	// bits 5-6 of keyboard_flags ride along as alt-screen / app-cursor state,
+	// not keyboard flags — they land here because frame_flags is full (see
+	// serialize_dirty_rows).
 	const altScreen = (rawKeyboardFlags & 0x20) !== 0;
+	const appCursor = (rawKeyboardFlags & 0x40) !== 0;
 	const keyboardFlags = rawKeyboardFlags & 0x1f;
 	const bell = (frameFlags & 0x01) !== 0;
 	const cursorShapeRaw = (frameFlags >> 1) & 0x03;
-	const cursorShape: "block" | "underline" | "beam" =
-		cursorShapeRaw === 2 ? "beam" : cursorShapeRaw === 1 ? "underline" : "block";
+	const cursorShape: "block" | "underline" | "beam" | "default" =
+		cursorShapeRaw === 3
+			? "default"
+			: cursorShapeRaw === 2
+				? "beam"
+				: cursorShapeRaw === 1
+					? "underline"
+					: "block";
 	const mouseMode = ((frameFlags >> 3) & 0x03) as 0 | 1 | 2 | 3;
 	const sgrMouse = (frameFlags & 0x20) !== 0;
 	const focusReporting = (frameFlags & 0x40) !== 0;
@@ -273,6 +287,7 @@ export function decodeBinaryFrame(buffer: ArrayBuffer): DecodedFrame | null {
 		hasSelection,
 		keyboardFlags,
 		altScreen,
+		appCursor,
 		bell,
 		mouseMode,
 		sgrMouse,
@@ -361,6 +376,17 @@ export function snapLineHeight(fontSize: number, target: number = 1.2): number {
 }
 
 export type CursorShape = "block" | "beam" | "underline";
+
+/**
+ * Resolve the shape to paint from the frame's DECSCUSR state and the user's
+ * cursor-style setting. An app-requested shape (including an explicit "block")
+ * always wins — matching iTerm2/Alacritty/kitty/WezTerm — and is what makes a
+ * vi normal-mode block cursor visible. "default" means the app never sent
+ * DECSCUSR, so the user's setting applies.
+ */
+export function resolveCursorShape(frameShape: DecodedFrame["cursorShape"], settingShape: CursorShape): CursorShape {
+	return frameShape === "default" ? settingShape : frameShape;
+}
 
 export interface CursorRect {
 	x: number;

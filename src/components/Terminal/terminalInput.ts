@@ -23,13 +23,19 @@ const F_KEYS: Record<string, string> = {
 	F12: "\x1b[24~",
 };
 
+// CSI-tilde encoded — unaffected by DECCKM.
 const NAV_KEYS: Record<string, string> = {
-	Home: "\x1b[H",
-	End: "\x1b[F",
 	Insert: "\x1b[2~",
 	Delete: "\x1b[3~",
 	PageUp: "\x1b[5~",
 	PageDown: "\x1b[6~",
+};
+
+// Home/End share the arrow keys' CSI-vs-SS3 duality under DECCKM (see
+// `keyToSequence`'s `appCursor` handling below).
+const NAV_APP_SUFFIX: Record<string, string> = {
+	Home: "H",
+	End: "F",
 };
 
 const IGNORED_KEYS = new Set([
@@ -53,8 +59,16 @@ function modifierParam(e: KeyboardEvent): number {
 /**
  * Convert a KeyboardEvent to the terminal escape sequence string to send to the PTY.
  * Returns null if the key should not be handled (modifier-only, Meta/Cmd).
+ *
+ * `appCursor` mirrors the terminal's DECCKM (application cursor keys) mode —
+ * pass `currentFrame?.appCursor`. When true, unmodified arrows/Home/End must be
+ * sent as SS3 (`\x1bO{A,B,C,D,H,F}`) instead of CSI (`\x1b[{A,B,C,D,H,F}`). zsh's
+ * zle enables DECCKM on every prompt (`smkx`); under `bindkey -v`, a shell that
+ * never binds the CSI form of Home/End (only the SS3 form, or nothing) will
+ * consume a wrongly-sent CSI sequence's leading ESC as a bare Escape —
+ * `vi-cmd-mode` — dropping the user into vi normal mode with no visual cue.
  */
-export function keyToSequence(e: KeyboardEvent): string | null {
+export function keyToSequence(e: KeyboardEvent, appCursor = false): string | null {
 	if (e.metaKey) return null;
 	if (IGNORED_KEYS.has(e.key)) return null;
 
@@ -62,12 +76,20 @@ export function keyToSequence(e: KeyboardEvent): string | null {
 	const arrowSuffix = ARROW_SUFFIX[e.key];
 	if (arrowSuffix) {
 		const mod = modifierParam(e);
-		return mod > 1 ? `\x1b[1;${mod}${arrowSuffix}` : `\x1b[${arrowSuffix}`;
+		// Modified arrows are always CSI — DECCKM only changes the unmodified form.
+		if (mod > 1) return `\x1b[1;${mod}${arrowSuffix}`;
+		return appCursor ? `\x1bO${arrowSuffix}` : `\x1b[${arrowSuffix}`;
 	}
 
 	// Function keys
 	const fKey = F_KEYS[e.key];
 	if (fKey) return fKey;
+
+	// Home/End: same CSI-vs-SS3 duality as arrows under DECCKM.
+	const navAppSuffix = NAV_APP_SUFFIX[e.key];
+	if (navAppSuffix) {
+		return appCursor ? `\x1bO${navAppSuffix}` : `\x1b[${navAppSuffix}`;
+	}
 
 	// Navigation keys
 	const navKey = NAV_KEYS[e.key];
