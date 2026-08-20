@@ -488,8 +488,14 @@ impl TerminalGrid {
             // enter/exit, so no inactive alternate lines remain addressable.
             alt_scrolling_history: scrollback,
             kitty_keyboard: true,
+            // `HollowBlock` is a sentinel meaning "no DECSCUSR seen yet" (see the
+            // `shape_bits` encoding in `serialize_dirty_rows`) — DECSCUSR itself can
+            // never request this shape (`patches/vte/src/ansi.rs`'s `q` handler only
+            // maps to Block/Underline/Beam/None), so it's safe to repurpose here.
+            // `\x1b[0 q` (reset) maps to `None`, which alacritty resolves back to
+            // this default — matching a real terminal's "no override" state.
             default_cursor_style: CursorStyle {
-                shape: CursorShape::Beam,
+                shape: CursorShape::HollowBlock,
                 blinking: true,
             },
             ..Config::default()
@@ -1113,7 +1119,17 @@ impl TerminalGrid {
                 continue;
             }
 
-            let col_limit = if row == cursor_row { cursor_col } else { cols };
+            // When a pending wrap is latched (the just-typed char landed in the last
+            // column and the terminal hasn't wrapped yet), `cursor_col` still reads
+            // `cols - 1` even though the logical cursor is one past it — the same
+            // compensation `logical_prefix_at_cursor`/`physical_prefix_at_cursor`
+            // already apply. Without it, a prompt line that exactly fills the
+            // terminal width loses its last character here.
+            let col_limit = if row == cursor_row {
+                (cursor_col + usize::from(grid.cursor.input_needs_wrap)).min(cols)
+            } else {
+                cols
+            };
             let mut result_text = String::new();
             let mut past_prompt = false;
             for col in 0..col_limit {
@@ -1696,9 +1712,10 @@ impl TerminalGrid {
     ///        bit4=dim, bit5=inverse, bit6=default_fg, bit7=default_bg
     /// keyboard_flags: bit0=disambiguate_esc_codes, bit1=report_event_types,
     ///                 bit2=report_alternate_keys, bit3=report_all_keys_as_esc,
-    ///                 bit4=report_associated_text, bit5=alternate_screen
-    /// frame_flags: bit0=bell, bits1-2=cursor_shape (0=block,1=underline,2=beam),
-    ///              bits3-4=mouse_mode (0=none,1=click,2=drag,3=motion),
+    ///                 bit4=report_associated_text, bit5=alternate_screen,
+    ///                 bit6=app_cursor
+    /// frame_flags: bit0=bell, bits1-2=cursor_shape (0=block,1=underline,2=beam,
+    ///              3=app-default), bits3-4=mouse_mode (0=none,1=click,2=drag,3=motion),
     ///              bit5=sgr_mouse, bit6=focus_reporting, bit7=bracketed_paste
     pub fn serialize_dirty_rows(&mut self) -> Vec<u8> {
         let num_cols = self.term.grid().columns();
@@ -1742,6 +1759,14 @@ impl TerminalGrid {
         // must drop that cache whenever this bit flips.
         if mode.contains(TermMode::ALT_SCREEN) {
             keyboard_flags |= 0x20;
+        }
+        // bit 6: DECCKM (application cursor keys) active. Determines whether the
+        // frontend must send SS3 (`\x1bO{A,B,C,D,H,F}`) instead of CSI
+        // (`\x1b[{A,B,C,D,H,F}`) for unmodified arrows/Home/End. zsh's zle enables
+        // this on every prompt (`smkx`), and a terminal that keeps sending CSI can
+        // land an unbound sequence's leading ESC on `vi-cmd-mode` under `bindkey -v`.
+        if mode.contains(TermMode::APP_CURSOR) {
+            keyboard_flags |= 0x40;
         }
 
         let viewport_changed = self.last_frame_display_offset != Some(display_offset)
@@ -1804,11 +1829,16 @@ impl TerminalGrid {
         if bell {
             frame_flags |= 0x01;
         }
-        // bits 1-2: cursor shape (0=block, 1=underline, 2=beam)
+        // bits 1-2: cursor shape (0=block, 1=underline, 2=beam, 3=app-default).
+        // `HollowBlock` is never produced by DECSCUSR (see `default_cursor_style`
+        // below) — it is our sentinel for "the app has not requested a shape",
+        // distinct from an app explicitly requesting `CursorShape::Block`. The
+        // frontend falls back to the user's cursor-style setting only for bits==3.
         let shape_bits: u8 = match cursor_shape {
             CursorShape::Block => 0,
             CursorShape::Underline => 1,
             CursorShape::Beam => 2,
+            CursorShape::HollowBlock => 3,
             _ => 0,
         };
         frame_flags |= shape_bits << 1;
@@ -3145,6 +3175,17 @@ mod tests {
     }
 
     #[test]
+    fn prompt_input_text_includes_last_char_when_line_exactly_fills_width() {
+        // "> " (2 cols) + "abcdefgh" (8 cols) exactly fills a 10-column grid, so the
+        // final 'h' lands in the last column and latches a pending wrap: the raw
+        // cursor column still reads 9 even though the logical position is one
+        // past it. Without the `input_needs_wrap` compensation this drops 'h'.
+        let mut grid = TerminalGrid::new(3, 10, 100);
+        let _ = grid.process(b"> abcdefgh");
+        assert_eq!(grid.prompt_input_text(), Some("abcdefgh".to_string()));
+    }
+
+    #[test]
     fn mouse_reporting_combined_decset() {
         let mut grid = TerminalGrid::new(24, 80, 1000);
         assert!(!grid.is_mouse_reporting());
@@ -3551,6 +3592,143 @@ mod tests {
         let frame_flags = buf[TEST_FRAME_FLAGS_OFFSET];
         // bits 3-6 should all be zero
         assert_eq!(frame_flags & 0x78, 0, "no mouse/focus flags by default");
+    }
+
+    // --- DECCKM (application cursor keys) tests ---
+    // Regression coverage for the "cursor caught before the last character" bug:
+    // zsh's zle enables DECCKM on every prompt (`smkx` = `\x1b[?1h\x1b=`); a
+    // frontend that keeps sending CSI arrows/Home/End under `bindkey -v` can land
+    // an unbound sequence's leading ESC on `vi-cmd-mode`.
+
+    const TEST_KEYBOARD_FLAGS_OFFSET: usize = 16;
+
+    #[test]
+    fn decckm_sets_app_cursor_bit() {
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"\x1b[?1h");
+        let _ = grid.process(b"X");
+        let buf = grid.serialize_dirty_rows();
+        let keyboard_flags = buf[TEST_KEYBOARD_FLAGS_OFFSET];
+        assert_ne!(keyboard_flags & 0x40, 0, "app_cursor bit set after CSI ?1h");
+    }
+
+    #[test]
+    fn decckm_off_by_default_and_clears_on_reset() {
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"X");
+        let buf = grid.serialize_dirty_rows();
+        assert_eq!(
+            buf[TEST_KEYBOARD_FLAGS_OFFSET] & 0x40,
+            0,
+            "app_cursor unset by default"
+        );
+
+        let _ = grid.process(b"\x1b[?1h");
+        let _ = grid.process(b"\x1b[?1l");
+        let _ = grid.process(b"Y");
+        let buf = grid.serialize_dirty_rows();
+        assert_eq!(
+            buf[TEST_KEYBOARD_FLAGS_OFFSET] & 0x40,
+            0,
+            "app_cursor cleared after CSI ?1l"
+        );
+    }
+
+    #[test]
+    fn decckm_via_real_smkx_sequence() {
+        // The exact bytes terminfo's `smkx` capability emits for xterm-256color —
+        // what zsh's `zle-line-init` actually writes on every prompt.
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"\x1b[?1h\x1b=");
+        let _ = grid.process(b"X");
+        let buf = grid.serialize_dirty_rows();
+        assert_ne!(
+            buf[TEST_KEYBOARD_FLAGS_OFFSET] & 0x40,
+            0,
+            "app_cursor set after the real smkx byte sequence"
+        );
+    }
+
+    // --- Cursor shape tests ---
+    // Regression coverage for the same bug's second half: an app-requested block
+    // cursor (DECSCUSR) must not be indistinguishable from "no shape requested".
+
+    #[test]
+    fn cursor_shape_defaults_to_app_default_sentinel() {
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"X");
+        let buf = grid.serialize_dirty_rows();
+        let frame_flags = buf[TEST_FRAME_FLAGS_OFFSET];
+        assert_eq!(
+            (frame_flags >> 1) & 0x03,
+            3,
+            "no DECSCUSR seen yet -> app-default sentinel"
+        );
+    }
+
+    #[test]
+    fn cursor_shape_decscusr_round_trip() {
+        let cases: &[(&[u8], u8)] = &[
+            (b"\x1b[2 q", 0), // steady block
+            (b"\x1b[6 q", 2), // steady bar (beam)
+            (b"\x1b[4 q", 1), // steady underline
+        ];
+        for (seq, expected_bits) in cases {
+            let mut grid = TerminalGrid::new(5, 10, 0);
+            let _ = grid.process(seq);
+            let _ = grid.process(b"X");
+            let buf = grid.serialize_dirty_rows();
+            let frame_flags = buf[TEST_FRAME_FLAGS_OFFSET];
+            assert_eq!(
+                (frame_flags >> 1) & 0x03,
+                *expected_bits,
+                "DECSCUSR {:?} -> shape bits {}",
+                seq,
+                expected_bits
+            );
+        }
+
+        // CSI 0 SP q resets to the app-default sentinel, same as never having sent one.
+        let mut grid = TerminalGrid::new(5, 10, 0);
+        let _ = grid.process(b"\x1b[6 q");
+        let _ = grid.process(b"\x1b[0 q");
+        let _ = grid.process(b"X");
+        let buf = grid.serialize_dirty_rows();
+        assert_eq!((buf[TEST_FRAME_FLAGS_OFFSET] >> 1) & 0x03, 3);
+    }
+
+    #[test]
+    fn cursor_shape_tracks_vi_mode_style_transitions() {
+        // The oh-my-zsh vi-mode plugin's zle-keymap-select hook: bar for insert,
+        // block for normal, bar again on returning to insert.
+        let mut grid = TerminalGrid::new(5, 10, 0);
+
+        let _ = grid.process(b"\x1b[6 q"); // viins
+        let _ = grid.process(b"a");
+        let buf = grid.serialize_dirty_rows();
+        assert_eq!(
+            (buf[TEST_FRAME_FLAGS_OFFSET] >> 1) & 0x03,
+            2,
+            "viins -> beam"
+        );
+
+        let _ = grid.process(b"\x1b[2 q"); // vicmd
+        let _ = grid.process(b"b");
+        let buf = grid.serialize_dirty_rows();
+        assert_eq!(
+            (buf[TEST_FRAME_FLAGS_OFFSET] >> 1) & 0x03,
+            0,
+            "vicmd -> block"
+        );
+
+        let _ = grid.process(b"\x1b[6 q"); // back to viins
+        let _ = grid.process(b"c");
+        let buf = grid.serialize_dirty_rows();
+        assert_eq!(
+            (buf[TEST_FRAME_FLAGS_OFFSET] >> 1) & 0x03,
+            2,
+            "back to viins -> beam"
+        );
     }
 
     // --- Search tests ---

@@ -48,6 +48,12 @@ manual item covers only the rebuilt live Codex integration.
   precise non-retryable timeout; it must not require a `status`/`output` poll,
   leave `/clear` in the composer, or run it twice. Close only the throwaway
   session after observing the result.
+## DECCKM app-cursor keys, DECSCUSR cursor shape, and wide-glyph cursor width (2026-08-20)
+
+- [ ] **[MANUAL]** In a real `zsh` prompt with `bindkey -v` (vi mode) and a non-empty prompt line, press Home/End and arrow keys: cursor moves without dropping into vi normal mode (visible via the block cursor NOT appearing after Home/End).
+- [ ] **[MANUAL]** oh-my-zsh vi-mode plugin: switching insert/normal mode visibly changes the terminal's own rendered cursor between beam and block.
+- [ ] **[MANUAL]** Run a full-width character (e.g. `echo 界` or a Nerd Font icon) under the cursor in a real pane: the block/underline cursor visibly covers both columns instead of only the leading half.
+- [ ] **[MANUAL]** `\x1b[2 q` (steady block) in a live shell: cursor stops blinking and stays solid; `\x1b[1 q` (blink block) restores blinking.
 
 ## Native drag out of the file browser survives a missing icon (2026-08-25, **Rust change — needs `make dev` restart**)
 
