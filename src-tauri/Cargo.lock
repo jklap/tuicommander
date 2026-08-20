@@ -8877,6 +8877,7 @@ dependencies = [
  "tracing-appender",
  "tracing-subscriber",
  "ulid",
+ "unicode-width",
  "url",
  "uuid",
  "web-push-native",

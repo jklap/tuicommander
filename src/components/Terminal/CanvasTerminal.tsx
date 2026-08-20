@@ -34,10 +34,12 @@ import {
 	decodeStyledRange,
 	GUTTER_PX,
 	gridDimsForBox,
+	isWideCursorGlyph,
 	reconcileDelay,
 	resolveCursorShape,
 	rowText,
 	shouldFireReconcile,
+	shouldPaintCursor,
 	snapLineHeight,
 } from "./canvasTerminalUtils";
 import { installFrameTimingDebugHook, isFrameTimingEnabled, recordFrameTiming, resetFrameTiming } from "./frameTiming";
@@ -770,7 +772,7 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 		if (frame.displayOffset > 0) return;
 		if (!frame.cursorVisible) return;
 		if (!focused()) return;
-		if (!cursorBlinkOn) return;
+		if (!shouldPaintCursor(cursorBlinkOn, frame.cursorSteady)) return;
 
 		const settingShape: CursorShape =
 			settingsStore.state.cursorStyle === "block"
@@ -779,23 +781,33 @@ const CanvasTerminal: Component<CanvasTerminalProps> = (props) => {
 					? "underline"
 					: "beam";
 		const shape: CursorShape = resolveCursorShape(frame.cursorShape, settingShape);
-		const rect = computeCursorRect(shape, frame.cursorRow, frame.cursorCol, m);
+
+		// Measure the glyph under the cursor up front (not just for "block") so a
+		// wide character (CJK, emoji, …) widens a block/underline cursor to cover
+		// both columns it occupies — computeCursorRect ignores spanCols for beam.
+		const row = rowMap.get(frame.cursorRow);
+		const col = frame.cursorCol;
+		let cp = 0;
+		let spanCols: 1 | 2 = 1;
+		if (row && col < row.count) {
+			cp = row.codepoints[col];
+			if (cp !== 0 && cp !== 0x20) {
+				const fontFamily = settingsStore.getFontFamily();
+				octx.font = gridRenderer.buildFontStyle(row.attrs[col], m.fontSize, fontFamily);
+				if (isWideCursorGlyph(octx.measureText(String.fromCodePoint(cp)).width, m.cellWidth)) {
+					spanCols = 2;
+				}
+			}
+		}
+
+		const rect = computeCursorRect(shape, frame.cursorRow, frame.cursorCol, m, spanCols);
 
 		octx.fillStyle = cachedFgDefault;
 		octx.fillRect(rect.x, rect.y, rect.w, rect.h);
 
-		if (shape === "block") {
-			const row = rowMap.get(frame.cursorRow);
-			const col = frame.cursorCol;
-			if (row && col < row.count) {
-				const cp = row.codepoints[col];
-				if (cp !== 0 && cp !== 0x20) {
-					const fontFamily = settingsStore.getFontFamily();
-					octx.font = gridRenderer.buildFontStyle(row.attrs[col], m.fontSize, fontFamily);
-					octx.fillStyle = cachedBgDefault;
-					octx.fillText(String.fromCodePoint(cp), rect.x, frame.cursorRow * m.cellHeight + m.baseline);
-				}
-			}
+		if (shape === "block" && cp !== 0 && cp !== 0x20) {
+			octx.fillStyle = cachedBgDefault;
+			octx.fillText(String.fromCodePoint(cp), rect.x, frame.cursorRow * m.cellHeight + m.baseline);
 		}
 
 		syncImePosition(frame.cursorRow, frame.cursorCol, m);
