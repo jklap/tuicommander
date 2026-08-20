@@ -8,6 +8,7 @@ import {
 	type DecodedFrame,
 	type DecodedRow,
 	GUTTER_PX,
+	resolveCursorShape,
 } from "./canvasTerminalUtils";
 import type { GridRenderer } from "./gridRenderer";
 import { scrollbarThumb } from "./scrollbarThumb";
@@ -101,7 +102,7 @@ export function paintCursor(
 			: settingsStore.state.cursorStyle === "underline"
 				? "underline"
 				: "beam";
-	const shape: CursorShape = frame.cursorShape !== "block" ? frame.cursorShape : settingShape;
+	const shape: CursorShape = resolveCursorShape(frame.cursorShape, settingShape);
 	const rect = computeCursorRect(shape, frame.cursorRow, frame.cursorCol, m);
 
 	octx.fillStyle = cachedFgDefault;
